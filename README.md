@@ -5,6 +5,7 @@ Multiplatform desktop app through UniFFI. The design is in [DESIGN.md](DESIGN.md
 are in [docs/DECISIONS.md](docs/DECISIONS.md), and status is in [docs/PROGRESS.md](docs/PROGRESS.md).
 
 Milestones 1–3 are implemented: the protocol crate, the Axum server and the macOS desktop app.
+Milestone 4 (the Android app, see [Android](#android)) is in progress.
 
 ## Layout
 
@@ -15,7 +16,9 @@ crates/client-core   CanvasEngine: fetches the workspace, holds state, applies o
 crates/client-ffi    UniFFI bridge (EngineHandle, FfiStateSnapshot, StateObserver) + uniffi-bindgen bin
 fixtures/            counter_home_bundle.json, pixelfed_home_bundle.json (DESIGN.md §2.2C)
 scripts/build_ffi.sh builds libclient_ffi.dylib and regenerates the Kotlin bindings
-kmp-app/             Gradle project: :shared (model + Compose renderer), :desktopApp (JVM, JNA)
+scripts/build_android.sh  cross-compiles libclient_ffi.so for Android (cargo-ndk)
+kmp-app/             Gradle project: :shared (model + Compose renderer), :desktopApp (JVM, JNA),
+                     :androidApp (Android, JNA aar)
 ```
 
 ## Prerequisites
@@ -137,9 +140,65 @@ step runs. `./gradlew` itself exits 1 for any simulator failure; the simulator's
 message `Process ... finished with non-zero exit value N`. An unrecognized `-P` property (e.g. a typo such as
 `-Pscren`) is ignored, with a warning.
 
+## Android
+
+`:androidApp` runs the same shared `CanvasApp` on Android, with the Rust engine cross-compiled to
+`libclient_ffi.so` (DECISIONS D9, D11).
+
+Prerequisites (once): an Android SDK with an NDK (Android Studio SDK Manager; the SDK path comes from
+`kmp-app/local.properties` `sdk.dir=...` or `ANDROID_HOME`), plus
+
+```bash
+cargo install cargo-ndk
+rustup target add aarch64-linux-android x86_64-linux-android
+```
+
+Build (from `kmp-app`, `JAVA_HOME` set as above). `assembleDebug` runs `:androidApp:buildRustAndroid`, i.e.
+`scripts/build_android.sh`, first; running the script by hand is optional:
+
+```bash
+../scripts/build_android.sh          # optional; writes androidApp/src/main/jniLibs/{arm64-v8a,x86_64}/libclient_ffi.so
+./gradlew :androidApp:assembleDebug  # -> androidApp/build/outputs/apk/debug/androidApp-debug.apk
+```
+
+Gradle properties for `:androidApp`:
+
+- `-PskipRustBuild`: don't run cargo; package the `.so` files already in `jniLibs`.
+- `-PandroidAbis=arm64-v8a,x86_64` (default): ABIs to build and package (`CANVAS_ANDROID_ABIS` for the script,
+  and the APK's `abiFilters`).
+- `-PcanvasBaseUrl=http://10.0.2.2:8080` (default) and `-PcanvasWorkspace=home` (default): the built-in
+  defaults (`BuildConfig`).
+
+Run on an emulator. Start the server first (`cargo run -p server`, on the host's 127.0.0.1:8080, which the
+emulator reaches as `10.0.2.2:8080`):
+
+```bash
+export PATH="$HOME/Library/Android/sdk/platform-tools:$HOME/Library/Android/sdk/emulator:$PATH"
+emulator -list-avds
+emulator -avd Medium_Phone_API_36 -no-window -no-audio -no-boot-anim &   # headless
+adb wait-for-device
+adb shell 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 1; done'
+
+./gradlew :androidApp:installDebug
+adb shell am start -n org.genui.canvas.android/.MainActivity
+adb shell am start -S -n org.genui.canvas.android/.MainActivity --es workspace pixelfed_demo   # -S restarts it
+adb shell am start -S -n org.genui.canvas.android/.MainActivity --es baseUrl http://10.0.2.2:9090
+adb logcat -s CanvasEngine:V
+adb exec-out screencap -p > screen.png
+```
+
+Intent extras `baseUrl` and `workspace` override the `BuildConfig` defaults. They are read when the engine is
+created, so use `am start -S` (force-stop first) to switch workspace on a running app. Rotation keeps the
+same engine. Logcat tag `CanvasEngine` carries both the Kotlin log lines (`starting base_url=...`,
+`dispatch: ...`) and the Rust engine's stdout/stderr. The workspace cache is in the app's `filesDir`.
+
+On a physical phone, use `adb reverse tcp:8080 tcp:8080` and `--es baseUrl http://127.0.0.1:8080`. Debug
+builds allow cleartext HTTP only to `10.0.2.2`, `localhost` and `127.0.0.1`; release builds allow none.
+
 ## Tests
 
 ```bash
 cargo test --workspace
 cd kmp-app && ./gradlew :shared:allTests :desktopApp:test
+./gradlew :androidApp:assembleDebug   # Android build check (no device tests yet)
 ```

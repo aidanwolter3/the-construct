@@ -87,10 +87,13 @@ Note: the environment restarted twice mid-work; work is now committed in small w
   the UniFFI bindings and `UniffiEngineBridge` (JNA jar on desktop, aar on Android); :shared owns buildRustFfi.
   D5 amended, D10. Tests: cargo 42, shared 26, desktopApp 12.
 
+- :androidApp (AGP 9.1.1 application, activity-compose 1.12.4): MainActivity + CanvasViewModel (engine survives
+  rotation, closed in onCleared), BuildConfig/intent-extra baseUrl (default http://10.0.2.2:8080) and workspace,
+  filesDir storage, debug-only cleartext config, `buildRustAndroid` task before preBuild. assembleDebug builds an
+  APK with libclient_ffi.so + libjnidispatch.so for arm64-v8a and x86_64. D11. Not yet run on a device.
+
 ## Next steps
 
-1. M4: create :androidApp (MainActivity, cleartext/INTERNET, base URL default 10.0.2.2:8080, filesDir storage,
-   Gradle task wiring scripts/build_android.sh), assembleDebug.
-2. M4: independent review + emulator QA (screencap, tap Increment, offline/online, pixelfed_demo), fix, docs
+1. M4: independent review + emulator QA (screencap, tap Increment, offline/online, pixelfed_demo), fix, docs
    (README Android section), commit "M4: ...".
 3. Then M5 (SQLite + outbox).

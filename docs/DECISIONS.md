@@ -141,3 +141,39 @@ use the classic `androidTarget()` with `com.android.library`.
 - The plugin id and version are in `gradle/libs.versions.toml` (`agp`,
   `android-kotlin-multiplatform-library`) and applied with `apply false` in the root build. The SDK path comes
   from the gitignored `kmp-app/local.properties` (`sdk.dir=...`) or `ANDROID_HOME`.
+
+## D11: `:androidApp` shell (base URL, cleartext, storage, engine lifetime)
+
+`kmp-app/androidApp` is a plain `com.android.application` module (AGP 9.1.1) with the Kotlin Compose
+compiler plugin. AGP 9 compiles Kotlin itself (built-in Kotlin), so `org.jetbrains.kotlin.android` is not
+applied. namespace/applicationId `org.genui.canvas.android`, compileSdk/targetSdk 36, minSdk 26, Java/Kotlin
+target 21 (same toolchain as `:shared`). Dependencies: `:shared`, `androidx.activity:activity-compose` 1.12.4,
+and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjnidispatch.so`) arrives through
+`:shared`'s `api` dependency; there is no duplicate-class conflict with the desktop jar (D5).
+
+- **Base URL / workspace:** an intent extra (`baseUrl`, `workspace`) wins over `BuildConfig.CANVAS_BASE_URL` /
+  `BuildConfig.CANVAS_WORKSPACE`, whose defaults are `http://10.0.2.2:8080` (the emulator's alias for the
+  host loopback) and `home`, overridable at build time with `-PcanvasBaseUrl=...` / `-PcanvasWorkspace=...`.
+  Extras are read only from the intent that creates the engine (see lifetime).
+- **Cleartext:** only debug builds allow HTTP, and only to `10.0.2.2`, `localhost` and `127.0.0.1`
+  (`src/debug/AndroidManifest.xml` sets `android:networkSecurityConfig`, `src/debug/res/xml/network_security_config.xml`).
+  `localhost`/`127.0.0.1` cover a physical phone with `adb reverse tcp:8080 tcp:8080`. Release builds keep the
+  platform default (cleartext blocked), so they need an HTTPS server or a config change.
+- **Storage:** `Context.filesDir` (app-private, `/data/data/org.genui.canvas.android/files`); the engine's
+  workspace cache lands there as `workspace_<id>.json` (D6).
+- **Engine lifetime:** `CanvasViewModel` (an androidx `ViewModel`) creates the `UniffiEngineBridge` and
+  `CanvasController`. It survives configuration changes, so rotation reuses the engine instead of creating a
+  second one. `onCleared()` (activity finished for good) calls `EngineHandle.close()`; dropping the Rust engine
+  also stops its background fetch thread (it holds only a `Weak`). The ViewModel keeps the bridge and its JNA
+  observers strongly reachable while the UI exists. A process kill simply ends everything.
+- **Insets:** `enableEdgeToEdge` with dark (light-style) bar icons, since the shared UI is the Material3 light
+  scheme; the root `Box` uses `Modifier.safeDrawingPadding()` so the status line is not under the status bar.
+  Theme: `@android:style/Theme.Material.Light.NoActionBar` (no AppCompat).
+- **Rust `.so`:** `:androidApp:buildRustAndroid` (Exec, `scripts/build_android.sh`, `~/.cargo/bin` prepended to
+  PATH) runs before `preBuild`; inputs are the crates' sources/`Cargo.toml`/`build.rs`, the workspace
+  `Cargo.toml`/`Cargo.lock` and the script; outputs are `src/main/jniLibs/<abi>/libclient_ffi.so` (gitignored).
+  `-PskipRustBuild` skips it (read at configuration time; configuration-cache safe). `-PandroidAbis=a,b`
+  (default `arm64-v8a,x86_64`) is passed to the script as `CANVAS_ANDROID_ABIS` and also sets
+  `ndk.abiFilters`, so the APK contains only ABIs that have `libclient_ffi.so` (the JNA aar ships more).
+- **Minify:** off for debug and release. `androidApp/proguard-rules.pro` already keeps `com.sun.jna.**` and
+  `uniffi.**` (JNA uses reflection and native lookups) for when release minify is turned on.
