@@ -1,0 +1,62 @@
+{
+  "version": "1.0.0",
+  "workspace": {
+    "type": "core://Workspace",
+    "id": "home",
+    "title": "Home",
+    "slots": [
+      {
+        "slot_id": "counter",
+        "provider_uri": "core://counter",
+        "content": {
+          "type": "core://Container",
+          "orientation": "Vertical",
+          "padding_dp": 24,
+          "children": [
+            { "type": "core://Text", "value_expr": "Project Canvas Counter", "style": "Title" },
+            { "type": "core://Text", "value_expr": "Count: ${core://counters/home#count}", "style": "Headline" },
+            {
+              "type": "core://Container",
+              "orientation": "Horizontal",
+              "padding_dp": 8,
+              "children": [
+                {
+                  "type": "core://Button",
+                  "label": "Increment",
+                  "on_click": {
+                    "intent": "action.mutation.optimistic",
+                    "entity_uri": "core://counters/home",
+                    "field": "count",
+                    "value_expr": "entity.count + 1",
+                    "rollback_value": 0,
+                    "endpoint": "/v1/counters/home/increment",
+                    "payload": {}
+                  }
+                },
+                {
+                  "type": "core://Button",
+                  "label": "Reset",
+                  "on_click": {
+                    "intent": "action.mutation.optimistic",
+                    "entity_uri": "core://counters/home",
+                    "field": "count",
+                    "value_expr": "0",
+                    "rollback_value": 0,
+                    "endpoint": "/v1/counters/home/reset",
+                    "payload": {}
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "entities": {
+    "core://counters/home": {
+      "id": "home",
+      "count": 0
+    }
+  }
+}
