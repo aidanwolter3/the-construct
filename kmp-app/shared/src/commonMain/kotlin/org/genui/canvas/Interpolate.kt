@@ -69,10 +69,11 @@ private val ITEM_TOKEN = Regex("""\${'$'}item\.([A-Za-z_][A-Za-z0-9_]*)""")
 
 /**
  * Resolves a reference string: an exact `$item.<field>` binding resolves against [item]
- * (null if no item or the field is missing/null); anything else is a literal URI.
+ * (null if no item or the field is missing/null); anything else is a URI in which embedded
+ * `$item.<field>` tokens are substituted (e.g. `pixelfed://posts/$item.id`, DESIGN.md §2.2A).
  */
 fun resolveRef(ref: String, item: JsonObject?): String? {
-    val field = itemFieldName(ref, allowEntityPrefix = false) ?: return ref
+    val field = itemFieldName(ref, allowEntityPrefix = false) ?: return bindItemTokens(ref, item)
     val v = item?.get(field) ?: return null
     return if (v is JsonPrimitive && v !is JsonNull) v.content else null
 }

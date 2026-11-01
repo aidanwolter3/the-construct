@@ -21,7 +21,7 @@ kmp-app/             Gradle project: :shared (model + Compose renderer), :deskto
 ## Prerequisites
 
 - macOS on Apple Silicon, with Rust installed through rustup (target `aarch64-apple-darwin`).
-- JDK 17 or later. This repo uses Android Studio's bundled JBR, which is set in
+- JDK 21 (`:desktopApp` sets `jvmToolchain(21)`). This repo uses Android Studio's bundled JBR, which is set in
   `kmp-app/gradle.properties` (`org.gradle.java.home`). Set `JAVA_HOME` to match:
 
 ```bash

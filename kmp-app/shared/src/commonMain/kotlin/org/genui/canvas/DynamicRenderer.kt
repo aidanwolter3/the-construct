@@ -24,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -108,7 +109,11 @@ fun RenderUiNode(
                     )
                 }
                 posts.forEach { post ->
-                    RenderUiNode(node.itemTemplate, entities, onDispatch, Modifier, post)
+                    // Key by entity URI so per-item state (e.g. pager position) follows the post
+                    // when the feed is reordered or a new post is inserted.
+                    key(post["uri"]) {
+                        RenderUiNode(node.itemTemplate, entities, onDispatch, Modifier, post)
+                    }
                 }
             }
         }

@@ -72,6 +72,18 @@ class BindingTest {
         assertEquals("pixelfed://users/7", resolveRef("pixelfed://users/7", post))
         assertNull(resolveRef("${'$'}item.missing", post))
         assertNull(resolveRef("${'$'}item.author_uri", null))
+        // Embedded tokens (DESIGN.md §2.2A: "entity://posts/$item.id") are substituted.
+        assertEquals("pixelfed://posts/101", resolveRef("pixelfed://posts/${'$'}item.id", post))
+    }
+
+    @Test
+    fun mutationWithNullRollbackRoundTripsAndKeepsField() {
+        // Rust's `rollback_value: serde_json::Value` is required, so a null must be emitted.
+        val json = """{"intent":"action.mutation.optimistic","entity_uri":"a","field":"f","value_expr":"0","rollback_value":null,"endpoint":"/e","payload":{}}"""
+        val intent = CanvasJson.decodeIntent(json)
+        assertIs<ActionIntent.OptimisticMutate>(intent)
+        val encoded = CanvasJson.encodeIntent(intent)
+        assertEquals(true, encoded.contains("\"rollback_value\":null"), encoded)
     }
 
     @Test
