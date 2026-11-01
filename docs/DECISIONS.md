@@ -46,3 +46,21 @@ Until a real CEL evaluator exists, a small expression subset stands in:
 
 `AuthorHeader.on_click` is `Option<ActionIntent>`. It is left out of the JSON when `None` and
 defaults to `None` when missing, which matches the §2.2C fixture.
+
+## D5: UniFFI Kotlin bindings live in `:desktopApp`, not `:shared`
+
+UniFFI's Kotlin bindings load the library through JNA, so they only run on the JVM. They are generated into
+`kmp-app/desktopApp/src/main/kotlin/uniffi/client_ffi/`. `:shared` depends only on the
+`CanvasEngineBridge` interface, and `desktopApp/EngineBridge.kt` implements that interface with `EngineHandle`.
+For M4, the bindings will move to a source set that the JVM and Android targets share.
+
+## D6: Engine snapshot shape
+
+`FfiStateSnapshot.workspace_json` holds only the layout node (the bundle's `workspace`), or `"null"` before the
+first load. `entities_json` holds the URI-keyed entity map. The offline cache stores the raw bundle per workspace
+at `<storage>/workspace_<id>.json`.
+
+## D7: FeedList item selection (temporary)
+
+Until query resolution exists, `FeedList` ignores `query_key`. It renders `item_template` once for each entity
+whose URI contains `/posts/`, ordered by `created_at` (newest first), and binds the item's URI as `uri`.

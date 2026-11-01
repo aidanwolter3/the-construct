@@ -27,22 +27,42 @@ Note: the environment restarted twice mid-work; work is now committed in small w
   Curl evidence: home returns 200 application/json; h2c works; unknown id returns 404 JSON.
 - Status: DONE (10 tests).
 
-## Milestone 3 (in progress)
+## Milestone 3: macOS desktop shell
 
-- client-core CanvasEngine: background fetch thread (reqwest blocking + rustls), observers, D4 expr evaluator,
-  offline JSON cache at <storage>/last_workspace.json. 13 tests. Snapshot workspace_json = layout node only;
-  entities_json = URI-keyed map.
-- kmp-app: Gradle 9.3.1 wrapper, Kotlin 2.3.20, Compose MP 1.11.0-beta01, material3 1.11.0-alpha05,
-  kotlinx-serialization 1.10.0, JNA 5.17.0. :shared (jvm("desktop") target) has Model.kt (custom tagged-union
-  serializers with Unknown fallback), Interpolate.kt, CanvasEngineBridge; 14 tests. :desktopApp placeholder window.
-- Process note: two runs of agents overlapped in kmp-app after a restart; overlapping files from the
-  earlier run were set aside in the scratchpad (interrupted-run/) and reused as reference.
+- client-core CanvasEngine: background fetch thread (reqwest blocking + rustls), observers called without locks,
+  D4 expression evaluator (expr.rs), per-workspace offline JSON cache at ~/.canvas/workspace_<id>.json,
+  retry every 5s while the server is unreachable, HTTP errors keep the engine online. Snapshot
+  workspace_json = layout node only; entities_json = URI-keyed map.
+- client-ffi: UniFFI proc-macro EngineHandle {new, new_with_workspace, subscribe, dispatch, snapshot, refresh},
+  FfiStateSnapshot, StateObserver callback interface; `uniffi-bindgen` bin. scripts/build_ffi.sh builds the
+  aarch64-apple-darwin dylib, copies it to target/release, and regenerates
+  kmp-app/desktopApp/src/main/kotlin/uniffi/client_ffi/client_ffi.kt. The Gradle task :desktopApp:buildRustFfi runs it
+  before compileKotlin (skip with -PskipRustBuild).
+- kmp-app: Gradle 9.3.1, Kotlin 2.3.20, Compose MP 1.11.0-beta01, material3 1.11.0-alpha05, kotlinx-serialization
+  1.10.0, JNA 5.17.0. :shared (jvm("desktop") target only; ready for androidTarget later) contains Model.kt
+  (hand-written tagged-union serializers with Unknown fallback), Interpolate.kt, DynamicRenderer.kt (all 9 node
+  types plus an Unknown placeholder), CanvasApp.kt (CanvasController + StateFlow). :desktopApp contains Main.kt and
+  EngineBridge.kt (JNA/UniFFI).
+- Review (independent agents): client-core reviewed. FFI/Kotlin review fixed embedded `$item` tokens in refs,
+  added keyed FeedList items, and corrected the README JDK note. Deferred items are listed below.
+- QA round 1 (real launch, System Events clicks, window-only screenshots): all checks passed. It found an
+  offline cache shared across workspaces (medium), 404 shown as Offline, and no reconnect. All three are fixed.
+- QA round 2: 41 Rust tests and 27 Kotlin tests pass. Clicking Increment twice shows "Count: 2"; Reset returns
+  to 0. The offline cache is per workspace, a 404 keeps the app Online, and reconnect happens within about 2s of
+  the server starting. Screenshots are in the session scratchpad (qa/ and qa2/).
+- Status: DONE.
+
+### Deferred / known issues
+- Clicks are applied locally only; no server sync until the M5 outbox. rollback_value is the fixture's static value.
+- An unknown workspace (404) leaves the UI on "Loading..." with no "not found" message.
+- A bad enum value or missing field in any node fails the whole layout decode. This is strict, like Rust serde;
+  only unknown `type`/`intent` values degrade to placeholders.
+- Snapshots can in rare cases be applied out of order (a fetch notification racing a click). Fix: add a sequence
+  number to FfiStateSnapshot.
+- FeedList ignores query_key and shows every `/posts/` entity, sorted by created_at.
+- client-ffi enables uniffi/cli by default (revisit for Android cross-builds in M4).
+- build_ffi.sh is aarch64-apple-darwin only.
 
 ## Next steps
 
-1. client-ffi: UniFFI proc-macro EngineHandle/FfiStateSnapshot/StateObserver, uniffi-bindgen bin,
-   scripts/build_ffi.sh -> bindings into kmp-app/desktopApp/src/main/kotlin/uniffi/client_ffi.
-2. kmp renderer: DynamicRenderer.kt + CanvasApp.kt in shared (reference: scratchpad interrupted-run/).
-3. Review client-core.
-4. Integrate: desktopApp Main.kt uses EngineHandle via JNA; :desktopApp:run depends on build_ffi.
-5. QA full demo (server + app + screenshot), README.md, M3 commit.
+M4 (Android: androidTarget in :shared, cargo-ndk, bindings in a shared JVM/Android source set), then M5 (SQLite + outbox).
