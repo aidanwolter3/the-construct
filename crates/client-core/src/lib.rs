@@ -6,8 +6,11 @@
 //!
 //! Current scope (M3): state lives in memory, and the last fetched bundle is
 //! written to `<storage_path>/workspace_<id>.json` (one file per workspace
-//! id) as an offline fallback. If the initial fetch cannot reach the server,
-//! a background thread retries every few seconds until it succeeds.
+//! id) as an offline fallback. A background thread retries the initial fetch
+//! every few seconds until the server answers; after that it probes
+//! `GET {base_url}/healthz` on the same interval so `is_online` tracks the
+//! server going away and coming back. Reconnecting does not re-fetch the
+//! workspace, so local optimistic changes survive.
 //! The SQLite store, action outbox and background sync come in M5.
 
 pub mod expr;
@@ -24,8 +27,10 @@ use std::time::Duration;
 use protocol::{ActionIntent, EntityRecord, UiNode, WorkspaceSpec};
 
 const DEFAULT_WORKSPACE_ID: &str = "home";
-/// Delay between background re-fetch attempts while the server is unreachable.
-const RETRY_INTERVAL: Duration = Duration::from_secs(5);
+/// Delay between background fetch retries / reachability probes.
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// Timeout for a single reachability probe.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Offline cache file name for a workspace: `workspace_<id>.json`, with any
 /// character outside `[A-Za-z0-9_-]` replaced by `_`.
@@ -59,7 +64,8 @@ enum FetchOutcome {
 ///   JSON, or `"null"` if no workspace has ever been loaded.
 /// - `entities_json`: the URI-keyed entity map as a JSON object (`"{}"` if
 ///   empty).
-/// - `is_online`: whether the most recent fetch succeeded.
+/// - `is_online`: whether the server answered the most recent fetch or
+///   reachability probe.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateSnapshot {
     pub workspace_json: String,
@@ -125,6 +131,7 @@ struct Inner {
     observers: Mutex<Vec<Arc<Observer>>>,
     workspace_id: String,
     workspace_url: String,
+    health_url: String,
     cache_path: Option<PathBuf>,
 }
 
@@ -170,33 +177,34 @@ impl CanvasEngine {
             state.seq = 1;
         }
 
+        let base = base_url.trim_end_matches('/');
         let inner = Arc::new(Inner {
             state: Mutex::new(state),
             observers: Mutex::new(Vec::new()),
             workspace_id: workspace_id.to_string(),
-            workspace_url: format!(
-                "{}/v1/workspaces/{}",
-                base_url.trim_end_matches('/'),
-                workspace_id
-            ),
+            workspace_url: format!("{base}/v1/workspaces/{workspace_id}"),
+            health_url: format!("{base}/healthz"),
             cache_path,
         });
 
-        // The fetch thread holds only a Weak reference between attempts, so
-        // it exits once the engine is dropped instead of keeping it alive.
+        // The background thread holds only a Weak reference between
+        // attempts, so it exits once the engine is dropped instead of
+        // keeping it alive. Until the server has answered once it retries
+        // the full fetch; afterwards it only probes reachability.
         let bg: Weak<Inner> = Arc::downgrade(&inner);
         let spawned = thread::Builder::new()
             .name("canvas-engine-fetch".into())
             .spawn(move || {
+                let mut answered = false;
                 loop {
                     let Some(inner) = bg.upgrade() else { return };
-                    let outcome = inner.refresh();
-                    drop(inner);
-                    // Retry only while the server is unreachable.
-                    if !matches!(outcome, FetchOutcome::Failed) {
-                        return;
+                    if answered {
+                        inner.probe();
+                    } else {
+                        answered = !matches!(inner.refresh(), FetchOutcome::Failed);
                     }
-                    thread::sleep(RETRY_INTERVAL);
+                    drop(inner);
+                    thread::sleep(POLL_INTERVAL);
                 }
             });
         if let Err(e) = spawned {
@@ -248,6 +256,28 @@ impl CanvasEngine {
 }
 
 impl Inner {
+    /// Check whether the server is reachable (any HTTP response counts) and
+    /// notify observers if `is_online` changed. Never touches the workspace
+    /// or entities.
+    fn probe(&self) {
+        let reachable = reachable(&self.health_url);
+        let seq_snap = {
+            let mut st = lock(&self.state);
+            if st.is_online == reachable {
+                return;
+            }
+            st.is_online = reachable;
+            if reachable {
+                println!("[CanvasEngine] server reachable again; online");
+            } else {
+                eprintln!("[CanvasEngine] server unreachable ({}); offline", self.health_url);
+            }
+            st.seq += 1;
+            (st.seq, st.snapshot())
+        };
+        self.notify(seq_snap);
+    }
+
     fn refresh(&self) -> FetchOutcome {
         let result = fetch(&self.workspace_url);
         let outcome;
@@ -386,6 +416,16 @@ fn fetch(url: &str) -> Result<(WorkspaceSpec, String), FetchError> {
     let spec =
         serde_json::from_str(&raw).map_err(|e| FetchError::Other(format!("bad bundle: {e}")))?;
     Ok((spec, raw))
+}
+
+/// True if the server sent any HTTP response to `GET url`.
+fn reachable(url: &str) -> bool {
+    reqwest::blocking::Client::builder()
+        .connect_timeout(PROBE_TIMEOUT)
+        .timeout(PROBE_TIMEOUT)
+        .build()
+        .and_then(|c| c.get(url).send())
+        .is_ok()
 }
 
 /// Write via a temp file + rename so a crash mid-write never leaves a

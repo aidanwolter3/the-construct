@@ -1,9 +1,10 @@
 //! End-to-end tests for `CanvasEngine` against a tiny hand-rolled HTTP server.
 
 use std::io::{BufRead, BufReader, Write};
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -23,34 +24,115 @@ fn serve_fixture() -> String {
     let addr = listener.local_addr().unwrap();
     thread::spawn(move || {
         for stream in listener.incoming() {
-            let Ok(mut stream) = stream else { continue };
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut request_line = String::new();
-            if reader.read_line(&mut request_line).is_err() {
-                continue;
-            }
-            // Drain headers.
-            loop {
-                let mut line = String::new();
-                match reader.read_line(&mut line) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) if line == "\r\n" || line == "\n" => break,
-                    Ok(_) => {}
-                }
-            }
-            let (status, body) = if request_line.starts_with("GET /v1/workspaces/home ") {
-                ("200 OK", FIXTURE)
-            } else {
-                ("404 Not Found", "not found")
-            };
-            let resp = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            let _ = stream.write_all(resp.as_bytes());
+            let Ok(stream) = stream else { continue };
+            handle(stream);
         }
     });
     format!("http://{addr}")
+}
+
+fn handle(mut stream: TcpStream) {
+    let _ = stream.set_nonblocking(false);
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line).is_err() {
+        return;
+    }
+    // Drain headers.
+    loop {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) if line == "\r\n" || line == "\n" => break,
+            Ok(_) => {}
+        }
+    }
+    let (status, body) = if request_line.starts_with("GET /v1/workspaces/home ") {
+        ("200 OK", FIXTURE)
+    } else if request_line.starts_with("GET /healthz ") {
+        ("200 OK", "ok")
+    } else {
+        ("404 Not Found", "not found")
+    };
+    let resp = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(resp.as_bytes());
+}
+
+/// A fixture server that can be stopped (port closed) and restarted on the
+/// same address.
+struct StoppableServer {
+    addr: SocketAddr,
+    stop: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl StoppableServer {
+    fn start(addr: &str) -> Self {
+        let listener = TcpListener::bind(addr).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let thread = thread::spawn(move || {
+            while !flag.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => handle(stream),
+                    Err(_) => thread::sleep(Duration::from_millis(20)),
+                }
+            }
+            // Listener dropped here: the port is closed.
+        });
+        Self { addr, stop, thread: Some(thread) }
+    }
+
+    fn url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    fn stop(mut self) -> SocketAddr {
+        self.stop.store(true, Ordering::SeqCst);
+        self.thread.take().unwrap().join().unwrap();
+        self.addr
+    }
+}
+
+/// Wait until a snapshot with the given online state arrives.
+fn wait_for_online_state(rx: &mpsc::Receiver<StateSnapshot>, online: bool) -> StateSnapshot {
+    loop {
+        let s = rx
+            .recv_timeout(TIMEOUT)
+            .unwrap_or_else(|_| panic!("no snapshot with is_online={online}"));
+        if s.is_online == online {
+            return s;
+        }
+    }
+}
+
+/// Regression: after a successful fetch, killing the server must flip the
+/// engine offline, and bringing it back must flip it online without
+/// discarding local optimistic changes.
+#[test]
+fn server_going_away_mid_session_reports_offline_then_online() {
+    let server = StoppableServer::start("127.0.0.1:0");
+    let engine = CanvasEngine::init("", &server.url());
+    let rx = subscribe_channel(&engine);
+    wait_online(&rx);
+
+    engine.dispatch(INCREMENT);
+    assert_eq!(count(&wait_for_online_state(&rx, true)), 1);
+
+    let addr = server.stop();
+    let offline = wait_for_online_state(&rx, false);
+    assert_ne!(offline.workspace_json, "null", "layout kept while offline");
+    assert_eq!(count(&offline), 1, "local state kept while offline");
+
+    let server = StoppableServer::start(&addr.to_string());
+    let back = wait_for_online_state(&rx, true);
+    assert_eq!(count(&back), 1, "reconnect must not discard local changes");
+    server.stop();
 }
 
 fn temp_dir(tag: &str) -> PathBuf {
