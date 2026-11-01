@@ -92,8 +92,13 @@ Note: the environment restarted twice mid-work; work is now committed in small w
   filesDir storage, debug-only cleartext config, `buildRustAndroid` task before preBuild. assembleDebug builds an
   APK with libclient_ffi.so + libjnidispatch.so for arm64-v8a and x86_64. D11. Not yet run on a device.
 
+- Review fixed: release builds ignore intent extras (exported launcher), buildRustFfi inputs, doc corrections.
+- QA round 1 found a BLOCKER: launch crash, because Interpolate.kt's regex had an unescaped `}` that Android ICU
+  rejects. Fixed. Added scripts/android_smoke.sh (install, launch, check for FATAL, assert text through
+  uiautomator, screencap) and an instrumented InterpolateDeviceTest (3 tests, connectedDebugAndroidTest).
+  With the fix, QA steps 5-11 passed (counter, offline/online, pixelfed Like, rotation, cache, ripple).
+
 ## Next steps
 
-1. M4: independent review + emulator QA (screencap, tap Increment, offline/online, pixelfed_demo), fix, docs
-   (README Android section), commit "M4: ...".
+1. M4: final QA pass on the committed build (round 2), then commit "M4: ...".
 3. Then M5 (SQLite + outbox).

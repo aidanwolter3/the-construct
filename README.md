@@ -17,6 +17,7 @@ crates/client-ffi    UniFFI bridge (EngineHandle, FfiStateSnapshot, StateObserve
 fixtures/            counter_home_bundle.json, pixelfed_home_bundle.json (DESIGN.md §2.2C)
 scripts/build_ffi.sh builds libclient_ffi.dylib and regenerates the Kotlin bindings
 scripts/build_android.sh  cross-compiles libclient_ffi.so for Android (cargo-ndk)
+scripts/android_smoke.sh  installs and launches the Android app on an emulator, checks it renders (Tests)
 kmp-app/             Gradle project: :shared (model + Compose renderer), :desktopApp (JVM, JNA),
                      :androidApp (Android, JNA aar)
 ```
@@ -175,7 +176,7 @@ emulator reaches as `10.0.2.2:8080`):
 ```bash
 export PATH="$HOME/Library/Android/sdk/platform-tools:$HOME/Library/Android/sdk/emulator:$PATH"
 emulator -list-avds
-emulator -avd Medium_Phone_API_36 -no-window -no-audio -no-boot-anim &   # headless
+emulator -avd Medium_Phone_API_36 -no-window -no-audio -no-boot-anim -no-snapshot-save &   # headless
 adb wait-for-device
 adb shell 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 1; done'
 
@@ -191,7 +192,9 @@ Intent extras `baseUrl` and `workspace` override the `BuildConfig` defaults (deb
 ignore them). They are read when the engine is
 created, so use `am start -S` (force-stop first) to switch workspace on a running app. Rotation keeps the
 same engine. Logcat tag `CanvasEngine` carries both the Kotlin log lines (`starting base_url=...`,
-`dispatch: ...`) and the Rust engine's stdout/stderr. The workspace cache is in the app's `filesDir`.
+`dispatch: ...`) and the Rust engine's stdout/stderr. The stdout/stderr redirect is process-wide, so the tag also
+shows other native output from the app process (e.g. GL/EGL driver lines). The workspace cache is in the app's
+`filesDir`.
 
 On a physical phone, use `adb reverse tcp:8080 tcp:8080` and `--es baseUrl http://127.0.0.1:8080`. Debug
 builds allow cleartext HTTP only to `10.0.2.2`, `localhost` and `127.0.0.1`; release builds allow none.
@@ -201,5 +204,22 @@ builds allow cleartext HTTP only to `10.0.2.2`, `localhost` and `127.0.0.1`; rel
 ```bash
 cargo test --workspace
 cd kmp-app && ./gradlew :shared:allTests :desktopApp:test
-./gradlew :androidApp:assembleDebug   # Android build check (no device tests yet)
+./gradlew :androidApp:assembleDebug   # Android build check only: it doesn't launch anything
+```
+
+`assembleDebug` and the JVM host tests can't catch Android-only runtime failures (for example, Android's ICU regex
+engine rejects patterns that `java.util.regex` accepts). Two checks run on a booted emulator or device:
+
+```bash
+# Launch check: installs the debug app, launches it per workspace, then fails on a FATAL EXCEPTION in logcat,
+# a dead process, or missing text in a `uiautomator dump` ("Count: <n>" and "Online" for home, "Sunrise over
+# Boulder" for pixelfed_demo). Writes <ws>.png, <ws>.xml and <ws>.logcat.txt to --out
+# (default kmp-app/androidApp/build/smoke).
+../scripts/android_smoke.sh --pixelfed                    # device and server already running
+../scripts/android_smoke.sh --boot --server --pixelfed    # boots Medium_Phone_API_36 headless and starts the
+                                                          # server, then stops both at the end
+../scripts/android_smoke.sh --help                        # --workspaces, --skip-install, --skip-rust, --wait, --timeout
+
+# Instrumented tests (androidApp/src/androidTest): runs the shared interpolation regexes on the device.
+./gradlew :androidApp:connectedDebugAndroidTest
 ```

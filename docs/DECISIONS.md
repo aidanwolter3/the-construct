@@ -116,7 +116,9 @@ feedback.
   unchanged. Instead, `client-ffi/src/android_log.rs` (`cfg(target_os = "android")`, run once from the
   `EngineHandle` constructors) uses `pipe2` and `dup2` to point fds 1 and 2 at pipes. A thread per pipe
   forwards each line to `__android_log_write` with tag `CanvasEngine`: stdout at INFO and stderr at WARN. View
-  them with `adb logcat -s CanvasEngine:V`. Desktop builds don't compile this module.
+  them with `adb logcat -s CanvasEngine:V`. Desktop builds don't compile this module. The redirect applies
+  to the whole process, so the tag also carries any other native stdout/stderr from it, such as GL/EGL driver
+  lines, and not only engine output.
 
 ## D10: Android target uses AGP 9.1.1's `com.android.kotlin.multiplatform.library` plugin
 
