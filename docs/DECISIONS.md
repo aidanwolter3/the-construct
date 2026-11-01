@@ -163,6 +163,10 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
   (`src/debug/AndroidManifest.xml` sets `android:networkSecurityConfig`, `src/debug/res/xml/network_security_config.xml`).
   `localhost`/`127.0.0.1` cover a physical phone with `adb reverse tcp:8080 tcp:8080`. Release builds keep the
   platform default (cleartext blocked), so they need an HTTPS server or a config change.
+  **Caveat, found in QA:** the network security config applies only to the Java networking stack. The engine
+  makes its requests from Rust (`reqwest`), so the config does not restrict them: the engine will use cleartext
+  to any base URL, in debug and release. The effective control is the base URL (BuildConfig, plus extras that only
+  debug builds read). A follow-up is to make the engine reject `http://` outside debug builds.
 - **Storage:** `Context.filesDir` (app-private, `/data/data/org.genui.canvas.android/files`); the engine's
   workspace cache lands there as `workspace_<id>.json` (D6).
 - **Engine lifetime:** `CanvasViewModel` (an androidx `ViewModel`) creates the `UniffiEngineBridge` and

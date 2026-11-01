@@ -4,8 +4,8 @@ A server-driven UI shell: a Rust protocol, server and client core, rendered by a
 Multiplatform desktop app through UniFFI. The design is in [DESIGN.md](DESIGN.md), decisions
 are in [docs/DECISIONS.md](docs/DECISIONS.md), and status is in [docs/PROGRESS.md](docs/PROGRESS.md).
 
-Milestones 1–3 are implemented: the protocol crate, the Axum server and the macOS desktop app.
-Milestone 4 (the Android app, see [Android](#android)) is in progress.
+Milestones 1–4 are implemented: the protocol crate, the Axum server, the macOS desktop app and the Android
+app (see [Android](#android)). A headless simulation mode renders the shared UI to PNGs (see Simulation mode).
 
 ## Layout
 
@@ -196,8 +196,13 @@ same engine. Logcat tag `CanvasEngine` carries both the Kotlin log lines (`start
 shows other native output from the app process (e.g. GL/EGL driver lines). The workspace cache is in the app's
 `filesDir`.
 
-On a physical phone, use `adb reverse tcp:8080 tcp:8080` and `--es baseUrl http://127.0.0.1:8080`. Debug
-builds allow cleartext HTTP only to `10.0.2.2`, `localhost` and `127.0.0.1`; release builds allow none.
+On a physical phone, use `adb reverse tcp:8080 tcp:8080` and `--es baseUrl http://127.0.0.1:8080`.
+
+Cleartext caveat: the debug `network_security_config.xml` (cleartext only to `10.0.2.2`, `localhost`,
+`127.0.0.1`) governs Java/Kotlin networking only. All engine traffic goes through Rust (`reqwest`), which that
+config does not cover, so the engine will talk plain HTTP to any `baseUrl` it is given, in debug and release.
+The real controls are the base URL itself (`BuildConfig`, and intent extras that only debug builds honour).
+Enforcing HTTPS in the engine for release builds is a follow-up.
 
 ## Tests
 
@@ -221,5 +226,6 @@ engine rejects patterns that `java.util.regex` accepts). Two checks run on a boo
 ../scripts/android_smoke.sh --help                        # --workspaces, --skip-install, --skip-rust, --wait, --timeout
 
 # Instrumented tests (androidApp/src/androidTest): runs the shared interpolation regexes on the device.
+# Note: AGP uninstalls the app afterwards, so don't follow this with android_smoke.sh --skip-install.
 ./gradlew :androidApp:connectedDebugAndroidTest
 ```

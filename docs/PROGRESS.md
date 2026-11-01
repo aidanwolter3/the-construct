@@ -1,6 +1,6 @@
 # Progress Log
 
-Running log of implementation work for the first demo (Milestones 1-3 of DESIGN.md).
+Running log of implementation work for the first demo (Milestones 1-4 of DESIGN.md, plus a headless simulation mode).
 Process: orchestrator coordinates separate implementation, code-review and QA passes.
 Note: the environment restarted twice mid-work; work is now committed in small wip commits.
 
@@ -78,7 +78,7 @@ Note: the environment restarted twice mid-work; work is now committed in small w
   shut down (process exits); default out dir is per-second; no golden-image diffing (Roborazzi) yet.
 - Tests: shared 26, desktopApp 12. Status: DONE.
 
-## Milestone 4: Android (in progress)
+## Milestone 4: Android
 
 - Rust: client-ffi `bindgen` feature now opt-in (no CLI deps by default); scripts/build_android.sh (cargo-ndk,
   arm64-v8a + x86_64 into kmp-app/androidApp/src/main/jniLibs; deps only liblog/libdl/libc); Rust stdout/stderr
@@ -90,15 +90,35 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 - :androidApp (AGP 9.1.1 application, activity-compose 1.12.4): MainActivity + CanvasViewModel (engine survives
   rotation, closed in onCleared), BuildConfig/intent-extra baseUrl (default http://10.0.2.2:8080) and workspace,
   filesDir storage, debug-only cleartext config, `buildRustAndroid` task before preBuild. assembleDebug builds an
-  APK with libclient_ffi.so + libjnidispatch.so for arm64-v8a and x86_64. D11. Not yet run on a device.
-
+  APK with libclient_ffi.so + libjnidispatch.so for arm64-v8a and x86_64. D11.
 - Review fixed: release builds ignore intent extras (exported launcher), buildRustFfi inputs, doc corrections.
 - QA round 1 found a BLOCKER: launch crash, because Interpolate.kt's regex had an unescaped `}` that Android ICU
   rejects. Fixed. Added scripts/android_smoke.sh (install, launch, check for FATAL, assert text through
   uiautomator, screencap) and an instrumented InterpolateDeviceTest (3 tests, connectedDebugAndroidTest).
   With the fix, QA steps 5-11 passed (counter, offline/online, pixelfed Like, rotation, cache, ripple).
 
+- QA round 2 on the committed build (emulator Medium_Phone_API_36, arm64): all checks pass. Fetch over 10.0.2.2
+  is visible in `logcat -s CanvasEngine:V` (Rust and Kotlin lines), with no FATAL. Count 0->2->0. Offline shows within
+  2s of stopping the server and Online returns within 5s of restarting it. pixelfed_demo renders and Like toggles.
+  Rotation keeps one engine. A fresh install with the server down recovers. android_smoke.sh passes for both
+  workspaces, connectedDebugAndroidTest passes 3/3, and the desktop simulator still works.
+- Finding (documented, not fixed): the network security config does not restrict the engine's cleartext traffic,
+  because requests go through Rust reqwest. See D11 caveat.
+- Tests: cargo 42, shared 26, desktopApp 12, androidApp instrumented 3. Status: DONE.
+
+### Deferred / known issues (M4)
+- Enforce HTTPS in the engine for release builds; the network security config doesn't apply to Rust traffic.
+- An unknown workspace (404) shows "Online" + "Loading..." forever with no on-screen error (desktop and Android).
+- The CanvasEngine logcat tag also carries other native stderr from the process (e.g. GL lines); the fd redirect is
+  process-wide. Log lines over ~4 KB are truncated by logcat.
+- Android builds use the committed UniFFI bindings; if the Rust API changes without regenerating them, the
+  checksum check fails at load.
+- :shared has no Android host tests; Android-only behaviour is covered by the smoke script + instrumented test.
+- Deprecated `compose.runtime/foundation/ui` accessors in shared/build.gradle.kts.
+
 ## Next steps
 
-1. M4: final QA pass on the committed build (round 2), then commit "M4: ...".
-3. Then M5 (SQLite + outbox).
+1. M5: SQLite entity cache + action outbox in client-core (rusqlite bundled; also builds for Android via cargo-ndk),
+   server sync of optimistic mutations, real rollback_value, snapshot sequence numbers.
+2. Small follow-ups: 404 "workspace not found" UI state; HTTPS enforcement for release; golden-image diffing for
+   the simulator (Roborazzi or a pixel diff on sim PNGs); Android host tests for :shared.
