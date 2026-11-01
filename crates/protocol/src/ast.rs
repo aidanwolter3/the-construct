@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 use crate::intent::ActionIntent;
 
 /// A single node in the server-driven UI tree.
+// `ActionBar` (three inline intents) dwarfs other variants. We keep the
+// DESIGN.md §2.2A field types rather than boxing intents; layout trees are
+// small and built rarely, so the size cost is irrelevant.
+#[allow(clippy::large_enum_variant)]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type")]
 pub enum UiNode {

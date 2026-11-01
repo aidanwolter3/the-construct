@@ -5,6 +5,7 @@ use protocol::{
 use serde_json::{Value, json};
 
 const PIXELFED_FIXTURE: &str = include_str!("../../../fixtures/pixelfed_home_bundle.json");
+const COUNTER_FIXTURE: &str = include_str!("../../../fixtures/counter_home_bundle.json");
 
 fn like_intent() -> ActionIntent {
     ActionIntent::OptimisticMutate {
@@ -253,6 +254,71 @@ fn pixelfed_fixture_reserializes_identically() {
     // And the typed form survives a second trip.
     let again: WorkspaceSpec = serde_json::from_value(reserialized).unwrap();
     assert_eq!(again, bundle);
+}
+
+#[test]
+fn counter_fixture_parses_and_reserializes_identically() {
+    let original: Value = serde_json::from_str(COUNTER_FIXTURE).unwrap();
+    let bundle: WorkspaceSpec = serde_json::from_str(COUNTER_FIXTURE).unwrap();
+    assert_eq!(bundle.version, "1.0.0");
+
+    let UiNode::Workspace { id, slots, .. } = &bundle.workspace else {
+        panic!("root is not a Workspace");
+    };
+    assert_eq!(id, "home");
+    assert_eq!(slots.len(), 1);
+    assert_eq!(slots[0].provider_uri, "core://counter");
+    let UiNode::Container {
+        orientation,
+        children,
+        ..
+    } = &slots[0].content
+    else {
+        panic!("slot content is not a Container");
+    };
+    assert_eq!(*orientation, Orientation::Vertical);
+    assert_eq!(children.len(), 3);
+    let UiNode::Container { children: row, .. } = &children[2] else {
+        panic!("third child is not a Container");
+    };
+    let labels: Vec<&str> = row
+        .iter()
+        .map(|n| match n {
+            UiNode::Button {
+                label,
+                on_click: ActionIntent::OptimisticMutate { entity_uri, .. },
+            } => {
+                assert_eq!(entity_uri, "core://counters/home");
+                label.as_str()
+            }
+            other => panic!("expected mutate Button, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(labels, ["Increment", "Reset"]);
+
+    assert_eq!(
+        bundle.entities["core://counters/home"].get_i64("count"),
+        Some(0)
+    );
+    assert_eq!(serde_json::to_value(&bundle).unwrap(), original);
+}
+
+// Pitfall: `aspect_ratio` is f32. String round-trips are exact (serde_json
+// writes the shortest f32 repr), but `to_value` widens f32 -> f64, so a
+// non-dyadic value like 1.7777 no longer equals the f64 parsed from the
+// original JSON. Compare via strings or typed values, not `Value`, when
+// aspect ratios are arbitrary.
+#[test]
+fn aspect_ratio_f32_round_trip_semantics() {
+    let j = r#"{"type":"pixelfed://MediaCarousel","media_refs":[],"aspect_ratio":1.7777}"#;
+    let n: UiNode = serde_json::from_str(j).unwrap();
+    assert_eq!(serde_json::to_string(&n).unwrap(), j);
+    let back: UiNode = serde_json::from_str(&serde_json::to_string(&n).unwrap()).unwrap();
+    assert_eq!(back, n);
+
+    let original: Value = serde_json::from_str(j).unwrap();
+    let widened = serde_json::to_value(&n).unwrap();
+    assert_ne!(widened["aspect_ratio"], original["aspect_ratio"]);
 }
 
 #[test]
