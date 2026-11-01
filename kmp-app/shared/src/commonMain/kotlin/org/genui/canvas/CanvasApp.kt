@@ -64,7 +64,7 @@ class CanvasController(private val bridge: CanvasEngineBridge) {
     /** Encodes [intent] and forwards it to the engine. */
     fun dispatch(intent: ActionIntent) {
         val json = CanvasJson.encodeIntent(intent)
-        println("[Canvas] dispatch: $json")
+        // Logging is the bridge's job (desktop prints "[desktop] dispatch: <json>").
         try {
             bridge.dispatch(json)
         } catch (t: Throwable) {
