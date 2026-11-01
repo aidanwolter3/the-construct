@@ -1,0 +1,9 @@
+target/
+.gradle/
+build/
+*.dylib
+*.so
+.idea/
+local.properties
+.claude/settings.local.json
+.kotlin/
