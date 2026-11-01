@@ -117,11 +117,24 @@ class FakeEngineBridge(bundleJson: String, online: Boolean = true) : CanvasEngin
                 val delta = n.toLong()
                 return JsonPrimitive(if (op == "+") Math.addExact(current, delta) else Math.subtractExact(current, delta))
             }
-            return try {
+            val literal = try {
                 CanvasJson.json.parseToJsonElement(e)
             } catch (t: Exception) {
                 throw IllegalArgumentException("unsupported expression: $e")
             }
+            // parseToJsonElement accepts unquoted tokens (`foo.count`, `size(x)`, `NaN`) as
+            // non-string primitives; serde_json (and so expr.rs) rejects them.
+            if (!isStrictJson(literal)) throw IllegalArgumentException("unsupported expression: $e")
+            return literal
+        }
+
+        private val JSON_NUMBER = Regex("""-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?""")
+
+        private fun isStrictJson(v: JsonElement): Boolean = when (v) {
+            is JsonObject -> v.values.all(::isStrictJson)
+            is kotlinx.serialization.json.JsonArray -> v.all(::isStrictJson)
+            is JsonPrimitive -> v.isString || v is JsonNull || v.content == "true" || v.content == "false" ||
+                JSON_NUMBER.matches(v.content)
         }
     }
 }

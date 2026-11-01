@@ -24,6 +24,14 @@ fun main(args: Array<String>) {
     } catch (e: UsageException) {
         System.err.println("[sim] error: ${e.message}")
         2
+    } catch (e: Throwable) {
+        // Must still reach exitProcess: an uncaught exception would leave the live engine's
+        // non-daemon threads running and the JVM (and Gradle) hanging.
+        System.err.println("[sim] internal error: $e")
+        e.printStackTrace()
+        1
+    } finally {
+        liveStorage?.deleteRecursively()
     }
     System.out.flush()
     // The live engine owns non-daemon threads; exit explicitly.
@@ -94,7 +102,11 @@ private fun runCli(args: Array<String>): Int {
         val fixture = opts["fixture"]?.let(::path) ?: defaultFixture(workspace, cwd)
         if (!fixture.isFile) throw UsageException("fixture not found: $fixture")
         println("[sim] mode=fixture workspace=$workspace fixture=$fixture")
-        val fake = FakeEngineBridge(fixture.readText())
+        val fake = try {
+            FakeEngineBridge(fixture.readText())
+        } catch (e: Exception) {
+            throw UsageException("bad fixture $fixture: ${e.message}")
+        }
         setOnline = fake::setOnline
         controller = CanvasController(fake)
     } else {
@@ -127,7 +139,6 @@ private fun runCli(args: Array<String>): Int {
         setOnline = setOnline,
         modeName = mode,
     ).run(steps)
-    liveStorage?.deleteRecursively()
     println(if (result.ok) "[sim] OK: ${result.steps.size} step(s)" else "[sim] FAILED (see steps.log)")
     println("[sim] output: ${outDir.absolutePath}")
     return if (result.ok) 0 else 1

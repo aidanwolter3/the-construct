@@ -69,5 +69,19 @@ class SimScriptTest {
         assertEquals(JsonPrimitive(4), FakeEngineBridge.evalMutation("entity.count", e))
         assertEquals(JsonPrimitive(0), FakeEngineBridge.evalMutation("0", e))
         assertFailsWith<IllegalArgumentException> { FakeEngineBridge.evalMutation("entity.count * 2", e) }
+        // Unsupported forms from expr.rs's `unsupported` test, plus unquoted tokens that
+        // kotlinx's parseToJsonElement would otherwise accept as literals.
+        for (expr in listOf(
+            "", "entity.count + 1.5", "entity.count + entity.count", "entity.count + -1", "entity.",
+            "entity.a.b", "foo.count", "!true", "size(entity.list)", "foo", "NaN", "'x'",
+        )) {
+            assertFailsWith<IllegalArgumentException>(expr) { FakeEngineBridge.evalMutation(expr, e) }
+        }
+        assertEquals(JsonPrimitive("x"), FakeEngineBridge.evalMutation("\"x\"", e))
+    }
+
+    @Test
+    fun unknownCommandWhoseLowercaseIsLongerIsAParseError() {
+        assertFailsWith<ScriptParseException> { parseScript("İ") }
     }
 }

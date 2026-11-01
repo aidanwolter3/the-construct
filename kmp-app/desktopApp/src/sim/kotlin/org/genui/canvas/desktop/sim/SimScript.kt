@@ -28,8 +28,9 @@ fun parseScript(script: String): List<SimStep> {
     script.split(';', '\n').forEachIndexed { index, raw ->
         val entry = raw.trim()
         if (entry.isEmpty() || entry.startsWith("#")) return@forEachIndexed
-        val command = entry.substringBefore(' ').substringBefore('\t').lowercase()
-        val arg = entry.substring(command.length).trim()
+        val rawCommand = entry.substringBefore(' ').substringBefore('\t')
+        val command = rawCommand.lowercase()
+        val arg = entry.substring(rawCommand.length).trim()
         fun where() = "command #${index + 1} '$entry'"
         fun requireArg(what: String): String =
             arg.ifEmpty { throw ScriptParseException("${where()}: '$command' needs $what") }

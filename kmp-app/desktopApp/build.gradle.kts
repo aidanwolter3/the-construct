@@ -72,7 +72,9 @@ val repoRoot = rootDir.parentFile
 val buildRustFfi by tasks.registering(Exec::class) {
     group = "build"
     description = "Builds client-ffi (cargo) and generates Kotlin bindings via scripts/build_ffi.sh"
-    onlyIf { !project.hasProperty("skipRustBuild") }
+    // Resolved at configuration time: Task.project at execution time breaks the configuration cache.
+    val skipRustBuild = project.hasProperty("skipRustBuild")
+    onlyIf { !skipRustBuild }
     workingDir = repoRoot
     commandLine("bash", File(repoRoot, "scripts/build_ffi.sh").absolutePath)
     // Gradle (esp. the daemon) may not inherit a login-shell PATH containing cargo.
