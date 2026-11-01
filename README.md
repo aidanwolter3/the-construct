@@ -70,6 +70,66 @@ resets when the app restarts. The engine caches the last fetched bundle per work
 `~/.canvas/workspace_<id>.json` (e.g. `workspace_home.json`) and uses it when the server is unreachable;
 it retries the fetch every 5 seconds until the server responds.
 
+## Simulation mode
+
+A headless feedback loop: `:desktopApp:simulate` renders the real shared `CanvasApp` to an offscreen
+virtual screen (no window), runs a small script against it and writes PNG screenshots. A run takes about
+2 seconds. Run it from `kmp-app` with `JAVA_HOME` set as above:
+
+```bash
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=home -Pscreen=phone \
+  -Pscript="shot start; click Increment; click Increment; assert-text Count: 2; shot after; offline; shot offline"
+
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -Pscreen=desktop
+./gradlew -PskipRustBuild :desktopApp:simulate -PscriptFile=my_script.txt -Pdensity=1 -Pout=/tmp/shots
+./gradlew -PskipRustBuild :desktopApp:simulate -PbaseUrl=http://127.0.0.1:8080 -Pscript="shot live"   # live mode
+```
+
+Flags (all optional):
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-Pworkspace` | `home` | Workspace id. In fixture mode it selects the default fixture. |
+| `-Pscreen` | `phone` | `phone` (390x844 dp), `tablet` (820x1180), `desktop` (1280x800), or `WxH` in dp. |
+| `-Pdensity` | per screen | Pixels per dp: phone 3, tablet 2, desktop 2, `WxH` 2. PNG size = dp x density. |
+| `-Pscript` | `shot initial` | Script text (see below). |
+| `-PscriptFile` | | Script read from a file. Use either this or `-Pscript`, not both. |
+| `-Pmode` | `fixture` | `fixture` or `live`. Live mode is selected automatically when `-PbaseUrl` is given. |
+| `-Pfixture` | per workspace | Bundle JSON in fixture mode. Defaults: `home` uses `fixtures/counter_home_bundle.json`, `pixelfed_demo` uses `fixtures/pixelfed_home_bundle.json`. Other workspaces need `-Pfixture`. |
+| `-PbaseUrl` | `http://127.0.0.1:8080` | Server for live mode. |
+| `-PtimeoutMs` | `10000` | Live mode only: how long to wait for the workspace to load before the first step. |
+| `-Pout` | `kmp-app/desktopApp/build/sim/<yyyyMMdd-HHmmss>` | Output directory. |
+
+Relative paths (`-Pfixture`, `-PscriptFile`, `-Pout`) resolve against the **repo root**, the task's working
+directory, so `-Pfixture=fixtures/counter_home_bundle.json` works.
+
+**Fixture mode** (the default) needs no Rust and no server. A fake in-memory engine
+(`FakeEngineBridge`) loads the bundle, applies `OptimisticMutate` clicks with the D4 expression subset, and
+toggles connectivity for `offline`/`online`. **Live mode** runs the real Rust engine through JNA against
+the server. It uses a fresh temp storage dir, so it neither reads nor writes `~/.canvas`. If the workspace
+does not load within `timeoutMs`, it logs a warning and still runs the script (shots show Loading/Offline).
+`offline`/`online` are not supported in live mode and fail the run.
+
+Script commands are separated by `;` or newlines. Each command is trimmed, blank entries are skipped, and
+entries starting with `#` are comments. An argument cannot contain `;`.
+
+| Command | Effect |
+|---|---|
+| `shot <name>` | Writes `<NN>-<name>.png`, where NN is the step number. |
+| `click <text>` | Clicks the node with that text: an exact match first (clickable nodes preferred), then a substring match. Fails if no node matches. |
+| `wait <ms>` | Sleeps, advances the UI clock, then waits for idle. |
+| `idle` | Waits until the UI is idle. |
+| `assert-text <text>` | Fails unless some node's text contains `<text>`. Retries for up to 2 s. |
+| `assert-no-text <text>` | The inverse of `assert-text`. |
+| `offline` / `online` | Fixture mode only: flips the engine's connectivity. |
+| `screen <WxH or preset>` | Restarts the renderer at the new size. Engine state carries over; UI state such as scroll position does not. |
+
+The output directory holds the PNGs, `steps.log` (human-readable) and `steps.json` (one entry per step:
+`index`, `command`, `arg`, `status` (`ok`/`fail`), `message`, `file`, `elapsed_ms`). Its absolute path is
+printed at the end. The run stops at the first failing step; the logs are still written. Exit codes: 0 for
+success, 1 for a failed step, 2 for bad flags or a bad script. An unknown command is rejected before any step
+runs. On failure, Gradle reports `simulate` as failed.
+
 ## Tests
 
 ```bash

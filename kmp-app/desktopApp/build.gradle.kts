@@ -10,6 +10,17 @@ kotlin {
     jvmToolchain(21)
 }
 
+// Simulation mode (README "Simulation mode", DECISIONS D8): a separate `sim` source set holds the
+// headless simulator and fake engine, so the Compose UI test harness stays off the shipping app's
+// runtime classpath. `sim` sees `main` (EngineBridge, UniFFI bindings); tests see `sim`.
+val sim: SourceSet by sourceSets.creating
+val simImplementation: Configuration by configurations.getting {
+    extendsFrom(configurations.implementation.get())
+}
+configurations.named(sim.runtimeOnlyConfigurationName) {
+    extendsFrom(configurations.runtimeOnly.get())
+}
+
 // UniFFI-generated Kotlin bindings (package `uniffi.client_ffi`) go in
 // desktopApp/src/main/kotlin/uniffi/client_ffi/. UniFFI's Kotlin backend loads
 // the Rust cdylib through JNA, so the bindings are JVM-only and live here rather
@@ -20,7 +31,13 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.kotlinx.coroutines.swing)
     implementation(libs.jna)
+
+    simImplementation(sourceSets.main.get().output)
+    simImplementation(libs.compose.ui.test)
+
     testImplementation(kotlin("test"))
+    testImplementation(sim.output)
+    testImplementation(libs.compose.ui.test)
 }
 
 // Rust cdylib (libclient_ffi.dylib) built by `cargo build --release -p client-ffi`.
@@ -45,6 +62,7 @@ tasks.withType<JavaExec>().configureEach {
 }
 tasks.withType<Test>().configureEach {
     systemProperty("jna.library.path", rustLibDir)
+    systemProperty("java.awt.headless", "true")
     testLogging { showStandardStreams = true }
 }
 
@@ -73,4 +91,26 @@ val buildRustFfi by tasks.registering(Exec::class) {
 
 tasks.named("compileKotlin") {
     dependsOn(buildRustFfi)
+}
+
+// Headless simulator: renders CanvasApp offscreen and writes PNG screenshots driven by a script.
+// Relative paths (-Pfixture, -Pout, -PscriptFile) resolve against the repo root (the working dir).
+//   ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=home -Pscreen=phone \
+//       -Pscript="shot start; click Increment; assert-text Count: 1; shot after"
+val simulate by tasks.registering(JavaExec::class) {
+    group = "verification"
+    description = "Renders the shared Compose UI headlessly and writes screenshots (see README: Simulation mode)"
+    classpath = sim.runtimeClasspath
+    mainClass = "org.genui.canvas.desktop.sim.SimulatorKt"
+    workingDir = repoRoot
+    jvmArgs("-Djava.awt.headless=true")
+    systemProperty("canvas.sim.defaultOutRoot", layout.buildDirectory.dir("sim").get().asFile.absolutePath)
+    // Forward -P<name>=<value> as --<name>=<value>.
+    val names = listOf("workspace", "screen", "script", "scriptFile", "fixture", "baseUrl", "mode", "out", "density", "timeoutMs")
+    // providers.gradleProperty reads only -P / gradle.properties (project.findProperty("script")
+    // would pick up an unrelated built-in project property).
+    val forwarded = names.mapNotNull { n -> providers.gradleProperty(n).orNull?.let { "--$n=$it" } }
+    args(forwarded)
+    // Always rerun; outputs are timestamped.
+    outputs.upToDateWhen { false }
 }

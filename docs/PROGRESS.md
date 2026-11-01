@@ -63,6 +63,18 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 - client-ffi enables uniffi/cli by default (revisit for Android cross-builds in M4).
 - build_ffi.sh is aarch64-apple-darwin only.
 
+## Phase A: Simulation mode (headless screenshots)
+
+- `:desktopApp:simulate` (JavaExec, `sim` source set) renders the real shared `CanvasApp` with
+  `runSkikoComposeUiTest` from a plain main, headless, and writes PNGs plus steps.log/steps.json. It has a
+  fixture mode (in-memory FakeEngineBridge) and a live mode (the real JNA engine). See README "Simulation mode"
+  and D8.
+- Implementation done (shared 26 tests, desktopApp 11 tests). Review/QA: in progress.
+
 ## Next steps
 
-M4 (Android: androidTarget in :shared, cargo-ndk, bindings in a shared JVM/Android source set), then M5 (SQLite + outbox).
+1. Phase A: independent code review + QA of simulation mode, fix findings, commit.
+2. Phase B (M4 Android): Rust android targets and cargo-ndk are installed. Steps: client-ffi `cli` feature
+   off by default; Android target in :shared + :androidApp; move UniFFI bindings/EngineBridge to a shared
+   JVM+Android source set; cargo-ndk build task; emulator QA.
+3. Then M5 (SQLite + outbox).

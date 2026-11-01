@@ -64,3 +64,24 @@ at `<storage>/workspace_<id>.json`.
 
 Until query resolution exists, `FeedList` ignores `query_key`. It renders `item_template` once for each entity
 whose URI contains `/posts/`, ordered by `created_at` (newest first), and binds the item's URI as `uri`.
+
+## D8: Simulation mode harness
+
+`:desktopApp:simulate` (README, "Simulation mode") renders `CanvasApp` headlessly for screenshot-driven
+feedback.
+
+- **Harness:** the Compose UI test harness, `runSkikoComposeUiTest(size, density)` from
+  `org.jetbrains.compose.ui:ui-test` (matching the Compose Multiplatform version). It is called from a plain
+  `main`, with no JUnit. It renders to a Skia raster surface, so `java.awt.headless=true` works. Clicks go
+  through `performMouseInput` (move, click, move off the node). `performClick()` injects touch events that
+  leave a Material button with a hover tint in later screenshots. Screenshots come from
+  `onRoot().captureToImage()` and are encoded to PNG with Skia. `ImageComposeScene` was not needed.
+- **Source set:** the simulator and fake engine live in a separate `sim` source set of `:desktopApp`. It sees
+  `main`, and tests see `sim`. The test harness stays off the shipping app's runtime classpath.
+- **Fake engine:** `FakeEngineBridge` implements `CanvasEngineBridge` in memory. It emits D6-shaped snapshots
+  from a bundle and applies `OptimisticMutate` with the D4 subset, mirroring `client-core/src/expr.rs`. That
+  lets fixture runs exercise real interactions without Rust or a server. Live mode uses the real JNA engine
+  with temp storage.
+- **Screen sizes and density:** presets are in dp: phone 390x844 at density 3, tablet 820x1180 at 2, desktop
+  1280x800 at 2. A custom `WxH` uses density 2. `-Pdensity` overrides any of these. The PNG is dp x density
+  pixels, so text is legible at phone-like scale.

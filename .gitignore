@@ -7,3 +7,4 @@ build/
 local.properties
 .claude/settings.local.json
 .kotlin/
+*.swp
