@@ -15,5 +15,10 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 
 ## Next steps
 
-1. Independent review + QA of protocol crate; fix findings; commit "M1".
-2. In parallel: M2 server (crates/server), client-core engine, client-ffi UniFFI, kmp-app scaffolding.
+In flight (parallel, uncommitted until each finishes):
+1. Independent review of protocol crate (may add tests in crates/protocol).
+2. M2 server implementation in crates/server (lib `app()` + bin, include_str! fixtures, oneshot tests).
+3. client-core CanvasEngine (reqwest blocking, background fetch thread, expr.rs for D4 subset).
+4. kmp-app scaffold (shared model + renderer, desktopApp with temporary FixtureEngine behind CanvasEngineBridge).
+Then: client-ffi UniFFI wrapper + scripts/build_ffi.sh + swap FixtureEngine for EngineHandle;
+review + QA of each; README.md; milestone commits.
