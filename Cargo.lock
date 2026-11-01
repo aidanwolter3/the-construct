@@ -286,6 +286,7 @@ name = "client-ffi"
 version = "0.1.0"
 dependencies = [
  "client-core",
+ "libc",
  "uniffi",
 ]
 

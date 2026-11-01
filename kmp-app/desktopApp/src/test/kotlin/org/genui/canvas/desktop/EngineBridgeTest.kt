@@ -2,7 +2,7 @@ package org.genui.canvas.desktop
 
 import com.sun.net.httpserver.HttpServer
 import org.genui.canvas.CanvasJson
-import uniffi.client_ffi.EngineHandle
+import org.genui.canvas.engine.UniffiEngineBridge
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.PrintStream
@@ -17,9 +17,9 @@ import kotlin.test.assertTrue
 import kotlin.test.fail
 
 /**
- * End-to-end over JNA: Kotlin [EngineBridge] -> UniFFI -> Rust CanvasEngine -> StateObserver
+ * End-to-end over JNA: Kotlin [UniffiEngineBridge] (:shared jvmCommonMain) -> UniFFI -> Rust CanvasEngine -> StateObserver
  * callback. A stub HTTP server serves fixtures/counter_home_bundle.json.
- * Requires target/release/libclient_ffi.dylib (built by :desktopApp:buildRustFfi).
+ * Requires target/release/libclient_ffi.dylib (built by :shared:buildRustFfi).
  */
 class EngineBridgeTest {
     private lateinit var server: HttpServer
@@ -50,10 +50,9 @@ class EngineBridgeTest {
 
     @Test
     fun dispatchIncrementUpdatesCounterThroughJna() {
-        val handle = EngineHandle.newWithWorkspace(
+        val bridge = UniffiEngineBridge.create(
             storage.absolutePath, "http://127.0.0.1:${server.address.port}", "home",
         )
-        val bridge = EngineBridge(handle)
         val counts = LinkedBlockingQueue<Int>()
         bridge.subscribe { _, entitiesJson, _ ->
             val e = entitiesJson.trim()

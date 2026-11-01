@@ -1,0 +1,50 @@
+package org.genui.canvas.engine
+
+import org.genui.canvas.CanvasEngineBridge
+import uniffi.client_ffi.EngineHandle
+import uniffi.client_ffi.FfiStateSnapshot
+import uniffi.client_ffi.StateObserver
+
+/**
+ * [CanvasEngineBridge] backed by the Rust engine through the UniFFI/JNA bindings. Shared by the
+ * desktop JVM and Android targets (`jvmCommonMain`, DECISIONS D5); platform differences (logging)
+ * go through [engineLog].
+ *
+ * Holds strong references to both the [EngineHandle] and every registered [StateObserver]:
+ * the Rust side only keeps a handle into UniFFI's callback map, so the Kotlin observer object
+ * must stay reachable for as long as the engine may call it. Callers must in turn keep the
+ * bridge reachable for the life of the UI.
+ */
+class UniffiEngineBridge(val handle: EngineHandle) : CanvasEngineBridge {
+    private val observers = mutableListOf<StateObserver>()
+
+    override fun subscribe(onState: (workspaceJson: String, entitiesJson: String, isOnline: Boolean) -> Unit) {
+        val observer = object : StateObserver {
+            override fun onStateUpdated(snapshot: FfiStateSnapshot) {
+                onState(snapshot.workspaceJson, snapshot.entitiesJson, snapshot.isOnline)
+            }
+        }
+        synchronized(observers) { observers += observer }
+        handle.subscribe(observer)
+    }
+
+    override fun dispatch(intentJson: String) {
+        engineLog("dispatch: $intentJson")
+        handle.dispatch(intentJson)
+    }
+
+    companion object {
+        /**
+         * Creates the engine (which starts loading [workspace] from [baseUrl] in the background,
+         * caching under [storageDir]) and wraps it. [storageDir] must exist and be writable.
+         */
+        fun create(storageDir: String, baseUrl: String, workspace: String): UniffiEngineBridge {
+            val handle = EngineHandle.newWithWorkspace(storageDir, baseUrl, workspace)
+            engineLog("engine created base_url=$baseUrl workspace=$workspace")
+            return UniffiEngineBridge(handle)
+        }
+    }
+}
+
+/** Platform log line: stdout with a `[desktop]` prefix on desktop, logcat tag `CanvasEngine` on Android. */
+internal expect fun engineLog(message: String)

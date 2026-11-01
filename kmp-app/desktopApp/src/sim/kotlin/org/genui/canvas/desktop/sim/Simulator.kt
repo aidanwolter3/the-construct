@@ -1,8 +1,7 @@
 package org.genui.canvas.desktop.sim
 
 import org.genui.canvas.CanvasController
-import org.genui.canvas.desktop.EngineBridge
-import uniffi.client_ffi.EngineHandle
+import org.genui.canvas.engine.UniffiEngineBridge
 import java.io.File
 import java.nio.file.Files
 import java.time.LocalDateTime
@@ -44,9 +43,8 @@ private val KNOWN_OPTIONS = setOf(
     "workspace", "screen", "script", "scriptFile", "mode", "fixture", "baseUrl", "out", "density", "timeoutMs",
 )
 
-// Kept reachable for the whole run: the bridge owns the JNA callback observers.
-private var liveEngine: EngineHandle? = null
-private var liveBridge: EngineBridge? = null
+// Kept reachable for the whole run: the bridge owns the engine handle and the JNA callback observers.
+private var liveBridge: UniffiEngineBridge? = null
 private var liveStorage: File? = null
 
 fun parseArgs(args: Array<String>): Map<String, String> = args.associate { a ->
@@ -121,9 +119,7 @@ private fun runCli(args: Array<String>): Int {
         val storage = Files.createTempDirectory("canvas-sim").toFile()
         liveStorage = storage
         println("[sim] mode=live workspace=$workspace baseUrl=$baseUrl storage=$storage")
-        val engine = EngineHandle.newWithWorkspace(storage.absolutePath, baseUrl, workspace)
-        val bridge = EngineBridge(engine)
-        liveEngine = engine
+        val bridge = UniffiEngineBridge.create(storage.absolutePath, baseUrl, workspace)
         liveBridge = bridge
         controller = CanvasController(bridge)
         val deadline = System.nanoTime() + timeoutMs * 1_000_000

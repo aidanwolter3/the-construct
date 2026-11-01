@@ -41,7 +41,7 @@ curl -s http://127.0.0.1:8080/v1/workspaces/home | jq .
 Terminal 2: build the FFI library and bindings, then run the desktop app.
 
 ```bash
-scripts/build_ffi.sh            # optional: :desktopApp:compileKotlin runs it automatically
+scripts/build_ffi.sh            # optional: :shared:buildRustFfi runs it before the desktop compile
                                 # (dylib built to target/aarch64-apple-darwin/release, copied to target/release)
 cd kmp-app
 export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
@@ -104,7 +104,7 @@ Relative paths (`-Pfixture`, `-PscriptFile`, `-Pout`) resolve against the **repo
 directory, so `-Pfixture=fixtures/counter_home_bundle.json` works.
 
 **Fixture mode** (the default) needs no server, and no Rust build when run with `-PskipRustBuild` (without
-it, `compileKotlin` triggers `buildRustFfi`, i.e. cargo). A fake in-memory engine
+it, the desktop compile triggers `:shared:buildRustFfi`, i.e. cargo). A fake in-memory engine
 (`FakeEngineBridge`) loads the bundle, applies `OptimisticMutate` clicks with the D4 expression subset, and
 toggles connectivity for `offline`/`online`. **Live mode** runs the real Rust engine through JNA against
 the server. It uses a fresh temp storage dir, so it neither reads nor writes `~/.canvas`. If the workspace

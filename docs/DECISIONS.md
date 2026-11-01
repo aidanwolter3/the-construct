@@ -47,12 +47,27 @@ Until a real CEL evaluator exists, a small expression subset stands in:
 `AuthorHeader.on_click` is `Option<ActionIntent>`. It is left out of the JSON when `None` and
 defaults to `None` when missing, which matches the §2.2C fixture.
 
-## D5: UniFFI Kotlin bindings live in `:desktopApp`, not `:shared`
+## D5: UniFFI Kotlin bindings live in `:shared`'s `jvmCommonMain` source set
 
-UniFFI's Kotlin bindings load the library through JNA, so they only run on the JVM. They are generated into
-`kmp-app/desktopApp/src/main/kotlin/uniffi/client_ffi/`. `:shared` depends only on the
-`CanvasEngineBridge` interface, and `desktopApp/EngineBridge.kt` implements that interface with `EngineHandle`.
-For M4, the bindings will move to a source set that the JVM and Android targets share.
+UniFFI's Kotlin bindings load the library through JNA, so they run on the JVM and on Android but not in
+`commonMain`. Until M4 they lived in `:desktopApp`. Since M4 (Phase B) they are generated into
+`kmp-app/shared/src/jvmCommonMain/kotlin/uniffi/client_ffi/` (committed). `jvmCommonMain` is an intermediate
+source set between `commonMain` and the `desktop` (JVM) and `android` targets, declared with
+`applyDefaultHierarchyTemplate { common { group("jvmCommon") { ... } } }`.
+
+- `org.genui.canvas.engine.UniffiEngineBridge` (also in `jvmCommonMain`) implements `CanvasEngineBridge` over
+  `EngineHandle`. `UniffiEngineBridge.create(storageDir, baseUrl, workspace)` builds the engine. The bridge
+  holds the handle and observers, so callers only need to keep the bridge reachable.
+- Logging goes through `internal expect fun engineLog`: stdout `[desktop] ...` on desktop (Rust already
+  prints `[CanvasEngine] ...` there) and `android.util.Log` tag `CanvasEngine` on Android.
+- The storage directory, base URL and system properties stay in the apps (`desktopApp` `Main.kt`).
+- JNA is declared per platform: the plain `net.java.dev.jna:jna` jar in `desktopMain`, and
+  `net.java.dev.jna:jna:<ver>@aar` (which bundles `libjnidispatch.so`) in `androidMain`. Both use `api`,
+  because the bindings expose JNA types. Neither is declared in `jvmCommonMain`, so Android never gets the jar
+  and desktop never gets the aar.
+- `:shared:buildRustFfi` (`scripts/build_ffi.sh`) regenerates the bindings and the macOS dylib.
+  `compileKotlinDesktop` depends on it. Android compiles only `mustRunAfter` it: they use the committed
+  bindings and don't need cargo. `-PskipRustBuild` skips it.
 
 ## D6: Engine snapshot shape
 
@@ -85,3 +100,44 @@ feedback.
 - **Screen sizes and density:** presets are in dp: phone 390x844 at density 3, tablet 820x1180 at 2, desktop
   1280x800 at 2. A custom `WxH` uses density 2. `-Pdensity` overrides any of these. The PNG is dp x density
   pixels, so text is legible at phone-like scale.
+
+## D9: Bindgen feature and Android logging
+
+- **Bindgen feature:** uniffi's `cli` feature (clap, askama, and other CLI deps) is behind the opt-in
+  `client-ffi` feature `bindgen`, and the `uniffi-bindgen` binary has `required-features = ["bindgen"]`. The
+  cdylib builds for desktop and Android don't compile the CLI. To generate bindings:
+  `cargo run -p client-ffi --release --features bindgen --bin uniffi-bindgen -- generate --library <lib> --language kotlin --out-dir <dir> --no-format`.
+- **Android build:** `scripts/build_android.sh` runs `cargo ndk` and writes
+  `kmp-app/androidApp/src/main/jniLibs/<abi>/libclient_ffi.so`. The ABIs default to `arm64-v8a x86_64`
+  (`CANVAS_ANDROID_ABIS` overrides them), and the NDK defaults to the newest complete one (`ANDROID_NDK_HOME`
+  overrides it). The `.so` needs only `liblog`, `libdl` and `libc`, not `libc++_shared.so`. reqwest's rustls
+  (ring) cross-compiles cleanly.
+- **Android logging:** client-core logs with `println!`/`eprintln!`, which Android discards. client-core is
+  unchanged. Instead, `client-ffi/src/android_log.rs` (`cfg(target_os = "android")`, run once from the
+  `EngineHandle` constructors) uses `pipe2` and `dup2` to point fds 1 and 2 at pipes. A thread per pipe
+  forwards each line to `__android_log_write` with tag `CanvasEngine`: stdout at INFO and stderr at WARN. View
+  them with `adb logcat -s CanvasEngine:V`. Desktop builds don't compile this module.
+
+## D10: Android target uses AGP 9.1.1's `com.android.kotlin.multiplatform.library` plugin
+
+`:shared` gets its Android target from the KMP-native Android library plugin
+(`com.android.kotlin.multiplatform.library`, AGP 9.1.1), configured with
+`kotlin { android { namespace = "org.genui.canvas.shared"; compileSdk = 36; minSdk = 26 } }`. It does not
+use the classic `androidTarget()` with `com.android.library`.
+
+- **Why this plugin:** it is Google's supported path for KMP libraries on AGP 9. Combining
+  `com.android.library` with the Kotlin Multiplatform plugin is the legacy setup that AGP 9 phases out. That
+  combination was not tried here. The plugin builds a single-variant library with no build types or
+  flavors, which is all `:shared` needs. Host and device tests are off unless enabled.
+- **Why AGP 9.1.1:** it works with Gradle 9.3.1, Kotlin 2.3.20 and Compose Multiplatform 1.11.0-beta01, and it
+  supports compileSdk 36. With `--warning-mode all` it shows no Gradle or AGP deprecation warnings. Verified with
+  `:shared:assemble` (which produces `shared.aar`) and the desktop tests. Newer 9.x releases exist but were
+  not needed.
+- **DSL:** the target block is `android { }` inside `kotlin { }`. AGP 9.1.1 reports `androidLibrary { }` as
+  deprecated with "use 'android' instead". The target's source sets are `androidMain`/`androidHostTest`/`androidDeviceTest`.
+- **Hierarchy:** `withAndroidTarget()` in the hierarchy template only matches the legacy `androidTarget()`.
+  The `jvmCommon` group (D5) matches this plugin's target with
+  `withCompilations { it.target.platformType == KotlinPlatformType.androidJvm }`.
+- The plugin id and version are in `gradle/libs.versions.toml` (`agp`,
+  `android-kotlin-multiplatform-library`) and applied with `apply false` in the root build. The SDK path comes
+  from the gitignored `kmp-app/local.properties` (`sdk.dir=...`) or `ANDROID_HOME`.

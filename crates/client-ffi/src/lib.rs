@@ -7,6 +7,15 @@ use std::sync::Arc;
 
 use client_core::{CanvasEngine, StateSnapshot};
 
+#[cfg(target_os = "android")]
+mod android_log;
+
+/// One-time per-process setup that the engine constructors run.
+fn platform_init() {
+    #[cfg(target_os = "android")]
+    android_log::init();
+}
+
 /// A snapshot of engine state; JSON payloads are passed through as strings.
 #[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
 pub struct FfiStateSnapshot {
@@ -42,6 +51,7 @@ impl EngineHandle {
     /// fetch runs on a background thread.
     #[uniffi::constructor]
     pub fn new(storage_path: String, base_url: String) -> Self {
+        platform_init();
         Self {
             inner: Arc::new(CanvasEngine::init(&storage_path, &base_url)),
         }
@@ -54,6 +64,7 @@ impl EngineHandle {
         base_url: String,
         workspace_id: String,
     ) -> Self {
+        platform_init();
         Self {
             inner: Arc::new(CanvasEngine::init_with_workspace(
                 &storage_path,

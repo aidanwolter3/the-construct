@@ -1,8 +1,9 @@
 package org.genui.canvas
 
 /**
- * Platform-neutral seam to the Rust engine (client-core via client-ffi). On desktop it is
- * implemented over the UniFFI/JNA bindings in :desktopApp; tests and previews can supply fakes.
+ * Platform-neutral seam to the Rust engine (client-core via client-ffi). On desktop and Android it
+ * is implemented by `org.genui.canvas.engine.UniffiEngineBridge` (jvmCommonMain) over the UniFFI/JNA
+ * bindings; tests and previews can supply fakes.
  */
 interface CanvasEngineBridge {
     /**

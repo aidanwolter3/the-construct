@@ -78,9 +78,19 @@ Note: the environment restarted twice mid-work; work is now committed in small w
   shut down (process exits); default out dir is per-second; no golden-image diffing (Roborazzi) yet.
 - Tests: shared 26, desktopApp 12. Status: DONE.
 
+## Milestone 4: Android (in progress)
+
+- Rust: client-ffi `bindgen` feature now opt-in (no CLI deps by default); scripts/build_android.sh (cargo-ndk,
+  arm64-v8a + x86_64 into kmp-app/androidApp/src/main/jniLibs; deps only liblog/libdl/libc); Rust stdout/stderr
+  forwarded to logcat tag CanvasEngine on Android (client-ffi/src/android_log.rs). D9.
+- Gradle: AGP 9.1.1 `com.android.kotlin.multiplatform.library` on :shared; new `jvmCommonMain` source set holds
+  the UniFFI bindings and `UniffiEngineBridge` (JNA jar on desktop, aar on Android); :shared owns buildRustFfi.
+  D5 amended, D10. Tests: cargo 42, shared 26, desktopApp 12.
+
 ## Next steps
 
-1. Phase B (M4 Android): Rust android targets and cargo-ndk are installed. Steps: client-ffi `cli` feature
-   off by default; Android target in :shared + :androidApp; move UniFFI bindings/EngineBridge to a shared
-   JVM+Android source set; cargo-ndk build task; emulator QA.
+1. M4: create :androidApp (MainActivity, cleartext/INTERNET, base URL default 10.0.2.2:8080, filesDir storage,
+   Gradle task wiring scripts/build_android.sh), assembleDebug.
+2. M4: independent review + emulator QA (screencap, tap Increment, offline/online, pixelfed_demo), fix, docs
+   (README Android section), commit "M4: ...".
 3. Then M5 (SQLite + outbox).
