@@ -154,7 +154,9 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
 - **Base URL / workspace:** an intent extra (`baseUrl`, `workspace`) wins over `BuildConfig.CANVAS_BASE_URL` /
   `BuildConfig.CANVAS_WORKSPACE`, whose defaults are `http://10.0.2.2:8080` (the emulator's alias for the
   host loopback) and `home`, overridable at build time with `-PcanvasBaseUrl=...` / `-PcanvasWorkspace=...`.
-  Extras are read only from the intent that creates the engine (see lifetime).
+  Extras are read only from the intent that creates the engine (see lifetime), and only in debug builds
+  (`BuildConfig.DEBUG`): the launcher activity is exported, so release builds ignore them rather than let
+  another app redirect the engine to an arbitrary server.
 - **Cleartext:** only debug builds allow HTTP, and only to `10.0.2.2`, `localhost` and `127.0.0.1`
   (`src/debug/AndroidManifest.xml` sets `android:networkSecurityConfig`, `src/debug/res/xml/network_security_config.xml`).
   `localhost`/`127.0.0.1` cover a physical phone with `adb reverse tcp:8080 tcp:8080`. Release builds keep the

@@ -81,7 +81,10 @@ val buildRustFfi by tasks.registering(Exec::class) {
     environment("PATH", "$cargoBin${File.pathSeparator}${System.getenv("PATH") ?: ""}")
 
     inputs.files(
-        fileTree(File(repoRoot, "crates")) { include("**/src/**", "**/Cargo.toml") },
+        fileTree(File(repoRoot, "crates")) {
+            include("**/src/**", "**/Cargo.toml", "**/build.rs")
+            exclude("**/.*.swp")
+        },
         File(repoRoot, "Cargo.toml"),
         File(repoRoot, "Cargo.lock"),
         File(repoRoot, "scripts/build_ffi.sh"),

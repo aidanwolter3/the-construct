@@ -187,7 +187,8 @@ adb logcat -s CanvasEngine:V
 adb exec-out screencap -p > screen.png
 ```
 
-Intent extras `baseUrl` and `workspace` override the `BuildConfig` defaults. They are read when the engine is
+Intent extras `baseUrl` and `workspace` override the `BuildConfig` defaults (debug builds only; release builds
+ignore them). They are read when the engine is
 created, so use `am start -S` (force-stop first) to switch workspace on a running app. Rotation keeps the
 same engine. Logcat tag `CanvasEngine` carries both the Kotlin log lines (`starting base_url=...`,
 `dispatch: ...`) and the Rust engine's stdout/stderr. The workspace cache is in the app's `filesDir`.

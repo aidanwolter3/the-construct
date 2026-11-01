@@ -4,8 +4,9 @@
 # Usage: scripts/build_android.sh
 #
 # Environment (all optional):
-#   ANDROID_NDK_HOME     NDK to use. Default: newest NDK under $ANDROID_HOME/ndk,
-#                        then $ANDROID_SDK_ROOT/ndk, then ~/Library/Android/sdk/ndk.
+#   ANDROID_NDK_HOME     NDK to use. Default: newest NDK under <sdk>/ndk, where <sdk> is
+#                        $ANDROID_HOME if set, else $ANDROID_SDK_ROOT if set, else
+#                        ~/Library/Android/sdk (the first one set is used; no fallback).
 #   CANVAS_ANDROID_ABIS  Space- or comma-separated ABIs. Default: "arm64-v8a x86_64".
 #
 # Outputs:

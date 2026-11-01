@@ -55,12 +55,19 @@ class MainActivity : ComponentActivity() {
 
 internal data class EngineConfig(val storageDir: File, val baseUrl: String, val workspace: String) {
     companion object {
-        /** Intent extra, else the BuildConfig default (-PcanvasBaseUrl / -PcanvasWorkspace at build time). */
-        fun from(intent: Intent?, storageDir: File) = EngineConfig(
-            storageDir = storageDir,
-            baseUrl = intent?.getStringExtra(EXTRA_BASE_URL)?.takeIf { it.isNotBlank() } ?: BuildConfig.CANVAS_BASE_URL,
-            workspace = intent?.getStringExtra(EXTRA_WORKSPACE)?.takeIf { it.isNotBlank() } ?: BuildConfig.CANVAS_WORKSPACE,
-        )
+        /**
+         * Intent extra, else the BuildConfig default (-PcanvasBaseUrl / -PcanvasWorkspace at build time).
+         * Extras are honored only in debug builds: the activity is exported (launcher), so in a release build
+         * any other app could otherwise point the engine at an arbitrary server.
+         */
+        fun from(intent: Intent?, storageDir: File): EngineConfig {
+            val extras = if (BuildConfig.DEBUG) intent else null
+            return EngineConfig(
+                storageDir = storageDir,
+                baseUrl = extras?.getStringExtra(EXTRA_BASE_URL)?.takeIf { it.isNotBlank() } ?: BuildConfig.CANVAS_BASE_URL,
+                workspace = extras?.getStringExtra(EXTRA_WORKSPACE)?.takeIf { it.isNotBlank() } ?: BuildConfig.CANVAS_WORKSPACE,
+            )
+        }
     }
 }
 

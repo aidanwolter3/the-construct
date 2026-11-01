@@ -10,10 +10,10 @@ import uniffi.client_ffi.StateObserver
  * desktop JVM and Android targets (`jvmCommonMain`, DECISIONS D5); platform differences (logging)
  * go through [engineLog].
  *
- * Holds strong references to both the [EngineHandle] and every registered [StateObserver]:
- * the Rust side only keeps a handle into UniFFI's callback map, so the Kotlin observer object
- * must stay reachable for as long as the engine may call it. Callers must in turn keep the
- * bridge reachable for the life of the UI.
+ * Holds strong references to both the [EngineHandle] and every registered [StateObserver]. (UniFFI's
+ * generated callback handle map already pins each observer until Rust frees it; the list here is
+ * defensive.) Callers must keep the bridge reachable for the life of the UI: if it and the handle
+ * become unreachable, UniFFI's cleaner frees the Rust engine.
  */
 class UniffiEngineBridge(val handle: EngineHandle) : CanvasEngineBridge {
     private val observers = mutableListOf<StateObserver>()
