@@ -201,3 +201,54 @@ fn offline_falls_back_to_cache() {
     assert_eq!(count(&engine.snapshot()), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn observer_may_dispatch_reentrantly() {
+    use std::sync::{Arc, Mutex};
+    let engine = Arc::new(CanvasEngine::init("", "http://127.0.0.1:1"));
+    // Weak ref avoids an Arc cycle (engine -> observer -> engine).
+    let weak = Arc::downgrade(&engine);
+    let fired = Arc::new(Mutex::new(false));
+    let fired2 = Arc::clone(&fired);
+    let (tx, rx) = mpsc::channel();
+    engine.subscribe(move |s| {
+        let entities: Value = serde_json::from_str(&s.entities_json).unwrap();
+        let c = entities["core://counters/home"]["count"].as_i64();
+        if c == Some(1) {
+            let mut f = fired2.lock().unwrap();
+            if !*f {
+                *f = true;
+                drop(f);
+                if let Some(e) = weak.upgrade() {
+                    e.dispatch(INCREMENT); // must not deadlock
+                }
+            }
+        }
+        let _ = tx.send(c);
+    });
+    engine.dispatch(INCREMENT);
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    loop {
+        let c = rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).unwrap();
+        if c == Some(2) {
+            break;
+        }
+    }
+    assert_eq!(count(&engine.snapshot()), 2);
+}
+
+#[test]
+fn panicking_observer_does_not_propagate() {
+    let engine = CanvasEngine::init("", "http://127.0.0.1:1");
+    engine.subscribe(|_| panic!("observer boom"));
+    let rx = subscribe_channel(&engine);
+    engine.dispatch(INCREMENT);
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    loop {
+        let s = rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).unwrap();
+        if s.entities_json != "{}" {
+            assert_eq!(count(&s), 1);
+            break;
+        }
+    }
+}

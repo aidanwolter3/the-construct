@@ -12,7 +12,8 @@ pub mod expr;
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
+use std::panic::{self, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -47,7 +48,15 @@ impl Observer {
     /// Call the observer unless it has already seen this or a newer state.
     fn deliver(&self, seq: u64, snap: StateSnapshot) {
         if self.last_seq.fetch_max(seq, Ordering::SeqCst) < seq {
-            (self.f)(snap);
+            self.call(snap);
+        }
+    }
+
+    /// Invoke the callback, containing any panic so it never unwinds into
+    /// `dispatch`/`refresh` callers (which may sit behind an FFI boundary).
+    fn call(&self, snap: StateSnapshot) {
+        if panic::catch_unwind(AssertUnwindSafe(|| (self.f)(snap))).is_err() {
+            eprintln!("[CanvasEngine] observer panicked; ignored");
         }
     }
 }
@@ -168,10 +177,12 @@ impl CanvasEngine {
             let st = lock(&self.inner.state);
             (st.seq, st.snapshot())
         };
-        // Always deliver the initial snapshot (even at seq 0); a newer one
-        // already delivered by a concurrent notify takes precedence.
-        if observer.last_seq.fetch_max(seq, Ordering::SeqCst) <= seq {
-            (observer.f)(snap);
+        // Always deliver the initial snapshot (even at seq 0), unless a
+        // concurrent notify already delivered this or a newer state. `notify`
+        // never sends seq 0, so `prev == 0` at seq 0 means nothing was sent.
+        let prev = observer.last_seq.fetch_max(seq, Ordering::SeqCst);
+        if prev < seq || (seq == 0 && prev == 0) {
+            observer.call(snap);
         }
     }
 
@@ -210,7 +221,7 @@ impl Inner {
                     st.apply_bundle(spec);
                     st.is_online = true;
                     if let Some(path) = &self.cache_path
-                        && let Err(e) = fs::write(path, raw)
+                        && let Err(e) = write_atomic(path, &raw)
                     {
                         eprintln!(
                             "[CanvasEngine] failed to write cache {}: {e}",
@@ -301,6 +312,14 @@ fn fetch(url: &str) -> Result<(WorkspaceSpec, String), String> {
     let raw = resp.text().map_err(|e| e.to_string())?;
     let spec = serde_json::from_str(&raw).map_err(|e| format!("bad bundle: {e}"))?;
     Ok((spec, raw))
+}
+
+/// Write via a temp file + rename so a crash mid-write never leaves a
+/// truncated cache. Callers serialize writes (state lock held).
+fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, contents)?;
+    fs::rename(&tmp, path)
 }
 
 fn load_cache(path: &PathBuf) -> Option<WorkspaceSpec> {

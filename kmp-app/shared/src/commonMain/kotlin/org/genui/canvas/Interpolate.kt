@@ -1,5 +1,6 @@
 package org.genui.canvas
 
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -58,4 +59,77 @@ private fun itemFieldName(expr: String, allowEntityPrefix: Boolean): String? {
         else -> return null
     }
     return rest.takeIf { FIELD.matches(it) }
+}
+
+// ---------------------------------------------------------------------------
+// Item binding for references and intents declared inside item templates.
+// ---------------------------------------------------------------------------
+
+private val ITEM_TOKEN = Regex("""\${'$'}item\.([A-Za-z_][A-Za-z0-9_]*)""")
+
+/**
+ * Resolves a reference string: an exact `$item.<field>` binding resolves against [item]
+ * (null if no item or the field is missing/null); anything else is a literal URI.
+ */
+fun resolveRef(ref: String, item: JsonObject?): String? {
+    val field = itemFieldName(ref, allowEntityPrefix = false) ?: return ref
+    val v = item?.get(field) ?: return null
+    return if (v is JsonPrimitive && v !is JsonNull) v.content else null
+}
+
+/** Resolves [MediaRefs] (DECISIONS D1) to a list of media entity URIs. */
+fun resolveMediaRefs(refs: MediaRefs, item: JsonObject?): List<String> = when (refs) {
+    is MediaRefs.Items -> refs.items
+    is MediaRefs.Expr -> {
+        val field = itemFieldName(refs.expr, allowEntityPrefix = false)
+        when (val v = field?.let { item?.get(it) }) {
+            is JsonArray -> v.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p !is JsonNull }?.content }
+            is JsonNull, null -> emptyList()
+            is JsonPrimitive -> listOf(v.content)
+            else -> emptyList()
+        }
+    }
+}
+
+/**
+ * Substitutes every `$item.<field>` token inside [s] with the item's field value.
+ * Tokens whose field is missing or null are left untouched.
+ */
+fun bindItemTokens(s: String, item: JsonObject?): String {
+    if (item == null || !s.contains("\$item.")) return s
+    return ITEM_TOKEN.replace(s) { m ->
+        val v = item[m.groupValues[1]]
+        if (v == null || v is JsonNull) m.value else renderJsonValue(v)
+    }
+}
+
+private fun bindJson(e: JsonElement, item: JsonObject): JsonElement = when (e) {
+    is JsonObject -> JsonObject(e.mapValues { bindJson(it.value, item) })
+    is JsonArray -> JsonArray(e.map { bindJson(it, item) })
+    is JsonPrimitive -> if (e.isString) JsonPrimitive(bindItemTokens(e.content, item)) else e
+}
+
+/**
+ * Binds an intent declared inside an item template to the current [item], replacing
+ * `$item.<field>` tokens in its string fields and JSON payload so the engine receives
+ * concrete URIs (e.g. `entity_uri: "pixelfed://posts/101"`). `value_expr` is left alone:
+ * it is evaluated by the engine against the target entity. Unknown intents are bound
+ * through their raw JSON (except the `intent` tag).
+ */
+fun bindIntent(intent: ActionIntent, item: JsonObject?): ActionIntent {
+    if (item == null) return intent
+    return when (intent) {
+        is ActionIntent.Navigate -> intent.copy(targetUri = bindItemTokens(intent.targetUri, item))
+        is ActionIntent.OptimisticMutate -> intent.copy(
+            entityUri = bindItemTokens(intent.entityUri, item),
+            endpoint = bindItemTokens(intent.endpoint, item),
+            payload = bindJson(intent.payload, item),
+        )
+        is ActionIntent.AuthLogin -> intent.copy(instanceUrl = bindItemTokens(intent.instanceUrl, item))
+        is ActionIntent.PromptAgent -> intent.copy(promptText = bindItemTokens(intent.promptText, item))
+        ActionIntent.NavigateBack -> intent
+        is ActionIntent.Unknown -> intent.copy(
+            raw = JsonObject(intent.raw.mapValues { (k, v) -> if (k == "intent") v else bindJson(v, item) })
+        )
+    }
 }
