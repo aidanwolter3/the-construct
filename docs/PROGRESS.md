@@ -69,12 +69,18 @@ Note: the environment restarted twice mid-work; work is now committed in small w
   `runSkikoComposeUiTest` from a plain main, headless, and writes PNGs plus steps.log/steps.json. It has a
   fixture mode (in-memory FakeEngineBridge) and a live mode (the real JNA engine). See README "Simulation mode"
   and D8.
-- Implementation done (shared 26 tests, desktopApp 11 tests). Review/QA: in progress.
+- Review (independent agent) fixed: fake engine accepted unquoted literals expr.rs rejects; JVM could hang on
+  unexpected exceptions in live mode; a parser index crash; buildRustFfi's onlyIf broke the configuration cache.
+- QA (independent agent): 9/9 checks pass (fixture + live, both workspaces, phone/tablet/desktop, ~1.4s per run,
+  no window, 10 PNGs viewed). Low findings fixed: unwritable -Pout now exit 2; live-mode offline/online rejected
+  before running; NN-FAILED.png on failure; warning for unknown -P flags; wait capped at 600000 ms; README notes.
+- Deferred (low): fake engine can deliver snapshots out of order under concurrent emits; live engine is never
+  shut down (process exits); default out dir is per-second; no golden-image diffing (Roborazzi) yet.
+- Tests: shared 26, desktopApp 12. Status: DONE.
 
 ## Next steps
 
-1. Phase A: independent code review + QA of simulation mode, fix findings, commit.
-2. Phase B (M4 Android): Rust android targets and cargo-ndk are installed. Steps: client-ffi `cli` feature
+1. Phase B (M4 Android): Rust android targets and cargo-ndk are installed. Steps: client-ffi `cli` feature
    off by default; Android target in :shared + :androidApp; move UniFFI bindings/EngineBridge to a shared
    JVM+Android source set; cargo-ndk build task; emulator QA.
 3. Then M5 (SQLite + outbox).

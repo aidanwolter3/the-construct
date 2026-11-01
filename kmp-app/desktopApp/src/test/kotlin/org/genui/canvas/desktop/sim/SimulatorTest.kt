@@ -9,6 +9,7 @@ import javax.imageio.ImageIO
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -87,15 +88,17 @@ class SimulatorTest {
         assertEquals(1, result.steps.size)
         assertTrue(result.steps[0].message.contains("Count: 0"), result.steps[0].message)
         assertFalse(File(outDir, "02-never.png").exists())
+        assertEquals(File(outDir, "01-FAILED.png"), result.steps[0].file)
+        assertNotBlank(ImageIO.read(File(outDir, "01-FAILED.png")))
+        assertTrue(File(outDir, "steps.json").readText().contains("\"file\": \"01-FAILED.png\""))
         assertTrue(File(outDir, "steps.log").readText().contains("RESULT: FAILED"))
     }
 
     @Test
-    fun connectivityStepsFailWithoutConnectivityControl() {
-        val fake = FakeEngineBridge(bundle("counter_home_bundle.json"))
-        val result = SimRunner(CanvasController(fake), outDir, ScreenSpec.parse("phone"), setOnline = null, modeName = "live")
-            .run(parseScript("offline"))
-        assertFalse(result.ok)
-        assertTrue(result.steps[0].message.contains("not supported in live mode"))
+    fun connectivityStepsAreRejectedBeforeRunningInLiveMode() {
+        val steps = parseScript("shot a; offline")
+        validateStepsForMode(steps, "fixture")
+        val e = assertFailsWith<ScriptParseException> { validateStepsForMode(steps, "live") }
+        assertTrue(e.message!!.contains("step 2 'offline' is not supported in live mode"), e.message)
     }
 }

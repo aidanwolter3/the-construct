@@ -113,6 +113,15 @@ val simulate by tasks.registering(JavaExec::class) {
     // would pick up an unrelated built-in project property).
     val forwarded = names.mapNotNull { n -> providers.gradleProperty(n).orNull?.let { "--$n=$it" } }
     args(forwarded)
+    // Warn about likely typos (e.g. -Pscren): any other -P is silently ignored. Computed at
+    // configuration time; the doFirst only captures a List<String> (configuration-cache safe).
+    val known = names + "skipRustBuild"
+    val unknown = gradle.startParameter.projectProperties.keys
+        .filter { it !in known && !it.startsWith("org.gradle") && !it.startsWith("kotlin") && !it.startsWith("android") }
+        .sorted()
+    doFirst {
+        unknown.forEach { System.err.println("WARNING: unknown -P property '$it' ignored by simulate (known: ${known.joinToString()})") }
+    }
     // Always rerun; outputs are timestamped.
     outputs.upToDateWhen { false }
 }

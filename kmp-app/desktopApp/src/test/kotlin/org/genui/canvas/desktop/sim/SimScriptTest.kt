@@ -48,6 +48,8 @@ class SimScriptTest {
         assertFailsWith<ScriptParseException> { parseScript("shot") }
         assertFailsWith<ScriptParseException> { parseScript("wait soon") }
         assertFailsWith<ScriptParseException> { parseScript("wait -5") }
+        assertFailsWith<ScriptParseException> { parseScript("wait 600001") }
+        parseScript("wait 600000")
         assertFailsWith<ScriptParseException> { parseScript("idle now") }
         assertFailsWith<ScriptParseException> { parseScript("screen huge") }
     }

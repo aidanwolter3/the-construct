@@ -17,6 +17,18 @@ sealed class SimStep(val command: String, val arg: String = "") {
 
 class ScriptParseException(message: String) : IllegalArgumentException(message)
 
+/** Upper bound for `wait`, 10 minutes. */
+const val MAX_WAIT_MS = 600_000L
+
+/** Rejects steps that [mode] can't run: `offline`/`online` need the fixture mode's fake engine. */
+fun validateStepsForMode(steps: List<SimStep>, mode: String) {
+    if (mode == "fixture") return
+    val i = steps.indexOfFirst { it == SimStep.Offline || it == SimStep.Online }
+    if (i >= 0) {
+        throw ScriptParseException("step ${i + 1} '${steps[i].command}' is not supported in $mode mode (fixture mode only)")
+    }
+}
+
 /**
  * Parses a simulator script. Commands are separated by `;` or newlines; each is trimmed, blank
  * entries are ignored and entries starting with `#` are comments. The first word is the command
@@ -41,8 +53,8 @@ fun parseScript(script: String): List<SimStep> {
             "shot" -> SimStep.Shot(requireArg("a name"))
             "click" -> SimStep.Click(requireArg("the text to click"))
             "wait" -> SimStep.Wait(
-                requireArg("a duration in ms").toLongOrNull()?.takeIf { it >= 0 }
-                    ?: throw ScriptParseException("${where()}: 'wait' needs a non-negative integer number of ms"),
+                requireArg("a duration in ms").toLongOrNull()?.takeIf { it in 0..MAX_WAIT_MS }
+                    ?: throw ScriptParseException("${where()}: 'wait' needs an integer number of ms in 0..$MAX_WAIT_MS"),
             )
             "idle" -> { noArg(); SimStep.Idle }
             "assert-text" -> SimStep.AssertText(requireArg("the expected text"))

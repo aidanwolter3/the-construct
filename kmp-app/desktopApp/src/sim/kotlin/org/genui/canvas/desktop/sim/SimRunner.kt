@@ -65,7 +65,8 @@ private class StepFailure(message: String) : Exception(message)
  * screenshots are `widthDp * density` x `heightDp * density` pixels. A `screen` step restarts the
  * harness at the new size; the controller (and so engine state) carries over, Compose UI state
  * such as scroll position does not. [setOnline] is null when connectivity can't be simulated
- * (live mode); `offline`/`online` then fail. The first failing step stops the run.
+ * (live mode); `offline`/`online` then fail. The first failing step stops the run and its screen
+ * is saved as `NN-FAILED.png` (best effort).
  */
 @OptIn(ExperimentalTestApi::class)
 class SimRunner(
@@ -117,11 +118,12 @@ class SimRunner(
                         } catch (e: Throwable) {
                             StepResult(index, step.command, step.arg, false, "${e::class.simpleName}: ${e.message}", null, ms(start))
                         }
-                        results += record(r)
                         if (!r.ok) {
+                            results += record(r.copy(file = captureFailure(index)))
                             failed = true
                             return@runSkikoComposeUiTest
                         }
+                        results += record(r)
                     }
                 }
             } catch (e: Throwable) {
@@ -194,6 +196,16 @@ class SimRunner(
             }
             is SimStep.Screen -> error("handled by run()")
         }
+    }
+
+    /** Best effort: saves the screen after a failed step as `NN-FAILED.png`; null if that fails too. */
+    private fun SkikoComposeUiTest.captureFailure(index: Int): File? = try {
+        val file = File(outDir, "%02d-FAILED.png".format(index))
+        file.writeBytes(encodePng(onRoot().captureToImage()))
+        file
+    } catch (e: Throwable) {
+        log("[sim] could not capture failure screenshot: ${e::class.simpleName}: ${e.message}")
+        null
     }
 
     private fun SkikoComposeUiTest.awaitCondition(what: String, condition: () -> Boolean) {

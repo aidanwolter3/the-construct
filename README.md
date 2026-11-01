@@ -103,21 +103,24 @@ Flags (all optional):
 Relative paths (`-Pfixture`, `-PscriptFile`, `-Pout`) resolve against the **repo root**, the task's working
 directory, so `-Pfixture=fixtures/counter_home_bundle.json` works.
 
-**Fixture mode** (the default) needs no Rust and no server. A fake in-memory engine
+**Fixture mode** (the default) needs no server, and no Rust build when run with `-PskipRustBuild` (without
+it, `compileKotlin` triggers `buildRustFfi`, i.e. cargo). A fake in-memory engine
 (`FakeEngineBridge`) loads the bundle, applies `OptimisticMutate` clicks with the D4 expression subset, and
 toggles connectivity for `offline`/`online`. **Live mode** runs the real Rust engine through JNA against
 the server. It uses a fresh temp storage dir, so it neither reads nor writes `~/.canvas`. If the workspace
 does not load within `timeoutMs`, it logs a warning and still runs the script (shots show Loading/Offline).
-`offline`/`online` are not supported in live mode and fail the run.
+`offline`/`online` are not supported in live mode; a live-mode script containing them is rejected before any
+step runs.
 
 Script commands are separated by `;` or newlines. Each command is trimmed, blank entries are skipped, and
-entries starting with `#` are comments. An argument cannot contain `;`.
+entries starting with `#` are comments. An argument cannot contain `;`, and since `;` separates commands, a
+`#` comment ends at the next `;` (the rest of the line is parsed as commands).
 
 | Command | Effect |
 |---|---|
 | `shot <name>` | Writes `<NN>-<name>.png`, where NN is the step number. |
 | `click <text>` | Clicks the node with that text: an exact match first (clickable nodes preferred), then a substring match. Fails if no node matches. |
-| `wait <ms>` | Sleeps, advances the UI clock, then waits for idle. |
+| `wait <ms>` | Sleeps, advances the UI clock, then waits for idle. At most 600000 (10 minutes). |
 | `idle` | Waits until the UI is idle. |
 | `assert-text <text>` | Fails unless some node's text contains `<text>`. Retries for up to 2 s. |
 | `assert-no-text <text>` | The inverse of `assert-text`. |
@@ -126,9 +129,13 @@ entries starting with `#` are comments. An argument cannot contain `;`.
 
 The output directory holds the PNGs, `steps.log` (human-readable) and `steps.json` (one entry per step:
 `index`, `command`, `arg`, `status` (`ok`/`fail`), `message`, `file`, `elapsed_ms`). Its absolute path is
-printed at the end. The run stops at the first failing step; the logs are still written. Exit codes: 0 for
-success, 1 for a failed step, 2 for bad flags or a bad script. An unknown command is rejected before any step
-runs. On failure, Gradle reports `simulate` as failed.
+printed at the end. The run stops at the first failing step; the logs are still written, and the screen at that
+point is saved (best effort) as `<NN>-FAILED.png`, recorded as that step's `file` and printed with the error.
+The simulator's exit codes: 0 for success, 1 for a failed step, 2 for bad flags, a bad script or an unusable
+`-Pout` directory. Unknown commands, bad arguments and `offline`/`online` in live mode are rejected before any
+step runs. `./gradlew` itself exits 1 for any simulator failure; the simulator's own code appears in Gradle's
+message `Process ... finished with non-zero exit value N`. An unrecognized `-P` property (e.g. a typo such as
+`-Pscren`) is ignored, with a warning.
 
 ## Tests
 

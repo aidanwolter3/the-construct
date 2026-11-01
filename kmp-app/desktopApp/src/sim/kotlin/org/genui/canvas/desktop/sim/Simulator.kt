@@ -90,11 +90,17 @@ private fun runCli(args: Array<String>): Int {
     if (mode != "fixture" && mode != "live") throw UsageException("bad mode '$mode' (expected fixture or live)")
     if (mode == "live" && opts["fixture"] != null) throw UsageException("fixture cannot be combined with live mode")
     if (mode == "fixture" && opts["baseUrl"] != null) throw UsageException("baseUrl cannot be combined with fixture mode")
+    try {
+        validateStepsForMode(steps, mode)
+    } catch (e: ScriptParseException) {
+        throw UsageException("script: ${e.message}")
+    }
 
     val outDir = opts["out"]?.let(::path) ?: run {
         val root = System.getProperty("canvas.sim.defaultOutRoot")?.let(::File) ?: File(cwd, "kmp-app/desktopApp/build/sim")
         File(root, LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")))
     }.absoluteFile
+    requireWritableDir(outDir)
 
     val controller: CanvasController
     var setOnline: ((Boolean) -> Unit)? = null
@@ -139,9 +145,26 @@ private fun runCli(args: Array<String>): Int {
         setOnline = setOnline,
         modeName = mode,
     ).run(steps)
-    println(if (result.ok) "[sim] OK: ${result.steps.size} step(s)" else "[sim] FAILED (see steps.log)")
+    if (result.ok) {
+        println("[sim] OK: ${result.steps.size} step(s)")
+    } else {
+        val failed = result.steps.last { !it.ok }
+        System.err.println("[sim] FAILED at step ${failed.index} (${failed.command}): ${failed.message}")
+        failed.file?.let { System.err.println("[sim] failure screenshot: ${it.absolutePath}") }
+        System.err.println("[sim] see ${File(outDir, "steps.log").absolutePath}")
+    }
     println("[sim] output: ${outDir.absolutePath}")
     return if (result.ok) 0 else 1
+}
+
+/** Creates [dir] if needed; a usage error unless it ends up a writable directory. */
+fun requireWritableDir(dir: File) {
+    try {
+        Files.createDirectories(dir.toPath())
+    } catch (e: Exception) {
+        throw UsageException("cannot create output directory $dir: ${e::class.simpleName}: ${e.message}")
+    }
+    if (!dir.isDirectory || !Files.isWritable(dir.toPath())) throw UsageException("output directory $dir is not a writable directory")
 }
 
 /** fixtures/ next to (or above) [from]: counter bundle for `home`, Pixelfed bundle for `pixelfed_demo`. */
