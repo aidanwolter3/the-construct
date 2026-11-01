@@ -119,6 +119,76 @@ async fn counter_mutations_return_ok() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+fn post(uri: &str, content_type: Option<&str>, body: &'static str) -> Request<Body> {
+    let mut b = Request::post(uri);
+    if let Some(ct) = content_type {
+        b = b.header("content-type", ct);
+    }
+    b.body(Body::from(body)).unwrap()
+}
+
+#[tokio::test]
+async fn counter_mutation_body_edge_cases() {
+    const URI: &str = "/v1/counters/home/increment";
+    // Empty body with JSON content-type is accepted (clients often always set it).
+    let (status, _) = send(post(URI, Some("application/json"), "")).await;
+    assert_eq!(status, StatusCode::OK);
+    // Content-type parameters are tolerated.
+    let (status, _) = send(post(URI, Some("application/json; charset=utf-8"), "{}")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Invalid JSON -> 400 with a JSON error body.
+    let (status, body) = send(post(URI, Some("application/json"), "{bad")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let v: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["error"], "invalid_json");
+
+    // Non-empty body without a JSON content-type -> 415 JSON error.
+    for ct in [None, Some("text/plain")] {
+        let (status, body) = send(post(URI, ct, r#"{"a":1}"#)).await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE, "ct {ct:?}");
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["error"], "expected_application_json");
+    }
+
+    // Unknown counter id is 404 even with a malformed body (path checked first).
+    let (status, body) = send(post(
+        "/v1/counters/other/increment",
+        Some("application/json"),
+        "{bad",
+    ))
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let v: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["error"], "unknown_counter_endpoint");
+}
+
+#[tokio::test]
+async fn wrong_method_is_405() {
+    let (status, _) = send(
+        Request::post("/v1/workspaces/home")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    let (status, _) = get("/v1/counters/home/increment").await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
+async fn workspace_response_is_json_content_type() {
+    let resp = server::app()
+        .oneshot(
+            Request::get("/v1/workspaces/home")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.headers()["content-type"], "application/json");
+}
+
 #[tokio::test]
 async fn real_tcp_listener() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

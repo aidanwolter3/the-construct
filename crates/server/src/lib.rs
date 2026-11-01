@@ -9,8 +9,9 @@ use std::sync::LazyLock;
 
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::Path,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -53,26 +54,61 @@ pub fn app() -> Router {
 async fn get_workspace(Path(id): Path<String>) -> Response {
     match workspace(&id) {
         Some(spec) => Json(spec).into_response(),
-        None => (
+        None => json_error(
             StatusCode::NOT_FOUND,
-            Json(json!({ "error": "workspace_not_found", "id": id })),
-        )
-            .into_response(),
+            json!({ "error": "workspace_not_found", "id": id }),
+        ),
     }
 }
 
+fn json_error(status: StatusCode, body: Value) -> Response {
+    (status, Json(body)).into_response()
+}
+
+/// Accepts an optional JSON body. The path is validated before the body so an
+/// unknown endpoint is always 404. An empty body is treated as `null` even
+/// when `Content-Type: application/json` is set (common for HTTP clients that
+/// add the header unconditionally). A non-empty body must be JSON-typed and
+/// valid; failures are reported as JSON errors like the other endpoints.
 async fn counter_mutation(
     Path((id, op)): Path<(String, String)>,
-    body: Option<Json<Value>>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> Response {
     if id != "home" || !matches!(op.as_str(), "increment" | "reset") {
-        return (
+        return json_error(
             StatusCode::NOT_FOUND,
-            Json(json!({ "error": "unknown_counter_endpoint", "id": id, "op": op })),
-        )
-            .into_response();
+            json!({ "error": "unknown_counter_endpoint", "id": id, "op": op }),
+        );
     }
-    let payload = body.map(|Json(v)| v).unwrap_or(Value::Null);
+    let payload = if body.iter().all(u8::is_ascii_whitespace) {
+        Value::Null
+    } else {
+        let is_json = headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(';').next())
+            .is_some_and(|mime| {
+                let mime = mime.trim();
+                mime.eq_ignore_ascii_case("application/json")
+                    || (mime.starts_with("application/") && mime.ends_with("+json"))
+            });
+        if !is_json {
+            return json_error(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                json!({ "error": "expected_application_json" }),
+            );
+        }
+        match serde_json::from_slice::<Value>(&body) {
+            Ok(v) => v,
+            Err(e) => {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    json!({ "error": "invalid_json", "detail": e.to_string() }),
+                );
+            }
+        }
+    };
     tracing::info!(counter = %id, %op, %payload, "counter mutation");
     Json(json!({ "ok": true })).into_response()
 }

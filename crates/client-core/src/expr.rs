@@ -21,7 +21,10 @@ pub enum ExprError {
     /// The referenced field is missing.
     MissingField(String),
     /// The field has the wrong type for the operation.
-    TypeMismatch { field: String, expected: &'static str },
+    TypeMismatch {
+        field: String,
+        expected: &'static str,
+    },
     /// Integer overflow in `+`/`-`.
     Overflow,
 }
