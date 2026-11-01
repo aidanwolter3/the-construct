@@ -5,7 +5,9 @@
 //! to subscribers on every change.
 //!
 //! Current scope (M3): state lives in memory, and the last fetched bundle is
-//! written to `<storage_path>/last_workspace.json` as an offline fallback.
+//! written to `<storage_path>/workspace_<id>.json` (one file per workspace
+//! id) as an offline fallback. If the initial fetch cannot reach the server,
+//! a background thread retries every few seconds until it succeeds.
 //! The SQLite store, action outbox and background sync come in M5.
 
 pub mod expr;
@@ -15,14 +17,41 @@ use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread;
 use std::time::Duration;
 
 use protocol::{ActionIntent, EntityRecord, UiNode, WorkspaceSpec};
 
-const CACHE_FILE: &str = "last_workspace.json";
 const DEFAULT_WORKSPACE_ID: &str = "home";
+/// Delay between background re-fetch attempts while the server is unreachable.
+const RETRY_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Offline cache file name for a workspace: `workspace_<id>.json`, with any
+/// character outside `[A-Za-z0-9_-]` replaced by `_`.
+fn cache_file_name(workspace_id: &str) -> String {
+    let safe: String = workspace_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("workspace_{safe}.json")
+}
+
+/// Outcome of a fetch attempt.
+enum FetchOutcome {
+    /// Bundle fetched and applied.
+    Fetched,
+    /// The server answered, but with a non-success HTTP status.
+    HttpError,
+    /// The server could not be reached (or the response was unusable).
+    Failed,
+}
 
 /// State pushed to observers.
 ///
@@ -123,7 +152,7 @@ impl CanvasEngine {
             None
         } else {
             match fs::create_dir_all(storage_path) {
-                Ok(()) => Some(PathBuf::from(storage_path).join(CACHE_FILE)),
+                Ok(()) => Some(PathBuf::from(storage_path).join(cache_file_name(workspace_id))),
                 Err(e) => {
                     eprintln!("[CanvasEngine] cannot create storage dir {storage_path}: {e}");
                     None
@@ -153,10 +182,23 @@ impl CanvasEngine {
             cache_path,
         });
 
-        let bg = Arc::clone(&inner);
+        // The fetch thread holds only a Weak reference between attempts, so
+        // it exits once the engine is dropped instead of keeping it alive.
+        let bg: Weak<Inner> = Arc::downgrade(&inner);
         let spawned = thread::Builder::new()
             .name("canvas-engine-fetch".into())
-            .spawn(move || bg.refresh());
+            .spawn(move || {
+                loop {
+                    let Some(inner) = bg.upgrade() else { return };
+                    let outcome = inner.refresh();
+                    drop(inner);
+                    // Retry only while the server is unreachable.
+                    if !matches!(outcome, FetchOutcome::Failed) {
+                        return;
+                    }
+                    thread::sleep(RETRY_INTERVAL);
+                }
+            });
         if let Err(e) = spawned {
             eprintln!("[CanvasEngine] failed to spawn fetch thread: {e}");
         }
@@ -206,8 +248,9 @@ impl CanvasEngine {
 }
 
 impl Inner {
-    fn refresh(&self) {
+    fn refresh(&self) -> FetchOutcome {
         let result = fetch(&self.workspace_url);
+        let outcome;
         let seq_snap = {
             let mut st = lock(&self.state);
             match result {
@@ -228,16 +271,36 @@ impl Inner {
                             path.display()
                         );
                     }
+                    outcome = FetchOutcome::Fetched;
                 }
-                Err(e) => {
+                Err(FetchError::Status(code)) => {
+                    // The server responded, so the network is reachable;
+                    // keep whatever workspace we already have.
+                    if code == 404 {
+                        eprintln!(
+                            "[CanvasEngine] workspace '{}' not found (HTTP 404)",
+                            self.workspace_id
+                        );
+                    } else {
+                        eprintln!(
+                            "[CanvasEngine] fetch {} failed: HTTP {code}",
+                            self.workspace_url
+                        );
+                    }
+                    st.is_online = true;
+                    outcome = FetchOutcome::HttpError;
+                }
+                Err(FetchError::Other(e)) => {
                     eprintln!("[CanvasEngine] fetch {} failed: {e}", self.workspace_url);
                     st.is_online = false;
+                    outcome = FetchOutcome::Failed;
                 }
             }
             st.seq += 1;
             (st.seq, st.snapshot())
         };
         self.notify(seq_snap);
+        outcome
     }
 
     fn dispatch(&self, intent_json: &str) {
@@ -298,19 +361,30 @@ impl Inner {
     }
 }
 
-fn fetch(url: &str) -> Result<(WorkspaceSpec, String), String> {
+enum FetchError {
+    /// The server responded with this non-success HTTP status code.
+    Status(u16),
+    /// Transport failure or unusable response body.
+    Other(String),
+}
+
+fn fetch(url: &str) -> Result<(WorkspaceSpec, String), FetchError> {
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(5))
         .build()
-        .map_err(|e| format!("client build: {e}"))?;
-    let resp = client.get(url).send().map_err(|e| e.to_string())?;
+        .map_err(|e| FetchError::Other(format!("client build: {e}")))?;
+    let resp = client
+        .get(url)
+        .send()
+        .map_err(|e| FetchError::Other(e.to_string()))?;
     let status = resp.status();
     if !status.is_success() {
-        return Err(format!("HTTP {status}"));
+        return Err(FetchError::Status(status.as_u16()));
     }
-    let raw = resp.text().map_err(|e| e.to_string())?;
-    let spec = serde_json::from_str(&raw).map_err(|e| format!("bad bundle: {e}"))?;
+    let raw = resp.text().map_err(|e| FetchError::Other(e.to_string()))?;
+    let spec =
+        serde_json::from_str(&raw).map_err(|e| FetchError::Other(format!("bad bundle: {e}")))?;
     Ok((spec, raw))
 }
 

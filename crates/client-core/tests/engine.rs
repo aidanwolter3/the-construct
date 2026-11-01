@@ -112,7 +112,7 @@ fn fetch_increment_reset() {
     assert_eq!(count(&rx.recv_timeout(TIMEOUT).unwrap()), 0);
 
     // Cache was written.
-    let cached = std::fs::read_to_string(dir.join("last_workspace.json")).unwrap();
+    let cached = std::fs::read_to_string(dir.join("workspace_home.json")).unwrap();
     assert_eq!(cached, FIXTURE);
 
     // A second engine on the same storage dir with the server unreachable
@@ -189,7 +189,7 @@ fn unreachable_server_reports_offline() {
 fn offline_falls_back_to_cache() {
     let dir = temp_dir("cache");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("last_workspace.json"), FIXTURE).unwrap();
+    std::fs::write(dir.join("workspace_home.json"), FIXTURE).unwrap();
 
     let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
     // Cached state is available synchronously.
@@ -229,7 +229,9 @@ fn observer_may_dispatch_reentrantly() {
     engine.dispatch(INCREMENT);
     let deadline = std::time::Instant::now() + TIMEOUT;
     loop {
-        let c = rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).unwrap();
+        let c = rx
+            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .unwrap();
         if c == Some(2) {
             break;
         }
@@ -245,10 +247,61 @@ fn panicking_observer_does_not_propagate() {
     engine.dispatch(INCREMENT);
     let deadline = std::time::Instant::now() + TIMEOUT;
     loop {
-        let s = rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).unwrap();
+        let s = rx
+            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .unwrap();
         if s.entities_json != "{}" {
             assert_eq!(count(&s), 1);
             break;
         }
     }
+}
+
+#[test]
+fn cache_is_keyed_by_workspace_id() {
+    let dir = temp_dir("keyed");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("workspace_home.json"), FIXTURE).unwrap();
+
+    // A different workspace must not pick up the "home" cache.
+    let other = CanvasEngine::init_with_workspace(
+        dir.to_str().unwrap(),
+        "http://127.0.0.1:1",
+        "pixelfed_demo",
+    );
+    let snap = other.snapshot();
+    assert_eq!(snap.workspace_json, "null");
+    assert_eq!(snap.entities_json, "{}");
+
+    // Ids are sanitized into the file name.
+    std::fs::write(dir.join("workspace_a_b__c.json"), FIXTURE).unwrap();
+    let odd =
+        CanvasEngine::init_with_workspace(dir.to_str().unwrap(), "http://127.0.0.1:1", "a/b..c");
+    assert_ne!(odd.snapshot().workspace_json, "null");
+
+    // "home" still finds its own cache.
+    let home =
+        CanvasEngine::init_with_workspace(dir.to_str().unwrap(), "http://127.0.0.1:1", "home");
+    assert_ne!(home.snapshot().workspace_json, "null");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn http_404_keeps_engine_online() {
+    let base = serve_fixture();
+    let engine = CanvasEngine::init_with_workspace("", &base, "missing");
+    let rx = subscribe_channel(&engine);
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    let s = loop {
+        let s = rx
+            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .expect("no online snapshot after 404");
+        if s.is_online {
+            break s;
+        }
+    };
+    assert_eq!(s.workspace_json, "null");
+    assert_eq!(s.entities_json, "{}");
+    engine.refresh();
+    assert!(engine.snapshot().is_online);
 }

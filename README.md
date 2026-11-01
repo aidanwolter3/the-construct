@@ -20,7 +20,8 @@ kmp-app/             Gradle project: :shared (model + Compose renderer), :deskto
 
 ## Prerequisites
 
-- macOS on Apple Silicon, with Rust installed through rustup (target `aarch64-apple-darwin`).
+- macOS on Apple Silicon, with Rust installed through rustup (target `aarch64-apple-darwin`; add it with
+  `rustup target add aarch64-apple-darwin` if needed).
 - JDK 21 (`:desktopApp` sets `jvmToolchain(21)`). This repo uses Android Studio's bundled JBR, which is set in
   `kmp-app/gradle.properties` (`org.gradle.java.home`). Set `JAVA_HOME` to match:
 
@@ -41,6 +42,7 @@ Terminal 2: build the FFI library and bindings, then run the desktop app.
 
 ```bash
 scripts/build_ffi.sh            # optional: :desktopApp:compileKotlin runs it automatically
+                                # (dylib built to target/aarch64-apple-darwin/release, copied to target/release)
 cd kmp-app
 export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ./gradlew :desktopApp:run
@@ -59,9 +61,14 @@ Options for the desktop app (set as `-D` JVM properties or environment variables
 
 - `canvas.baseUrl` / `CANVAS_BASE_URL` (default `http://127.0.0.1:8080`)
 - `canvas.workspace` / `CANVAS_WORKSPACE` (default `home`; `pixelfed_demo` shows the Pixelfed feed fixture)
-- `-PskipRustBuild` skips the cargo build step in Gradle.
 
-The engine caches the last fetched bundle in `~/.canvas/last_workspace.json`.
+Separately, `-PskipRustBuild` is a Gradle property (`./gradlew -PskipRustBuild :desktopApp:run`) that skips
+the cargo build step.
+
+Clicks are applied locally only: there is no server sync until the action outbox lands in M5, so the count
+resets when the app restarts. The engine caches the last fetched bundle per workspace in
+`~/.canvas/workspace_<id>.json` (e.g. `workspace_home.json`) and uses it when the server is unreachable;
+it retries the fetch every 5 seconds until the server responds.
 
 ## Tests
 
