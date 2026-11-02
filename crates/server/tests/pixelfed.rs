@@ -625,12 +625,12 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(version(&resp).as_deref(), Some("1"));
-    // A committed layout replaces the feed layout; entities still come upstream.
+    // A newer version replaces the feed layout; entities still come upstream.
     let mut node = server::layouts::builtin("pixelfed_home").unwrap();
     if let UiNode::Workspace { title, .. } = &mut node {
         *title = "Custom".into();
     }
-    server::layouts::commit(state.store(), "pixelfed_home", &node, None, None, None).unwrap();
+    server::layouts::append_version(state.store(), "pixelfed_home", &node, None).unwrap();
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
     assert_eq!(version(&resp).as_deref(), Some("2"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();

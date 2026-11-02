@@ -1,89 +1,34 @@
-//! Layout agent (M7): `POST /v1/agent/modify_layout`, the rules provider, the
-//! Anthropic provider against a mock Messages API, and the registry.
+//! Layout agent (kept in the library, not routed; see `server::agent`): the
+//! rules provider, the Anthropic provider against a mock Messages API, patch
+//! validation and the registry. `POST /v1/agent/modify_layout` is gone (404,
+//! tested in `tests/apps.rs`).
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::http::HeaderMap;
-use protocol::{UiNode, WorkspaceSpec};
-use reqwest::StatusCode;
+use protocol::UiNode;
 use serde_json::{Value, json};
-use server::AppState;
 use server::agent::anthropic::{AnthropicConfig, AnthropicProvider, patch_schema};
 use server::agent::{self, LayoutProvider, ProviderError, Selection};
 use server::layouts;
-use server::pixelfed::routes::session_hash;
 use tokio::task::JoinHandle;
 
 const DESIGN_PROMPT: &str = "Hide post captions and put media at the very top";
 
-struct Pod {
-    url: String,
-    state: Arc<AppState>,
-    handle: JoinHandle<()>,
+/// The rules provider on `layout`, then patch validation: `(ops, new layout)`.
+async fn rules(prompt: &str, layout: &Value) -> Result<(Vec<Value>, Value), String> {
+    let generated = agent::rules::RulesProvider
+        .generate(prompt, layout, agent::registry())
+        .await
+        .map_err(|e| format!("{e:?}"))?;
+    let node = agent::apply_and_validate(layout, &generated.ops)?;
+    Ok((generated.ops, serde_json::to_value(node).unwrap()))
 }
 
-impl Drop for Pod {
-    fn drop(&mut self) {
-        self.handle.abort();
-    }
-}
-
-async fn spawn(state: AppState) -> Pod {
-    let state = Arc::new(state);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let router = server::app(state.clone());
-    let handle = tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
-    Pod { url, state, handle }
-}
-
-async fn open_pod() -> Pod {
-    spawn(AppState::in_memory().with_agent_open(true)).await
-}
-
-async fn prompt_raw(
-    pod: &Pod,
-    body: Value,
-    bearer: Option<&str>,
-) -> (StatusCode, Option<String>, Value) {
-    let mut req = reqwest::Client::new()
-        .post(format!("{}/v1/agent/modify_layout", pod.url))
-        .json(&body);
-    if let Some(t) = bearer {
-        req = req.bearer_auth(t);
-    }
-    let resp = req.send().await.unwrap();
-    let version = resp
-        .headers()
-        .get(layouts::VERSION_HEADER)
-        .map(|v| v.to_str().unwrap().to_owned());
-    (
-        resp.status(),
-        version,
-        resp.json().await.unwrap_or(Value::Null),
-    )
-}
-
-async fn prompt(pod: &Pod, text: &str) -> (StatusCode, Value) {
-    let (s, _, b) = prompt_raw(pod, json!({ "prompt": text }), None).await;
-    (s, b)
-}
-
-async fn prompt_ws(pod: &Pod, ws: &str, text: &str) -> (StatusCode, Value) {
-    let (s, _, b) = prompt_raw(pod, json!({ "prompt": text, "workspace_id": ws }), None).await;
-    (s, b)
-}
-
-fn version_count(pod: &Pod, ws: &str) -> usize {
-    pod.state.store().layout_versions(ws).unwrap().len()
-}
-
-fn latest(pod: &Pod, ws: &str) -> (i64, UiNode) {
-    layouts::latest(pod.state.store(), ws).unwrap().unwrap()
+fn builtin(ws: &str) -> Value {
+    serde_json::to_value(layouts::builtin(ws).unwrap()).unwrap()
 }
 
 /// The feed's PostCard template as JSON.
@@ -102,28 +47,13 @@ fn blank_caption() -> Value {
     json!({ "type": "core://Text", "value_expr": "", "style": "Caption" })
 }
 
-/// A 200 body must be a WorkspaceSpec; returns the workspace JSON.
-fn spec_workspace(body: &Value) -> Value {
-    let spec: WorkspaceSpec = serde_json::from_value(body.clone()).expect("WorkspaceSpec");
-    assert!(spec.entities.is_empty());
-    serde_json::to_value(spec.workspace).unwrap()
-}
-
-// ---------- rules provider through the endpoint ----------
+// ---------- rules provider ----------
 
 #[tokio::test]
-async fn design_prompt_end_to_end() {
-    let pod = open_pod().await;
-    // No Pixelfed session exists: the agent edits the signed-in feed layout,
-    // which is versioned independently of the upstream.
-    let (status, version, body) = prompt_raw(&pod, json!({ "prompt": DESIGN_PROMPT }), None).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(version.as_deref(), Some("2"));
-    assert_eq!(body["layout_version"], 2);
-    assert_eq!(body["provider"], "rules");
-    assert_eq!(body["model"], Value::Null);
-    assert_eq!(body["version"], "1.0.0");
-    let ws = spec_workspace(&body);
+async fn design_prompt() {
+    let (ops, ws) = rules(DESIGN_PROMPT, &builtin("pixelfed_home"))
+        .await
+        .unwrap();
     assert_eq!(ws["id"], "pixelfed_home");
     let c = card(&ws);
     assert_eq!(c["caption_slot"], blank_caption());
@@ -137,51 +67,35 @@ async fn design_prompt_end_to_end() {
         ]
     );
     // One patch, replace ops with explicit values.
-    let patch = body["patch"].as_array().unwrap();
-    assert_eq!(patch.len(), 3, "{patch:?}");
+    assert_eq!(ops.len(), 3, "{ops:?}");
     assert!(
-        patch
-            .iter()
+        ops.iter()
             .all(|op| op["op"] == "replace" && op.get("value").is_some())
     );
-    // Committed with prompt/provider/patch.
-    let (v, node) = latest(&pod, "pixelfed_home");
-    assert_eq!(v, 2);
-    assert_eq!(serde_json::to_value(&node).unwrap(), ws);
-    let rows = pod.state.store().layout_versions("pixelfed_home").unwrap();
-    assert_eq!(rows[0].prompt.as_deref(), Some(DESIGN_PROMPT));
-    assert_eq!(rows[0].provider.as_deref(), Some("rules"));
-    // Repeating it changes nothing (idempotent rules): no new version.
-    let (status, body) = prompt(&pod, DESIGN_PROMPT).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["unchanged"], true);
-    assert_eq!(body["layout_version"], 2);
-    assert_eq!(version_count(&pod, "pixelfed_home"), 2);
+    // Repeating it changes nothing (idempotent rules).
+    let (ops, again) = rules(DESIGN_PROMPT, &ws).await.unwrap();
+    assert!(ops.is_empty(), "{ops:?}");
+    assert_eq!(again, ws);
 }
 
 #[tokio::test]
 async fn each_rule_alone() {
-    let pod = open_pod().await;
-    let (s, b) = prompt(&pod, "hide captions").await;
-    assert_eq!(s, StatusCode::OK, "{b}");
-    assert_eq!(card(&b["workspace"])["caption_slot"], blank_caption());
-    assert_eq!(kinds(card(&b["workspace"]))[0], "pixelfed://AuthorHeader");
+    let (_, ws) = rules("hide captions", &builtin("pixelfed_home"))
+        .await
+        .unwrap();
+    assert_eq!(card(&ws)["caption_slot"], blank_caption());
+    assert_eq!(kinds(card(&ws))[0], "pixelfed://AuthorHeader");
 
-    let (s, b) = prompt(&pod, "Show captions").await;
-    assert_eq!(s, StatusCode::OK, "{b}");
+    let (_, ws) = rules("Show captions", &ws).await.unwrap();
     assert_eq!(
-        card(&b["workspace"])["caption_slot"],
+        card(&ws)["caption_slot"],
         json!({ "type": "core://Text", "value_expr": "entity.caption", "style": "Body" })
     );
-    assert_eq!(
-        b["workspace"],
-        serde_json::to_value(layouts::builtin("pixelfed_home").unwrap()).unwrap()
-    );
+    assert_eq!(ws, builtin("pixelfed_home"));
 
-    let (s, b) = prompt(&pod, "Photos first").await;
-    assert_eq!(s, StatusCode::OK, "{b}");
+    let (ops, ws) = rules("Photos first", &ws).await.unwrap();
     assert_eq!(
-        kinds(card(&b["workspace"])),
+        kinds(card(&ws)),
         [
             "pixelfed://MediaCarousel",
             "pixelfed://AuthorHeader",
@@ -189,21 +103,16 @@ async fn each_rule_alone() {
             "core://Text"
         ]
     );
-    assert_eq!(b["patch"].as_array().unwrap().len(), 2, "a swap");
-    assert_eq!(b["layout_version"], 4);
+    assert_eq!(ops.len(), 2, "a swap");
 
-    // Back to v1, then the action bar.
-    let resp = reqwest::Client::new()
-        .post(format!("{}/v1/workspaces/pixelfed_home/rollback", pod.url))
-        .json(&json!({ "version": 1 }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let (s, b) = prompt(&pod, "Move the action bar above the photo").await;
-    assert_eq!(s, StatusCode::OK, "{b}");
+    let (_, ws) = rules(
+        "Move the action bar above the photo",
+        &builtin("pixelfed_home"),
+    )
+    .await
+    .unwrap();
     assert_eq!(
-        kinds(card(&b["workspace"])),
+        kinds(card(&ws)),
         [
             "pixelfed://AuthorHeader",
             "pixelfed://ActionBar",
@@ -212,19 +121,23 @@ async fn each_rule_alone() {
         ]
     );
     // Already above: idempotent.
-    let (s, b) = prompt(&pod, "move the action bar above the photo").await;
-    assert_eq!(s, StatusCode::OK);
-    assert_eq!(b["unchanged"], true);
+    let (ops, _) = rules("move the action bar above the photo", &ws)
+        .await
+        .unwrap();
+    assert!(ops.is_empty());
 }
 
 #[tokio::test]
 async fn rules_compose_in_prompt_order_on_the_current_layout() {
-    let pod = open_pod().await;
     // Media first, then the action bar goes right above the (moved) photo.
-    let (s, b) = prompt(&pod, "photos first and move the action bar above the photo").await;
-    assert_eq!(s, StatusCode::OK, "{b}");
+    let (_, ws) = rules(
+        "photos first and move the action bar above the photo",
+        &builtin("pixelfed_home"),
+    )
+    .await
+    .unwrap();
     assert_eq!(
-        kinds(card(&b["workspace"])),
+        kinds(card(&ws)),
         [
             "pixelfed://ActionBar",
             "pixelfed://MediaCarousel",
@@ -233,242 +146,93 @@ async fn rules_compose_in_prompt_order_on_the_current_layout() {
         ]
     );
     // Hide captions + weather in one patch.
-    let (s, b) = prompt(
-        &pod,
+    let (ops, ws) = rules(
         "Add a weather widget at the top, and hide the captions",
+        &ws,
     )
-    .await;
-    assert_eq!(s, StatusCode::OK, "{b}");
-    let ws = spec_workspace(&b);
+    .await
+    .unwrap();
     assert_eq!(ws["slots"][0]["slot_id"], "weather");
     assert_eq!(ws["slots"][1]["slot_id"], "feed");
     assert_eq!(
         ws["slots"][1]["content"]["item_template"]["caption_slot"],
         blank_caption()
     );
-    assert_eq!(b["patch"].as_array().unwrap().len(), 2);
+    assert_eq!(ops.len(), 2);
 }
 
 #[tokio::test]
 async fn weather_widget_is_added_once() {
-    let pod = open_pod().await;
-    let (s, b) = prompt(&pod, "add a weather widget").await;
-    assert_eq!(s, StatusCode::OK, "{b}");
+    let (ops, ws) = rules("add a weather widget", &builtin("pixelfed_home"))
+        .await
+        .unwrap();
     assert_eq!(
-        b["workspace"]["slots"][0],
+        ws["slots"][0],
         json!({ "slot_id": "weather", "provider_uri": "core://placeholder",
                 "content": { "type": "core://Container", "orientation": "Vertical", "padding_dp": 16,
                     "children": [{ "type": "core://Text", "value_expr": "Weather widget (not available yet)", "style": "Caption" }] } })
     );
-    // The padded Container passes validation (it was committed) and round-trips as a UiNode.
-    spec_workspace(&b);
     assert_eq!(
-        b["patch"],
-        json!([{ "op": "add", "path": "/slots/0", "value": b["workspace"]["slots"][0] }])
+        Value::Array(ops),
+        json!([{ "op": "add", "path": "/slots/0", "value": ws["slots"][0] }])
     );
-    let (s, b) = prompt(&pod, "Add a weather widget at the top").await;
-    assert_eq!(s, StatusCode::OK);
-    assert_eq!(b["unchanged"], true);
-    assert_eq!(b["patch"], json!([]));
-    assert_eq!(b["workspace"]["slots"].as_array().unwrap().len(), 2);
-    assert_eq!(version_count(&pod, "pixelfed_home"), 2);
-    // Works on other versioned workspaces too.
-    let (s, b) = prompt_ws(&pod, "home", "add a weather widget").await;
-    assert_eq!(s, StatusCode::OK, "{b}");
-    assert_eq!(b["workspace"]["id"], "home");
+    let (ops, again) = rules("Add a weather widget at the top", &ws).await.unwrap();
+    assert!(ops.is_empty());
+    assert_eq!(again["slots"].as_array().unwrap().len(), 2);
+    // Works on the other apps too.
+    let (_, home) = rules("add a weather widget", &builtin("home"))
+        .await
+        .unwrap();
+    assert_eq!(home["id"], "home");
 }
 
 #[tokio::test]
-async fn unsupported_prompts_are_422_and_commit_nothing() {
-    let pod = open_pod().await;
-    let (s, b) = prompt(&pod, "make it purple").await;
-    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(b["error"], "unsupported_prompt");
-    let supported = b["supported"].as_array().unwrap();
-    assert!(supported.iter().any(|e| e == "Hide post captions"), "{b}");
-    assert_eq!(supported.len(), agent::rules::SUPPORTED.len());
-    // A known rule with nothing to act on in this layout.
-    let (s, b) = prompt_ws(&pod, "home", "hide captions").await;
-    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(b["error"], "unsupported_prompt");
-    assert!(b["detail"].as_str().unwrap().contains("PostCard"), "{b}");
-    // Reset is a rollback, not a patch.
-    let (s, b) = prompt(&pod, "Reset layout").await;
-    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(b["error"], "use_rollback");
-    assert_eq!(b["rollback"], "/v1/workspaces/pixelfed_home/rollback");
-    assert!(version_count(&pod, "pixelfed_home") <= 1);
-    assert!(version_count(&pod, "home") <= 1);
-}
-
-#[tokio::test]
-async fn invalid_demo_rule_is_rejected_and_versions_unchanged() {
-    let pod = open_pod().await;
-    let (s, _) = prompt(&pod, "hide captions").await;
-    assert_eq!(s, StatusCode::OK);
-    let before = pod.state.store().layout_versions("pixelfed_home").unwrap();
-    let mut events = pod.state.subscribe_layouts();
-    // Composed with a valid rule: the whole patch is rejected.
-    let (s, b) = prompt(&pod, "show captions and remove the action bar").await;
-    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
-    assert_eq!(b["error"], "invalid_patch");
-    assert_eq!(b["provider"], "rules");
-    assert!(b["detail"].as_str().unwrap().contains("action_slot"), "{b}");
-    let patch = b["patch"].as_array().unwrap();
+async fn unsupported_prompts() {
+    let feed = builtin("pixelfed_home");
+    let generate = |p: &'static str, layout: Value| async move {
+        agent::rules::RulesProvider
+            .generate(p, &layout, agent::registry())
+            .await
+    };
     assert_eq!(
-        patch.last().unwrap(),
+        generate("make it purple", feed.clone()).await,
+        Err(ProviderError::Unsupported { detail: None })
+    );
+    assert!(agent::rules::SUPPORTED.contains(&"Hide post captions"));
+    // A known rule with nothing to act on in this layout.
+    match generate("hide captions", builtin("home")).await {
+        Err(ProviderError::Unsupported { detail: Some(d) }) => {
+            assert!(d.contains("PostCard"), "{d}")
+        }
+        other => panic!("{other:?}"),
+    }
+    // Reset is not a patch.
+    assert_eq!(
+        generate("Reset layout", feed).await,
+        Err(ProviderError::UseRollback)
+    );
+}
+
+#[tokio::test]
+async fn invalid_demo_rule_is_rejected_as_a_whole() {
+    let (_, hidden) = rules("hide captions", &builtin("pixelfed_home"))
+        .await
+        .unwrap();
+    // Composed with a valid rule: the whole patch is rejected.
+    let generated = agent::rules::RulesProvider
+        .generate(
+            "show captions and remove the action bar",
+            &hidden,
+            agent::registry(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        generated.ops.last().unwrap(),
         &json!({ "op": "remove", "path": "/slots/0/content/item_template/action_slot" })
     );
-    assert_eq!(
-        pod.state.store().layout_versions("pixelfed_home").unwrap(),
-        before
-    );
-    assert!(events.try_recv().is_err(), "nothing broadcast");
-    let (v, node) = latest(&pod, "pixelfed_home");
-    assert_eq!(v, 2);
-    assert_eq!(
-        card(&serde_json::to_value(node).unwrap())["caption_slot"],
-        blank_caption()
-    );
-}
-
-#[tokio::test]
-async fn successful_prompt_broadcasts_a_layout_event() {
-    let pod = open_pod().await;
-    let resp = reqwest::Client::new()
-        .get(format!("{}/v1/workspaces/pixelfed_home/events", pod.url))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let mut resp = resp;
-    let mut buf = String::new();
-    let mut next = async || -> String {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                if let Some(i) = buf.find("\n\n") {
-                    let msg = buf[..i].to_owned();
-                    buf.drain(..i + 2);
-                    if msg != ": keepalive" {
-                        return msg;
-                    }
-                    continue;
-                }
-                let chunk = resp.chunk().await.unwrap().expect("stream ended");
-                buf.push_str(std::str::from_utf8(&chunk).unwrap());
-            }
-        })
-        .await
-        .expect("no SSE message")
-    };
-    let msg = |v: i64| {
-        format!(
-            "event: layout\ndata: {}",
-            json!({ "workspace_id": "pixelfed_home", "version": v,
-                    "layout_id": "pixelfed_home.classic", "layout_version": v })
-        )
-    };
-    assert_eq!(next().await, msg(1));
-    let (s, _) = prompt(&pod, DESIGN_PROMPT).await;
-    assert_eq!(s, StatusCode::OK);
-    assert_eq!(next().await, msg(2));
-}
-
-#[tokio::test]
-async fn auth_and_request_validation() {
-    let pod = spawn(AppState::in_memory()).await;
-    pod.state
-        .store()
-        .create_session(&session_hash("tok"))
-        .unwrap();
-    for bearer in [None, Some("wrong")] {
-        let (s, _, b) = prompt_raw(&pod, json!({ "prompt": DESIGN_PROMPT }), bearer).await;
-        assert_eq!(s, StatusCode::UNAUTHORIZED, "{bearer:?}");
-        assert_eq!(b["error"], "unauthorized");
-        assert_eq!(
-            b["detail"],
-            "a valid pod session is required (or CONSTRUCT_AGENT_OPEN=1 for local demos)"
-        );
-    }
-    // Same body on the history routes.
-    let resp = reqwest::Client::new()
-        .get(format!("{}/v1/workspaces/home/versions", pod.url))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    let b: Value = resp.json().await.unwrap();
-    assert!(
-        b["detail"]
-            .as_str()
-            .unwrap()
-            .contains("CONSTRUCT_AGENT_OPEN"),
-        "{b}"
-    );
-    assert_eq!(version_count(&pod, "pixelfed_home"), 0);
-    let (s, _, b) = prompt_raw(&pod, json!({ "prompt": DESIGN_PROMPT }), Some("tok")).await;
-    assert_eq!(s, StatusCode::OK, "{b}");
-
-    for bad in [
-        json!({}),
-        json!({ "prompt": "  " }),
-        json!({ "prompt": 3 }),
-        json!({ "prompt": "x", "workspace_id": 1 }),
-        json!({ "prompt": "x".repeat(4001) }),
-    ] {
-        let (s, _, b) = prompt_raw(&pod, bad.clone(), Some("tok")).await;
-        assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}");
-        assert_eq!(b["error"], "invalid_request");
-    }
-    let (s, _, b) = prompt_raw(
-        &pod,
-        json!({ "prompt": "hide captions", "workspace_id": "nope" }),
-        Some("tok"),
-    )
-    .await;
-    assert_eq!(s, StatusCode::NOT_FOUND);
-    assert_eq!(b["error"], "workspace_not_found");
-}
-
-#[tokio::test]
-async fn malformed_workspace_ids_are_400_with_a_truncated_echo() {
-    let pod = open_pod().await;
-    let huge = "w".repeat(10_000);
-    let check = |s: StatusCode, b: &Value, what: &str| {
-        assert_eq!(s, StatusCode::BAD_REQUEST, "{what}: {b}");
-        assert_eq!(b["error"], "invalid_workspace_id", "{what}");
-        assert!(
-            b["id"].as_str().unwrap().len() <= 67,
-            "{what}: echo is truncated"
-        );
-    };
-    let (s, b) = prompt_ws(&pod, &huge, "hide captions").await;
-    check(s, &b, "agent");
-    let (s, b) = prompt_ws(&pod, "bad id!", "hide captions").await;
-    check(s, &b, "agent charset");
-    let client = reqwest::Client::new();
-    for (method, path) in [
-        ("GET", format!("/v1/workspaces/{huge}")),
-        ("GET", format!("/v1/workspaces/{huge}/versions")),
-        ("POST", format!("/v1/workspaces/{huge}/rollback")),
-        ("GET", format!("/v1/workspaces/{huge}/events")),
-        ("GET", "/v1/workspaces/a.b/versions".to_owned()),
-    ] {
-        let url = format!("{}{path}", pod.url);
-        let req = if method == "GET" {
-            client.get(url)
-        } else {
-            client.post(url).json(&json!({ "version": 1 }))
-        };
-        let resp = req.send().await.unwrap();
-        let s = resp.status();
-        let b: Value = resp.json().await.unwrap();
-        check(s, &b, &path[..40.min(path.len())]);
-    }
-    // A well-formed unknown id is still a 404.
-    let (s, b) = prompt_ws(&pod, "no-such_ws", "hide captions").await;
-    assert_eq!(s, StatusCode::NOT_FOUND);
-    assert_eq!(b["id"], "no-such_ws");
+    let err = agent::apply_and_validate(&hidden, &generated.ops).unwrap_err();
+    assert!(err.contains("action_slot"), "{err}");
 }
 
 // ---------- provider selection ----------
@@ -515,19 +279,6 @@ fn provider_selection_from_env() {
         Selection::from_lookup(lookup(&[("CONSTRUCT_LLM_PROVIDER", "gpt")])),
         Selection::NotConfigured { detail, .. } if detail.contains("unknown")
     ));
-}
-
-#[tokio::test]
-async fn anthropic_selected_without_key_is_503() {
-    let sel = Selection::from_lookup(lookup(&[("CONSTRUCT_LLM_PROVIDER", "anthropic")]));
-    let pod = spawn(AppState::in_memory().with_agent_open(true).with_agent(sel)).await;
-    let (s, b) = prompt(&pod, DESIGN_PROMPT).await;
-    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        b,
-        json!({ "error": "provider_not_configured", "provider": "anthropic", "detail": "ANTHROPIC_API_KEY is not set" })
-    );
-    assert_eq!(version_count(&pod, "pixelfed_home"), 0);
 }
 
 // ---------- registry ----------
@@ -875,7 +626,7 @@ async fn anthropic_http_errors() {
 }
 
 #[tokio::test]
-async fn anthropic_malformed_output_is_a_provider_error_through_the_endpoint() {
+async fn anthropic_malformed_output_is_a_provider_error() {
     let not_json = message(
         json!([{ "type": "text", "text": "Sure! Here is the patch:" }]),
         "end_turn",
@@ -888,73 +639,24 @@ async fn anthropic_malformed_output_is_a_provider_error_through_the_endpoint() {
         Value::Null,
     );
     let api = mock_api(vec![(200, vec![], not_json), (200, vec![], bad_value)]).await;
-    let pod = spawn(
-        AppState::in_memory()
-            .with_agent_open(true)
-            .with_agent(Selection::provider(provider(&api, true))),
-    )
-    .await;
+    let p = provider(&api, true);
     for want in ["not valid JSON", "value_json is not valid JSON"] {
-        let (s, b) = prompt(&pod, "hide captions").await;
-        assert_eq!(s, StatusCode::BAD_GATEWAY, "{b}");
-        assert_eq!(b["error"], "provider_error");
-        assert_eq!(b["provider"], "anthropic");
-        assert!(b["detail"].as_str().unwrap().contains(want), "{b}");
+        match p
+            .generate("hide captions", &layout(), agent::registry())
+            .await
+        {
+            Err(ProviderError::Failed(d)) => assert!(d.contains(want), "{d}"),
+            other => panic!("{other:?}"),
+        }
     }
-    assert_eq!(
-        version_count(&pod, "pixelfed_home"),
-        1,
-        "only the seeded v1"
-    );
-}
-
-#[tokio::test]
-async fn anthropic_provider_through_the_endpoint() {
-    let api = mock_api(vec![
-        (200, vec![], hide_captions_answer()),
-        (401, vec![], json!({ "type": "error", "error": { "type": "authentication_error", "message": "invalid x-api-key" } })),
-    ])
-    .await;
-    let pod = spawn(
-        AppState::in_memory()
-            .with_agent_open(true)
-            .with_agent(Selection::provider(provider(&api, true))),
-    )
-    .await;
-    let (s, b) = prompt(&pod, "Hide post captions").await;
-    assert_eq!(s, StatusCode::OK, "{b}");
-    assert_eq!(b["provider"], "anthropic");
-    assert_eq!(b["model"], "claude-opus-5-5");
-    assert_eq!(b["explanation"], "Blank the caption.");
-    assert_eq!(card(&spec_workspace(&b))["caption_slot"], blank_caption());
-    let rows = pod.state.store().layout_versions("pixelfed_home").unwrap();
-    assert_eq!(rows[0].provider.as_deref(), Some("anthropic"));
-    // The registry and current layout went to the API.
-    let reqs = api.requests.lock().unwrap().clone();
-    assert!(
-        reqs[0].1["system"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("pixelfed://PostCard")
-    );
-    // A rejected key is a 503 with a clear message.
-    let (s, b) = prompt(&pod, "Hide post captions").await;
-    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "{b}");
-    assert_eq!(b["error"], "provider_not_configured");
-    assert!(
-        b["detail"]
-            .as_str()
-            .unwrap()
-            .contains("rejected ANTHROPIC_API_KEY"),
-        "{b}"
-    );
 }
 
 // ---------- review hardening ----------
 
 #[test]
 fn builtin_layouts_pass_validation() {
-    for ws in layouts::VERSIONED {
+    for app in layouts::APPS {
+        let ws = app.id;
         let layout = serde_json::to_value(layouts::builtin(ws).unwrap()).unwrap();
         agent::apply_and_validate(&layout, &[]).unwrap_or_else(|e| panic!("{ws}: {e}"));
     }
@@ -1036,80 +738,6 @@ fn validation_rejects_invented_intents_but_allows_copies() {
     let ask = json!({ "type": "core://Button", "label": "Hide captions",
         "on_click": { "intent": "action.agent.prompt", "prompt_text": "hide captions" } });
     assert!(ok(json!([{ "op": "replace", "path": caption, "value": ask }])).is_ok());
-}
-
-/// Generates "/title" = "Agent" once released (a slow LLM call).
-struct GatedProvider {
-    started: Arc<tokio::sync::Notify>,
-    release: Arc<tokio::sync::Notify>,
-}
-
-impl LayoutProvider for GatedProvider {
-    fn name(&self) -> &str {
-        "gated"
-    }
-    fn model(&self) -> Option<&str> {
-        None
-    }
-    fn generate<'a>(
-        &'a self,
-        _prompt: &'a str,
-        _layout: &'a Value,
-        _registry: &'a Value,
-    ) -> agent::GenerateFuture<'a> {
-        Box::pin(async move {
-            self.started.notify_one();
-            self.release.notified().await;
-            Ok(agent::Generated {
-                ops: vec![json!({ "op": "replace", "path": "/title", "value": "Agent" })],
-                explanation: None,
-            })
-        })
-    }
-}
-
-#[tokio::test]
-async fn a_change_committed_during_generation_is_not_overwritten() {
-    let started = Arc::new(tokio::sync::Notify::new());
-    let release = Arc::new(tokio::sync::Notify::new());
-    let pod = spawn(
-        AppState::in_memory()
-            .with_agent_open(true)
-            .with_agent(Selection::provider(GatedProvider {
-                started: started.clone(),
-                release: release.clone(),
-            })),
-    )
-    .await;
-    let url = pod.url.clone();
-    let request = tokio::spawn(async move {
-        reqwest::Client::new()
-            .post(format!("{url}/v1/agent/modify_layout"))
-            .json(&json!({ "prompt": "rename" }))
-            .send()
-            .await
-            .unwrap()
-            .json::<Value>()
-            .await
-            .unwrap()
-    });
-    started.notified().await;
-    // Meanwhile another change lands (a rollback or a concurrent prompt).
-    let (v1, mut other) = latest(&pod, "pixelfed_home");
-    assert_eq!(v1, 1);
-    if let UiNode::Workspace { slots, .. } = &mut other {
-        slots[0].slot_id = "concurrent".into();
-    }
-    let v2 = layouts::commit(pod.state.store(), "pixelfed_home", &other, None, None, None).unwrap();
-    assert_eq!(v2, 2);
-    release.notify_one();
-    let body = request.await.unwrap();
-    assert_eq!(body["layout_version"], 3, "{body}");
-    let ws = spec_workspace(&body);
-    assert_eq!(ws["title"], "Agent");
-    assert_eq!(ws["slots"][0]["slot_id"], "concurrent", "v2's change kept");
-    let (v, stored) = latest(&pod, "pixelfed_home");
-    assert_eq!((v, serde_json::to_value(stored).unwrap()), (3, ws));
 }
 
 #[test]

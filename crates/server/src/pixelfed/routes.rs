@@ -637,12 +637,12 @@ pub async fn home_workspace(state: &Arc<AppState>, headers: &HeaderMap) -> Respo
     );
     let served = match crate::layouts::active_async(state, layout::WORKSPACE_ID).await {
         Ok(Some(v)) => v,
-        Ok(None) => unreachable!("pixelfed_home is a versioned workspace"),
+        Ok(None) => unreachable!("pixelfed_home has versions after the layout sync"),
         Err(e) => return e.into_response(),
     };
     let mut spec = layout::home_feed(timeline.entities, timeline.order);
     spec.workspace = served.layout;
-    (crate::layouts::served_headers(&served.active), Json(spec)).into_response()
+    (crate::layouts::served_headers(served.version), Json(spec)).into_response()
 }
 
 // ---------- actions ----------

@@ -1,0 +1,77 @@
+{
+  "note": "Counter",
+  "layout": {
+    "type": "core://Workspace",
+    "id": "home",
+    "slots": [
+      {
+        "content": {
+          "type": "core://Container",
+          "children": [
+            {
+              "type": "core://Text",
+              "style": "Title",
+              "value_expr": "The Construct Counter"
+            },
+            {
+              "type": "core://Text",
+              "style": "Headline",
+              "value_expr": "Count: ${core://counters/home#count}"
+            },
+            {
+              "type": "core://Container",
+              "children": [
+                {
+                  "type": "core://Button",
+                  "label": "Increment",
+                  "on_click": {
+                    "intent": "action.mutation.optimistic",
+                    "endpoint": "/v1/counters/home/increment",
+                    "entity_uri": "core://counters/home",
+                    "field": "count",
+                    "payload": {},
+                    "rollback_value": 0,
+                    "value_expr": "entity.count + 1"
+                  }
+                },
+                {
+                  "type": "core://Button",
+                  "label": "Decrement",
+                  "on_click": {
+                    "intent": "action.mutation.optimistic",
+                    "endpoint": "/v1/counters/home/decrement",
+                    "entity_uri": "core://counters/home",
+                    "field": "count",
+                    "payload": {},
+                    "rollback_value": 0,
+                    "value_expr": "entity.count - 1"
+                  }
+                },
+                {
+                  "type": "core://Button",
+                  "label": "Reset",
+                  "on_click": {
+                    "intent": "action.mutation.optimistic",
+                    "endpoint": "/v1/counters/home/reset",
+                    "entity_uri": "core://counters/home",
+                    "field": "count",
+                    "payload": {},
+                    "rollback_value": 0,
+                    "value_expr": "0"
+                  }
+                }
+              ],
+              "orientation": "Horizontal",
+              "padding_dp": 8
+            }
+          ],
+          "orientation": "Vertical",
+          "padding_dp": 24
+        },
+        "provider_uri": "core://counter",
+        "slot_id": "counter"
+      }
+    ],
+    "title": "Home"
+  }
+}

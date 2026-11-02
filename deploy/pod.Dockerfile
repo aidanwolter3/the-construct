@@ -14,6 +14,8 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY fixtures ./fixtures
+# Layout files (layouts as code) are embedded in the binary at compile time.
+COPY layouts ./layouts
 ENV CARGO_PROFILE_RELEASE_STRIP=true \
     CARGO_PROFILE_RELEASE_LTO=thin \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1

@@ -1,8 +1,10 @@
 //! The Construct backend: serves fixture hydration bundles, persists
 //! counter mutations in SQLite (M5, see [`store`]) and adapts a Pixelfed
 //! instance (M6, see [`pixelfed`]; the pod owns the upstream token).
-//! Workspace layouts are versioned and pushed over SSE (M7, see [`layouts`]);
-//! [`agent`] edits them from natural-language prompts.
+//! Workspace layouts are code (`layouts/<app>/NNNN.json`), synced into one
+//! append-only version history per app at startup, served read-only and
+//! pushed over SSE (see [`layouts`]). [`agent`] (prompt -> layout patch) is
+//! kept in the library but not routed: clients cannot change layouts.
 //!
 //! Fixtures are embedded at compile time and parsed into
 //! [`protocol::WorkspaceSpec`] once, so an invalid fixture fails loudly
@@ -197,23 +199,32 @@ pub struct AppState {
     /// Serializes upstream token refreshes (Passport rotates the refresh
     /// token, so two concurrent refreshes would revoke each other).
     pixelfed_refresh: tokio::sync::Mutex<()>,
-    /// `CONSTRUCT_AGENT_OPEN=1`: versions/rollback/agent need no session (dev only).
-    agent_open: bool,
-    /// New workspace revisions, fanned out to SSE subscribers.
+    /// `CONSTRUCT_SHOW_DEV_APPS=1`: `GET /v1/apps` also lists the dev apps.
+    show_dev_apps: bool,
+    /// New app versions, fanned out to SSE subscribers.
     layout_tx: tokio::sync::broadcast::Sender<layouts::LayoutEvent>,
     /// SSE keepalive interval (15 s; shorter in tests).
     sse_keepalive: std::time::Duration,
     /// Set by [`AppState::shutdown`]: open SSE streams end.
     shutdown: tokio::sync::watch::Sender<bool>,
-    /// Layout agent provider (default: the offline rules provider).
-    agent: agent::Selection,
 }
 
 impl AppState {
+    /// State over `store`, after syncing the embedded layout files into it
+    /// ([`layouts::sync`]). Panics with the sync error; see [`Self::try_new`].
     pub fn new(store: Store) -> Self {
+        Self::try_new(store).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// [`Self::new`], returning the layout sync error (a changed, missing,
+    /// out-of-order or invalid layout file) instead of panicking.
+    pub fn try_new(store: Store) -> Result<Self, String> {
+        for (path, version) in layouts::sync(&store)? {
+            tracing::info!(file = %path, version, "layout file deployed as a new version");
+        }
         let pixelfed = PixelfedConfig::default();
         let media_allow = pixelfed.media_allowlist();
-        Self {
+        Ok(Self {
             store,
             test_hooks: false,
             fault: Mutex::new(None),
@@ -221,33 +232,22 @@ impl AppState {
             media_allow,
             pixelfed,
             pixelfed_refresh: tokio::sync::Mutex::new(()),
-            agent_open: false,
+            show_dev_apps: false,
             layout_tx: tokio::sync::broadcast::channel(layouts::CHANNEL_CAPACITY).0,
             sse_keepalive: layouts::DEFAULT_KEEPALIVE,
             shutdown: tokio::sync::watch::channel(false).0,
-            agent: agent::Selection::rules(),
-        }
+        })
     }
 
-    /// `CONSTRUCT_AGENT_OPEN=1`: layout history / rollback / agent endpoints
-    /// accept requests without a pod session (dev and demo only).
-    pub fn with_agent_open(mut self, open: bool) -> Self {
-        self.agent_open = open;
+    /// `CONSTRUCT_SHOW_DEV_APPS=1`: `GET /v1/apps` also lists `pixelfed_demo`
+    /// and `home` (their other endpoints work either way).
+    pub fn with_dev_apps(mut self, show: bool) -> Self {
+        self.show_dev_apps = show;
         self
     }
 
-    pub fn agent_open(&self) -> bool {
-        self.agent_open
-    }
-
-    /// The layout agent provider (`agent::Selection::from_env()` in `main`).
-    pub fn with_agent(mut self, selection: agent::Selection) -> Self {
-        self.agent = selection;
-        self
-    }
-
-    pub fn agent(&self) -> &agent::Selection {
-        &self.agent
+    pub fn show_dev_apps(&self) -> bool {
+        self.show_dev_apps
     }
 
     /// Override the SSE keepalive interval (tests).
@@ -260,9 +260,14 @@ impl AppState {
         self.sse_keepalive
     }
 
-    /// Broadcast a new workspace revision to SSE subscribers (no-op without any).
-    pub fn publish_layout(&self, active: &layouts::ActiveLayout) {
-        let _ = self.layout_tx.send(layouts::LayoutEvent::from(active));
+    /// Broadcast a new app version to SSE subscribers (no-op without any).
+    /// Nothing at runtime appends versions (they come with a deploy); tests
+    /// and tooling that append with [`layouts::append_version`] call this.
+    pub fn publish_layout(&self, workspace_id: &str, version: i64) {
+        let _ = self.layout_tx.send(layouts::LayoutEvent {
+            workspace_id: workspace_id.to_owned(),
+            version,
+        });
     }
 
     /// End all open SSE streams (call before graceful shutdown, which
@@ -291,10 +296,11 @@ impl AppState {
         &self.pixelfed
     }
 
-    /// State backed by `<dir>/server.db` (the directory is created).
+    /// State backed by `<dir>/server.db` (the directory is created), with
+    /// the layout files synced.
     pub fn open_dir(dir: &FsPath) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         std::fs::create_dir_all(dir)?;
-        Ok(Self::new(Store::open(&dir.join("server.db"))?))
+        Ok(Self::try_new(Store::open(&dir.join("server.db"))?)?)
     }
 
     /// Private in-memory database (tests).
@@ -333,8 +339,7 @@ pub fn app(state: Arc<AppState>) -> Router {
         .route("/v1/counters/{id}/{op}", post(counter_mutation))
         .route("/v1/demo/ack", post(demo_ack))
         .merge(pixelfed::routes::router())
-        .merge(layouts::router())
-        .merge(agent::router());
+        .merge(layouts::router());
     if state.test_hooks {
         router = router.route("/v1/test/fault", post(set_fault));
     }
@@ -407,7 +412,7 @@ async fn get_workspace(
             .or_default()
             .set("count", count);
     }
-    (layouts::served_headers(&served.active), Json(spec)).into_response()
+    (layouts::served_headers(served.version), Json(spec)).into_response()
 }
 
 /// A JSON error response, kept small so it can travel in `Result::Err`.

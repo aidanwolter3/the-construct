@@ -1,0 +1,60 @@
+{
+  "note": "Classic feed",
+  "layout": {
+    "type": "core://Workspace",
+    "id": "pixelfed_demo",
+    "slots": [
+      {
+        "content": {
+          "type": "pixelfed://FeedList",
+          "item_template": {
+            "type": "pixelfed://PostCard",
+            "action_slot": {
+              "type": "pixelfed://ActionBar",
+              "bookmark_intent": {
+                "intent": "action.navigation.open",
+                "presentation": "Push",
+                "target_uri": "pixelfed://bookmarks"
+              },
+              "comment_intent": {
+                "intent": "action.navigation.open",
+                "presentation": "Modal",
+                "target_uri": "pixelfed://posts/$item.id/comments"
+              },
+              "like_intent": {
+                "intent": "action.mutation.optimistic",
+                "endpoint": "/v1/demo/ack",
+                "entity_uri": "$item.uri",
+                "field": "is_liked",
+                "payload": {
+                  "id": "$item.id"
+                },
+                "rollback_value": false,
+                "value_expr": "!entity.is_liked"
+              }
+            },
+            "author_slot": {
+              "type": "pixelfed://AuthorHeader",
+              "user_ref": "$item.author_uri"
+            },
+            "caption_slot": {
+              "type": "core://Text",
+              "style": "Body",
+              "value_expr": "entity.caption"
+            },
+            "media_slot": {
+              "type": "pixelfed://MediaCarousel",
+              "aspect_ratio": 1.0,
+              "media_refs": "$item.media_uris"
+            },
+            "post_ref": "$item.uri"
+          },
+          "query_key": "timeline:home"
+        },
+        "provider_uri": "pixelfed://home_timeline",
+        "slot_id": "feed"
+      }
+    ],
+    "title": "Home"
+  }
+}

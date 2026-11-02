@@ -5,12 +5,12 @@
 //! - `CONSTRUCT_DATA_DIR`: directory for `server.db` (default `~/.construct-server`,
 //!   created if missing).
 //! - `CONSTRUCT_TEST_HOOKS=1`: enables `POST /v1/test/fault`.
-//! - `CONSTRUCT_AGENT_OPEN=1`: layout versions / rollback / agent endpoints accept
-//!   requests without a pod session (dev and demo only).
-//! - `CONSTRUCT_LLM_PROVIDER`: layout agent provider, `auto` (default: `anthropic`
-//!   if `ANTHROPIC_API_KEY` is set, else `rules`) | `anthropic` | `rules`.
-//! - `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` (default `https://api.anthropic.com`),
-//!   `CONSTRUCT_LLM_MODEL` (model id), `CONSTRUCT_LLM_FALLBACKS=0` (no server-side refusal fallback).
+//! - `CONSTRUCT_SHOW_DEV_APPS=1`: `GET /v1/apps` also lists the dev apps
+//!   (`pixelfed_demo`, `home`).
+//!
+//! On start, new layout files (`layouts/<app>/NNNN.json`, embedded) are appended
+//! as new app versions before the server listens; a changed, missing,
+//! out-of-order or invalid file stops the start with an error naming it.
 //! - `PIXELFED_INSTANCE_URL`: Pixelfed instance for pod->upstream calls
 //!   (default `http://127.0.0.1:8081`, the local fake; `http://localhost:8090` for the
 //!   local real Pixelfed, whose web/OAuth routes only answer on Host `localhost`).
@@ -45,13 +45,18 @@ async fn main() -> std::io::Result<()> {
 
     let dir = data_dir();
     let test_hooks = std::env::var("CONSTRUCT_TEST_HOOKS").is_ok_and(|v| v == "1");
-    let agent_open = std::env::var("CONSTRUCT_AGENT_OPEN").is_ok_and(|v| v == "1");
-    let state = server::AppState::open_dir(&dir)
-        .map_err(|e| std::io::Error::other(format!("failed to open {}: {e}", dir.display())))?
-        .with_test_hooks(test_hooks)
-        .with_pixelfed(server::PixelfedConfig::from_env())
-        .with_agent_open(agent_open)
-        .with_agent(server::agent::Selection::from_env());
+    let show_dev_apps = std::env::var("CONSTRUCT_SHOW_DEV_APPS").is_ok_and(|v| v == "1");
+    let state = match server::AppState::open_dir(&dir) {
+        Ok(s) => s,
+        Err(e) => {
+            // E.g. a layout file changed after it was deployed: say which, and stop.
+            tracing::error!("cannot start: {e} (data dir {})", dir.display());
+            std::process::exit(1);
+        }
+    }
+    .with_test_hooks(test_hooks)
+    .with_pixelfed(server::PixelfedConfig::from_env())
+    .with_dev_apps(show_dev_apps);
     let pixelfed = state.pixelfed_config();
     tracing::info!(
         instance = %pixelfed.instance_url,
@@ -62,22 +67,10 @@ async fn main() -> std::io::Result<()> {
     if test_hooks {
         tracing::warn!("CONSTRUCT_TEST_HOOKS=1: POST /v1/test/fault is enabled");
     }
-    match state.agent() {
-        server::agent::Selection::Ready(p) => tracing::info!(
-            provider = p.name(),
-            model = p.model().unwrap_or("-"),
-            "layout agent provider selected"
-        ),
-        server::agent::Selection::NotConfigured { provider, detail } => tracing::warn!(
-            provider = %provider,
-            %detail,
-            "layout agent provider NOT configured: POST /v1/agent/modify_layout answers 503"
-        ),
-    }
-    if agent_open {
-        tracing::warn!(
-            "CONSTRUCT_AGENT_OPEN=1: layout versions/rollback/agent endpoints need no session (dev only)"
-        );
+    for app in server::layouts::APPS {
+        if let Ok(Some(v)) = state.store().app_latest_meta(app.id) {
+            tracing::info!(app = app.id, version = v.version, "serving layout");
+        }
     }
 
     let addr = std::env::var("CONSTRUCT_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_owned());

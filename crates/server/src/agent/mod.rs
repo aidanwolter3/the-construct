@@ -1,9 +1,11 @@
-//! Generative layout agent (M7, D25): `POST /v1/agent/modify_layout`.
-//!
-//! A [`LayoutProvider`] turns a prompt plus the current layout into an RFC 6902
-//! patch; the handler applies it to a copy, validates the result and, only if
-//! it is valid, commits it as a new layout version and broadcasts it. Nothing
-//! is committed on any failure.
+//! Generative layout agent (M7, D25), kept in the repo but NOT routed: clients
+//! cannot change layouts on the pod any more (layouts are code, see
+//! [`crate::layouts`]). What remains: the [`LayoutProvider`] trait with the
+//! offline [`rules`] and [`anthropic`] providers (prompt -> RFC 6902 patch),
+//! [`apply_and_validate`] for patches, and [`validate_structure`], which the
+//! startup sync of `layouts/` uses for developer-authored layout files. These
+//! are public library items, so they compile (and their tests run) without a
+//! route using them.
 
 pub mod anthropic;
 pub mod rules;
@@ -11,23 +13,10 @@ pub mod rules;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
-use std::time::Instant;
 
-use axum::{
-    Json, Router,
-    body::Bytes,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-    routing::post,
-};
 use protocol::{ActionIntent, UiNode};
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use crate::{AppState, json_error, layouts, parse_json_body};
-
-/// Default `workspace_id` of a prompt.
-pub const DEFAULT_WORKSPACE: &str = crate::pixelfed::layout::WORKSPACE_ID;
 /// Validation limits.
 pub const MAX_SLOTS: usize = 50;
 pub const MAX_LAYOUT_BYTES: usize = 256 * 1024;
@@ -220,18 +209,55 @@ fn check_bounds(doc: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// Validates a patched layout against the original root.
+/// Validates a patched layout against the original root: everything
+/// [`validate_structure`] checks (with the original's workspace id), plus
+/// mutation, navigation and sign-in intents may only be copies of intents the
+/// original already has (a patch must not invent endpoints, entity targets or
+/// instance URLs; the model is told the same).
 pub fn validate(original: &Value, doc: &Value) -> Result<UiNode, String> {
+    let original_id = original["id"].as_str().unwrap_or_default();
+    let node = validate_structure(original_id, doc)?;
+    let original_node = serde_json::from_value::<UiNode>(original.clone()).ok();
+    let mut existing = Vec::new();
+    if let Some(original) = &original_node {
+        collect_intents(original, &mut existing);
+    }
+    let mut intents = Vec::new();
+    collect_intents(&node, &mut intents);
+    for intent in intents {
+        let restricted = matches!(
+            intent,
+            ActionIntent::OptimisticMutate { .. }
+                | ActionIntent::AuthLogin { .. }
+                | ActionIntent::Navigate { .. }
+        );
+        if restricted && !existing.contains(&intent) {
+            let json = serde_json::to_string(intent).unwrap_or_default();
+            return Err(format!(
+                "new action intent {json}: mutation, navigation and sign-in intents may only be \
+                 copies of intents already in the layout"
+            ));
+        }
+    }
+    Ok(node)
+}
+
+/// Structural validation of a workspace layout, without any intent
+/// restriction (used directly for developer-authored layout files): depth and
+/// size bounds, deserializes as a [`UiNode`], the root is a `core://Workspace`
+/// with id `expected_id`, 1..=[`MAX_SLOTS`] slots with unique `slot_id`s,
+/// numeric fields in range (aspect ratio, padding), and every mutation
+/// endpoint is a pod path (`/v1/...`).
+pub fn validate_structure(expected_id: &str, doc: &Value) -> Result<UiNode, String> {
     check_bounds(doc)?;
     let node: UiNode = serde_json::from_value(doc.clone())
         .map_err(|e| format!("layout does not deserialize as a UiNode: {e}"))?;
     let UiNode::Workspace { id, slots, .. } = &node else {
         return Err("root must stay a core://Workspace".to_owned());
     };
-    let original_id = original["id"].as_str().unwrap_or_default();
-    if id != original_id {
+    if id != expected_id {
         return Err(format!(
-            "workspace id changed from '{original_id}' to '{id}'"
+            "workspace id changed from '{expected_id}' to '{id}'"
         ));
     }
     if slots.is_empty() {
@@ -245,14 +271,6 @@ pub fn validate(original: &Value, doc: &Value) -> Result<UiNode, String> {
         return Err(format!("duplicate slot_id '{}'", dup.slot_id));
     }
     check_values(&node)?;
-    // Intents that reach the network or start a sign-in may only be copies of
-    // ones the current layout already has (the model is told the same): a
-    // patch must not invent endpoints, entity targets or instance URLs.
-    let original_node = serde_json::from_value::<UiNode>(original.clone()).ok();
-    let mut existing = Vec::new();
-    if let Some(original) = &original_node {
-        collect_intents(original, &mut existing);
-    }
     let mut intents = Vec::new();
     collect_intents(&node, &mut intents);
     for intent in intents {
@@ -261,19 +279,6 @@ pub fn validate(original: &Value, doc: &Value) -> Result<UiNode, String> {
         {
             return Err(format!(
                 "mutation endpoint '{endpoint}' must be a pod path starting with /v1/"
-            ));
-        }
-        let restricted = matches!(
-            intent,
-            ActionIntent::OptimisticMutate { .. }
-                | ActionIntent::AuthLogin { .. }
-                | ActionIntent::Navigate { .. }
-        );
-        if restricted && !existing.contains(&intent) {
-            let json = serde_json::to_string(intent).unwrap_or_default();
-            return Err(format!(
-                "new action intent {json}: mutation, navigation and sign-in intents may only be \
-                 copies of intents already in the layout"
             ));
         }
     }
@@ -356,257 +361,4 @@ fn collect_intents<'a>(node: &'a UiNode, out: &mut Vec<&'a ActionIntent>) {
         } => out.extend([like_intent, bookmark_intent, comment_intent]),
         UiNode::FeedList { item_template, .. } => collect_intents(item_template, out),
     }
-}
-
-// ---------- route ----------
-
-pub fn router() -> Router<Arc<AppState>> {
-    Router::new().route("/v1/agent/modify_layout", post(modify_layout))
-}
-
-fn bad_request(detail: &str) -> Response {
-    json_error(
-        StatusCode::BAD_REQUEST,
-        json!({ "error": "invalid_request", "detail": detail,
-                "expected": { "prompt": "non-empty string", "workspace_id": "optional string" } }),
-    )
-}
-
-/// `POST /v1/agent/modify_layout {"prompt", "workspace_id"?}`.
-async fn modify_layout(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    if let Some(r) = layouts::require_agent_auth(&state, &headers).await {
-        return r;
-    }
-    let payload = match parse_json_body(&headers, &body) {
-        Ok(v) => v,
-        Err(e) => return e.into_response(),
-    };
-    let Some(prompt) = payload["prompt"]
-        .as_str()
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-    else {
-        return bad_request("`prompt` must be a non-empty string");
-    };
-    if prompt.chars().count() > MAX_PROMPT_CHARS {
-        return bad_request("`prompt` is too long (max 4000 characters)");
-    }
-    let workspace_id = match &payload["workspace_id"] {
-        Value::Null => DEFAULT_WORKSPACE,
-        Value::String(s) => s.as_str(),
-        _ => return bad_request("`workspace_id` must be a string"),
-    };
-    if let Some(r) = layouts::reject_invalid_workspace_id(workspace_id) {
-        return r;
-    }
-    if !layouts::is_versioned(workspace_id) {
-        return json_error(
-            StatusCode::NOT_FOUND,
-            json!({ "error": "workspace_not_found", "id": workspace_id,
-                    "versioned": layouts::VERSIONED }),
-        );
-    }
-    let (provider_name, model) = state.agent().describe();
-    let provider = match state.agent() {
-        Selection::Ready(p) => p.clone(),
-        Selection::NotConfigured { detail, .. } => {
-            tracing::warn!(provider = %provider_name, %prompt, outcome = "provider_not_configured", %detail, "agent prompt");
-            return json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                json!({ "error": "provider_not_configured", "provider": provider_name, "detail": detail }),
-            );
-        }
-    };
-    let started = Instant::now();
-    let (base, layout) = match layouts::active_async(&state, workspace_id).await {
-        Ok(Some(x)) => (x.active, x.layout),
-        Ok(None) => {
-            return json_error(
-                StatusCode::NOT_FOUND,
-                json!({ "error": "workspace_not_found", "id": workspace_id }),
-            );
-        }
-        Err(e) => return e.into_response(),
-    };
-    let layout_json = match serde_json::to_value(&layout) {
-        Ok(v) => v,
-        Err(e) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "error": "internal", "detail": e.to_string() }),
-            );
-        }
-    };
-    let log = |outcome: &str, ops: usize, detail: &str| {
-        tracing::info!(
-            provider = %provider_name,
-            model = model.as_deref().unwrap_or("-"),
-            workspace = workspace_id,
-            %prompt,
-            ops,
-            outcome,
-            detail,
-            elapsed_ms = started.elapsed().as_millis() as u64,
-            "agent prompt"
-        );
-    };
-
-    let generated = match provider.generate(prompt, &layout_json, registry()).await {
-        Ok(g) => g,
-        Err(err) => {
-            let (status, body, outcome) = match err {
-                ProviderError::Unsupported { detail } => (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    json!({ "error": "unsupported_prompt", "provider": provider_name,
-                            "detail": detail.unwrap_or_else(|| "the rules provider does not understand this prompt".to_owned()),
-                            "supported": rules::SUPPORTED }),
-                    "unsupported_prompt",
-                ),
-                ProviderError::UseRollback => (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    json!({ "error": "use_rollback", "provider": provider_name,
-                            "detail": format!("resetting is not a patch: POST /v1/workspaces/{workspace_id}/rollback {{\"version\": 1}} restores the built-in layout"),
-                            "rollback": format!("/v1/workspaces/{workspace_id}/rollback") }),
-                    "use_rollback",
-                ),
-                ProviderError::NotConfigured(detail) => (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    json!({ "error": "provider_not_configured", "provider": provider_name, "detail": detail }),
-                    "provider_not_configured",
-                ),
-                ProviderError::Failed(detail) => (
-                    StatusCode::BAD_GATEWAY,
-                    json!({ "error": "provider_error", "provider": provider_name, "model": model, "detail": detail }),
-                    "provider_error",
-                ),
-            };
-            log(outcome, 0, body["detail"].as_str().unwrap_or_default());
-            return json_error(status, body);
-        }
-    };
-    let patch = Value::Array(generated.ops.clone());
-    let op_count = generated.ops.len();
-
-    // `layout_version` is the workspace revision (the client's one number per
-    // workspace, D24); `layout_id` / `layout_id_version` name the layout.
-    let respond = |active: &layouts::ActiveLayout, workspace: &UiNode, unchanged: bool| {
-        let mut body = json!({
-            "version": crate::pixelfed::layout::BUNDLE_VERSION,
-            "workspace": layouts::node_value(workspace),
-            "entities": {},
-            "layout_version": active.revision,
-            "layout_id": active.layout_id,
-            "layout_id_version": active.layout_version,
-            "provider": provider_name,
-            "model": model,
-            "patch": patch,
-        });
-        if let Some(e) = &generated.explanation {
-            body["explanation"] = json!(e);
-        }
-        if unchanged {
-            body["unchanged"] = json!(true);
-        }
-        (layouts::served_headers(active), Json(body)).into_response()
-    };
-
-    if generated.ops.is_empty() {
-        // Already in the requested state (e.g. a second "add a weather
-        // widget"): no new version.
-        log(
-            "unchanged",
-            0,
-            generated.explanation.as_deref().unwrap_or_default(),
-        );
-        return respond(&base, &layout, true);
-    }
-
-    // Apply to the version the patch was made for. If another version was
-    // committed meanwhile (a concurrent prompt, a rollback/restore, or a switch
-    // of the active layout during a slow provider call), re-apply the same
-    // patch on the new active latest instead of overwriting that change with a
-    // layout derived from the old one.
-    let (mut base, mut layout, mut layout_json) = (base, layout, layout_json);
-    let first_base = base.revision;
-    let mut attempt = 0;
-    loop {
-        let new_layout = match apply_and_validate(&layout_json, &generated.ops) {
-            Ok(node) => node,
-            Err(detail) => {
-                log("invalid_patch", op_count, &detail);
-                let detail = if base.revision == first_base {
-                    detail
-                } else {
-                    format!(
-                        "{detail} (the layout changed to v{} while the patch for \
-                         v{first_base} was generated)",
-                        base.revision
-                    )
-                };
-                return json_error(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    json!({ "error": "invalid_patch", "detail": detail, "patch": patch,
-                            "provider": provider_name, "model": model }),
-                );
-            }
-        };
-        if new_layout == layout {
-            log("unchanged", op_count, "patch is a no-op");
-            return respond(&base, &layout, true);
-        }
-        let meta = layouts::LayoutMeta {
-            prompt: Some(prompt.to_owned()),
-            provider: Some(provider_name.clone()),
-            patch_json: Some(patch.to_string()),
-        };
-        match layouts::commit_on_and_publish(&state, &base, new_layout.clone(), meta).await {
-            Ok(Some(active)) => {
-                log(
-                    "committed",
-                    op_count,
-                    &format!(
-                        "v{} -> v{} ({} v{})",
-                        base.revision, active.revision, active.layout_id, active.layout_version
-                    ),
-                );
-                return respond(&active, &new_layout, false);
-            }
-            Ok(None) if attempt < MAX_COMMIT_RETRIES => attempt += 1,
-            Ok(None) => {
-                log("conflict", op_count, "");
-                return json_error(
-                    StatusCode::CONFLICT,
-                    json!({ "error": "conflict", "provider": provider_name,
-                            "detail": "the layout kept changing; try again" }),
-                );
-            }
-            Err(e) => {
-                log("store_error", op_count, "");
-                return e.into_response();
-            }
-        }
-        (base, layout) = match layouts::active_async(&state, workspace_id).await {
-            Ok(Some(x)) => (x.active, x.layout),
-            Ok(None) => return internal("the workspace lost its versions"),
-            Err(e) => return e.into_response(),
-        };
-        layout_json = match serde_json::to_value(&layout) {
-            Ok(v) => v,
-            Err(e) => return internal(&e.to_string()),
-        };
-    }
-}
-
-/// Commit attempts after the first when the layout changed underneath.
-const MAX_COMMIT_RETRIES: u32 = 3;
-
-fn internal(detail: &str) -> Response {
-    json_error(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        json!({ "error": "internal", "detail": detail }),
-    )
 }

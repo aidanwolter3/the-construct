@@ -328,6 +328,7 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 
 ## Next steps
 
+0. One-app/menu change in progress: server done (apps API, layouts as code, migration v7); next client-core/FFI, then the shared UI.
 1. Layout browser follow-ups (A3 done): user-created layouts (copy a layout), a diff view between versions, a zstd
    dictionary for blobs (measured ~6x smaller edits), a retention policy; Android `testTagsAsResourceId` for
    instrumented UI tests of the browser.

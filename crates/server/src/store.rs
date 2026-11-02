@@ -5,7 +5,6 @@
 //! inside a transaction that also bumps `user_version`.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -94,6 +93,9 @@ const MIGRATIONS: &[Migration] = &[
     // workspace revision log whose latest row is the active layout. The v5
     // rows become the history of each workspace's default built-in layout.
     Migration::Rust(migrate_v6),
+    // v7: layouts as code (one app = one linear, append-only history; D31+).
+    // The v6 catalog tables stay but are inert after this.
+    Migration::Rust(migrate_v7),
 ];
 
 /// v6 schema. `layout_versions` (v5) is renamed, converted and dropped.
@@ -212,6 +214,125 @@ fn migrate_v6(tx: &Transaction<'_>) -> rusqlite::Result<()> {
     tx.execute_batch("DROP TABLE layout_versions_v5;")
 }
 
+/// v7 schema: one linear, append-only layout history per app.
+const V7_SCHEMA: &str = "
+    CREATE TABLE app_versions (
+        app_id     TEXT NOT NULL,
+        version    INTEGER NOT NULL,
+        hash       TEXT NOT NULL REFERENCES layout_blobs (hash),
+        source     TEXT NOT NULL,
+        note       TEXT,
+        file_key   TEXT UNIQUE,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (app_id, version)
+    ) WITHOUT ROWID;";
+
+/// v6 -> v7. Revision R of each workspace (`workspace_revisions`) becomes
+/// version R of that app, whose layout is the one shown at that revision
+/// (`layout_id` at `layout_version`) and whose note says how it got there, so
+/// version numbers stay what clients saw (monotonic) and the history is what
+/// was on screen. The v6 tables (`layouts`, `layout_versions`,
+/// `workspace_revisions`) are kept but inert: nothing reads or writes them
+/// after this. `layout_blobs` stays live (shared by hash). Refuses (the whole
+/// migration rolls back and the server does not start) if a revision points
+/// at a missing layout version or blob, rather than inventing history.
+fn migrate_v7(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute_batch(V7_SCHEMA)?;
+    type Rev = (String, i64, String, i64, String, i64);
+    let revisions: Vec<Rev> = {
+        let mut stmt = tx.prepare(
+            "SELECT workspace_id, revision, layout_id, layout_version, reason, created_at
+             FROM workspace_revisions ORDER BY workspace_id, revision",
+        )?;
+        stmt.query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<_>>()?
+    };
+    for (ws, revision, layout_id, layout_version, reason, created_at) in revisions {
+        let found: Option<(String, String, Option<String>)> = tx
+            .query_row(
+                "SELECT hash, source, prompt FROM layout_versions
+                 WHERE layout_id = ?1 AND version = ?2",
+                params![layout_id, layout_version],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let Some((hash, layout_source, prompt)) = found else {
+            return Err(refuse(format!(
+                "migration v7: revision {revision} of '{ws}' shows {layout_id} v{layout_version}, \
+                 which is not in layout_versions"
+            )));
+        };
+        let has_blob = tx
+            .query_row(
+                "SELECT 1 FROM layout_blobs WHERE hash = ?1",
+                [&hash],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !has_blob {
+            return Err(refuse(format!(
+                "migration v7: the layout of {layout_id} v{layout_version} (revision {revision} \
+                 of '{ws}') is missing from layout_blobs"
+            )));
+        }
+        let title: String = tx
+            .query_row(
+                "SELECT title FROM layouts WHERE id = ?1",
+                [&layout_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or_else(|| layout_id.clone());
+        let (source, note) = v7_source_and_note(&reason, &layout_source, prompt.as_deref(), &title);
+        tx.execute(
+            "INSERT INTO app_versions (app_id, version, hash, source, note, file_key, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+            params![ws, revision, hash, source, note, created_at],
+        )?;
+    }
+    Ok(())
+}
+
+/// `(source, note)` of a migrated revision: a switch of the active layout
+/// (`reason` `activate`) -> `switch`, "Switched to <title>"; otherwise the
+/// source of the layout version it showed, with a note from its prompt.
+fn v7_source_and_note(
+    reason: &str,
+    layout_source: &str,
+    prompt: Option<&str>,
+    title: &str,
+) -> (String, String) {
+    if reason == REASON_ACTIVATE {
+        return ("switch".to_owned(), format!("Switched to {title}"));
+    }
+    let prompt = prompt.map(str::trim).filter(|p| !p.is_empty());
+    let note = match layout_source {
+        SOURCE_SEED => format!("Built-in layout: {title}"),
+        SOURCE_RESTORE => match prompt.and_then(|p| p.strip_prefix("restore v")) {
+            Some(n) => format!("Restored {title} v{n}"),
+            None => prompt.map_or_else(|| format!("Restored {title}"), str::to_owned),
+        },
+        SOURCE_ROLLBACK => match prompt.and_then(|p| p.strip_prefix("rollback to v")) {
+            Some(n) => format!("Rolled back to v{n}"),
+            None => prompt.map_or_else(|| "Rolled back".to_owned(), str::to_owned),
+        },
+        SOURCE_AGENT => prompt.map_or_else(|| "AI edit".to_owned(), str::to_owned),
+        SOURCE_MANUAL => prompt.map_or_else(|| "Manual edit".to_owned(), str::to_owned),
+        other => prompt.map_or_else(|| other.to_owned(), str::to_owned),
+    };
+    (layout_source.to_owned(), note)
+}
+
 /// Re-serialize a stored layout through [`protocol::UiNode`] (the canonical
 /// form every new version uses); text that does not parse is kept as is.
 fn canonical_json(json: &str) -> String {
@@ -227,6 +348,8 @@ pub const SOURCE_AGENT: &str = "agent";
 pub const SOURCE_ROLLBACK: &str = "rollback";
 pub const SOURCE_RESTORE: &str = "restore";
 pub const SOURCE_MANUAL: &str = "manual";
+/// A version created from a layout file (`layouts/<app>/NNNN.json`).
+pub const SOURCE_FILE: &str = "file";
 /// `reason` of a revision that switched the active layout.
 pub const REASON_ACTIVATE: &str = "activate";
 /// The provider recorded on rollbacks (v5 and `POST .../rollback`).
@@ -293,105 +416,36 @@ fn get_blob(conn: &Connection, hash: &str) -> rusqlite::Result<String> {
     decode_blob(&encoding, data, raw_len)
 }
 
-/// One row of [`Store::layout_versions`] (metadata only, no layout JSON):
-/// the history of a workspace's active layout (the pre-catalog shape).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct LayoutVersionInfo {
+/// One version of an app's layout history (metadata; the layout itself is
+/// the blob `hash`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppVersion {
+    pub app_id: String,
+    /// 1, 2, ... per app, gapless and append-only.
     pub version: i64,
+    /// Unix seconds.
     pub created_at: i64,
-    pub prompt: Option<String>,
-    pub provider: Option<String>,
-}
-
-/// The workspace's latest revision: which layout (and which of its
-/// versions) is on display.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActiveLayout {
-    pub workspace_id: String,
-    /// Monotonic per workspace; bumps on every visible change.
-    pub revision: i64,
-    pub layout_id: String,
-    pub layout_version: i64,
-}
-
-/// A catalog entry with its current version.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LayoutRow {
-    pub id: String,
-    pub workspace_id: String,
-    pub title: String,
-    pub description: String,
-    pub preview_hint: String,
-    pub builtin: bool,
-    pub created_at: i64,
-    /// Newest version (0 for a layout without versions, which seeding never leaves).
-    pub current_version: i64,
-    /// `created_at` of the newest version.
-    pub updated_at: i64,
-}
-
-/// One version of a layout (metadata).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VersionRow {
-    pub version: i64,
-    pub created_at: i64,
+    /// [`SOURCE_FILE`] for layouts-as-code versions; migrated rows keep
+    /// `seed` | `agent` | `rollback` | `restore` | `manual` | `switch`.
     pub source: String,
-    pub prompt: Option<String>,
-    pub provider: Option<String>,
+    pub note: Option<String>,
+    /// `<app_id>/NNNN` for a version created from `layouts/<app_id>/NNNN.json`.
+    pub file_key: Option<String>,
     pub hash: String,
-    /// Uncompressed JSON size.
-    pub bytes: i64,
 }
 
-/// A built-in layout to seed (`json` must be canonical: `to_json(UiNode)`).
+/// A layout file to sync (see [`Store::sync_layout_files`]). `json` must be
+/// canonical (`serde_json::to_string(&UiNode)`), so equal layouts hash equal.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SeedLayout {
-    pub id: String,
-    pub workspace_id: String,
-    pub title: String,
-    pub description: String,
-    pub preview_hint: String,
+pub struct FileVersion {
+    /// `<app_id>/NNNN`.
+    pub key: String,
+    /// NNNN.
+    pub number: u32,
+    /// `layouts/<app_id>/NNNN.json`, for error messages.
+    pub path: String,
+    pub note: String,
     pub json: String,
-}
-
-/// Outcome of [`Store::restore_version`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Restored {
-    LayoutNotFound,
-    VersionNotFound,
-    /// The version's content equals the latest one; nothing appended.
-    Unchanged {
-        version: i64,
-    },
-    Appended {
-        version: i64,
-        json: String,
-        /// The new revision, when the layout is the active one.
-        active: Option<ActiveLayout>,
-    },
-}
-
-/// Outcome of [`Store::activate_layout`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Activated {
-    LayoutNotFound,
-    VersionNotFound,
-    Done {
-        active: ActiveLayout,
-        /// The version a `version` argument was restored into, if it appended one.
-        restored: Option<i64>,
-        /// Already active at that content: no new revision.
-        unchanged: bool,
-    },
-}
-
-/// Metadata stored with a new layout version.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct LayoutMeta {
-    pub prompt: Option<String>,
-    pub provider: Option<String>,
-    /// The RFC 6902 patch that produced the layout, as JSON text.
-    pub patch_json: Option<String>,
 }
 
 /// Outcome of [`Store::sign_in_pixelfed`].
@@ -454,190 +508,55 @@ fn save_account_on(
     Ok(())
 }
 
-/// Append `max + 1` to a layout's history (blob stored once by hash).
-fn append_version_on(
+const APP_VERSION_COLS: &str = "app_id, version, created_at, source, note, file_key, hash";
+
+fn app_version_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AppVersion> {
+    Ok(AppVersion {
+        app_id: r.get(0)?,
+        version: r.get(1)?,
+        created_at: r.get(2)?,
+        source: r.get(3)?,
+        note: r.get(4)?,
+        file_key: r.get(5)?,
+        hash: r.get(6)?,
+    })
+}
+
+fn latest_app_version_on(conn: &Connection, app_id: &str) -> rusqlite::Result<Option<AppVersion>> {
+    conn.query_row(
+        &format!(
+            "SELECT {APP_VERSION_COLS} FROM app_versions WHERE app_id = ?1
+             ORDER BY version DESC LIMIT 1"
+        ),
+        [app_id],
+        app_version_row,
+    )
+    .optional()
+}
+
+/// Append `json` as version `MAX + 1` of the app (blob stored once by hash).
+fn append_app_version_on(
     conn: &Connection,
-    layout_id: &str,
+    app_id: &str,
     json: &str,
     source: &str,
-    meta: &LayoutMeta,
+    note: Option<&str>,
+    file_key: Option<&str>,
 ) -> rusqlite::Result<i64> {
     let hash = put_blob(conn, json)?;
-    append_hash_on(conn, layout_id, &hash, source, meta)
-}
-
-fn append_hash_on(
-    conn: &Connection,
-    layout_id: &str,
-    hash: &str,
-    source: &str,
-    meta: &LayoutMeta,
-) -> rusqlite::Result<i64> {
     conn.query_row(
-        "INSERT INTO layout_versions
-             (layout_id, version, hash, source, prompt, provider, patch_json, created_at)
-         SELECT ?1, COALESCE(MAX(version), 0) + 1, ?2, ?3, ?4, ?5, ?6, ?7
-         FROM layout_versions WHERE layout_id = ?1
+        "INSERT INTO app_versions (app_id, version, hash, source, note, file_key, created_at)
+         SELECT ?1, COALESCE(MAX(version), 0) + 1, ?2, ?3, ?4, ?5, ?6
+         FROM app_versions WHERE app_id = ?1
          RETURNING version",
-        params![
-            layout_id,
-            hash,
-            source,
-            meta.prompt,
-            meta.provider,
-            meta.patch_json,
-            now_secs()
-        ],
+        params![app_id, hash, source, note, file_key, now_secs()],
         |r| r.get(0),
     )
 }
 
-/// Append the workspace's next revision.
-fn append_revision_on(
-    conn: &Connection,
-    workspace_id: &str,
-    layout_id: &str,
-    layout_version: i64,
-    reason: &str,
-) -> rusqlite::Result<ActiveLayout> {
-    let revision = conn.query_row(
-        "INSERT INTO workspace_revisions
-             (workspace_id, revision, layout_id, layout_version, reason, created_at)
-         SELECT ?1, COALESCE(MAX(revision), 0) + 1, ?2, ?3, ?4, ?5
-         FROM workspace_revisions WHERE workspace_id = ?1
-         RETURNING revision",
-        params![workspace_id, layout_id, layout_version, reason, now_secs()],
-        |r| r.get(0),
-    )?;
-    Ok(ActiveLayout {
-        workspace_id: workspace_id.to_owned(),
-        revision,
-        layout_id: layout_id.to_owned(),
-        layout_version,
-    })
-}
-
-fn active_on(conn: &Connection, workspace_id: &str) -> rusqlite::Result<Option<ActiveLayout>> {
-    conn.query_row(
-        "SELECT revision, layout_id, layout_version FROM workspace_revisions
-         WHERE workspace_id = ?1 ORDER BY revision DESC LIMIT 1",
-        [workspace_id],
-        |r| {
-            Ok(ActiveLayout {
-                workspace_id: workspace_id.to_owned(),
-                revision: r.get(0)?,
-                layout_id: r.get(1)?,
-                layout_version: r.get(2)?,
-            })
-        },
-    )
-    .optional()
-}
-
-fn layout_workspace_on(conn: &Connection, layout_id: &str) -> rusqlite::Result<Option<String>> {
-    conn.query_row(
-        "SELECT workspace_id FROM layouts WHERE id = ?1",
-        [layout_id],
-        |r| r.get(0),
-    )
-    .optional()
-}
-
-/// `(version, hash)` of a layout's newest version.
-fn latest_version_on(
-    conn: &Connection,
-    layout_id: &str,
-) -> rusqlite::Result<Option<(i64, String)>> {
-    conn.query_row(
-        "SELECT version, hash FROM layout_versions WHERE layout_id = ?1
-         ORDER BY version DESC LIMIT 1",
-        [layout_id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )
-    .optional()
-}
-
-fn version_hash_on(
-    conn: &Connection,
-    layout_id: &str,
-    version: i64,
-) -> rusqlite::Result<Option<String>> {
-    conn.query_row(
-        "SELECT hash FROM layout_versions WHERE layout_id = ?1 AND version = ?2",
-        params![layout_id, version],
-        |r| r.get(0),
-    )
-    .optional()
-}
-
-/// Copy version `from` of `layout_id` into a new version (and a new
-/// revision when the layout is active). With `skip_if_same`, a copy whose
-/// content equals the newest version is not appended.
-fn restore_on(
-    conn: &Connection,
-    layout_id: &str,
-    from: i64,
-    source: &str,
-    meta: &LayoutMeta,
-    skip_if_same: bool,
-) -> rusqlite::Result<Restored> {
-    let Some(ws) = layout_workspace_on(conn, layout_id)? else {
-        return Ok(Restored::LayoutNotFound);
-    };
-    let Some(hash) = version_hash_on(conn, layout_id, from)? else {
-        return Ok(Restored::VersionNotFound);
-    };
-    if skip_if_same
-        && let Some((latest, latest_hash)) = latest_version_on(conn, layout_id)?
-        && latest_hash == hash
-    {
-        return Ok(Restored::Unchanged { version: latest });
-    }
-    let version = append_hash_on(conn, layout_id, &hash, source, meta)?;
-    let active = match active_on(conn, &ws)? {
-        Some(a) if a.layout_id == layout_id => {
-            Some(append_revision_on(conn, &ws, layout_id, version, source)?)
-        }
-        _ => None,
-    };
-    Ok(Restored::Appended {
-        version,
-        json: get_blob(conn, &hash)?,
-        active,
-    })
-}
-
-fn version_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<VersionRow> {
-    Ok(VersionRow {
-        version: r.get(0)?,
-        created_at: r.get(1)?,
-        source: r.get(2)?,
-        prompt: r.get(3)?,
-        provider: r.get(4)?,
-        hash: r.get(5)?,
-        bytes: r.get(6)?,
-    })
-}
-
-const LAYOUT_ROW_SQL: &str = "
-    SELECT l.id, l.workspace_id, l.title, l.description, l.preview_hint, l.builtin, l.created_at,
-           COALESCE(v.version, 0), COALESCE(v.created_at, l.created_at)
-    FROM layouts l
-    LEFT JOIN layout_versions v ON v.layout_id = l.id
-        AND v.version = (SELECT MAX(version) FROM layout_versions WHERE layout_id = l.id)";
-
-fn layout_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<LayoutRow> {
-    Ok(LayoutRow {
-        id: r.get(0)?,
-        workspace_id: r.get(1)?,
-        title: r.get(2)?,
-        description: r.get(3)?,
-        preview_hint: r.get(4)?,
-        builtin: r.get(5)?,
-        created_at: r.get(6)?,
-        current_version: r.get(7)?,
-        updated_at: r.get(8)?,
-    })
+/// A plain SQLite error carrying `msg` (migrations that refuse to continue).
+fn refuse(msg: String) -> rusqlite::Error {
+    rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(msg))
 }
 
 /// Run migrations up to `user_version = target`.
@@ -669,8 +588,6 @@ pub struct BelowZero {
 
 pub struct Store {
     conn: Mutex<Connection>,
-    /// Set once the built-in layouts were seeded on this connection.
-    catalog_seeded: AtomicBool,
 }
 
 impl Store {
@@ -691,13 +608,7 @@ impl Store {
         migrate(&mut conn, MIGRATIONS.len())?;
         Ok(Self {
             conn: Mutex::new(conn),
-            catalog_seeded: AtomicBool::new(false),
         })
-    }
-
-    /// Whether [`Store::seed_catalog`] already ran on this store.
-    pub fn catalog_seeded(&self) -> bool {
-        self.catalog_seeded.load(Ordering::Acquire)
     }
 
     fn conn(&self) -> MutexGuard<'_, Connection> {
@@ -978,284 +889,157 @@ impl Store {
         tx.commit()
     }
 
-    // ---------- Layout catalog (v6, D26) ----------
+    // ---------- App versions (v7, layouts as code) ----------
 
-    /// Seed built-in layouts, idempotently, in one transaction: each seed's
-    /// metadata is upserted and its version 1 (source `seed`) inserted only
-    /// if it has no versions (history is never overwritten); a workspace
-    /// without revisions gets revision 1 on its default layout (`defaults`:
-    /// `(workspace_id, layout_id)`). Returns how many versions were inserted.
-    pub fn seed_catalog(
-        &self,
-        seeds: &[SeedLayout],
-        defaults: &[(&str, &str)],
-    ) -> rusqlite::Result<usize> {
+    /// The app's newest version and its layout JSON.
+    pub fn app_latest(&self, app_id: &str) -> rusqlite::Result<Option<(AppVersion, String)>> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        let now = now_secs();
-        let mut inserted = 0;
-        for seed in seeds {
-            tx.execute(
-                "INSERT INTO layouts (id, workspace_id, title, description, preview_hint, builtin, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
-                 ON CONFLICT(id) DO UPDATE SET title = excluded.title,
-                     description = excluded.description, preview_hint = excluded.preview_hint,
-                     builtin = 1",
-                params![seed.id, seed.workspace_id, seed.title, seed.description, seed.preview_hint, now],
-            )?;
-            if latest_version_on(&tx, &seed.id)?.is_none() {
-                append_version_on(
-                    &tx,
-                    &seed.id,
-                    &seed.json,
-                    SOURCE_SEED,
-                    &LayoutMeta::default(),
-                )?;
-                inserted += 1;
-            }
-        }
-        for (ws, layout_id) in defaults {
-            if active_on(&tx, ws)?.is_none()
-                && let Some((version, _)) = latest_version_on(&tx, layout_id)?
-            {
-                append_revision_on(&tx, ws, layout_id, version, SOURCE_SEED)?;
-            }
-        }
-        tx.commit()?;
-        self.catalog_seeded.store(true, Ordering::Release);
-        Ok(inserted)
-    }
-
-    /// The workspace's latest revision (`None` before seeding).
-    pub fn active(&self, workspace_id: &str) -> rusqlite::Result<Option<ActiveLayout>> {
-        active_on(&self.conn(), workspace_id)
-    }
-
-    /// The active layout and its JSON (one consistent read).
-    pub fn active_layout(
-        &self,
-        workspace_id: &str,
-    ) -> rusqlite::Result<Option<(ActiveLayout, String)>> {
-        let mut conn = self.conn();
-        let tx = conn.transaction()?;
-        let Some(active) = active_on(&tx, workspace_id)? else {
+        let Some(v) = latest_app_version_on(&tx, app_id)? else {
             return Ok(None);
         };
-        let hash = version_hash_on(&tx, &active.layout_id, active.layout_version)?
-            .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
-        let json = get_blob(&tx, &hash)?;
-        Ok(Some((active, json)))
+        let json = get_blob(&tx, &v.hash)?;
+        Ok(Some((v, json)))
     }
 
-    /// Append `json` as the next version of the workspace's active layout and
-    /// the next revision, atomically. With `expected = (layout_id,
-    /// layout_version)`, only if that is still what is active (compare-and-
-    /// append: `None` if another change or a switch happened meanwhile).
-    /// `None` too if the workspace has no active layout.
-    pub fn append_active(
+    /// The app's newest version (metadata only).
+    pub fn app_latest_meta(&self, app_id: &str) -> rusqlite::Result<Option<AppVersion>> {
+        latest_app_version_on(&self.conn(), app_id)
+    }
+
+    /// Versions older than `before` (all if `None`), newest first, at most `limit`.
+    pub fn app_versions(
         &self,
-        workspace_id: &str,
-        expected: Option<(&str, i64)>,
-        json: &str,
-        source: &str,
-        meta: &LayoutMeta,
-    ) -> rusqlite::Result<Option<ActiveLayout>> {
-        let mut conn = self.conn();
-        let tx = conn.transaction()?;
-        let Some(active) = active_on(&tx, workspace_id)? else {
-            return Ok(None);
-        };
-        if let Some((id, version)) = expected
-            && (id != active.layout_id || version != active.layout_version)
-        {
-            return Ok(None);
-        }
-        let version = append_version_on(&tx, &active.layout_id, json, source, meta)?;
-        let new = append_revision_on(&tx, workspace_id, &active.layout_id, version, source)?;
-        tx.commit()?;
-        Ok(Some(new))
-    }
-
-    /// Copy version `from` of a layout into a new version (append-only), plus
-    /// a revision if the layout is active. With `skip_if_same`, restoring
-    /// content equal to the newest version appends nothing.
-    pub fn restore_version(
-        &self,
-        layout_id: &str,
-        from: i64,
-        source: &str,
-        meta: &LayoutMeta,
-        skip_if_same: bool,
-    ) -> rusqlite::Result<Restored> {
-        let mut conn = self.conn();
-        let tx = conn.transaction()?;
-        let out = restore_on(&tx, layout_id, from, source, meta, skip_if_same)?;
-        tx.commit()?;
-        Ok(out)
-    }
-
-    /// [`Store::restore_version`] on the workspace's active layout (always
-    /// appends, like the pre-catalog rollback). `None` without an active layout.
-    pub fn rollback_active(
-        &self,
-        workspace_id: &str,
-        from: i64,
-        meta: &LayoutMeta,
-    ) -> rusqlite::Result<Option<Restored>> {
-        let mut conn = self.conn();
-        let tx = conn.transaction()?;
-        let Some(active) = active_on(&tx, workspace_id)? else {
-            return Ok(None);
-        };
-        let out = restore_on(&tx, &active.layout_id, from, SOURCE_ROLLBACK, meta, false)?;
-        tx.commit()?;
-        Ok(Some(out))
-    }
-
-    /// Make a layout its workspace's active one. With `version`, that version
-    /// is first restored into the layout (append-only, skipped when equal to
-    /// the newest). Already active at the same version -> `unchanged`.
-    pub fn activate_layout(
-        &self,
-        layout_id: &str,
-        version: Option<i64>,
-    ) -> rusqlite::Result<Activated> {
-        let mut conn = self.conn();
-        let tx = conn.transaction()?;
-        let Some(ws) = layout_workspace_on(&tx, layout_id)? else {
-            return Ok(Activated::LayoutNotFound);
-        };
-        let mut restored = None;
-        if let Some(from) = version {
-            let meta = LayoutMeta {
-                prompt: Some(format!("restore v{from}")),
-                ..Default::default()
-            };
-            match restore_on(&tx, layout_id, from, SOURCE_RESTORE, &meta, true)? {
-                Restored::LayoutNotFound => return Ok(Activated::LayoutNotFound),
-                Restored::VersionNotFound => return Ok(Activated::VersionNotFound),
-                Restored::Unchanged { .. } => {}
-                Restored::Appended {
-                    version, active, ..
-                } => {
-                    restored = Some(version);
-                    if let Some(active) = active {
-                        // It was already active: the restore's revision is the switch.
-                        tx.commit()?;
-                        return Ok(Activated::Done {
-                            active,
-                            restored,
-                            unchanged: false,
-                        });
-                    }
-                }
-            }
-        }
-        let Some((latest, _)) = latest_version_on(&tx, layout_id)? else {
-            return Ok(Activated::VersionNotFound);
-        };
-        let (active, unchanged) = match active_on(&tx, &ws)? {
-            Some(a) if a.layout_id == layout_id && a.layout_version == latest => (a, true),
-            _ => (
-                append_revision_on(&tx, &ws, layout_id, latest, REASON_ACTIVATE)?,
-                false,
-            ),
-        };
-        tx.commit()?;
-        Ok(Activated::Done {
-            active,
-            restored,
-            unchanged,
-        })
-    }
-
-    /// Catalog entries (of one workspace, or all), by workspace then id.
-    pub fn layouts(&self, workspace_id: Option<&str>) -> rusqlite::Result<Vec<LayoutRow>> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare_cached(&format!(
-            "{LAYOUT_ROW_SQL} WHERE ?1 IS NULL OR l.workspace_id = ?1 ORDER BY l.workspace_id, l.id"
-        ))?;
-        stmt.query_map([workspace_id], layout_row)?.collect()
-    }
-
-    pub fn layout(&self, layout_id: &str) -> rusqlite::Result<Option<LayoutRow>> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare_cached(&format!("{LAYOUT_ROW_SQL} WHERE l.id = ?1"))?;
-        stmt.query_row([layout_id], layout_row).optional()
-    }
-
-    /// Versions of a layout older than `before` (all if `None`), newest
-    /// first, at most `limit`.
-    pub fn layout_version_rows(
-        &self,
-        layout_id: &str,
+        app_id: &str,
         before: Option<i64>,
         limit: i64,
-    ) -> rusqlite::Result<Vec<VersionRow>> {
+    ) -> rusqlite::Result<Vec<AppVersion>> {
         let conn = self.conn();
-        let mut stmt = conn.prepare_cached(
-            "SELECT v.version, v.created_at, v.source, v.prompt, v.provider, v.hash, b.raw_len
-             FROM layout_versions v JOIN layout_blobs b ON b.hash = v.hash
-             WHERE v.layout_id = ?1 AND (?2 IS NULL OR v.version < ?2)
-             ORDER BY v.version DESC LIMIT ?3",
-        )?;
-        stmt.query_map(params![layout_id, before, limit], version_row)?
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT {APP_VERSION_COLS} FROM app_versions
+             WHERE app_id = ?1 AND (?2 IS NULL OR version < ?2)
+             ORDER BY version DESC LIMIT ?3"
+        ))?;
+        stmt.query_map(params![app_id, before, limit], app_version_row)?
             .collect()
     }
 
-    /// One version's metadata and JSON.
-    pub fn layout_version(
+    /// One version's metadata and layout JSON.
+    pub fn app_version(
         &self,
-        layout_id: &str,
+        app_id: &str,
         version: i64,
-    ) -> rusqlite::Result<Option<(VersionRow, String)>> {
+    ) -> rusqlite::Result<Option<(AppVersion, String)>> {
         let conn = self.conn();
         let row = conn
             .query_row(
-                "SELECT v.version, v.created_at, v.source, v.prompt, v.provider, v.hash, b.raw_len
-                 FROM layout_versions v JOIN layout_blobs b ON b.hash = v.hash
-                 WHERE v.layout_id = ?1 AND v.version = ?2",
-                params![layout_id, version],
-                version_row,
+                &format!(
+                    "SELECT {APP_VERSION_COLS} FROM app_versions WHERE app_id = ?1 AND version = ?2"
+                ),
+                params![app_id, version],
+                app_version_row,
             )
             .optional()?;
         match row {
-            Some(row) => {
-                let json = get_blob(&conn, &row.hash)?;
-                Ok(Some((row, json)))
+            Some(v) => {
+                let json = get_blob(&conn, &v.hash)?;
+                Ok(Some((v, json)))
             }
             None => Ok(None),
         }
     }
 
-    /// All versions of the workspace's active layout, newest first (the
-    /// pre-catalog `GET /v1/workspaces/:id/versions` shape).
-    pub fn layout_versions(&self, workspace_id: &str) -> rusqlite::Result<Vec<LayoutVersionInfo>> {
-        let conn = self.conn();
-        let Some(active) = active_on(&conn, workspace_id)? else {
-            return Ok(Vec::new());
-        };
-        let mut stmt = conn.prepare_cached(
-            "SELECT version, created_at, prompt, provider FROM layout_versions
-             WHERE layout_id = ?1 ORDER BY version DESC",
-        )?;
-        stmt.query_map([&active.layout_id], |r| {
-            Ok(LayoutVersionInfo {
-                version: r.get(0)?,
-                created_at: r.get(1)?,
-                prompt: r.get(2)?,
-                provider: r.get(3)?,
-            })
-        })?
-        .collect()
+    /// Append a version outside the file sync (tests and tooling only; no
+    /// HTTP route reaches this). Returns the new version number.
+    pub fn append_app_version(
+        &self,
+        app_id: &str,
+        json: &str,
+        source: &str,
+        note: Option<&str>,
+    ) -> rusqlite::Result<i64> {
+        append_app_version_on(&self.conn(), app_id, json, source, note, None)
     }
 
-    /// Storage accounting: `(blobs, blob bytes stored, versions)`.
+    /// Sync one app's layout files (in number order) into its history, in one
+    /// transaction: a file already recorded (by key) must be unchanged (same
+    /// layout hash and note); a new file is appended as version `MAX + 1`
+    /// (source [`SOURCE_FILE`]). Refuses (`Ok(Err(message))`, nothing written)
+    /// when a recorded file changed or is missing, or a new file is numbered
+    /// below an already recorded one. Returns the appended `(path, version)`s.
+    #[allow(clippy::type_complexity)]
+    pub fn sync_layout_files(
+        &self,
+        app_id: &str,
+        files: &[FileVersion],
+    ) -> rusqlite::Result<Result<Vec<(String, i64)>, String>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        // (key, version, hash, note) of files already deployed.
+        let recorded: Vec<(String, i64, String, Option<String>)> = {
+            let mut stmt = tx.prepare(
+                "SELECT file_key, version, hash, note FROM app_versions
+                 WHERE app_id = ?1 AND file_key IS NOT NULL ORDER BY version",
+            )?;
+            stmt.query_map([app_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })?
+            .collect::<rusqlite::Result<_>>()?
+        };
+        let next_name = format!("{:04}.json", files.last().map_or(1, |f| f.number + 1));
+        for (key, version, _, _) in &recorded {
+            if !files.iter().any(|f| &f.key == key) {
+                return Ok(Err(format!(
+                    "layouts/{key}.json was deployed as version {version} but is missing; \
+                     layout files are append-only, restore it (and add {next_name} for a change)"
+                )));
+            }
+        }
+        // The highest-numbered recorded file: new files must come after it.
+        let newest_recorded = files
+            .iter()
+            .filter(|f| recorded.iter().any(|(k, ..)| k == &f.key))
+            .max_by_key(|f| f.number);
+        let mut appended = Vec::new();
+        for file in files {
+            if let Some((_, version, hash, note)) = recorded.iter().find(|(k, ..)| k == &file.key) {
+                if *hash != content_hash(&file.json) || note.as_deref() != Some(file.note.as_str())
+                {
+                    return Ok(Err(format!(
+                        "{} changed after it was deployed as version {version}; \
+                         layout files are append-only, add {next_name} instead",
+                        file.path
+                    )));
+                }
+                continue;
+            }
+            if let Some(newer) = newest_recorded.filter(|n| n.number > file.number) {
+                return Ok(Err(format!(
+                    "{} is new but numbered below {}, which is already deployed; \
+                     layout files are append-only, number new files after the newest one",
+                    file.path, newer.path
+                )));
+            }
+            let version = append_app_version_on(
+                &tx,
+                app_id,
+                &file.json,
+                SOURCE_FILE,
+                Some(&file.note),
+                Some(&file.key),
+            )?;
+            appended.push((file.path.clone(), version));
+        }
+        tx.commit()?;
+        Ok(Ok(appended))
+    }
+
+    /// Storage accounting: `(blobs, blob bytes stored, app versions)`.
     pub fn layout_storage(&self) -> rusqlite::Result<(i64, i64, i64)> {
         self.conn().query_row(
             "SELECT (SELECT COUNT(*) FROM layout_blobs),
                     (SELECT COALESCE(SUM(LENGTH(data)), 0) FROM layout_blobs),
-                    (SELECT COUNT(*) FROM layout_versions)",
+                    (SELECT COUNT(*) FROM app_versions)",
             [],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
@@ -1376,274 +1160,117 @@ mod tests {
         assert!(s.pixelfed_account("i").unwrap().is_none());
     }
 
-    fn seed(id: &str, ws: &str, json: &str) -> SeedLayout {
-        SeedLayout {
-            id: id.into(),
-            workspace_id: ws.into(),
-            title: format!("T {id}"),
-            description: String::new(),
-            preview_hint: "hint".into(),
+    fn file(app: &str, n: u32, json: &str, note: &str) -> FileVersion {
+        FileVersion {
+            key: format!("{app}/{n:04}"),
+            number: n,
+            path: format!("layouts/{app}/{n:04}.json"),
+            note: note.into(),
             json: json.into(),
         }
     }
 
-    fn meta(prompt: &str) -> LayoutMeta {
-        LayoutMeta {
-            prompt: Some(prompt.into()),
-            provider: Some("rules".into()),
-            patch_json: Some("[]".into()),
-        }
-    }
-
-    fn catalog() -> Store {
-        let s = Store::open_in_memory().unwrap();
-        let seeds = [
-            seed("a.one", "a", "{\"v\":1}"),
-            seed("a.two", "a", "{\"w\":1}"),
-        ];
-        assert_eq!(s.seed_catalog(&seeds, &[("a", "a.one")]).unwrap(), 2);
-        s
-    }
-
-    fn blobs(s: &Store) -> i64 {
-        s.layout_storage().unwrap().0
-    }
-
-    #[test]
-    fn seeding_is_idempotent_and_keeps_history_and_the_active_layout() {
-        let s = catalog();
-        let a = s.active("a").unwrap().unwrap();
-        assert_eq!(
-            (a.revision, a.layout_id.as_str(), a.layout_version),
-            (1, "a.one", 1)
-        );
-        s.append_active("a", None, "{\"v\":2}", SOURCE_AGENT, &meta("p"))
-            .unwrap()
-            .unwrap();
-        // Re-seed with new metadata, changed seed content and a new built-in.
-        let mut one = seed("a.one", "a", "{\"v\":\"changed\"}");
-        one.title = "Renamed".into();
-        let seeds = [
-            one,
-            seed("a.two", "a", "{}"),
-            seed("a.three", "a", "{\"x\":1}"),
-        ];
-        assert_eq!(s.seed_catalog(&seeds, &[("a", "a.three")]).unwrap(), 1);
-        let a = s.active("a").unwrap().unwrap();
-        assert_eq!(
-            (a.revision, a.layout_id.as_str(), a.layout_version),
-            (2, "a.one", 2)
-        );
-        let row = s.layout("a.one").unwrap().unwrap();
-        assert_eq!((row.title.as_str(), row.current_version), ("Renamed", 2));
-        assert_eq!(s.active_layout("a").unwrap().unwrap().1, "{\"v\":2}");
-        let ids: Vec<String> = s
-            .layouts(Some("a"))
+    fn history(s: &Store, app: &str) -> Vec<(i64, String, Option<String>)> {
+        s.app_versions(app, None, 100)
             .unwrap()
             .into_iter()
-            .map(|l| l.id)
-            .collect();
-        assert_eq!(ids, ["a.one", "a.three", "a.two"]);
-        assert!(s.layouts(Some("b")).unwrap().is_empty());
-        assert_eq!(s.layouts(None).unwrap().len(), 3);
+            .map(|v| (v.version, v.source, v.note))
+            .collect()
+    }
+
+    fn user_version(conn: &Connection) -> i64 {
+        conn.query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap()
     }
 
     #[test]
-    fn compare_and_append_detects_edits_and_switches() {
-        let s = catalog();
+    fn layout_file_sync_is_append_only_and_idempotent() {
+        let s = Store::open_in_memory().unwrap();
+        let one = file("a", 1, "{\"v\":1}", "First");
         assert_eq!(
-            s.append_active(
-                "a",
-                Some(("a.one", 1)),
-                "{\"v\":2}",
-                SOURCE_AGENT,
-                &meta("p")
-            )
-            .unwrap()
-            .map(|a| (a.revision, a.layout_version)),
-            Some((2, 2))
-        );
-        // Stale base version.
-        assert_eq!(
-            s.append_active("a", Some(("a.one", 1)), "{}", SOURCE_AGENT, &meta("p"))
+            s.sync_layout_files("a", std::slice::from_ref(&one))
+                .unwrap()
                 .unwrap(),
-            None
+            [("layouts/a/0001.json".to_owned(), 1)]
         );
-        // Switch the active layout: an edit made for a.one no longer applies.
-        let Activated::Done {
-            active, unchanged, ..
-        } = s.activate_layout("a.two", None).unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(
-            (active.revision, active.layout_id.as_str(), unchanged),
-            (3, "a.two", false)
+        // Idempotent.
+        assert!(
+            s.sync_layout_files("a", std::slice::from_ref(&one))
+                .unwrap()
+                .unwrap()
+                .is_empty()
         );
+        // A changed layout or note is refused, naming the file.
+        let changed = file("a", 1, "{\"v\":2}", "First");
         assert_eq!(
-            s.append_active("a", Some(("a.one", 2)), "{}", SOURCE_AGENT, &meta("p"))
+            s.sync_layout_files("a", &[changed]).unwrap().unwrap_err(),
+            "layouts/a/0001.json changed after it was deployed as version 1; \
+             layout files are append-only, add 0002.json instead"
+        );
+        let renoted = file("a", 1, "{\"v\":1}", "Other");
+        assert!(
+            s.sync_layout_files("a", &[renoted])
+                .unwrap()
+                .unwrap_err()
+                .contains("changed after it was deployed")
+        );
+        // A new file appends; the history is per app.
+        let two = file("a", 2, "{\"v\":1}", "Same layout again");
+        assert_eq!(
+            s.sync_layout_files("a", &[one.clone(), two.clone()])
+                .unwrap()
                 .unwrap(),
-            None
+            [("layouts/a/0002.json".to_owned(), 2)]
         );
-        let a = s
-            .append_active(
-                "a",
-                Some(("a.two", 1)),
-                "{\"w\":2}",
-                SOURCE_AGENT,
-                &meta("p"),
-            )
+        assert_eq!(
+            history(&s, "a"),
+            [
+                (2, "file".into(), Some("Same layout again".into())),
+                (1, "file".into(), Some("First".into())),
+            ]
+        );
+        let (v, json) = s.app_latest("a").unwrap().unwrap();
+        assert_eq!(
+            (v.version, v.file_key.as_deref(), json.as_str()),
+            (2, Some("a/0002"), "{\"v\":1}")
+        );
+        assert_eq!(s.app_version("a", 1).unwrap().unwrap().1, "{\"v\":1}");
+        assert_eq!(s.app_version("a", 3).unwrap(), None);
+        assert_eq!(s.layout_storage().unwrap().0, 1, "one blob for both");
+        // A deployed file that disappeared is refused.
+        assert!(
+            s.sync_layout_files("a", std::slice::from_ref(&one))
+                .unwrap()
+                .unwrap_err()
+                .starts_with("layouts/a/0002.json was deployed as version 2 but is missing")
+        );
+        // A new file numbered below a deployed one is refused, and nothing is written.
+        let b = Store::open_in_memory().unwrap();
+        b.sync_layout_files("b", &[file("b", 2, "{}", "two")])
             .unwrap()
             .unwrap();
-        assert_eq!(
-            (a.revision, a.layout_id.as_str(), a.layout_version),
-            (4, "a.two", 2)
-        );
-        // a.one is untouched by edits to a.two.
-        assert_eq!(s.layout("a.one").unwrap().unwrap().current_version, 2);
-        assert_eq!(
-            s.append_active("none", None, "{}", SOURCE_AGENT, &meta("p"))
-                .unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn restore_dedupes_blobs_and_bumps_the_revision_only_when_active() {
-        let s = catalog();
-        s.append_active("a", None, "{\"v\":2}", SOURCE_AGENT, &meta("p"))
-            .unwrap();
-        let before = blobs(&s);
-        let m = LayoutMeta {
-            prompt: Some("restore v1".into()),
-            ..Default::default()
-        };
-        let Restored::Appended {
-            version,
-            json,
-            active,
-        } = s
-            .restore_version("a.one", 1, SOURCE_RESTORE, &m, true)
+        let err = b
+            .sync_layout_files("b", &[file("b", 1, "{}", "one"), file("b", 2, "{}", "two")])
             .unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!((version, json.as_str()), (3, "{\"v\":1}"));
-        assert_eq!(active.unwrap().revision, 3);
-        assert_eq!(blobs(&s), before, "a restore stores no new blob");
-        // Restoring content equal to the latest is a no-op.
-        assert_eq!(
-            s.restore_version("a.one", 1, SOURCE_RESTORE, &m, true)
-                .unwrap(),
-            Restored::Unchanged { version: 3 }
+            .unwrap_err();
+        assert!(
+            err.starts_with("layouts/b/0001.json is new but numbered below layouts/b/0002.json"),
+            "{err}"
         );
-        // An inactive layout: new version, no revision.
-        s.restore_version("a.two", 1, SOURCE_RESTORE, &m, false)
-            .unwrap();
-        assert_eq!(s.active("a").unwrap().unwrap().revision, 3);
-        assert_eq!(s.layout("a.two").unwrap().unwrap().current_version, 2);
-        assert_eq!(
-            s.restore_version("a.one", 9, SOURCE_RESTORE, &m, true)
-                .unwrap(),
-            Restored::VersionNotFound
-        );
-        assert_eq!(
-            s.restore_version("x", 1, SOURCE_RESTORE, &m, true).unwrap(),
-            Restored::LayoutNotFound
-        );
-        let rows = s.layout_version_rows("a.one", None, 10).unwrap();
-        let v: Vec<(i64, &str)> = rows
-            .iter()
-            .map(|r| (r.version, r.source.as_str()))
-            .collect();
-        assert_eq!(v, [(3, "restore"), (2, "agent"), (1, "seed")]);
-        assert_eq!(rows[0].hash, rows[2].hash);
-        assert_eq!(rows[0].bytes, 7);
+        assert_eq!(history(&b, "b").len(), 1);
+        // Paging.
         let page: Vec<i64> = s
-            .layout_version_rows("a.one", Some(3), 1)
+            .app_versions("a", Some(2), 1)
             .unwrap()
             .iter()
-            .map(|r| r.version)
+            .map(|v| v.version)
             .collect();
-        assert_eq!(page, [2]);
-        // Legacy per-workspace list = the active layout's history.
-        assert_eq!(s.layout_versions("a").unwrap().len(), 3);
-    }
-
-    #[test]
-    fn activate_with_a_version_restores_first() {
-        let s = catalog();
-        s.restore_version("a.two", 1, SOURCE_RESTORE, &LayoutMeta::default(), false)
-            .unwrap();
-        // Same content as the latest: no restore, just the switch.
-        let Activated::Done {
-            active,
-            restored,
-            unchanged,
-        } = s.activate_layout("a.two", Some(1)).unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(
-            (active.revision, active.layout_version, restored, unchanged),
-            (2, 2, None, false)
-        );
-        // Again: already active.
-        let Activated::Done {
-            active, unchanged, ..
-        } = s.activate_layout("a.two", None).unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!((active.revision, unchanged), (2, true));
-        // Back to a.one at an older version: restore (no revision: inactive), then switch.
-        s.append_active("a", None, "{\"w\":9}", SOURCE_AGENT, &meta("p"))
-            .unwrap();
-        s.activate_layout("a.one", None).unwrap();
-        s.append_active("a", None, "{\"v\":2}", SOURCE_AGENT, &meta("p"))
-            .unwrap();
-        let Activated::Done {
-            active,
-            restored,
-            unchanged,
-        } = s.activate_layout("a.two", Some(1)).unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(
-            (
-                active.layout_id.as_str(),
-                active.layout_version,
-                restored,
-                unchanged
-            ),
-            ("a.two", 4, Some(4), false)
-        );
-        // Active layout restored to an older version: the restore's revision is the change.
-        let rev = active.revision;
-        let Activated::Done {
-            active, restored, ..
-        } = s.activate_layout("a.two", Some(3)).unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(
-            (active.revision, active.layout_version, restored),
-            (rev + 1, 5, Some(5))
-        );
-        assert_eq!(
-            s.activate_layout("a.two", Some(99)).unwrap(),
-            Activated::VersionNotFound
-        );
-        assert_eq!(
-            s.activate_layout("zz", None).unwrap(),
-            Activated::LayoutNotFound
-        );
+        assert_eq!(page, [1]);
     }
 
     #[test]
     #[allow(clippy::type_complexity)]
-    fn v6_migrates_v5_history_into_the_default_layouts() {
+    fn v6_and_v7_carry_v5_history_forward() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("server.db");
         let classic = serde_json::to_string(&protocol::UiNode::Text {
@@ -1691,94 +1318,234 @@ mod tests {
                 )
                 .unwrap();
             }
+            migrate(&mut conn, 6).unwrap();
+            let revs: i64 = conn
+                .query_row("SELECT COUNT(*) FROM workspace_revisions", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(revs, 5);
         }
         let s = Store::open(&path).unwrap();
-        let v: i64 = s
-            .conn()
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(v, 6);
-        let a = s.active("home").unwrap().unwrap();
+        assert_eq!(user_version(&s.conn()), MIGRATIONS.len() as i64);
         assert_eq!(
-            (a.revision, a.layout_id.as_str(), a.layout_version),
-            (3, "home.counter", 3)
-        );
-        let rows = s.layout_version_rows("home.counter", None, 10).unwrap();
-        let got: Vec<_> = rows
-            .iter()
-            .map(|r| {
-                (
-                    r.version,
-                    r.source.as_str(),
-                    r.prompt.as_deref(),
-                    r.provider.as_deref(),
-                    r.created_at,
-                )
-            })
-            .collect();
-        assert_eq!(
-            got,
+            history(&s, "home"),
             [
+                (3, "rollback".into(), Some("Rolled back to v1".into())),
+                (2, "agent".into(), Some("hide captions".into())),
                 (
-                    3,
-                    "rollback",
-                    Some("rollback to v1"),
-                    Some("rollback"),
-                    1003
+                    1,
+                    "seed".into(),
+                    Some("Built-in layout: home.counter".into())
                 ),
-                (2, "agent", Some("hide captions"), Some("rules"), 1002),
-                (1, "seed", None, None, 1001),
             ]
         );
+        let rows = s.app_versions("home", None, 10).unwrap();
         assert_eq!(
             rows[0].hash, rows[2].hash,
             "identical layouts share one blob"
         );
         assert_eq!(
-            s.layout_version("home.counter", 2).unwrap().unwrap().1,
+            rows.iter().map(|r| r.created_at).collect::<Vec<_>>(),
+            [1003, 1002, 1001]
+        );
+        assert_eq!(
+            s.app_version("home", 2).unwrap().unwrap().1,
             "{\"edited\":true}"
         );
-        let patch: Option<String> = s
-            .conn()
-            .query_row(
-                "SELECT patch_json FROM layout_versions WHERE layout_id = 'home.counter' AND version = 2",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(patch.as_deref(), Some("[{\"op\":\"x\"}]"));
         assert_eq!(
-            s.active_layout("pixelfed_home").unwrap().unwrap().1,
+            s.app_latest("pixelfed_home").unwrap().unwrap().1,
             "{\"b\":1}"
         );
-        assert_eq!(s.active("pixelfed_home").unwrap().unwrap().revision, 2);
-        assert_eq!(s.active("pixelfed_demo").unwrap(), None);
-        // 3 distinct blobs for 5 rows.
-        assert_eq!(
-            s.layout_storage().unwrap(),
-            (3, s.layout_storage().unwrap().1, 5)
+        assert_eq!(s.app_latest("pixelfed_demo").unwrap(), None);
+        assert_eq!(s.layout_storage().unwrap().0, 3, "3 distinct blobs");
+    }
+
+    /// Writes v6 catalog rows the way the v6 code did.
+    struct V6<'a>(&'a Connection);
+
+    impl V6<'_> {
+        fn layout(&self, id: &str, ws: &str, title: &str) {
+            self.0
+                .execute(
+                    "INSERT INTO layouts (id, workspace_id, title, builtin, created_at)
+                     VALUES (?1, ?2, ?3, 1, 1)",
+                    params![id, ws, title],
+                )
+                .unwrap();
+        }
+
+        fn version(&self, layout: &str, v: i64, json: &str, source: &str, prompt: Option<&str>) {
+            let hash = put_blob(self.0, json).unwrap();
+            let provider = match source {
+                SOURCE_AGENT => Some("rules"),
+                SOURCE_ROLLBACK => Some(ROLLBACK),
+                _ => None,
+            };
+            self.0
+                .execute(
+                    "INSERT INTO layout_versions
+                         (layout_id, version, hash, source, prompt, provider, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![layout, v, hash, source, prompt, provider, 100 + v],
+                )
+                .unwrap();
+        }
+
+        fn revision(&self, ws: &str, rev: i64, layout: &str, v: i64, reason: &str) {
+            self.0
+                .execute(
+                    "INSERT INTO workspace_revisions
+                         (workspace_id, revision, layout_id, layout_version, reason, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![ws, rev, layout, v, reason, 2000 + rev],
+                )
+                .unwrap();
+        }
+    }
+
+    const C1: &str = "{\"counter\":1}";
+    const C2: &str = "{\"counter\":2}";
+    const B1: &str = "{\"big\":1}";
+
+    /// A v6 database: `home` went seed -> agent edit -> switch to Big counter
+    /// -> switch back restoring v1 -> restore v2 (active) -> rollback to v1;
+    /// `pixelfed_demo` has catalog rows but no revisions.
+    fn v6_db(path: &Path) {
+        let mut conn = Connection::open(path).unwrap();
+        migrate(&mut conn, 6).unwrap();
+        let db = V6(&conn);
+        db.layout("home.counter", "home", "Counter");
+        db.layout("home.big_counter", "home", "Big counter");
+        db.layout("pixelfed_demo.classic", "pixelfed_demo", "Classic feed");
+        db.version("home.counter", 1, C1, SOURCE_SEED, None);
+        db.version("home.big_counter", 1, B1, SOURCE_SEED, None);
+        db.version("pixelfed_demo.classic", 1, "{\"d\":1}", SOURCE_SEED, None);
+        db.revision("home", 1, "home.counter", 1, SOURCE_SEED);
+        db.version("home.counter", 2, C2, SOURCE_AGENT, Some("make it bigger"));
+        db.revision("home", 2, "home.counter", 2, SOURCE_AGENT);
+        db.revision("home", 3, "home.big_counter", 1, REASON_ACTIVATE);
+        db.version("home.counter", 3, C1, SOURCE_RESTORE, Some("restore v1"));
+        db.revision("home", 4, "home.counter", 3, REASON_ACTIVATE);
+        db.version("home.counter", 4, C2, SOURCE_RESTORE, Some("restore v2"));
+        db.revision("home", 5, "home.counter", 4, SOURCE_RESTORE);
+        db.version(
+            "home.counter",
+            5,
+            C1,
+            SOURCE_ROLLBACK,
+            Some("rollback to v1"),
         );
-        // Seeding afterwards adds new built-ins without touching history or the active layout.
-        let seeds = [
-            seed("home.counter", "home", "{\"new\":1}"),
-            seed("home.big_counter", "home", "{\"big\":1}"),
-            seed("pixelfed_demo.classic", "pixelfed_demo", "{\"d\":1}"),
-        ];
-        let defaults = [
-            ("home", "home.counter"),
-            ("pixelfed_demo", "pixelfed_demo.classic"),
-        ];
-        assert_eq!(s.seed_catalog(&seeds, &defaults).unwrap(), 2);
-        let a = s.active("home").unwrap().unwrap();
+        db.revision("home", 6, "home.counter", 5, SOURCE_ROLLBACK);
+    }
+
+    fn count(conn: &Connection, table: &str) -> i64 {
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn v7_turns_workspace_revisions_into_app_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.db");
+        v6_db(&path);
+        let s = Store::open(&path).unwrap();
+        let note = |n: &str| Some(n.to_owned());
         assert_eq!(
-            (a.revision, a.layout_id.as_str(), a.layout_version),
-            (3, "home.counter", 3)
+            history(&s, "home"),
+            [
+                (6, "rollback".into(), note("Rolled back to v1")),
+                (5, "restore".into(), note("Restored Counter v2")),
+                (4, "switch".into(), note("Switched to Counter")),
+                (3, "switch".into(), note("Switched to Big counter")),
+                (2, "agent".into(), note("make it bigger")),
+                (1, "seed".into(), note("Built-in layout: Counter")),
+            ]
+        );
+        // Each version is what was on screen at that revision.
+        let shown: Vec<String> = (1..=6)
+            .map(|v| s.app_version("home", v).unwrap().unwrap().1)
+            .collect();
+        assert_eq!(shown, [C1, C2, B1, C1, C2, C1]);
+        assert_eq!(
+            s.app_version("home", 3).unwrap().unwrap().0.created_at,
+            2003
+        );
+        assert!(history(&s, "pixelfed_demo").is_empty());
+        {
+            // No new blobs; the v6 tables are left as they were.
+            let conn = s.conn();
+            assert_eq!(count(&conn, "layout_blobs"), 4);
+            assert_eq!(count(&conn, "layout_versions"), 7);
+            assert_eq!(count(&conn, "workspace_revisions"), 6);
+            assert_eq!(count(&conn, "layouts"), 3);
+        }
+        // Layout files continue after the migrated history.
+        assert_eq!(
+            s.sync_layout_files("home", &[file("home", 1, C1, "Counter")])
+                .unwrap()
+                .unwrap(),
+            [("layouts/home/0001.json".to_owned(), 7)]
         );
         assert_eq!(
-            s.layout("home.counter").unwrap().unwrap().title,
-            "T home.counter"
+            s.sync_layout_files("pixelfed_demo", &[file("pixelfed_demo", 1, "{}", "x")])
+                .unwrap()
+                .unwrap(),
+            [("layouts/pixelfed_demo/0001.json".to_owned(), 1)]
         );
-        assert_eq!(s.active("pixelfed_demo").unwrap().unwrap().revision, 1);
+        drop(s);
+        // Reopening runs nothing again.
+        let s = Store::open(&path).unwrap();
+        assert_eq!(history(&s, "home").len(), 7);
+    }
+
+    #[test]
+    fn v7_refuses_a_revision_without_its_layout_version_or_blob() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.db");
+        v6_db(&path);
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute(
+                "DELETE FROM layout_versions WHERE layout_id = 'home.counter' AND version = 4",
+                [],
+            )
+            .unwrap();
+        }
+        let err = Store::open(&path).err().unwrap().to_string();
+        assert!(
+            err.contains(
+                "revision 5 of 'home' shows home.counter v4, which is not in layout_versions"
+            ),
+            "{err}"
+        );
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(user_version(&conn), 6, "nothing was migrated");
+        drop(conn);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.db");
+        v6_db(&path);
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute(
+                "DELETE FROM layout_blobs WHERE hash = ?1",
+                [content_hash(B1)],
+            )
+            .unwrap();
+        }
+        let err = Store::open(&path).err().unwrap().to_string();
+        assert!(err.contains("is missing from layout_blobs"), "{err}");
+    }
+
+    #[test]
+    fn v7_on_an_empty_v6_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.db");
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            migrate(&mut conn, 6).unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        assert_eq!(s.app_latest("home").unwrap(), None);
     }
 
     #[test]
