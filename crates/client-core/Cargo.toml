@@ -15,4 +15,4 @@ rusqlite.workspace = true
 # tests/outbox.rs runs the real server (in-process, random port).
 server = { path = "../server" }
 axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "net"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }

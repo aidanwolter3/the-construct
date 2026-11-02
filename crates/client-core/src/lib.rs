@@ -29,12 +29,12 @@
 pub mod expr;
 pub mod store;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::panic::{self, AssertUnwindSafe};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -376,6 +376,10 @@ impl WorkerSignal {
         self.cv.notify_all();
     }
 
+    fn is_shut_down(&self) -> bool {
+        lock(&self.flags).1
+    }
+
     /// Block until woken, shut down or `timeout` (None = no timeout)
     /// elapses. Returns false once shut down.
     fn wait(&self, timeout: Option<Duration>) -> bool {
@@ -421,8 +425,9 @@ struct Inner {
     /// Serializes a workspace fetch+merge with an outbox POST+apply, so a
     /// bundle never races a flush (the row would be counted twice or
     /// dropped). Never held together with HTTP on the state mutex, and
-    /// released before observers are notified.
-    net: Mutex<()>,
+    /// released before observers are notified. Shared by all engines in
+    /// this process on the same cache file ([`net_lock_for`]).
+    net: Arc<Mutex<()>>,
     signal: Arc<WorkerSignal>,
     config: EngineConfig,
     workspace_id: String,
@@ -440,6 +445,15 @@ impl Drop for Inner {
 /// The client-side state engine. Cheap to share behind an `Arc`.
 pub struct CanvasEngine {
     inner: Arc<Inner>,
+}
+
+impl Drop for CanvasEngine {
+    /// Stop the sync worker now, not only once `Inner` is freed: a worker
+    /// mid-pass holds a strong reference and would otherwise keep flushing
+    /// rows after the engine was closed.
+    fn drop(&mut self) {
+        self.inner.signal.shutdown();
+    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -462,18 +476,40 @@ fn unix_now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// The `net` lock for a cache file, shared by every engine in this process
+/// that opens the same file. An engine that is being dropped can still be
+/// mid-pass (its worker holds a strong reference during a POST) while a new
+/// engine on the same storage starts (e.g. an Android activity relaunched):
+/// without a shared lock both workers could POST the same outbox row.
+/// `None` (in-memory store) gets a private lock.
+fn net_lock_for(db_path: Option<&Path>) -> Arc<Mutex<()>> {
+    static LOCKS: LazyLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
+        LazyLock::new(Mutex::default);
+    let Some(path) = db_path else {
+        return Arc::default();
+    };
+    let key = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut locks = lock(&LOCKS);
+    locks.retain(|_, l| l.strong_count() > 0);
+    if let Some(l) = locks.get(&key).and_then(Weak::upgrade) {
+        return l;
+    }
+    let l: Arc<Mutex<()>> = Arc::default();
+    locks.insert(key, Arc::downgrade(&l));
+    l
+}
+
 /// Open `<storage_path>/cache.db`, falling back to an in-memory DB when
-/// `storage_path` is empty or the file cannot be opened.
-fn open_store(storage_path: &str) -> Option<Store> {
+/// `storage_path` is empty or the file cannot be opened. Also returns the
+/// `net` lock for that store (see [`net_lock_for`]).
+fn open_store(storage_path: &str) -> (Option<Store>, Arc<Mutex<()>>) {
     if !storage_path.is_empty() {
+        let path = PathBuf::from(storage_path).join(CACHE_DB_FILE);
         let opened = fs::create_dir_all(storage_path)
             .map_err(|e| e.to_string())
-            .and_then(|()| {
-                Store::open(&PathBuf::from(storage_path).join(CACHE_DB_FILE))
-                    .map_err(|e| e.to_string())
-            });
+            .and_then(|()| Store::open(&path).map_err(|e| e.to_string()));
         match opened {
-            Ok(store) => return Some(store),
+            Ok(store) => return (Some(store), net_lock_for(Some(&path))),
             Err(e) => eprintln!(
                 "[CanvasEngine] cannot open {storage_path}/{CACHE_DB_FILE}: {e}; using an \
                  in-memory store"
@@ -481,10 +517,10 @@ fn open_store(storage_path: &str) -> Option<Store> {
         }
     }
     match Store::open_in_memory() {
-        Ok(store) => Some(store),
+        Ok(store) => (Some(store), net_lock_for(None)),
         Err(e) => {
             eprintln!("[CanvasEngine] cannot open an in-memory store: {e}; mutations disabled");
-            None
+            (None, net_lock_for(None))
         }
     }
 }
@@ -529,8 +565,9 @@ impl CanvasEngine {
         workspace_id: &str,
         config: EngineConfig,
     ) -> Self {
+        let (store, net) = open_store(storage_path);
         let mut state = State {
-            store: open_store(storage_path),
+            store,
             ..State::default()
         };
         state.load_cached(workspace_id);
@@ -541,7 +578,7 @@ impl CanvasEngine {
         let inner = Arc::new(Inner {
             state: Mutex::new(state),
             observers: Mutex::new(Vec::new()),
-            net: Mutex::new(()),
+            net,
             signal: Arc::clone(&signal),
             config,
             workspace_id: workspace_id.to_string(),
@@ -709,15 +746,31 @@ impl Inner {
     fn flush_pass(&self, client: &reqwest::blocking::Client) -> Option<Duration> {
         loop {
             let net = lock(&self.net);
+            if self.signal.is_shut_down() {
+                // The engine was dropped mid-pass: stop before the next row.
+                return None;
+            }
             let row = {
-                let st = lock(&self.state);
+                let mut st = lock(&self.state);
                 if !st.is_online {
                     return None;
                 }
                 let store = st.store.as_ref()?;
                 match store.first_pending() {
                     Ok(Some(row)) => row,
-                    Ok(None) => return None,
+                    Ok(None) => {
+                        // Another engine on the same cache file may have
+                        // flushed rows this one counted: resync to 0.
+                        if st.pending_actions != 0 {
+                            st.pending_actions = 0;
+                            st.seq += 1;
+                            let snap = st.snapshot();
+                            drop(st);
+                            drop(net);
+                            self.notify(snap);
+                        }
+                        return None;
+                    }
                     Err(e) => {
                         eprintln!("[CanvasEngine] sync worker: cannot read the outbox: {e}");
                         return Some(self.config.poll_interval);
@@ -725,8 +778,11 @@ impl Inner {
                 }
             };
             let now = unix_now_ms();
-            if row.next_attempt_at > now {
-                // FIFO: never skip past a row that is not due yet.
+            let cap_ms = i64::try_from(self.config.backoff_cap.as_millis()).unwrap_or(i64::MAX);
+            if row.next_attempt_at > now && row.next_attempt_at - now <= cap_ms {
+                // FIFO: never skip past a row that is not due yet. A row due
+                // further out than the backoff cap can only come from the
+                // wall clock moving backwards; it is treated as due.
                 return Some(Duration::from_millis((row.next_attempt_at - now) as u64));
             }
 

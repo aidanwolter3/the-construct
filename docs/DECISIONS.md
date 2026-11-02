@@ -238,7 +238,10 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
   goes online: successful fetch or probe) and holds only a `Weak` to the engine between passes; dropping the
   engine signals it to exit. HTTP never runs with the state mutex held. A separate `net` mutex serializes a
   workspace fetch+merge with an outbox POST+apply, so a bundle never races a flush (which could count a row
-  twice or drop it).
+  twice or drop it). That lock is shared by every engine in the process on the same `cache.db`, and dropping
+  a `CanvasEngine` stops its worker before the next row, so a closing engine that is mid-POST and its
+  successor (Android activity relaunch) never send the same row twice. A `next_attempt_at` further out than
+  the backoff cap (wall clock moved backwards) is treated as due.
 - **Pass:** while online, take the lowest-id PENDING row; if its `next_attempt_at` (unix **ms**, so test
   backoffs can be sub-second) is in the future, sleep until then (FIFO never skips ahead). POST
   `base_url + endpoint` with `payload_json`. 2xx: delete. 4xx: delete + roll back (below). 5xx or anything else

@@ -6,6 +6,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -53,6 +54,8 @@ struct TestServer {
     addr: SocketAddr,
     admin: SocketAddr,
     hits: Arc<Mutex<Vec<Hit>>>,
+    /// Mutation POSTs that have arrived (counted before any delay).
+    arrivals: Arc<AtomicUsize>,
     rt: Option<tokio::runtime::Runtime>,
 }
 
@@ -79,6 +82,16 @@ impl TestServer {
     /// Start, running `setup` (e.g. `set_count`, `fault`) before `addr`
     /// accepts connections.
     fn start_on_with(addr: SocketAddr, setup: impl FnOnce(&TestServer)) -> Self {
+        Self::build(addr, Duration::ZERO, setup)
+    }
+
+    /// Like [`TestServer::start`], but every mutation POST waits
+    /// `post_delay` before it is handled.
+    fn start_slow(post_delay: Duration) -> Self {
+        Self::build("127.0.0.1:0".parse().unwrap(), post_delay, |_| {})
+    }
+
+    fn build(addr: SocketAddr, post_delay: Duration, setup: impl FnOnce(&TestServer)) -> Self {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -86,13 +99,22 @@ impl TestServer {
             .unwrap();
         let state = Arc::new(AppState::in_memory().with_test_hooks(true));
         let hits: Arc<Mutex<Vec<Hit>>> = Arc::default();
+        let arrivals: Arc<AtomicUsize> = Arc::default();
         let log = Arc::clone(&hits);
+        let arrived = Arc::clone(&arrivals);
         let app = server::app(Arc::clone(&state)).layer(middleware::from_fn(
             move |req: Request, next: Next| {
                 let log = Arc::clone(&log);
+                let arrived = Arc::clone(&arrived);
                 async move {
                     let post = req.method() == axum::http::Method::POST;
                     let path = req.uri().path().to_string();
+                    if post && !path.starts_with("/v1/test/") {
+                        arrived.fetch_add(1, AtomicOrdering::SeqCst);
+                        if !post_delay.is_zero() {
+                            tokio::time::sleep(post_delay).await;
+                        }
+                    }
                     let resp = next.run(req).await;
                     if post && !path.starts_with("/v1/test/") {
                         log.lock().unwrap().push(Hit {
@@ -111,6 +133,7 @@ impl TestServer {
             addr: admin,
             admin,
             hits,
+            arrivals,
             rt: Some(rt),
         };
         setup(&server);
@@ -589,5 +612,62 @@ fn dropping_the_engine_stops_the_worker() {
     thread::sleep(Duration::from_millis(400));
     assert!(server.hits().is_empty(), "{:?}", server.hit_list());
     assert_eq!(rows(&dir).len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn closing_an_engine_mid_flush_never_double_sends_with_its_successor() {
+    // Engine A is mid-pass (a slow POST in flight) when it is dropped and
+    // engine B opens the same cache.db (Android activity relaunch). A must
+    // stop after its in-flight row and B must not resend that row.
+    let server = TestServer::start_slow(Duration::from_millis(250));
+    let dir = temp_dir("handover");
+    let a = engine(&dir, &server.url(), fast_config());
+    wait_online(&a);
+    for _ in 0..3 {
+        a.dispatch(INCREMENT);
+    }
+    wait_until("first POST in flight", || {
+        server.arrivals.load(AtomicOrdering::SeqCst) >= 1
+    });
+    drop(a);
+    let b = engine(&dir, &server.url(), fast_config());
+    wait_until("all rows flushed", || {
+        rows(&dir).is_empty() && b.snapshot().pending_actions == 0
+    });
+    // Let any stray duplicate POST land before checking.
+    thread::sleep(Duration::from_millis(600));
+    assert_eq!(server.count(), 3, "POSTs: {:?}", server.hit_list());
+    assert_eq!(server.hit_list(), vec![(INC.into(), 200); 3]);
+    assert_eq!(count(&b.snapshot()), 3);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn row_due_beyond_the_backoff_cap_is_sent_anyway() {
+    // A next_attempt_at a day ahead (the wall clock moved backwards since it
+    // was written) must not stall the FIFO outbox for a day.
+    let addr = free_addr();
+    let dir = temp_dir("skew");
+    seed_cache(&dir);
+    {
+        let a = engine(&dir, &format!("http://{addr}"), fast_config());
+        a.dispatch(INCREMENT);
+    }
+    let id = rows(&dir)[0].id;
+    let day_ahead = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+        + 86_400_000;
+    Store::open(&dir.join("cache.db"))
+        .unwrap()
+        .mark_retry(id, day_ahead, "HTTP 503")
+        .unwrap();
+
+    let server = TestServer::start_on(addr);
+    let b = engine(&dir, &server.url(), fast_config());
+    wait_flushed(&b, &server, 1);
+    assert_eq!(server.hit_list(), vec![(INC.into(), 200)]);
     let _ = std::fs::remove_dir_all(&dir);
 }

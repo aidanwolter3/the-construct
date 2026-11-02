@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -68,10 +69,14 @@ fun RenderUiNode(
                 Orientation.Vertical -> Column(mod, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     node.children.forEach { RenderUiNode(it, entities, onDispatch, Modifier, item) }
                 }
-                Orientation.Horizontal -> Row(
+                // FlowRow, not Row: children keep their natural width and wrap onto the next line
+                // when they do not fit (a Row squeezes the last child, e.g. a button label wrapping
+                // one letter per line on a phone).
+                Orientation.Horizontal -> FlowRow(
                     mod,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    itemVerticalAlignment = Alignment.CenterVertically,
                 ) {
                     node.children.forEach { RenderUiNode(it, entities, onDispatch, Modifier, item) }
                 }
