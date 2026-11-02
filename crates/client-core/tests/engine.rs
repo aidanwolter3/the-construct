@@ -614,6 +614,14 @@ fn read_only_cache_falls_back_to_an_in_memory_copy() {
     seed_cache(&dir, "home");
     let db = dir.join("cache.db");
     std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o444)).unwrap();
+    // Root (e.g. cloud sessions, containers) ignores file permissions, so
+    // the file is still writable and there is no read-only case to test.
+    // CI runs as a normal user and covers it.
+    if std::fs::OpenOptions::new().write(true).open(&db).is_ok() {
+        eprintln!("skipping: a 0444 file is still writable (running as root?)");
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
 
     let engine = ConstructEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
     let s = engine.snapshot();
