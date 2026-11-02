@@ -321,6 +321,27 @@ reblogged status (Mastodon behaviour); favourite/bookmark are idempotent. Media 
 big digit/letter) so screenshots show which carousel page is visible; their `meta.original` sizes are the
 advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a valid 1x1 (DC-only) hash.
 
+**Amended (M6-X): the fake is the first-class e2e target**, the real Pixelfed (D20) is optional (fixture recording,
+contract test). Fast, deterministic, no containers, and it can inject faults the real instance cannot.
+- **Single binary:** `build.rs` embeds the two JSON fixtures and `media/` (`include_bytes!` list generated at build
+  time); an empty `Config::fixtures_dir` selects them, `FAKE_PIXELFED_FIXTURES` loads a directory instead. Bind
+  `FAKE_PIXELFED_ADDR`, else `0.0.0.0:$PORT`, else `127.0.0.1:8081`; SIGTERM stops it. Dockerfile: rust slim builder
+  -> distroless `cc` (glibc; no musl toolchain needed), 51 MB image, 2.1 MB stripped binary, ~1-4 MB RSS idle.
+- **Admin routes** (`/_admin/reset[?keep_auth=1]`, `/_admin/state`, `POST|DELETE /_admin/faults`) are served by
+  default only when bound to loopback (`FAKE_PIXELFED_ADMIN=1|0` overrides): they let anyone wipe state, so not on a
+  public bind by accident. The library always has the same controls (`AppState::reset`, `add_faults`, ...).
+- **Reset** restores the fixture content and clears faults, request log and grant counters; without `keep_auth` it
+  also drops apps/codes/tokens (an instance wipe; the seed token survives).
+- **Faults:** ordered rules `{path_prefix?, method?, times?, kind}`; per request every matching `latency` adds up
+  and the first matching `status`/`rate_limit` answers; each used rule spends one `times`. `expire_tokens` acts at
+  once and is not stored. The 401 is shaped like an expired Passport token so the pod's refresh path runs. The
+  `X-Fake-Fault` header covers direct calls (the pod forwards no custom headers). The request log keeps the newest
+  500 non-admin requests; a request whose client hung up mid-way (a latency fault past its timeout) is logged as 499.
+- **e2e crate** (`crates/e2e`): pod + engine in-process; the engine reaches the pod via a switchable TCP proxy
+  (offline without restarting the pod, whose in-memory store must survive). Upstream from `E2E_UPSTREAM`
+  (`fake` default, in-process or `E2E_FAKE_URL`; `real`). One sequential suite test, so a real instance sees one
+  sign-in per run (Pixelfed throttles `/oauth/*` to 10/min).
+
 ## D17: Pixelfed token ownership and the pod adapter (`server::pixelfed`)
 
 - **Token ownership:** the pod holds the upstream access token; private data stays on the pod. The client runs
@@ -422,7 +443,12 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   -> 64-char verifier from the unreserved set (getrandom, rejection-sampled), S256 challenge, 32-char state ->
   authorize URL (RFC 3986 percent-encoding, `%20` not `+`) -> `UrlOpener.open` -> redirect (loopback listener, or
   `handle_auth_redirect(url)`) -> state check -> `POST /v1/auth/pixelfed/token` -> session stored -> signed_in ->
-  outbox woken -> refetch. 5 min redirect timeout. A newer AuthLogin or `logout()` cancels a pending flow.
+  outbox woken -> refetch. 5 min redirect timeout. A newer AuthLogin or `logout()` cancels a pending flow while
+  it waits for the browser (a closed tab must be retryable). **Post-sign-in refetch:** from the code exchange on
+  (`Flow.exchanging`) the flow stays current until the first signed-in fetch is done; `auth_json` is `pending`
+  with `"message":"Loading your feed…"` while the session is already in place, and goes `signed_in` only after
+  that fetch (fetched or failed; skipped if a logout/401/newer session got there first), so the status line never
+  shows `@user` over the signed-out screen. An AuthLogin in that phase is ignored (logged), not a second flow.
 - **Redirect handling:** a redirect whose `state` does not match is ignored (loopback: 400 page; custom:
   `handle_auth_redirect` returns false) and the flow keeps waiting, so a stray or forged redirect cannot kill the
   real sign-in. Other loopback paths (favicon) get 404. `error=` with the right state ends the flow as `error`.
@@ -433,8 +459,17 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   another app). The FFI uses the default.
 - **No browser:** no opener, `open` returning false or throwing -> `auth_json` error "no browser available" and the
   authorize URL is logged; the flow keeps waiting so a human can open it (success then moves to signed_in).
-- **auth_json:** `{"state":"signed_out"}`, `{"state":"pending"}`, `{"state":"signed_in","username",
+- **auth_json:** `{"state":"signed_out"}`, `{"state":"pending","message"?}`, `{"state":"signed_in","username",
   "display_name","avatar_url"}` (from the token response), `{"state":"error","error":"<message>"}`.
+- **Error messages are short and human** (`auth::SIGN_IN_*`, `auth::sign_in_error_message`), mapped from the
+  pod's `error` code: `account_not_owner` -> "This pod belongs to a different Pixelfed account.",
+  `oauth_exchange_failed` -> "Pixelfed rejected the sign-in. Please try again.", `instance_not_allowed` -> "This
+  pod isn't configured for that Pixelfed instance.", `redirect_uri_not_allowed` -> "This pod doesn't accept
+  sign-ins from this app.", `upstream_unreachable`/`upstream_error`/502/504 -> "Can't reach Pixelfed right now.",
+  transport failure -> "Can't reach your pod."; `error=access_denied` redirect -> "Sign-in was cancelled.",
+  timeout -> "Sign-in timed out. Please try again.", anything else -> "Something went wrong. Please try again."
+  The URL, HTTP status and body go to the log only (`sign-in failed: <detail> (shown: <message>)`). The status
+  line wraps the error to 2 lines (the auth text takes the row's remaining width) instead of truncating it.
 - **Session store:** one key `pod_session:<base_url>` holding JSON `{token, username?, display_name?, avatar_url?}`
   (a bare non-JSON value is read as a token). Restored at construction (snapshot starts signed_in). Default store
   when the platform passes none: macOS login Keychain (`keyring` 3, apple-native only, service
@@ -480,6 +515,10 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   together with their entities, and the sync worker then refetches so the signed-out bundle replaces the emptied
   feed. A workspace fetch that was sent with a session which is no longer current when it returns (logout or a
   401 meanwhile) is discarded rather than applied, so an in-flight fetch cannot re-cache the private feed.
+  The client DB runs with `PRAGMA secure_delete=ON` (freed cells/pages zeroed; cheap at this size) and the purge
+  ends with `PRAGMA wal_checkpoint(TRUNCATE)`, so the purged rows survive neither in free pages of `cache.db` nor
+  as old WAL frames (tested on the raw bytes). Fragments of rows overwritten before this change in an existing
+  file are not scrubbed (no VACUUM).
 
 ## D20: Local real Pixelfed for end-to-end tests (`dev/pixelfed`, `scripts/pixelfed_dev.sh`)
 
@@ -501,6 +540,11 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   `PIXELFED_PUBLIC_URL` left at its default (= instance URL), so the authorize link is `localhost` too. Verified end
   to end with the desktop simulator's scripted login (D21): sign-in, feed with the boost, real JPEGs through the
   media proxy, carousel swipe, like reaching the instance (`favourited: true`).
+- **Amended (M6-X): optional, secondary.** The fake (D16) is the primary e2e target. The real stack is for
+  re-recording `fixtures/pixelfed/recorded/` and a contract test: `scripts/e2e.sh --upstream real` runs the same
+  `crates/e2e` suite (scripted web login as alice, like, offline like, bookmark, all undone at the end) against it,
+  intended for a scheduled CI job on a throwaway instance (each run registers one OAuth app). Found while porting
+  the login: Pixelfed answers `POST /login` with 500 when the request has no `User-Agent` (it records the device).
 
 ## D21: Platform sign-in glue (desktop, Android, simulator)
 
@@ -572,6 +616,10 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   offline -> error. Live mode sends the intent to the real engine.
 - **Simulator `type <target> <text>`:** clears the field then `performTextInput`; target `tag:<t>`, one word, or
   `"quoted text"`.
+- **Simulator `click` must hit:** the click lands at the node's center, so a match whose center is outside its
+  ancestors' clip or the screen (the feed is a scrolling Column, every post is composed) is first scrolled into
+  view with `performScrollTo`; still off screen -> the step fails with the bounds. Before, `click Like` could pass
+  while dispatching nothing.
 
 ## D24: Client agent prompt, layout version and push subscriber (client-core)
 
@@ -609,3 +657,31 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   outbox rows, so optimistic values survive a pushed layout change.
 - **Snapshot/FFI:** `StateSnapshot.agent_json` / `FfiStateSnapshot.agent_json` (default `{"state":"idle"}`), mapped
   to `EngineSnapshot.agentJson` in `UniffiEngineBridge`.
+
+## D25: Layout agent endpoint and providers (`server::agent`)
+
+- **Flow:** `POST /v1/agent/modify_layout` loads the latest version, asks the provider for an RFC 6902 patch (paths
+  relative to the `core://Workspace` root), applies it to a copy with `json-patch`, validates (deserializes as
+  `UiNode`; same root id; 1..=50 slots; `OptimisticMutate.endpoint` starts with `/v1/`; <= 256 KB), and only then
+  `layouts::commit_and_publish`es with prompt, provider and patch. Any failure commits nothing. An empty patch, or
+  one whose result equals the current layout, answers 200 `"unchanged": true` at the current version (no empty
+  versions). Concurrent prompts are last-writer-wins (each patch is validated against the version it was made for).
+- **Provider trait:** `LayoutProvider { name, model, generate -> boxed future of Generated{ops, explanation} }`
+  (boxed so the selection is an `Arc<dyn>`). `Selection::from_env` resolves `CANVAS_LLM_PROVIDER`; an explicit
+  `anthropic` without a key is `NotConfigured` (server starts; prompts get 503) rather than a silent fallback.
+- **Rules provider:** phrase matching on a normalized prompt (lowercase, punctuation -> spaces, word-bounded); the
+  matched rules run in prompt order, each on the previous one's result, emitting `replace`/`add`/`remove` ops with
+  explicit values only for slots that change (so they compose and are idempotent). Nodes are found by walking the
+  JSON for `pixelfed://PostCard` objects and by node kind inside their four slots, not by index. Moves ("media at
+  the top", "action bar above the photo") move one slot node to a new position and keep the others' relative order
+  (for the built-in card both are the contract's swaps). A recognized rule with nothing to act on (e.g. captions on
+  `home`) is `unsupported_prompt` with a `detail`.
+- **Anthropic provider:** raw reqwest, non-streaming (`max_tokens` 16000 fits the 120 s timeout), structured outputs
+  with the contract's PATCH_SCHEMA; the system prompt is two blocks, instructions + registry first (with
+  `cache_control`, since they are identical across prompts) then the pretty-printed layout (serde_json maps are
+  sorted, so the text is deterministic). Refusal / `max_tokens` / non-JSON text / unparsable `value_json` ->
+  502 `provider_error`; 401/403 -> 503 `provider_not_configured` naming the rejected key; 429/5xx/`overloaded_error`
+  retried twice (honoring `retry-after`, capped at 30 s, else 1 s doubling); connect errors retried, timeouts not.
+- **Registry:** `schemars::JsonSchema` derived on the protocol AST/intent types behind protocol's `schema` feature
+  (the server enables it); `agent::registry()` = `schema_for!(UiNode)` (intents under `$defs`). A new variant must
+  derive the schema to compile, and a test checks every variant tag is in the registry.

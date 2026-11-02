@@ -1,0 +1,9 @@
+# Build context for `docker build -f crates/fake-pixelfed/Dockerfile .` (repo root):
+# keep it small (target/ alone is many GB).
+target
+**/target
+.git
+kmp-app
+dev
+docs
+**/*.swp

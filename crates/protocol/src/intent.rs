@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "intent")]
 pub enum ActionIntent {
@@ -41,6 +42,7 @@ pub enum ActionIntent {
 }
 
 /// One extra field update carried by `ActionIntent::OptimisticMutate.also`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FieldUpdate {
     pub field: String,
@@ -48,6 +50,7 @@ pub struct FieldUpdate {
     pub value_expr: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresentationMode {
     Push,

@@ -7,6 +7,10 @@
 //! - `CANVAS_TEST_HOOKS=1`: enables `POST /v1/test/fault`.
 //! - `CANVAS_AGENT_OPEN=1`: layout versions / rollback / agent endpoints accept
 //!   requests without a pod session (dev and demo only).
+//! - `CANVAS_LLM_PROVIDER`: layout agent provider, `auto` (default: `anthropic`
+//!   if `ANTHROPIC_API_KEY` is set, else `rules`) | `anthropic` | `rules`.
+//! - `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` (default `https://api.anthropic.com`),
+//!   `CANVAS_LLM_MODEL` (model id), `CANVAS_LLM_FALLBACKS=0` (no server-side refusal fallback).
 //! - `PIXELFED_INSTANCE_URL`: Pixelfed instance for pod->upstream calls
 //!   (default `http://127.0.0.1:8081`, the local fake; `http://localhost:8090` for the
 //!   local real Pixelfed, whose web/OAuth routes only answer on Host `localhost`).
@@ -46,7 +50,8 @@ async fn main() -> std::io::Result<()> {
         .map_err(|e| std::io::Error::other(format!("failed to open {}: {e}", dir.display())))?
         .with_test_hooks(test_hooks)
         .with_pixelfed(server::PixelfedConfig::from_env())
-        .with_agent_open(agent_open);
+        .with_agent_open(agent_open)
+        .with_agent(server::agent::Selection::from_env());
     let pixelfed = state.pixelfed_config();
     tracing::info!(
         instance = %pixelfed.instance_url,
@@ -56,6 +61,18 @@ async fn main() -> std::io::Result<()> {
     tracing::info!(db = %dir.join("server.db").display(), "server database opened");
     if test_hooks {
         tracing::warn!("CANVAS_TEST_HOOKS=1: POST /v1/test/fault is enabled");
+    }
+    match state.agent() {
+        server::agent::Selection::Ready(p) => tracing::info!(
+            provider = p.name(),
+            model = p.model().unwrap_or("-"),
+            "layout agent provider selected"
+        ),
+        server::agent::Selection::NotConfigured { provider, detail } => tracing::warn!(
+            provider = %provider,
+            %detail,
+            "layout agent provider NOT configured: POST /v1/agent/modify_layout answers 503"
+        ),
     }
     if agent_open {
         tracing::warn!(

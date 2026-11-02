@@ -37,6 +37,37 @@ pub const VERIFIER_LEN: usize = 64;
 /// RFC 3986 unreserved characters (the PKCE verifier alphabet).
 const UNRESERVED: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
 
+/// `auth_json` error messages (docs/DECISIONS.md D19). Short and human: the
+/// status line shows them on a phone; the technical detail (URL, HTTP
+/// status, the pod's error body) goes to the log only.
+pub const SIGN_IN_NOT_OWNER: &str = "This pod belongs to a different Pixelfed account.";
+pub const SIGN_IN_REJECTED: &str = "Pixelfed rejected the sign-in. Please try again.";
+pub const SIGN_IN_INSTANCE_NOT_ALLOWED: &str = "This pod isn't configured for that Pixelfed instance.";
+pub const SIGN_IN_REDIRECT_NOT_ALLOWED: &str = "This pod doesn't accept sign-ins from this app.";
+pub const SIGN_IN_UPSTREAM_DOWN: &str = "Can't reach Pixelfed right now.";
+pub const SIGN_IN_POD_UNREACHABLE: &str = "Can't reach your pod.";
+pub const SIGN_IN_DENIED: &str = "Sign-in was cancelled.";
+pub const SIGN_IN_TIMED_OUT: &str = "Sign-in timed out. Please try again.";
+pub const SIGN_IN_FAILED: &str = "Something went wrong. Please try again.";
+
+/// The `auth_json` message for a failed pod auth call: `status` is `None`
+/// when the pod could not be reached, `code` the `error` field of its JSON
+/// body.
+pub fn sign_in_error_message(status: Option<u16>, code: Option<&str>) -> &'static str {
+    let Some(status) = status else {
+        return SIGN_IN_POD_UNREACHABLE;
+    };
+    match code {
+        Some("account_not_owner") => SIGN_IN_NOT_OWNER,
+        Some("oauth_exchange_failed") => SIGN_IN_REJECTED,
+        Some("instance_not_allowed") => SIGN_IN_INSTANCE_NOT_ALLOWED,
+        Some("redirect_uri_not_allowed") => SIGN_IN_REDIRECT_NOT_ALLOWED,
+        Some("upstream_unreachable" | "upstream_error") => SIGN_IN_UPSTREAM_DOWN,
+        _ if status == 502 || status == 504 => SIGN_IN_UPSTREAM_DOWN,
+        _ => SIGN_IN_FAILED,
+    }
+}
+
 /// Platform secure storage for the pod session (Keychain, Android Keystore,
 /// ...). Implementations may be called from any thread; the engine contains
 /// panics from them.
@@ -728,6 +759,29 @@ mod tests {
         assert!(p.is_expired(1_601));
         assert!(p.is_expired(900), "created in the future");
         assert_eq!(pending_auth_key("http://h:1/"), "pending_auth:http://h:1");
+    }
+
+    #[test]
+    fn pod_error_codes_map_to_short_messages() {
+        let m = sign_in_error_message;
+        assert_eq!(m(Some(403), Some("account_not_owner")), SIGN_IN_NOT_OWNER);
+        assert_eq!(m(Some(400), Some("oauth_exchange_failed")), SIGN_IN_REJECTED);
+        assert_eq!(m(Some(400), Some("instance_not_allowed")), SIGN_IN_INSTANCE_NOT_ALLOWED);
+        assert_eq!(m(Some(400), Some("redirect_uri_not_allowed")), SIGN_IN_REDIRECT_NOT_ALLOWED);
+        assert_eq!(m(Some(502), Some("upstream_unreachable")), SIGN_IN_UPSTREAM_DOWN);
+        assert_eq!(m(Some(502), Some("upstream_error")), SIGN_IN_UPSTREAM_DOWN);
+        assert_eq!(m(Some(502), None), SIGN_IN_UPSTREAM_DOWN);
+        assert_eq!(m(Some(504), Some("whatever")), SIGN_IN_UPSTREAM_DOWN);
+        assert_eq!(m(None, None), SIGN_IN_POD_UNREACHABLE);
+        assert_eq!(m(Some(500), None), SIGN_IN_FAILED);
+        assert_eq!(m(Some(400), Some("app_not_registered")), SIGN_IN_FAILED);
+        for msg in [
+            SIGN_IN_NOT_OWNER, SIGN_IN_REJECTED, SIGN_IN_INSTANCE_NOT_ALLOWED,
+            SIGN_IN_REDIRECT_NOT_ALLOWED, SIGN_IN_UPSTREAM_DOWN, SIGN_IN_POD_UNREACHABLE,
+            SIGN_IN_DENIED, SIGN_IN_TIMED_OUT, SIGN_IN_FAILED,
+        ] {
+            assert!(msg.len() <= 60 && !msg.contains("http") && !msg.contains("HTTP"), "{msg}");
+        }
     }
 
     #[test]

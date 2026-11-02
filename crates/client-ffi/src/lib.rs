@@ -316,7 +316,7 @@ mod tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
             let auth = handle.snapshot().auth_json;
-            if auth.contains("\"error\"") && auth.contains("cannot reach the pod") {
+            if auth.contains("\"error\"") && auth.contains(client_core::auth::SIGN_IN_POD_UNREACHABLE) {
                 break;
             }
             assert!(std::time::Instant::now() < deadline, "auth_json: {auth}");

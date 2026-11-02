@@ -216,6 +216,16 @@ fn pending_auth_json() -> String {
     json!({ "state": "pending" }).to_string()
 }
 
+/// `auth_json` message while the first feed after a sign-in is fetched.
+pub const LOADING_FEED_MESSAGE: &str = "Loading your feed…";
+
+/// Signed in, but the post-sign-in refetch has not landed yet: still
+/// `pending`, so the UI does not show the account over the signed-out
+/// screen.
+fn loading_feed_auth_json() -> String {
+    json!({ "state": "pending", "message": LOADING_FEED_MESSAGE }).to_string()
+}
+
 fn error_auth_json(message: &str) -> String {
     json!({ "state": "error", "error": message }).to_string()
 }
@@ -227,6 +237,10 @@ struct Flow {
     state: String,
     /// Custom-scheme mode: where `handle_auth_redirect` delivers.
     redirect_tx: Option<Mutex<mpsc::Sender<Redirect>>>,
+    /// The redirect arrived: the code is being exchanged, or the session
+    /// is in place and the post-sign-in refetch is running. A new
+    /// `AuthLogin` is ignored from here on (it would start a second flow).
+    exchanging: AtomicBool,
 }
 
 impl Flow {
@@ -239,7 +253,9 @@ impl Flow {
 enum LoginError {
     /// Superseded, logged out or engine dropped: report nothing.
     Cancelled,
-    Failed(String),
+    /// `message` is shown in `auth_json` (short, human); `detail` (URLs,
+    /// HTTP status, the pod's error body) is only logged.
+    Failed { message: String, detail: String },
     /// A redirect reached an engine with no matching sign-in (in memory or
     /// persisted): [`SIGN_IN_INTERRUPTED`] unless signed in.
     Unmatched,
@@ -270,8 +286,10 @@ enum FetchOutcome {
 ///   (`{query_key: [entity uri, ...]}`, `"{}"` when none). Every URI in it
 ///   is also in `entities_json` when the bundle (or cache) carried it.
 /// - `auth_json`: `{"state":"signed_out"|"pending"|"signed_in"|"error",
-///   "username"?, "display_name"?, "avatar_url"?, "error"?}` (the account
-///   fields when signed in, `error` with a message in the error state).
+///   "username"?, "display_name"?, "avatar_url"?, "error"?, "message"?}` (the
+///   account fields when signed in, `error` with a short human message in the
+///   error state, `message` = [`LOADING_FEED_MESSAGE`] while `pending` after
+///   the code exchange until the first signed-in fetch is done).
 /// - `agent_json`: the last layout prompt, `{"state":"idle"|"running"|
 ///   "done"|"error","message"?,"provider"?,"layout_version"?}`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -556,6 +574,16 @@ impl State {
                     }
                 ),
                 Err(e) => eprintln!("[CanvasEngine] ERROR: failed to purge private cache: {e}"),
+            }
+            // `secure_delete` zeroed the freed pages; flush them out of the
+            // WAL too, so the purged rows are not left in old WAL frames.
+            match store.checkpoint_truncate() {
+                Ok(true) => {}
+                Ok(false) => eprintln!(
+                    "[CanvasEngine] WAL checkpoint after the purge was blocked by a reader; the \
+                     WAL is truncated at a later checkpoint"
+                ),
+                Err(e) => eprintln!("[CanvasEngine] WAL checkpoint after the purge failed: {e}"),
             }
             match store.pending_outbox() {
                 Ok(rows) => keep.extend(rows.into_iter().map(|r| r.entity_uri)),
@@ -1871,6 +1899,16 @@ impl Inner {
     /// `ActionIntent::AuthLogin`: go `pending` and run the flow on a
     /// background thread (the dispatching thread never blocks).
     fn start_login(self: &Arc<Self>, instance_url: String) {
+        if lock(&self.flow)
+            .as_ref()
+            .is_some_and(|f| f.exchanging.load(Ordering::SeqCst))
+        {
+            println!(
+                "[CanvasEngine] sign-in ignored: a sign-in is already being completed (code \
+                 exchange or first feed fetch)"
+            );
+            return;
+        }
         let (redirect_tx, redirect_rx) = match &self.redirect {
             RedirectMode::Custom(_) => {
                 let (tx, rx) = mpsc::channel();
@@ -1882,6 +1920,7 @@ impl Inner {
             cancelled: AtomicBool::new(false),
             state: auth::random_state(),
             redirect_tx,
+            exchanging: AtomicBool::new(false),
         });
         self.replace_flow(Some(Arc::clone(&flow)));
         self.set_auth_json(pending_auth_json());
@@ -1916,11 +1955,11 @@ impl Inner {
                     Err(LoginError::Cancelled) => {
                         println!("[CanvasEngine] sign-in cancelled");
                     }
-                    Err(LoginError::Failed(msg)) => {
+                    Err(LoginError::Failed { message, detail }) => {
                         if inner.is_current(&flow) {
-                            eprintln!("[CanvasEngine] sign-in failed: {msg}");
+                            eprintln!("[CanvasEngine] sign-in failed: {detail} (shown: {message})");
                             inner.replace_flow(None);
-                            inner.set_auth_json(error_auth_json(&msg));
+                            inner.set_auth_json(error_auth_json(&message));
                         }
                     }
                     Err(LoginError::Unmatched) => {
@@ -1949,7 +1988,7 @@ impl Inner {
         if let Err(e) = spawned {
             eprintln!("[CanvasEngine] failed to spawn the sign-in thread: {e}");
             self.replace_flow(None);
-            self.set_auth_json(error_auth_json(&format!("cannot start sign-in: {e}")));
+            self.set_auth_json(error_auth_json(auth::SIGN_IN_FAILED));
         }
     }
 
@@ -2055,6 +2094,8 @@ impl Inner {
                         cancelled: AtomicBool::new(false),
                         state: redirect.state().unwrap_or_default().to_owned(),
                         redirect_tx: None,
+                        // The redirect is here: a tap must not restart.
+                        exchanging: AtomicBool::new(true),
                     });
                     *current = Some(Arc::clone(&flow));
                     flow
@@ -2068,17 +2109,21 @@ impl Inner {
         true
     }
 
-    /// Go `signed_in` with `session`, then store it, wake the outbox and
-    /// refetch (on the calling auth thread).
+    /// Install `session` (auth still `pending`, "Loading your feed…"),
+    /// store it, wake the outbox and refetch (on the calling auth thread);
+    /// once that fetch is done (fetched or failed) go `signed_in`. The flow
+    /// stays current until then, so a new `AuthLogin` is ignored and a
+    /// `logout` cancels it.
     fn complete_sign_in(&self, flow: &Arc<Flow>, session: Session) -> Result<(), LoginError> {
         let username = session.username.clone();
+        let token = session.token.clone();
         let snap = {
             // Held across the check and the update (lock order: flow, then
             // state) so a concurrent `logout` either cancels this flow
             // first or runs after the session is in place and removes it
             // again. The secure store is written afterwards, without this
             // lock (`sync_session_store` orders it against logout's delete).
-            let mut current = lock(&self.flow);
+            let current = lock(&self.flow);
             if flow.is_cancelled()
                 || self.signal.is_shut_down()
                 || !current.as_ref().is_some_and(|f| Arc::ptr_eq(f, flow))
@@ -2086,23 +2131,41 @@ impl Inner {
                 return Err(LoginError::Cancelled);
             }
             let mut st = lock(&self.state);
-            st.auth_json = session.auth_json();
+            st.auth_json = loading_feed_auth_json();
             st.session = Some(session);
             st.auth_blocked = false;
             st.seq += 1;
-            let snap = st.snapshot();
-            drop(st);
-            *current = None;
-            snap
+            st.snapshot()
         };
         println!(
-            "[CanvasEngine] signed in as {}",
+            "[CanvasEngine] signed in as {}; fetching the feed",
             username.as_deref().unwrap_or("?")
         );
         self.notify(snap);
         self.sync_session_store();
         self.signal.wake();
         self.refresh();
+        // Signed in now unless a logout / 401 / newer flow got there first.
+        let snap = {
+            let mut current = lock(&self.flow);
+            if !current.as_ref().is_some_and(|f| Arc::ptr_eq(f, flow)) {
+                return Ok(());
+            }
+            *current = None;
+            if flow.is_cancelled() || self.signal.is_shut_down() {
+                return Ok(());
+            }
+            let mut st = lock(&self.state);
+            match &st.session {
+                Some(s) if s.token == token => {
+                    st.auth_json = s.auth_json();
+                    st.seq += 1;
+                    st.snapshot()
+                }
+                _ => return Ok(()),
+            }
+        };
+        self.notify(snap);
         Ok(())
     }
 
@@ -2277,24 +2340,39 @@ fn auth_client() -> Result<reqwest::blocking::Client, String> {
         .map_err(|e| format!("client build: {e}"))
 }
 
-/// `POST url` with a JSON body; the parsed JSON response on 2xx, else an
-/// error message with the status and the pod's error body.
-fn post_auth(client: &reqwest::blocking::Client, url: &str, body: &Value) -> Result<Value, String> {
-    let resp = client
-        .post(url)
-        .json(body)
-        .send()
-        .map_err(|e| format!("cannot reach the pod: {e}"))?;
+/// A sign-in failure: `message` for `auth_json`, `detail` for the log.
+fn failed(message: &str, detail: impl Into<String>) -> LoginError {
+    LoginError::Failed {
+        message: message.to_owned(),
+        detail: detail.into(),
+    }
+}
+
+/// `POST url` with a JSON body; the parsed JSON response on 2xx, else a
+/// failure whose message is mapped from the pod's `error` code
+/// ([`auth::sign_in_error_message`]) and whose detail (logged only) has the
+/// URL, status and error body.
+fn post_auth(client: &reqwest::blocking::Client, url: &str, body: &Value) -> Result<Value, LoginError> {
+    let resp = client.post(url).json(body).send().map_err(|e| {
+        failed(
+            auth::sign_in_error_message(None, None),
+            format!("POST {url}: cannot reach the pod: {e}"),
+        )
+    })?;
     let status = resp.status();
     let text = resp.text().unwrap_or_default();
     if !status.is_success() {
-        let detail = serde_json::from_str::<Value>(&text)
+        let code = serde_json::from_str::<Value>(&text)
             .ok()
-            .and_then(|v| v.get("error").and_then(Value::as_str).map(str::to_owned))
-            .unwrap_or_else(|| text.chars().take(200).collect());
-        return Err(format!("POST {url} -> HTTP {}: {detail}", status.as_u16()));
+            .and_then(|v| v.get("error").and_then(Value::as_str).map(str::to_owned));
+        let body: String = text.chars().take(300).collect();
+        return Err(failed(
+            auth::sign_in_error_message(Some(status.as_u16()), code.as_deref()),
+            format!("POST {url} -> HTTP {}: {body}", status.as_u16()),
+        ));
     }
-    serde_json::from_str(&text).map_err(|e| format!("POST {url}: bad response: {e}"))
+    serde_json::from_str(&text)
+        .map_err(|e| failed(auth::SIGN_IN_FAILED, format!("POST {url}: bad response: {e}")))
 }
 
 fn json_str(v: &Value, key: &str) -> Option<String> {
@@ -2314,7 +2392,6 @@ fn login_flow(
     instance_url: &str,
     redirect_rx: Option<mpsc::Receiver<Redirect>>,
 ) -> Result<(), LoginError> {
-    let failed = LoginError::Failed;
     let (base_url, opener, redirect_mode, loopback_port, signal) = {
         let inner = weak.upgrade().ok_or(LoginError::Cancelled)?;
         (
@@ -2330,7 +2407,12 @@ fn login_flow(
     let listener = match redirect_mode {
         RedirectMode::Loopback => Some(
             LoopbackListener::bind_preferred(loopback_port)
-                .map_err(|e| failed(format!("cannot open the loopback redirect listener: {e}")))?,
+                .map_err(|e| {
+                    failed(
+                        auth::SIGN_IN_FAILED,
+                        format!("cannot open the loopback redirect listener: {e}"),
+                    )
+                })?,
         ),
         RedirectMode::Custom(_) => None,
     };
@@ -2340,17 +2422,19 @@ fn login_flow(
         (None, RedirectMode::Loopback) => unreachable!("loopback always has a listener"),
     };
 
-    let client = auth_client().map_err(failed)?;
+    let client = auth_client().map_err(|e| failed(auth::SIGN_IN_FAILED, e))?;
     let app = post_auth(
         &client,
         &format!("{base_url}/v1/auth/pixelfed/app"),
         &json!({ "instance_url": instance_url, "redirect_uri": redirect_uri }),
-    )
-    .map_err(failed)?;
+    )?;
     let (Some(client_id), Some(endpoint)) =
         (json_str(&app, "client_id"), json_str(&app, "authorize_endpoint"))
     else {
-        return Err(failed(format!("unexpected /v1/auth/pixelfed/app response: {app}")));
+        return Err(failed(
+            auth::SIGN_IN_FAILED,
+            format!("unexpected /v1/auth/pixelfed/app response: {app}"),
+        ));
     };
     let scope = json_str(&app, "scopes").unwrap_or_else(|| "read write".to_owned());
     let pkce = Pkce::generate();
@@ -2412,7 +2496,10 @@ fn login_flow(
             })
             .map_err(|e| match e {
                 auth::WaitError::Cancelled => LoginError::Cancelled,
-                other => failed(other.to_string()),
+                other @ auth::WaitError::TimedOut => {
+                    failed(auth::SIGN_IN_TIMED_OUT, other.to_string())
+                }
+                other => failed(auth::SIGN_IN_FAILED, other.to_string()),
             })?,
         (None, Some(rx)) => {
             let deadline = Instant::now() + auth::REDIRECT_TIMEOUT;
@@ -2421,7 +2508,10 @@ fn login_flow(
                     return Err(LoginError::Cancelled);
                 }
                 if Instant::now() >= deadline {
-                    return Err(failed(auth::WaitError::TimedOut.to_string()));
+                    return Err(failed(
+                        auth::SIGN_IN_TIMED_OUT,
+                        auth::WaitError::TimedOut.to_string(),
+                    ));
                 }
                 match rx.recv_timeout(Duration::from_millis(100)) {
                     Ok(r) => break r,
@@ -2432,7 +2522,7 @@ fn login_flow(
                 }
             }
         }
-        (None, None) => return Err(failed("no redirect channel".into())),
+        (None, None) => return Err(failed(auth::SIGN_IN_FAILED, "no redirect channel")),
     };
     if cancelled() {
         return Err(LoginError::Cancelled);
@@ -2469,16 +2559,21 @@ fn finish_sign_in(
     code_verifier: &str,
     redirect_uri: &str,
 ) -> Result<(), LoginError> {
-    let failed = LoginError::Failed;
     let code = match redirect {
         Redirect::Code { code, .. } => code,
         Redirect::Error {
             error, description, ..
         } => {
             let more = description.map(|d| format!(" ({d})")).unwrap_or_default();
-            return Err(failed(format!("authorization failed: {error}{more}")));
+            let message = if error == "access_denied" {
+                auth::SIGN_IN_DENIED
+            } else {
+                auth::SIGN_IN_REJECTED
+            };
+            return Err(failed(message, format!("authorization failed: {error}{more}")));
         }
     };
+    flow.exchanging.store(true, Ordering::SeqCst);
     if let Some(inner) = weak.upgrade()
         && inner.is_current(flow)
     {
@@ -2494,10 +2589,9 @@ fn finish_sign_in(
             "code_verifier": code_verifier,
             "redirect_uri": redirect_uri,
         }),
-    )
-    .map_err(failed)?;
+    )?;
     let Some(session_token) = json_str(&token, "session_token") else {
-        return Err(failed("the pod returned no session_token".into()));
+        return Err(failed(auth::SIGN_IN_FAILED, "the pod returned no session_token"));
     };
     let account = token.get("account").cloned().unwrap_or(Value::Null);
     let session = Session {
@@ -2529,7 +2623,7 @@ fn recover_sign_in(weak: &Weak<Inner>, flow: &Arc<Flow>, redirect: Redirect) -> 
         "[CanvasEngine] completing the sign-in for {} started before a restart",
         pending.instance_url
     );
-    let client = auth_client().map_err(LoginError::Failed)?;
+    let client = auth_client().map_err(|e| failed(auth::SIGN_IN_FAILED, e))?;
     finish_sign_in(
         weak,
         flow,

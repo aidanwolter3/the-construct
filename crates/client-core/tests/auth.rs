@@ -9,11 +9,14 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use client_core::auth::{PendingAuth, pending_auth_key, session_key};
+use client_core::auth::{
+    PendingAuth, SIGN_IN_DENIED, SIGN_IN_NOT_OWNER, SIGN_IN_POD_UNREACHABLE,
+    SIGN_IN_UPSTREAM_DOWN, pending_auth_key, session_key,
+};
 use client_core::store::{Store, StoreOps};
 use client_core::{
-    CanvasEngine, EngineConfig, EngineOptions, MemoryStore, RedirectMode, SIGN_IN_INTERRUPTED,
-    SecureStore, StateSnapshot, UrlOpener,
+    CanvasEngine, EngineConfig, EngineOptions, LOADING_FEED_MESSAGE, MemoryStore, RedirectMode,
+    SIGN_IN_INTERRUPTED, SecureStore, StateSnapshot, UrlOpener,
 };
 use serde_json::{Value, json};
 use server::pixelfed::routes::session_hash;
@@ -416,11 +419,8 @@ fn authorization_denied_is_an_error() {
     wait_until("auth error", || {
         auth(&engine.snapshot())["state"] == "error"
     });
-    let a = auth(&engine.snapshot());
-    assert!(
-        a["error"].as_str().unwrap().contains("access_denied"),
-        "{a}"
-    );
+    // A short message for the status line; "access_denied" is only logged.
+    assert_eq!(auth(&engine.snapshot())["error"], SIGN_IN_DENIED);
     assert!(store.get(&session_key(&env.pod)).is_none());
 }
 
@@ -913,4 +913,203 @@ fn secure_store_io_stays_off_the_ui_thread_and_logout_wins_the_race() {
     let me = thread::current().name().unwrap_or("?").to_owned();
     assert!(!threads.is_empty());
     assert!(!threads.contains(&me), "store touched on the caller's thread: {threads:?}");
+}
+
+/// A stub pod for the sign-in UX tests: canned `/v1/auth/pixelfed/app` and
+/// `/token` answers, and a workspace fetch that, with a bearer, is held
+/// until the test opens the gate.
+#[derive(Default)]
+struct StubPod {
+    app_calls: std::sync::atomic::AtomicUsize,
+    /// (status, body) of `/app` and `/token`; `None` = success.
+    app_reply: Mutex<Option<(u16, Value)>>,
+    token_reply: Mutex<Option<(u16, Value)>>,
+    gate_open: std::sync::atomic::AtomicBool,
+}
+
+fn stub_reply(r: &Mutex<Option<(u16, Value)>>, ok: Value) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let (code, body) = r.lock().unwrap().clone().unwrap_or((200, ok));
+    (axum::http::StatusCode::from_u16(code).unwrap(), axum::Json(body)).into_response()
+}
+
+fn stub_bundle(title: &str) -> Value {
+    json!({
+        "version": "1.0.0",
+        "workspace": { "type": "core://Workspace", "id": "home", "title": title, "slots": [] },
+        "entities": {},
+    })
+}
+
+fn start_stub_pod(rt: &tokio::runtime::Runtime) -> (String, Arc<StubPod>) {
+    use axum::routing::{get, post};
+    use std::sync::atomic::Ordering;
+    let pod = Arc::new(StubPod::default());
+    let (p1, p2, p3) = (Arc::clone(&pod), Arc::clone(&pod), Arc::clone(&pod));
+    let app = axum::Router::new()
+        .route("/healthz", get(|| async { "ok" }))
+        .route(
+            "/v1/auth/pixelfed/app",
+            post(move || {
+                let pod = Arc::clone(&p1);
+                async move {
+                    pod.app_calls.fetch_add(1, Ordering::SeqCst);
+                    stub_reply(
+                        &pod.app_reply,
+                        json!({ "client_id": "1", "authorize_endpoint": "http://stub/oauth/authorize",
+                                "scopes": "read write" }),
+                    )
+                }
+            }),
+        )
+        .route(
+            "/v1/auth/pixelfed/token",
+            post(move || {
+                let pod = Arc::clone(&p2);
+                async move {
+                    stub_reply(
+                        &pod.token_reply,
+                        json!({ "session_token": "stub-session", "account": { "username": "stubuser" } }),
+                    )
+                }
+            }),
+        )
+        .route(
+            "/v1/workspaces/home",
+            get(move |headers: axum::http::HeaderMap| {
+                let pod = Arc::clone(&p3);
+                async move {
+                    if !headers.contains_key("authorization") {
+                        return axum::Json(stub_bundle("Signed out"));
+                    }
+                    while !pod.gate_open.load(Ordering::SeqCst) {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    axum::Json(stub_bundle("Feed"))
+                }
+            }),
+        );
+    let (l, addr) = bind();
+    spawn_serve(rt, l, app);
+    (format!("http://{addr}"), pod)
+}
+
+fn stub_engine(base: &str) -> (CanvasEngine, mpsc::Receiver<String>) {
+    let (tx, rx) = mpsc::channel();
+    let engine = CanvasEngine::init_with_options(
+        "",
+        base,
+        "home",
+        EngineOptions {
+            config: fast_config(),
+            secure_store: Some(Arc::new(MemoryStore::new())),
+            url_opener: Some(Arc::new(CapturingOpener(Mutex::new(tx)))),
+            redirect: RedirectMode::Custom(CUSTOM_REDIRECT.into()),
+            loopback_port: 0,
+        },
+    );
+    (engine, rx)
+}
+
+fn state_param(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .unwrap()
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .unwrap()
+        .1
+        .into_owned()
+}
+
+/// Start a sign-in and deliver the approval redirect; returns once the
+/// redirect was accepted.
+fn stub_sign_in(engine: &CanvasEngine, rx: &mpsc::Receiver<String>) {
+    engine.dispatch(&json!({ "intent": "action.auth.login", "instance_url": "http://stub" }).to_string());
+    let url = rx.recv_timeout(TIMEOUT).unwrap();
+    assert!(engine.handle_auth_redirect(&format!("canvas://oauth?code=c&state={}", state_param(&url))));
+}
+
+fn workspace_title(snap: &StateSnapshot) -> String {
+    let ws: Value = serde_json::from_str(&snap.workspace_json).unwrap();
+    ws["title"].as_str().unwrap_or_default().to_owned()
+}
+
+#[test]
+fn auth_stays_pending_until_the_first_feed_and_ignores_a_second_tap() {
+    use std::sync::atomic::Ordering;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (base, pod) = start_stub_pod(&rt);
+    let (engine, rx) = stub_engine(&base);
+    wait_until("signed-out screen", || workspace_title(&engine.snapshot()) == "Signed out");
+
+    stub_sign_in(&engine, &rx);
+    // Session in place, feed fetch held: still pending, with the loading message.
+    wait_until("loading the feed", || {
+        auth(&engine.snapshot()) == json!({ "state": "pending", "message": LOADING_FEED_MESSAGE })
+    });
+    // A second tap on "Sign in" (the signed-out screen is still shown) is ignored.
+    engine.dispatch(&json!({ "intent": "action.auth.login", "instance_url": "http://stub" }).to_string());
+    thread::sleep(Duration::from_millis(300));
+    assert!(rx.try_recv().is_err(), "a second browser flow was started");
+    assert_eq!(pod.app_calls.load(Ordering::SeqCst), 1);
+    let snap = engine.snapshot();
+    assert_eq!(auth(&snap)["state"], "pending");
+    assert_eq!(workspace_title(&snap), "Signed out");
+
+    pod.gate_open.store(true, Ordering::SeqCst);
+    wait_until("signed in", || auth(&engine.snapshot())["state"] == "signed_in");
+    let snap = engine.snapshot();
+    assert_eq!(auth(&snap)["username"], "stubuser");
+    assert_eq!(workspace_title(&snap), "Feed", "signed_in only after the feed landed");
+
+    // The flow is over: sign-in works again (after a logout).
+    engine.logout();
+    stub_sign_in(&engine, &rx);
+    wait_until("signed in again", || auth(&engine.snapshot())["state"] == "signed_in");
+    assert_eq!(pod.app_calls.load(Ordering::SeqCst), 2);
+    drop(engine);
+    rt.shutdown_background();
+}
+
+#[test]
+fn sign_in_errors_are_short_human_messages() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (base, pod) = start_stub_pod(&rt);
+    let (engine, rx) = stub_engine(&base);
+    let error = |engine: &CanvasEngine| {
+        wait_until("auth error", || auth(&engine.snapshot())["state"] == "error");
+        auth(&engine.snapshot())["error"].as_str().unwrap().to_owned()
+    };
+
+    *pod.token_reply.lock().unwrap() = Some((
+        403,
+        json!({ "error": "account_not_owner", "detail": "this pod is pinned to another Pixelfed account" }),
+    ));
+    stub_sign_in(&engine, &rx);
+    assert_eq!(error(&engine), SIGN_IN_NOT_OWNER);
+
+    *pod.app_reply.lock().unwrap() =
+        Some((502, json!({ "error": "upstream_unreachable", "detail": "connection refused" })));
+    engine.dispatch(&json!({ "intent": "action.auth.login", "instance_url": "http://stub" }).to_string());
+    wait_until("upstream error", || auth(&engine.snapshot())["error"] == SIGN_IN_UPSTREAM_DOWN);
+    drop(engine);
+    rt.shutdown_background();
+
+    // No pod at all.
+    let dead = {
+        let (l, addr) = bind();
+        drop(l);
+        format!("http://{addr}")
+    };
+    let (engine, _rx) = stub_engine(&dead);
+    engine.dispatch(&json!({ "intent": "action.auth.login", "instance_url": "http://stub" }).to_string());
+    assert_eq!(error(&engine), SIGN_IN_POD_UNREACHABLE);
 }

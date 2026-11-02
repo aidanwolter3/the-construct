@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -169,7 +170,8 @@ fun CanvasApp(controller: CanvasController, modifier: Modifier = Modifier) {
 
 /**
  * Connectivity, plus "N pending" (amber dot) while queued mutations wait to be sent, plus the sign-in
- * status on the right unless signed out: "@username" and a "Sign out" button, "Signing in…", or the error.
+ * status on the right unless signed out: "@username" and a "Sign out" button, "Signing in…" (or the engine's
+ * progress message, e.g. "Loading your feed…"), or the error (wrapped to at most 2 lines).
  */
 @Composable
 private fun StatusLine(isOnline: Boolean, pendingActions: Int, auth: AuthInfo, onSignOut: () -> Unit) {
@@ -196,19 +198,22 @@ private fun StatusLine(isOnline: Boolean, pendingActions: Int, auth: AuthInfo, o
         }
         val authText = when (auth.state) {
             "signed_in" -> auth.username?.let { "@$it" } ?: "Signed in"
-            "pending" -> "Signing in…"
+            "pending" -> auth.message ?: "Signing in…"
             "error" -> "Sign-in failed" + (auth.error?.let { ": $it" } ?: "")
             else -> null
         }
         if (authText != null) {
-            Spacer(Modifier.weight(1f))
+            // The auth text takes all the remaining width (right-aligned), so an error reason has room to wrap.
+            Spacer(Modifier.width(16.dp))
             Text(
                 authText,
                 style = MaterialTheme.typography.labelMedium,
                 color = if (auth.state == "error") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
+                // An error reason wraps (2 lines max) instead of being cut off on a phone.
+                maxLines = if (auth.state == "error") 2 else 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
+                textAlign = TextAlign.End,
+                modifier = Modifier.weight(1f),
             )
             if (auth.state == "signed_in") {
                 Spacer(Modifier.width(8.dp))

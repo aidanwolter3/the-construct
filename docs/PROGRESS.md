@@ -146,6 +146,10 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 - QA fixes (client): restart-safe custom-scheme sign-in (`pending_auth:` record, "Sign-in was interrupted"),
   private cache purge on sign-out, secure-store I/O moved off the UI thread and out of the flow lock (D19); CW
   label no longer doubles "CW:", carousel images without alt text read "Photo n of N".
+- M6-X: the fake is the primary e2e target (D16 amended, D20 now optional): embedded fixtures (single 2-3 MB
+  binary, Dockerfile), `/_admin/{reset,state,faults}` + `X-Fake-Fault`, `crates/e2e` (pod + engine in-process:
+  shared suite for fake or `E2E_UPSTREAM=real`, fault tests: 503/429/expired token/latency/reset),
+  `scripts/e2e.sh`. Real-upstream run against the local Pixelfed (alice) passed, state restored.
 
 ## Next steps
 

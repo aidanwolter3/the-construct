@@ -17,11 +17,14 @@ crates/server        Axum server: GET /v1/workspaces/{home,pixelfed_demo,pixelfe
 crates/client-core   CanvasEngine: fetches the workspace, holds state, applies optimistic mutations (SQLite cache + outbox),
                      OAuth2 PKCE sign-in (pod session in a secure store)
 crates/client-ffi    UniFFI bridge (EngineHandle, FfiStateSnapshot, StateObserver) + uniffi-bindgen bin
-crates/fake-pixelfed local fake Pixelfed (Mastodon API + OAuth PKCE) upstream for development and tests
+crates/fake-pixelfed fake Pixelfed (Mastodon API + OAuth PKCE, admin/fault controls), the primary e2e upstream;
+                     single binary with embedded fixtures, Dockerfile for a sidecar image
+crates/e2e           end-to-end suite: pod + engine in-process against the fake (default) or a real Pixelfed
 fixtures/            counter_home_bundle.json, pixelfed_home_bundle.json (DESIGN.md §2.2C);
                      pixelfed/ (Mastodon API JSON + media served by fake-pixelfed)
 scripts/build_ffi.sh builds libclient_ffi.dylib and regenerates the Kotlin bindings
 scripts/build_android.sh  cross-compiles libclient_ffi.so for Android (cargo-ndk)
+scripts/e2e.sh       end-to-end suite against the fake binary or a real Pixelfed (End-to-end tests)
 scripts/android_smoke.sh  installs and launches the Android app on an emulator, checks it renders (Tests)
 kmp-app/             Gradle project: :shared (model + Compose renderer), :desktopApp (JVM, JNA),
                      :androidApp (Android, JNA aar)
@@ -84,6 +87,42 @@ curl -s -X POST -H 'content-type: application/json' -d '{"version":1}' \
 curl -s http://127.0.0.1:8080/v1/workspaces/home/versions | jq .
 ```
 
+Layout agent (M7, DECISIONS D25). `POST /v1/agent/modify_layout {"prompt": "...", "workspace_id": "pixelfed_home"}`
+(`workspace_id` optional, default `pixelfed_home`; any versioned workspace) turns the prompt into an RFC 6902 patch
+of the latest layout, validates the result (must deserialize as a `UiNode`, root still the same `core://Workspace`
+with 1..=50 slots, optimistic-mutation endpoints start with `/v1/`, at most 256 KB), commits it as a new version
+and pushes it on the SSE channel. Same auth as versions/rollback. It edits the signed-in feed layout, so it works
+without a Pixelfed session.
+
+- 200: a `WorkspaceSpec` body `{version, workspace, entities: {}, layout_version, provider, model, patch}` (plus
+  `explanation` from the LLM, and `"unchanged": true` with no new version when the patch is empty).
+- 422 `invalid_patch` (`detail`, `patch`, `provider`) when the patch does not apply or the result is invalid;
+  422 `unsupported_prompt` (`supported`: example prompts) from the rules provider; 422 `use_rollback` for "reset
+  layout"; 502 `provider_error`; 503 `provider_not_configured`; 400 bad body; 404 unknown workspace. Nothing is
+  committed on any error. Every prompt is logged with provider, model, op count and outcome.
+- Providers, chosen at startup (logged): `CANVAS_LLM_PROVIDER` = `auto` (default: `anthropic` if
+  `ANTHROPIC_API_KEY` is set, else `rules`) | `anthropic` | `rules`. `anthropic` without a key: every prompt
+  answers 503 (the server still starts).
+  - `rules`: deterministic and offline. Phrases (case-insensitive, composable in one prompt, applied in the order
+    written, idempotent): "hide (post) captions", "show captions", "media at the (very) top" / "photos first",
+    "move the action bar above the photo", "add a weather widget (at the top)" (a placeholder text slot; no weather
+    component exists), "reset layout" (-> 422 pointing at rollback), and "remove the action bar", which is
+    rejected on purpose (422 `invalid_patch`) to demonstrate validation.
+  - `anthropic`: the Messages API with structured outputs. `ANTHROPIC_API_KEY`; `ANTHROPIC_BASE_URL` (default
+    `https://api.anthropic.com`); `CANVAS_LLM_MODEL` (model id; default in `agent::anthropic::DEFAULT_MODEL`);
+    `CANVAS_LLM_FALLBACKS=0` turns off the server-side refusal fallback. 120 s timeout, up to 2 retries on
+    429/5xx/overloaded.
+
+```bash
+CANVAS_AGENT_OPEN=1 CANVAS_ADDR=127.0.0.1:8681 cargo run -p server
+curl -X POST http://127.0.0.1:8681/v1/agent/modify_layout -H "Content-Type: application/json" \
+  -d '{"prompt": "Hide post captions and put media at the very top"}'
+# -> 200 {"layout_version":2,"provider":"rules","patch":[3 replace ops],"workspace":{...},...}
+curl -s http://127.0.0.1:8681/v1/workspaces/pixelfed_home/versions | jq .
+curl -s -X POST -H 'content-type: application/json' -d '{"version":1}' \
+  http://127.0.0.1:8681/v1/workspaces/pixelfed_home/rollback | jq .version   # 3
+```
+
 ```bash
 CANVAS_TEST_HOOKS=1 cargo run -p server
 curl -s -X POST http://127.0.0.1:8080/v1/counters/home/increment          # {"count":1,"ok":true}
@@ -137,8 +176,10 @@ deleted (0 pending)`.
 
 ## Fake Pixelfed upstream
 
-`crates/fake-pixelfed` is a local Mastodon-compatible stand-in for a Pixelfed instance (no real account is
-needed; docs/DECISIONS.md D16). It serves `fixtures/pixelfed/` with in-memory state that resets on restart.
+`crates/fake-pixelfed` is a Mastodon-compatible stand-in for a Pixelfed instance and the **primary end-to-end
+target** (docs/DECISIONS.md D16): no account, no containers, deterministic fixtures, and controllable faults. The
+real Pixelfed below is optional (recording fixtures, contract test). It serves `fixtures/pixelfed/` (compiled into
+the binary) with in-memory state that resets on restart or on `POST /_admin/reset`.
 
 ```bash
 cargo run -p fake-pixelfed                       # listens on 127.0.0.1:8081
@@ -148,14 +189,59 @@ curl -s -H 'Authorization: Bearer dev' http://127.0.0.1:8081/api/v1/timelines/ho
 
 Environment:
 
-- `FAKE_PIXELFED_ADDR` (default `127.0.0.1:8081`).
-- `FAKE_PIXELFED_PUBLIC_URL` (default `http://<bound addr>`): every `{{BASE}}` in the fixture JSON is replaced
-  with it, so emitted media/profile/status URLs point at it. Use `http://10.0.2.2:8081` when the Android
-  emulator must load them directly.
+- `FAKE_PIXELFED_ADDR` (default `127.0.0.1:8081`; if unset and `PORT` is set, as on most PaaS, `0.0.0.0:$PORT`).
+- `FAKE_PIXELFED_PUBLIC_URL` (default `http://<bound addr>`, with `0.0.0.0` shown as `127.0.0.1`): every `{{BASE}}`
+  in the fixture JSON is replaced with it, so emitted media/profile/status URLs point at it. Use
+  `http://10.0.2.2:8081` when the Android emulator must load them directly.
 - `FAKE_PIXELFED_AUTO_APPROVE=1`: `GET /oauth/authorize` redirects straight back with a code (same as adding
   `auto=1` to the query); otherwise it shows an HTML page with an **Authorize** button.
-- `FAKE_PIXELFED_TOKEN=<tok>`: a pre-seeded valid access token, to skip OAuth in QA.
-- `FAKE_PIXELFED_FIXTURES`: fixture directory (default `fixtures/pixelfed`).
+- `FAKE_PIXELFED_TOKEN=<tok>`: a pre-seeded valid access token, to skip OAuth in QA (survives resets).
+- `FAKE_PIXELFED_FIXTURES`: fixture directory to load instead of the embedded copies (e.g. `fixtures/pixelfed`
+  while editing fixtures without rebuilding).
+- `FAKE_PIXELFED_ADMIN`: `1` serves the `/_admin` routes on any address, `0` never; unset, only when bound to a
+  loopback address.
+
+**Sidecar / Docker.** One self-contained binary (release: 3.4 MB, 2.1 MB stripped with thin LTO; ~3.5 MB RSS
+idle, ~5 MB after a few hundred requests; the Docker container ~1 MB). Image: `rust:1-slim-bookworm` builder ->
+`gcr.io/distroless/cc-debian12:nonroot`, 51 MB.
+
+```bash
+docker build -f crates/fake-pixelfed/Dockerfile -t canvas-fake-pixelfed .      # from the repo root
+docker run --rm -p 127.0.0.1:8081:8081 -e FAKE_PIXELFED_ADMIN=1 \
+  -e FAKE_PIXELFED_PUBLIC_URL=http://127.0.0.1:8081 canvas-fake-pixelfed
+E2E_FAKE_URL=http://127.0.0.1:8081 cargo test -p e2e --test suite                # suite against it
+```
+
+Inside the container it binds `0.0.0.0:8081`, so the admin routes stay off unless `FAKE_PIXELFED_ADMIN=1`; it
+stops on SIGTERM.
+
+**Admin endpoints** (test controls; in-process the same as `AppState::reset`, `add_faults`, `clear_faults`,
+`report`, `requests`, `favourited_ids`, `bookmarked_ids`):
+
+- `POST /_admin/reset[?keep_auth=1]`: favourites, bookmarks and counts back to the fixtures; fault rules, request
+  log and grant counters cleared; apps, codes and tokens dropped (as after an instance wipe) unless `keep_auth=1`.
+- `GET /_admin/state[?tail=50]`: `counts` (apps, codes, access/refresh tokens, statuses, requests),
+  `grants` (authorization_code, refresh_token, client_credentials), `favourited` / `bookmarked` ids, active
+  `faults`, and the last `tail` `requests` (`method`, `path` with query, `status`, `ms`, `fault`; 499 = the client
+  hung up first, e.g. on its timeout). Admin calls are not logged.
+- `POST /_admin/faults {"rules":[...]}` appends rules, returns the active ones; `DELETE /_admin/faults` clears.
+
+```bash
+curl -s -X POST http://127.0.0.1:8081/_admin/faults -H 'content-type: application/json' -d '{"rules":[
+  {"path_prefix":"/api/v1/statuses","kind":"status","status":503,"times":2},
+  {"kind":"rate_limit","retry_after":2,"times":1},
+  {"path_prefix":"/api/v1/timelines","method":"GET","kind":"latency","ms":1500,"times":3},
+  {"kind":"expire_tokens"}]}'
+```
+
+A rule matches requests whose path starts with `path_prefix` (default: every non-admin path) and, if given,
+whose `method` matches, for the next `times` matches (default: until cleared). Kinds: `status` (401 is shaped like
+an expired token: `{"error":"The access token is invalid"}` + `WWW-Authenticate: Bearer`; 429 adds `Retry-After:
+1`; others `{"error":"<reason>"}`), `rate_limit` (429 `{"error":"Too Many Attempts."}` + `Retry-After:
+<retry_after>`), `latency` (delay `ms`, then handle normally; adds to a status rule), `expire_tokens` (applied at
+once, not stored: every access token stops working, refresh tokens stay valid). For a single request, send
+`X-Fake-Fault: 401|429|500|503|<status>|latency=<ms>` (comma-separated, e.g. `latency=500,503`); the pod does not
+forward it, so through the pod use the rules.
 
 Endpoints: `POST /api/v1/apps` and `POST /oauth/token` (form-urlencoded or JSON bodies), `GET|POST
 /oauth/authorize` (authorization code + PKCE; only `S256` accepted, the verifier is checked, codes are single-use
@@ -170,6 +256,34 @@ The timeline has five entries: a 3-image carousel, a reblog of a single-image po
 (already favourited, no alt text), a text-only post, and a content-warning (sensitive) post with a portrait
 image. Media are small generated PNGs with a big digit (1-6) or avatar letter so screenshots show which image is
 visible.
+
+## End-to-end tests
+
+`crates/e2e` runs the real pod (`server::app`, in-memory store) and the client-core engine in-process against a
+Pixelfed upstream; the engine reaches the pod through a TCP proxy the tests can switch off (offline). The same
+suite (`tests/suite.rs`) runs against either upstream: sign-in via PKCE with a scripted browser, the feed, a like,
+an offline like flushed on reconnect, a bookmark, sign-out. It leaves the upstream as it found it.
+
+```bash
+cargo test -p e2e                       # in-process fake (part of cargo test --workspace; suite < 1 s)
+scripts/e2e.sh                          # same suite against the fake-pixelfed binary on a free port
+scripts/e2e.sh --faults                 # ... plus the fault tests below
+scripts/e2e.sh --upstream real          # a real Pixelfed (default http://localhost:8090, user alice)
+```
+
+- **Fake** (default, `E2E_UPSTREAM=fake`): the browser GETs the authorize URL with `auto=1`; upstream state is read
+  from `/_admin/state`. `E2E_FAKE_URL=<url>` uses an already running fake (binary or Docker image, admin on) and
+  resets it first.
+- **Real** (`E2E_UPSTREAM=real`, optional contract test, e.g. a scheduled CI job on a throwaway instance):
+  `PIXELFED_INSTANCE_URL` (default `http://localhost:8090`), the browser scripts Pixelfed's web login (by e-mail;
+  a bare login gets `@example.test`) and consent form as `E2E_PIXELFED_LOGIN` / `E2E_PIXELFED_PASSWORD` (default
+  `alice` / `alice-dev-pass`), and upstream state is checked with `E2E_PIXELFED_TOKEN` (default
+  `dev/pixelfed/.seed/<login>_token`). Each run registers one OAuth app on the instance (the pod is in-memory).
+- **Fault tests** (`tests/upstream_faults.rs`, always the in-process fake): upstream 503 x2 -> pod 502 -> the client
+  retries with backoff -> flushed; upstream 429 -> pod 429 -> retried, never rolled back; expired upstream token ->
+  the pod refreshes transparently (action and feed); latency past the 10 s timeouts -> retried (this one takes
+  ~11 s); reset with and without `keep_auth` through a live session (a full reset signs the client out; a new
+  sign-in re-registers the app).
 
 ## Pixelfed (pod adapter)
 
@@ -257,9 +371,13 @@ thread; `auth_json` in every snapshot goes `pending` -> `signed_in` (username, d
 - A 401 from the pod signs the client out (a stale session on `pixelfed_home` gets one, see above). A like queued
   while the session was invalid stays pending (not rolled back) and is sent after the next sign-in.
 - Signing out (or a 401) removes the cached private feed (`pixelfed://` entities, the feed workspace row) from
-  `cache.db`; `logout()` also drops queued Pixelfed actions, a 401 keeps them for the next sign-in.
+  `cache.db`; `logout()` also drops queued Pixelfed actions, a 401 keeps them for the next sign-in. The DB runs
+  with `secure_delete=ON` and the WAL is truncated after the purge, so the rows don't linger in the file's bytes.
 - UI: while signed in the status line shows `@username` and a **Sign out** button (`CanvasController.logout()`);
-  "Signing in…" while pending; "Sign-in failed: <message>" on error.
+  "Signing in…" while pending, then "Loading your feed…" from the code exchange until the first signed-in fetch
+  lands (only then `@username`; a second "Sign in" tap meanwhile is ignored); "Sign-in failed: <message>" on
+  error, wrapped to at most 2 lines. Messages are short and human ("This pod belongs to a different Pixelfed
+  account.", "Can't reach your pod.", ...); the URL/status/body detail is in the `[CanvasEngine]` log only.
 
 Per platform (DECISIONS D21):
 
@@ -293,7 +411,11 @@ client-core side of M7 (docs/DECISIONS.md D24):
   refetching`, `agent: applied layout v3 (rules)`.
 - FFI: `FfiStateSnapshot.agentJson` -> `EngineSnapshot.agentJson`.
 
-## Local Pixelfed instance (real, dev only)
+## Local Pixelfed instance (real, optional)
+
+Optional: the fake above is the primary e2e target. Use the real instance to re-record
+`fixtures/pixelfed/recorded/` and as a contract test (`scripts/e2e.sh --upstream real`).
+
 
 A real Pixelfed (v0.15.2, `ghcr.io/pixelfed/pixelfed`, digest-pinned) + MariaDB 11.4 + Redis 7.4 in Docker, for
 end-to-end tests against the genuine API. It is loopback-only (`127.0.0.1:8090`), federation is off, open
@@ -477,7 +599,7 @@ entries starting with `#` are comments. An argument cannot contain `;`, and sinc
 | Command | Effect |
 |---|---|
 | `shot <name>` | Writes `<NN>-<name>.png`, where NN is the step number. |
-| `click <target>` | Clicks the node `<target>` selects (below). Fails if no node matches. |
+| `click <target>` | Clicks the node `<target>` selects (below), at its center. A node whose center is off screen (or clipped by its parent) is first scrolled into view (`performScrollTo`, step message "scrolled into view"); fails if no node matches or it is still not on screen. |
 | `wait <ms>` | Sleeps, advances the UI clock, then waits for idle. At most 600000 (10 minutes). |
 | `idle` | Waits until the UI is idle. |
 | `assert-text <text>` | Fails unless some node's text or content description contains `<text>`. Retries for up to 2 s. |
@@ -577,7 +699,8 @@ Enforcing HTTPS in the engine for release builds is a follow-up.
 ## Tests
 
 ```bash
-cargo test --workspace
+cargo test --workspace                # includes the e2e suite against the in-process fake (End-to-end tests)
+scripts/e2e.sh --upstream real        # optional: the same suite against the local real Pixelfed
 cd kmp-app && ./gradlew :shared:allTests :desktopApp:test
 ./gradlew :androidApp:assembleDebug   # Android build check only: it doesn't launch anything
 ```

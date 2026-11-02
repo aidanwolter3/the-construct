@@ -6,6 +6,9 @@ import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.runSkikoComposeUiTest
 import androidx.compose.ui.unit.Density
 import kotlinx.serialization.json.JsonPrimitive
@@ -86,6 +89,33 @@ class PixelfedFeedTest {
     }
 
     @Test
+    fun pendingShowsTheEngineProgressMessage() {
+        val bundle = assertNotNull(findFixture("pixelfed_home_feed_bundle.json")).readText()
+        run(
+            FakeEngineBridge(bundle, authJson = """{"state":"pending","message":"Loading your feed…"}"""),
+            "assert-text Loading your feed; assert-no-text Signing in; assert-no-text Sign out",
+        )
+    }
+
+    @Test
+    fun longSignInErrorWrapsToTwoLinesOnAPhoneInsteadOfBeingCut() {
+        val bundle = assertNotNull(findFixture("pixelfed_home_feed_bundle.json")).readText()
+        val reason = "This pod belongs to a different Pixelfed account."
+        val controller = CanvasController(FakeEngineBridge(bundle, authJson = """{"state":"error","error":"$reason"}"""))
+        SimImages.install("fixture")
+        runSkikoComposeUiTest(size = Size(390f, 844f), density = Density(1f)) {
+            setContent { CanvasApp(controller) }
+            waitForIdle()
+            val layouts = mutableListOf<TextLayoutResult>()
+            onNode(hasText(reason, substring = true))
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            val layout = layouts.single()
+            assertEquals(2, layout.lineCount, "wrapped onto two lines")
+            assertTrue(!layout.hasVisualOverflow, "the reason is not cut off")
+        }
+    }
+
+    @Test
     fun autoApproveBrowserReadsTheRedirectUriAndRefusesUnreachableAuthorizePages() {
         assertEquals(
             "http://127.0.0.1:47823/callback",
@@ -114,6 +144,19 @@ class PixelfedFeedTest {
         run(fake, "click Unlike; assert-text 27; assert-no-text 28")
         assertEquals(JsonPrimitive(false), fake.entityField(CAROUSEL, "is_liked"))
         assertEquals(JsonPrimitive(27), fake.entityField(CAROUSEL, "like_count"))
+    }
+
+    @Test
+    fun clickScrollsAnOffScreenTargetIntoViewFirst() {
+        // The text-only post is below the fold on a phone; a click at its (off-screen) center would hit
+        // nothing. The step scrolls it into view, then clicks, and says so.
+        val fake = fake()
+        val r = run(fake, "click tag:like:$TEXT_ONLY; assert-text 16; click tag:like:$CAROUSEL; assert-text 28")
+        assertTrue("scrolled into view" in r.steps[0].message, r.steps[0].message)
+        assertEquals(JsonPrimitive(true), fake.entityField(TEXT_ONLY, "is_liked"))
+        // Now the first post's heart is above the viewport: scrolled back to it.
+        assertTrue("scrolled into view" in r.steps[2].message, r.steps[2].message)
+        assertEquals(JsonPrimitive(true), fake.entityField(CAROUSEL, "is_liked"))
     }
 
     @Test

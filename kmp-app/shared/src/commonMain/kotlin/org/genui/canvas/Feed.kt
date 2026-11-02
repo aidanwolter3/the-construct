@@ -61,14 +61,22 @@ fun blurhashAverageRgb(hash: String?): Int? {
     return v.takeIf { it in 0..0xFFFFFF }
 }
 
-/** Sign-in status from the engine snapshot's `auth_json` (M6). [state]: signed_out, pending, signed_in, error. */
-data class AuthInfo(val state: String = "signed_out", val username: String? = null, val error: String? = null) {
+/**
+ * Sign-in status from the engine snapshot's `auth_json` (M6). [state]: signed_out, pending, signed_in, error.
+ * [message]: optional progress text while pending (e.g. "Loading your feed…" after the code exchange).
+ */
+data class AuthInfo(
+    val state: String = "signed_out",
+    val username: String? = null,
+    val error: String? = null,
+    val message: String? = null,
+) {
     companion object {
         /** Lenient: anything unparsable reads as signed out. */
         fun parse(json: String): AuthInfo = try {
             val o = CanvasJson.json.parseToJsonElement(json).jsonObject
             fun str(k: String) = (o[k] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull
-            AuthInfo(str("state") ?: "signed_out", str("username"), str("error"))
+            AuthInfo(str("state") ?: "signed_out", str("username"), str("error"), str("message"))
         } catch (t: Exception) {
             AuthInfo()
         }

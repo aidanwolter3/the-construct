@@ -24,6 +24,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.runSkikoComposeUiTest
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -202,7 +203,27 @@ class SimRunner(
             }
             is SimStep.Click -> {
                 waitForIdle()
-                val (node, how) = findTarget(step.text)
+                val (node, found) = findTarget(step.text)
+                // The click lands at the node's center: it must be on screen, or the event hits nothing (or
+                // another node) and the step would "pass" without effect. Scroll it into view if possible.
+                var how = found
+                if (!centerOnScreen(node)) {
+                    val scrolled = try {
+                        node.performScrollTo()
+                        waitForIdle()
+                        true
+                    } catch (e: AssertionError) {
+                        false
+                    }
+                    if (!centerOnScreen(node)) {
+                        throw StepFailure(
+                            "'${step.text}' matched a node ($found) that is not on screen" +
+                                (if (scrolled) " even after scrolling to it" else " and has no scrollable parent") +
+                                "; bounds ${describeBounds(node)}",
+                        )
+                    }
+                    how = "$found, scrolled into view"
+                }
                 // A mouse click, then move the pointer off the node: performClick() injects touch
                 // events that leave the button in a hovered state, so later shots show a tint.
                 node.performMouseInput {
@@ -243,6 +264,24 @@ class SimRunner(
             }
             is SimStep.Screen -> error("handled by run()")
         }
+    }
+
+    /**
+     * Whether a click at [node]'s center would reach it: the center lies inside the node's bounds clipped by
+     * its ancestors (a list item scrolled out of its viewport is clipped away) and inside the root.
+     */
+    private fun SkikoComposeUiTest.centerOnScreen(node: SemanticsNodeInteraction): Boolean {
+        val n = node.fetchSemanticsNode()
+        val center = n.boundsInRoot.center
+        val clipped = n.layoutInfo.coordinates.boundsInRoot()
+        val root = onRoot().fetchSemanticsNode().boundsInRoot
+        return n.layoutInfo.isAttached && !clipped.isEmpty && clipped.contains(center) && root.contains(center)
+    }
+
+    private fun SkikoComposeUiTest.describeBounds(node: SemanticsNodeInteraction): String {
+        val n = node.fetchSemanticsNode()
+        val root = onRoot().fetchSemanticsNode().boundsInRoot
+        return "${n.boundsInRoot}, visible ${n.layoutInfo.coordinates.boundsInRoot()}, screen $root"
     }
 
     /** Best effort: saves the screen after a failed step as `NN-FAILED.png`; null if that fails too. */

@@ -526,6 +526,10 @@ impl Store {
         // last few commits.
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // Deleted rows are overwritten with zeros instead of lingering in
+        // free pages (a purged private feed must not stay readable in the
+        // file); cheap at this cache's size.
+        conn.pragma_update(None, "secure_delete", "ON")?;
         if conn.is_readonly(MAIN_DB)? {
             return Err(read_only_error("database opened read-only"));
         }
@@ -637,6 +641,18 @@ impl Store {
             }
         }
         Ok(())
+    }
+
+    /// Copy the WAL into the main file and truncate it to zero bytes
+    /// (`PRAGMA wal_checkpoint(TRUNCATE)`), so pages that held deleted rows
+    /// (zeroed by `secure_delete`) no longer survive as old WAL frames.
+    /// Returns whether the checkpoint completed (false if another
+    /// connection's reader kept it from finishing). A no-op in memory.
+    pub fn checkpoint_truncate(&self) -> StoreResult<bool> {
+        let busy: i64 = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?;
+        Ok(busy == 0)
     }
 
     /// `PRAGMA user_version`.
@@ -849,6 +865,46 @@ mod tests {
             [],
         )
         .unwrap();
+    }
+
+    /// Whether `needle` occurs in the bytes of `path` (missing file: no).
+    fn file_contains(path: &Path, needle: &[u8]) -> bool {
+        std::fs::read(path).is_ok_and(|b| b.windows(needle.len()).any(|w| w == needle))
+    }
+
+    #[test]
+    fn purged_rows_do_not_survive_in_the_db_or_wal_bytes() {
+        const CAPTION: &str = "PRIVATE-CAPTION-sunset-at-the-lake-7f3a";
+        let path = temp_db("secure-delete");
+        let wal = path.with_file_name("cache.db-wal");
+        let mut s = Store::open(&path).unwrap();
+        let secure: i64 = s.conn.query_row("PRAGMA secure_delete", [], |r| r.get(0)).unwrap();
+        assert_eq!(secure, 1);
+        s.transaction(|tx| {
+            for i in 0..50 {
+                tx.upsert_entity(
+                    &format!("pixelfed://posts/{i}"),
+                    &entity(&format!(r#"{{"id":"{i}","caption":"{CAPTION} {i}"}}"#)),
+                    1,
+                )?;
+            }
+            tx.upsert_entity("core://counters/home", &entity(r#"{"count":1}"#), 1)
+        })
+        .unwrap();
+        // Moved into the main file, as a long-running app would have.
+        assert!(s.checkpoint_truncate().unwrap());
+        assert!(file_contains(&path, CAPTION.as_bytes()));
+
+        let n = s.transaction(|tx| tx.delete_unreferenced_entities("pixelfed")).unwrap();
+        assert_eq!(n, 50);
+        assert!(s.checkpoint_truncate().unwrap());
+        assert!(!file_contains(&path, CAPTION.as_bytes()), "caption left in cache.db");
+        assert!(!file_contains(&wal, CAPTION.as_bytes()), "caption left in cache.db-wal");
+        assert_eq!(std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0), 0);
+        // Other data is intact.
+        assert_eq!(s.load_entities(&["core://counters/home".into()]).unwrap().len(), 1);
+        drop(s);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]

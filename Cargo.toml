@@ -6,6 +6,7 @@ members = [
     "crates/client-ffi",
     "crates/server",
     "crates/fake-pixelfed",
+    "crates/e2e",
 ]
 
 [workspace.package]

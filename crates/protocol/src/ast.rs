@@ -13,6 +13,7 @@ use crate::intent::ActionIntent;
 // DESIGN.md §2.2A field types rather than boxing intents; layout trees are
 // small and built rarely, so the size cost is irrelevant.
 #[allow(clippy::large_enum_variant)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type")]
 pub enum UiNode {
@@ -78,6 +79,7 @@ pub enum UiNode {
 }
 
 /// A named region of a workspace, filled by a content provider.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct SlotSpec {
     pub slot_id: String,
@@ -85,12 +87,14 @@ pub struct SlotSpec {
     pub content: UiNode,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
     Vertical,
     Horizontal,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextStyle {
     Headline,
@@ -104,6 +108,7 @@ pub enum TextStyle {
 ///
 /// Serialized untagged so the original wire form is preserved:
 /// `"$item.media_uris"` <-> `Expr`, `["pixelfed://media/1"]` <-> `List`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum ListBinding {

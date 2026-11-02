@@ -1,12 +1,14 @@
 //! Project Canvas backend: serves fixture hydration bundles, persists
 //! counter mutations in SQLite (M5, see [`store`]) and adapts a Pixelfed
 //! instance (M6, see [`pixelfed`]; the pod owns the upstream token).
-//! Workspace layouts are versioned and pushed over SSE (M7, see [`layouts`]).
+//! Workspace layouts are versioned and pushed over SSE (M7, see [`layouts`]);
+//! [`agent`] edits them from natural-language prompts.
 //!
 //! Fixtures are embedded at compile time and parsed into
 //! [`protocol::WorkspaceSpec`] once, so an invalid fixture fails loudly
 //! (panics on first access, which the integration tests exercise).
 
+pub mod agent;
 pub mod layouts;
 pub mod pixelfed;
 pub mod store;
@@ -203,6 +205,8 @@ pub struct AppState {
     sse_keepalive: std::time::Duration,
     /// Set by [`AppState::shutdown`]: open SSE streams end.
     shutdown: tokio::sync::watch::Sender<bool>,
+    /// Layout agent provider (default: the offline rules provider).
+    agent: agent::Selection,
 }
 
 impl AppState {
@@ -221,6 +225,7 @@ impl AppState {
             layout_tx: tokio::sync::broadcast::channel(layouts::CHANNEL_CAPACITY).0,
             sse_keepalive: layouts::DEFAULT_KEEPALIVE,
             shutdown: tokio::sync::watch::channel(false).0,
+            agent: agent::Selection::rules(),
         }
     }
 
@@ -233,6 +238,16 @@ impl AppState {
 
     pub fn agent_open(&self) -> bool {
         self.agent_open
+    }
+
+    /// The layout agent provider (`agent::Selection::from_env()` in `main`).
+    pub fn with_agent(mut self, selection: agent::Selection) -> Self {
+        self.agent = selection;
+        self
+    }
+
+    pub fn agent(&self) -> &agent::Selection {
+        &self.agent
     }
 
     /// Override the SSE keepalive interval (tests).
@@ -321,7 +336,8 @@ pub fn app(state: Arc<AppState>) -> Router {
         .route("/v1/counters/{id}/{op}", post(counter_mutation))
         .route("/v1/demo/ack", post(demo_ack))
         .merge(pixelfed::routes::router())
-        .merge(layouts::router());
+        .merge(layouts::router())
+        .merge(agent::router());
     if state.test_hooks {
         router = router.route("/v1/test/fault", post(set_fault));
     }

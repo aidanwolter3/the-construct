@@ -13,7 +13,7 @@ name = "server"
 path = "src/main.rs"
 
 [dependencies]
-protocol.workspace = true
+protocol = { workspace = true, features = ["schema"] }
 serde_json.workspace = true
 rusqlite.workspace = true
 # `http2` enables h2c (prior knowledge) alongside HTTP/1.1 per DESIGN.md M2.
@@ -29,6 +29,9 @@ base64 = "0.22"
 getrandom = "0.3"
 # `stream::unfold` for the size-capped media proxy body.
 futures-util = { version = "0.3", default-features = false }
+# Layout agent (M7): RFC 6902 patches and the component registry (JSON Schema).
+json-patch = "4"
+schemars = "1"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
