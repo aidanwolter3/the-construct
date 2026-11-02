@@ -1,0 +1,62 @@
+# The Construct — notes for Claude
+
+Server-driven UI: a Rust "pod" serves app layouts (JSON `UiNode` trees) plus normalized entities; native clients
+(macOS desktop, Android, headless simulator) render them with shared Compose code and a shared Rust engine.
+Only app today: Pixelfed (`pixelfed_home`). Read `README.md` for details and `docs/DECISIONS.md` (D1–D33) before
+changing architecture; `docs/PROGRESS.md` has history and next steps. `DESIGN.md` is the original design doc
+(product renamed from "Project Canvas"; AI layout editing was built, then shelved — see D32/D33).
+
+## Repo map
+- `crates/protocol` — wire types (`UiNode`, `ActionIntent`, `WorkspaceSpec`, `EntityRecord`).
+- `crates/server` — the pod (Axum + SQLite): workspaces, read-only app versions + SSE, Pixelfed adapter
+  (OAuth, feed, likes, media proxy), counters. `agent/` is unrouted on purpose (D32).
+- `crates/client-core` — engine: SQLite cache, outbox sync, PKCE sign-in, SSE subscriber.
+- `crates/client-ffi` — UniFFI bridge (Kotlin bindings live in `kmp-app/shared/src/jvmCommonMain`).
+- `crates/fake-pixelfed` — fake upstream (primary test target); `crates/e2e` — end-to-end suite.
+- `layouts/<app>/NNNN.json` — layout versions as code (see below).
+- `kmp-app/` — Gradle: `:shared` (commonMain UI), `:desktopApp` (JVM + simulator), `:androidApp`.
+- `deploy/` (Fly.io), `.github/workflows/ci.yml`, `scripts/`, `fixtures/`, `assets/icon/`.
+
+## Commands
+```bash
+cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
+cargo run -p server                      # pod on 127.0.0.1:8080 (fake Pixelfed expected on :8081)
+cargo run -p fake-pixelfed               # fake upstream on 127.0.0.1:8081
+scripts/e2e.sh                           # e2e suite against the fake binary
+
+# JVM / Kotlin (from kmp-app). On macOS gradle.properties pins Android Studio's JDK; elsewhere override it:
+cargo build -p client-ffi --release      # Linux: target/release/libclient_ffi.so (macOS: scripts/build_ffi.sh)
+cd kmp-app && ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :shared:allTests :desktopApp:test
+
+# Headless simulator: real shared UI -> PNGs (no window). Read the PNGs to check UI changes.
+./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate -Pworkspace=home \
+  -Pscreen=phone -Pout=/tmp/sim -Pscript="shot start; click Increment; assert-text Count: 1; shot after"
+```
+Simulator script commands (shot, click, assert-text, wait-text, open-menu, open-history, select-version,
+publish-version, set-server, offline, …) are documented in README "Simulation mode". Fixture mode needs no
+server; `-PbaseUrl=http://127.0.0.1:8080` runs live against a local pod.
+
+Android/emulator/device checks and the macOS window need the developer's Mac (`scripts/android_smoke.sh`,
+`./gradlew :androidApp:installDebug`); cloud sessions can't run them — say so in your summary when a change
+needs a device check.
+
+## Deploys and CI
+- Every PR/push: clippy + Rust tests, JVM tests, simulator screenshots (artifact).
+- **Push to `main` auto-deploys staging** (https://the-construct-pod.fly.dev + fake Pixelfed) when the Rust job
+  passes. Keep `main` green; server schema changes need a migration that works on staging's existing DB.
+- Prefer branches + PRs for non-trivial work; check `gh run list` after pushing.
+
+## Layouts as code (only way to publish a new layout version)
+Add `layouts/<app>/NNNN.json` (`{"note": "...", "layout": {...}}`, next number, no gaps), add one
+`layout_file!("<app>", "NNNN")` line to `layouts::FILES` in `crates/server/src/layouts.rs`, run `cargo test`,
+push. Never edit or renumber a deployed file — the server refuses to start. Clients are read-only for layout state.
+
+## Conventions
+- Names: product "The Construct"; Kotlin package `org.theconstruct`; env vars `CONSTRUCT_*`; data dirs
+  `~/.construct*`; OAuth redirect `construct://oauth`. Server env vars: README "Server runtime configuration".
+- Clients default to staging; override with `CONSTRUCT_BASE_URL` / `-Dconstruct.baseUrl` (desktop),
+  `-PconstructBaseUrl` or the in-app server picker (Android).
+- Shared UI goes in `kmp-app/shared/src/commonMain`; keep Compose keys stable (state must survive layout updates).
+- Record architecture decisions as new `docs/DECISIONS.md` entries (don't rewrite old ones; mark superseded).
+- Read files with the Read tool — never `cat`, `head`, `tail`, `sed` or `awk` to read files (developer's rule).
+- No model names in commit messages or docs prose.
