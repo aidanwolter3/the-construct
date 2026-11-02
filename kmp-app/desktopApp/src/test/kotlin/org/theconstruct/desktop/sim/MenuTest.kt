@@ -136,7 +136,8 @@ class MenuTest {
             r.steps.joinToString("\n") { it.logLine() },
         )
         assertNull(controller.pinned.value)
-        runner(fake, controller).ok("open-history Pixelfed; select-version 2; assert-text Current")
+        runner(fake, controller).ok("open-history Pixelfed; select-version 2")
+        assertEquals(2L, controller.pinned.value?.version)
     }
 
     @Test
