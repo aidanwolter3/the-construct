@@ -1,5 +1,7 @@
-//! Sync worker and refetch merge (docs/DECISIONS.md D14) against the real
-//! server (`server::app`, in-process on a local port, test hooks enabled).
+//! Sync worker and refetch merge (docs/DECISIONS.md D14) against a small
+//! counter server (in-process on a local port; see [`TestServer`]): a
+//! stateful entity whose server-side value the tests can read and set, a
+//! mutation it rejects (decrement below zero is a 422) and injectable faults.
 //! Intervals are shortened through `EngineConfig`; waits poll with
 //! timeouts instead of fixed sleeps.
 
@@ -11,13 +13,16 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use axum::extract::Request;
+use axum::extract::{Path as UrlPath, Request, State};
+use axum::http::StatusCode;
 use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use client_core::store::{OutboxRow, Store, StoreOps};
 use client_core::{ConstructEngine, EngineConfig, StateSnapshot};
 use protocol::WorkspaceSpec;
-use serde_json::Value;
-use server::AppState;
+use serde_json::{Value, json};
 
 const FIXTURE: &str = include_str!("../../../fixtures/counter_home_bundle.json");
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -45,21 +50,73 @@ struct Hit {
     at: Instant,
 }
 
-/// The real server on a local port, recording every POST it answers.
-/// The same app also listens on a private admin port (used for the fault
-/// hook), so a test can prepare state before the engine's port opens.
-/// Dropping it closes both ports.
+/// The counter server's state: the count, and a pending injected fault
+/// (`(status, remaining)`: the next mutation POSTs answer `status` without
+/// being applied).
+#[derive(Default)]
+struct Counter {
+    count: Mutex<i64>,
+    fault: Mutex<Option<(u16, u32)>>,
+}
+
+/// `GET /v1/workspaces/home`: the fixture with the current count.
+async fn workspace(State(c): State<Arc<Counter>>) -> Response {
+    let mut spec: WorkspaceSpec = serde_json::from_str(FIXTURE).unwrap();
+    let count = *c.count.lock().unwrap();
+    spec.entities
+        .entry(URI.to_owned())
+        .or_default()
+        .set("count", count);
+    Json(spec).into_response()
+}
+
+/// `POST /v1/counters/home/{increment,decrement}`: `{"ok":true,"count":n}`;
+/// a decrement below zero changes nothing and is a 422.
+async fn mutate(State(c): State<Arc<Counter>>, UrlPath(op): UrlPath<String>) -> Response {
+    let mut count = c.count.lock().unwrap();
+    match op.as_str() {
+        "increment" => *count += 1,
+        "decrement" if *count > 0 => *count -= 1,
+        "decrement" => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({ "error": "count_below_zero", "count": *count })),
+            )
+                .into_response();
+        }
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    }
+    Json(json!({ "ok": true, "count": *count })).into_response()
+}
+
+/// While a fault is pending, every POST answers its status unapplied.
+async fn faults(State(c): State<Arc<Counter>>, req: Request, next: Next) -> Response {
+    if req.method() == axum::http::Method::POST {
+        let mut fault = c.fault.lock().unwrap();
+        if let Some((status, remaining)) = fault.as_mut() {
+            let status = StatusCode::from_u16(*status).unwrap();
+            *remaining -= 1;
+            if *remaining == 0 {
+                *fault = None;
+            }
+            return (status, Json(json!({ "error": "injected_fault" }))).into_response();
+        }
+    }
+    next.run(req).await
+}
+
+/// The counter server on a local port, recording every POST it answers.
+/// Dropping it closes the port.
 struct TestServer {
-    state: Arc<AppState>,
+    counter: Arc<Counter>,
     addr: SocketAddr,
-    admin: SocketAddr,
     hits: Arc<Mutex<Vec<Hit>>>,
     /// Mutation POSTs that have arrived (counted before any delay).
     arrivals: Arc<AtomicUsize>,
     rt: Option<tokio::runtime::Runtime>,
 }
 
-fn spawn_serve(rt: &tokio::runtime::Runtime, addr: SocketAddr, app: axum::Router) -> SocketAddr {
+fn spawn_serve(rt: &tokio::runtime::Runtime, addr: SocketAddr, app: Router) -> SocketAddr {
     let std_listener = TcpListener::bind(addr).unwrap();
     std_listener.set_nonblocking(true).unwrap();
     let addr = std_listener.local_addr().unwrap();
@@ -97,26 +154,31 @@ impl TestServer {
             .enable_all()
             .build()
             .unwrap();
-        let state = Arc::new(AppState::in_memory().with_test_hooks(true));
+        let counter: Arc<Counter> = Arc::default();
         let hits: Arc<Mutex<Vec<Hit>>> = Arc::default();
         let arrivals: Arc<AtomicUsize> = Arc::default();
         let log = Arc::clone(&hits);
         let arrived = Arc::clone(&arrivals);
-        let app = server::app(Arc::clone(&state)).layer(middleware::from_fn(
-            move |req: Request, next: Next| {
+        let app = Router::new()
+            .route("/healthz", get(|| async { "ok" }))
+            .route("/v1/workspaces/home", get(workspace))
+            .route("/v1/counters/home/{op}", post(mutate))
+            .route_layer(middleware::from_fn_with_state(Arc::clone(&counter), faults))
+            .with_state(Arc::clone(&counter))
+            .layer(middleware::from_fn(move |req: Request, next: Next| {
                 let log = Arc::clone(&log);
                 let arrived = Arc::clone(&arrived);
                 async move {
                     let post = req.method() == axum::http::Method::POST;
                     let path = req.uri().path().to_string();
-                    if post && !path.starts_with("/v1/test/") {
+                    if post {
                         arrived.fetch_add(1, AtomicOrdering::SeqCst);
                         if !post_delay.is_zero() {
                             tokio::time::sleep(post_delay).await;
                         }
                     }
                     let resp = next.run(req).await;
-                    if post && !path.starts_with("/v1/test/") {
+                    if post {
                         log.lock().unwrap().push(Hit {
                             path,
                             status: resp.status().as_u16(),
@@ -125,13 +187,10 @@ impl TestServer {
                     }
                     resp
                 }
-            },
-        ));
-        let admin = spawn_serve(&rt, "127.0.0.1:0".parse().unwrap(), app.clone());
+            }));
         let mut server = Self {
-            state,
-            addr: admin,
-            admin,
+            counter,
+            addr,
             hits,
             arrivals,
             rt: Some(rt),
@@ -146,25 +205,16 @@ impl TestServer {
     }
 
     fn count(&self) -> i64 {
-        self.state.store().counter("home").unwrap()
+        *self.counter.count.lock().unwrap()
     }
 
     fn set_count(&self, n: i64) {
-        self.state.store().reset("home").unwrap();
-        for _ in 0..n {
-            self.state.store().increment("home").unwrap();
-        }
+        *self.counter.count.lock().unwrap() = n;
     }
 
     /// Make the next `count` mutation POSTs answer `status`.
     fn fault(&self, status: u16, count: u32) {
-        let resp = reqwest::blocking::Client::new()
-            .post(format!("http://{}/v1/test/fault", self.admin))
-            .header("Content-Type", "application/json")
-            .body(format!(r#"{{"status":{status},"count":{count}}}"#))
-            .send()
-            .unwrap();
-        assert!(resp.status().is_success(), "fault hook: {}", resp.status());
+        *self.counter.fault.lock().unwrap() = (count > 0).then_some((status, count));
     }
 
     fn hits(&self) -> Vec<Hit> {

@@ -214,12 +214,11 @@ fun requireWritableDir(dir: File, what: String = "output directory") {
 }
 
 /**
- * fixtures/ next to (or above) [from]: counter bundle for `home`, the one-post Pixelfed demo for `pixelfed_demo`,
- * the normalized fake-upstream timeline for `pixelfed_home`.
+ * fixtures/ next to (or above) [from]: the one-post Pixelfed demo for `pixelfed_demo`, the normalized
+ * fake-upstream timeline for `pixelfed_home`.
  */
 fun defaultFixture(workspace: String, from: File): File {
     val name = when (workspace) {
-        "home" -> "counter_home_bundle.json"
         "pixelfed_demo" -> "pixelfed_home_bundle.json"
         "pixelfed_home" -> "pixelfed_home_feed_bundle.json"
         else -> throw UsageException("no default fixture for workspace '$workspace'; pass -Pfixture=<bundle.json> or use live mode")

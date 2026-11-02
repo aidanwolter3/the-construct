@@ -81,10 +81,10 @@ class MenuTest {
     @Test
     fun menuListsAppsConnectionAccountAndServer() {
         val r = runner(feed()).ok(
-            "open-menu; assert-text Pixelfed demo; assert-text Counter; assert-text Latest · v3; assert-text Online; " +
+            "open-menu; assert-text Pixelfed demo; assert-text Latest · v3; assert-text Online; " +
                 "assert-text Not signed in; assert-text Staging; close-menu; assert-no-text Connection",
         )
-        assertEquals("3 app(s)", r.steps[0].message)
+        assertEquals("2 app(s)", r.steps[0].message)
     }
 
     @Test
@@ -191,7 +191,7 @@ class MenuTest {
         }
         runner(fake, controller).ok(
             "click Increment; open-menu; assert-text Offline; assert-text 1 pending; " +
-                "assert-text Can't reach your pod; assert-text Counter",
+                "assert-text Can't reach your pod; assert-text Version history of Home",
         )
         fake.setOnline(true)
         compose(controller) { assertFalse(has("menu-badge")) }
@@ -218,11 +218,11 @@ class MenuTest {
         val fake = feed()
         val controller = ConstructController(fake, fake.appId)
         runner(fake, controller).ok(
-            "open-menu; assert-text Counter; close-menu; offline; open-menu; assert-text Offline; assert-text Counter; " +
+            "open-menu; assert-text Pixelfed demo; close-menu; offline; open-menu; assert-text Offline; " +
                 "assert-text Pixelfed demo; assert-no-text Can't reach your pod; assert-no-text Try again",
         )
         assertTrue(controller.menu.appsFailedOffline)
-        runner(fake, controller).ok("online; open-menu; assert-text Online; assert-text Counter")
+        runner(fake, controller).ok("online; open-menu; assert-text Online; assert-text Pixelfed demo")
         assertFalse(controller.menu.appsFailedOffline, "the list was reloaded once back online")
     }
 
@@ -236,9 +236,11 @@ class MenuTest {
                 if (fail) throw LayoutApiException("Can't reach your pod.", LayoutApiException.Kind.Offline) else fake.listApps()
         }
         val controller = ConstructController(bridge, fake.appId)
-        runner(fake, controller).ok("open-menu; assert-text Counter; close-menu")
+        runner(fake, controller).ok("open-menu; assert-text Pixelfed demo; close-menu")
         fail = true
-        runner(fake, controller).ok("open-menu; assert-text Online; assert-text Counter; assert-text Can't reach your pod.; assert-text Try again")
+        runner(fake, controller).ok(
+            "open-menu; assert-text Online; assert-text Pixelfed demo; assert-text Can't reach your pod.; assert-text Try again",
+        )
     }
 
     @Test
@@ -297,23 +299,24 @@ class MenuTest {
         val first = feed()
         var opened: FakeEngineBridge? = null
         val controller = ConstructController(first, first.appId) { id ->
-            FakeEngineBridge(bundle("counter_home_bundle.json"), appId = id, apps = first.apps).also { opened = it }
+            FakeEngineBridge(bundle("pixelfed_home_bundle.json"), appId = id, apps = first.apps).also { opened = it }
         }
-        runner(first, controller).ok("open-history Pixelfed; select-version 2; open-app Counter; assert-text Count: 0")
-        assertEquals("home", controller.currentAppId())
+        runner(first, controller).ok("open-history Pixelfed; select-version 2; open-app pixelfed_demo; assert-text Sunrise over Boulder")
+        assertEquals("pixelfed_demo", controller.currentAppId())
         assertNull(controller.pinned.value, "a pin belongs to its app")
         assertNotNull(opened)
         // Snapshots of the closed engine are ignored.
         first.setOnline(false)
         assertEquals(true, controller.state.value.isOnline)
-        assertTrue((controller.state.value.workspace as UiNode.Workspace).id == "home")
+        // The demo bundle's root id (the app id is pixelfed_demo).
+        assertEquals("home_stream", (controller.state.value.workspace as UiNode.Workspace).id)
     }
 
     @Test
     fun openAppIsSafeWithoutAnEngineFactory() {
         val fake = feed()
         val controller = ConstructController(fake, fake.appId)
-        val r = runner(fake, controller).run(parseScript("open-app Counter"))
+        val r = runner(fake, controller).run(parseScript("open-app pixelfed_demo"))
         assertFalse(r.ok)
         assertTrue("isn't available here" in r.steps[0].message, r.steps[0].message)
         assertEquals("pixelfed_home", controller.currentAppId())

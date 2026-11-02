@@ -58,11 +58,8 @@ jobs:
         working-directory: kmp-app
         run: |
           ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate \
-            -Pworkspace=home -Pscreen=phone -Pout="$RUNNER_TEMP/sim/home" \
-            -Pscript="shot start; click Increment; click Increment; assert-text Count: 2; shot after; offline; shot offline"
-          ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate \
             -Pworkspace=pixelfed_demo -Pscreen=phone -Pout="$RUNNER_TEMP/sim/pixelfed" \
-            -Pscript="shot feed"
+            -Pscript="shot feed; click Like; assert-text Unlike; shot liked; offline; shot offline"
       - name: Upload screenshots and test reports
         if: always()
         uses: actions/upload-artifact@v7
@@ -124,7 +121,7 @@ jobs:
             sleep 3
           done
           [ "$code" = 200 ] || { echo "healthz returned $code"; exit 1; }
-          curl -fsS https://the-construct-pod.fly.dev/v1/workspaces/home | jq -e '.workspace.id == "home"'
+          curl -fsS https://the-construct-pod.fly.dev/v1/workspaces/pixelfed_demo | jq -e '.workspace.id == "pixelfed_demo"'
       - name: Note skipped deploy
         if: env.FLY_TOKEN_POD == '' || env.FLY_TOKEN_FAKE == ''
         run: echo "::warning::FLY_API_TOKEN_POD / FLY_API_TOKEN_FAKE secrets missing; some deploy steps were skipped."

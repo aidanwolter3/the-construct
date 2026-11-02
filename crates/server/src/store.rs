@@ -19,7 +19,7 @@ enum Migration {
 
 /// Migration `i` upgrades the schema from `user_version = i` to `i + 1`.
 const MIGRATIONS: &[Migration] = &[
-    // v1 (M5): persistent counters.
+    // v1 (M5): persistent counters (the counter app; dropped in v10).
     Migration::Sql(
         "CREATE TABLE counters (
          id    TEXT PRIMARY KEY NOT NULL,
@@ -107,6 +107,9 @@ const MIGRATIONS: &[Migration] = &[
     // file's declared `"schema"`; other rows get the schema their layout's
     // vocabulary needs.
     Migration::Rust(migrate_v9),
+    // v10 (D39): the counter app is gone. Its old `home` rows in
+    // `app_versions` stay, inert (no app reads them).
+    Migration::Sql("DROP TABLE IF EXISTS counters;"),
 ];
 
 fn migrate_v9(tx: &Transaction<'_>) -> rusqlite::Result<()> {
@@ -798,13 +801,6 @@ fn migrate(conn: &mut Connection, target: usize) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Result of a decrement that would take the count below zero.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BelowZero {
-    /// The unchanged current count.
-    pub count: i64,
-}
-
 pub struct Store {
     conn: Mutex<Connection>,
 }
@@ -869,61 +865,6 @@ impl Store {
         // A panic while holding the lock cannot leave SQLite inconsistent
         // (statements are atomic), so recover from poisoning.
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// Current count (0 if the counter has never been written).
-    pub fn counter(&self, id: &str) -> rusqlite::Result<i64> {
-        Ok(self
-            .conn()
-            .query_row("SELECT count FROM counters WHERE id = ?1", [id], |r| {
-                r.get(0)
-            })
-            .optional()?
-            .unwrap_or(0))
-    }
-
-    pub fn increment(&self, id: &str) -> rusqlite::Result<i64> {
-        self.conn().query_row(
-            "INSERT INTO counters (id, count) VALUES (?1, 1)
-             ON CONFLICT(id) DO UPDATE SET count = count + 1
-             RETURNING count",
-            [id],
-            |r| r.get(0),
-        )
-    }
-
-    /// Decrement, refusing (and changing nothing) if the result would be < 0.
-    pub fn decrement(&self, id: &str) -> rusqlite::Result<Result<i64, BelowZero>> {
-        let conn = self.conn();
-        let updated: Option<i64> = conn
-            .query_row(
-                "UPDATE counters SET count = count - 1 WHERE id = ?1 AND count > 0
-                 RETURNING count",
-                [id],
-                |r| r.get(0),
-            )
-            .optional()?;
-        match updated {
-            Some(n) => Ok(Ok(n)),
-            None => {
-                let count = conn
-                    .query_row("SELECT count FROM counters WHERE id = ?1", [id], |r| {
-                        r.get(0)
-                    })
-                    .optional()?
-                    .unwrap_or(0);
-                Ok(Err(BelowZero { count }))
-            }
-        }
-    }
-
-    pub fn reset(&self, id: &str) -> rusqlite::Result<i64> {
-        self.conn().execute(
-            "INSERT INTO counters (id, count) VALUES (?1, 0)
-             ON CONFLICT(id) DO UPDATE SET count = 0",
-            params![id],
-        )?;
-        Ok(0)
     }
 
     // ---------- Pixelfed (v2) ----------
@@ -1280,7 +1221,7 @@ mod tests {
         let path = dir.path().join("server.db");
         {
             let s = Store::open(&path).unwrap();
-            assert_eq!(s.increment("home").unwrap(), 1);
+            s.create_session("h").unwrap();
         }
         let s = Store::open(&path).unwrap();
         let v: i64 = s
@@ -1288,7 +1229,29 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, MIGRATIONS.len() as i64);
-        assert_eq!(s.counter("home").unwrap(), 1);
+        assert!(s.session_exists("h").unwrap(), "data survives reopening");
+    }
+
+    #[test]
+    fn v10_drops_the_counters_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.db");
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            migrate(&mut conn, 9).unwrap();
+            conn.execute("INSERT INTO counters (id, count) VALUES ('home', 3)", [])
+                .unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        let tables: i64 = s
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'counters'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0);
     }
 
     fn account(id: &str, token: &str) -> PixelfedAccount {
@@ -1992,15 +1955,5 @@ mod tests {
         // Tiny inputs that zstd cannot shrink are stored raw.
         assert_eq!(encode_blob("{}"), ("raw", b"{}".to_vec()));
         assert_eq!(content_hash("{}").len(), 64);
-    }
-
-    #[test]
-    fn decrement_floor() {
-        let s = Store::open_in_memory().unwrap();
-        assert_eq!(s.decrement("home").unwrap(), Err(BelowZero { count: 0 }));
-        s.increment("home").unwrap();
-        assert_eq!(s.decrement("home").unwrap(), Ok(0));
-        assert_eq!(s.decrement("home").unwrap(), Err(BelowZero { count: 0 }));
-        assert_eq!(s.counter("home").unwrap(), 0);
     }
 }

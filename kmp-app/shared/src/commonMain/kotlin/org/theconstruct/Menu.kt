@@ -422,7 +422,6 @@ private fun NewerVersionBanner(controller: ConstructController, state: Construct
 
 private fun appIcon(icon: String): ImageVector = when (icon) {
     "photo" -> ConstructIcons.Photo
-    "counter" -> ConstructIcons.PlusOne
     else -> ConstructIcons.Dashboard
 }
 

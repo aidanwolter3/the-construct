@@ -409,7 +409,7 @@ from a client (D32, D33).
 
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
-  bookmarks are idempotent upstream, counters are not).
+  bookmarks are idempotent upstream, comments are not).
 - Toggle payloads (`"$value"`) are not rewritten on re-apply (D14); local and server state can differ until the
   next fetch.
 - The client's layout version is in memory only (refetched at startup, D24).
@@ -433,6 +433,13 @@ from a client (D32, D33).
   content-warning label). Sign-in paths come from the layout; sign-out purges generically (store v4).
 - The parked agent module is deleted.
 - Needs a device check (Android, macOS window): the feed should look as before.
+
+## Counter app removed (D39)
+
+- The `home` "Counter" app is gone from the pod (layouts, `/v1/counters`, the `counters` table via migration v10), the
+  apps list, the simulator catalog and the docs. Pixelfed and the `pixelfed_demo` dev app cover what it showed.
+- `fixtures/counter_home_bundle.json` stays as test-only data; the outbox tests run against an in-test counter server.
+- CI's fixture-mode simulator run and the staging smoke test use `pixelfed_demo` now.
 
 ## Next steps
 

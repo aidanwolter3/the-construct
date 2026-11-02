@@ -1346,3 +1346,21 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   the app to see vN" when the newest version needs a newer build (a hint, never a badge). The simulator's fake
   catalog and engine follow the same rules (the fake engine starts on the newest compatible version).
 - **Not yet:** pins are still in memory only (D36).
+
+## D39: The counter app is removed
+
+- **Why:** the `home` "Counter" app (M1/M5) was the first workspace and the stand-in for a real app. Pixelfed now
+  covers everything it showed (optimistic actions, the outbox, layout versions, the menu), so it was dead weight in
+  the pod, the app list and the docs.
+- **Pod:** `home` is gone from `layouts::APPS` and `layouts/home/` is deleted, as are `/v1/counters/{id}/{op}` and
+  the counter store calls. Migration v10 drops the `counters` table. The `home` rows already in `app_versions` on
+  existing databases stay, inert: the startup sync only reads the apps in `APPS` (D32), and deleting history is not
+  worth a data migration. `GET /v1/workspaces/home` is now 404. The fault hook (`/v1/test/fault`) stays; its tests
+  use `/v1/demo/ack`.
+- **Clients:** the `counter` icon and the simulator's Counter app and `home` default fixture are gone. A pod that
+  still lists `home` (staging before the deploy) shows it with the generic icon.
+- **Kept as test data:** `fixtures/counter_home_bundle.json` (workspace `home`, entity `core://counters/home`) stays
+  the minimal stateful workspace for engine, protocol and UI tests, which use their own stub servers. The engine's
+  outbox tests (`client-core/tests/outbox.rs`) used the pod's counter endpoints; they now run against a small
+  in-test counter server with the same behaviour (422 below zero, injectable faults). The engine's default workspace
+  id (`ConstructEngine::init`) is still `home`; clients always pass one.

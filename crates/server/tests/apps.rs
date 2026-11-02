@@ -67,9 +67,20 @@ async fn get_as(pod: &Pod, path: &str, schema: Option<u32>) -> (StatusCode, Opti
     )
 }
 
-/// A recognizably different layout: the built-in one retitled.
+/// The layout of an app's newest file (what a current client is served on a
+/// fresh pod).
+fn newest_file(ws: &str) -> UiNode {
+    layouts::parse_files(layouts::FILES)
+        .unwrap()
+        .into_iter()
+        .rfind(|f| f.app_id == ws)
+        .unwrap()
+        .layout
+}
+
+/// A recognizably different layout: the newest file's, retitled.
 fn retitled(ws: &str, title: &str) -> UiNode {
-    let mut node = layouts::builtin(ws).unwrap();
+    let mut node = newest_file(ws);
     if let UiNode::Workspace { title: t, id, .. } = &mut node {
         *t = title.to_owned();
         *id = ws.to_owned();
@@ -116,7 +127,7 @@ async fn apps_lists_only_pixelfed_unless_dev_apps_are_shown() {
     assert!(is_rfc3339(&a["updated_at"]), "{a}");
 
     let dev = spawn(AppState::in_memory().with_dev_apps(true)).await;
-    deploy(&dev, "home", "Two");
+    deploy(&dev, "pixelfed_demo", "Two");
     let (_, _, body) = get(&dev, "/v1/apps").await;
     let got: Vec<(&str, &str, &str, i64)> = body["apps"]
         .as_array()
@@ -139,9 +150,8 @@ async fn apps_lists_only_pixelfed_unless_dev_apps_are_shown() {
                 "pixelfed_demo",
                 "Pixelfed demo",
                 "photo",
-                files("pixelfed_demo")
+                files("pixelfed_demo") + 1
             ),
-            ("home", "Counter", "counter", files("home") + 1),
         ]
     );
     // Hidden apps' endpoints work without the flag.
@@ -149,20 +159,20 @@ async fn apps_lists_only_pixelfed_unless_dev_apps_are_shown() {
     assert_eq!(status, StatusCode::OK);
     // No schema header: the newest version a schema-1 client draws.
     assert_eq!(version.as_deref(), Some("1"));
-    let (status, _, body) = get(&pod, "/v1/apps/home/versions").await;
+    let (status, _, body) = get(&pod, "/v1/apps/pixelfed_demo/versions").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["latest_version"], files("home"));
+    assert_eq!(body["latest_version"], files("pixelfed_demo"));
 }
 
 #[tokio::test]
 async fn versions_page_newest_first() {
     let pod = pod().await;
-    for i in files("home") + 1..=5 {
-        assert_eq!(deploy(&pod, "home", &format!("T{i}")), i);
+    for i in files("pixelfed_demo") + 1..=5 {
+        assert_eq!(deploy(&pod, "pixelfed_demo", &format!("T{i}")), i);
     }
-    let (status, _, body) = get(&pod, "/v1/apps/home/versions").await;
+    let (status, _, body) = get(&pod, "/v1/apps/pixelfed_demo/versions").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["app_id"], "home");
+    assert_eq!(body["app_id"], "pixelfed_demo");
     assert_eq!(body["latest_version"], 5);
     let versions = body["versions"].as_array().unwrap();
     let numbers: Vec<i64> = versions
@@ -173,14 +183,14 @@ async fn versions_page_newest_first() {
     assert!(body.get("next_before").is_none(), "{body}");
     let first = versions.last().unwrap();
     assert_eq!(first["source"], "file");
-    assert_eq!(first["note"], "Counter");
+    assert_eq!(first["note"], "Classic feed");
     assert!(is_rfc3339(&first["created_at"]), "{first}");
     assert_eq!(versions[0]["source"], "manual");
     assert_eq!(versions[0]["note"], "T5");
     assert!(versions[0].get("layout").is_none(), "metadata only");
 
     // Paging.
-    let (_, _, page) = get(&pod, "/v1/apps/home/versions?limit=2").await;
+    let (_, _, page) = get(&pod, "/v1/apps/pixelfed_demo/versions?limit=2").await;
     let numbers: Vec<i64> = page["versions"]
         .as_array()
         .unwrap()
@@ -189,10 +199,10 @@ async fn versions_page_newest_first() {
         .collect();
     assert_eq!(numbers, [5, 4]);
     assert_eq!(page["next_before"], 4);
-    let (_, _, page) = get(&pod, "/v1/apps/home/versions?limit=2&before=4").await;
+    let (_, _, page) = get(&pod, "/v1/apps/pixelfed_demo/versions?limit=2&before=4").await;
     assert_eq!(page["versions"][0]["version"], 3);
     assert_eq!(page["next_before"], 2);
-    let (_, _, page) = get(&pod, "/v1/apps/home/versions?limit=2&before=2").await;
+    let (_, _, page) = get(&pod, "/v1/apps/pixelfed_demo/versions?limit=2&before=2").await;
     assert_eq!(page["versions"].as_array().unwrap().len(), 1);
     assert!(page.get("next_before").is_none(), "{page}");
     assert_eq!(page["latest_version"], 5);
@@ -206,11 +216,11 @@ async fn versions_page_newest_first() {
         "before=-1",
         "before=a",
     ] {
-        let (status, _, body) = get(&pod, &format!("/v1/apps/home/versions?{q}")).await;
+        let (status, _, body) = get(&pod, &format!("/v1/apps/pixelfed_demo/versions?{q}")).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{q}");
         assert_eq!(body["error"], "invalid_request", "{q}");
     }
-    let (status, _, _) = get(&pod, "/v1/apps/home/versions?limit=100").await;
+    let (status, _, _) = get(&pod, "/v1/apps/pixelfed_demo/versions?limit=100").await;
     assert_eq!(status, StatusCode::OK);
 }
 
@@ -241,7 +251,7 @@ async fn one_version_carries_its_layout() {
         json!({ "error": "version_not_found", "app_id": "pixelfed_home", "version": missing })
     );
     for bad in ["0", "-1", "x", "1.5"] {
-        let (status, _, body) = get(&pod, &format!("/v1/apps/home/versions/{bad}")).await;
+        let (status, _, body) = get(&pod, &format!("/v1/apps/pixelfed_demo/versions/{bad}")).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
         assert_eq!(body["error"], "invalid_request");
     }
@@ -270,7 +280,7 @@ async fn unknown_and_malformed_app_ids() {
 #[tokio::test]
 async fn workspace_get_serves_the_latest_app_version() {
     let pod = pod().await;
-    for ws in ["home", "pixelfed_demo"] {
+    for ws in ["pixelfed_demo"] {
         let resp = client()
             .get(format!("{}/v1/workspaces/{ws}", pod.url))
             .send()
@@ -292,14 +302,14 @@ async fn workspace_get_serves_the_latest_app_version() {
             .unwrap();
         assert_eq!(spec.workspace, file.layout);
     }
-    let second = deploy(&pod, "home", "Second").to_string();
-    let (status, version, body) = get(&pod, "/v1/workspaces/home").await;
+    let second = deploy(&pod, "pixelfed_demo", "Second").to_string();
+    let (status, version, body) = get(&pod, "/v1/workspaces/pixelfed_demo").await;
     assert_eq!(
         (status, version.as_deref()),
         (StatusCode::OK, Some(second.as_str()))
     );
     assert_eq!(body["workspace"]["title"], "Second");
-    assert_eq!(body["entities"]["core://counters/home"]["count"], 0);
+    assert!(!body["entities"].as_object().unwrap().is_empty(), "{body}");
 }
 
 #[tokio::test]
@@ -316,8 +326,8 @@ async fn client_reachable_layout_writes_and_old_catalog_routes_are_gone() {
         "/v1/layouts/home.counter/activate",
         "/v1/layouts/home.counter/restore",
         "/v1/apps",
-        "/v1/apps/home/versions",
-        "/v1/apps/home/versions/1",
+        "/v1/apps/pixelfed_demo/versions",
+        "/v1/apps/pixelfed_demo/versions/1",
     ];
     for path in posts {
         let resp = client()
@@ -362,8 +372,8 @@ async fn client_reachable_layout_writes_and_old_catalog_routes_are_gone() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     // Nothing changed.
-    let (_, version, _) = get(&pod, "/v1/workspaces/home").await;
-    assert_eq!(version, Some(files("home").to_string()));
+    let (_, version, _) = get(&pod, "/v1/workspaces/pixelfed_demo").await;
+    assert_eq!(version, Some(files("pixelfed_demo").to_string()));
 }
 
 #[tokio::test]
@@ -378,13 +388,18 @@ async fn restart_on_the_same_database_appends_nothing() {
                 .0,
             files("pixelfed_home")
         );
-        layouts::append_version(state.store(), "home", &retitled("home", "Two"), None).unwrap();
+        layouts::append_version(
+            state.store(),
+            "pixelfed_demo",
+            &retitled("pixelfed_demo", "Two"),
+            None,
+        )
+        .unwrap();
     }
     let state = AppState::open_dir(dir.path()).unwrap();
     for (ws, want) in [
         ("pixelfed_home", files("pixelfed_home")),
-        ("pixelfed_demo", files("pixelfed_demo")),
-        ("home", files("home") + 1),
+        ("pixelfed_demo", files("pixelfed_demo") + 1),
     ] {
         let (v, _) = layouts::latest(state.store(), ws).unwrap().unwrap();
         assert_eq!(v, want, "{ws}");
@@ -398,7 +413,7 @@ async fn restart_on_the_same_database_appends_nothing() {
 #[tokio::test]
 async fn agent_era_versions_serve_with_unknown_intents() {
     let pod = pod().await;
-    let layout = serde_json::to_string(&layouts::builtin("home").unwrap()).unwrap();
+    let layout = serde_json::to_string(&newest_file("pixelfed_demo")).unwrap();
     assert!(layout.contains("\"action.mutation.optimistic\""));
     let legacy = layout.replacen(
         "\"action.mutation.optimistic\"",
@@ -408,16 +423,16 @@ async fn agent_era_versions_serve_with_unknown_intents() {
     let v = pod
         .state
         .store()
-        .append_app_version("home", &legacy, "agent", Some("make it bigger"))
+        .append_app_version("pixelfed_demo", &legacy, "agent", Some("make it bigger"))
         .unwrap();
-    assert_eq!(v, files("home") + 1);
-    let (status, _, body) = get(&pod, &format!("/v1/apps/home/versions/{v}")).await;
+    assert_eq!(v, files("pixelfed_demo") + 1);
+    let (status, _, body) = get(&pod, &format!("/v1/apps/pixelfed_demo/versions/{v}")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let text = body["layout"].to_string();
     assert!(text.contains("\"intent\":\"action.unknown\""), "{text}");
     assert!(!text.contains("action.agent.prompt"), "{text}");
     assert_eq!(body["source"], "agent");
-    let (status, version, body) = get(&pod, "/v1/workspaces/home").await;
+    let (status, version, body) = get(&pod, "/v1/workspaces/pixelfed_demo").await;
     assert_eq!(
         (status, version.as_deref()),
         (StatusCode::OK, Some(v.to_string().as_str()))
@@ -438,46 +453,46 @@ async fn a_legacy_version_that_is_not_a_ui_node_is_served_as_stored() {
     let pod = pod().await;
     let store = pod.state.store();
     let odd = store
-        .append_app_version("home", "{\"edited\":true}", "agent", Some("odd"))
+        .append_app_version("pixelfed_demo", "{\"edited\":true}", "agent", Some("odd"))
         .unwrap();
-    let (status, _, body) = get(&pod, &format!("/v1/apps/home/versions/{odd}")).await;
+    let (status, _, body) = get(&pod, &format!("/v1/apps/pixelfed_demo/versions/{odd}")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["layout"], json!({ "edited": true }));
     assert_eq!(body["note"], "odd");
     // Not even JSON: a clear 500.
     let bad = store
-        .append_app_version("home", "not json", "agent", None)
+        .append_app_version("pixelfed_demo", "not json", "agent", None)
         .unwrap();
-    let (status, _, body) = get(&pod, &format!("/v1/apps/home/versions/{bad}")).await;
+    let (status, _, body) = get(&pod, &format!("/v1/apps/pixelfed_demo/versions/{bad}")).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(body["error"], "corrupt_version", "{body}");
     assert_eq!(body["version"], bad);
 }
 
-/// A database where `home/0001` was recorded with other content.
-fn db_with_a_changed_home_file(dir: &std::path::Path) {
+/// A database where `pixelfed_demo/0001` was recorded with other content.
+fn db_with_a_changed_file(dir: &std::path::Path) {
     let store = server::store::Store::open(&dir.join("server.db")).unwrap();
     let file = server::store::FileVersion {
-        key: "home/0001".into(),
+        key: "pixelfed_demo/0001".into(),
         number: 1,
-        path: "layouts/home/0001.json".into(),
-        note: "Counter".into(),
+        path: "layouts/pixelfed_demo/0001.json".into(),
+        note: "Classic feed".into(),
         json: "{}".into(),
         file_hash: "0".repeat(64),
         schema: 1,
     };
     store
-        .sync_layout_files(&[("home", vec![file])])
+        .sync_layout_files(&[("pixelfed_demo", vec![file])])
         .unwrap()
         .unwrap();
 }
 
-const CHANGED: &str = "layouts/home/0001.json changed after it was deployed as version 1";
+const CHANGED: &str = "layouts/pixelfed_demo/0001.json changed after it was deployed as version 1";
 
 #[test]
 fn a_sync_error_stops_the_start() {
     let dir = tempfile::tempdir().unwrap();
-    db_with_a_changed_home_file(dir.path());
+    db_with_a_changed_file(dir.path());
     let err = AppState::open_dir(dir.path()).err().unwrap().to_string();
     assert!(err.contains(CHANGED), "{err}");
     assert!(err.contains("To recover"), "{err}");
@@ -491,7 +506,7 @@ fn the_server_binary_exits_non_zero_on_a_sync_error() {
     use std::io::Read;
     use std::process::{Command, Stdio};
     let dir = tempfile::tempdir().unwrap();
-    db_with_a_changed_home_file(dir.path());
+    db_with_a_changed_file(dir.path());
     let mut child = Command::new(env!("CARGO_BIN_EXE_server"))
         .env("CONSTRUCT_DATA_DIR", dir.path())
         .env("CONSTRUCT_ADDR", "127.0.0.1:0")
@@ -597,29 +612,34 @@ fn layout_msg(ws: &str, version: i64) -> String {
 #[tokio::test]
 async fn sse_sends_current_version_then_new_versions_of_its_workspace() {
     let pod = pod().await;
-    let two = deploy(&pod, "home", "Two");
-    let mut home =
-        SseReader::connect(&format!("{}/v1/workspaces/home/events", pod.url), None).await;
-    assert_eq!(home.next_event().await, layout_msg("home", two));
-    let mut demo = SseReader::connect(
-        &format!("{}/v1/workspaces/pixelfed_demo/events", pod.url),
+    let two = deploy(&pod, "pixelfed_demo", "Two");
+    let demo_url = format!("{}/v1/workspaces/pixelfed_demo/events", pod.url);
+    let mut demo = SseReader::connect(&demo_url, None).await;
+    assert_eq!(demo.next_event().await, layout_msg("pixelfed_demo", two));
+    let mut feed = SseReader::connect(
+        &format!("{}/v1/workspaces/pixelfed_home/events", pod.url),
         None,
     )
     .await;
-    let demo_n = files("pixelfed_demo");
-    assert_eq!(demo.next_event().await, layout_msg("pixelfed_demo", demo_n));
+    let feed_n = files("pixelfed_home");
+    assert_eq!(feed.next_event().await, layout_msg("pixelfed_home", feed_n));
     // Each stream only gets its own workspace's versions.
-    assert_eq!(deploy(&pod, "pixelfed_demo", "X"), demo_n + 1);
-    assert_eq!(deploy(&pod, "home", "Three"), two + 1);
-    assert_eq!(home.next_event().await, layout_msg("home", two + 1));
+    assert_eq!(deploy(&pod, "pixelfed_home", "X"), feed_n + 1);
+    assert_eq!(deploy(&pod, "pixelfed_demo", "Three"), two + 1);
     assert_eq!(
         demo.next_event().await,
-        layout_msg("pixelfed_demo", demo_n + 1)
+        layout_msg("pixelfed_demo", two + 1)
+    );
+    assert_eq!(
+        feed.next_event().await,
+        layout_msg("pixelfed_home", feed_n + 1)
     );
     // A reconnecting client catches up with the current version.
-    let mut again =
-        SseReader::connect(&format!("{}/v1/workspaces/home/events", pod.url), None).await;
-    assert_eq!(again.next_event().await, layout_msg("home", two + 1));
+    let mut again = SseReader::connect(&demo_url, None).await;
+    assert_eq!(
+        again.next_event().await,
+        layout_msg("pixelfed_demo", two + 1)
+    );
 }
 
 /// A subscriber that sends its schema hears only of versions it can draw: a
@@ -672,8 +692,12 @@ async fn sse_announces_the_newest_version_the_client_can_draw() {
 #[tokio::test]
 async fn sse_keepalive_comment() {
     let pod = spawn(AppState::in_memory().with_sse_keepalive(Duration::from_millis(100))).await;
-    let mut sse = SseReader::connect(&format!("{}/v1/workspaces/home/events", pod.url), None).await;
-    assert_eq!(sse.next().await, layout_msg("home", files("home")));
+    let url = format!("{}/v1/workspaces/pixelfed_demo/events", pod.url);
+    let mut sse = SseReader::connect(&url, None).await;
+    assert_eq!(
+        sse.next().await,
+        layout_msg("pixelfed_demo", files("pixelfed_demo"))
+    );
     assert_eq!(sse.next().await, ": keepalive");
     assert_eq!(sse.next().await, ": keepalive");
 }
@@ -724,8 +748,12 @@ async fn sse_auth_matches_the_workspace_get() {
 #[tokio::test]
 async fn shutdown_ends_open_streams() {
     let pod = pod().await;
-    let mut sse = SseReader::connect(&format!("{}/v1/workspaces/home/events", pod.url), None).await;
-    assert_eq!(sse.next_event().await, layout_msg("home", files("home")));
+    let url = format!("{}/v1/workspaces/pixelfed_demo/events", pod.url);
+    let mut sse = SseReader::connect(&url, None).await;
+    assert_eq!(
+        sse.next_event().await,
+        layout_msg("pixelfed_demo", files("pixelfed_demo"))
+    );
     pod.state.shutdown();
     let end = tokio::time::timeout(Duration::from_secs(5), sse.resp.chunk())
         .await
