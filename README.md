@@ -364,6 +364,29 @@ curl -s -H 'Authorization: Bearer dev' http://127.0.0.1:8081/api/v1/timelines/ho
 
 Its environment variables are listed in [Server runtime configuration](#fake-pixelfed-environment).
 
+**Comments.** `fixtures/pixelfed/comments.json` seeds threaded comments on every timeline post (as many direct
+comments as each post's `replies_count`, plus nested replies; authors are the timeline accounts and the signed-in
+`constructdemo`). Each entry is compact (`id`, `in_reply_to_id`, `account` username, `created_at`, plain `text`,
+optional `favourites_count`) and is expanded into a full status; parents must come before their replies. The API
+is Mastodon's:
+
+- `GET /api/v1/statuses/:id/context`: `{"ancestors": [...], "descendants": [...]}` — the parent chain root first,
+  and every reply below depth first (siblings oldest first); thread them by `in_reply_to_id`. On a reblog, the
+  reblogged post's thread.
+- `POST /api/v1/statuses` (form or JSON) with `status` and `in_reply_to_id`: adds a comment by the signed-in
+  account and bumps the parent's `replies_count`. Optional `visibility`, `spoiler_text`, `sensitive`; the
+  `Idempotency-Key` header replays the first result. 422 for blank text, more than 500 characters or no
+  `in_reply_to_id` (top-level posts need media on Pixelfed, which the fake doesn't take); 404 for an unknown parent.
+- `GET /api/v1/statuses/:id`; `DELETE /api/v1/statuses/:id` (own statuses only, else 403; returns it with `text`).
+- Comments are statuses, so `favourite` / `bookmark` work on them too. `POST /_admin/reset` restores the threads.
+
+```bash
+curl -s -H 'Authorization: Bearer dev' http://127.0.0.1:8081/api/v1/statuses/781254316723458049/context \
+  | jq '.descendants[] | {id, in_reply_to_id, who: .account.username, content_text}'
+curl -s -H 'Authorization: Bearer dev' -d status='Lovely light!' -d in_reply_to_id=781254316723458049 \
+  http://127.0.0.1:8081/api/v1/statuses | jq '{id, content}'
+```
+
 **Sidecar / Docker.** One self-contained binary (release: 3.4 MB, 2.1 MB stripped with thin LTO; ~3.5 MB RSS
 idle, ~5 MB after a few hundred requests; the Docker container ~1 MB). Image: `rust:1-slim-bookworm` builder ->
 `gcr.io/distroless/cc-debian12:nonroot`, 51 MB.
@@ -379,11 +402,13 @@ Inside the container it binds `0.0.0.0:8081`, so the admin routes stay off unles
 stops on SIGTERM.
 
 **Admin endpoints** (test controls; in-process the same as `AppState::reset`, `add_faults`, `clear_faults`,
-`report`, `requests`, `favourited_ids`, `bookmarked_ids`):
+`report`, `requests`, `favourited_ids`, `bookmarked_ids`, plus `reply_ids`, `created_ids` and `status`):
 
-- `POST /_admin/reset[?keep_auth=1]`: favourites, bookmarks and counts back to the fixtures; fault rules, request
-  log and grant counters cleared; apps, codes and tokens dropped (as after an instance wipe) unless `keep_auth=1`.
-- `GET /_admin/state[?tail=50]`: `counts` (apps, codes, access/refresh tokens, statuses, requests),
+- `POST /_admin/reset[?keep_auth=1]`: favourites, bookmarks, comments and counts back to the fixtures; fault rules,
+  request log and grant counters cleared; apps, codes and tokens dropped (as after an instance wipe) unless
+  `keep_auth=1`.
+- `GET /_admin/state[?tail=50]`: `counts` (apps, codes, access/refresh tokens, statuses, comments, requests),
+  `created` (ids of comments posted through the API since the reset),
   `grants` (authorization_code, refresh_token, client_credentials), `favourited` / `bookmarked` ids, active
   `faults`, and the last `tail` `requests` (`method`, `path` with query, `status`, `ms`, `fault`; 499 = the client
   hung up first, e.g. on its timeout). Admin calls are not logged.

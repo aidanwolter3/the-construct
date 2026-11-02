@@ -369,6 +369,15 @@ from a client (D32, D33).
   - Tests: cargo 281, :shared 63, :desktopApp 63 (all passing).
 - Status: DONE.
 
+## Fake Pixelfed comments
+- `fixtures/pixelfed/comments.json`: threaded comments (34, nested replies included) matching each post's
+  `replies_count`; embedded in the binary like the other fixtures.
+- Mastodon endpoints on the fake: `GET /api/v1/statuses/:id/context`, `POST /api/v1/statuses` (replies only,
+  `Idempotency-Key` honoured), `GET` / `DELETE /api/v1/statuses/:id` (delete: own only). Counts stay consistent;
+  reset restores the threads. `_admin/state` gains `counts.comments` and `created`. README "Fake Pixelfed upstream".
+- Not yet wired into the pod or clients: the comment button still navigates to `pixelfed://posts/:id/comments`.
+- Tests: `crates/fake-pixelfed/tests/comments.rs` (13).
+
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
   bookmarks are idempotent upstream, counters are not).
