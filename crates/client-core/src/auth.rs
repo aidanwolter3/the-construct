@@ -4,7 +4,10 @@
 //! browser part of the authorization-code flow (PKCE verifier, state,
 //! authorize URL, redirect capture) and hands `code` + `code_verifier` to the
 //! pod, which returns a pod session token. That token lives in a
-//! [`SecureStore`] under [`session_key`].
+//! [`SecureStore`] under [`session_key`]. A custom-scheme sign-in waiting
+//! for its redirect is also persisted there ([`PendingAuth`] under
+//! [`pending_auth_key`]) so a redirect that cold-starts the app can still be
+//! completed.
 //!
 //! Everything here is synchronous and free of engine state; the flow itself
 //! is driven by the engine (`lib.rs`) on a background thread.
@@ -65,6 +68,48 @@ pub enum RedirectMode {
 /// The `SecureStore` key of the pod session for a pod base URL.
 pub fn session_key(base_url: &str) -> String {
     format!("pod_session:{}", base_url.trim_end_matches('/'))
+}
+
+/// How long a persisted custom-scheme sign-in ([`PendingAuth`]) can still be
+/// completed by a later engine (e.g. after the app process was killed while
+/// the browser was in front).
+pub const PENDING_AUTH_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// The `SecureStore` key of the pending custom-scheme sign-in for a pod base URL.
+pub fn pending_auth_key(base_url: &str) -> String {
+    format!("pending_auth:{}", base_url.trim_end_matches('/'))
+}
+
+/// A custom-scheme sign-in waiting for its redirect, persisted under
+/// [`pending_auth_key`] so that the redirect can be exchanged even if it
+/// reaches a new process (docs/DECISIONS.md D19).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PendingAuth {
+    pub state: String,
+    pub code_verifier: String,
+    pub redirect_uri: String,
+    pub instance_url: String,
+    /// Unix seconds.
+    pub created_at: i64,
+}
+
+impl PendingAuth {
+    pub fn parse(raw: &str) -> Option<Self> {
+        serde_json::from_str::<PendingAuth>(raw)
+            .ok()
+            .filter(|p| !p.state.is_empty() && !p.code_verifier.is_empty())
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    /// Older than [`PENDING_AUTH_TTL`] at unix time `now` (or created more
+    /// than a minute in the future: the clock moved).
+    pub fn is_expired(&self, now: i64) -> bool {
+        let age = now - self.created_at;
+        age > PENDING_AUTH_TTL.as_secs() as i64 || age < -60
+    }
 }
 
 /// Process-local store (tests, platforms without a secure store).
@@ -664,6 +709,25 @@ mod tests {
         let other = LoopbackListener::bind_preferred(free).unwrap();
         assert_ne!(other.port(), free);
         assert_ne!(other.port(), 0);
+    }
+
+    #[test]
+    fn pending_auth_roundtrip_and_expiry() {
+        let p = PendingAuth {
+            state: "s".into(),
+            code_verifier: "v".into(),
+            redirect_uri: "canvas://oauth".into(),
+            instance_url: "https://pix.example".into(),
+            created_at: 1_000,
+        };
+        assert_eq!(PendingAuth::parse(&p.to_json()), Some(p.clone()));
+        assert_eq!(PendingAuth::parse("garbage"), None);
+        assert_eq!(PendingAuth::parse(&PendingAuth { state: String::new(), ..p.clone() }.to_json()), None);
+        assert!(!p.is_expired(1_000));
+        assert!(!p.is_expired(1_600));
+        assert!(p.is_expired(1_601));
+        assert!(p.is_expired(900), "created in the future");
+        assert_eq!(pending_auth_key("http://h:1/"), "pending_auth:http://h:1");
     }
 
     #[test]

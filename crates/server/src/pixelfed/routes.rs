@@ -24,11 +24,13 @@ use super::upstream::{SCOPES, UpstreamError};
 use super::{
     Account, MediaUrls, Status, hex, layout, normalize_account, normalize_timeline, post_state,
 };
-use crate::store::{PixelfedAccount, PixelfedApp};
+use crate::store::{PixelfedAccount, PixelfedApp, SignIn};
 use crate::{ApiError, AppState, api_error, blocking, json_error, parse_json_body};
 
 /// Path prefix of the media proxy.
 pub const MEDIA_PATH: &str = "/v1/pixelfed/media";
+/// Largest media body the proxy relays (25 MB).
+pub const MAX_MEDIA_BYTES: u64 = 25 * 1024 * 1024;
 /// Statuses fetched per home timeline request.
 const TIMELINE_LIMIT: u32 = 20;
 
@@ -85,8 +87,9 @@ async fn signed_in_account(
     };
     let hash = session_hash(token);
     let instance = state.pixelfed.instance_url.clone();
+    let ttl = state.pixelfed.session_ttl_secs;
     blocking(state, move |s| {
-        if !s.session_exists(&hash)? {
+        if !s.session_valid(&hash, ttl)? {
             return Ok(None);
         }
         s.pixelfed_account(&instance)
@@ -242,25 +245,59 @@ async fn refresh_account(
 
 /// Run an upstream call with the stored token; on a 401, refresh the token
 /// once and retry. A 401 that survives (no refresh possible, or the fresh
-/// token is rejected too) is returned as `Status(401)`.
+/// token is rejected too) is returned as `Status(401)`. Also returns the
+/// access token of the last attempt (the one a surviving 401 rejected).
 async fn with_token<T, F, Fut>(
     state: &Arc<AppState>,
     account: PixelfedAccount,
     call: F,
-) -> Result<T, UpstreamError>
+) -> (Result<T, UpstreamError>, String)
 where
     F: Fn(String) -> Fut,
     Fut: std::future::Future<Output = Result<T, UpstreamError>>,
 {
-    match call(account.access_token.clone()).await {
+    let token = account.access_token.clone();
+    match call(token.clone()).await {
         Err(UpstreamError::Status(StatusCode::UNAUTHORIZED, detail)) => {
-            match refresh_account(state, &account).await? {
-                Some(fresh) => call(fresh.access_token).await,
-                None => Err(UpstreamError::Status(StatusCode::UNAUTHORIZED, detail)),
+            match refresh_account(state, &account).await {
+                Ok(Some(fresh)) => {
+                    let token = fresh.access_token;
+                    (call(token.clone()).await, token)
+                }
+                Ok(None) => (
+                    Err(UpstreamError::Status(StatusCode::UNAUTHORIZED, detail)),
+                    token,
+                ),
+                Err(e) => (Err(e), token),
             }
         }
-        other => other,
+        other => (other, token),
     }
+}
+
+/// Redirect URIs the pod registers apps for: the client's loopback
+/// (`http://127.0.0.1:<port>/callback`, `http://localhost:<port>/callback`),
+/// `canvas://oauth`, and exact `PIXELFED_EXTRA_REDIRECTS` entries.
+fn redirect_allowed(uri: &str, extra: &[String]) -> bool {
+    if uri == "canvas://oauth" || extra.iter().any(|e| e == uri) {
+        return true;
+    }
+    ["http://127.0.0.1:", "http://localhost:"]
+        .iter()
+        .filter_map(|prefix| uri.strip_prefix(prefix))
+        .filter_map(|rest| rest.strip_suffix("/callback"))
+        .any(|port| {
+            (1..=5).contains(&port.len())
+                && port.bytes().all(|b| b.is_ascii_digit())
+                && port.parse::<u16>().is_ok_and(|p| p > 0)
+        })
+}
+
+/// Is this upstream error the token endpoint rejecting the client itself
+/// (unknown client id / wrong secret)?
+fn is_invalid_client(e: &UpstreamError) -> bool {
+    matches!(e, UpstreamError::Status(s, detail)
+        if *s == StatusCode::UNAUTHORIZED || (s.is_client_error() && detail.contains("invalid_client")))
 }
 
 // ---------- auth ----------
@@ -284,6 +321,18 @@ async fn register_app(
     if !state.pixelfed.accepts(instance_url) {
         return instance_not_allowed(&state, instance_url);
     }
+    if !redirect_allowed(redirect_uri, &state.pixelfed.extra_redirects) {
+        tracing::warn!(redirect_uri, "app registration for a disallowed redirect_uri rejected");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            json!({
+                "error": "redirect_uri_not_allowed",
+                "redirect_uri": redirect_uri,
+                "allowed": ["http://127.0.0.1:<port>/callback", "http://localhost:<port>/callback",
+                            "canvas://oauth", "PIXELFED_EXTRA_REDIRECTS entries"],
+            }),
+        );
+    }
     let instance = state.pixelfed.instance_url.clone();
     let redirect = redirect_uri.to_owned();
     let cached = {
@@ -292,6 +341,34 @@ async fn register_app(
             Ok(c) => c,
             Err(e) => return e.into_response(),
         }
+    };
+    // A cached app may be unknown upstream (instance reset, app deleted): the
+    // authorize page would then fail with invalid_client before the pod sees
+    // a token call. Check it with a client_credentials grant; only a definite
+    // invalid_client drops it (unreachable / 5xx / 429 / other: keep it).
+    let cached = match cached {
+        Some(app) => match state
+            .upstream
+            .client_credentials(&app.client_id, &app.client_secret)
+            .await
+        {
+            Ok(()) => Some(app),
+            Err(e) if is_invalid_client(&e) => {
+                tracing::warn!(client_id = %app.client_id, error = %e,
+                    "cached Pixelfed app is unknown upstream; re-registering");
+                let (i, r) = (instance.clone(), redirect.clone());
+                if let Err(e) = blocking(&state, move |s| s.delete_pixelfed_app(&i, &r)).await {
+                    return e.into_response();
+                }
+                None
+            }
+            Err(e) => {
+                tracing::info!(client_id = %app.client_id, error = %e,
+                    "could not validate the cached Pixelfed app; keeping it");
+                Some(app)
+            }
+        },
+        None => None,
     };
     let app = match cached {
         Some(app) => app,
@@ -410,8 +487,29 @@ async fn exchange_token(
         }
         Err(e) => return bad_gateway(&e),
     };
-    let mut media = MediaUrls::new(&proxy_base(&headers));
+    let mut media = MediaUrls::new(&proxy_base(&headers), &state.media_allow);
     let user = normalize_account(&account, &mut media);
+    // Owner pinning (D17): only the owner's account may sign in, so another
+    // user of the instance cannot replace the stored account.
+    let cfg = &state.pixelfed;
+    let not_owner = || {
+        tracing::warn!(account_id = %account.id, username = ?user.get_str("username"),
+            "Pixelfed sign-in by an account that does not own this pod rejected");
+        json_error(
+            StatusCode::FORBIDDEN,
+            json!({ "error": "account_not_owner",
+                    "detail": "this pod is pinned to another Pixelfed account" }),
+        )
+    };
+    if cfg
+        .owner_account_id
+        .as_ref()
+        .is_some_and(|owner| *owner != account.id)
+    {
+        return not_owner();
+    }
+    let replace_owner = cfg.owner_account_id.is_some() || cfg.allow_account_change;
+    let ttl = cfg.session_ttl_secs;
     let stored = PixelfedAccount {
         access_token: token.access_token,
         account_id: account.id.clone(),
@@ -425,12 +523,13 @@ async fn exchange_token(
     {
         let i = instance.clone();
         let result = blocking(&state, move |s| {
-            s.save_pixelfed_account(&i, &stored)?;
-            s.create_session(&hash)
+            s.sign_in_pixelfed(&i, &stored, &hash, replace_owner, ttl)
         })
         .await;
-        if let Err(e) = result {
-            return e.into_response();
+        match result {
+            Ok(SignIn::Ok) => {}
+            Ok(SignIn::NotOwner { .. }) => return not_owner(),
+            Err(e) => return e.into_response(),
         }
     }
     if let Err(e) = save_media_keys(&state, media).await {
@@ -501,23 +600,28 @@ pub async fn home_workspace(state: &Arc<AppState>, headers: &HeaderMap) -> Respo
         Err(e) => return e.into_response(),
     };
     let username = account.username.clone();
-    let statuses = match with_token(state, account, |token| async move {
+    let (result, last_token) = with_token(state, account, |token| async move {
         state.upstream.home_timeline(&token, TIMELINE_LIMIT).await
     })
-    .await
-    {
+    .await;
+    let statuses = match result {
         Ok(s) => s,
         Err(UpstreamError::Status(StatusCode::UNAUTHORIZED, _)) => {
             // The upstream token was revoked or expired and could not be
-            // refreshed: forget it.
-            tracing::warn!(%username, "upstream rejected the stored token; signed out");
+            // refreshed: forget it, but only if it is still the stored one (a
+            // sign-in or refresh may have replaced it meanwhile).
             let instance = state.pixelfed.instance_url.clone();
-            let _ = blocking(state, move |s| s.delete_pixelfed_account(&instance)).await;
+            let deleted = blocking(state, move |s| {
+                s.delete_pixelfed_account_if_token(&instance, &last_token)
+            })
+            .await
+            .unwrap_or(false);
+            tracing::warn!(%username, deleted, "upstream rejected the stored token; signed out");
             return signed_out();
         }
         Err(e) => return bad_gateway(&e),
     };
-    let mut media = MediaUrls::new(&proxy_base(headers));
+    let mut media = MediaUrls::new(&proxy_base(headers), &state.media_allow);
     let timeline = normalize_timeline(&statuses, &mut media);
     if let Err(e) = save_media_keys(state, media).await {
         return e.into_response();
@@ -586,7 +690,7 @@ async fn toggle(state: Arc<AppState>, headers: HeaderMap, body: Bytes, kind: Tog
         (Toggle::Bookmark, true) => "bookmark",
         (Toggle::Bookmark, false) => "unbookmark",
     };
-    let result = with_token(&state, account, |token| {
+    let (result, _) = with_token(&state, account, |token| {
         let (state, id) = (&state, &id);
         async move { state.upstream.status_action(&token, id, action).await }
     })
@@ -643,6 +747,16 @@ async fn media(State(state): State<Arc<AppState>>, Path(key): Path<String>) -> R
         Ok(None) => return not_found(),
         Err(e) => return e.into_response(),
     };
+    // Normalization only emits keys for allowlisted URLs, but keys stored by
+    // an older pod (or before the allowlist changed) are checked again here.
+    if !state.media_allow.allows(&url) {
+        tracing::warn!(host = ?reqwest::Url::parse(&url).ok().and_then(|u| u.host_str().map(str::to_owned)),
+            "media proxy refused a URL outside the allowlist");
+        return json_error(
+            StatusCode::FORBIDDEN,
+            json!({ "error": "media_host_not_allowed" }),
+        );
+    }
     // URLs built with the public base (e.g. 10.0.2.2) are fetched via the
     // instance base the pod can reach.
     let cfg = &state.pixelfed;
@@ -688,9 +802,47 @@ async fn media(State(state): State<Arc<AppState>>, Path(key): Path<String>) -> R
             header::CONTENT_SECURITY_POLICY,
             HeaderValue::from_static("default-src 'none'; sandbox"),
         );
+    if resp.content_length().is_some_and(|n| n > MAX_MEDIA_BYTES) {
+        tracing::warn!(
+            length = resp.content_length(),
+            "media larger than the proxy cap refused"
+        );
+        return json_error(
+            StatusCode::BAD_GATEWAY,
+            json!({ "error": "media_too_large", "max_bytes": MAX_MEDIA_BYTES }),
+        );
+    }
     if let Some(v) = resp.headers().get(header::CONTENT_LENGTH) {
         out = out.header(header::CONTENT_LENGTH, v.clone());
     }
-    out.body(Body::from_stream(resp.bytes_stream()))
+    out.body(Body::from_stream(capped_stream(resp, MAX_MEDIA_BYTES)))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// The response body as a stream that fails (aborting the client's
+/// response) once more than `max` bytes have arrived, for upstreams that
+/// send no or a wrong Content-Length.
+fn capped_stream(
+    resp: reqwest::Response,
+    max: u64,
+) -> impl futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static {
+    futures_util::stream::unfold((Some(resp), 0u64), move |(resp, seen)| async move {
+        let mut resp = resp?;
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                let seen = seen.saturating_add(chunk.len() as u64);
+                if seen > max {
+                    tracing::warn!(max, "media body exceeded the proxy cap; aborted");
+                    Some((
+                        Err(std::io::Error::other("media exceeds the size cap")),
+                        (None, seen),
+                    ))
+                } else {
+                    Some((Ok(chunk), (Some(resp), seen)))
+                }
+            }
+            Ok(None) => None,
+            Err(e) => Some((Err(std::io::Error::other(e)), (None, seen))),
+        }
+    })
 }

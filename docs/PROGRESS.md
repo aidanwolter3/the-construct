@@ -143,6 +143,9 @@ Note: the environment restarted twice mid-work; work is now committed in small w
   UI with carousel (D18); platform glue: Keychain, Android Keystore + canvas://oauth, sim browsers (D21); real
   local Pixelfed 0.15.2 via Colima in dev/pixelfed + scripts/pixelfed_dev.sh, recorded fixtures, pod adapted to
   it (D20); desktop sim e2e against the real instance passed (sign in, feed, carousel, like reached Pixelfed).
+- QA fixes (client): restart-safe custom-scheme sign-in (`pending_auth:` record, "Sign-in was interrupted"),
+  private cache purge on sign-out, secure-store I/O moved off the UI thread and out of the flow lock (D19); CW
+  label no longer doubles "CW:", carousel images without alt text read "Photo n of N".
 
 ## Next steps
 

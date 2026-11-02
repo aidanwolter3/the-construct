@@ -65,7 +65,10 @@ struct Fault {
 /// Default Pixelfed instance: the local fake (`crates/fake-pixelfed`).
 pub const DEFAULT_PIXELFED_URL: &str = "http://127.0.0.1:8081";
 
-/// Which Pixelfed instance the pod talks to (single tenant).
+/// Default pod session lifetime (`CANVAS_SESSION_TTL_DAYS`).
+pub const DEFAULT_SESSION_TTL_DAYS: i64 = 90;
+
+/// Which Pixelfed instance the pod talks to (single tenant), and who may own it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PixelfedConfig {
     /// Base URL for server->upstream calls (`PIXELFED_INSTANCE_URL`).
@@ -73,6 +76,20 @@ pub struct PixelfedConfig {
     /// Base URL for browser-facing links such as the authorize endpoint
     /// (`PIXELFED_PUBLIC_URL`, default = instance URL).
     pub public_url: String,
+    /// Explicit owner (`PIXELFED_OWNER_ACCOUNT_ID`): only this upstream
+    /// account id may sign in. Unset: the first account to sign in is pinned.
+    pub owner_account_id: Option<String>,
+    /// `PIXELFED_ALLOW_ACCOUNT_CHANGE=1`: any account may sign in and replace
+    /// the stored one (the pre-pinning behaviour).
+    pub allow_account_change: bool,
+    /// Extra media hosts the proxy may fetch (`PIXELFED_MEDIA_HOSTS`,
+    /// comma-separated `host`, `host:port` or `https://host[:port]`), e.g. a CDN.
+    pub media_hosts: Vec<String>,
+    /// Extra exact redirect URIs accepted by `/v1/auth/pixelfed/app`
+    /// (`PIXELFED_EXTRA_REDIRECTS`, comma-separated).
+    pub extra_redirects: Vec<String>,
+    /// Pod sessions older than this are invalid (`CANVAS_SESSION_TTL_DAYS`).
+    pub session_ttl_secs: i64,
 }
 
 impl Default for PixelfedConfig {
@@ -91,15 +108,65 @@ impl PixelfedConfig {
         Self {
             instance_url,
             public_url,
+            owner_account_id: None,
+            allow_account_change: false,
+            media_hosts: Vec::new(),
+            extra_redirects: Vec::new(),
+            session_ttl_secs: DEFAULT_SESSION_TTL_DAYS * 86_400,
         }
     }
 
-    /// From `PIXELFED_INSTANCE_URL` / `PIXELFED_PUBLIC_URL`.
+    /// From `PIXELFED_INSTANCE_URL`, `PIXELFED_PUBLIC_URL`,
+    /// `PIXELFED_OWNER_ACCOUNT_ID`, `PIXELFED_ALLOW_ACCOUNT_CHANGE`,
+    /// `PIXELFED_MEDIA_HOSTS`, `PIXELFED_EXTRA_REDIRECTS`, `CANVAS_SESSION_TTL_DAYS`.
     pub fn from_env() -> Self {
-        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
+        let var = |k: &str| {
+            std::env::var(k)
+                .ok()
+                .map(|v| v.trim().to_owned())
+                .filter(|v| !v.is_empty())
+        };
+        let list = |k: &str| -> Vec<String> {
+            var(k)
+                .map(|v| {
+                    v.split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
         let instance =
             var("PIXELFED_INSTANCE_URL").unwrap_or_else(|| DEFAULT_PIXELFED_URL.to_owned());
-        Self::new(&instance, var("PIXELFED_PUBLIC_URL").as_deref())
+        let ttl_days = match var("CANVAS_SESSION_TTL_DAYS").map(|v| v.parse::<i64>()) {
+            None => DEFAULT_SESSION_TTL_DAYS,
+            Some(Ok(d)) if (1..=36_500).contains(&d) => d,
+            Some(_) => {
+                tracing::warn!(
+                    "CANVAS_SESSION_TTL_DAYS is not a number of days in 1..=36500; using {DEFAULT_SESSION_TTL_DAYS}"
+                );
+                DEFAULT_SESSION_TTL_DAYS
+            }
+        };
+        Self {
+            owner_account_id: var("PIXELFED_OWNER_ACCOUNT_ID"),
+            allow_account_change: var("PIXELFED_ALLOW_ACCOUNT_CHANGE")
+                .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
+            media_hosts: list("PIXELFED_MEDIA_HOSTS"),
+            extra_redirects: list("PIXELFED_EXTRA_REDIRECTS"),
+            session_ttl_secs: ttl_days * 86_400,
+            ..Self::new(&instance, var("PIXELFED_PUBLIC_URL").as_deref())
+        }
+    }
+
+    /// Origins the media proxy may fetch: the instance and public URLs plus
+    /// [`Self::media_hosts`].
+    pub fn media_allowlist(&self) -> pixelfed::MediaAllowlist {
+        pixelfed::MediaAllowlist::new(
+            [self.instance_url.as_str(), self.public_url.as_str()],
+            self.media_hosts.iter().map(String::as_str),
+        )
     }
 
     /// Only the configured instance (by its instance or public URL) is accepted
@@ -120,6 +187,8 @@ pub struct AppState {
     test_hooks: bool,
     fault: Mutex<Option<Fault>>,
     pixelfed: PixelfedConfig,
+    /// [`PixelfedConfig::media_allowlist`], parsed once.
+    media_allow: pixelfed::MediaAllowlist,
     upstream: Upstream,
     /// Serializes upstream token refreshes (Passport rotates the refresh
     /// token, so two concurrent refreshes would revoke each other).
@@ -129,11 +198,13 @@ pub struct AppState {
 impl AppState {
     pub fn new(store: Store) -> Self {
         let pixelfed = PixelfedConfig::default();
+        let media_allow = pixelfed.media_allowlist();
         Self {
             store,
             test_hooks: false,
             fault: Mutex::new(None),
-            upstream: Upstream::new(&pixelfed.instance_url),
+            upstream: Upstream::new(&pixelfed.instance_url, media_allow.clone()),
+            media_allow,
             pixelfed,
             pixelfed_refresh: tokio::sync::Mutex::new(()),
         }
@@ -141,7 +212,8 @@ impl AppState {
 
     /// Point the Pixelfed adapter at another instance.
     pub fn with_pixelfed(mut self, config: PixelfedConfig) -> Self {
-        self.upstream = Upstream::new(&config.instance_url);
+        self.media_allow = config.media_allowlist();
+        self.upstream = Upstream::new(&config.instance_url, self.media_allow.clone());
         self.pixelfed = config;
         self
     }

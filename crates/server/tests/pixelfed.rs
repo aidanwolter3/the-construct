@@ -227,14 +227,21 @@ async fn upstream_status(env: &Env, id: &str) -> Value {
 }
 
 fn signed_out_button(spec: &WorkspaceSpec) -> (String, ActionIntent) {
-    let UiNode::Workspace { id, slots, .. } = &spec.workspace else {
+    let UiNode::Workspace { id, title, slots } = &spec.workspace else {
         panic!("not a workspace");
     };
     assert_eq!(id, "pixelfed_home");
+    assert_eq!(title, "Pixelfed");
     let UiNode::Container { children, .. } = &slots[0].content else {
         panic!("signed-out slot is not a Container");
     };
-    assert!(matches!(&children[0], UiNode::Text { value_expr, .. } if value_expr == "Pixelfed"));
+    // The workspace title is the only "Pixelfed" heading (no duplicate Text).
+    assert!(
+        !children
+            .iter()
+            .any(|c| matches!(c, UiNode::Text { value_expr, .. } if value_expr == "Pixelfed")),
+        "duplicate Pixelfed title Text"
+    );
     children
         .iter()
         .find_map(|c| match c {
@@ -662,7 +669,10 @@ async fn media_proxy_neutralizes_non_media_content_types() {
             ),
     )
     .await;
-    let state = AppState::in_memory();
+    let state = AppState::in_memory().with_pixelfed(PixelfedConfig {
+        media_hosts: vec![origin.url.trim_start_matches("http://").to_owned()],
+        ..PixelfedConfig::default()
+    });
     let urls: Vec<(String, String)> = ["page", "img.svg", "img.jpg"]
         .iter()
         .map(|p| {
@@ -903,4 +913,376 @@ async fn expired_upstream_token_is_refreshed() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["is_liked"], true);
     assert_ne!(stored(dir.path()).0, token2);
+}
+
+// ---------- M6 review fixes ----------
+
+const FAKE_ACCOUNT: &str = "703641122334455667";
+
+/// Fake + pod with a tweaked config; `seed` runs on the pod state (with the
+/// fake's URL as the instance) before the pod starts.
+async fn env_custom(
+    state: AppState,
+    cfg: impl FnOnce(&mut PixelfedConfig),
+    seed: impl FnOnce(&AppState, &str),
+) -> Env {
+    let fake = spawn_fake().await;
+    let mut config = PixelfedConfig::new(&fake.url, None);
+    cfg(&mut config);
+    let state = state.with_pixelfed(config);
+    seed(&state, &fake.url);
+    let pod = spawn_pod(state).await;
+    Env { fake, pod }
+}
+
+/// Pin another account (id 999, upstream token SEED) as the owner, with pod
+/// session "tok".
+fn seed_other_owner(state: &AppState, instance: &str) {
+    let other = PixelfedAccount {
+        access_token: SEED.into(),
+        account_id: "999".into(),
+        username: "owner".into(),
+        ..Default::default()
+    };
+    let r = state
+        .store()
+        .sign_in_pixelfed(instance, &other, &session_hash("tok"), false, 86_400)
+        .unwrap();
+    assert_eq!(r, server::store::SignIn::Ok);
+}
+
+async fn exchange(env: &Env) -> (StatusCode, Value) {
+    let (code, verifier) = authorize(env).await;
+    post_json(
+        &format!("{}/v1/auth/pixelfed/token", env.pod.url),
+        None,
+        json!({ "instance_url": env.fake.url, "code": code, "code_verifier": verifier,
+                "redirect_uri": REDIRECT }),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn another_account_cannot_take_over_the_pod() {
+    let env = env_custom(AppState::in_memory(), |_| {}, seed_other_owner).await;
+    let (status, body) = exchange(&env).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "account_not_owner");
+    assert!(body.get("session_token").is_none());
+    // The owner's stored account (and session) still work.
+    let (status, home) = get_home(&env.pod.url, Some("tok")).await;
+    assert_eq!(status, StatusCode::OK, "{home}");
+    assert_eq!(home["queries"]["timeline:home"].as_array().unwrap().len(), 5);
+}
+
+#[tokio::test]
+async fn the_owner_may_sign_in_again() {
+    let env = env().await;
+    let s1 = sign_in(&env).await; // first sign-in pins the owner
+    let s2 = sign_in(&env).await; // same account: fine
+    assert_ne!(s1, s2);
+    for s in [&s1, &s2] {
+        assert_eq!(get_home(&env.pod.url, Some(s)).await.0, StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn explicit_owner_and_allow_change_overrides() {
+    // PIXELFED_OWNER_ACCOUNT_ID names someone else: 403 even on a fresh pod.
+    let env = env_custom(
+        AppState::in_memory(),
+        |c| c.owner_account_id = Some("999".into()),
+        |_, _| {},
+    )
+    .await;
+    let (status, body) = exchange(&env).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "account_not_owner");
+
+    // PIXELFED_OWNER_ACCOUNT_ID names the signing-in account: it replaces a pinned owner.
+    let env = env_custom(
+        AppState::in_memory(),
+        |c| c.owner_account_id = Some(FAKE_ACCOUNT.into()),
+        seed_other_owner,
+    )
+    .await;
+    sign_in(&env).await;
+
+    // PIXELFED_ALLOW_ACCOUNT_CHANGE=1: any account replaces the stored one.
+    let dir = tempfile::tempdir().unwrap();
+    let env = env_custom(
+        AppState::open_dir(dir.path()).unwrap(),
+        |c| c.allow_account_change = true,
+        seed_other_owner,
+    )
+    .await;
+    sign_in(&env).await;
+    let conn = rusqlite::Connection::open(dir.path().join("server.db")).unwrap();
+    let ids: (String, String) = conn
+        .query_row(
+            "SELECT a.account_id, o.account_id FROM pixelfed_account a JOIN pixelfed_owner o USING (instance)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(ids, (FAKE_ACCOUNT.to_owned(), FAKE_ACCOUNT.to_owned()));
+}
+
+#[tokio::test]
+async fn sessions_expire_after_the_ttl() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = env_with(AppState::open_dir(dir.path()).unwrap()).await;
+    let session = sign_in(&env).await;
+    assert_eq!(get_home(&env.pod.url, Some(&session)).await.0, StatusCode::OK);
+    // Age the session past the default 90 days.
+    let conn = rusqlite::Connection::open(dir.path().join("server.db")).unwrap();
+    conn.execute(
+        "UPDATE sessions SET created_at = created_at - 91 * 86400",
+        [],
+    )
+    .unwrap();
+    let (status, header, _) = get_home_full(&env.pod.url, Some(&session)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(header.as_deref(), Some("invalid"));
+    let (status, _) = post_json(
+        &format!("{}/v1/pixelfed/posts/like", env.pod.url),
+        Some(&session),
+        json!({ "id": CAROUSEL, "liked": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // The next sign-in prunes it.
+    sign_in(&env).await;
+    let n: i64 = conn
+        .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1);
+}
+
+#[tokio::test]
+async fn app_registration_only_for_allowed_redirect_uris() {
+    let env = env_custom(
+        AppState::in_memory(),
+        |c| c.extra_redirects = vec!["myapp://signed-in".into()],
+        |_, _| {},
+    )
+    .await;
+    let app_url = format!("{}/v1/auth/pixelfed/app", env.pod.url);
+    for bad in [
+        "http://evil.example/callback",
+        "http://127.0.0.1:9/cb",
+        "http://127.0.0.1:0/callback",
+        "http://127.0.0.1:99999/callback",
+        "http://127.0.0.1:9/callback?x=1",
+        "http://127.0.0.1:9/callback/",
+        "https://127.0.0.1:9/callback",
+        "http://127.0.0.1.evil.example:9/callback",
+        "http://localhost:9@evil.example/callback",
+        "canvas://oauth/x",
+        "myapp://signed-in/x",
+    ] {
+        let (status, body) = post_json(
+            &app_url,
+            None,
+            json!({ "instance_url": env.fake.url, "redirect_uri": bad }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+        assert_eq!(body["error"], "redirect_uri_not_allowed", "{bad}");
+    }
+    for ok in [
+        "http://127.0.0.1:47823/callback",
+        "http://localhost:65535/callback",
+        "canvas://oauth",
+        "myapp://signed-in",
+    ] {
+        let (status, body) = post_json(
+            &app_url,
+            None,
+            json!({ "instance_url": env.fake.url, "redirect_uri": ok }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{ok}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn stale_cached_app_is_re_registered() {
+    let env = env().await;
+    let app_url = format!("{}/v1/auth/pixelfed/app", env.pod.url);
+    let body = json!({ "instance_url": env.fake.url, "redirect_uri": REDIRECT });
+    let (_, a1) = post_json(&app_url, None, body.clone()).await;
+    let fake = env.fake.fake.as_ref().unwrap();
+    // A cached app the upstream still knows is reused (validated).
+    let (_, a2) = post_json(&app_url, None, body.clone()).await;
+    assert_eq!(a1["client_id"], a2["client_id"]);
+    assert_eq!(fake.client_credentials_grants(), 1);
+    // The instance forgets it: the next /app call registers a new one, and
+    // the whole sign-in works with it.
+    assert_eq!(fake.forget_apps(), 1);
+    let (status, a3) = post_json(&app_url, None, body).await;
+    assert_eq!(status, StatusCode::OK, "{a3}");
+    assert_ne!(a3["client_id"], a1["client_id"]);
+    let session = sign_in(&env).await;
+    assert_eq!(get_home(&env.pod.url, Some(&session)).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn cached_app_is_kept_when_validation_is_inconclusive() {
+    let dead = dead_url().await;
+    let state = seeded_state(&dead, SEED);
+    let app = server::store::PixelfedApp {
+        client_id: "cached-1".into(),
+        client_secret: "s".into(),
+    };
+    state.store().save_pixelfed_app(&dead, REDIRECT, &app).unwrap();
+    let pod = spawn_pod(state).await;
+    let (status, body) = post_json(
+        &format!("{}/v1/auth/pixelfed/app", pod.url),
+        None,
+        json!({ "instance_url": dead, "redirect_uri": REDIRECT }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["client_id"], "cached-1");
+}
+
+#[tokio::test]
+async fn media_proxy_ssrf_guards() {
+    use axum::{body::Body, http::header, response::Redirect, routing::get};
+    const BIG: usize = server::pixelfed::routes::MAX_MEDIA_BYTES as usize + 1;
+    let outside = serve(axum::Router::new().route(
+        "/img.jpg",
+        get(|| async { ([(header::CONTENT_TYPE, "image/jpeg")], "secret") }),
+    ))
+    .await;
+    let out_url = format!("{}/img.jpg", outside.url);
+    let redirect_out = out_url.clone();
+    let origin = serve(
+        axum::Router::new()
+            .route(
+                "/img.jpg",
+                get(|| async { ([(header::CONTENT_TYPE, "image/jpeg")], "jpg") }),
+            )
+            .route("/redir-ok", get(|| async { Redirect::temporary("/img.jpg") }))
+            .route(
+                "/redir-out",
+                get(move || {
+                    let to = redirect_out.clone();
+                    async move { Redirect::temporary(&to) }
+                }),
+            )
+            .route(
+                "/big",
+                get(|| async { ([(header::CONTENT_TYPE, "image/jpeg")], vec![0u8; BIG]) }),
+            )
+            .route(
+                "/big-stream",
+                get(|| async {
+                    // Chunked (no Content-Length): 26 x 1 MiB.
+                    let chunks = (0..26).map(|_| Ok::<_, std::io::Error>(vec![0u8; 1 << 20]));
+                    (
+                        [(header::CONTENT_TYPE, "image/jpeg")],
+                        Body::from_stream(futures_util::stream::iter(chunks)),
+                    )
+                }),
+            ),
+    )
+    .await;
+    let state = AppState::in_memory().with_pixelfed(PixelfedConfig {
+        media_hosts: vec![origin.url.trim_start_matches("http://").to_owned()],
+        ..PixelfedConfig::default()
+    });
+    let mut urls: Vec<(String, String)> = ["img.jpg", "redir-ok", "redir-out", "big", "big-stream"]
+        .iter()
+        .map(|p| format!("{}/{p}", origin.url))
+        .chain([out_url.clone()])
+        .map(|u| (server::pixelfed::media_key(&u), u))
+        .collect();
+    // Keys stored for a disallowed URL (e.g. by an older pod) are refused too.
+    state
+        .store()
+        .save_media_keys(urls.iter().map(|(k, u)| (k, u)))
+        .unwrap();
+    let pod = spawn_pod(state).await;
+    let fetch = |key: String| {
+        let pod = pod.url.clone();
+        async move {
+            client()
+                .get(format!("{pod}/v1/pixelfed/media/{key}"))
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+    let (out_key, _) = urls.pop().unwrap();
+    let resp = fetch(out_key).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(resp.json::<Value>().await.unwrap()["error"], "media_host_not_allowed");
+
+    let key = |i: usize| urls[i].0.clone();
+    let resp = fetch(key(0)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.text().await.unwrap(), "jpg");
+    // A redirect within the allowlist is followed; one leaving it is not.
+    let resp = fetch(key(1)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.text().await.unwrap(), "jpg");
+    let resp = fetch(key(2)).await;
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    assert!(!resp.text().await.unwrap().contains("secret"));
+    // Too large: refused up front by Content-Length, or cut off while streaming.
+    let resp = fetch(key(3)).await;
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(resp.json::<Value>().await.unwrap()["error"], "media_too_large");
+    let resp = fetch(key(4)).await;
+    // Aborted mid-body (Err) is expected; a complete body must be under the cap.
+    if let Ok(b) = resp.bytes().await {
+        assert!(b.len() < BIG, "streamed {} bytes past the cap", b.len());
+    }
+}
+
+/// A 401 that survives refresh only deletes the stored account if it still
+/// holds the token that failed (compare-and-delete).
+#[tokio::test]
+async fn surviving_401_does_not_delete_a_replaced_account() {
+    use axum::{extract::State, routing::get};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_url = format!("http://{}", listener.local_addr().unwrap());
+    let state = Arc::new(seeded_state(&upstream_url, "tok-0"));
+    // Each timeline call stores a newer token (as a concurrent sign-in would)
+    // and then rejects the request.
+    #[derive(Clone)]
+    struct Mock(Arc<AppState>, String, Arc<AtomicUsize>);
+    let mock = Mock(state.clone(), upstream_url.clone(), Arc::new(AtomicUsize::new(0)));
+    let router = axum::Router::new()
+        .route(
+            "/api/v1/timelines/home",
+            get(|State(Mock(pod, instance, n)): State<Mock>| async move {
+                let next = n.fetch_add(1, Ordering::SeqCst) + 1;
+                pod.store()
+                    .save_pixelfed_account(
+                        &instance,
+                        &PixelfedAccount {
+                            access_token: format!("tok-{next}"),
+                            account_id: "1".into(),
+                            username: "x".into(),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                (StatusCode::UNAUTHORIZED, "{\"error\":\"Unauthenticated.\"}")
+            }),
+        )
+        .with_state(mock.clone());
+    let _upstream = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let pod = serve(server::app(state.clone())).await;
+    let (status, header, _) = get_home_full(&pod.url, Some("tok")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(header.as_deref(), Some("invalid"));
+    // tok-0 failed, the retry with tok-1 failed, but tok-2 was stored meanwhile: kept.
+    assert_eq!(mock.2.load(Ordering::SeqCst), 2);
+    let stored = state.store().pixelfed_account(&upstream_url).unwrap();
+    assert_eq!(stored.map(|a| a.access_token).as_deref(), Some("tok-2"));
 }

@@ -9,10 +9,11 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use client_core::auth::session_key;
+use client_core::auth::{PendingAuth, pending_auth_key, session_key};
+use client_core::store::{Store, StoreOps};
 use client_core::{
-    CanvasEngine, EngineConfig, EngineOptions, MemoryStore, RedirectMode, SecureStore,
-    StateSnapshot, UrlOpener,
+    CanvasEngine, EngineConfig, EngineOptions, MemoryStore, RedirectMode, SIGN_IN_INTERRUPTED,
+    SecureStore, StateSnapshot, UrlOpener,
 };
 use serde_json::{Value, json};
 use server::pixelfed::routes::session_hash;
@@ -166,13 +167,23 @@ fn engine(
     opener: Option<Arc<dyn UrlOpener>>,
     redirect: RedirectMode,
 ) -> CanvasEngine {
+    engine_in("", env_pod, Arc::clone(store) as Arc<dyn SecureStore>, opener, redirect)
+}
+
+fn engine_in(
+    storage: &str,
+    env_pod: &str,
+    store: Arc<dyn SecureStore>,
+    opener: Option<Arc<dyn UrlOpener>>,
+    redirect: RedirectMode,
+) -> CanvasEngine {
     CanvasEngine::init_with_options(
-        "",
+        storage,
         env_pod,
         WORKSPACE,
         EngineOptions {
             config: fast_config(),
-            secure_store: Some(Arc::clone(store) as Arc<dyn SecureStore>),
+            secure_store: Some(store),
             url_opener: opener,
             redirect,
             // Random ports: tests run in parallel (the fixed default is covered below).
@@ -333,7 +344,11 @@ fn custom_scheme_sign_in_rejects_a_wrong_state() {
         Some(Arc::new(CapturingOpener(Mutex::new(tx)))),
         RedirectMode::Custom(CUSTOM_REDIRECT.into()),
     );
-    assert!(!engine.handle_auth_redirect("canvas://oauth?code=x&state=y"));
+    // No sign-in at all (in memory or persisted): taken, then reported.
+    assert!(engine.handle_auth_redirect("canvas://oauth?code=x&state=y"));
+    wait_until("interrupted error", || {
+        auth(&engine.snapshot())["error"] == SIGN_IN_INTERRUPTED
+    });
     engine.dispatch(&env.login_intent());
     let url = rx.recv_timeout(TIMEOUT).unwrap();
     let parsed = reqwest::Url::parse(&url).unwrap();
@@ -367,8 +382,11 @@ fn custom_scheme_sign_in_rejects_a_wrong_state() {
 
     assert!(engine.handle_auth_redirect(&location));
     wait_signed_in(&engine);
-    // The flow is over: a replay is ignored.
-    assert!(!engine.handle_auth_redirect(&location));
+    assert!(store.get(&pending_auth_key(&env.pod)).is_none());
+    // The flow is over: a replay changes nothing (signed in, no error).
+    engine.handle_auth_redirect(&location);
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(auth(&engine.snapshot())["state"], "signed_in");
     assert_eq!(auth(&engine.snapshot())["username"], "canvasdemo");
 }
 
@@ -450,9 +468,12 @@ fn logout_forgets_the_session_everywhere() {
     let token = stored_token(&env, &store);
 
     engine.logout();
-    // Immediately signed out and gone from the store (no network wait).
+    // Immediately signed out; gone from the store soon after (the store is
+    // written on a background thread, not on the caller's).
     assert_eq!(auth(&engine.snapshot())["state"], "signed_out");
-    assert!(store.get(&session_key(&env.pod)).is_none());
+    wait_until("session deleted from the store", || {
+        store.get(&session_key(&env.pod)).is_none()
+    });
     wait_until("pod session deleted", || !env.session_exists(&token));
     wait_signed_out_bundle(&engine);
     assert_eq!(auth(&engine.snapshot())["state"], "signed_out");
@@ -627,4 +648,269 @@ fn loopback_reuses_the_preferred_port_across_sign_ins() {
     let want = format!("http://127.0.0.1:{port}/callback");
     assert_eq!(redirect_uri_of(&urls[0]), want);
     assert_eq!(redirect_uri_of(&urls[1]), want);
+}
+
+/// GET `<authorize url>&auto=1` without following redirects: the fake's
+/// approval redirect (`canvas://oauth?code=..&state=..`).
+fn approve(url: &str) -> String {
+    let resp = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+        .get(format!("{url}&auto=1"))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 302);
+    resp.headers()["location"].to_str().unwrap().to_owned()
+}
+
+fn custom_engine(env: &Env, store: &Arc<MemoryStore>) -> (CanvasEngine, mpsc::Receiver<String>) {
+    let (tx, rx) = mpsc::channel();
+    let engine = engine(
+        &env.pod,
+        store,
+        Some(Arc::new(CapturingOpener(Mutex::new(tx)))),
+        RedirectMode::Custom(CUSTOM_REDIRECT.into()),
+    );
+    (engine, rx)
+}
+
+#[test]
+fn custom_scheme_sign_in_survives_a_process_restart() {
+    // Android: the process dies while the browser is in front; the
+    // canvas://oauth redirect cold-starts a new engine on the same store.
+    let env = Env::start();
+    let store = Arc::new(MemoryStore::new());
+    let location = {
+        let (a, rx) = custom_engine(&env, &store);
+        a.dispatch(&env.login_intent());
+        let url = rx.recv_timeout(TIMEOUT).unwrap();
+        let pending = PendingAuth::parse(&store.get(&pending_auth_key(&env.pod)).unwrap()).unwrap();
+        assert_eq!(pending.redirect_uri, CUSTOM_REDIRECT);
+        assert_eq!(pending.instance_url, env.fake);
+        assert!(url.contains(&format!("state={}", pending.state)));
+        approve(&url)
+        // `a` is dropped here, before the redirect arrives.
+    };
+    thread::sleep(Duration::from_millis(300));
+    assert!(store.get(&pending_auth_key(&env.pod)).is_some(), "kept across the drop");
+
+    let (b, _rx) = custom_engine(&env, &store);
+    assert_eq!(auth(&b.snapshot())["state"], "signed_out");
+    assert!(b.handle_auth_redirect(&location));
+    wait_signed_in(&b);
+    assert_eq!(auth(&b.snapshot())["username"], "canvasdemo");
+    assert!(env.session_exists(&stored_token(&env, &store)));
+    assert!(store.get(&pending_auth_key(&env.pod)).is_none(), "deleted on success");
+    // A replay (the code is spent, the record gone) changes nothing.
+    assert!(b.handle_auth_redirect(&location));
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(auth(&b.snapshot())["state"], "signed_in");
+}
+
+#[test]
+fn unmatched_or_expired_persisted_sign_in_reports_interrupted() {
+    let env = Env::start();
+    let store = Arc::new(MemoryStore::new());
+    let stale = PendingAuth {
+        state: "old".into(),
+        code_verifier: "v".repeat(64),
+        redirect_uri: CUSTOM_REDIRECT.into(),
+        instance_url: env.fake.clone(),
+        created_at: 1,
+    };
+    store.set(&pending_auth_key(&env.pod), &stale.to_json());
+    let (engine, _rx) = custom_engine(&env, &store);
+    // Matching state but expired: deleted, reported.
+    assert!(engine.handle_auth_redirect("canvas://oauth?code=c&state=old"));
+    wait_until("interrupted error", || {
+        auth(&engine.snapshot())["error"] == SIGN_IN_INTERRUPTED
+    });
+    assert!(store.get(&pending_auth_key(&env.pod)).is_none());
+
+    // A fresh record with another state is not used (and kept), but logout drops it.
+    let fresh = PendingAuth {
+        state: "other".into(),
+        created_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64,
+        ..stale
+    };
+    store.set(&pending_auth_key(&env.pod), &fresh.to_json());
+    assert!(engine.handle_auth_redirect("canvas://oauth?code=c&state=nope"));
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(auth(&engine.snapshot())["error"], SIGN_IN_INTERRUPTED);
+    assert!(store.get(&pending_auth_key(&env.pod)).is_some(), "another flow's record is kept");
+    engine.logout();
+    wait_until("logout deleted the pending sign-in", || {
+        store.get(&pending_auth_key(&env.pod)).is_none()
+    });
+}
+
+#[test]
+fn cancelled_custom_sign_in_deletes_the_persisted_flow() {
+    let env = Env::start();
+    let store = Arc::new(MemoryStore::new());
+    let (engine, rx) = custom_engine(&env, &store);
+    engine.dispatch(&env.login_intent());
+    rx.recv_timeout(TIMEOUT).unwrap();
+    assert!(store.get(&pending_auth_key(&env.pod)).is_some());
+    engine.logout();
+    wait_until("pending sign-in deleted", || {
+        store.get(&pending_auth_key(&env.pod)).is_none()
+    });
+}
+
+fn temp_storage(tag: &str) -> std::path::PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "client-core-auth-{tag}-{}-{nanos}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// (pixelfed entities, outbox rows, has the workspace row) in cache.db.
+fn cached(dir: &std::path::Path) -> (i64, i64, bool) {
+    let db = Store::open(&dir.join(client_core::CACHE_DB_FILE)).unwrap();
+    let count = |sql: &str| db.conn().query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+    (
+        count("SELECT COUNT(*) FROM entities WHERE domain = 'pixelfed'"),
+        count("SELECT COUNT(*) FROM action_outbox"),
+        db.load_workspace(WORKSPACE).unwrap().is_some_and(|w| {
+            w.entity_uris
+                .iter()
+                .chain(w.queries.values().flatten())
+                .any(|u| u.starts_with("pixelfed://"))
+        }),
+    )
+}
+
+#[test]
+fn sign_out_purges_the_private_feed_from_the_cache() {
+    let env = Env::start();
+    let dir = temp_storage("purge");
+    let store = Arc::new(MemoryStore::new());
+    let engine = engine_in(
+        dir.to_str().unwrap(),
+        &env.pod,
+        Arc::clone(&store) as Arc<dyn SecureStore>,
+        Some(Arc::new(AutoApproveBrowser::default())),
+        RedirectMode::Loopback,
+    );
+    engine.dispatch(&env.login_intent());
+    wait_signed_in(&engine);
+    let (ents, _, ws) = cached(&dir);
+    assert!(ents > 1 && ws, "feed cached: {ents} {ws}");
+
+    // 401 sign-out (session revoked elsewhere) with a like queued: the liked
+    // post stays (its row resumes after the next sign-in), the rest goes.
+    let (id, _) = unliked_post(&engine.snapshot());
+    let token = stored_token(&env, &store);
+    reqwest::blocking::Client::new()
+        .post(format!("{}/v1/auth/logout", env.pod))
+        .bearer_auth(&token)
+        .send()
+        .unwrap();
+    engine.dispatch(&like_intent(&id));
+    wait_until("signed out by the 401", || {
+        auth(&engine.snapshot())["state"] == "signed_out"
+    });
+    wait_signed_out_bundle(&engine);
+    assert_eq!(cached(&dir), (1, 1, false));
+    let snap = engine.snapshot();
+    assert_eq!(snap.pending_actions, 1);
+    let ents = entities(&snap);
+    let private: Vec<&String> = ents
+        .as_object()
+        .unwrap()
+        .keys()
+        .filter(|k| k.starts_with("pixelfed://"))
+        .collect();
+    assert_eq!(private, vec![&format!("pixelfed://posts/{id}")]);
+
+    // Explicit logout: the like can never be sent as anyone; dropped too.
+    engine.logout();
+    assert_eq!(cached(&dir), (0, 0, false));
+    let snap = engine.snapshot();
+    assert_eq!(snap.pending_actions, 0);
+    assert!(!snap.entities_json.contains("pixelfed://posts/"));
+    wait_signed_out_bundle(&engine);
+    assert_eq!(cached(&dir).0, 0);
+    drop(engine);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A `MemoryStore` whose session writes are slow (a Keychain prompt, a
+/// slow Keystore) and that records the threads touching the session key.
+struct SlowStore {
+    inner: MemoryStore,
+    set_started: Mutex<mpsc::Sender<()>>,
+    threads: Mutex<Vec<String>>,
+}
+
+impl SlowStore {
+    fn record(&self, key: &str) {
+        if key.starts_with("pod_session:") {
+            let name = thread::current().name().unwrap_or("?").to_owned();
+            self.threads.lock().unwrap().push(name);
+        }
+    }
+}
+
+impl SecureStore for SlowStore {
+    fn get(&self, key: &str) -> Option<String> {
+        self.inner.get(key)
+    }
+    fn set(&self, key: &str, value: &str) {
+        self.record(key);
+        if key.starts_with("pod_session:") {
+            let _ = self.set_started.lock().unwrap().send(());
+            thread::sleep(Duration::from_millis(800));
+        }
+        self.inner.set(key, value);
+    }
+    fn delete(&self, key: &str) {
+        self.record(key);
+        self.inner.delete(key);
+    }
+}
+
+#[test]
+fn secure_store_io_stays_off_the_ui_thread_and_logout_wins_the_race() {
+    let env = Env::start();
+    let (tx, started) = mpsc::channel();
+    let store = Arc::new(SlowStore {
+        inner: MemoryStore::new(),
+        set_started: Mutex::new(tx),
+        threads: Mutex::default(),
+    });
+    let engine = engine_in(
+        "",
+        &env.pod,
+        Arc::clone(&store) as Arc<dyn SecureStore>,
+        Some(Arc::new(AutoApproveBrowser::default())),
+        RedirectMode::Loopback,
+    );
+    engine.dispatch(&env.login_intent());
+    // The session is being written (slowly): the UI thread is not blocked
+    // by it, neither for logout nor for a new sign-in.
+    started.recv_timeout(TIMEOUT).unwrap();
+    let t = Instant::now();
+    engine.logout();
+    assert!(t.elapsed() < Duration::from_millis(300), "logout blocked {:?}", t.elapsed());
+    assert_eq!(auth(&engine.snapshot())["state"], "signed_out");
+    // Logout came after the sign-in: the store must end up empty.
+    thread::sleep(Duration::from_millis(1200));
+    assert!(store.inner.get(&session_key(&env.pod)).is_none());
+    assert_eq!(auth(&engine.snapshot())["state"], "signed_out");
+    let threads = store.threads.lock().unwrap().clone();
+    let me = thread::current().name().unwrap_or("?").to_owned();
+    assert!(!threads.is_empty());
+    assert!(!threads.contains(&me), "store touched on the caller's thread: {threads:?}");
 }

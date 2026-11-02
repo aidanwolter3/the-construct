@@ -64,10 +64,10 @@ internal fun MediaCarousel(
     Column(modifier.fillMaxWidth()) {
         Box(Modifier.fillMaxWidth().aspectRatio(ratio)) {
             if (refs.size == 1) {
-                MediaImage(media[0], Modifier.fillMaxSize())
+                MediaImage(media[0], 0, 1, Modifier.fillMaxSize())
             } else {
                 HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize().testTag("carousel:$postUri")) { page ->
-                    MediaImage(media[page], Modifier.fillMaxSize())
+                    MediaImage(media[page], page, refs.size, Modifier.fillMaxSize())
                 }
                 Text(
                     "${pagerState.currentPage + 1}/${refs.size}",
@@ -100,13 +100,20 @@ internal fun MediaCarousel(
     }
 }
 
+/**
+ * Accessibility label of carousel image [index] (0-based) of [count]: its alt text, else "Photo n of N"
+ * (just "Photo" for a single image).
+ */
+internal fun mediaContentDescription(altText: String?, index: Int, count: Int): String =
+    altText?.takeIf { it.isNotBlank() } ?: if (count > 1) "Photo ${index + 1} of $count" else "Photo"
+
 @Composable
-private fun MediaImage(media: JsonObject?, modifier: Modifier) {
-    val alt = media?.str("alt_text")
+private fun MediaImage(media: JsonObject?, index: Int, count: Int, modifier: Modifier) {
+    val alt = media?.str("alt_text")?.takeIf { it.isNotBlank() }
     val bg = blurhashAverageRgb(media?.str("blurhash"))?.let { Color(0xFF000000 or it.toLong()) } ?: Color(0xFFE8E8EC)
     CanvasImage(
         url = media?.str("url"),
-        contentDescription = alt,
+        contentDescription = mediaContentDescription(alt, index, count),
         modifier = modifier,
         placeholderColor = bg,
         error = {
@@ -225,6 +232,13 @@ internal fun ActionBar(node: UiNode.ActionBar, item: JsonObject?, dispatch: (Act
     }
 }
 
+/** Label text for a content warning: "CW: " + [text], unless the author already wrote a "CW" word (any case). */
+internal fun contentWarningText(text: String): String {
+    val t = text.trim()
+    val prefixed = t.startsWith("CW", ignoreCase = true) && (t.length == 2 || !t[2].isLetterOrDigit())
+    return if (prefixed) t else "CW: $t"
+}
+
 /** The post's `content_warning` as a label above the caption (nothing is hidden yet). */
 @Composable
 internal fun ContentWarningLabel(text: String, modifier: Modifier = Modifier) {
@@ -236,6 +250,6 @@ internal fun ContentWarningLabel(text: String, modifier: Modifier = Modifier) {
     ) {
         Icon(CanvasIcons.Warning, contentDescription = null, tint = Color(0xFFB26A00), modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(6.dp))
-        Text("CW: $text", style = MaterialTheme.typography.labelLarge, color = Color(0xFF7A4A00))
+        Text(contentWarningText(text), style = MaterialTheme.typography.labelLarge, color = Color(0xFF7A4A00))
     }
 }

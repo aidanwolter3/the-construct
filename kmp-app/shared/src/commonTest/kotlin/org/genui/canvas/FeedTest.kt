@@ -125,4 +125,21 @@ class FeedTest {
         assertEquals(AuthInfo(), AuthInfo.parse("garbage"))
         assertTrue(AuthInfo.parse("{}").state == "signed_out")
     }
+
+    @Test
+    fun contentWarningLabelDoesNotDoubleThePrefix() {
+        assertEquals("CW: Snake photo", contentWarningText("Snake photo"))
+        assertEquals("CW: orange", contentWarningText("CW: orange"))
+        assertEquals("cw orange", contentWarningText("cw orange"))
+        assertEquals("CW", contentWarningText("CW"))
+        assertEquals("CW: Cwazy cats", contentWarningText("Cwazy cats"))
+    }
+
+    @Test
+    fun carouselImagesWithoutAltTextGetAPositionLabel() {
+        assertEquals("A snake", mediaContentDescription("A snake", 0, 3))
+        assertEquals("Photo 2 of 3", mediaContentDescription(null, 1, 3))
+        assertEquals("Photo 3 of 3", mediaContentDescription("  ", 2, 3))
+        assertEquals("Photo", mediaContentDescription(null, 0, 1))
+    }
 }

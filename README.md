@@ -158,13 +158,24 @@ Environment:
   instance").
 - `PIXELFED_PUBLIC_URL` (default = instance URL): base for browser-facing links (the `authorize_endpoint`),
   e.g. `http://10.0.2.2:8081` for the Android emulator while the pod calls `127.0.0.1:8081`.
+- `PIXELFED_OWNER_ACCOUNT_ID` (default unset): the only upstream account id allowed to sign in. Unset, the first
+  account that signs in is pinned as the owner and any other account gets 403 `account_not_owner`.
+- `PIXELFED_ALLOW_ACCOUNT_CHANGE=1`: let any account sign in and replace the stored one (no pinning).
+- `PIXELFED_MEDIA_HOSTS` (comma-separated `host`, `host:port` or `https://host[:port]`): extra origins the media
+  proxy may fetch (CDN/S3) besides the instance and public URLs. Media on other hosts are shown as placeholders.
+- `PIXELFED_EXTRA_REDIRECTS` (comma-separated exact URIs): extra redirect URIs accepted by `/v1/auth/pixelfed/app`.
+- `CANVAS_SESSION_TTL_DAYS` (default 90): pod sessions older than this are rejected (sign in again).
 
 Endpoints:
 
 - `POST /v1/auth/pixelfed/app {instance_url, redirect_uri}` -> `{client_id, scopes, authorize_endpoint}`
-  (registers an app upstream once per redirect_uri). Another instance -> 400 `instance_not_allowed`.
+  (registers an app upstream once per redirect_uri; a cached app is re-checked with a `client_credentials` grant
+  and re-registered if the instance no longer knows it). Another instance -> 400 `instance_not_allowed`.
+  `redirect_uri` must be `http://127.0.0.1:<port>/callback`, `http://localhost:<port>/callback`, `canvas://oauth`
+  or a `PIXELFED_EXTRA_REDIRECTS` entry, else 400 `redirect_uri_not_allowed`.
 - `POST /v1/auth/pixelfed/token {instance_url, code, code_verifier, redirect_uri}` -> `{session_token,
-  account:{id, username, display_name, avatar_url}}`. Upstream rejection -> 400 `oauth_exchange_failed`.
+  account:{id, username, display_name, avatar_url}}`. Upstream rejection -> 400 `oauth_exchange_failed`. An
+  account other than the pinned owner -> 403 `account_not_owner` (the stored account is untouched).
 - `POST /v1/auth/logout` (bearer) -> `{ok:true}`; deletes the session (401 if it is not valid).
 - `GET /v1/workspaces/pixelfed_home`: with a valid session, the home feed bundle (`queries["timeline:home"]` +
   posts/users/media entities, PostCard layout with like/bookmark optimistic mutations). Without a bearer: 200 with a
@@ -177,8 +188,10 @@ Endpoints:
   so concurrent requests share one refresh) and retries; if that fails, the feed signs out as above.
 - `POST /v1/pixelfed/posts/like {id, liked}` and `POST /v1/pixelfed/posts/bookmark {id, bookmarked}` -> `{ok, id,
   is_liked, like_count, is_bookmarked}`. No session 401; upstream 4xx passed through; upstream 5xx/unreachable 502.
-- `GET /v1/pixelfed/media/{key}`: unauthenticated media/avatar proxy. Every image URL in a bundle is rewritten to
-  `http://<request Host>/v1/pixelfed/media/<key>`; unknown keys are 404.
+- `GET /v1/pixelfed/media/{key}`: unauthenticated media/avatar proxy. Every image URL in a bundle on an allowed
+  origin (instance, public URL, `PIXELFED_MEDIA_HOSTS`) is rewritten to
+  `http://<request Host>/v1/pixelfed/media/<key>`; other image URLs become `null`. Unknown keys are 404, a key for
+  a disallowed origin 403; redirects are only followed to allowed origins; bodies over 25 MB are refused (502).
 - `POST /v1/demo/ack`: stateless 200 used by the static `pixelfed_demo` fixture's like button.
 
 Try it with curl against the fake (auto-approve skips the browser):
@@ -187,11 +200,11 @@ Try it with curl against the fake (auto-approve skips the browser):
 FAKE_PIXELFED_ADDR=127.0.0.1:8081 FAKE_PIXELFED_AUTO_APPROVE=1 cargo run -p fake-pixelfed &
 cargo run -p server &
 curl -s -X POST -H 'content-type: application/json' http://127.0.0.1:8080/v1/auth/pixelfed/app \
-  -d '{"instance_url":"http://127.0.0.1:8081","redirect_uri":"http://127.0.0.1:9/cb"}'
+  -d '{"instance_url":"http://127.0.0.1:8081","redirect_uri":"http://127.0.0.1:9/callback"}'
 # GET <authorize_endpoint>?response_type=code&client_id=..&redirect_uri=..&scope=read+write&state=s
 #   &code_challenge=<S256(verifier)>&code_challenge_method=S256  -> 302 to redirect_uri?code=..
 curl -s -X POST -H 'content-type: application/json' http://127.0.0.1:8080/v1/auth/pixelfed/token \
-  -d '{"instance_url":"http://127.0.0.1:8081","code":"..","code_verifier":"..","redirect_uri":"http://127.0.0.1:9/cb"}'
+  -d '{"instance_url":"http://127.0.0.1:8081","code":"..","code_verifier":"..","redirect_uri":"http://127.0.0.1:9/callback"}'
 curl -s -H "Authorization: Bearer $SESSION" http://127.0.0.1:8080/v1/workspaces/pixelfed_home | jq .queries
 ```
 
@@ -207,6 +220,9 @@ thread; `auth_json` in every snapshot goes `pending` -> `signed_in` (username, d
 - `redirectUri = null`: loopback (desktop). The engine listens once on `http://127.0.0.1:47823/callback` for 5
   minutes (a fixed port so the pod reuses one upstream OAuth app; if 47823 is busy, a random port, which registers
   another app). A custom URI (Android: `canvas://oauth`): the app forwards the redirect to `handleAuthRedirect`.
+  The custom-scheme flow is also kept in the secure store (`pending_auth:<baseUrl>`, 10 minutes), so a redirect
+  that cold-starts the app after its process was killed still signs in; one that matches nothing shows "Sign-in
+  was interrupted; please try again".
 - `secureStore = null`: macOS Keychain (service `dev.canvas.client`, key `pod_session:<baseUrl>`), in-memory
   elsewhere. The session survives restarts; `logout()` deletes it on the pod and locally.
 - `urlOpener = null` (or `open` returns false): `auth_json` says "no browser available" and the authorize URL is
@@ -214,6 +230,8 @@ thread; `auth_json` in every snapshot goes `pending` -> `signed_in` (username, d
   With the fake, append `&auto=1` to approve without clicking.
 - A 401 from the pod signs the client out (a stale session on `pixelfed_home` gets one, see above). A like queued
   while the session was invalid stays pending (not rolled back) and is sent after the next sign-in.
+- Signing out (or a 401) removes the cached private feed (`pixelfed://` entities, the feed workspace row) from
+  `cache.db`; `logout()` also drops queued Pixelfed actions, a 401 keeps them for the next sign-in.
 - UI: while signed in the status line shows `@username` and a **Sign out** button (`CanvasController.logout()`);
   "Signing in…" while pending; "Sign-in failed: <message>" on error.
 
@@ -259,7 +277,8 @@ below). Things the real instance does differently from the fake:
   routing on `APP_DOMAIN`, port ignored); with Host `127.0.0.1` or `10.0.2.2` they are 404. `/api/*` and
   `/storage/*` answer on any Host. For the Android emulator use `adb reverse tcp:8090 tcp:8090` and
   `localhost:8090`.
-- `/oauth/authorize` and `/oauth/token` are throttled to 10 requests/minute per IP (429).
+- `/oauth/authorize` and `/oauth/token` are throttled to 10 requests/minute per IP (429). Each pod sign-in uses
+  two `/oauth/token` requests (the cached-app `client_credentials` check and the code exchange).
 - The home timeline hides boosts unless `include_reblogs=true`, hides text-only posts, and emits absolute `Link`
   headers built from `APP_URL` that drop `include_reblogs`.
 - Media/avatar URLs are absolute `http://localhost:8090/storage/...`.

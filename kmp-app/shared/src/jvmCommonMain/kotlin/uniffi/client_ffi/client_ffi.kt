@@ -1061,7 +1061,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_dispatch() != 57352.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_client_ffi_checksum_method_enginehandle_handle_auth_redirect() != 45461.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_handle_auth_redirect() != 36756.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_logout() != 63659.toShort()) {
@@ -1507,8 +1507,10 @@ public interface EngineHandleInterface {
     fun `dispatch`(`intentJson`: kotlin.String)
     
     /**
-     * Deliver an OAuth redirect URL (custom-scheme mode). True if the
-     * pending sign-in accepted it. Never blocks.
+     * Deliver an OAuth redirect URL (custom-scheme mode). True if it was
+     * taken: by the pending sign-in, or (none in memory, e.g. after a
+     * process restart) by a background completion of the persisted one
+     * (outcome in `auth_json`). Never blocks.
      */
     fun `handleAuthRedirect`(`url`: kotlin.String): kotlin.Boolean
     
@@ -1645,8 +1647,10 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
 
     
     /**
-     * Deliver an OAuth redirect URL (custom-scheme mode). True if the
-     * pending sign-in accepted it. Never blocks.
+     * Deliver an OAuth redirect URL (custom-scheme mode). True if it was
+     * taken: by the pending sign-in, or (none in memory, e.g. after a
+     * process restart) by a background completion of the persisted one
+     * (outcome in `auth_json`). Never blocks.
      */override fun `handleAuthRedirect`(`url`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {

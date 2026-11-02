@@ -165,8 +165,10 @@ impl EngineHandle {
         }
     }
 
-    /// Deliver an OAuth redirect URL (custom-scheme mode). True if the
-    /// pending sign-in accepted it. Never blocks.
+    /// Deliver an OAuth redirect URL (custom-scheme mode). True if it was
+    /// taken: by the pending sign-in, or (none in memory, e.g. after a
+    /// process restart) by a background completion of the persisted one
+    /// (outcome in `auth_json`). Never blocks.
     pub fn handle_auth_redirect(&self, url: String) -> bool {
         self.inner.handle_auth_redirect(&url)
     }
@@ -300,7 +302,8 @@ mod tests {
             Some("canvas://oauth".to_string()),
         );
         assert_eq!(handle.snapshot().auth_json, r#"{"state":"signed_out"}"#);
-        assert!(!handle.handle_auth_redirect("canvas://oauth?code=x&state=y".to_string()));
+        // Taken for the persisted-flow check (the store panics: nothing matches).
+        assert!(handle.handle_auth_redirect("canvas://oauth?code=x&state=y".to_string()));
         handle.logout();
         // Sign-in against an unreachable pod ends in the error state.
         handle.dispatch(

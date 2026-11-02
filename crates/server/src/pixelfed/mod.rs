@@ -13,7 +13,8 @@
 //! - `pixelfed://users/<id>`: id, username (acct), display_name, avatar_url.
 //! - `pixelfed://media/<id>`: id, type, url, preview_url, aspect_ratio, alt_text, blurhash.
 //!
-//! Every image URL is rewritten through [`MediaUrls`] to the pod's media proxy.
+//! Every image URL is rewritten through [`MediaUrls`] to the pod's media proxy
+//! (or dropped to null when its origin is not in the [`MediaAllowlist`]).
 
 pub mod layout;
 pub mod routes;
@@ -230,33 +231,131 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The origins the media proxy may fetch (SSRF guard): media URLs come from
+/// upstream content, which a federated post can fill with any URL.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MediaAllowlist {
+    /// (lowercase host, port). `None`: the URL must use its scheme's default port.
+    origins: Vec<(String, Option<u16>)>,
+}
+
+impl MediaAllowlist {
+    /// `bases`: full URLs (their host and effective port). `hosts`: `host`,
+    /// `host:port` or a full `scheme://host[:port]` URL.
+    pub fn new<'a>(
+        bases: impl IntoIterator<Item = &'a str>,
+        hosts: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        let mut origins = Vec::new();
+        for base in bases {
+            match reqwest::Url::parse(base.trim()) {
+                Ok(u) if u.host_str().is_some() => origins.push((
+                    u.host_str().unwrap_or_default().to_ascii_lowercase(),
+                    u.port_or_known_default(),
+                )),
+                _ => tracing::warn!(base, "unparseable Pixelfed base URL in media allowlist"),
+            }
+        }
+        for host in hosts {
+            let host = host.trim();
+            let parsed = if host.contains("://") {
+                reqwest::Url::parse(host).map(|u| {
+                    let port = u.port_or_known_default();
+                    (u, port)
+                })
+            } else {
+                reqwest::Url::parse(&format!("http://{host}")).map(|u| {
+                    let port = u.port();
+                    (u, port)
+                })
+            };
+            match parsed {
+                Ok((u, port)) if u.host_str().is_some() => origins.push((
+                    u.host_str().unwrap_or_default().to_ascii_lowercase(),
+                    port,
+                )),
+                _ => tracing::warn!(host, "ignoring unparseable PIXELFED_MEDIA_HOSTS entry"),
+            }
+        }
+        Self { origins }
+    }
+
+    pub fn allows_url(&self, url: &reqwest::Url) -> bool {
+        if !matches!(url.scheme(), "http" | "https") {
+            return false;
+        }
+        let Some(host) = url.host_str().map(str::to_ascii_lowercase) else {
+            return false;
+        };
+        self.origins.iter().any(|(h, port)| {
+            *h == host
+                && match port {
+                    Some(p) => url.port_or_known_default() == Some(*p),
+                    None => url.port().is_none(),
+                }
+        })
+    }
+
+    pub fn allows(&self, url: &str) -> bool {
+        reqwest::Url::parse(url).is_ok_and(|u| self.allows_url(&u))
+    }
+}
+
+/// Warn once per host (per process) about media URLs outside the allowlist.
+fn log_dropped_media_host(url: &str) {
+    static LOGGED: std::sync::Mutex<Option<HashSet<String>>> = std::sync::Mutex::new(None);
+    let host = reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "<unparseable>".to_owned());
+    let mut guard = LOGGED.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.get_or_insert_with(HashSet::new).insert(host.clone()) {
+        tracing::warn!(
+            %host,
+            "media URL host is not in the allowlist (PIXELFED_MEDIA_HOSTS); dropped (logged once per host)"
+        );
+    }
+}
+
 /// Rewrites upstream image URLs to `<proxy_base>/<key>` and remembers
-/// key -> upstream URL for the URLs it has emitted.
+/// key -> upstream URL for the URLs it has emitted. URLs outside the
+/// [`MediaAllowlist`] are dropped (null), so the client shows a placeholder.
 #[derive(Debug, Clone)]
 pub struct MediaUrls {
     proxy_base: String,
+    allow: MediaAllowlist,
     pub keys: BTreeMap<String, String>,
 }
 
 impl MediaUrls {
     /// `proxy_base` like `http://10.0.2.2:8080/v1/pixelfed/media` (no trailing slash).
-    pub fn new(proxy_base: &str) -> Self {
+    pub fn new(proxy_base: &str, allow: &MediaAllowlist) -> Self {
         Self {
             proxy_base: proxy_base.trim_end_matches('/').to_owned(),
+            allow: allow.clone(),
             keys: BTreeMap::new(),
         }
     }
 
-    pub fn rewrite(&mut self, url: &str) -> String {
+    /// The proxy URL for `url`, or `None` if its origin is not allowed.
+    pub fn rewrite(&mut self, url: &str) -> Option<String> {
+        if !self.allow.allows(url) {
+            log_dropped_media_host(url);
+            return None;
+        }
         let key = media_key(url);
         let out = format!("{}/{key}", self.proxy_base);
         self.keys.insert(key, url.to_owned());
-        out
+        Some(out)
     }
 
     fn rewrite_opt(&mut self, url: Option<&str>) -> Value {
-        match url.map(str::trim).filter(|u| !u.is_empty()) {
-            Some(u) => Value::String(self.rewrite(u)),
+        match url
+            .map(str::trim)
+            .filter(|u| !u.is_empty())
+            .and_then(|u| self.rewrite(u))
+        {
+            Some(u) => Value::String(u),
             None => Value::Null,
         }
     }
@@ -606,9 +705,72 @@ mod tests {
     const BASE: &str = "http://127.0.0.1:8081";
     const PROXY: &str = "http://10.0.2.2:8080/v1/pixelfed/media";
 
+    /// The fake's and the recorded instance's origins.
+    fn allow() -> MediaAllowlist {
+        MediaAllowlist::new([BASE, REAL_BASE], [])
+    }
+
+    #[test]
+    fn media_allowlist_matches_host_and_port() {
+        let a = MediaAllowlist::new(
+            ["http://localhost:8090", "https://pixelfed.example/"],
+            ["cdn.example", "s3.example:9000", "https://img.example"],
+        );
+        for ok in [
+            "http://localhost:8090/storage/a.jpg",
+            "http://LOCALHOST:8090/x",
+            "https://pixelfed.example/storage/a.jpg",
+            "https://pixelfed.example:443/a",
+            "https://cdn.example/a.jpg",
+            "http://cdn.example/a.jpg",
+            "https://s3.example:9000/b/a.jpg",
+            "https://img.example/a",
+        ] {
+            assert!(a.allows(ok), "{ok}");
+        }
+        for bad in [
+            "http://localhost:22/",
+            "http://localhost/",
+            "http://pixelfed.example/a", // port 80, not the configured 443
+            "https://cdn.example:8443/a",
+            "https://s3.example/a",
+            "http://169.254.169.254/latest/meta-data",
+            "https://evil.example/a.jpg",
+            "https://cdn.example.evil.example/a",
+            "file:///etc/passwd",
+            "ftp://cdn.example/a",
+            "not a url",
+        ] {
+            assert!(!a.allows(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn media_outside_the_allowlist_is_dropped() {
+        let raw = vec![json!({
+            "id": "1",
+            "account": {"id": "2", "avatar": "http://169.254.169.254/latest/meta-data/"},
+            "media_attachments": [{
+                "id": "3",
+                "url": format!("{BASE}/storage/ok.png"),
+                "preview_url": "https://evil.example/p.png"
+            }]
+        })];
+        let mut media = MediaUrls::new(PROXY, &allow());
+        let tl = normalize_timeline(&raw, &mut media);
+        assert_eq!(
+            tl.entities["pixelfed://users/2"].get("avatar_url"),
+            Some(&Value::Null)
+        );
+        let m = &tl.entities["pixelfed://media/3"];
+        assert_eq!(m.get("preview_url"), Some(&Value::Null));
+        proxied(&media, &m.0["url"], "/storage/ok.png");
+        assert_eq!(media.keys.len(), 1, "only the allowed URL got a proxy key");
+    }
+
     fn fixture_timeline() -> (Timeline, MediaUrls) {
         let raw: Vec<Value> = serde_json::from_str(&FIXTURE.replace("{{BASE}}", BASE)).unwrap();
-        let mut media = MediaUrls::new(PROXY);
+        let mut media = MediaUrls::new(PROXY, &allow());
         let tl = normalize_timeline(&raw, &mut media);
         (tl, media)
     }
@@ -784,7 +946,7 @@ mod tests {
 
     fn normalize_recorded(json: &str) -> (Timeline, MediaUrls) {
         let raw: Vec<Value> = serde_json::from_str(json).unwrap();
-        let mut media = MediaUrls::new(PROXY);
+        let mut media = MediaUrls::new(PROXY, &allow());
         let tl = normalize_timeline(&raw, &mut media);
         assert_eq!(tl.order.len(), raw.len(), "no recorded status was skipped");
         (tl, media)
@@ -914,7 +1076,7 @@ mod tests {
                 {"id": "10", "meta": "bad"}
             ]
         })];
-        let mut media = MediaUrls::new(PROXY);
+        let mut media = MediaUrls::new(PROXY, &allow());
         let tl = normalize_timeline(&raw, &mut media);
         let p = &tl.entities["pixelfed://posts/1"];
         assert_eq!(p.get_bool("sensitive"), Some(false));
@@ -955,7 +1117,7 @@ mod tests {
             json!({"id": "8", "account": {"id": "1", "acct": "x@remote", "avatar": ""},
                    "media_attachments": [{"id": "9", "meta": {"original": {"width": 1280, "height": 720}}}]}),
         ];
-        let mut media = MediaUrls::new(PROXY);
+        let mut media = MediaUrls::new(PROXY, &allow());
         let tl = normalize_timeline(&raw, &mut media);
         assert_eq!(tl.order, ["pixelfed://posts/7", "pixelfed://posts/8"]);
         let p = &tl.entities["pixelfed://posts/7"];

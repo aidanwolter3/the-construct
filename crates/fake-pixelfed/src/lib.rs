@@ -1,7 +1,7 @@
 //! A fake Pixelfed (Mastodon-compatible) upstream for local development and tests.
 //!
 //! Serves the fixtures in `fixtures/pixelfed/` with in-memory state: OAuth app registration, an
-//! authorization-code + PKCE (S256) flow, bearer-token checks, the home timeline,
+//! authorization-code + PKCE (S256) flow, refresh_token and client_credentials grants, bearer-token checks, the home timeline,
 //! favourite/bookmark toggles and static media under `/storage/...`. Every `{{BASE}}` in the fixture
 //! JSON is replaced by the configured public URL when the fixtures are loaded.
 
@@ -79,6 +79,8 @@ struct Inner {
     reblog_of: HashMap<String, String>,
     /// Home timeline order (outer ids, newest first).
     timeline: Vec<String>,
+    /// Successful client_credentials grants (test observability).
+    client_credentials_grants: usize,
 }
 
 impl Inner {
@@ -167,6 +169,24 @@ impl AppState {
         inner.tokens.clear();
         tracing::info!(count = n, "all access tokens expired (test hook)");
         n
+    }
+
+    /// Test hook: the instance forgets every registered OAuth app (as after a
+    /// reset); their tokens stop working too. Returns how many were dropped.
+    pub fn forget_apps(&self) -> usize {
+        let mut inner = self.lock();
+        let n = inner.apps.len();
+        inner.apps.clear();
+        inner.codes.clear();
+        inner.refresh_tokens.clear();
+        inner.tokens.retain(|_, client| client == "seed");
+        tracing::info!(count = n, "all OAuth apps forgotten (test hook)");
+        n
+    }
+
+    /// How many client_credentials grants succeeded.
+    pub fn client_credentials_grants(&self) -> usize {
+        self.lock().client_credentials_grants
     }
 }
 
@@ -602,11 +622,14 @@ async fn token(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Byt
         error_json(StatusCode::BAD_REQUEST, "invalid_grant", desc)
     };
     let grant_type = param(&params, "grant_type");
-    if !matches!(grant_type, "authorization_code" | "refresh_token") {
+    if !matches!(
+        grant_type,
+        "authorization_code" | "refresh_token" | "client_credentials"
+    ) {
         return error_json(
             StatusCode::BAD_REQUEST,
             "unsupported_grant_type",
-            "only authorization_code and refresh_token are supported",
+            "only authorization_code, refresh_token and client_credentials are supported",
         );
     }
     let client_id = param(&params, "client_id");
@@ -621,6 +644,22 @@ async fn token(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Byt
                 "Client authentication failed",
             );
         }
+    }
+    if grant_type == "client_credentials" {
+        // Passport: an app-only token, no refresh token. Like Pixelfed's, it
+        // cannot act as a user, so the fake does not accept it on the API.
+        inner.client_credentials_grants += 1;
+        tracing::info!(client_id, "client_credentials token issued (app-only)");
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        return Json(json!({
+            "token_type": "Bearer",
+            "expires_in": TOKEN_EXPIRES_IN,
+            "access_token": random_token(32),
+            "created_at": iso8601(now),
+        }))
+        .into_response();
     }
     if grant_type == "refresh_token" {
         // Passport semantics: the refresh token is single use and rotating;

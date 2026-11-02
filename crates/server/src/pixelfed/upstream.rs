@@ -2,9 +2,11 @@
 
 use std::time::Duration;
 
-use reqwest::StatusCode;
+use reqwest::{StatusCode, redirect};
 use serde::Deserialize;
 use serde_json::Value;
+
+use super::MediaAllowlist;
 
 /// Total timeout for API calls.
 pub const API_TIMEOUT: Duration = Duration::from_secs(10);
@@ -71,19 +73,40 @@ fn lenient_secs<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<i64>, D
 #[derive(Debug, Clone)]
 pub struct Upstream {
     http: reqwest::Client,
+    /// Media fetches: redirects are followed only to allowlisted origins.
+    media: reqwest::Client,
     instance_url: String,
 }
 
 impl Upstream {
-    pub fn new(instance_url: &str) -> Self {
+    pub fn new(instance_url: &str, media_allow: MediaAllowlist) -> Self {
+        let user_agent = concat!("canvas-pod/", env!("CARGO_PKG_VERSION"));
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(API_TIMEOUT)
-            .user_agent(concat!("canvas-pod/", env!("CARGO_PKG_VERSION")))
+            .user_agent(user_agent)
+            .build()
+            .expect("reqwest client");
+        let policy = redirect::Policy::custom(move |attempt| {
+            if attempt.previous().len() >= 5 {
+                attempt.error("too many media redirects")
+            } else if media_allow.allows_url(attempt.url()) {
+                attempt.follow()
+            } else {
+                tracing::warn!(host = ?attempt.url().host_str(), "media redirect to a host outside the allowlist refused");
+                attempt.stop()
+            }
+        });
+        let media = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(MEDIA_TIMEOUT)
+            .user_agent(user_agent)
+            .redirect(policy)
             .build()
             .expect("reqwest client");
         Self {
             http,
+            media,
             instance_url: instance_url.trim_end_matches('/').to_owned(),
         }
     }
@@ -162,6 +185,24 @@ impl Upstream {
         .await
     }
 
+    /// `POST /oauth/token` (client_credentials grant, scope read): checks that
+    /// the upstream still knows a cached app. Passport issues an app-only
+    /// token (unused); an unknown client or wrong secret is 401 invalid_client.
+    pub async fn client_credentials(
+        &self,
+        client_id: &str,
+        client_secret: &str,
+    ) -> Result<(), UpstreamError> {
+        Self::send_json::<Value>(self.http.post(self.url("/oauth/token")).form(&[
+            ("grant_type", "client_credentials"),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("scope", "read"),
+        ]))
+        .await
+        .map(|_| ())
+    }
+
     pub async fn verify_credentials(&self, token: &str) -> Result<Value, UpstreamError> {
         Self::send_json(
             self.http
@@ -209,12 +250,12 @@ impl Upstream {
     }
 
     /// GET a media URL (no credentials are sent: media are public and the URL
-    /// may be on another host).
+    /// may be on another allowlisted host). A redirect to a host outside the
+    /// allowlist is not followed (the 3xx comes back as a `Status` error).
     pub async fn fetch_media(&self, url: &str) -> Result<reqwest::Response, UpstreamError> {
         let resp = self
-            .http
+            .media
             .get(url)
-            .timeout(MEDIA_TIMEOUT)
             .send()
             .await
             .map_err(|e| UpstreamError::Unreachable(e.to_string()))?;

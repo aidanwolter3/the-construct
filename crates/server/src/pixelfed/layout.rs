@@ -97,11 +97,8 @@ pub fn signed_out(instance_url: &str) -> WorkspaceSpec {
                 content: UiNode::Container {
                     orientation: Orientation::Vertical,
                     padding_dp: 16,
+                    // No title Text: the workspace title already says "Pixelfed".
                     children: vec![
-                        UiNode::Text {
-                            value_expr: "Pixelfed".into(),
-                            style: TextStyle::Title,
-                        },
                         UiNode::Text {
                             value_expr: format!(
                                 "Sign in to {instance_url} to see your home feed. Your Pixelfed \

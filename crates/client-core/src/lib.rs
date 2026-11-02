@@ -55,7 +55,7 @@ use protocol::{ActionIntent, EntityRecord, FieldUpdate, UiNode, WorkspaceSpec};
 use serde_json::{Value, json};
 
 pub use auth::{MemoryStore, RedirectMode, SecureStore, UrlOpener};
-use auth::{LoopbackListener, Pkce, Redirect, guarded};
+use auth::{LoopbackListener, PendingAuth, Pkce, Redirect, guarded};
 use store::{AlsoUpdate, NewOutboxRow, OutboxRow, Store, StoreOps};
 
 const DEFAULT_WORKSPACE_ID: &str = "home";
@@ -74,6 +74,13 @@ const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 pub const SIGNED_OUT_AUTH_JSON: &str = r#"{"state":"signed_out"}"#;
 /// Timeout for the sign-in calls to the pod (`/v1/auth/...`).
 const AUTH_HTTP_TIMEOUT: Duration = Duration::from_secs(15);
+/// Entity domains whose data is private to the signed-in account; purged
+/// from the cache on sign-out (docs/DECISIONS.md D19).
+const PRIVATE_DOMAINS: &[&str] = &["pixelfed"];
+/// Outbox endpoints that only work with a session; dropped on logout.
+const AUTHED_ENDPOINT_PREFIX: &str = "/v1/pixelfed/";
+/// `auth_json` error when a custom-scheme redirect matches no sign-in.
+pub const SIGN_IN_INTERRUPTED: &str = "Sign-in was interrupted; please try again";
 
 /// Engine timing knobs. [`EngineConfig::default`] is what `init` uses;
 /// tests shorten the intervals so they do not sleep for seconds.
@@ -216,6 +223,9 @@ enum LoginError {
     /// Superseded, logged out or engine dropped: report nothing.
     Cancelled,
     Failed(String),
+    /// A redirect reached an engine with no matching sign-in (in memory or
+    /// persisted): [`SIGN_IN_INTERRUPTED`] unless signed in.
+    Unmatched,
 }
 
 /// Outcome of a fetch attempt.
@@ -450,6 +460,61 @@ impl State {
         self.queries = queries;
     }
 
+    /// Sign-out: forget the cached private (signed-in) data, in memory and in
+    /// the store (one transaction): every entity of a [`PRIVATE_DOMAINS`]
+    /// domain that no remaining PENDING row targets, the queries that list
+    /// such entities, and the cached `active_workspace` row of
+    /// `workspace_id` if it references any. `drop_authed_outbox` (explicit
+    /// logout) first deletes the PENDING rows under
+    /// [`AUTHED_ENDPOINT_PREFIX`]: nobody could send them any more. The
+    /// in-memory layout stays until the refetch replaces it.
+    fn purge_private(&mut self, workspace_id: &str, drop_authed_outbox: bool) {
+        let private = |uri: &str| PRIVATE_DOMAINS.contains(&store::split_uri(uri).0);
+        let mut keep: std::collections::HashSet<String> = Default::default();
+        if let Some(store) = self.store.as_mut() {
+            let result = store.transaction(|tx| {
+                let dropped = if drop_authed_outbox {
+                    tx.delete_pending_outbox_with_endpoint_prefix(AUTHED_ENDPOINT_PREFIX)?
+                } else {
+                    0
+                };
+                let mut entities = 0;
+                for domain in PRIVATE_DOMAINS {
+                    entities += tx.delete_unreferenced_entities(domain)?;
+                }
+                let ws_private = tx.load_workspace(workspace_id)?.is_some_and(|w| {
+                    w.entity_uris
+                        .iter()
+                        .chain(w.queries.values().flatten())
+                        .any(|u| private(u))
+                });
+                if ws_private {
+                    tx.delete_workspace(workspace_id)?;
+                }
+                Ok((dropped, entities, ws_private))
+            });
+            match result {
+                Ok((dropped, entities, ws)) => println!(
+                    "[CanvasEngine] signed out: removed {entities} cached private entities{}{}",
+                    if ws { format!(", workspace '{workspace_id}'") } else { String::new() },
+                    if dropped > 0 {
+                        format!(" and {dropped} pending action(s) that need the session")
+                    } else {
+                        String::new()
+                    }
+                ),
+                Err(e) => eprintln!("[CanvasEngine] ERROR: failed to purge private cache: {e}"),
+            }
+            match store.pending_outbox() {
+                Ok(rows) => keep.extend(rows.into_iter().map(|r| r.entity_uri)),
+                Err(e) => eprintln!("[CanvasEngine] failed to read the outbox after the purge: {e}"),
+            }
+        }
+        self.entities.retain(|u, _| !private(u) || keep.contains(u));
+        self.queries.retain(|_, uris| !uris.iter().any(|u| private(u)));
+        self.sync_pending_count();
+    }
+
     /// Re-read the PENDING count from the store (after a delete).
     fn sync_pending_count(&mut self) {
         if let Some(store) = &self.store {
@@ -682,8 +747,15 @@ struct Inner {
     loopback_port: u16,
     /// `pod_session:<base_url>`.
     session_key: String,
-    /// The sign-in in progress, if any.
+    /// `pending_auth:<base_url>` (custom-scheme mode only).
+    pending_key: String,
+    /// The sign-in in progress, if any. Never held during secure-store I/O.
     flow: Mutex<Option<Arc<Flow>>>,
+    /// Serializes writes of `session_key` (see [`Inner::sync_session_store`]).
+    session_io: Mutex<()>,
+    /// Serializes reads/writes of `pending_key` (lock order: `pending_io`,
+    /// then `flow`).
+    pending_io: Mutex<()>,
 }
 
 impl Drop for Inner {
@@ -906,7 +978,10 @@ impl CanvasEngine {
             redirect,
             loopback_port,
             session_key,
+            pending_key: auth::pending_auth_key(base),
             flow: Mutex::new(None),
+            session_io: Mutex::new(()),
+            pending_io: Mutex::new(()),
         });
 
         // Both background threads hold only a Weak reference between
@@ -988,9 +1063,14 @@ impl CanvasEngine {
 
     /// Deliver an OAuth redirect (custom-scheme mode, e.g.
     /// `canvas://oauth?code=..&state=..`) to the pending sign-in. Returns
-    /// true if a pending flow accepted it; false if no custom-scheme flow is
-    /// waiting, the URL carries no code/error, or its `state` does not match
-    /// (the flow then keeps waiting). Never blocks.
+    /// true if it was taken: delivered to the in-memory flow, or (no flow in
+    /// memory, e.g. the app process was restarted while the browser was in
+    /// front) handed to a background thread that completes the sign-in
+    /// persisted under [`auth::pending_auth_key`] if its `state` matches and
+    /// it is not expired, else reports [`SIGN_IN_INTERRUPTED`] (only when
+    /// signed out). False if the engine uses a loopback redirect, the URL
+    /// carries no code/error, or its `state` does not match the in-memory
+    /// flow (which then keeps waiting). Never blocks.
     pub fn handle_auth_redirect(&self, url: &str) -> bool {
         self.inner.handle_auth_redirect(url)
     }
@@ -1048,22 +1128,52 @@ impl Inner {
             eprintln!("[CanvasEngine] pod rejected the session on {what} (HTTP 401); signed out");
             st.session = None;
             st.auth_json = SIGNED_OUT_AUTH_JSON.to_string();
+            // Pending rows are kept (they resume after the next sign-in).
+            st.purge_private(&self.workspace_id, false);
             st.seq += 1;
             st.snapshot()
         };
-        guarded("SecureStore.delete", || {
-            self.secure_store.delete(&self.session_key)
-        });
+        // Called on the fetch / sync threads only.
+        self.sync_session_store();
         Some(snap)
+    }
+
+    /// Make the secure store match the in-memory session (write it, or
+    /// delete the key when signed out). Every session change calls this
+    /// afterwards, off the UI thread and without the flow lock; `session_io`
+    /// serializes the calls and each one writes the state current when it
+    /// runs, so the last write always reflects the last change (a logout
+    /// racing a sign-in cannot leave a stale session in the store).
+    fn sync_session_store(&self) {
+        let _io = lock(&self.session_io);
+        let raw = lock(&self.state)
+            .session
+            .as_ref()
+            .map(|s| serde_json::to_string(s).unwrap_or_default());
+        match raw {
+            Some(raw) => {
+                if guarded("SecureStore.set", || self.secure_store.set(&self.session_key, &raw))
+                    .is_none()
+                {
+                    eprintln!("[CanvasEngine] the session could not be stored; it lasts until exit");
+                }
+            }
+            None => {
+                guarded("SecureStore.delete", || {
+                    self.secure_store.delete(&self.session_key)
+                });
+            }
+        }
     }
 
     fn refresh(&self) -> FetchOutcome {
         let net = lock(&self.net);
-        let token = self.session_token();
+        let mut token = self.session_token();
         let mut result = fetch(&self.workspace_url, token.as_deref());
         if let (Err(FetchError::Status(401)), Some(t)) = (&result, &token) {
             // The refresh below delivers a newer snapshot than this one.
             let _ = self.expire_session(t, "workspace fetch");
+            token = None;
             if !self.signal.is_shut_down() {
                 result = fetch(&self.workspace_url, None);
             }
@@ -1078,6 +1188,20 @@ impl Inner {
         let snap = {
             let mut st = lock(&self.state);
             match result {
+                Ok(_) if token.is_some()
+                    && st.session.as_ref().map(|s| &s.token) != token.as_ref() =>
+                {
+                    // Fetched with a session that was signed out (or
+                    // replaced) meanwhile: never cache that account's data
+                    // again. Whoever changed the session refetches.
+                    println!(
+                        "[CanvasEngine] discarded workspace '{}' fetched with a session that has \
+                         since changed",
+                        self.workspace_id
+                    );
+                    st.is_online = true;
+                    outcome = FetchOutcome::Fetched;
+                }
                 Ok(spec) => {
                     let failures = std::mem::take(&mut st.fetch_failures);
                     st.last_fetch_error = None;
@@ -1209,10 +1333,16 @@ impl Inner {
                 let (snap, blocked) =
                     self.outbox_unauthorized(&row, &url, sent, token.as_deref());
                 drop(net);
+                let signed_out = snap.is_some();
                 if let Some(snap) = snap {
                     self.notify(snap);
                 }
                 if blocked {
+                    if signed_out && !self.signal.is_shut_down() {
+                        // The private feed was purged: show the signed-out
+                        // bundle instead of an empty one.
+                        self.refresh();
+                    }
                     // Paused until a sign-in wakes the worker.
                     return None;
                 }
@@ -1535,12 +1665,30 @@ impl Inner {
         self.replace_flow(Some(Arc::clone(&flow)));
         self.set_auth_json(pending_auth_json());
         println!("[CanvasEngine] sign-in started for {instance_url}");
+        self.spawn_auth_thread(flow, true, move |weak, flow| {
+            login_flow(weak, flow, &instance_url, redirect_rx)
+        });
+    }
 
+    /// Run `body` (a sign-in) on a `canvas-engine-auth` thread and report
+    /// its failure in `auth_json` if `flow` is still current. `cleanup`:
+    /// afterwards delete the persisted pending sign-in unless it belongs to
+    /// the (then) current flow; skipped when the engine was dropped, so a
+    /// flow cut short by the app going away can be completed by the next
+    /// engine.
+    fn spawn_auth_thread(
+        self: &Arc<Self>,
+        flow: Arc<Flow>,
+        cleanup: bool,
+        body: impl FnOnce(&Weak<Inner>, &Arc<Flow>) -> Result<(), LoginError> + Send + 'static,
+    ) {
         let weak = Arc::downgrade(self);
+        let thread_flow = Arc::clone(&flow);
         let spawned = thread::Builder::new()
             .name("canvas-engine-auth".into())
             .spawn(move || {
-                let result = login_flow(&weak, &flow, &instance_url, redirect_rx);
+                let flow = thread_flow;
+                let result = body(&weak, &flow);
                 let Some(inner) = weak.upgrade() else { return };
                 match result {
                     Ok(()) => {}
@@ -1554,6 +1702,27 @@ impl Inner {
                             inner.set_auth_json(error_auth_json(&msg));
                         }
                     }
+                    Err(LoginError::Unmatched) => {
+                        if inner.is_current(&flow) {
+                            inner.replace_flow(None);
+                            if lock(&inner.state).session.is_some() {
+                                // E.g. a replayed redirect: nothing to report.
+                                eprintln!(
+                                    "[CanvasEngine] auth redirect matches no sign-in; ignored \
+                                     (signed in)"
+                                );
+                            } else {
+                                eprintln!(
+                                    "[CanvasEngine] auth redirect matches no pending sign-in \
+                                     (interrupted or expired)"
+                                );
+                                inner.set_auth_json(error_auth_json(SIGN_IN_INTERRUPTED));
+                            }
+                        }
+                    }
+                }
+                if cleanup && !inner.signal.is_shut_down() {
+                    inner.drop_stale_pending();
                 }
             });
         if let Err(e) = spawned {
@@ -1563,59 +1732,154 @@ impl Inner {
         }
     }
 
+    /// Persist `pending` for `flow` (custom-scheme mode) if it is still the
+    /// current sign-in. Auth thread only.
+    fn persist_pending(&self, flow: &Arc<Flow>, pending: &PendingAuth) {
+        let _io = lock(&self.pending_io);
+        if self.is_current(flow) {
+            let raw = pending.to_json();
+            guarded("SecureStore.set", || self.secure_store.set(&self.pending_key, &raw));
+        }
+    }
+
+    /// Delete the persisted pending sign-in unless it belongs to the current
+    /// in-memory flow (custom-scheme mode only). Background threads only.
+    fn drop_stale_pending(&self) {
+        if !matches!(self.redirect, RedirectMode::Custom(_)) {
+            return;
+        }
+        let _io = lock(&self.pending_io);
+        let Some(raw) = guarded("SecureStore.get", || self.secure_store.get(&self.pending_key))
+            .flatten()
+        else {
+            return;
+        };
+        let current = lock(&self.flow).as_ref().map(|f| f.state.clone());
+        let ours = PendingAuth::parse(&raw).is_some_and(|p| Some(&p.state) == current.as_ref());
+        if !ours {
+            guarded("SecureStore.delete", || {
+                self.secure_store.delete(&self.pending_key)
+            });
+        }
+    }
+
+    /// Delete the persisted pending sign-in if it is the one for `state`.
+    fn drop_stale_pending_of(&self, state: &str) {
+        let _io = lock(&self.pending_io);
+        let raw = guarded("SecureStore.get", || self.secure_store.get(&self.pending_key)).flatten();
+        if raw.as_deref().and_then(PendingAuth::parse).is_some_and(|p| p.state == state) {
+            guarded("SecureStore.delete", || {
+                self.secure_store.delete(&self.pending_key)
+            });
+        }
+    }
+
+    /// Load and delete the persisted pending sign-in if its state is
+    /// `state` and it has not expired (an expired one is deleted too).
+    fn take_pending(&self, state: &str) -> Option<PendingAuth> {
+        let _io = lock(&self.pending_io);
+        let raw = guarded("SecureStore.get", || self.secure_store.get(&self.pending_key)).flatten()?;
+        let delete = || {
+            guarded("SecureStore.delete", || {
+                self.secure_store.delete(&self.pending_key)
+            })
+        };
+        let Some(pending) = PendingAuth::parse(&raw) else {
+            delete();
+            return None;
+        };
+        if pending.is_expired(unix_now()) {
+            println!("[CanvasEngine] the persisted sign-in has expired; deleted");
+            delete();
+            return None;
+        }
+        if pending.state != state {
+            return None;
+        }
+        delete();
+        Some(pending)
+    }
+
     /// See [`CanvasEngine::handle_auth_redirect`].
-    fn handle_auth_redirect(&self, url: &str) -> bool {
+    fn handle_auth_redirect(self: &Arc<Self>, url: &str) -> bool {
         let Some(redirect) = auth::parse_redirect(url) else {
             eprintln!("[CanvasEngine] auth redirect without code/error ignored");
             return false;
         };
-        let Some(flow) = lock(&self.flow).clone() else {
-            eprintln!("[CanvasEngine] auth redirect but no sign-in is pending; ignored");
-            return false;
-        };
-        let Some(tx) = &flow.redirect_tx else {
+        if !matches!(self.redirect, RedirectMode::Custom(_)) {
             eprintln!("[CanvasEngine] auth redirect ignored: this engine uses a loopback redirect");
             return false;
-        };
-        if redirect.state() != Some(flow.state.as_str()) {
-            eprintln!("[CanvasEngine] auth redirect with a mismatched state ignored");
-            return false;
         }
-        lock(tx).send(redirect).is_ok()
+        let recovery = {
+            let mut current = lock(&self.flow);
+            match current.as_ref() {
+                Some(flow) => {
+                    let Some(tx) = &flow.redirect_tx else {
+                        eprintln!(
+                            "[CanvasEngine] auth redirect ignored: a sign-in is being completed"
+                        );
+                        return false;
+                    };
+                    if redirect.state() != Some(flow.state.as_str()) {
+                        eprintln!("[CanvasEngine] auth redirect with a mismatched state ignored");
+                        return false;
+                    }
+                    return lock(tx).send(redirect).is_ok();
+                }
+                None => {
+                    // No flow in memory (e.g. a new process): complete the
+                    // persisted one in the background. Installed as the
+                    // current flow so AuthLogin / logout cancel it.
+                    let flow = Arc::new(Flow {
+                        cancelled: AtomicBool::new(false),
+                        state: redirect.state().unwrap_or_default().to_owned(),
+                        redirect_tx: None,
+                    });
+                    *current = Some(Arc::clone(&flow));
+                    flow
+                }
+            }
+        };
+        println!("[CanvasEngine] auth redirect with no sign-in in memory; checking the persisted one");
+        self.spawn_auth_thread(recovery, false, move |weak, flow| {
+            recover_sign_in(weak, flow, redirect)
+        });
+        true
     }
 
-    /// Store the session and go `signed_in`, then wake the outbox and
+    /// Go `signed_in` with `session`, then store it, wake the outbox and
     /// refetch (on the calling auth thread).
     fn complete_sign_in(&self, flow: &Arc<Flow>, session: Session) -> Result<(), LoginError> {
-        // Held across the check and the update (lock order: flow, then
-        // state) so a concurrent `logout` either cancels this flow first or
-        // runs after the session is in place and removes it again.
-        let mut current = lock(&self.flow);
-        if flow.is_cancelled()
-            || self.signal.is_shut_down()
-            || !current.as_ref().is_some_and(|f| Arc::ptr_eq(f, flow))
-        {
-            return Err(LoginError::Cancelled);
-        }
-        let raw = serde_json::to_string(&session).unwrap_or_default();
-        if guarded("SecureStore.set", || self.secure_store.set(&self.session_key, &raw)).is_none() {
-            eprintln!("[CanvasEngine] the session could not be stored; it lasts until exit");
-        }
-        println!(
-            "[CanvasEngine] signed in as {}",
-            session.username.as_deref().unwrap_or("?")
-        );
+        let username = session.username.clone();
         let snap = {
+            // Held across the check and the update (lock order: flow, then
+            // state) so a concurrent `logout` either cancels this flow
+            // first or runs after the session is in place and removes it
+            // again. The secure store is written afterwards, without this
+            // lock (`sync_session_store` orders it against logout's delete).
+            let mut current = lock(&self.flow);
+            if flow.is_cancelled()
+                || self.signal.is_shut_down()
+                || !current.as_ref().is_some_and(|f| Arc::ptr_eq(f, flow))
+            {
+                return Err(LoginError::Cancelled);
+            }
             let mut st = lock(&self.state);
             st.auth_json = session.auth_json();
             st.session = Some(session);
             st.auth_blocked = false;
             st.seq += 1;
-            st.snapshot()
+            let snap = st.snapshot();
+            drop(st);
+            *current = None;
+            snap
         };
-        *current = None;
-        drop(current);
+        println!(
+            "[CanvasEngine] signed in as {}",
+            username.as_deref().unwrap_or("?")
+        );
         self.notify(snap);
+        self.sync_session_store();
         self.signal.wake();
         self.refresh();
         Ok(())
@@ -1629,19 +1893,24 @@ impl Inner {
             let token = st.session.take().map(|s| s.token);
             st.auth_json = SIGNED_OUT_AUTH_JSON.to_string();
             st.auth_blocked = false;
+            st.purge_private(&self.workspace_id, true);
             st.seq += 1;
             (st.snapshot(), token)
         };
-        guarded("SecureStore.delete", || {
-            self.secure_store.delete(&self.session_key)
-        });
         println!("[CanvasEngine] signed out");
         self.notify(snap);
         let weak = Arc::downgrade(self);
+        // Strong until the store is synced, so that dropping the engine
+        // right after `logout()` cannot leave the session in the store.
+        let strong = Arc::clone(self);
         let url = format!("{}/v1/auth/logout", self.base_url);
         let spawned = thread::Builder::new()
             .name("canvas-engine-logout".into())
             .spawn(move || {
+                // Secure-store I/O off the calling (UI) thread.
+                strong.sync_session_store();
+                strong.drop_stale_pending();
+                drop(strong);
                 if let Some(token) = token {
                     match auth_client().and_then(|c| {
                         c.post(&url)
@@ -1661,6 +1930,9 @@ impl Inner {
             });
         if let Err(e) = spawned {
             eprintln!("[CanvasEngine] failed to spawn the logout thread: {e}");
+            // Keep the store consistent even then (blocking this once).
+            self.sync_session_store();
+            self.drop_stale_pending();
         }
     }
 
@@ -1799,6 +2071,21 @@ fn login_flow(
     if cancelled() {
         return Err(LoginError::Cancelled);
     }
+    if listener.is_none() {
+        // Custom scheme: the redirect may reach a new process (the app was
+        // killed while the browser was in front), so keep what it needs.
+        let inner = weak.upgrade().ok_or(LoginError::Cancelled)?;
+        inner.persist_pending(
+            flow,
+            &PendingAuth {
+                state: flow.state.clone(),
+                code_verifier: pkce.verifier.clone(),
+                redirect_uri: redirect_uri.clone(),
+                instance_url: instance_url.to_owned(),
+                created_at: unix_now(),
+            },
+        );
+    }
 
     let opened = opener
         .as_ref()
@@ -1856,6 +2143,39 @@ fn login_flow(
     if cancelled() {
         return Err(LoginError::Cancelled);
     }
+    if listener.is_none()
+        && let Some(inner) = weak.upgrade()
+    {
+        // The redirect arrived: the persisted copy is no longer needed.
+        inner.drop_stale_pending_of(&flow.state);
+    }
+    finish_sign_in(
+        weak,
+        flow,
+        &client,
+        &base_url,
+        redirect,
+        instance_url,
+        &pkce.verifier,
+        &redirect_uri,
+    )
+}
+
+/// The common tail of a sign-in once its redirect is in: an `error=`
+/// redirect fails, a code is exchanged through the pod for a session, which
+/// is then stored.
+#[allow(clippy::too_many_arguments)]
+fn finish_sign_in(
+    weak: &Weak<Inner>,
+    flow: &Arc<Flow>,
+    client: &reqwest::blocking::Client,
+    base_url: &str,
+    redirect: Redirect,
+    instance_url: &str,
+    code_verifier: &str,
+    redirect_uri: &str,
+) -> Result<(), LoginError> {
+    let failed = LoginError::Failed;
     let code = match redirect {
         Redirect::Code { code, .. } => code,
         Redirect::Error {
@@ -1872,12 +2192,12 @@ fn login_flow(
     }
 
     let token = post_auth(
-        &client,
+        client,
         &format!("{base_url}/v1/auth/pixelfed/token"),
         &json!({
             "instance_url": instance_url,
             "code": code,
-            "code_verifier": pkce.verifier,
+            "code_verifier": code_verifier,
             "redirect_uri": redirect_uri,
         }),
     )
@@ -1894,6 +2214,38 @@ fn login_flow(
     };
     let inner = weak.upgrade().ok_or(LoginError::Cancelled)?;
     inner.complete_sign_in(flow, session)
+}
+
+/// Complete a custom-scheme sign-in whose redirect reached an engine with
+/// no flow in memory, from the copy persisted by `login_flow` (state must
+/// match, not expired; it is deleted either way).
+fn recover_sign_in(weak: &Weak<Inner>, flow: &Arc<Flow>, redirect: Redirect) -> Result<(), LoginError> {
+    let (pending, base_url) = {
+        let inner = weak.upgrade().ok_or(LoginError::Cancelled)?;
+        let pending = redirect
+            .state()
+            .and_then(|state| inner.take_pending(state))
+            .ok_or(LoginError::Unmatched)?;
+        (pending, inner.base_url.clone())
+    };
+    if flow.is_cancelled() {
+        return Err(LoginError::Cancelled);
+    }
+    println!(
+        "[CanvasEngine] completing the sign-in for {} started before a restart",
+        pending.instance_url
+    );
+    let client = auth_client().map_err(LoginError::Failed)?;
+    finish_sign_in(
+        weak,
+        flow,
+        &client,
+        &base_url,
+        redirect,
+        &pending.instance_url,
+        &pending.code_verifier,
+        &pending.redirect_uri,
+    )
 }
 
 /// The sync worker thread: runs flush passes until the engine is dropped.

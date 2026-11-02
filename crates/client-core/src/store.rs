@@ -253,7 +253,26 @@ pub trait StoreOps {
         Ok(())
     }
 
+    /// Delete every entity of `domain` that no PENDING outbox row targets.
+    /// Returns the number deleted.
+    fn delete_unreferenced_entities(&self, domain: &str) -> StoreResult<usize> {
+        self.conn()
+            .prepare_cached(
+                "DELETE FROM entities WHERE domain = ?1 AND uri NOT IN (
+                     SELECT entity_uri FROM action_outbox
+                     WHERE COALESCE(status, 'PENDING') = 'PENDING')",
+            )?
+            .execute([domain])
+    }
+
     // ---- active_workspace ----
+
+    fn delete_workspace(&self, id: &str) -> StoreResult<()> {
+        self.conn()
+            .prepare_cached("DELETE FROM active_workspace WHERE id = ?1")?
+            .execute([id])?;
+        Ok(())
+    }
 
     /// Insert or replace a workspace's layout, entity URI list and queries.
     fn save_workspace(
@@ -384,6 +403,17 @@ pub trait StoreOps {
             .prepare_cached("DELETE FROM action_outbox WHERE id = ?1")?
             .execute([id])?;
         Ok(n > 0)
+    }
+
+    /// Delete every PENDING row whose endpoint starts with `prefix`. Returns
+    /// the number deleted.
+    fn delete_pending_outbox_with_endpoint_prefix(&self, prefix: &str) -> StoreResult<usize> {
+        self.conn()
+            .prepare_cached(
+                "DELETE FROM action_outbox WHERE COALESCE(status, 'PENDING') = 'PENDING'
+                     AND substr(endpoint, 1, length(?1)) = ?1",
+            )?
+            .execute([prefix])
     }
 
     /// Record a failed attempt: `retry_count += 1`, set `next_attempt_at`
@@ -733,6 +763,38 @@ mod tests {
         assert!(!s.delete_outbox(a).unwrap());
         assert_eq!(s.pending_count().unwrap(), 1);
         assert_eq!(s.first_pending().unwrap().unwrap().id, b);
+    }
+
+    #[test]
+    fn private_purge_helpers() {
+        let s = Store::open_in_memory().unwrap();
+        for uri in ["pixelfed://posts/1", "pixelfed://posts/2", "core://counters/home"] {
+            s.upsert_entity(uri, &entity("{}"), 1).unwrap();
+        }
+        let like = s
+            .insert_outbox(&NewOutboxRow {
+                endpoint: "/v1/pixelfed/posts/like".into(),
+                ..new_row("pixelfed://posts/1")
+            })
+            .unwrap();
+        s.insert_outbox(&new_row("core://counters/home")).unwrap();
+        assert_eq!(s.delete_unreferenced_entities("pixelfed").unwrap(), 1);
+        assert!(s.get_entity("pixelfed://posts/1").unwrap().is_some(), "pending row keeps it");
+        assert!(s.get_entity("pixelfed://posts/2").unwrap().is_none());
+        assert!(s.get_entity("core://counters/home").unwrap().is_some());
+
+        assert_eq!(s.delete_pending_outbox_with_endpoint_prefix("/v1/pixelfed/").unwrap(), 1);
+        assert!(s.get_outbox(like).unwrap().is_none());
+        assert_eq!(s.pending_count().unwrap(), 1);
+        assert_eq!(s.delete_unreferenced_entities("pixelfed").unwrap(), 1);
+
+        let layout: UiNode = serde_json::from_str(
+            r#"{"type":"core://Workspace","id":"home","title":"Home","slots":[]}"#,
+        )
+        .unwrap();
+        s.save_workspace("w", &layout, &[], &BTreeMap::new(), 1).unwrap();
+        s.delete_workspace("w").unwrap();
+        assert_eq!(s.load_workspace("w").unwrap(), None);
     }
 
     #[test]

@@ -330,12 +330,29 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   secure store, and sends `Authorization: Bearer <session>` on every pod request.
 - **Store (migration v2):** `pixelfed_apps(instance, redirect_uri, client_id, client_secret)` (one app per
   redirect_uri, registered lazily with scopes `read write`; deleted when the token endpoint answers 401
-  invalid_client so the next `/app` call re-registers), `pixelfed_account(instance PK, access_token, ...)`,
+  invalid_client, at code exchange or at the `/app` validation below, so a new app is registered), `pixelfed_account(instance PK, access_token, ...)`,
   `sessions(token_hash PK, created_at)` holding SHA-256(token) hex only, and `pixelfed_media(key, url)`.
-- **Single tenant:** one account per instance; any valid session uses it; a new sign-in replaces it. Logout deletes
-  only the session. Only the configured instance is accepted in auth calls (`PIXELFED_INSTANCE_URL` or
-  `PIXELFED_PUBLIC_URL`, trailing slash ignored), so the pod never calls a client-chosen host. Sessions do not
-  expire yet.
+- **Single tenant, pinned owner (migration v4 `pixelfed_owner(instance, account_id)`):** one account per instance;
+  any valid session uses it. The first successful sign-in pins its upstream account id as the owner (an account
+  stored before v4 is pinned by the migration); a later sign-in by another account id gets 403
+  `account_not_owner` and changes nothing (owner check, account save and session insert are one transaction), so
+  another user of the instance cannot take over the pod. The owner re-signing in is fine. Overrides:
+  `PIXELFED_OWNER_ACCOUNT_ID` (only that id may sign in; it replaces a pinned owner) or
+  `PIXELFED_ALLOW_ACCOUNT_CHANGE=1` (any account replaces the stored one). Logout deletes only the session. Only
+  the configured instance is accepted in auth calls (`PIXELFED_INSTANCE_URL` or `PIXELFED_PUBLIC_URL`, trailing
+  slash ignored), so the pod never calls a client-chosen host. **Sessions expire** after `CANVAS_SESSION_TTL_DAYS`
+  (default 90; an expired session is treated as unknown: 401); each sign-in prunes expired rows.
+- **Redirect URIs:** `/v1/auth/pixelfed/app` registers apps only for `http://127.0.0.1:<port>/callback`,
+  `http://localhost:<port>/callback`, `canvas://oauth` and exact `PIXELFED_EXTRA_REDIRECTS` entries (else 400
+  `redirect_uri_not_allowed`), so the pod cannot be used to mint upstream apps for arbitrary redirects.
+- **Stale app recovery:** a cached app is checked on every `/app` call with a `client_credentials` grant
+  (`scope=read`; Pixelfed/Passport issues an app-only token for apps from `/api/v1/apps`, verified on 0.15.2; the
+  token is discarded). 401 / `invalid_client` -> the row is deleted and a new app registered (an instance reset
+  otherwise left the authorize page failing with invalid_client before any token call). Unreachable, 5xx, 429 or
+  any other answer keeps the cached app. Cost: one extra `/oauth/token` request per sign-in, which counts toward
+  Pixelfed's 10 requests/minute/IP throttle on `/oauth/*` (a 429 keeps the cached app).
+- **Upstream 401 cleanup is compare-and-delete:** a 401 that survives refresh deletes the stored account only if it
+  still holds the access token that failed, so a concurrent sign-in or refresh is not wiped.
 - **Status mapping:** `GET /v1/workspaces/pixelfed_home` without a bearer -> 200 signed-out bundle (AuthLogin
   button). With a bearer that gets no feed (unknown session, no stored account, or upstream 401, which also deletes
   the stored account) -> 401 + `WWW-Authenticate: Bearer` + `X-Canvas-Session: invalid`, body = the same signed-out
@@ -351,6 +368,13 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   The URLs come from upstream content, so the reply is inert: the upstream content type only if it is
   `image/*` (not SVG), `video/*` or `audio/*`, else `application/octet-stream`, plus `nosniff` and
   `CSP: default-src 'none'; sandbox`. URLs under `PIXELFED_PUBLIC_URL` are fetched via `PIXELFED_INSTANCE_URL`.
+  **SSRF guard:** only origins in the allowlist are proxied: the host+port of `PIXELFED_INSTANCE_URL` and
+  `PIXELFED_PUBLIC_URL`, plus `PIXELFED_MEDIA_HOSTS` (comma-separated `host` = default port only, `host:port`, or
+  `scheme://host[:port]`; for CDNs/S3). A URL outside it is dropped to `null` at normalization (no key stored; the
+  client shows its placeholder; warned once per host) and a stored key for one is refused with 403
+  `media_host_not_allowed`. Media redirects are followed (max 5) only to allowlisted origins (else the 3xx ->
+  502). Bodies are capped at 25 MB: a larger `Content-Length` -> 502 `media_too_large`, and a body that grows past
+  the cap while streaming is aborted.
 - **Demo:** the static `pixelfed_demo` like intent posts to `POST /v1/demo/ack` (stateless 200).
 - **Real Pixelfed (M6-RA):** the timeline request adds `include_reblogs=true` (Pixelfed hides boosts otherwise; the
   pod reads one page, so Pixelfed's Link headers, which drop the flag, are not followed). Every optional field is
@@ -363,7 +387,9 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   re-reads the stored token first, because Passport rotates the refresh token and a second concurrent refresh would
   fail and sign the user out. Refresh rejected / impossible -> the old 401 behaviour. Pixelfed tokens last a year,
   so this mostly covers expiry, not revocation. The fake mirrors all of this (hides boosts without the flag,
-  Passport-shaped token response, rotating `refresh_token` grant, `expire_access_tokens()` test hook).
+  Passport-shaped token response, rotating `refresh_token` grant, `client_credentials` grant issuing an app-only
+  token the API does not accept, `expire_access_tokens()` and `forget_apps()` test hooks).
+- **Signed-out bundle:** the workspace title is the only "Pixelfed" heading (no extra title Text).
 
 ## D18: Pixelfed widgets: Coil, carousel aspect rule, simulator images
 
@@ -415,6 +441,23 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   `dev.canvas.client`; a `cfg(target_os = "macos")` dependency so Android never compiles it), in-memory
   elsewhere. `init`/`init_with_workspace` use the default; `init_with_config` (tests) uses in-memory. Platform
   callbacks (store, opener) run inside `catch_unwind`, so a foreign exception surfaced as a panic is contained.
+  **Store I/O off the UI thread, never under the flow lock:** every session change (sign-in, logout, 401) updates
+  memory first and then calls `sync_session_store` on a background thread (auth / logout / fetch / sync worker),
+  which writes whatever session is current *when it runs* (set, or delete when signed out), serialized by its own
+  lock. So the last write always reflects the last change and a logout racing a sign-in's slow Keychain write
+  cannot leave the session in the store. Consequence: right after `logout()` returns the store may still hold the
+  session for a moment (memory is already signed out).
+- **Restart-safe custom-scheme sign-in:** before opening the browser, a custom-scheme flow persists
+  `{state, code_verifier, redirect_uri, instance_url, created_at}` in the secure store under
+  `pending_auth:<base_url>` (`auth::PendingAuth`, TTL 10 min = `PENDING_AUTH_TTL`); loopback flows do not (the
+  listener dies with the process anyway). If the app process dies while the browser is in front (Android), the
+  `canvas://oauth` redirect cold-starts a new engine with no flow in memory: `handle_auth_redirect` installs a
+  placeholder flow (so AuthLogin/logout cancel it), returns true, and on the auth thread loads the record; if the
+  state matches and it has not expired it is deleted and the code exchanged as usual (pending -> signed_in), else
+  `auth_json` becomes error "Sign-in was interrupted; please try again" (`SIGN_IN_INTERRUPTED`; not shown if
+  already signed in, e.g. a replayed redirect). The record is deleted once the redirect arrives, when a flow ends
+  (success, failure, timeout, cancel) unless it belongs to the then-current flow, on logout, and when found
+  expired; it is kept when the engine is dropped mid-flow (the next engine may complete it).
 - **Bearer:** `Authorization: Bearer <session>` on workspace fetches and outbox POSTs; not on `/healthz` probes.
   An outbox POST gets it only if `base_url + endpoint` keeps the pod's origin (an endpoint like `@host/x` does not).
 - **401 policy:** fetch 401 with a session -> session cleared (memory + store), signed_out, one retry without the
@@ -425,8 +468,18 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   row is retried with the current session. A user's like is never silently
   undone just because the session expired. The pod answers a stale bearer on `pixelfed_home` with 401 (D17), so
   a stale session is cleared on the first workspace fetch (e.g. at startup) and the signed-out bundle follows.
-- **Logout:** non-blocking: cancel flow, clear session + store, notify signed_out; then on a thread `POST
-  /v1/auth/logout` (best effort) and refetch.
+- **Logout:** non-blocking: cancel flow, clear the in-memory session, purge the private cache (below), notify
+  signed_out; then on a thread: sync the store (delete the session, drop a pending sign-in), `POST /v1/auth/logout`
+  (best effort) and refetch.
+- **Private cache purge on sign-out:** the signed-in feed must not outlive the session in `cache.db`. On logout and
+  on a 401 sign-out, in one transaction: every entity of a private domain (`PRIVATE_DOMAINS` = `pixelfed`) that no
+  PENDING outbox row targets is deleted, and so is the current workspace's `active_workspace` row if it references
+  any `pixelfed://` URI; in memory those entities and every query listing a private URI go (the layout stays until
+  the refetch replaces it). Explicit logout first deletes PENDING rows whose endpoint starts with `/v1/pixelfed/`
+  (they need a session and can no longer be sent as anyone); a 401 sign-out keeps them (paused-flush policy above)
+  together with their entities, and the sync worker then refetches so the signed-out bundle replaces the emptied
+  feed. A workspace fetch that was sent with a session which is no longer current when it returns (logout or a
+  401 meanwhile) is discarded rather than applied, so an in-flight fetch cannot re-cache the private feed.
 
 ## D20: Local real Pixelfed for end-to-end tests (`dev/pixelfed`, `scripts/pixelfed_dev.sh`)
 
