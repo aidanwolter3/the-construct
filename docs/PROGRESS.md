@@ -408,7 +408,18 @@ from a client (D32, D33).
   the caller's thread; writes are already off the UI thread (D19).
 - Single tenant: one pinned Pixelfed account per pod; one timeline page (no pagination).
 - Engine traffic is not HTTPS-enforced on Android release builds (D11).
-- Not yet exercised: the Anthropic provider against the live API, and sign-in against a public Pixelfed instance.
+- Not yet exercised: sign-in against a public Pixelfed instance.
+
+## Fully generic protocol, engine and clients (D37)
+
+- The `pixelfed://` widgets (FeedList, PostCard, MediaCarousel, AuthorHeader, ActionBar) are gone from the
+  protocol, the engine and the shared UI. Schema 3 adds generic building blocks (Row, Column, Spacer, Divider,
+  Conditional, Carousel, IconButton, Chip, Badge); the post card is `layouts/pixelfed_home/0003.json` (and
+  `pixelfed_demo/0002.json`). Old versions are still served to old clients as opaque nodes.
+- The pod sends the strings the widgets used to compute (author name and handle, avatar URL, "boosted by", the
+  content-warning label). Sign-in paths come from the layout; sign-out purges generically (store v4).
+- The parked agent module is deleted.
+- Needs a device check (Android, macOS window): the feed should look as before.
 
 ## Next steps
 
@@ -424,5 +435,5 @@ from a client (D32, D33).
    zstd dictionary for layout blobs; drop `CONSTRUCT_LLM_PROVIDER` from `deploy/fly/pod.toml` (a harmless no-op
    now).
 
-Parked (the agent can return later): the layout agent (`server::agent`, unrouted, with its tests), e.g. as developer
-tooling that writes new layout files; a live test of the Anthropic provider; diffs between versions.
+Parked: a layout agent (deleted in D37; it can come back from git history), e.g. as developer tooling that writes
+new layout files; diffs between versions.

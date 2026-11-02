@@ -3,17 +3,16 @@
 //! instance (M6, see [`pixelfed`]; the pod owns the upstream token).
 //! Workspace layouts are code (`layouts/<app>/NNNN.json`), synced into one
 //! append-only version history per app at startup, served read-only and
-//! pushed over SSE (see [`layouts`]). [`agent`] (prompt -> layout patch) is
-//! kept in the library but not routed: clients cannot change layouts.
+//! pushed over SSE (see [`layouts`]); [`validate`] checks every layout file.
 //!
 //! Fixtures are embedded at compile time and parsed into
 //! [`protocol::WorkspaceSpec`] once, so an invalid fixture fails loudly
 //! (panics on first access, which the integration tests exercise).
 
-pub mod agent;
 pub mod layouts;
 pub mod pixelfed;
 pub mod store;
+pub mod validate;
 
 use std::path::Path as FsPath;
 use std::sync::{Arc, LazyLock, Mutex};

@@ -17,8 +17,7 @@ simulation mode renders the shared UI to PNGs (see Simulation mode).
 The pod serves **one app, Pixelfed** (workspace `pixelfed_home`), at its latest layout version. Layouts are code:
 new versions are files in [`layouts/`](layouts/) that ship with a deploy (DECISIONS D32). Clients can't change
 layouts. They show the layout plus a small hamburger menu with the app's version history, connection, account and
-server (D33). The AI layout agent from M7 is no longer routed: its code stays in `server::agent`, with its tests,
-so it can come back later.
+server (D33). The AI layout agent from M7 was removed (D37); it can come back from git history.
 
 Quick links: [Server runtime configuration](#server-runtime-configuration),
 [Adding a new layout version](#adding-a-new-layout-version), [The menu](#the-menu-all-surfaces),
@@ -28,12 +27,12 @@ Quick links: [Server runtime configuration](#server-runtime-configuration),
 ## Layout
 
 ```
-crates/protocol      UiNode / ActionIntent / WorkspaceSpec (hydration bundle) / EntityRecord (+ JSON Schema
-                     registry behind the `schema` feature)
+crates/protocol      UiNode / ActionIntent / WorkspaceSpec (hydration bundle) / EntityRecord; generic nodes
+                     only (D37)
 crates/server        Axum server ("the pod"): GET /v1/workspaces/{pixelfed_home,pixelfed_demo,home}, persistent
                      counters (SQLite), Pixelfed adapter (auth, feed normalization, actions, media proxy),
-                     layouts as code (one linear version history per app), read-only apps API, SSE push;
-                     the layout agent module (rules / Anthropic providers) is kept but not routed
+                     layouts as code (one linear version history per app, checked by `validate`),
+                     read-only apps API, SSE push
 crates/client-core   ConstructEngine: fetches the workspace, holds state, applies optimistic mutations (SQLite cache +
                      outbox sync worker), OAuth2 PKCE sign-in (pod session in a secure store), read-only apps
                      API, SSE layout subscriber
@@ -208,7 +207,7 @@ version) are logged at startup. `GET /healthz` answers 200 `ok`
 | `CONSTRUCT_SESSION_TTL_DAYS` | `90` | Pod session lifetime in days (1..=36500; other values warn and use 90). |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
 
-The layout agent is not routed (D32), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PROVIDER`, `CONSTRUCT_LLM_MODEL`,
+The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PROVIDER`, `CONSTRUCT_LLM_MODEL`,
 `CONSTRUCT_LLM_FALLBACKS`, `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL` have no effect on the pod.
 `deploy/fly/pod.toml` still sets `CONSTRUCT_LLM_PROVIDER`; that is harmless.
 
@@ -317,11 +316,17 @@ client build. The engine and the clients know no app.
   through the offline outbox, then reloads the paths that list the query (and the workspace with
   `refresh_workspace`); a 4xx removes the entity. `$nonce` is a fresh value per dispatch, for temporary URIs and
   idempotency keys.
-- **Schema versions:** the engine sends `X-Construct-Schema: 2`. The pod serves each client the newest version of
-  an app whose vocabulary it can draw, so an older app (no header = 1) keeps getting the last version without
-  screens or the new nodes. Using any of the above makes a layout version need schema 2.
+- **Building blocks (schema 3, D37):** `core://Row`, `core://Column`, `core://Spacer`, `core://Divider`,
+  `core://Conditional` (`value` binding, `content`), `core://Carousel` (`items` binding, `item_template`,
+  `aspect_ratio` or `aspect_field` with `min_aspect`/`max_aspect`, `tag`), `core://IconButton` (`icon` from
+  `protocol::ICONS`, `on_click`, `active` binding with `active_icon`/`active_tint`/`active_content_description`,
+  `tag`), `core://Chip` (`tone` Neutral/Warning) and `core://Badge`. There are no app-specific nodes: the Pixelfed
+  post card is a `core://Column` in the layout file.
+- **Schema versions:** the engine sends `X-Construct-Schema: 3`. The pod serves each client the newest version of
+  an app whose vocabulary it can draw, so an older app (no header = 1) keeps getting the last version it can draw.
+  Screens and the List/Image/TextField nodes need schema 2; the building blocks need 3.
 
-`layouts/pixelfed_home/0002.json` uses all of this for comments: the feed's comment button (already
+`layouts/pixelfed_home/0003.json` builds the feed from these nodes. It (like 0002) uses the rest for comments: the feed's comment button (already
 `pixelfed://posts/$item.id/comments`) opens the `comments` screen, which loads
 `/v1/pixelfed/screens/comments?post_id=$route.id` into a `core://List` and posts new comments with a
 `core://TextField` and `action.mutation.create`.
@@ -596,8 +601,9 @@ thread; `auth_json` in every snapshot goes `pending` -> `signed_in` (username, d
   With the fake, append `&auto=1` to approve without clicking.
 - A 401 from the pod signs the client out (a stale session on `pixelfed_home` gets one, see above). A like queued
   while the session was invalid stays pending (not rolled back) and is sent after the next sign-in.
-- Signing out (or a 401) removes the cached private feed (`pixelfed://` entities, the feed workspace row) from
-  `cache.db`; `logout()` also drops queued Pixelfed actions, a 401 keeps them for the next sign-in. The DB runs
+- Signing out (or a 401) removes cached private data from `cache.db`: every entity no query references, every
+  data load and the workspace row (D37). `logout()` also drops actions queued while signed in; a 401 keeps them for
+  the next sign-in. The DB runs
   with `secure_delete=ON` and the WAL is truncated after the purge, so the rows don't linger in the file's bytes.
 - UI: the menu's Account section shows "Signed in as @username" with **Sign out** (`ConstructController.logout()`),
   "Signing in…" while pending, then "Loading your feed…" from the code exchange until the first signed-in fetch

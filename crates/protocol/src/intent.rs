@@ -6,7 +6,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "intent")]
 pub enum ActionIntent {
@@ -34,8 +33,17 @@ pub enum ActionIntent {
         also: Vec<FieldUpdate>,
     },
 
+    /// Start a sign-in. `app_path` and `token_path` are the pod's endpoints
+    /// for registering the client and exchanging the code (docs/DECISIONS.md
+    /// D36), e.g. `/v1/auth/pixelfed/app` and `/v1/auth/pixelfed/token`.
     #[serde(rename = "action.auth.login")]
-    AuthLogin { instance_url: String },
+    AuthLogin {
+        instance_url: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        app_path: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        token_path: String,
+    },
 
     /// Load a pod path (a screen's `data`) whose answer is a
     /// [`crate::DataBundle`]: its entities are merged and its queries
@@ -71,7 +79,6 @@ pub enum ActionIntent {
 }
 
 /// One extra field update carried by `ActionIntent::OptimisticMutate.also`.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FieldUpdate {
     pub field: String,
@@ -79,7 +86,6 @@ pub struct FieldUpdate {
     pub value_expr: String,
 }
 
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresentationMode {
     Push,

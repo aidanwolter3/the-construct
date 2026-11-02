@@ -21,25 +21,35 @@ class BindingTest {
         )
     )
 
-    private fun pixelfedActionBar(): UiNode.ActionBar {
-        val ws = ConstructJson.decodeBundle(PIXELFED_BUNDLE_JSON).workspace as UiNode.Workspace
-        val card = (ws.slots[0].content as UiNode.FeedList).itemTemplate as UiNode.PostCard
-        return card.actionSlot as UiNode.ActionBar
+    /** The demo layout's icon button whose tag starts with [prefix] (e.g. "like:"). */
+    private fun iconButton(prefix: String): UiNode.IconButton {
+        fun all(n: UiNode): List<UiNode> = listOf(n) + when (n) {
+            is UiNode.Workspace -> n.slots.flatMap { all(it.content) }
+            is UiNode.Container -> n.children.flatMap(::all)
+            is UiNode.Row -> n.children.flatMap(::all)
+            is UiNode.Column -> n.children.flatMap(::all)
+            is UiNode.ItemList -> all(n.itemTemplate)
+            is UiNode.Carousel -> all(n.itemTemplate)
+            is UiNode.Conditional -> all(n.content)
+            else -> emptyList()
+        }
+        val ws = ConstructJson.decodeBundle(PIXELFED_BUNDLE_JSON).workspace
+        return all(ws).filterIsInstance<UiNode.IconButton>().single { it.tag?.startsWith(prefix) == true }
     }
 
     @Test
     fun bindIntentSubstitutesItemFieldsInMutation() {
-        val bound = bindIntent(pixelfedActionBar().likeIntent, post)
+        val bound = bindIntent(iconButton("like:").onClick, post)
         assertIs<ActionIntent.OptimisticMutate>(bound)
         assertEquals("pixelfed://posts/101", bound.entityUri)
         assertEquals("101", bound.payload.jsonObject["id"]!!.jsonPrimitive.content)
         assertEquals("!entity.is_liked", bound.valueExpr) // evaluated by the engine, not bound
-        assertEquals("/api/v1/posts/like", bound.endpoint)
+        assertEquals("/v1/demo/ack", bound.endpoint)
     }
 
     @Test
     fun bindIntentSubstitutesEmbeddedTokenInNavigate() {
-        val bound = bindIntent(pixelfedActionBar().commentIntent, post)
+        val bound = bindIntent(iconButton("comment:").onClick, post)
         assertIs<ActionIntent.Navigate>(bound)
         assertEquals("pixelfed://posts/101/comments", bound.targetUri)
         assertEquals(PresentationMode.Modal, bound.presentation)
@@ -47,7 +57,7 @@ class BindingTest {
 
     @Test
     fun bindIntentWithoutItemIsIdentity() {
-        val intent = pixelfedActionBar().likeIntent
+        val intent = iconButton("like:").onClick
         assertSame(intent, bindIntent(intent, null))
     }
 
@@ -87,13 +97,13 @@ class BindingTest {
     }
 
     @Test
-    fun resolveMediaRefsHandlesExprAndItems() {
+    fun resolveListHandlesExprAndItems() {
         assertEquals(
             listOf("pixelfed://media/501", "pixelfed://media/502"),
-            resolveMediaRefs(MediaRefs.Expr("${'$'}item.media_uris"), post),
+            resolveList(ListBinding.Expr("${'$'}item.media_uris"), post),
         )
-        assertEquals(listOf("a", "b"), resolveMediaRefs(MediaRefs.Items(listOf("a", "b")), null))
-        assertEquals(emptyList(), resolveMediaRefs(MediaRefs.Expr("${'$'}item.missing"), post))
+        assertEquals(listOf("a", "b"), resolveList(ListBinding.Items(listOf("a", "b")), null))
+        assertEquals(emptyList(), resolveList(ListBinding.Expr("${'$'}item.missing"), post))
     }
 
     @Test

@@ -270,6 +270,10 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
     let resp = client()
         .get(format!("{}/v1/workspaces/pixelfed_home", env.pod.url))
         .header("host", "10.0.2.2:8080")
+        .header(
+            protocol::SCHEMA_HEADER,
+            protocol::SCHEMA_VERSION.to_string(),
+        )
         .bearer_auth(&session)
         .send()
         .await
@@ -293,49 +297,56 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
         "{alice:?}"
     );
 
-    // Layout matches the contract.
+    // Posts carry their author's display fields (D36).
+    let carousel = &spec.entities[&format!("pixelfed://posts/{CAROUSEL}")];
+    assert_eq!(carousel.get_str("author_name"), Some("Alice Lumen"));
+    assert_eq!(carousel.get_str("author_handle"), Some("@alice"));
+    assert!(
+        carousel
+            .get_str("author_avatar_url")
+            .unwrap()
+            .starts_with("http://10.0.2.2:8080/v1/pixelfed/media/")
+    );
+    let boosted = &spec.entities[&format!("pixelfed://posts/{REBLOG_INNER}")];
+    assert_eq!(boosted.get_str("reblogged_by_name"), Some("Bob 🚲"));
+    let cw = spec
+        .entities
+        .values()
+        .find(|e| e.get_str("content_warning").is_some())
+        .unwrap();
+    assert_eq!(cw.get_str("content_warning_label"), Some("CW: Snake photo"));
+
+    // The layout is generic: a core://List of posts whose buttons hold the actions.
     let UiNode::Workspace { id, slots, .. } = &spec.workspace else {
         panic!("not a workspace");
     };
     assert_eq!(id, "pixelfed_home");
-    let UiNode::FeedList {
-        query_key,
-        item_template,
-    } = &slots[0].content
-    else {
-        panic!("not a FeedList");
+    let UiNode::List { query_key, .. } = &slots[0].content else {
+        panic!("not a core://List");
     };
     assert_eq!(query_key, "timeline:home");
-    let UiNode::PostCard {
-        post_ref,
-        author_slot,
-        media_slot,
-        action_slot,
-        caption_slot,
-    } = item_template.as_ref()
-    else {
-        panic!("not a PostCard");
-    };
-    assert_eq!(post_ref, "$item.uri");
     assert!(
-        matches!(author_slot.as_ref(), UiNode::AuthorHeader { user_ref, on_click: None } if user_ref == "$item.author_uri")
+        spec.workspace
+            .walk()
+            .iter()
+            .all(|n| !matches!(n, UiNode::Unknown(_)))
     );
-    assert!(
-        matches!(media_slot.as_ref(), UiNode::MediaCarousel { aspect_ratio, .. } if *aspect_ratio == 1.0)
-    );
-    assert!(
-        matches!(caption_slot.as_ref(), UiNode::Text { value_expr, .. } if value_expr == "entity.caption")
-    );
-    let UiNode::ActionBar {
-        like_intent,
-        bookmark_intent,
-        comment_intent,
-    } = action_slot.as_ref()
-    else {
-        panic!("not an ActionBar");
+    let button = |tag: &str| {
+        spec.workspace
+            .walk()
+            .into_iter()
+            .find_map(|n| match n {
+                UiNode::IconButton {
+                    tag: Some(t),
+                    on_click,
+                    ..
+                } if t == tag => Some(on_click.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no button {tag}"))
     };
     assert_eq!(
-        *like_intent,
+        button("like:$item.uri"),
         ActionIntent::OptimisticMutate {
             entity_uri: "$item.uri".into(),
             field: "is_liked".into(),
@@ -351,7 +362,7 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
         }
     );
     assert_eq!(
-        *bookmark_intent,
+        button("bookmark:$item.uri"),
         ActionIntent::OptimisticMutate {
             entity_uri: "$item.uri".into(),
             field: "is_bookmarked".into(),
@@ -363,7 +374,7 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
         }
     );
     assert_eq!(
-        *comment_intent,
+        button("comment:$item.uri"),
         ActionIntent::Navigate {
             target_uri: "pixelfed://posts/$item.id/comments".into(),
             presentation: PresentationMode::Modal,
@@ -394,7 +405,9 @@ async fn pixelfed_home_signed_out_without_valid_session() {
         assert_eq!(
             intent,
             ActionIntent::AuthLogin {
-                instance_url: env.fake.url.clone()
+                instance_url: env.fake.url.clone(),
+                app_path: "/v1/auth/pixelfed/app".into(),
+                token_path: "/v1/auth/pixelfed/token".into(),
             }
         );
     }
@@ -628,7 +641,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     // No schema header: a client from before screens gets the newest version it can
-    // draw (0001; 0002 adds the comments screen).
+    // draw (0001; 0002 adds the comments screen, 0003 the generic nodes).
     assert_eq!(version(&resp).as_deref(), Some("1"));
     let resp = client()
         .get(&url)
@@ -640,7 +653,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
         .send()
         .await
         .unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("2"));
+    assert_eq!(version(&resp).as_deref(), Some("3"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 1));
     // A newer version replaces the feed layout; entities still come upstream.
@@ -650,7 +663,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     }
     server::layouts::append_version(state.store(), "pixelfed_home", &node, None).unwrap();
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("3"));
+    assert_eq!(version(&resp).as_deref(), Some("4"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert_eq!(spec.workspace, node);
     assert_eq!(spec.queries["timeline:home"].len(), 5);

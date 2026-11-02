@@ -1,6 +1,6 @@
 use protocol::{
-    ActionIntent, EntityRecord, FieldUpdate, ListBinding, Orientation, PresentationMode, SlotSpec,
-    TextStyle, UiNode, WorkspaceSpec,
+    ActionIntent, EntityRecord, FieldUpdate, ImageShape, ListBinding, Orientation,
+    PresentationMode, SlotSpec, TextStyle, Tone, UiNode, WorkspaceSpec,
 };
 use serde_json::{Value, json};
 
@@ -19,32 +19,98 @@ fn like_intent() -> ActionIntent {
     }
 }
 
-fn post_card(author_on_click: Option<ActionIntent>, media_refs: ListBinding) -> UiNode {
-    UiNode::PostCard {
-        post_ref: "$item.uri".into(),
-        author_slot: Box::new(UiNode::AuthorHeader {
-            user_ref: "$item.author_uri".into(),
-            on_click: author_on_click,
-        }),
-        media_slot: Box::new(UiNode::MediaCarousel {
-            media_refs,
-            aspect_ratio: 0.75, // exactly representable in f32 and f64
-        }),
-        action_slot: Box::new(UiNode::ActionBar {
-            like_intent: like_intent(),
-            bookmark_intent: ActionIntent::Navigate {
-                target_uri: "pixelfed://bookmarks".into(),
-                presentation: PresentationMode::Push,
+/// A post template made of generic nodes (what the Pixelfed layouts use).
+fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
+    UiNode::Column {
+        spacing_dp: 0,
+        padding_h_dp: 0,
+        padding_v_dp: 0,
+        children: vec![
+            UiNode::Row {
+                spacing_dp: 10,
+                padding_h_dp: 12,
+                padding_v_dp: 10,
+                children: vec![
+                    UiNode::Image {
+                        url: "$item.author_avatar_url".into(),
+                        shape: ImageShape::Circle,
+                        size_dp: Some(36),
+                        aspect_ratio: None,
+                        content_description: None,
+                        blurhash: None,
+                    },
+                    UiNode::Text {
+                        value_expr: "$item.author_name".into(),
+                        style: TextStyle::Label,
+                    },
+                ],
             },
-            comment_intent: ActionIntent::Navigate {
-                target_uri: "pixelfed://posts/$item.id/comments".into(),
-                presentation: PresentationMode::Modal,
+            UiNode::Carousel {
+                items,
+                item_template: Box::new(UiNode::Image {
+                    url: "$item.url".into(),
+                    shape: ImageShape::Square,
+                    size_dp: None,
+                    aspect_ratio: Some(0.75), // exactly representable in f32 and f64
+                    content_description: Some("$item.alt_text".into()),
+                    blurhash: Some("$item.blurhash".into()),
+                }),
+                aspect_ratio: 1.0,
+                aspect_field: Some("aspect_ratio".into()),
+                min_aspect: Some(0.75),
+                max_aspect: None,
+                tag: author_tag,
             },
-        }),
-        caption_slot: Box::new(UiNode::Text {
-            value_expr: "entity.caption".into(),
-            style: TextStyle::Body,
-        }),
+            UiNode::Row {
+                spacing_dp: 0,
+                padding_h_dp: 4,
+                padding_v_dp: 0,
+                children: vec![
+                    UiNode::IconButton {
+                        icon: "favorite_border".into(),
+                        content_description: "Like".into(),
+                        on_click: like_intent(),
+                        active: Some("$item.is_liked".into()),
+                        active_icon: Some("favorite".into()),
+                        active_tint: Some("#ED4956".into()),
+                        active_content_description: Some("Unlike".into()),
+                        size_dp: None,
+                        tag: Some("like:$item.uri".into()),
+                    },
+                    UiNode::Spacer { size_dp: None },
+                    UiNode::IconButton {
+                        icon: "chat_bubble".into(),
+                        content_description: "Comment".into(),
+                        on_click: ActionIntent::Navigate {
+                            target_uri: "pixelfed://posts/$item.id/comments".into(),
+                            presentation: PresentationMode::Modal,
+                        },
+                        active: None,
+                        active_icon: None,
+                        active_tint: None,
+                        active_content_description: None,
+                        size_dp: None,
+                        tag: None,
+                    },
+                ],
+            },
+            UiNode::Conditional {
+                value: "$item.content_warning".into(),
+                content: Box::new(UiNode::Chip {
+                    text: "$item.content_warning_label".into(),
+                    icon: Some("warning".into()),
+                    tone: Tone::Warning,
+                }),
+            },
+            UiNode::Conditional {
+                value: "$item.reblogged_by_name".into(),
+                content: Box::new(UiNode::Badge {
+                    text: "$item.reblogged_by_name boosted".into(),
+                    icon: "repeat".into(),
+                }),
+            },
+            UiNode::Divider {},
+        ],
     }
 }
 
@@ -79,25 +145,26 @@ fn full_workspace() -> UiNode {
                     orientation: Orientation::Vertical,
                     padding_dp: 0,
                     children: vec![
-                        UiNode::FeedList {
+                        UiNode::List {
                             query_key: "timeline:home".into(),
-                            item_template: Box::new(post_card(
+                            item_template: Box::new(post_template(
                                 None,
                                 ListBinding::Expr("$item.media_uris".into()),
                             )),
+                            indent: None,
+                            empty_text: None,
                         },
-                        UiNode::FeedList {
+                        UiNode::List {
                             query_key: "timeline:pinned".into(),
-                            item_template: Box::new(post_card(
-                                Some(ActionIntent::Navigate {
-                                    target_uri: "pixelfed://users/42".into(),
-                                    presentation: PresentationMode::Replace,
-                                }),
+                            item_template: Box::new(post_template(
+                                Some("carousel:$item.uri".into()),
                                 ListBinding::List(vec![
-                                    "pixelfed://media/501".into(),
-                                    "pixelfed://media/502".into(),
+                                    "x://media/501".into(),
+                                    "x://media/502".into(),
                                 ]),
                             )),
+                            indent: None,
+                            empty_text: Some("Nothing pinned".into()),
                         },
                     ],
                 },
@@ -138,17 +205,26 @@ fn full_workspace_wire_shape() {
 
     let feeds = &v["slots"][1]["content"]["children"];
     let card0 = &feeds[0]["item_template"];
-    assert_eq!(card0["type"], "pixelfed://PostCard");
-    // None on_click is omitted, not serialized as null.
-    assert!(card0["author_slot"].get("on_click").is_none());
-    assert_eq!(card0["media_slot"]["media_refs"], "$item.media_uris");
+    assert_eq!(card0["type"], "core://Column");
+    let carousel = &card0["children"][1];
+    assert_eq!(carousel["type"], "core://Carousel");
+    // None fields are omitted, not serialized as null.
+    assert!(carousel.get("tag").is_none() && carousel.get("max_aspect").is_none());
+    assert_eq!(carousel["items"], "$item.media_uris");
+    assert_eq!(
+        card0["children"][2]["children"][0]["active_tint"],
+        "#ED4956"
+    );
+    assert_eq!(card0["children"][3]["content"]["tone"], "Warning");
+    assert_eq!(card0["children"][5], json!({ "type": "core://Divider" }));
 
     let card1 = &feeds[1]["item_template"];
-    assert_eq!(card1["author_slot"]["on_click"]["presentation"], "Replace");
+    assert_eq!(card1["children"][1]["tag"], "carousel:$item.uri");
     assert_eq!(
-        card1["media_slot"]["media_refs"],
-        json!(["pixelfed://media/501", "pixelfed://media/502"])
+        card1["children"][1]["items"],
+        json!(["x://media/501", "x://media/502"])
     );
+    assert_eq!(feeds[1]["empty_text"], "Nothing pinned");
 }
 
 #[test]
@@ -156,95 +232,34 @@ fn pixelfed_fixture_parses() {
     let bundle: WorkspaceSpec = serde_json::from_str(PIXELFED_FIXTURE).unwrap();
     assert_eq!(bundle.version, "1.0.0");
 
-    let UiNode::Workspace {
-        id, title, slots, ..
-    } = &bundle.workspace
-    else {
+    let UiNode::Workspace { id, slots, .. } = &bundle.workspace else {
         panic!("root is not a Workspace: {:?}", bundle.workspace);
     };
     assert_eq!(id, "home_stream");
-    assert_eq!(title, "Home");
     assert_eq!(slots.len(), 1);
     assert_eq!(slots[0].slot_id, "feed");
-    assert_eq!(slots[0].provider_uri, "pixelfed://home_timeline");
-
-    let UiNode::FeedList {
-        query_key,
-        item_template,
-    } = &slots[0].content
-    else {
-        panic!("slot content is not a FeedList");
+    let UiNode::List { query_key, .. } = &slots[0].content else {
+        panic!("slot content is not a core://List");
     };
     assert_eq!(query_key, "timeline:home");
-
-    let UiNode::PostCard {
-        post_ref,
-        author_slot,
-        media_slot,
-        action_slot,
-        caption_slot,
-    } = item_template.as_ref()
-    else {
-        panic!("item_template is not a PostCard");
-    };
-    assert_eq!(post_ref, "$item.uri");
-    assert_eq!(
-        **author_slot,
-        UiNode::AuthorHeader {
-            user_ref: "$item.author_uri".into(),
-            on_click: None
-        }
-    );
-    assert_eq!(
-        **media_slot,
-        UiNode::MediaCarousel {
-            media_refs: ListBinding::Expr("$item.media_uris".into()),
-            aspect_ratio: 1.0
-        }
-    );
-    let UiNode::ActionBar {
-        like_intent: like,
-        bookmark_intent,
-        comment_intent,
-    } = action_slot.as_ref()
-    else {
-        panic!("action_slot is not an ActionBar");
-    };
-    assert_eq!(*like, like_intent());
-    assert_eq!(
-        *bookmark_intent,
-        ActionIntent::Navigate {
-            target_uri: "pixelfed://bookmarks".into(),
-            presentation: PresentationMode::Push
-        }
-    );
-    assert!(matches!(
-        comment_intent,
-        ActionIntent::Navigate {
-            presentation: PresentationMode::Modal,
-            ..
-        }
-    ));
-    assert_eq!(
-        **caption_slot,
-        UiNode::Text {
-            value_expr: "entity.caption".into(),
-            style: TextStyle::Body
-        }
+    // Generic nodes only.
+    assert!(
+        bundle
+            .workspace
+            .walk()
+            .iter()
+            .all(|n| !matches!(n, UiNode::Unknown(_)))
     );
 
-    assert_eq!(bundle.entities.len(), 3);
     let post = &bundle.entities["pixelfed://posts/101"];
     assert_eq!(post.get_str("caption"), Some("Sunrise over Boulder"));
     assert_eq!(post.get_i64("like_count"), Some(89));
     assert_eq!(post.get_bool("is_liked"), Some(false));
-    assert_eq!(post.get_i64("created_at"), Some(1_793_548_800));
+    assert_eq!(post.get_str("author_name"), Some("Aidan"));
     assert_eq!(
         post.get_str_list("media_uris"),
         Some(vec!["pixelfed://media/501"])
     );
-    let user = &bundle.entities["pixelfed://users/42"];
-    assert_eq!(user.get_str("username"), Some("aidan"));
     let media = &bundle.entities["pixelfed://media/501"];
     assert_eq!(media.get_f64("aspect_ratio"), Some(1.0));
 }
@@ -315,7 +330,7 @@ fn counter_fixture_parses_and_reserializes_identically() {
 // aspect ratios are arbitrary.
 #[test]
 fn aspect_ratio_f32_round_trip_semantics() {
-    let j = r#"{"type":"pixelfed://MediaCarousel","media_refs":[],"aspect_ratio":1.7777}"#;
+    let j = r#"{"type":"core://Image","url":"u","aspect_ratio":1.7777}"#;
     let n: UiNode = serde_json::from_str(j).unwrap();
     assert_eq!(serde_json::to_string(&n).unwrap(), j);
     let back: UiNode = serde_json::from_str(&serde_json::to_string(&n).unwrap()).unwrap();
@@ -395,8 +410,19 @@ fn every_action_intent_round_trips() {
         (
             ActionIntent::AuthLogin {
                 instance_url: "https://pixelfed.social".into(),
+                app_path: String::new(),
+                token_path: String::new(),
             },
             json!({ "intent": "action.auth.login", "instance_url": "https://pixelfed.social" }),
+        ),
+        (
+            ActionIntent::AuthLogin {
+                instance_url: "https://pixelfed.social".into(),
+                app_path: "/v1/auth/pixelfed/app".into(),
+                token_path: "/v1/auth/pixelfed/token".into(),
+            },
+            json!({ "intent": "action.auth.login", "instance_url": "https://pixelfed.social",
+                    "app_path": "/v1/auth/pixelfed/app", "token_path": "/v1/auth/pixelfed/token" }),
         ),
         (ActionIntent::Unknown, json!({ "intent": "action.unknown" })),
     ];
@@ -419,13 +445,15 @@ fn every_action_intent_round_trips() {
     }
 }
 
-// Deserialization is intentionally strict. Clients must treat a parse error
-// as "unsupported layout" and degrade gracefully; servers validate before
-// sending.
+// An unknown node type (e.g. a removed `pixelfed://` widget in an old layout
+// version) is kept as opaque JSON and re-serialized unchanged (D36); clients
+// draw a placeholder for it. A known type with bad fields is still an error.
 #[test]
-fn unknown_node_type_is_rejected() {
-    let bad = json!({ "type": "pixelfed://StoryRing", "user_ref": "x" });
-    assert!(serde_json::from_value::<UiNode>(bad).is_err());
+fn unknown_node_types_are_kept_opaque() {
+    let old = json!({ "type": "pixelfed://StoryRing", "user_ref": "x" });
+    let n: UiNode = serde_json::from_value(old.clone()).unwrap();
+    assert_eq!(n, UiNode::Unknown(old.clone()));
+    assert_eq!(serde_json::to_value(&n).unwrap(), old);
 
     let nested = json!({
         "type": "core://Container",
@@ -433,10 +461,16 @@ fn unknown_node_type_is_rejected() {
         "padding_dp": 8,
         "children": [{ "type": "core://Marquee", "value_expr": "hi" }]
     });
-    assert!(serde_json::from_value::<UiNode>(nested).is_err());
+    let n: UiNode = serde_json::from_value(nested.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&n).unwrap(), nested);
 
+    let bad_known = json!({ "type": "core://Text", "style": "Body" });
+    assert!(serde_json::from_value::<UiNode>(bad_known).is_err());
     let missing_tag = json!({ "value_expr": "hi", "style": "Body" });
-    assert!(serde_json::from_value::<UiNode>(missing_tag).is_err());
+    assert!(matches!(
+        serde_json::from_value::<UiNode>(missing_tag).unwrap(),
+        UiNode::Unknown(_)
+    ));
 }
 
 // Intents are the exception (D32): an unknown tag, e.g. the removed
@@ -543,11 +577,18 @@ fn bundle_queries_round_trip() {
 }
 
 #[test]
-fn fixtures_have_no_new_fields() {
-    for fixture in [PIXELFED_FIXTURE, COUNTER_FIXTURE] {
-        let bundle: WorkspaceSpec = serde_json::from_str(fixture).unwrap();
-        assert!(bundle.queries.is_empty());
-        let s = serde_json::to_string(&bundle).unwrap();
-        assert!(!s.contains("\"queries\"") && !s.contains("\"also\""));
-    }
+fn fixture_queries_list_their_entities() {
+    // The counter has none (and omits the field); the demo's List reads its posts from one.
+    let counter: WorkspaceSpec = serde_json::from_str(COUNTER_FIXTURE).unwrap();
+    assert!(counter.queries.is_empty());
+    assert!(
+        !serde_json::to_string(&counter)
+            .unwrap()
+            .contains("\"queries\"")
+    );
+
+    let demo: WorkspaceSpec = serde_json::from_str(PIXELFED_FIXTURE).unwrap();
+    let posts = &demo.queries["timeline:home"];
+    assert!(!posts.is_empty());
+    assert!(posts.iter().all(|uri| demo.entities.contains_key(uri)));
 }

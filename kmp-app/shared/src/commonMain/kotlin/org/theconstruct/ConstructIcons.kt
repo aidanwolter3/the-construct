@@ -72,4 +72,19 @@ internal object ConstructIcons {
     val ExpandMore = icon("ExpandMore", "M16.59,8.59L12,13.17 7.41,8.59 6,10l6,6 6,-6z")
     val ExpandLess = icon("ExpandLess", "M12,8l-6,6 1.41,1.41L12,10.83l4.59,4.58L18,14z")
     val Send = icon("Send", "M2.01,21L23,12 2.01,3 2,10l15,2 -15,2z")
+
+    /** The icons layouts name (protocol `ICONS`, DECISIONS D36); null for an unknown name. */
+    fun named(name: String): ImageVector? = when (name) {
+        "favorite" -> Favorite
+        "favorite_border" -> FavoriteBorder
+        "chat_bubble" -> ChatBubbleOutline
+        "bookmark" -> Bookmark
+        "bookmark_border" -> BookmarkBorder
+        "repeat" -> Repeat
+        "warning" -> Warning
+        "send" -> Send
+        "arrow_back" -> ArrowBack
+        "close" -> Close
+        else -> null
+    }
 }

@@ -6,10 +6,12 @@
 //! null; a status that cannot be parsed at all is skipped and logged).
 //!
 //! Entity shapes (docs/M6 contract):
-//! - `pixelfed://posts/<id>`: id, author_uri, media_uris, caption, content_warning,
-//!   sensitive, like_count, is_liked, is_bookmarked, reply_count, created_at (unix s),
-//!   url, and `reblogged_by_uri` when the timeline entry was a reblog (the post is the
-//!   INNER status, so actions target the inner id).
+//! - `pixelfed://posts/<id>`: id, author_uri, author_name, author_handle (`@acct`),
+//!   author_avatar_url, media_uris, caption, content_warning, content_warning_label
+//!   ("CW: ..."), sensitive, like_count, is_liked, is_bookmarked, reply_count,
+//!   created_at (unix s), url, and `reblogged_by_uri` / `reblogged_by_name` when the
+//!   timeline entry was a reblog (the post is the INNER status, so actions target the
+//!   inner id). The author fields are copies, so layouts bind them on the post (D36).
 //! - `pixelfed://users/<id>`: id, username (acct), display_name, avatar_url.
 //! - `pixelfed://media/<id>`: id, type, url, preview_url, aspect_ratio, alt_text, blurhash.
 //!
@@ -416,6 +418,13 @@ pub fn normalize_timeline(statuses: &[Value], media: &mut MediaUrls) -> Timeline
         let mut post = normalize_post(target, media, &mut out.entities);
         if status.reblog.is_some() {
             let by = add_user(&status.account, media, &mut out.entities);
+            post.set(
+                "reblogged_by_name",
+                out.entities[&by]
+                    .get("display_name")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            );
             post.set("reblogged_by_uri", by);
         }
         out.entities.insert(uri.clone(), post);
@@ -451,10 +460,29 @@ pub fn normalize_post(
         .map(str::trim)
         .filter(|t| !t.is_empty());
     let mut post = post_state(s);
+    // The author's display fields on the post itself, so a layout binds them
+    // as `$item.author_name` etc. (D36).
+    let author = &entities[&author_uri];
+    post.set(
+        "author_name",
+        author.get("display_name").cloned().unwrap_or(Value::Null),
+    );
+    post.set(
+        "author_handle",
+        format!("@{}", author.get_str("username").unwrap_or_default()),
+    );
+    post.set(
+        "author_avatar_url",
+        author.get("avatar_url").cloned().unwrap_or(Value::Null),
+    );
     post.set("author_uri", author_uri);
     post.set("media_uris", media_uris);
     post.set("caption", caption);
     post.set("content_warning", json!(content_warning));
+    post.set(
+        "content_warning_label",
+        json!(content_warning.map(content_warning_label)),
+    );
     post.set("sensitive", s.sensitive.unwrap_or(false));
     post.set(
         "reply_count",
@@ -632,6 +660,19 @@ pub fn normalize_comments(
         );
     }
     out
+}
+
+/// "CW: " + the warning, unless the author already wrote a "CW" word.
+pub fn content_warning_label(text: &str) -> String {
+    let t = text.trim();
+    let prefixed = t.len() >= 2
+        && t[..2].eq_ignore_ascii_case("cw")
+        && t[2..].chars().next().is_none_or(|c| !c.is_alphanumeric());
+    if prefixed {
+        t.to_owned()
+    } else {
+        format!("CW: {t}")
+    }
 }
 
 /// The mutable interaction state of a post: id, is_liked, like_count, is_bookmarked.
@@ -1362,5 +1403,18 @@ mod comment_tests {
         assert_eq!(relative_time(now - 3 * 3_600, now), "3 h");
         assert_eq!(relative_time(now - 2 * 86_400, now), "2 d");
         assert_eq!(relative_time(951_782_400, now), "2000-02-29");
+    }
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::content_warning_label;
+
+    #[test]
+    fn content_warning_labels() {
+        assert_eq!(content_warning_label("Snake photo"), "CW: Snake photo");
+        assert_eq!(content_warning_label(" cw: spiders "), "cw: spiders");
+        assert_eq!(content_warning_label("CW"), "CW");
+        assert_eq!(content_warning_label("Cwtch"), "CW: Cwtch");
     }
 }
