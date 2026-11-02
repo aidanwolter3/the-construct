@@ -191,7 +191,7 @@ class MenuTest {
         }
         runner(fake, controller).ok(
             "click Increment; open-menu; assert-text Offline; assert-text 1 pending; " +
-                "assert-text Can't reach your pod; assert-text Pixelfed demo",
+                "assert-text Can't reach your pod; assert-text Version history of Home",
         )
         fake.setOnline(true)
         compose(controller) { assertFalse(has("menu-badge")) }
@@ -308,7 +308,8 @@ class MenuTest {
         // Snapshots of the closed engine are ignored.
         first.setOnline(false)
         assertEquals(true, controller.state.value.isOnline)
-        assertTrue((controller.state.value.workspace as UiNode.Workspace).id == "pixelfed_demo")
+        // The demo bundle's root id (the app id is pixelfed_demo).
+        assertEquals("home_stream", (controller.state.value.workspace as UiNode.Workspace).id)
     }
 
     @Test
