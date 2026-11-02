@@ -42,7 +42,8 @@ import org.genui.canvas.UiNode
  * and sets `agent_json` to done (provider `fake-rules`); an unrecognized one, a caption/media rule on a layout
  * without a PostCard, or any prompt while offline sets it to error and leaves the layout alone.
  *
- * Layout catalog (D27): [FakeLayoutCatalog.fixture] (`pixelfed_demo` for a bundle with `pixelfed://` entities, else
+ * Layout catalog (D27, D30): [FakeLayoutCatalog.fixture] (the pod's built-ins from `fixtures/layouts/`: `pixelfed_home`
+ * for the feed bundle, `pixelfed_demo` for another bundle with `pixelfed://` entities, else
  * `home`) answers the catalog calls with the pod's JSON shapes; activate / restore of the active layout replace the
  * layout and bump [layoutVersion] (the workspace revision); an applied prompt appends to the active layout's
  * history. Offline, every catalog call throws [LayoutApiException] (Offline).

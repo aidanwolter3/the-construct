@@ -245,6 +245,34 @@ Note: the environment restarted twice mid-work; work is now committed in small w
     session (signed out), offline), unit tests for error sentences; FFI offline mapping; shared `LayoutCatalogTest`,
     desktop `FakeLayoutCatalogTest`. cargo 280, :shared 51, :desktopApp 56.
 - Status: A2 DONE (client API); the browser UI (A3) is next.
+- A3 (shared Compose UI + simulator, D30): the layout browser on every surface (desktop, Android, simulator; the
+  same commonMain code a web shell would use).
+  - Layouts button (`layouts-button`, "Browse layouts") above the AI FAB opens an in-tree full-screen browser:
+    list with LIVE thumbnails (the real `RenderUiNode` of each layout's current version against the current entities,
+    rendered at 390 dp and scaled into 120x200 dp, non-interactive: no-op dispatch, pointer shield, cleared
+    semantics), "Active" + version badges; details with the paged version history (source chips Built-in / AI prompt
+    with the prompt / Rollback / Restore / Manual, relative + absolute time, "Current · on screen"); full-size version
+    preview with "Restore this version" (active layout) or "Use this version" (other layouts); "Use this layout".
+  - In-tree confirmation dialog; on success the browser closes and a snackbar ("Switched to Editorial journal",
+    "Restored v2 as v5") offers Undo for 8 s; undo is append-only (re-activate the previous layout at its previous
+    version, or restore the previous version as a new copy). Errors inline with Try again (offline, 401 "Sign in to
+    change layouts."); a failed write keeps the dialog open with the reason.
+  - Navigation is a pure saveable value (`LayoutNav`): Back closes the innermost level; rotation keeps level,
+    selection and an open dialog (verified on the emulator). Calls run on `Dispatchers.IO` via `LayoutRepository`
+    (spec cache per (id, version), owned by the controller), loads are cancelled with their level. A switch keeps the
+    carousel page, the agent prompt text and the outbox (tested).
+  - Fake catalog: the pod's real built-ins from `fixtures/layouts/` with the pod's titles/descriptions/hints; classic
+    has seed, two AI prompts and a rollback; `pixelfed_home` built-ins for the feed bundle.
+  - Simulator: `open-layouts`, `select-layout`, `select-version`, `use-layout`, `restore-version`, `confirm`,
+    `cancel`, `undo`, `close-layouts`, `back` (wait for idle and the catalog calls, fail with a hint). Run in fixture
+    mode (pixelfed_demo phone + desktop, pixelfed_home, home) and live against a local pod; Android emulator: list,
+    details, preview, switch to Editorial, undo, Back per level, rotation.
+  - Tests: shared `LayoutBrowserModelTest` (navigation, offered change, undo bookkeeping, messages, labels, relative
+    time, lenient parsers), desktop `LayoutBrowserTest` (switch keeps the carousel page + undo, restore + undo is
+    append-only, previews never dispatch and the browser blocks the feed, Back per level, offline error + retry,
+    401 write keeps the dialog, the agent prompt survives a switch, command failures, command parsing). :shared 58,
+    :desktopApp 65.
+- Status: A3 DONE (layout browser + version history on every surface).
 
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
@@ -264,11 +292,9 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 
 ## Next steps
 
-1. Layout browser UI on every surface (A3) on top of the D27 bridge calls (`listLayouts`, `layoutVersions`,
-   `layoutVersion`, `activateLayout`, `restoreLayoutVersion` on `Dispatchers.IO`; `CanvasState.activeLayout` marks
-   the active layout/version): preview by `preview_hint` or the version's `layout`, activate, history with restore.
-   Optional later: user-created layouts (copy a layout), a zstd dictionary for
-   blobs (measured ~6x smaller edits), a retention policy.
+1. Layout browser follow-ups (A3 done): user-created layouts (copy a layout), a diff view between versions, a zstd
+   dictionary for blobs (measured ~6x smaller edits), a retention policy; Android `testTagsAsResourceId` for
+   instrumented UI tests of the browser.
 2. Feed as a `LazyColumn` with pagination (`max_id` / `Link: next`).
 3. Outbox idempotency keys (client-generated, honoured by the pod).
 4. Live test of the Anthropic provider once a key exists (prompt quality, latency, refusals).

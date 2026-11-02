@@ -836,3 +836,63 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   `pixelfed://` entities, else `home`; the active layout's newest version is the bundle's layout so the screen starts
   unchanged; activate/restore of the active layout swap the layout and bump the revision; an applied prompt appends
   to the active layout; offline -> `Kind.Offline`).
+
+## D30: Layout browser UI (shared Compose) and simulator commands
+
+- **Where:** all in `:shared` commonMain (`LayoutBrowser.kt` UI, `LayoutBrowserModel.kt` model), so desktop, Android,
+  the simulator and a future web shell share it. The only platform pieces are `layoutIoDispatcher` (`Dispatchers.IO`),
+  the wall clock and the local date format (`jvmCommonMain` actuals).
+- **Entry point:** a small secondary FAB (`layouts-button`, "Browse layouts", Material "Dashboard" icon) stacked above
+  the AI FAB in `AgentPromptOverlay`'s FAB column, hidden with it while the agent panel is open. Shown on every loaded
+  workspace, also when the bridge has no catalog: the browser then shows the readable error ("Layouts aren't
+  available here.") instead of the button disappearing.
+- **In-tree overlay, not navigation or Dialog windows:** like the agent panel (D23), the browser (`layouts-browser`),
+  the confirmation (`confirm-dialog`, scrim + card) and the snackbar (`layouts-snackbar`) are composables drawn by
+  `CanvasApp` above the workspace, so the headless harness's `onRoot().captureToImage()` sees them (a Material
+  `AlertDialog` opens a second root). The browser is a full-screen `Surface`, which also blocks touches to the feed.
+- **Navigation model:** `LayoutNav(open, layoutId?, version?, confirming)`, a pure value: list -> details -> preview,
+  `back()` closes the innermost level (dialog, preview, details, list); saved with `rememberSaveable` (`LayoutNavSaver`,
+  a list of primitives), so rotation keeps the level, the selected layout/version and an open dialog.
+  `PlatformBackHandler(enabled = open)` maps system Back to `back()` (registered after the agent panel's).
+- **Loading:** `LayoutRepository` (owned by `CanvasController`, so it survives rotation with the Android ViewModel)
+  runs the D27 calls with `withContext(layoutIoDispatcher)`, parses leniently (`LayoutCatalogJson`) and caches version
+  specs per (id, version) (immutable on the pod). List and history loads run in `LaunchedEffect`s keyed on the open
+  level, Retry tokens and `state.activeLayout`, so closing a level cancels its load and an AI edit or a switch made
+  elsewhere reloads it (a reload keeps the stale list on screen). History pages of 20 (`versions-more` uses
+  `next_before`). Writes and Undo run in `CanvasApp`'s scope, so closing the browser never drops a result.
+  `LayoutCalls.inFlight` counts calls in flight (like `ImageLoads`) for the simulator.
+- **Live thumbnails:** `LayoutPreview` renders the real `RenderUiNode` of the layout's current version against the
+  current entities and queries at 390 dp (a phone) and scales it into a 120x200 dp box with `graphicsLayer`
+  (`wrapContentSize(unbounded)` + `requiredSize`, origin top-left, clipped). Never interactive: intents go to a no-op,
+  a pointer layer on top is hit by every event (not consumed, so the enclosing card's click opens the details), and
+  `clearAndSetSemantics` hides the inner nodes from screen readers and tests. The on-screen layout uses
+  `state.workspace` directly; others fetch their spec lazily; a `preview_hint` placeholder shows while loading or on
+  failure. The version preview is the same composable at full height (render width = the box's width, at least
+  360 dp).
+- **Changes offered:** details of an inactive layout -> "Use this layout" (`layout-use`, activate); preview of a
+  version of the active layout -> "Restore this version" (`version-restore`, restore; none for the current version);
+  preview of an inactive layout -> "Use this version" (`version-use`, activate with that version, or plain activate for
+  its newest). Every one asks first (`confirm-ok` / `confirm-cancel`); a failure (401 "Sign in to change layouts.",
+  offline) stays in the dialog with "Try again".
+- **After success: close to the workspace.** The user asked for a different screen, so the browser closes and the new
+  layout is visible at once (the D27 call refetched before returning); the snackbar says "Switched to Editorial
+  journal" / "Restored v2 as v5" with Undo (`snackbar-undo`, 8 s).
+- **Undo is append-only:** `undoFor(change, before, outcome)` with `before` = `state.activeLayout` when the change
+  started: a switch is undone by `activateLayout(previousId, previousVersion)` (no new version when that is still its
+  newest content), a restore by `restoreLayoutVersion(id, previousVersion)` (a new copy on top). No undo when the pod
+  answered `unchanged` or the previous layout was unknown. The undo's own snackbar has no Undo.
+- **State across a switch:** nothing in the browser touches the workspace tree, so the D23 keys apply: slots by
+  `slot_id`, posts by URI, PostCard slots by node kind (a carousel keeps its page when Editorial moves it to another
+  slot; tested), the agent prompt text and the outbox are untouched (the engine's merge re-applies pending rows).
+- **Fake catalog:** `FakeLayoutCatalog` serves the pod's built-ins with the pod's titles, descriptions and hints,
+  read from the repo's `fixtures/layouts/*.json` (found by walking up from the working directory like the bundles;
+  rule-derived stand-ins if missing): the feed bundle (root id `pixelfed_home`) gets `pixelfed_home.*`, the one-post
+  bundle `pixelfed_demo.*`, the counter `home.*`. Classic has v1 seed, v2/v3 AI prompts, v4 a rollback to v1 (counter:
+  seed, AI, rollback), timestamps relative to now.
+- **Simulator commands:** `open-layouts`, `select-layout <id | last segment>`, `select-version <n>` (presses Load
+  older until the row appears), `use-layout`, `restore-version`, `confirm`, `cancel`, `undo`, `close-layouts`, and a
+  generic `back` (the simulator now provides `LocalBackPresses`). Each waits for idle and for `LayoutCalls` to drain,
+  waits up to 20 s for its screen, and fails with a hint naming the missing control. `shot` also waits for the
+  catalog calls (thumbnails). After every click the harness re-sends a pointer exit, so a screen that opens under the
+  old pointer position is not captured with a hover tint.
+- **Android:** the debug server chip moved up (96 dp from the bottom) so it never covers the snackbar.

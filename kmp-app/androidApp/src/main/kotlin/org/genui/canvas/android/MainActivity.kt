@@ -84,7 +84,8 @@ class MainActivity : ComponentActivity() {
                     DebugServerChip(
                         current = vm.baseUrl,
                         onPick = ::switchServer,
-                        modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 8.dp),
+                        // Above the layout browser's snackbar (bottom start, up to ~84 dp tall), so it never hides it.
+                        modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 96.dp),
                     )
                 }
             }

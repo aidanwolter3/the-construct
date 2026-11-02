@@ -612,8 +612,30 @@ browser. All calls are blocking: on Kotlin call them on `Dispatchers.IO`, never 
   layout immediately (the SSE echo is a no-op).
 - Every snapshot carries `layout_json` = `{"layout_id","layout_version","revision"}` (`CanvasState.activeLayout`
   in Kotlin) to mark the active layout and version; `{}` when unknown.
-- Simulation mode: `FakeEngineBridge` serves a small in-memory catalog (`home`: counter, big_counter;
-  `pixelfed_demo`: classic with 3 versions, editorial, compact).
+- Simulation mode: `FakeEngineBridge` serves an in-memory catalog of the pod's built-ins (read from
+  `fixtures/layouts/`; `home`: counter with seed / AI / rollback versions, big_counter; the Pixelfed workspaces:
+  classic with seed, two AI prompts and a rollback, editorial, compact, minimal).
+
+### Layout browser (all surfaces)
+
+Every surface (desktop, Android, simulator) has the same shared-Compose browser (docs/DECISIONS.md D30):
+
+- The **layouts button** (above the AI sparkle button, "Browse layouts") opens the list of this workspace's layouts,
+  each with a **live thumbnail**: its current version rendered with your real data, scaled down and not interactive.
+  The active one is marked "Active" with its version.
+- Tap a layout for its **details and version history** (newest first: version, time, source chip: Built-in, AI prompt
+  with the prompt, Rollback, Restore, Manual; "Load older" pages back). "Use this layout" switches to it.
+- Tap a version for a full-size **preview**. On the active layout, "Restore this version" adds a copy of it on top (so
+  nothing is ever lost); on another layout, "Use this version" switches to that version.
+- Every change asks for confirmation, then closes the browser, shows the new layout at once and offers **Undo** in a
+  snackbar for 8 s (undo is itself a new version / switch, never a deletion).
+- Back (Android) closes one level at a time; rotation keeps the open level. Errors show inline with "Try again"
+  (offline: "Can't reach your pod. ..."; writes without a session: "Sign in to change layouts.", unless the pod runs
+  with `CANVAS_AGENT_OPEN=1`).
+- Test tags: `layouts-button`, `layouts-browser`, `layouts-close`, `layouts-back`, `layout-item-<id>`,
+  `layout-details`, `layout-use`, `version-item-<n>`, `versions-more`, `version-preview`, `version-restore`,
+  `version-use`, `confirm-dialog`, `confirm-ok`, `confirm-cancel`, `confirm-error`, `layouts-snackbar`,
+  `snackbar-undo`, `layouts-error`, `layouts-retry`.
 
 ## Local Pixelfed instance (real, optional)
 
@@ -816,6 +838,40 @@ entries starting with `#` are comments. An argument cannot contain `;`, and sinc
 | `type <target> <text>` | Replaces the text of the selected text field with `<text>` (clear, then type), e.g. `type tag:agent-prompt Hide post captions`. The target is `tag:<testTag>`, a single word, or `"quoted text"` (may contain spaces); the text is the rest of the command. |
 | `offline` / `online` | Fixture mode only: flips the engine's connectivity. |
 | `screen <WxH or preset>` | Restarts the renderer at the new size. Engine state carries over; UI state such as scroll position does not. |
+| `back` | A system Back press (closes the innermost open panel / browser level); fails if nothing handles it. |
+| `open-layouts` | Opens the layout browser (clicks `layouts-button`) and waits for the list (or its error). |
+| `select-layout <id>` | Opens the details of a layout: a full id (`pixelfed_demo.editorial`) or its last segment (`editorial`). |
+| `select-version <n>` | In the details, opens the preview of version `n` (`3` or `v3`), pressing "Load older" as needed. |
+| `use-layout` | Presses "Use this layout" / "Use this version" (details or preview of an inactive layout); opens the confirmation. |
+| `restore-version` | Presses "Restore this version" (preview of an older version of the active layout); opens the confirmation. |
+| `confirm` / `cancel` | Confirms / cancels the open confirmation; `confirm` waits for the result (the step message has the snackbar text or the error). |
+| `undo` | Presses Undo on the result snackbar and waits for the result. |
+| `close-layouts` | Closes the browser. |
+
+The layout commands are thin wrappers over clicks on the browser's test tags (`click tag:layout-use` works too), but
+each waits until idle and until every catalog call has finished (they run on a background thread), waits up to 20 s
+for its screen, and fails with a hint when its control is missing (e.g. `select-version 2` without `select-layout`:
+"no layout details on screen (use select-layout first)"). Example (fixture or live mode):
+
+```bash
+cat > /tmp/layouts.txt <<'SCRIPT'
+# list with thumbnails, details with history, a version preview
+open-layouts; shot list
+select-layout classic; shot details
+select-version 3; shot preview
+back; back
+# switch to Editorial ("Switched to Editorial journal" + Undo), then undo
+select-layout editorial; use-layout; confirm; shot editorial
+undo; shot undone
+SCRIPT
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -PscriptFile=/tmp/layouts.txt
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -Pscreen=desktop -PscriptFile=/tmp/layouts.txt
+# live: a local pod (CANVAS_AGENT_OPEN=1 lets the anonymous simulator switch and restore)
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -PbaseUrl=http://127.0.0.1:8080 -PscriptFile=/tmp/layouts.txt
+```
+
+For `home` use `select-layout counter` / `big_counter`; there `select-version 2; restore-version; confirm` restores
+the AI version ("Restored v2 as v4").
 
 A `<target>` is either `tag:<testTag>` (an exact test tag, else the first tag containing it) or text: an exact text
 match, then an exact content description (clickable nodes preferred for both), then the same as substrings; the
