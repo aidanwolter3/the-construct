@@ -1,5 +1,6 @@
 {
   "note": "Comments: the comment button opens the post's comments, where you can add one",
+  "schema": 2,
   "layout": {
     "type": "core://Workspace",
     "id": "pixelfed_home",

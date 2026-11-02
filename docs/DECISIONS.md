@@ -1253,3 +1253,35 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   comments, pagination, per-item failure states for creates, date formatting in layouts, a non-wrapping row
   (`core://Container` Horizontal is a FlowRow).
 
+
+## D36: Layout versions declare their schema; breaking changes retire old ones without editing them
+
+- **Problem:** D35's `required_schema(layout)` is a lower bound computed from vocabulary: it keeps new layouts away
+  from old clients, but nothing stopped a newer client from being served (or pinning) an old layout after a
+  breaking change, and the version picker could not tell the user a version won't draw.
+- **Each layout file declares `"schema": N`**, the client schema it was written for (normally the current
+  `SCHEMA_VERSION`; the pod refuses one below `required_schema` or above the current version). A declared schema,
+  rather than the computed one, because a layout that happens to use only old vocabulary is still written against
+  today's semantics.
+  - Stored per version (`app_versions.schema`, server store v9). It is **not** part of `file_hash`, so adding it to
+    the already-deployed files did not trip the append-only check; the startup sync records it once (rows from
+    before v9 adopt it) and then refuses a changed value like a changed file. Versions not from files (tests,
+    migrated agent-era rows) record `required_schema` of their layout (1 when unreadable).
+- **Retiring is a protocol change, not a file edit:** `protocol::RETIRED` lists `(client schema, oldest layout schema
+  it draws)`. A breaking change bumps `SCHEMA_VERSION` and adds an entry. `compatibility(layout, client)` is
+  `UpdateRequired` (layout newer than the client), `Retired` (older than the client's floor) or `Compatible`.
+  Old clients keep drawing old layouts (their own floor is unchanged).
+- **Pod:** `active_for` serves the newest compatible version by declared schema (`None` if none fits, as before).
+  `GET /v1/apps/{id}/versions[/{n}]` add `schema`, `compatible` and `incompatible` (`update_required` | `retired`)
+  for the client's `X-Construct-Schema`, which the engine now also sends on the apps calls. The single-version
+  endpoint still returns the layout (history to look at). The pod computes compatibility because it always has the
+  newest `RETIRED` table.
+- **Clients:** incompatible rows in the version picker are greyed out and not clickable, with "Needs a newer version
+  of the app" / "Made for an older version of the app" before the note. `parseVersionLayout` refuses an
+  incompatible spec, so nothing pins one. An older pod that sends no `compatible` means compatible. The simulator's
+  `select-version` fails with the row's text on a greyed-out row.
+- **Compatibility today:** schema 2 (D35) was additive, so `RETIRED` is empty. `home/0001`, `pixelfed_demo/0001` and
+  `pixelfed_home/0001` declare 1, `pixelfed_home/0002` declares 2; every version draws on current clients. (On
+  `pixelfed_home/0001` the comment button opens nothing: that version has no comments screen.)
+- **Not yet:** the SSE event and "Newer version available" still use the latest version even when the client can't
+  draw it (D35's note). Pins are in memory only, so an app update cannot carry over a pin it can't draw.

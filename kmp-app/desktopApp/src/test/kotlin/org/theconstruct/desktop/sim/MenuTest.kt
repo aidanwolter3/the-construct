@@ -3,6 +3,8 @@ package org.theconstruct.desktop.sim
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SkikoComposeUiTest
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.runSkikoComposeUiTest
@@ -103,6 +105,39 @@ class MenuTest {
         assertEquals(3L, fake.layoutVersion)
         runner(fake, controller).ok("open-history pixelfed_home; select-version latest; assert-text Comment")
         assertNull(controller.pinned.value)
+    }
+
+    @Test
+    fun versionsThisBuildCantDrawAreGreyedOutAndCantBeSelected() {
+        val base = ConstructJson.decodeBundle(bundle("pixelfed_home_feed_bundle.json")).workspace
+        val catalog = FakeAppCatalog()
+        catalog.add(
+            "pixelfed_home", "Pixelfed", "photo",
+            FakeAppCatalog.Version(FakeAppCatalog.captionFirst(base), "Old feed", 0, schema = 1, incompatible = "retired"),
+            FakeAppCatalog.Version(base, "Current", 0, schema = 2),
+            FakeAppCatalog.Version(base, "Stories", 0, schema = 3, incompatible = "update_required"),
+        )
+        val fake = FakeEngineBridge(bundle("pixelfed_home_feed_bundle.json"), apps = catalog)
+        val controller = ConstructController(fake, fake.appId)
+        compose(controller) {
+            controller.menu.showHistory("pixelfed_home")
+            waitForIdle()
+            waitUntil(timeoutMillis = 5_000) { has("version-1") }
+            onNode(hasTestTag("version-3")).assertIsNotEnabled()
+            onNode(hasTestTag("version-1")).assertIsNotEnabled()
+            onNode(hasTestTag("version-2")).assertIsEnabled()
+            onNode(hasText("Needs a newer version of the app · Stories")).assertExists()
+            onNode(hasText("Made for an older version of the app · Old feed")).assertExists()
+        }
+        val r = runner(fake, controller).run(parseScript("open-history Pixelfed; select-version 1"))
+        assertFalse(r.ok)
+        assertTrue(
+            r.steps.last().message.contains("v1 can't be shown by this build: v1"),
+            r.steps.joinToString("\n") { it.logLine() },
+        )
+        assertNull(controller.pinned.value)
+        runner(fake, controller).ok("open-history Pixelfed; select-version 2")
+        assertEquals(2L, controller.pinned.value?.version)
     }
 
     @Test

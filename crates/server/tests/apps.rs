@@ -434,6 +434,7 @@ fn db_with_a_changed_home_file(dir: &std::path::Path) {
         note: "Counter".into(),
         json: "{}".into(),
         file_hash: "0".repeat(64),
+        schema: 1,
     };
     store
         .sync_layout_files(&[("home", vec![file])])
@@ -635,4 +636,51 @@ async fn shutdown_ends_open_streams() {
         .await
         .expect("stream did not end after shutdown");
     assert!(matches!(end, Ok(None)), "{end:?}");
+}
+
+/// Each version says which schema it was written for and whether the asking
+/// client (its `X-Construct-Schema`) can draw it.
+#[tokio::test]
+async fn versions_say_whether_the_client_can_draw_them() {
+    let pod = pod().await;
+    let page = |schema: Option<u32>| {
+        let mut req = client().get(format!("{}/v1/apps/pixelfed_home/versions", pod.url));
+        if let Some(s) = schema {
+            req = req.header(protocol::SCHEMA_HEADER, s.to_string());
+        }
+        async move { req.send().await.unwrap().json::<Value>().await.unwrap() }
+    };
+    let body = page(Some(protocol::SCHEMA_VERSION)).await;
+    let rows: Vec<(i64, i64, bool)> = body["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| {
+            assert!(v.get("incompatible").is_none(), "{v}");
+            (
+                v["version"].as_i64().unwrap(),
+                v["schema"].as_i64().unwrap(),
+                v["compatible"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(rows, [(2, 2, true), (1, 1, true)]);
+    // A client from before screens (no header) cannot draw 0002.
+    let body = page(None).await;
+    assert_eq!(body["versions"][0]["compatible"], false);
+    assert_eq!(body["versions"][0]["incompatible"], "update_required");
+    assert_eq!(body["versions"][1]["compatible"], true);
+    let one = client()
+        .get(format!("{}/v1/apps/pixelfed_home/versions/2", pod.url))
+        .send()
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        (&one["schema"], &one["incompatible"]),
+        (&json!(2), &json!("update_required"))
+    );
+    assert!(one["layout"].is_object(), "still served to look at");
 }
