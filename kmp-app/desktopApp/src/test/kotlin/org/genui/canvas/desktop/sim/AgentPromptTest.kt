@@ -1,21 +1,27 @@
 package org.genui.canvas.desktop.sim
 
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runSkikoComposeUiTest
 import androidx.compose.ui.unit.Density
 import org.genui.canvas.ActionIntent
 import org.genui.canvas.CanvasApp
 import org.genui.canvas.CanvasController
+import org.genui.canvas.CanvasEngineBridge
 import org.genui.canvas.CanvasJson
+import org.genui.canvas.EngineSnapshot
 import org.genui.canvas.TextStyle
 import org.genui.canvas.UiNode
 import java.io.File
@@ -131,6 +137,106 @@ class AgentPromptTest {
             assertEquals("", promptText())
             onNode(hasTestTag("agent-send")).assertIsNotEnabled() // blank
         }
+    }
+
+    /**
+     * A bridge whose agent status only changes when the test says so, like the real engine while the pod's LLM call
+     * is in flight (the fake answers synchronously). It records the prompts it was sent.
+     */
+    private class ManualAgentBridge(bundleJson: String) : CanvasEngineBridge {
+        private val workspaceJson = CanvasJson.encodeNode(CanvasJson.decodeBundle(bundleJson).workspace)
+        private var listener: ((EngineSnapshot) -> Unit)? = null
+        private var seq = 0L
+        val prompts = mutableListOf<String>()
+
+        override fun subscribe(onState: (EngineSnapshot) -> Unit) {
+            listener = onState
+            agent("{\"state\":\"idle\"}")
+        }
+
+        override fun dispatch(intentJson: String) {
+            (CanvasJson.decodeIntent(intentJson) as? ActionIntent.PromptAgent)?.let { prompts += it.promptText }
+        }
+
+        fun agent(json: String) {
+            listener?.invoke(EngineSnapshot(workspaceJson, "{}", true, ++seq, pendingActions = 0, agentJson = json))
+        }
+    }
+
+    @Test
+    fun aDoubleTapPostsThePromptOnce() {
+        val bridge = ManualAgentBridge(bundle())
+        val controller = CanvasController(bridge)
+        SimImages.install("fixture")
+        runSkikoComposeUiTest(size = Size(390f, 900f), density = Density(1f)) {
+            setContent { CanvasApp(controller) }
+            waitForIdle()
+            onNode(hasTestTag("agent-fab")).performClick()
+            waitForIdle()
+            onNode(hasTestTag("agent-prompt")).performTextInput("Hide captions")
+            waitForIdle()
+            // Two taps before any recomposition (no snapshot yet: the engine has not reported running).
+            mainClock.autoAdvance = false
+            // (Semantics clicks run onClick synchronously, like a tap's handler; two in a row stand for a double
+            // tap or the IME action plus the button landing within one frame.)
+            onNode(hasTestTag("agent-send")).performSemanticsAction(SemanticsActions.OnClick)
+            onNode(hasTestTag("agent-send")).performSemanticsAction(SemanticsActions.OnClick)
+            mainClock.autoAdvance = true
+            waitForIdle()
+            assertEquals(listOf("Hide captions"), bridge.prompts)
+            onNode(hasTestTag("agent-send")).assertIsNotEnabled()
+            // A newer snapshot (here: an error) re-enables Send.
+            bridge.agent("{\"state\":\"error\",\"message\":\"offline: try again when online\"}")
+            waitForIdle()
+            onNode(hasTestTag("agent-send")).performClick()
+            waitForIdle()
+            assertEquals(listOf("Hide captions", "Hide captions"), bridge.prompts)
+        }
+    }
+
+    @Test
+    fun anEditWhileRunningIsNotClearedByTheResult() {
+        val bridge = ManualAgentBridge(bundle())
+        val controller = CanvasController(bridge)
+        SimImages.install("fixture")
+        runSkikoComposeUiTest(size = Size(390f, 900f), density = Density(1f)) {
+            setContent { CanvasApp(controller) }
+            waitForIdle()
+            onNode(hasTestTag("agent-fab")).performClick()
+            waitForIdle()
+            onNode(hasTestTag("agent-prompt")).performTextInput("Hide captions")
+            waitForIdle()
+            onNode(hasTestTag("agent-send")).performClick()
+            bridge.agent("{\"state\":\"running\"}")
+            waitForIdle()
+            onNode(hasTestTag("agent-send")).assertIsNotEnabled()
+            // The user starts the next prompt while the agent works.
+            onNode(hasTestTag("agent-prompt")).performTextClearance()
+            onNode(hasTestTag("agent-prompt")).performTextInput("Add a weather widget")
+            bridge.agent("{\"state\":\"done\",\"provider\":\"rules\",\"layout_version\":2}")
+            waitForIdle()
+            assertEquals("Add a weather widget", promptText())
+            onNode(hasTestTag("agent-status")).assertTextEquals("Layout updated (v2, rules)")
+            // Unedited: the result clears the sent text.
+            onNode(hasTestTag("agent-send")).performClick()
+            bridge.agent("{\"state\":\"running\"}")
+            bridge.agent("{\"state\":\"done\",\"provider\":\"rules\",\"layout_version\":3}")
+            waitForIdle()
+            assertEquals("", promptText())
+            assertEquals(listOf("Hide captions", "Add a weather widget"), bridge.prompts)
+        }
+    }
+
+    @Test
+    fun fakeRulesMatchTheServerOnNoOpsAndLayoutsWithoutPostCards() {
+        // The counter fixture has no PostCard: like the server's rules provider, caption/media rules fail there.
+        val counter = CanvasJson.decodeBundle(assertNotNull(findFixture("counter_home_bundle.json")).readText()).workspace
+        assertEquals(FakeLayoutRules.Outcome.Failed(FakeLayoutRules.NO_CARD), FakeLayoutRules.run("Hide captions", counter))
+        // A repeated prompt leaves the layout as is and commits no new version.
+        val fake = FakeEngineBridge(bundle())
+        fake.dispatch(CanvasJson.encodeIntent(ActionIntent.PromptAgent("add a weather widget")))
+        fake.dispatch(CanvasJson.encodeIntent(ActionIntent.PromptAgent("add a weather widget")))
+        assertEquals(2, fake.layoutVersion)
     }
 
     @Test

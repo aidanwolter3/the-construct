@@ -604,7 +604,11 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   `safeDrawing`, which includes the IME).
 - **State outside the server-driven tree:** `AgentPromptOverlay` is drawn by `CanvasApp` over the workspace;
   `rememberSaveable` open flag and prompt text. The text is cleared only when the agent status, after this panel's
-  send, changes to `done`; an error keeps it for editing. Send is disabled while blank or `running`.
+  send, changes to `done` and only if the field still holds the sent text (an edit made while running is kept); an
+  error keeps it for editing. Send is disabled while blank or `running`, and from a tap until a newer snapshot seq
+  arrives (two taps or IME action + button within one frame post once). Android: `adjustResize`, so the IME arrives
+  as insets (no window pan) and the root's `safeDrawingPadding` lifts the panel; the status line is a polite live
+  region.
 - **Status:** `EngineSnapshot.agentJson` (default `{"state":"idle"}`) -> `CanvasState.agent` (`AgentInfo`):
   "Applying...", "Layout updated (v3, rules)", or the error message.
 - **Recomposition stability:** workspace slots are keyed by `slot_id` and the PostCard's author/media/action slots by
@@ -612,8 +616,9 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   hidden, when the carousel moves to the top slot, and when a slot is inserted above the feed (tested).
 - **Fixture mode:** `FakeEngineBridge` answers `PromptAgent` with `FakeLayoutRules` (hide captions, media at the top /
   photos first, add a weather widget; composable, tree-walking, same shapes as the server's rules provider), bumps
-  its layout version and reports provider `fake-rules`; unknown prompts -> error "unsupported prompt (try: ...)",
-  offline -> error. Live mode sends the intent to the real engine.
+  its layout version (not when the layout is already in the requested state, like the server's `unchanged`) and
+  reports provider `fake-rules`; unknown prompts -> error "unsupported prompt (try: ...)", a caption/media rule on a
+  layout without a PostCard -> the server's "this layout has no pixelfed://PostCard", offline -> error. Live mode sends the intent to the real engine.
 - **Simulator `type <target> <text>`:** clears the field then `performTextInput`; target `tag:<t>`, one word, or
   `"quoted text"`.
 - **Simulator `click` must hit:** the click lands at the node's center, so a match whose center is outside its
@@ -630,7 +635,9 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 - **200:** the response's `workspace` is applied at once (no refetch): layout only, `State::apply_layout` keeps
   entities, queries and the outbox and rewrites the cached `active_workspace` row with its existing entity URIs and
   queries (the response carries `entities: {}`, so the fetch merge must not be used). Skipped if an equal or newer
-  version is already applied (the SSE refetch may win the race): both paths are idempotent. `agent_json` =
+  version is already applied (the SSE refetch may win the race): both paths are idempotent. Not applied (a refetch
+  instead) when no versioned layout is on display (`layout_version` is `None`, e.g. the signed-out `pixelfed_home`
+  screen with `CANVAS_AGENT_OPEN=1`) or the session changed since the request. `agent_json` =
   `{"state":"done","message":"Layout updated (vN, <provider>)","provider","layout_version"}`.
 - **Errors:** non-2xx -> `error` with `"<error>: <detail>"`, `"<error>; try: <supported...>"` (unsupported_prompt),
   or `HTTP <code>: <body start>`, plus `provider` when the pod names one; transport failure -> `"offline: try again
@@ -661,11 +668,19 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 ## D25: Layout agent endpoint and providers (`server::agent`)
 
 - **Flow:** `POST /v1/agent/modify_layout` loads the latest version, asks the provider for an RFC 6902 patch (paths
-  relative to the `core://Workspace` root), applies it to a copy with `json-patch`, validates (deserializes as
-  `UiNode`; same root id; 1..=50 slots; `OptimisticMutate.endpoint` starts with `/v1/`; <= 256 KB), and only then
-  `layouts::commit_and_publish`es with prompt, provider and patch. Any failure commits nothing. An empty patch, or
-  one whose result equals the current layout, answers 200 `"unchanged": true` at the current version (no empty
-  versions). Concurrent prompts are last-writer-wins (each patch is validated against the version it was made for).
+  relative to the `core://Workspace` root), applies it to a copy with `json-patch` one op at a time (<= 200 ops,
+  patch <= 256 KB; depth and size are checked after every op, since `copy` can double the document), validates
+  (deserializes as `UiNode`; JSON depth <= 32, since clients parse and render recursively; <= 256 KB; same root id;
+  1..=50 slots with unique `slot_id`s; `MediaCarousel.aspect_ratio` in 0.2..=5 (a non-finite `f32` would serialize
+  as `null` and make the stored layout unreadable); `Container.padding_dp` <= 64; `OptimisticMutate.endpoint` starts
+  with `/v1/`; every `OptimisticMutate` / `AuthLogin` / `Navigate` intent must equal one already in the current
+  layout, so a patch can move or copy intents but never invent endpoints, targets or sign-in instances;
+  `PromptAgent` / `NavigateBack` are free), and only then commits with prompt, provider and patch. Any failure
+  commits nothing. An empty patch, or one whose result equals the current layout, answers 200 `"unchanged": true`
+  at the current version (no empty versions). The commit is compare-and-append on the version the patch was made
+  for (`Store::append_layout_if_latest`, one statement); if a concurrent prompt or rollback committed meanwhile, the
+  same patch is re-applied and re-validated on the new latest (up to 3 more times, then 409 `conflict`), so a slow
+  provider call never silently reverts a rollback.
 - **Provider trait:** `LayoutProvider { name, model, generate -> boxed future of Generated{ops, explanation} }`
   (boxed so the selection is an `Arc<dyn>`). `Selection::from_env` resolves `CANVAS_LLM_PROVIDER`; an explicit
   `anthropic` without a key is `NotConfigured` (server starts; prompts get 503) rather than a silent fallback.
@@ -682,6 +697,8 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   sorted, so the text is deterministic). Refusal / `max_tokens` / non-JSON text / unparsable `value_json` ->
   502 `provider_error`; 401/403 -> 503 `provider_not_configured` naming the rejected key; 429/5xx/`overloaded_error`
   retried twice (honoring `retry-after`, capped at 30 s, else 1 s doubling); connect errors retried, timeouts not.
+  The whole call (retries and delays included) is bounded by 170 s, under the client's 180 s. `AnthropicConfig`'s
+  `Debug` redacts the key.
 - **Registry:** `schemars::JsonSchema` derived on the protocol AST/intent types behind protocol's `schema` feature
   (the server enables it); `agent::registry()` = `schema_for!(UiNode)` (intents under `$defs`). A new variant must
   derive the schema to compile, and a test checks every variant tag is in the registry.

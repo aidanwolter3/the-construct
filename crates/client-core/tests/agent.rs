@@ -51,6 +51,9 @@ struct StubState {
     agent_requests: Mutex<Vec<(String, String)>>,
     /// Authorization header per events connection.
     event_auth: Mutex<Vec<String>>,
+    /// Workspace fetches answer an unversioned "Signed out" screen (no
+    /// version header), like the signed-out `pixelfed_home`.
+    unversioned: std::sync::atomic::AtomicBool,
 }
 
 struct Stub {
@@ -156,6 +159,11 @@ fn handle(mut stream: TcpStream, st: &StubState) {
             let v = *st.version.lock().unwrap();
             let mut bundle: Value = serde_json::from_str(FIXTURE).unwrap();
             bundle["workspace"] = layout(v);
+            if st.unversioned.load(Ordering::SeqCst) {
+                bundle["workspace"]["title"] = json!("Signed out");
+                respond(&mut stream, "200 OK", "", &bundle.to_string());
+                return;
+            }
             respond(
                 &mut stream,
                 "200 OK",
@@ -308,6 +316,21 @@ fn prompt_success_applies_layout_and_reports_done() {
     assert_eq!(serde_json::to_value(&cached.layout).unwrap()["title"], "Home v2");
     assert_eq!(cached.entity_uris, vec!["core://counters/home".to_string()]);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn prompt_response_is_not_painted_over_an_unversioned_screen() {
+    // An open agent endpoint answers a signed-out client with the feed
+    // layout; the signed-out screen (no version header) must stay.
+    let stub = Stub::start();
+    stub.st.unversioned.store(true, Ordering::SeqCst);
+    let engine = engine(&stub, "");
+    wait_until("signed-out screen", || title(&engine.snapshot()) == "Signed out");
+    let fetches = stub.fetches();
+    engine.dispatch(&prompt("Hide post captions"));
+    wait_until("agent done", || agent(&engine.snapshot())["state"] == "done");
+    wait_until("refetch", || stub.fetches() > fetches);
+    assert_eq!(title(&engine.snapshot()), "Signed out", "response layout not applied");
 }
 
 #[test]

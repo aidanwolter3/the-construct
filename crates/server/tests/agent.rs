@@ -882,3 +882,191 @@ async fn anthropic_provider_through_the_endpoint() {
         "{b}"
     );
 }
+
+// ---------- review hardening ----------
+
+#[test]
+fn builtin_layouts_pass_validation() {
+    for ws in layouts::VERSIONED {
+        let layout = serde_json::to_value(layouts::builtin(ws).unwrap()).unwrap();
+        agent::apply_and_validate(&layout, &[]).unwrap_or_else(|e| panic!("{ws}: {e}"));
+    }
+}
+
+#[test]
+fn validation_bounds_depth_size_growth_and_values() {
+    let layout = layout();
+    let ok = |ops: Value| agent::apply_and_validate(&layout, ops.as_array().unwrap());
+    let caption = "/slots/0/content/item_template/caption_slot";
+
+    // Deep nesting (clients parse and render recursively).
+    let mut deep = json!({ "type": "core://Text", "value_expr": "", "style": "Body" });
+    for _ in 0..20 {
+        deep = json!({ "type": "core://Container", "orientation": "Vertical", "padding_dp": 0, "children": [deep] });
+    }
+    let err = ok(json!([{ "op": "replace", "path": caption, "value": deep }])).unwrap_err();
+    assert!(err.contains("deeper than"), "{err}");
+    let shallow = json!({ "type": "core://Container", "orientation": "Vertical", "padding_dp": 8,
+        "children": [{ "type": "core://Text", "value_expr": "entity.caption", "style": "Body" }] });
+    assert!(ok(json!([{ "op": "replace", "path": caption, "value": shallow }])).is_ok());
+
+    // `copy` doubling the document is stopped after the op that crosses the
+    // size limit, not after building a gigantic document.
+    let bomb: Vec<Value> = (0..60)
+        .map(|i| json!({ "op": "copy", "from": "", "path": format!("/x{i}") }))
+        .collect();
+    let err = ok(Value::Array(bomb)).unwrap_err();
+    assert!(err.contains("after operation") && err.contains("bytes"), "{err}");
+
+    // Too many operations.
+    let many: Vec<Value> = (0..201)
+        .map(|_| json!({ "op": "test", "path": "/id", "value": "pixelfed_home" }))
+        .collect();
+    let err = ok(Value::Array(many)).unwrap_err();
+    assert!(err.contains("201 operations"), "{err}");
+
+    // Values a renderer cannot draw; 1e39 would even become `null` as f32.
+    let media = "/slots/0/content/item_template/media_slot/aspect_ratio";
+    for bad in [json!(0.0), json!(-1.0), json!(1e39), json!(100.0)] {
+        let err = ok(json!([{ "op": "replace", "path": media, "value": bad }])).unwrap_err();
+        assert!(err.contains("aspect_ratio"), "{bad}: {err}");
+    }
+    assert!(ok(json!([{ "op": "replace", "path": media, "value": 1.5 }])).is_ok());
+    let mut padded = shallow.clone();
+    padded["padding_dp"] = json!(60_000);
+    let err = ok(json!([{ "op": "replace", "path": caption, "value": padded }])).unwrap_err();
+    assert!(err.contains("padding_dp"), "{err}");
+
+    // Slot ids stay unique.
+    let slot = layout["slots"][0].clone();
+    let err = ok(json!([{ "op": "add", "path": "/slots/-", "value": slot }])).unwrap_err();
+    assert!(err.contains("duplicate slot_id"), "{err}");
+}
+
+#[test]
+fn validation_rejects_invented_intents_but_allows_copies() {
+    let layout = layout();
+    let ok = |ops: Value| agent::apply_and_validate(&layout, ops.as_array().unwrap());
+    let caption = "/slots/0/content/item_template/caption_slot";
+    let action = "/slots/0/content/item_template/action_slot";
+    // A sign-in button to another instance (phishing) is not a copy.
+    let login = json!({ "type": "core://Button", "label": "Sign in again",
+        "on_click": { "intent": "action.auth.login", "instance_url": "https://evil.example" } });
+    let err = ok(json!([{ "op": "replace", "path": caption, "value": login }])).unwrap_err();
+    assert!(err.contains("action.auth.login"), "{err}");
+    // Retargeting a pod mutation (still /v1/) is not a copy either.
+    let err = ok(json!([{ "op": "replace", "path": format!("{action}/like_intent/endpoint"),
+        "value": "/v1/workspaces/pixelfed_home/rollback" }]))
+    .unwrap_err();
+    assert!(err.contains("copies of intents"), "{err}");
+    // Moving or copying existing intents is fine, and PromptAgent buttons are allowed.
+    assert!(ok(json!([{ "op": "copy", "from": action, "path": caption }])).is_ok());
+    let ask = json!({ "type": "core://Button", "label": "Hide captions",
+        "on_click": { "intent": "action.agent.prompt", "prompt_text": "hide captions" } });
+    assert!(ok(json!([{ "op": "replace", "path": caption, "value": ask }])).is_ok());
+}
+
+/// Generates "/title" = "Agent" once released (a slow LLM call).
+struct GatedProvider {
+    started: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+impl LayoutProvider for GatedProvider {
+    fn name(&self) -> &str {
+        "gated"
+    }
+    fn model(&self) -> Option<&str> {
+        None
+    }
+    fn generate<'a>(
+        &'a self,
+        _prompt: &'a str,
+        _layout: &'a Value,
+        _registry: &'a Value,
+    ) -> agent::GenerateFuture<'a> {
+        Box::pin(async move {
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(agent::Generated {
+                ops: vec![json!({ "op": "replace", "path": "/title", "value": "Agent" })],
+                explanation: None,
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_change_committed_during_generation_is_not_overwritten() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let pod = spawn(
+        AppState::in_memory()
+            .with_agent_open(true)
+            .with_agent(Selection::provider(GatedProvider {
+                started: started.clone(),
+                release: release.clone(),
+            })),
+    )
+    .await;
+    let url = pod.url.clone();
+    let request = tokio::spawn(async move {
+        reqwest::Client::new()
+            .post(format!("{url}/v1/agent/modify_layout"))
+            .json(&json!({ "prompt": "rename" }))
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap()
+    });
+    started.notified().await;
+    // Meanwhile another change lands (a rollback or a concurrent prompt).
+    let (v1, mut other) = latest(&pod, "pixelfed_home");
+    assert_eq!(v1, 1);
+    if let UiNode::Workspace { slots, .. } = &mut other {
+        slots[0].slot_id = "concurrent".into();
+    }
+    let v2 = layouts::commit(pod.state.store(), "pixelfed_home", &other, None, None, None).unwrap();
+    assert_eq!(v2, 2);
+    release.notify_one();
+    let body = request.await.unwrap();
+    assert_eq!(body["layout_version"], 3, "{body}");
+    let ws = spec_workspace(&body);
+    assert_eq!(ws["title"], "Agent");
+    assert_eq!(ws["slots"][0]["slot_id"], "concurrent", "v2's change kept");
+    let (v, stored) = latest(&pod, "pixelfed_home");
+    assert_eq!((v, serde_json::to_value(stored).unwrap()), (3, ws));
+}
+
+#[test]
+fn anthropic_config_debug_redacts_the_key() {
+    let config = AnthropicConfig::new("sk-ant-secret-123");
+    let printed = format!("{config:?}");
+    assert!(!printed.contains("secret"), "{printed}");
+    assert!(printed.contains("redacted"), "{printed}");
+}
+
+#[tokio::test]
+async fn anthropic_total_timeout_bounds_retries() {
+    let overloaded =
+        json!({ "type": "error", "error": { "type": "overloaded_error", "message": "busy" } });
+    let api = mock_api(vec![
+        (529, vec![("retry-after", "5")], overloaded.clone()),
+        (529, vec![("retry-after", "5")], overloaded),
+    ])
+    .await;
+    let mut config = AnthropicConfig::new("k");
+    config.base_url = api.url.clone();
+    config.total_timeout = Duration::from_millis(300);
+    let started = std::time::Instant::now();
+    match AnthropicProvider::new(config)
+        .generate("x", &layout(), agent::registry())
+        .await
+    {
+        Err(ProviderError::Failed(d)) => assert!(d.contains("retries included"), "{d}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(started.elapsed() < Duration::from_secs(3));
+}

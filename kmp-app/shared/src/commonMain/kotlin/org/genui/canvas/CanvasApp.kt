@@ -159,6 +159,7 @@ fun CanvasApp(controller: CanvasController, modifier: Modifier = Modifier) {
                 if (state.workspace != null) {
                     AgentPromptOverlay(
                         state.agent,
+                        state.seq,
                         onSend = { controller.dispatch(ActionIntent.PromptAgent(it)) },
                         modifier = Modifier.fillMaxSize(),
                     )

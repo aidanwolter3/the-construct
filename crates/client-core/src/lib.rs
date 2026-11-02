@@ -1849,10 +1849,24 @@ impl Inner {
                 return;
             }
         };
+        let mut refetch = false;
         let snap = {
             let mut st = lock(&self.state);
             let applied = st.layout_version;
-            if version.is_some() && applied.is_some() && version <= applied {
+            let session_changed = st.session.as_ref().map(|s| s.token.as_str()) != token;
+            if session_changed || applied.is_none() {
+                // The screen on display is not the versioned layout the pod
+                // changed (e.g. the signed-out `pixelfed_home` screen, with
+                // an open agent endpoint), or the session changed meanwhile:
+                // never paint the response's layout over it. A refetch shows
+                // whatever this session should see now.
+                println!(
+                    "[CanvasEngine] agent: layout v{} not applied ({}); refetching",
+                    version.map_or("?".into(), |v| v.to_string()),
+                    if session_changed { "the session changed" } else { "no versioned layout on display" }
+                );
+                refetch = true;
+            } else if version.is_some() && version <= applied {
                 println!(
                     "[CanvasEngine] agent: layout v{} already applied (have v{})",
                     version.unwrap_or_default(),
@@ -1879,6 +1893,9 @@ impl Inner {
             st.snapshot()
         };
         self.notify(snap);
+        if refetch && !self.signal.is_shut_down() {
+            self.refresh();
+        }
     }
 
     /// Replace the current sign-in flow (cancelling the old one) with `new`.

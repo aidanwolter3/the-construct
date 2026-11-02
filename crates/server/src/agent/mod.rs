@@ -32,6 +32,17 @@ pub const DEFAULT_WORKSPACE: &str = crate::pixelfed::layout::WORKSPACE_ID;
 pub const MAX_SLOTS: usize = 50;
 pub const MAX_LAYOUT_BYTES: usize = 256 * 1024;
 pub const MAX_PROMPT_CHARS: usize = 4_000;
+/// Deepest JSON nesting (objects + arrays) a layout may have. The built-in
+/// layouts are about 9 deep; clients parse and render recursively (serde's
+/// default limit is 128), so a deep tree must never reach them.
+pub const MAX_LAYOUT_DEPTH: usize = 32;
+/// Most operations in one patch, and its largest JSON size.
+pub const MAX_PATCH_OPS: usize = 200;
+pub const MAX_PATCH_BYTES: usize = 256 * 1024;
+/// `MediaCarousel.aspect_ratio` range (width / height).
+pub const ASPECT_RATIO_RANGE: std::ops::RangeInclusive<f32> = 0.2..=5.0;
+/// Largest `Container.padding_dp`.
+pub const MAX_PADDING_DP: u16 = 64;
 
 /// What a provider produced.
 #[derive(Debug, Clone, PartialEq)]
@@ -152,19 +163,64 @@ pub fn registry() -> &'static Value {
 /// Applies `ops` to a copy of `layout` and validates the result (M7 contract
 /// step 4). `Err` carries a human-readable reason.
 pub fn apply_and_validate(layout: &Value, ops: &[Value]) -> Result<UiNode, String> {
+    if ops.len() > MAX_PATCH_OPS {
+        return Err(format!("{} operations (max {MAX_PATCH_OPS})", ops.len()));
+    }
+    let patch_size = serde_json::to_vec(ops).map_or(usize::MAX, |b| b.len());
+    if patch_size > MAX_PATCH_BYTES {
+        return Err(format!("patch is {patch_size} bytes (max {MAX_PATCH_BYTES})"));
+    }
     let patch: json_patch::Patch = serde_json::from_value(Value::Array(ops.to_vec()))
         .map_err(|e| format!("not an RFC 6902 patch: {e}"))?;
     let mut doc = layout.clone();
-    json_patch::patch(&mut doc, &patch).map_err(|e| format!("patch does not apply: {e}"))?;
+    // One op at a time on a private copy, bounding the document after each:
+    // `copy` can double it per op, so checking only the end result would let
+    // a short patch exhaust memory first.
+    for (i, op) in patch.iter().enumerate() {
+        json_patch::patch_unsafe(&mut doc, std::slice::from_ref(op))
+            .map_err(|e| format!("patch does not apply: operation {i}: {e}"))?;
+        check_bounds(&doc).map_err(|e| format!("after operation {i}: {e}"))?;
+    }
     validate(layout, &doc)
 }
 
-/// Validates a patched layout against the original root.
-pub fn validate(original: &Value, doc: &Value) -> Result<UiNode, String> {
+/// Nesting depth of objects/arrays (a scalar root is 0). Iterative, so a
+/// deep document cannot overflow the stack here.
+fn json_depth(v: &Value) -> usize {
+    let mut max = 0;
+    let mut stack = vec![(v, 1usize)];
+    while let Some((v, d)) = stack.pop() {
+        let children: Box<dyn Iterator<Item = &Value>> = match v {
+            Value::Array(a) => Box::new(a.iter()),
+            Value::Object(m) => Box::new(m.values()),
+            _ => continue,
+        };
+        max = max.max(d);
+        if d > MAX_LAYOUT_DEPTH {
+            break; // deep enough to reject; don't walk the rest
+        }
+        stack.extend(children.map(|c| (c, d + 1)));
+    }
+    max
+}
+
+/// Depth (first: everything after it recurses) and size limits.
+fn check_bounds(doc: &Value) -> Result<(), String> {
+    if json_depth(doc) > MAX_LAYOUT_DEPTH {
+        return Err(format!(
+            "layout nests deeper than {MAX_LAYOUT_DEPTH} levels"
+        ));
+    }
     let size = serde_json::to_vec(doc).map_or(usize::MAX, |b| b.len());
     if size > MAX_LAYOUT_BYTES {
         return Err(format!("layout is {size} bytes (max {MAX_LAYOUT_BYTES})"));
     }
+    Ok(())
+}
+
+/// Validates a patched layout against the original root.
+pub fn validate(original: &Value, doc: &Value) -> Result<UiNode, String> {
+    check_bounds(doc)?;
     let node: UiNode = serde_json::from_value(doc.clone())
         .map_err(|e| format!("layout does not deserialize as a UiNode: {e}"))?;
     let UiNode::Workspace { id, slots, .. } = &node else {
@@ -182,6 +238,19 @@ pub fn validate(original: &Value, doc: &Value) -> Result<UiNode, String> {
     if slots.len() > MAX_SLOTS {
         return Err(format!("{} slots (max {MAX_SLOTS})", slots.len()));
     }
+    let mut ids = std::collections::HashSet::new();
+    if let Some(dup) = slots.iter().find(|s| !ids.insert(s.slot_id.as_str())) {
+        return Err(format!("duplicate slot_id '{}'", dup.slot_id));
+    }
+    check_values(&node)?;
+    // Intents that reach the network or start a sign-in may only be copies of
+    // ones the current layout already has (the model is told the same): a
+    // patch must not invent endpoints, entity targets or instance URLs.
+    let original_node = serde_json::from_value::<UiNode>(original.clone()).ok();
+    let mut existing = Vec::new();
+    if let Some(original) = &original_node {
+        collect_intents(original, &mut existing);
+    }
     let mut intents = Vec::new();
     collect_intents(&node, &mut intents);
     for intent in intents {
@@ -192,8 +261,64 @@ pub fn validate(original: &Value, doc: &Value) -> Result<UiNode, String> {
                 "mutation endpoint '{endpoint}' must be a pod path starting with /v1/"
             ));
         }
+        let restricted = matches!(
+            intent,
+            ActionIntent::OptimisticMutate { .. }
+                | ActionIntent::AuthLogin { .. }
+                | ActionIntent::Navigate { .. }
+        );
+        if restricted && !existing.contains(&intent) {
+            let json = serde_json::to_string(intent).unwrap_or_default();
+            return Err(format!(
+                "new action intent {json}: mutation, navigation and sign-in intents may only be \
+                 copies of intents already in the layout"
+            ));
+        }
     }
     Ok(node)
+}
+
+/// Numeric fields the renderers cannot draw sensibly (or at all: a
+/// non-finite `f32` would even serialize as `null` and make the stored
+/// layout unreadable).
+fn check_values(node: &UiNode) -> Result<(), String> {
+    match node {
+        UiNode::Workspace { slots, .. } => slots.iter().try_for_each(|s| check_values(&s.content)),
+        UiNode::Container {
+            padding_dp,
+            children,
+            ..
+        } => {
+            if *padding_dp > MAX_PADDING_DP {
+                return Err(format!("padding_dp {padding_dp} (max {MAX_PADDING_DP})"));
+            }
+            children.iter().try_for_each(check_values)
+        }
+        UiNode::MediaCarousel { aspect_ratio, .. } => {
+            if !ASPECT_RATIO_RANGE.contains(aspect_ratio) {
+                return Err(format!(
+                    "aspect_ratio {aspect_ratio} outside {}..={}",
+                    ASPECT_RATIO_RANGE.start(),
+                    ASPECT_RATIO_RANGE.end()
+                ));
+            }
+            Ok(())
+        }
+        UiNode::PostCard {
+            author_slot,
+            media_slot,
+            action_slot,
+            caption_slot,
+            ..
+        } => [author_slot, media_slot, action_slot, caption_slot]
+            .into_iter()
+            .try_for_each(|s| check_values(s)),
+        UiNode::FeedList { item_template, .. } => check_values(item_template),
+        UiNode::Text { .. }
+        | UiNode::Button { .. }
+        | UiNode::AuthorHeader { .. }
+        | UiNode::ActionBar { .. } => Ok(()),
+    }
 }
 
 fn collect_intents<'a>(node: &'a UiNode, out: &mut Vec<&'a ActionIntent>) {
@@ -391,41 +516,91 @@ async fn modify_layout(
         return respond(base_version, &layout, true);
     }
 
-    let new_layout = match apply_and_validate(&layout_json, &generated.ops) {
-        Ok(node) => node,
-        Err(detail) => {
-            log("invalid_patch", op_count, &detail);
-            return json_error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                json!({ "error": "invalid_patch", "detail": detail, "patch": patch,
-                        "provider": provider_name, "model": model }),
-            );
+    // Apply to the version the patch was made for. If another version was
+    // committed meanwhile (a concurrent prompt or a rollback during a slow
+    // provider call), re-apply the same patch on the new latest instead of
+    // overwriting that change with a layout derived from the old one.
+    let (mut base_version, mut layout, mut layout_json) = (base_version, layout, layout_json);
+    let first_base = base_version;
+    let mut attempt = 0;
+    loop {
+        let new_layout = match apply_and_validate(&layout_json, &generated.ops) {
+            Ok(node) => node,
+            Err(detail) => {
+                log("invalid_patch", op_count, &detail);
+                let detail = if base_version == first_base {
+                    detail
+                } else {
+                    format!(
+                        "{detail} (the layout changed to v{base_version} while the patch for \
+                         v{first_base} was generated)"
+                    )
+                };
+                return json_error(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    json!({ "error": "invalid_patch", "detail": detail, "patch": patch,
+                            "provider": provider_name, "model": model }),
+                );
+            }
+        };
+        if new_layout == layout {
+            log("unchanged", op_count, "patch is a no-op");
+            return respond(base_version, &layout, true);
         }
-    };
-    if new_layout == layout {
-        log("unchanged", op_count, "patch is a no-op");
-        return respond(base_version, &layout, true);
+        let meta = layouts::LayoutMeta {
+            prompt: Some(prompt.to_owned()),
+            provider: Some(provider_name.clone()),
+            patch_json: Some(patch.to_string()),
+        };
+        match layouts::commit_on_and_publish(
+            &state,
+            workspace_id,
+            base_version,
+            new_layout.clone(),
+            meta,
+        )
+        .await
+        {
+            Ok(Some(version)) => {
+                log(
+                    "committed",
+                    op_count,
+                    &format!("v{base_version} -> v{version}"),
+                );
+                return respond(version, &new_layout, false);
+            }
+            Ok(None) if attempt < MAX_COMMIT_RETRIES => attempt += 1,
+            Ok(None) => {
+                log("conflict", op_count, "");
+                return json_error(
+                    StatusCode::CONFLICT,
+                    json!({ "error": "conflict", "provider": provider_name,
+                            "detail": "the layout kept changing; try again" }),
+                );
+            }
+            Err(e) => {
+                log("store_error", op_count, "");
+                return e.into_response();
+            }
+        }
+        (base_version, layout) = match layouts::latest_async(&state, workspace_id).await {
+            Ok(Some(x)) => x,
+            Ok(None) => return internal("the workspace lost its versions"),
+            Err(e) => return e.into_response(),
+        };
+        layout_json = match serde_json::to_value(&layout) {
+            Ok(v) => v,
+            Err(e) => return internal(&e.to_string()),
+        };
     }
-    let version = match layouts::commit_and_publish(
-        &state,
-        workspace_id,
-        new_layout.clone(),
-        Some(prompt.to_owned()),
-        Some(provider_name.clone()),
-        Some(patch.clone()),
+}
+
+/// Commit attempts after the first when the layout changed underneath.
+const MAX_COMMIT_RETRIES: u32 = 3;
+
+fn internal(detail: &str) -> Response {
+    json_error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        json!({ "error": "internal", "detail": detail }),
     )
-    .await
-    {
-        Ok(v) => v,
-        Err(e) => {
-            log("store_error", op_count, "");
-            return e.into_response();
-        }
-    };
-    log(
-        "committed",
-        op_count,
-        &format!("v{base_version} -> v{version}"),
-    );
-    respond(version, &new_layout, false)
 }

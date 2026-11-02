@@ -23,6 +23,9 @@ pub const EFFORT: &str = "medium";
 /// Retries after the first attempt for 429 / 5xx / overloaded.
 pub const MAX_RETRIES: u32 = 2;
 pub const TIMEOUT: Duration = Duration::from_secs(120);
+/// Budget for one prompt including retries and their delays: the client
+/// waits 180 s (D24), so the pod must answer before that.
+pub const TOTAL_TIMEOUT: Duration = Duration::from_secs(170);
 /// Upper bound on one honored `retry-after`.
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
 
@@ -79,7 +82,8 @@ remove/move/copy); `from` is the source pointer for move/copy (\"\" otherwise).
 the explanation.";
 
 /// Configuration (from the environment in production, explicit in tests).
-#[derive(Debug, Clone)]
+/// `Debug` redacts the API key.
+#[derive(Clone)]
 pub struct AnthropicConfig {
     pub api_key: String,
     pub base_url: String,
@@ -88,7 +92,24 @@ pub struct AnthropicConfig {
     pub fallbacks: bool,
     /// First retry delay when the response has no `retry-after` (doubles).
     pub retry_base: Duration,
+    /// Per HTTP request.
     pub timeout: Duration,
+    /// Whole call, retries and delays included.
+    pub total_timeout: Duration,
+}
+
+impl std::fmt::Debug for AnthropicConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnthropicConfig")
+            .field("api_key", &"<redacted>")
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("fallbacks", &self.fallbacks)
+            .field("retry_base", &self.retry_base)
+            .field("timeout", &self.timeout)
+            .field("total_timeout", &self.total_timeout)
+            .finish()
+    }
 }
 
 impl AnthropicConfig {
@@ -100,6 +121,7 @@ impl AnthropicConfig {
             fallbacks: true,
             retry_base: Duration::from_secs(1),
             timeout: TIMEOUT,
+            total_timeout: TOTAL_TIMEOUT,
         }
     }
 }
@@ -311,7 +333,14 @@ impl LayoutProvider for AnthropicProvider {
     ) -> GenerateFuture<'a> {
         Box::pin(async move {
             let body = self.request_body(prompt, layout, registry);
-            let resp = self.call(&body).await?;
+            let resp = tokio::time::timeout(self.config.total_timeout, self.call(&body))
+                .await
+                .map_err(|_| {
+                    ProviderError::Failed(format!(
+                        "no usable answer within {} s (retries included)",
+                        self.config.total_timeout.as_secs()
+                    ))
+                })??;
             parse_response(&resp)
         })
     }

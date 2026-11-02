@@ -536,6 +536,37 @@ impl Store {
         append_layout_on(&self.conn(), workspace_id, json, meta)
     }
 
+    /// Append a version only if `expected` is still the newest one (one
+    /// atomic statement); `None` if another version was appended meanwhile.
+    pub fn append_layout_if_latest(
+        &self,
+        workspace_id: &str,
+        expected: i64,
+        json: &str,
+        meta: &LayoutMeta,
+    ) -> rusqlite::Result<Option<i64>> {
+        self.conn()
+            .query_row(
+                "INSERT INTO layout_versions
+                     (workspace_id, version, json, prompt, provider, patch_json, created_at)
+                 SELECT ?1, MAX(version) + 1, ?2, ?3, ?4, ?5, ?6
+                 FROM layout_versions WHERE workspace_id = ?1
+                 HAVING MAX(version) = ?7
+                 RETURNING version",
+                params![
+                    workspace_id,
+                    json,
+                    meta.prompt,
+                    meta.provider,
+                    meta.patch_json,
+                    now_secs(),
+                    expected
+                ],
+                |r| r.get(0),
+            )
+            .optional()
+    }
+
     /// Copy version `from` into a new version; `None` if `from` is unknown.
     pub fn copy_layout(
         &self,
@@ -717,6 +748,11 @@ mod tests {
             Some((3, "{\"v\":1}".into()))
         );
         assert_eq!(s.copy_layout("a", 9, &LayoutMeta::default()).unwrap(), None);
+        // Compare-and-append: only on top of the newest version.
+        assert_eq!(s.append_layout_if_latest("a", 2, "{}", &meta).unwrap(), None);
+        assert_eq!(s.append_layout_if_latest("a", 3, "{\"v\":4}", &meta).unwrap(), Some(4));
+        assert_eq!(s.append_layout_if_latest("a", 3, "{}", &meta).unwrap(), None);
+        assert_eq!(s.append_layout_if_latest("none", 1, "{}", &meta).unwrap(), None);
         assert_eq!(s.layout_at("a", 2).unwrap().as_deref(), Some("{\"v\":2}"));
         let versions: Vec<i64> = s
             .layout_versions("a")
@@ -724,9 +760,9 @@ mod tests {
             .iter()
             .map(|v| v.version)
             .collect();
-        assert_eq!(versions, [3, 2, 1]);
+        assert_eq!(versions, [4, 3, 2, 1]);
         assert_eq!(
-            s.layout_versions("a").unwrap()[1].provider.as_deref(),
+            s.layout_versions("a").unwrap()[2].provider.as_deref(),
             Some("rules")
         );
     }

@@ -21,8 +21,22 @@ object FakeLayoutRules {
     private val MEDIA_TOP = Regex("""media at the (very )?top|photos first""", RegexOption.IGNORE_CASE)
     private val WEATHER = Regex("""add a weather widget""", RegexOption.IGNORE_CASE)
 
-    /** The new layout, or null when no rule matches [prompt]. */
-    fun apply(prompt: String, layout: UiNode): UiNode? {
+    /** Like the server's rules provider: a caption or media rule on a layout without a PostCard is an error. */
+    const val NO_CARD = "this layout has no pixelfed://PostCard"
+
+    sealed interface Outcome {
+        /** [layout] may equal the input (already in the requested state): the server then commits no version. */
+        data class Applied(val layout: UiNode) : Outcome
+        data class Failed(val message: String) : Outcome
+    }
+
+    /** The new layout, or null when no rule matches [prompt] or a matched rule cannot apply. */
+    fun apply(prompt: String, layout: UiNode): UiNode? = (run(prompt, layout) as? Outcome.Applied)?.layout
+
+    fun run(prompt: String, layout: UiNode): Outcome {
+        if ((HIDE_CAPTIONS.containsMatchIn(prompt) || MEDIA_TOP.containsMatchIn(prompt)) && !hasPostCard(layout)) {
+            return Outcome.Failed(NO_CARD)
+        }
         var matched = false
         var out = layout
         if (HIDE_CAPTIONS.containsMatchIn(prompt)) {
@@ -43,7 +57,15 @@ object FakeLayoutRules {
                 out = out.copy(slots = listOf(weather) + out.slots)
             }
         }
-        return if (matched) out else null
+        return if (matched) Outcome.Applied(out) else Outcome.Failed(UNSUPPORTED)
+    }
+
+    private fun hasPostCard(node: UiNode): Boolean = when (node) {
+        is UiNode.Workspace -> node.slots.any { hasPostCard(it.content) }
+        is UiNode.Container -> node.children.any { hasPostCard(it) }
+        is UiNode.FeedList -> hasPostCard(node.itemTemplate)
+        is UiNode.PostCard -> true
+        else -> false
     }
 
     private fun mapPostCards(node: UiNode, f: (UiNode.PostCard) -> UiNode.PostCard): UiNode = when (node) {

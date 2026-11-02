@@ -41,6 +41,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -93,6 +96,8 @@ fun agentStatusText(agent: AgentInfo): String? = when (agent.state) {
     else -> null
 }
 
+private data class PendingSend(val from: AgentInfo, val text: String)
+
 /** Suggestion chips under the prompt field; tapping one replaces the field's text. */
 val AGENT_SUGGESTIONS = listOf("Hide captions", "Media at the very top", "Add a weather widget")
 
@@ -101,27 +106,36 @@ val AGENT_SUGGESTIONS = listOf("Hide captions", "Media at the very top", "Add a 
  * that opens a bottom panel with a prompt field (`agent-prompt`), suggestion chips, a Send button (`agent-send`) and
  * the agent status. Lives outside the server-driven tree ([CanvasApp] draws it over the workspace), so a layout
  * swap never resets the prompt or the open panel. The prompt text is cleared only when the prompt this panel sent
- * succeeds; on error it stays for editing.
+ * succeeds and the field still holds it (an edit made meanwhile is kept); on error it stays for editing. One tap
+ * posts one prompt: Send is blocked from the tap until a newer snapshot ([seq]) arrives, then while running.
  */
 @Composable
-internal fun AgentPromptOverlay(agent: AgentInfo, onSend: (String) -> Unit, modifier: Modifier = Modifier) {
+internal fun AgentPromptOverlay(agent: AgentInfo, seq: Long, onSend: (String) -> Unit, modifier: Modifier = Modifier) {
     var open by rememberSaveable { mutableStateOf(false) }
     var text by rememberSaveable { mutableStateOf("") }
-    // The agent status when this panel last sent a prompt; null when no send is awaiting its result.
-    var sentFrom by remember { mutableStateOf<AgentInfo?>(null) }
+    // This panel's last send while its result is awaited: the agent status before the send and the text sent.
+    var pending by remember { mutableStateOf<PendingSend?>(null) }
+    // The snapshot seq shown when Send was last tapped. The engine reports `running` (a newer snapshot) as soon as
+    // it takes the prompt, but [agent] only catches up on the next recomposition: until then a second tap (double
+    // tap, or the IME action plus the button) must not post the prompt again.
+    var sentAtSeq by remember { mutableStateOf<Long?>(null) }
     LaunchedEffect(agent) {
-        val from = sentFrom ?: return@LaunchedEffect
-        if (agent == from) return@LaunchedEffect
+        val p = pending ?: return@LaunchedEffect
+        if (agent == p.from) return@LaunchedEffect
         when (agent.state) {
-            "done" -> { text = ""; sentFrom = null }
-            "error", "idle" -> sentFrom = null
+            // Clear only the text that was sent: an edit made while the agent was running is kept.
+            "done" -> { if (text.trim() == p.text) text = ""; pending = null }
+            "error", "idle" -> pending = null
         }
     }
-    val canSend = text.isNotBlank() && !agent.isRunning
+    val canSend = text.isNotBlank() && !agent.isRunning && sentAtSeq != seq
     val send = {
-        if (canSend) {
-            sentFrom = agent
-            onSend(text.trim())
+        // Re-read the state at tap time (two taps can land before a recomposition).
+        if (text.isNotBlank() && !agent.isRunning && sentAtSeq != seq) {
+            val prompt = text.trim()
+            sentAtSeq = seq
+            pending = PendingSend(agent, prompt)
+            onSend(prompt)
         }
     }
 
@@ -201,7 +215,9 @@ internal fun AgentPromptOverlay(agent: AgentInfo, onSend: (String) -> Unit, modi
                                     "done" -> Color(0xFF2E7D32)
                                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                                 },
-                                modifier = Modifier.weight(1f).padding(end = 12.dp).testTag("agent-status"),
+                                modifier = Modifier.weight(1f).padding(end = 12.dp).testTag("agent-status")
+                                    // Screen readers announce "Applying...", the result or the error as it changes.
+                                    .semantics { liveRegion = LiveRegionMode.Polite },
                             )
                             Button(onClick = send, enabled = canSend, modifier = Modifier.testTag("agent-send")) {
                                 Text("Send")

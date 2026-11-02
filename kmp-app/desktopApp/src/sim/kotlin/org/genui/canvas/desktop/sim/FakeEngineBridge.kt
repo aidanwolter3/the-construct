@@ -37,8 +37,9 @@ import org.genui.canvas.UiNode
  * on top. No 5xx/retry simulation.
  *
  * Layout agent (M7, DECISIONS D23): `PromptAgent` runs [FakeLayoutRules] on the current layout (no server): a
- * recognized prompt replaces the layout, bumps [layoutVersion] and sets `agent_json` to done (provider
- * `fake-rules`); an unrecognized one (or any prompt while offline) sets it to error and leaves the layout alone.
+ * recognized prompt replaces the layout, bumps [layoutVersion] (unless the layout is already in the requested state)
+ * and sets `agent_json` to done (provider `fake-rules`); an unrecognized one, a caption/media rule on a layout
+ * without a PostCard, or any prompt while offline sets it to error and leaves the layout alone.
  */
 class FakeEngineBridge(
     bundleJson: String,
@@ -127,13 +128,16 @@ class FakeEngineBridge(
         }
         emit()
         synchronized(lock) {
-            val result = if (isOnline) FakeLayoutRules.apply(prompt, workspace) else null
-            agentJson = when {
-                !isOnline -> agentJson(state = "error", message = "offline: the layout agent needs a connection")
-                result == null -> agentJson(state = "error", message = FakeLayoutRules.UNSUPPORTED)
-                else -> {
-                    workspace = result
-                    layoutVersion++
+            val result = if (isOnline) FakeLayoutRules.run(prompt, workspace) else null
+            agentJson = when (result) {
+                null -> agentJson(state = "error", message = "offline: the layout agent needs a connection")
+                is FakeLayoutRules.Outcome.Failed -> agentJson(state = "error", message = result.message)
+                is FakeLayoutRules.Outcome.Applied -> {
+                    // Already in the requested state: no new version (as the server answers `unchanged`).
+                    if (result.layout != workspace) {
+                        workspace = result.layout
+                        layoutVersion++
+                    }
                     agentJson(state = "done", provider = FakeLayoutRules.PROVIDER, layoutVersion = layoutVersion)
                 }
             }

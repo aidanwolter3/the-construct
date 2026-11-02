@@ -25,7 +25,8 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
 use crate::pixelfed::routes::{bearer, session_hash, unauthorized};
-use crate::store::{LayoutMeta, LayoutVersionInfo, Store};
+pub use crate::store::LayoutMeta;
+use crate::store::{LayoutVersionInfo, Store};
 use crate::{ApiError, AppState, blocking, json_error, parse_json_body};
 
 /// Response header carrying the served layout version.
@@ -147,6 +148,28 @@ pub async fn commit_and_publish(
     })
     .await?;
     state.publish_layout(workspace_id, version);
+    Ok(version)
+}
+
+/// Like [`commit_and_publish`], but only on top of version `base` (the one
+/// the change was made from): `Ok(None)` if another version was appended
+/// meanwhile (nothing committed), so the caller can redo the change on the
+/// new latest instead of silently overwriting it.
+pub async fn commit_on_and_publish(
+    state: &Arc<AppState>,
+    workspace_id: &str,
+    base: i64,
+    layout: UiNode,
+    meta: LayoutMeta,
+) -> Result<Option<i64>, ApiError> {
+    let ws = workspace_id.to_owned();
+    let version = blocking(state, move |s| {
+        s.append_layout_if_latest(&ws, base, &to_json(&layout)?, &meta)
+    })
+    .await?;
+    if let Some(v) = version {
+        state.publish_layout(workspace_id, v);
+    }
     Ok(version)
 }
 

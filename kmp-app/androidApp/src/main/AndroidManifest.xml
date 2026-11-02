@@ -9,11 +9,14 @@
         android:label="Project Canvas"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <!-- singleTask: the OAuth redirect (canvas://oauth, opened by the browser in its own task) must reach
-             this same activity instance and engine via onNewIntent (DECISIONS D19). -->
+             this same activity instance and engine via onNewIntent (DECISIONS D19).
+             adjustResize: the window is not panned for the keyboard; Compose gets the IME insets instead and the
+             root's safeDrawingPadding lifts the agent panel above the keyboard (DECISIONS D23). -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTask">
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
