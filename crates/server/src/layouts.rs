@@ -602,16 +602,22 @@ async fn versions(
     }
 }
 
-/// `{"version": N}` (N >= 1) from a request body.
+/// `{"version": N}` (N >= 1) from a request body. The body must be an
+/// object (or empty, when the version is optional): `[1]` or `"x"` is a 400,
+/// not a silent "no version".
 fn version_arg(payload: &Value, required: bool) -> Result<Option<i64>, Response> {
+    let invalid = || {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "invalid_request", "expected": { "version": "integer >= 1" } }),
+        )
+    };
+    if !payload.is_object() && !payload.is_null() {
+        return Err(invalid());
+    }
     match &payload["version"] {
         Value::Null if !required => Ok(None),
-        v => v.as_i64().filter(|v| *v >= 1).map(Some).ok_or_else(|| {
-            json_error(
-                StatusCode::BAD_REQUEST,
-                json!({ "error": "invalid_request", "expected": { "version": "integer >= 1" } }),
-            )
-        }),
+        v => v.as_i64().filter(|v| *v >= 1).map(Some).ok_or_else(invalid),
     }
 }
 
@@ -1059,7 +1065,14 @@ async fn restore(
     let Some(row) = row else {
         return layout_not_found(&id);
     };
-    let is_active = active.as_ref().is_some_and(|a| a.layout_id == row.id);
+    // An appended restore reports the revision it appended itself (decided
+    // in its transaction): the `active` read after it may already see a
+    // concurrent switch, which would hide the change from the caller.
+    let active = match &out {
+        Restored::Appended { active, .. } => active.clone(),
+        _ => active.filter(|a| a.layout_id == row.id),
+    };
+    let is_active = active.is_some();
     let (version, unchanged) = match out {
         Restored::LayoutNotFound => return layout_not_found(&id),
         Restored::VersionNotFound => {
@@ -1089,7 +1102,7 @@ async fn restore(
         "unchanged": unchanged,
         "active": is_active,
     });
-    if let Some(a) = active.filter(|_| is_active) {
+    if let Some(a) = active {
         body["revision"] = json!(a.revision);
     }
     Json(body).into_response()

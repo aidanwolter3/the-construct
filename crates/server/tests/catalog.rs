@@ -491,6 +491,17 @@ async fn activate_switches_the_served_layout_and_broadcasts() {
             json!({}),
             StatusCode::BAD_REQUEST,
         ),
+        // A body that is not an object is not "no version".
+        (
+            "/v1/layouts/pixelfed_demo.classic/activate",
+            json!([1]),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "/v1/layouts/pixelfed_demo.classic/activate",
+            json!("x"),
+            StatusCode::BAD_REQUEST,
+        ),
     ] {
         assert_eq!(post(&pod, path, body, None).await.status, status, "{path}");
     }

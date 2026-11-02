@@ -779,7 +779,9 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   /v1/layouts/:id/restore {"version": n}` -> `{layout_id, workspace_id, version, restored_from, unchanged, active,
   revision?}` (content equal to the newest -> `unchanged`, nothing appended; a restore is itself undoable). Changes
   to the active layout broadcast on the SSE channel; an inactive layout's restore does not. Errors: 400
-  `invalid_layout_id` / `invalid_request`, 404 `layout_not_found` / `version_not_found` / `workspace_not_found`.
+  `invalid_layout_id` / `invalid_request` (also a body that is not an object, e.g. `[1]`), 404 `layout_not_found` /
+  `version_not_found` / `workspace_not_found`. A restore's `active` / `revision` are those its own transaction
+  appended (not a later read, which could already see a concurrent switch).
 - **Legacy endpoints:** `GET /v1/workspaces/:id/versions` lists the ACTIVE layout's versions (same shape as D22);
   `POST /v1/workspaces/:id/rollback` appends to the active layout (always appends, as before) and answers `version`
   = the layout's new version plus `revision` and `layout_id`. On a fresh database revision and version coincide
