@@ -85,7 +85,7 @@ pub const MAX_VERSIONS_LIMIT: i64 = 100;
 pub struct App {
     pub id: &'static str,
     pub title: &'static str,
-    /// Icon name for clients (`photo`, `counter`).
+    /// Icon name for clients (`photo`).
     pub icon: &'static str,
     /// Listed by `GET /v1/apps` only with `CONSTRUCT_SHOW_DEV_APPS=1` (its
     /// other endpoints always work: tests, CI and the simulator use them).
@@ -93,7 +93,7 @@ pub struct App {
 }
 
 /// Every app, in `GET /v1/apps` order.
-pub const APPS: [App; 3] = [
+pub const APPS: [App; 2] = [
     App {
         id: crate::pixelfed::layout::WORKSPACE_ID,
         title: "Pixelfed",
@@ -104,12 +104,6 @@ pub const APPS: [App; 3] = [
         id: "pixelfed_demo",
         title: "Pixelfed demo",
         icon: "photo",
-        dev: true,
-    },
-    App {
-        id: "home",
-        title: "Counter",
-        icon: "counter",
         dev: true,
     },
 ];
@@ -153,8 +147,6 @@ pub const FILES: &[LayoutSource] = &[
     layout_file!("pixelfed_home", "0003"),
     layout_file!("pixelfed_demo", "0001"),
     layout_file!("pixelfed_demo", "0002"),
-    layout_file!("home", "0001"),
-    layout_file!("home", "0002"),
 ];
 
 /// A parsed, validated layout file.
@@ -1101,7 +1093,6 @@ mod tests {
         for (app_id, note) in [
             ("pixelfed_home", "Classic feed"),
             ("pixelfed_demo", "Classic feed"),
-            ("home", "Counter"),
         ] {
             let f = files
                 .iter()
@@ -1116,58 +1107,105 @@ mod tests {
         LayoutSource { app_id, name, text }
     }
 
+    /// A small valid layout file for `pixelfed_demo` (schema 1: a title and
+    /// one action), the base the validation tests mutate.
+    const MINIMAL: &str = r#"{
+  "note": "Minimal",
+  "schema": 1,
+  "layout": {
+    "type": "core://Workspace",
+    "id": "pixelfed_demo",
+    "title": "Demo",
+    "slots": [
+      {
+        "slot_id": "main",
+        "provider_uri": "core://test",
+        "content": {
+          "type": "core://Container",
+          "orientation": "Vertical",
+          "padding_dp": 16,
+          "children": [
+            {
+              "type": "core://Text",
+              "style": "Title",
+              "value_expr": "Minimal demo"
+            },
+            {
+              "type": "core://Button",
+              "label": "Ack",
+              "on_click": {
+                "intent": "action.mutation.optimistic",
+                "endpoint": "/v1/demo/ack",
+                "entity_uri": "core://test/x",
+                "field": "n",
+                "payload": {},
+                "rollback_value": 0,
+                "value_expr": "0"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}"#;
+
     #[test]
     fn invalid_files_are_refused_with_their_path() {
-        let ok = FILES.iter().find(|f| f.app_id == "home").unwrap().text;
+        let ok = MINIMAL;
         assert_eq!((FILES[1].app_id, FILES[1].name), ("pixelfed_home", "0002"));
         let cases: [(LayoutSource, &str); 12] = [
             (
-                src("home", "0001", "{"),
-                "layouts/home/0001.json: not valid JSON",
+                src("pixelfed_demo", "0001", "{"),
+                "layouts/pixelfed_demo/0001.json: not valid JSON",
             ),
             (
-                src("home", "1", ok),
-                "layouts/home/1.json: file names are 4-digit",
+                src("pixelfed_demo", "1", ok),
+                "layouts/pixelfed_demo/1.json: file names are 4-digit",
             ),
             (
                 src("nope", "0001", ok),
                 "layouts/nope/0001.json: 'nope' is not an app",
             ),
             (
-                src("home", "0001", r#"{"layout": {}}"#),
+                src("pixelfed_demo", "0001", r#"{"layout": {}}"#),
                 "\"note\" must be a non-empty string",
             ),
             (
-                src("home", "0001", r#"{"note": "x"}"#),
+                src("pixelfed_demo", "0001", r#"{"note": "x"}"#),
                 "\"layout\" is missing",
             ),
             (
-                src("home", "0001", r#"{"note": "x", "layout": {}, "extra": 1}"#),
+                src(
+                    "pixelfed_demo",
+                    "0001",
+                    r#"{"note": "x", "layout": {}, "extra": 1}"#,
+                ),
                 "unknown key 'extra'",
             ),
             (
                 src(
-                    "home",
+                    "pixelfed_demo",
                     "0001",
                     r#"{"note": "x", "layout": {"type": "core://Text", "value_expr": "", "style": "Body"}}"#,
                 ),
-                "layouts/home/0001.json: invalid layout: root must stay a core://Workspace",
+                "layouts/pixelfed_demo/0001.json: invalid layout: root must stay a core://Workspace",
             ),
             (
-                src("pixelfed_demo", "0001", ok),
-                "invalid layout: workspace id changed from 'pixelfed_demo' to 'home'",
+                src("pixelfed_home", "0001", ok),
+                "invalid layout: workspace id changed from 'pixelfed_home' to 'pixelfed_demo'",
             ),
             (
                 src(
-                    "home",
+                    "pixelfed_demo",
                     "0001",
                     leak(ok.replacen("  \"schema\": 1,\n", "", 1)),
                 ),
-                "layouts/home/0001.json: \"schema\" must be the client schema",
+                "layouts/pixelfed_demo/0001.json: \"schema\" must be the client schema",
             ),
             (
                 src(
-                    "home",
+                    "pixelfed_demo",
                     "0001",
                     leak(ok.replacen("\"schema\": 1", "\"schema\": 0", 1)),
                 ),
@@ -1175,7 +1213,7 @@ mod tests {
             ),
             (
                 src(
-                    "home",
+                    "pixelfed_demo",
                     "0001",
                     leak(ok.replacen("\"schema\": 1", "\"schema\": 999", 1)),
                 ),
@@ -1195,27 +1233,35 @@ mod tests {
             assert!(err.contains(want), "{err} does not contain {want}");
         }
         // Gaps and duplicates.
-        let err = parse_files(&[src("home", "0001", ok), src("home", "0003", ok)]).unwrap_err();
+        let err = parse_files(&[
+            src("pixelfed_demo", "0001", ok),
+            src("pixelfed_demo", "0003", ok),
+        ])
+        .unwrap_err();
         assert_eq!(
             err,
-            "layouts/home/0003.json: layout files are numbered without gaps, expected 0002.json next"
+            "layouts/pixelfed_demo/0003.json: layout files are numbered without gaps, expected 0002.json next"
         );
-        let err = parse_files(&[src("home", "0002", ok)]).unwrap_err();
+        let err = parse_files(&[src("pixelfed_demo", "0002", ok)]).unwrap_err();
         assert!(err.contains("expected 0001.json next"), "{err}");
-        let err = parse_files(&[src("home", "0001", ok), src("home", "0001", ok)]).unwrap_err();
+        let err = parse_files(&[
+            src("pixelfed_demo", "0001", ok),
+            src("pixelfed_demo", "0001", ok),
+        ])
+        .unwrap_err();
         assert!(err.contains("listed twice"), "{err}");
         // Structural rules from the agent validator (endpoint prefix).
-        let bad = ok.replace("/v1/counters/home/reset", "https://evil/reset");
+        let bad = ok.replace("/v1/demo/ack", "https://evil/ack");
         let bad: &'static str = Box::leak(bad.into_boxed_str());
-        let err = parse_files(&[src("home", "0001", bad)]).unwrap_err();
+        let err = parse_files(&[src("pixelfed_demo", "0001", bad)]).unwrap_err();
         assert!(
             err.contains("must be a pod path starting with /v1/"),
             "{err}"
         );
         // New intents are fine in developer-authored files.
-        let new_intent = ok.replace("/v1/counters/home/reset", "/v1/counters/home/increment");
+        let new_intent = ok.replace("/v1/demo/ack", "/v1/demo/other");
         let new_intent: &'static str = Box::leak(new_intent.into_boxed_str());
-        parse_files(&[src("home", "0001", new_intent)]).unwrap();
+        parse_files(&[src("pixelfed_demo", "0001", new_intent)]).unwrap();
     }
 
     #[test]
@@ -1237,9 +1283,8 @@ mod tests {
             "{err}"
         );
         // So is a typo'd type in a generic file.
-        let ok = FILES.iter().find(|f| f.app_id == "home").unwrap().text;
-        let typo = leak(ok.replacen("\"core://Button\"", "\"core://Buton\"", 1));
-        let err = parse_file(&src("home", "0001", typo)).unwrap_err();
+        let typo = leak(MINIMAL.replacen("\"core://Button\"", "\"core://Buton\"", 1));
+        let err = parse_file(&src("pixelfed_demo", "0003", typo)).unwrap_err();
         assert!(err.contains("unknown node type 'core://Buton'"), "{err}");
         // An unknown icon is refused too.
         let feed = FILES
@@ -1305,8 +1350,8 @@ mod tests {
 
     #[test]
     fn file_hash_ignores_formatting_and_key_order_but_not_content() {
-        let one = FILES.iter().find(|f| f.app_id == "home").unwrap().text;
-        let parsed = parse_file(&src("home", "0001", one)).unwrap();
+        let one = MINIMAL;
+        let parsed = parse_file(&src("pixelfed_demo", "0001", one)).unwrap();
         // Compact, keys sorted (serde_json's map), top-level keys reversed.
         let v: Value = serde_json::from_str(one).unwrap();
         let compact = leak(format!(
@@ -1317,22 +1362,28 @@ mod tests {
         let pretty = leak(serde_json::to_string_pretty(&v).unwrap());
         for text in [compact, pretty] {
             assert_eq!(
-                parse_file(&src("home", "0001", text)).unwrap().file_hash,
+                parse_file(&src("pixelfed_demo", "0001", text))
+                    .unwrap()
+                    .file_hash,
                 parsed.file_hash
             );
         }
         // Note whitespace is trimmed before hashing (the served note is trimmed too).
-        let padded = leak(one.replacen("\"Counter\"", "\"  Counter \"", 1));
+        let padded = leak(one.replacen("\"Minimal\"", "\"  Minimal \"", 1));
         assert_eq!(
-            parse_file(&src("home", "0001", padded)).unwrap().file_hash,
+            parse_file(&src("pixelfed_demo", "0001", padded))
+                .unwrap()
+                .file_hash,
             parsed.file_hash
         );
         // Content changes change it: the note, a value, an added explicit default.
-        let renoted = leak(one.replacen("\"Counter\"", "\"Counter!\"", 1));
-        let retitled = leak(one.replace("The Construct Counter", "Counter v2"));
+        let renoted = leak(one.replacen("\"Minimal\"", "\"Minimal!\"", 1));
+        let retitled = leak(one.replace("Minimal demo", "Minimal v2"));
         for text in [renoted, retitled] {
             assert_ne!(
-                parse_file(&src("home", "0001", text)).unwrap().file_hash,
+                parse_file(&src("pixelfed_demo", "0001", text))
+                    .unwrap()
+                    .file_hash,
                 parsed.file_hash
             );
         }
@@ -1340,7 +1391,7 @@ mod tests {
         // `schema` is not hashed: it was added to files after they deployed
         // (it is recorded and append-only on its own, see the store).
         let v2 = leak(one.replacen("\"schema\": 1", "\"schema\": 2", 1));
-        let p2 = parse_file(&src("home", "0001", v2)).unwrap();
+        let p2 = parse_file(&src("pixelfed_demo", "0001", v2)).unwrap();
         assert_eq!((p2.file_hash, p2.schema), (parsed.file_hash, 2));
     }
 
@@ -1362,25 +1413,25 @@ mod tests {
             assert_eq!(served.version, version, "schema {schema}");
             assert!(protocol::required_schema(&served.layout) <= schema);
         }
-        // A third home file.
-        let one = FILES.iter().rfind(|f| f.app_id == "home").copied().unwrap();
-        let two_text = one.text.replace("The Construct Counter", "Counter v2");
+        // A third pixelfed_demo file.
+        let one = src("pixelfed_demo", "0003", MINIMAL);
+        let two_text = MINIMAL.replace("Minimal demo", "Minimal v2");
         let two_text: &'static str = Box::leak(two_text.into_boxed_str());
-        let two = src("home", "0003", two_text);
+        let two = src("pixelfed_demo", "0003", two_text);
         let mut sources = FILES.to_vec();
         sources.push(two);
         assert_eq!(
             sync_sources(&store, &sources).unwrap().appended,
-            [("layouts/home/0003.json".to_owned(), 3)]
+            [("layouts/pixelfed_demo/0003.json".to_owned(), 3)]
         );
         // Changing a deployed file stops the start, naming it.
         let mut changed = FILES.to_vec();
-        changed.push(src("home", "0003", one.text));
+        changed.push(src("pixelfed_demo", "0003", one.text));
         assert_eq!(
             sync_sources(&store, &changed).unwrap_err(),
-            "layouts/home/0003.json changed after it was deployed as version 3; layout files are \
-             append-only. To recover, restore the deployed content of layouts/home/0003.json \
-             (git log -p -- layouts/home/0003.json) and put the change in a new file, 0004.json"
+            "layouts/pixelfed_demo/0003.json changed after it was deployed as version 3; layout files are \
+             append-only. To recover, restore the deployed content of layouts/pixelfed_demo/0003.json \
+             (git log -p -- layouts/pixelfed_demo/0003.json) and put the change in a new file, 0004.json"
         );
         // Reformatting a file (same layout and note) is not a change.
         let reformatted: Value = serde_json::from_str(two_text).unwrap();
@@ -1390,19 +1441,19 @@ mod tests {
                 .into_boxed_str(),
         );
         let mut same = FILES.to_vec();
-        same.push(src("home", "0003", reformatted));
+        same.push(src("pixelfed_demo", "0003", reformatted));
         assert_eq!(sync_sources(&store, &same).unwrap(), SyncReport::default());
         // A rollback deploy without 0003.json starts, serving v3 unchanged.
         let report = sync(&store).unwrap();
         assert_eq!(
             report.missing,
             [
-                "layouts/home/0003.json was deployed as version 3 but is missing from this build; \
+                "layouts/pixelfed_demo/0003.json was deployed as version 3 but is missing from this build; \
               serving the recorded history unchanged"
             ]
         );
         assert!(report.appended.is_empty());
-        assert_eq!(latest(&store, "home").unwrap().unwrap().0, 3);
+        assert_eq!(latest(&store, "pixelfed_demo").unwrap().unwrap().0, 3);
     }
 
     #[test]

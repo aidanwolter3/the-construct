@@ -1,6 +1,6 @@
-//! The Construct backend: serves fixture hydration bundles, persists
-//! counter mutations in SQLite (M5, see [`store`]) and adapts a Pixelfed
-//! instance (M6, see [`pixelfed`]; the pod owns the upstream token).
+//! The Construct backend: keeps its state in SQLite (see [`store`]), adapts
+//! a Pixelfed instance (M6, see [`pixelfed`]; the pod owns the upstream
+//! token) and serves the static `pixelfed_demo` fixture bundle.
 //! Workspace layouts are code (`layouts/<app>/NNNN.json`), synced into one
 //! append-only version history per app at startup, served read-only and
 //! pushed over SSE (see [`layouts`]); [`validate`] checks every layout file.
@@ -31,12 +31,8 @@ use protocol::WorkspaceSpec;
 use serde_json::{Value, json};
 use store::Store;
 
-static COUNTER_HOME_JSON: &str = include_str!("../../../fixtures/counter_home_bundle.json");
 static PIXELFED_HOME_JSON: &str = include_str!("../../../fixtures/pixelfed_home_bundle.json");
 
-static COUNTER_HOME: LazyLock<WorkspaceSpec> = LazyLock::new(|| {
-    serde_json::from_str(COUNTER_HOME_JSON).expect("fixtures/counter_home_bundle.json is invalid")
-});
 static PIXELFED_HOME: LazyLock<WorkspaceSpec> = LazyLock::new(|| {
     serde_json::from_str(PIXELFED_HOME_JSON).expect("fixtures/pixelfed_home_bundle.json is invalid")
 });
@@ -44,7 +40,6 @@ static PIXELFED_HOME: LazyLock<WorkspaceSpec> = LazyLock::new(|| {
 /// Look up a workspace bundle by id.
 pub fn workspace(id: &str) -> Option<&'static WorkspaceSpec> {
     match id {
-        "home" => Some(&COUNTER_HOME),
         "pixelfed_demo" => Some(&PIXELFED_HOME),
         _ => None,
     }
@@ -52,12 +47,8 @@ pub fn workspace(id: &str) -> Option<&'static WorkspaceSpec> {
 
 /// Force-parse all embedded fixtures. Call at startup to fail fast.
 pub fn validate_fixtures() {
-    LazyLock::force(&COUNTER_HOME);
     LazyLock::force(&PIXELFED_HOME);
 }
-
-/// The counter entity injected into the `home` bundle.
-const HOME_COUNTER_URI: &str = "core://counters/home";
 
 /// A pending injected fault (test hook): the next `remaining` mutation
 /// requests get `status` without being applied.
@@ -249,7 +240,7 @@ impl AppState {
     }
 
     /// `CONSTRUCT_SHOW_DEV_APPS=1`: `GET /v1/apps` also lists `pixelfed_demo`
-    /// and `home` (their other endpoints work either way).
+    /// (its other endpoints work either way).
     pub fn with_dev_apps(mut self, show: bool) -> Self {
         self.show_dev_apps = show;
         self
@@ -345,7 +336,6 @@ pub fn app(state: Arc<AppState>) -> Router {
     let mut router = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/workspaces/{id}", get(get_workspace))
-        .route("/v1/counters/{id}/{op}", post(counter_mutation))
         .route("/v1/demo/ack", post(demo_ack))
         .merge(pixelfed::routes::router())
         .merge(layouts::router());
@@ -411,16 +401,6 @@ async fn get_workspace(
     };
     let mut spec = spec.clone();
     spec.workspace = served.layout;
-    if id == "home" {
-        let count = match blocking(&state, |s| s.counter("home")).await {
-            Ok(n) => n,
-            Err(e) => return e.into_response(),
-        };
-        spec.entities
-            .entry(HOME_COUNTER_URI.to_owned())
-            .or_default()
-            .set("count", count);
-    }
     (layouts::served_headers(served.version), Json(spec)).into_response()
 }
 
@@ -522,46 +502,6 @@ pub(crate) fn parse_json_body(headers: &HeaderMap, body: &Bytes) -> Result<Value
             json!({ "error": "invalid_json", "detail": e.to_string() }),
         )
     })
-}
-
-/// Accepts an optional JSON body (ignored beyond validation). The path is
-/// validated before the body so an unknown endpoint is always 404.
-async fn counter_mutation(
-    State(state): State<Arc<AppState>>,
-    Path((id, op)): Path<(String, String)>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    if id != "home" || !matches!(op.as_str(), "increment" | "decrement" | "reset") {
-        return json_error(
-            StatusCode::NOT_FOUND,
-            json!({ "error": "unknown_counter_endpoint", "id": id, "op": op }),
-        );
-    }
-    let payload = match parse_json_body(&headers, &body) {
-        Ok(v) => v,
-        Err(e) => return e.into_response(),
-    };
-    let key = id.clone();
-    let result = match op.as_str() {
-        "increment" => blocking(&state, move |s| s.increment(&key).map(Ok)).await,
-        "decrement" => blocking(&state, move |s| s.decrement(&key)).await,
-        _ => blocking(&state, move |s| s.reset(&key).map(Ok)).await,
-    };
-    match result {
-        Ok(Ok(count)) => {
-            tracing::info!(counter = %id, %op, %payload, count, "counter mutation applied");
-            Json(json!({ "ok": true, "count": count })).into_response()
-        }
-        Ok(Err(store::BelowZero { count })) => {
-            tracing::info!(counter = %id, %op, count, "counter mutation rejected: count_below_zero");
-            json_error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                json!({ "error": "count_below_zero", "count": count }),
-            )
-        }
-        Err(e) => e.into_response(),
-    }
 }
 
 /// `POST /v1/demo/ack`: stateless 200 for the static `pixelfed_demo` fixture's

@@ -67,8 +67,6 @@ internal object ConstructIcons {
         "M21,19V5c0,-1.1 -0.9,-2 -2,-2H5c-1.1,0 -2,0.9 -2,2v14c0,1.1 0.9,2 2,2h14c1.1,0 2,-0.9 2,-2z" +
             "M8.5,13.5l2.5,3.01L14.5,12l4.5,6H5l3.5,-4.5z",
     )
-    /** Material "PlusOne": the counter app. */
-    val PlusOne = icon("PlusOne", "M10,8H8v4H4v2h4v4h2v-4h4v-2h-4zM14.5,6.08V7.9l2.5,-0.5V18h2V5z")
     val ExpandMore = icon("ExpandMore", "M16.59,8.59L12,13.17 7.41,8.59 6,10l6,6 6,-6z")
     val ExpandLess = icon("ExpandLess", "M12,8l-6,6 1.41,1.41L12,10.83l4.59,4.58L18,14z")
     val Send = icon("Send", "M2.01,21L23,12 2.01,3 2,10l15,2 -15,2z")

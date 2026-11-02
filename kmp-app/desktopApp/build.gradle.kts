@@ -79,8 +79,8 @@ tasks.withType<Test>().configureEach {
 
 // Headless simulator: renders ConstructApp offscreen and writes PNG screenshots driven by a script.
 // Relative paths (-Pfixture, -Pout, -PscriptFile, -Pstorage) resolve against the repo root (the working dir).
-//   ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=home -Pscreen=phone \
-//       -Pscript="shot start; click Increment; assert-text Count: 1; shot after"
+//   ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -Pscreen=phone \
+//       -Pscript="shot start; click Like; assert-text Unlike; shot after"
 val simulate by tasks.registering(JavaExec::class) {
     group = "verification"
     description = "Renders the shared Compose UI headlessly and writes screenshots (see README: Simulation mode)"

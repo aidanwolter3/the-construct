@@ -20,9 +20,9 @@ import java.time.Instant
  * (an `open-app` creates a new bridge on the same catalog). Thread-safe (synchronized).
  *
  * Fixture catalog ([fixture]), as with `CONSTRUCT_SHOW_DEV_APPS=1`: `pixelfed_home` "Pixelfed" (v1 caption above the
- * photo and no action bar, v2 photo first and still no action bar, v3 the bundle's layout), `pixelfed_demo` "Pixelfed
- * demo" (v1 no action bar, v2 the bundle's) and `home` "Counter" (v1 an Increment button only, v2 the bundle's), each
- * from its default fixture bundle; the newest version is always the bundle's layout, so the screen starts unchanged.
+ * photo and no action bar, v2 photo first and still no action bar, v3 the bundle's layout) and `pixelfed_demo`
+ * "Pixelfed demo" (v1 no action bar, v2 the bundle's), each from its default fixture bundle; the newest version is
+ * always the bundle's layout, so the screen starts unchanged. Any other bundle is added as a one-version app.
  * [publish] appends a visibly changed copy of the newest version (the developer's "deploy").
  */
 class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis() / 1000 }) {
@@ -165,7 +165,7 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
             }
         }
 
-        private val KNOWN = listOf("pixelfed_home", "pixelfed_demo", "home")
+        private val KNOWN = listOf("pixelfed_home", "pixelfed_demo")
 
         /**
          * The fixture catalog: [appId]'s history ends with [base] (the running bundle's layout); the other known apps
@@ -201,15 +201,10 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
                     Version(withoutActionBar(base), "Photos first", t - 2 * DAY),
                     Version(base, "Like, bookmark and comment bar", t - 3 * HOUR),
                 )
-                "pixelfed_demo" -> add(
+                else -> add(
                     id, "Pixelfed demo", "photo",
                     Version(withoutActionBar(base), "One-post demo", t - 5 * DAY),
                     Version(base, "Action bar", t - 26 * HOUR),
-                )
-                else -> add(
-                    id, "Counter", "counter",
-                    Version(incrementOnly(base), "Increment button", t - 6 * DAY),
-                    Version(base, "Decrement and reset buttons", t - 40 * 60),
                 )
             }
         }
@@ -235,20 +230,6 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
             val caption = kids.indexOfFirst { it is UiNode.Conditional && it.value.endsWith(".caption") }
             if (media >= 0 && caption >= 0) kids[media] = kids[caption].also { kids[caption] = kids[media] }
             c.copy(children = kids)
-        }
-
-        /** The counter with only its first button. */
-        fun incrementOnly(base: UiNode): UiNode {
-            fun walk(n: UiNode): UiNode = when (n) {
-                is UiNode.Workspace -> n.copy(slots = n.slots.map { it.copy(content = walk(it.content)) })
-                is UiNode.Container -> if (n.orientation == Orientation.Horizontal && n.children.all { it is UiNode.Button }) {
-                    n.copy(children = n.children.take(1))
-                } else {
-                    n.copy(children = n.children.map(::walk))
-                }
-                else -> n
-            }
-            return walk(base)
         }
 
         /** [base] with a [text] title in a first slot ([BANNER_SLOT], replaced if present). */

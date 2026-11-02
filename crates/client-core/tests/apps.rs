@@ -14,6 +14,8 @@ use serde_json::{Value, json};
 use server::{AppState, layouts};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
+/// The dev app these tests version (hidden from `/v1/apps` by default).
+const APP: &str = "pixelfed_demo";
 
 struct Pod {
     state: Arc<AppState>,
@@ -67,9 +69,15 @@ fn parse(s: &str) -> Value {
     serde_json::from_str(s).unwrap()
 }
 
-/// The built-in `home` layout with another title.
+/// The newest `pixelfed_demo` layout file with another title.
 fn retitled(title: &str) -> UiNode {
-    let mut v = serde_json::to_value(layouts::builtin("home").unwrap()).unwrap();
+    let newest = layouts::parse_files(layouts::FILES)
+        .unwrap()
+        .into_iter()
+        .rfind(|f| f.app_id == APP)
+        .unwrap()
+        .layout;
+    let mut v = serde_json::to_value(newest).unwrap();
     v["title"] = json!(title);
     serde_json::from_value(v).unwrap()
 }
@@ -105,7 +113,7 @@ fn list_apps_shows_the_app_and_dev_apps_on_request() {
     assert!(app["updated_at"].as_str().unwrap().ends_with('Z'));
 
     let dev = pod(AppState::in_memory().with_dev_apps(true));
-    let e = engine(&dev.base, "home");
+    let e = engine(&dev.base, APP);
     let apps = parse(&e.list_apps().unwrap());
     let ids: Vec<&str> = apps["apps"]
         .as_array()
@@ -113,17 +121,17 @@ fn list_apps_shows_the_app_and_dev_apps_on_request() {
         .iter()
         .map(|a| a["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["pixelfed_home", "pixelfed_demo", "home"]);
+    assert_eq!(ids, ["pixelfed_home", "pixelfed_demo"]);
 }
 
 #[test]
 fn app_versions_pages_newest_first() {
     let p = pod(AppState::in_memory());
-    let first = latest(&p, "home");
+    let first = latest(&p, APP);
     for i in 0..4 {
         layouts::append_version(
             p.state.store(),
-            "home",
+            APP,
             &retitled(&format!("T{i}")),
             Some(&format!("edit {i}")),
         )
@@ -133,21 +141,21 @@ fn app_versions_pages_newest_first() {
     // A hidden app's endpoints still work.
     let e = engine(&p.base, "pixelfed_home");
 
-    let page = parse(&e.app_versions("home", None, Some(2)).unwrap());
-    assert_eq!(page["app_id"], "home");
+    let page = parse(&e.app_versions(APP, None, Some(2)).unwrap());
+    assert_eq!(page["app_id"], APP);
     assert_eq!(page["latest_version"], top);
     assert_eq!(versions(&page), [top, top - 1]);
     assert_eq!(page["versions"][0]["note"], "edit 3");
     assert_eq!(page["next_before"], top - 1);
 
     let page = parse(
-        &e.app_versions("home", page["next_before"].as_i64(), Some(2))
+        &e.app_versions(APP, page["next_before"].as_i64(), Some(2))
             .unwrap(),
     );
     assert_eq!(versions(&page), [top - 2, top - 3]);
 
     // Default limit: everything here fits one page, and no next_before.
-    let all = parse(&e.app_versions("home", None, None).unwrap());
+    let all = parse(&e.app_versions(APP, None, None).unwrap());
     assert_eq!(versions(&all), (1..=top).rev().collect::<Vec<_>>());
     assert!(all.get("next_before").is_none());
     assert_eq!(
@@ -156,7 +164,7 @@ fn app_versions_pages_newest_first() {
     );
 
     // Out-of-range limit: the pod's 400, as a readable error.
-    let err = e.app_versions("home", None, Some(0)).unwrap_err();
+    let err = e.app_versions(APP, None, Some(0)).unwrap_err();
     assert!(
         matches!(err, LayoutApiError::Server { status: 400, .. }),
         "{err:?}"
@@ -167,20 +175,20 @@ fn app_versions_pages_newest_first() {
 #[test]
 fn app_version_returns_the_layout_and_errors_are_sentences() {
     let p = pod(AppState::in_memory());
-    layouts::append_version(p.state.store(), "home", &retitled("Two"), Some("two")).unwrap();
-    let n = latest(&p, "home");
-    let e = engine(&p.base, "home");
+    layouts::append_version(p.state.store(), APP, &retitled("Two"), Some("two")).unwrap();
+    let n = latest(&p, APP);
+    let e = engine(&p.base, APP);
 
-    let v = parse(&e.app_version("home", n).unwrap());
-    assert_eq!(v["app_id"], "home");
+    let v = parse(&e.app_version(APP, n).unwrap());
+    assert_eq!(v["app_id"], APP);
     assert_eq!(v["version"], n);
     assert_eq!(v["note"], "two");
     assert_eq!(v["layout"]["type"], "core://Workspace");
     assert_eq!(v["layout"]["title"], "Two");
-    let one = parse(&e.app_version("home", 1).unwrap());
-    assert_eq!(one["layout"]["id"], "home");
+    let one = parse(&e.app_version(APP, 1).unwrap());
+    assert_eq!(one["layout"]["id"], APP);
 
-    let err = e.app_version("home", n + 10).unwrap_err();
+    let err = e.app_version(APP, n + 10).unwrap_err();
     assert_eq!(
         err,
         LayoutApiError::NotFound {
@@ -204,11 +212,11 @@ fn app_version_returns_the_layout_and_errors_are_sentences() {
 
 #[test]
 fn unreachable_pod_is_offline() {
-    let e = engine("http://127.0.0.1:1", "home");
+    let e = engine("http://127.0.0.1:1", APP);
     for result in [
         e.list_apps(),
-        e.app_versions("home", None, None),
-        e.app_version("home", 1),
+        e.app_versions(APP, None, None),
+        e.app_version(APP, 1),
     ] {
         assert_eq!(
             result.unwrap_err(),
@@ -273,22 +281,22 @@ fn a_server_that_is_not_a_pod_says_so() {
 #[test]
 fn snapshot_layout_json_follows_the_pods_version() {
     let p = pod(AppState::in_memory());
-    let e = engine(&p.base, "home");
-    let n = latest(&p, "home");
+    let e = engine(&p.base, APP);
+    let n = latest(&p, APP);
     wait_until("first fetch", || e.snapshot().layout_json != "{}");
     assert_eq!(
         parse(&e.snapshot().layout_json),
-        json!({"app_id": "home", "version": n})
+        json!({"app_id": APP, "version": n})
     );
 
-    let v = layouts::append_version(p.state.store(), "home", &retitled("Pushed"), None).unwrap();
-    p.state.publish_layout("home", v);
+    let v = layouts::append_version(p.state.store(), APP, &retitled("Pushed"), None).unwrap();
+    p.state.publish_layout(APP, v);
     wait_until("pushed version", || {
         parse(&e.snapshot().layout_json)["version"] == v
     });
     assert_eq!(
         parse(&e.snapshot().layout_json),
-        json!({"app_id": "home", "version": v})
+        json!({"app_id": APP, "version": v})
     );
     let ws = parse(&e.snapshot().workspace_json);
     assert_eq!(ws["title"], "Pushed");

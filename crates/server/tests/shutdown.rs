@@ -45,7 +45,7 @@ fn sse_ends_cleanly_on(signal: &str) {
     let mut s = connect(port);
     s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
     s.write_all(
-        b"GET /v1/workspaces/home/events HTTP/1.1\r\nHost: localhost\r\n\
+        b"GET /v1/workspaces/pixelfed_demo/events HTTP/1.1\r\nHost: localhost\r\n\
           Accept: text/event-stream\r\n\r\n",
     )
     .unwrap();

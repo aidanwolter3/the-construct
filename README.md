@@ -29,8 +29,8 @@ Quick links: [Server runtime configuration](#server-runtime-configuration),
 ```
 crates/protocol      UiNode / ActionIntent / WorkspaceSpec (hydration bundle) / EntityRecord; generic nodes
                      only (D37)
-crates/server        Axum server ("the pod"): GET /v1/workspaces/{pixelfed_home,pixelfed_demo,home}, persistent
-                     counters (SQLite), Pixelfed adapter (auth, feed normalization, actions, media proxy),
+crates/server        Axum server ("the pod"): GET /v1/workspaces/{pixelfed_home,pixelfed_demo}, SQLite state,
+                     Pixelfed adapter (auth, feed normalization, actions, media proxy),
                      layouts as code (one linear version history per app, checked by `validate`),
                      read-only apps API, SSE push
 crates/client-core   ConstructEngine: fetches the workspace, holds state, applies optimistic mutations (SQLite cache +
@@ -41,8 +41,9 @@ crates/fake-pixelfed fake Pixelfed (Mastodon API + OAuth PKCE, admin/fault contr
                      single binary with embedded fixtures, Dockerfile for a sidecar image
 crates/e2e           end-to-end suite: pod + engine in-process against the fake (default) or a real Pixelfed
 layouts/             layouts as code: <app>/NNNN.json ({"note", "schema", "layout"}), embedded in the pod, append-only
-fixtures/            counter_home_bundle.json, pixelfed_home_bundle.json (DESIGN.md §2.2C),
-                     pixelfed_home_feed_bundle.json (simulator); pixelfed/ (Mastodon API JSON + media served by
+fixtures/            pixelfed_home_bundle.json (DESIGN.md §2.2C; the pixelfed_demo app),
+                     pixelfed_home_feed_bundle.json (simulator), counter_home_bundle.json (test-only: a minimal
+                     stateful workspace for engine and UI tests; no pod serves it); pixelfed/ (Mastodon API JSON + media served by
                      fake-pixelfed, recorded/ real-instance responses, images/ seed JPEGs)
 dev/pixelfed/        docker compose stack for the optional local real Pixelfed (dev-only secrets)
 scripts/build_ffi.sh builds libclient_ffi.dylib and regenerates the Kotlin bindings
@@ -71,17 +72,15 @@ Terminal 1: start the server on 127.0.0.1:8080 (set `CONSTRUCT_ADDR` to use anot
 
 ```bash
 cargo run -p server
-curl -s http://127.0.0.1:8080/v1/workspaces/home | jq .
+curl -s http://127.0.0.1:8080/v1/workspaces/pixelfed_demo | jq .
 ```
 
 Server details:
 
 - State lives in SQLite at `$CONSTRUCT_DATA_DIR/server.db`; `CONSTRUCT_DATA_DIR` defaults to `~/.construct-server`
-  (created if missing). The path is logged at startup. Delete the file to start from a zero count.
-- `GET /v1/workspaces/home` returns the counter fixture with `core://counters/home`.count set to the stored count.
-- `POST /v1/counters/home/{increment,decrement,reset}` (optional JSON body, ignored) returns
-  `{"ok":true,"count":N}`. Decrementing at 0 is refused with 422 `{"error":"count_below_zero","count":0}` and
-  changes nothing. Unknown counters/ops are 404. Every mutation is logged at info with the resulting count.
+  (created if missing). The path is logged at startup.
+- `GET /v1/workspaces/pixelfed_demo` returns the static one-post demo bundle; its like and bookmark actions post to
+  `POST /v1/demo/ack`, a stateless 200.
 - Test hook, only when started with `CONSTRUCT_TEST_HOOKS=1` (otherwise 404): `POST /v1/test/fault` with
   `{"status":503,"count":3}` makes the next 3 POSTs (other than `/v1/test/*`) return that status (400-599)
   without being applied; `"count":0` clears it. Each injected fault is logged.
@@ -89,9 +88,9 @@ Server details:
 Layouts, apps and the push channel (DECISIONS D32). Each app (= workspace) has one linear, append-only layout
 history. Its versions come from the files `layouts/<app>/NNNN.json`, which are embedded in the binary and appended
 at startup (see [Adding a new layout version](#adding-a-new-layout-version)). Entities are not versioned. The
-signed-out `pixelfed_home` screen is not versioned. Apps: `pixelfed_home` "Pixelfed", plus the dev apps
-`pixelfed_demo` "Pixelfed demo" and `home` "Counter". `GET /v1/apps` lists the dev apps only with
-`CONSTRUCT_SHOW_DEV_APPS=1`; their other endpoints always work.
+signed-out `pixelfed_home` screen is not versioned. Apps: `pixelfed_home` "Pixelfed", plus the dev app
+`pixelfed_demo` "Pixelfed demo". `GET /v1/apps` lists the dev app only with `CONSTRUCT_SHOW_DEV_APPS=1`; its other
+endpoints always work. (The `home` "Counter" app was removed, D39.)
 
 - `GET /v1/workspaces/{id}` serves the app's latest layout with `X-Construct-Layout-Version: <n>`. The header is
   absent on the signed-out `pixelfed_home` screen and on its 401.
@@ -107,7 +106,7 @@ signed-out `pixelfed_home` screen is not versioned. Apps: `pixelfed_home` "Pixel
   `[A-Za-z0-9_-]`), 404 `app_not_found` / `version_not_found`, 400 `invalid_request` (bad `limit` / `before` /
   version).
 - `GET /v1/workspaces/{id}/events` (SSE): the first message is the current version, then one each time a new
-  version of that app changes it (`event: layout` / `data: {"version":N,"workspace_id":"home"}`), plus a
+  version of that app changes it (`event: layout` / `data: {"version":N,"workspace_id":"pixelfed_demo"}`), plus a
   `: keepalive` comment every 15 s. With `X-Construct-Schema` the version is the newest one that client can draw
   (what a workspace GET serves it), so a version it can't draw sends nothing; without the header it is the app's
   latest (D38). New versions normally arrive with a deploy (the restart ends the stream, and the reconnect's first message
@@ -123,14 +122,14 @@ curl -s http://127.0.0.1:8080/v1/apps/pixelfed_home/versions | jq '.versions[] |
 # -> {"version":1,"note":"Classic feed","schema":1,"compatible":true} on a fresh database (no header = schema 1,
 #    so version 2, written for schema 2, says "compatible": false, "incompatible": "update_required")
 curl -s http://127.0.0.1:8080/v1/apps/pixelfed_home/versions/1 | jq .layout.id     # "pixelfed_home"
-curl -sN http://127.0.0.1:8080/v1/workspaces/home/events    # event: layout, data: {"version":1,"workspace_id":"home"}
+curl -sN http://127.0.0.1:8080/v1/workspaces/pixelfed_demo/events   # event: layout, data: {"version":2,"workspace_id":"pixelfed_demo"}
 ```
 
 ```bash
 CONSTRUCT_TEST_HOOKS=1 cargo run -p server
-curl -s -X POST http://127.0.0.1:8080/v1/counters/home/increment          # {"count":1,"ok":true}
+curl -s -X POST http://127.0.0.1:8080/v1/demo/ack                         # {"ok":true}
 curl -s -X POST -H 'content-type: application/json' \
-  -d '{"status":503,"count":2}' http://127.0.0.1:8080/v1/test/fault       # next 2 mutations -> 503
+  -d '{"status":503,"count":2}' http://127.0.0.1:8080/v1/test/fault       # next 2 POSTs -> 503
 ```
 
 Terminal 2: build the FFI library and bindings, then run the desktop app.
@@ -142,19 +141,18 @@ cd kmp-app
 export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ./gradlew :desktopApp:run                                              # the staging pod (default)
 ./gradlew :desktopApp:run -Dconstruct.baseUrl=http://127.0.0.1:8080       # or: CONSTRUCT_BASE_URL=... ./gradlew ...
-./gradlew :desktopApp:run -Dconstruct.baseUrl=http://127.0.0.1:8080 -Dconstruct.workspace=home   # the counter
+./gradlew :desktopApp:run -Dconstruct.baseUrl=http://127.0.0.1:8080 -Dconstruct.workspace=pixelfed_demo   # the demo
 ```
 
 All clients default to the deployed staging pod, `https://the-construct-pod.fly.dev`, and to the Pixelfed app
 (`pixelfed_home`; signed out, it shows "Sign in with Pixelfed"). For the local server started above, pass its URL
 explicitly (`CONSTRUCT_BASE_URL=http://127.0.0.1:8080`) or pick **Local** in the menu's Server section. With
-`-Dconstruct.workspace=home`, a "The Construct" window opens with the counter layout served by the server.
-Clicking **Increment** or **Reset** prints the intent to stdout and the count updates:
+`-Dconstruct.workspace=pixelfed_demo`, a "The Construct" window opens with the one-post demo served by the server
+(no sign-in). Clicking the heart prints the intent to stdout and the post's `is_liked` and `like_count` update:
 
 ```
 [desktop] dispatch: {"intent":"action.mutation.optimistic",...}
 [ConstructEngine] dispatch: {...}
-[ConstructEngine] core://counters/home#count = 1
 ```
 
 Options for the desktop app (set as `-D` JVM properties or environment variables):
@@ -167,8 +165,8 @@ Options for the desktop app (set as `-D` JVM properties or environment variables
   `~/.construct/servers/<url>`; `~/.construct` itself now belongs to staging. If you ran older builds against a
   local pod, its cache and pending outbox there would be shown on, and flushed to, staging: delete
   `~/.construct/cache.db` once.
-- `construct.workspace` / `CONSTRUCT_WORKSPACE`: default `pixelfed_home`. Use `home` for the counter and
-  `pixelfed_demo` for the one-post demo. Other apps can also be opened from the menu.
+- `construct.workspace` / `CONSTRUCT_WORKSPACE`: default `pixelfed_home`. Use `pixelfed_demo` for the one-post
+  demo. Other apps can also be opened from the menu.
 
 Separately, `-PskipRustBuild` is a Gradle property (`./gradlew -PskipRustBuild :desktopApp:run`) that skips
 the cargo build step.
@@ -183,11 +181,11 @@ one transaction (`sqlite3 ~/.construct/cache.db "SELECT * FROM action_outbox;"`)
 Queued rows are sent by a background sync worker (docs/DECISIONS.md D14), oldest first and one at a time,
 as `POST <base_url><endpoint>`. Clicks made while offline (or with the app closed before they were sent) stay
 in the queue and the menu shows "N pending" (and a badge on the menu button); they are flushed as soon as the server is reachable again,
-including on the next launch. Each accepted row is deleted. A row the server rejects with a 4xx (e.g.
-decrementing below 0) is deleted and its field rolled back, with later queued clicks re-applied on top. A 5xx,
+including on the next launch. Each accepted row is deleted. A row the server rejects with a 4xx (e.g. a like
+on a deleted post) is deleted and its field rolled back, with later queued clicks re-applied on top. A 5xx,
 408, 429 or network error keeps the row and retries it with exponential backoff (2 s, 4 s, ... capped at 60 s). A
 re-fetched workspace has the still-pending clicks re-applied, so they never visibly disappear. The engine logs
-each attempt, e.g. `[ConstructEngine] outbox #3 POST http://127.0.0.1:8080/v1/counters/home/increment -> 200,
+each attempt, e.g. `[ConstructEngine] outbox #3 POST http://127.0.0.1:8080/v1/demo/ack -> 200,
 deleted (0 pending)`.
 
 ## Server runtime configuration
@@ -200,9 +198,9 @@ version) are logged at startup. `GET /healthz` answers 200 `ok`
 | Variable | Default | Meaning |
 |---|---|---|
 | `CONSTRUCT_ADDR` | `127.0.0.1:8080` | Listen address. Use `0.0.0.0:8080` to accept LAN connections. |
-| `CONSTRUCT_DATA_DIR` | `~/.construct-server` | Directory of `server.db` (counters, Pixelfed app/account/sessions, media keys, layout versions); created if missing. |
+| `CONSTRUCT_DATA_DIR` | `~/.construct-server` | Directory of `server.db` (Pixelfed app/account/sessions, media keys, layout versions); created if missing. |
 | `CONSTRUCT_TEST_HOOKS` | unset | `1` enables `POST /v1/test/fault` (fault injection; otherwise 404). |
-| `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: `GET /v1/apps` also lists the dev apps `pixelfed_demo` and `home` (they work either way; this only makes them show up in the clients' menu). |
+| `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: `GET /v1/apps` also lists the dev app `pixelfed_demo` (it works either way; this only makes it show up in the clients' menu). |
 | `PIXELFED_INSTANCE_URL` | `http://127.0.0.1:8081` (the fake) | Pixelfed instance for pod->upstream calls, and the only instance accepted in auth calls. `http://localhost:8090` for the local real Pixelfed, `https://<instance>` for a public one. |
 | `PIXELFED_PUBLIC_URL` | = instance URL | Base for browser-facing links (the authorize page), e.g. `http://10.0.2.2:8081` for the emulator while the pod calls `127.0.0.1:8081`. Also accepted in auth calls. |
 | `PIXELFED_MEDIA_HOSTS` | unset | Comma-separated `host`, `host:port` or `scheme://host[:port]`: extra origins the media proxy may fetch (CDN/S3) besides the instance and public URLs. Media elsewhere become placeholders. |
@@ -341,7 +339,7 @@ client build. The engine and the clients know no app.
 - **A breaking schema change:** bump `protocol::SCHEMA_VERSION` and add `(new schema, oldest layout schema it still
   draws)` to `protocol::RETIRED`. Older versions then show as incompatible to new clients and are never served to
   them; the old files are not edited. `RETIRED` is `[(3, 3)]`: schema 3 removed the `pixelfed://` widgets (D37),
-  so schema-3 clients draw only schema-3 versions (`home/0002` re-publishes the counter for them).
+  so schema-3 clients draw only schema-3 versions (`pixelfed_home/0003`, `pixelfed_demo/0002`).
 
 `layouts/pixelfed_home/0003.json` builds the feed from these nodes. It (like 0002) uses the rest for comments: the feed's comment button (already
 `pixelfed://posts/$item.id/comments`) opens the `comments` screen, which loads
@@ -354,7 +352,7 @@ Desktop, Android and the simulator share one Compose UI (DECISIONS D33). The scr
 small **menu button** at the top left (content description "Menu"). The button gets a badge dot when you are
 offline, when actions wait to be sent, or when the version you picked has a newer one. The button opens a drawer:
 
-- **Apps:** `Pixelfed` (plus `Pixelfed demo` and `Counter` when the pod runs with `CONSTRUCT_SHOW_DEV_APPS=1`).
+- **Apps:** `Pixelfed` (plus `Pixelfed demo` when the pod runs with `CONSTRUCT_SHOW_DEV_APPS=1`).
   Tap a row to open that app. The history button opens the **version picker**: "Latest", then every version
   newest first ("vN", age, note), with "Load older". Picking a version shows that layout with your current data.
   This happens only on this device: nothing changes on the pod, and the next launch shows the latest again. While
@@ -380,26 +378,26 @@ Back (Android) closes the innermost level (custom URL field, picker, drawer). Te
 
 ## Milestone check recipes
 
-DESIGN.md M5 (offline click lands in the outbox, flushed on reconnect), with the counter workspace:
+DESIGN.md M5 (offline click lands in the outbox, flushed on reconnect), with the one-post demo (no sign-in):
 
 ```bash
 cargo run -p server                                                  # terminal 1
-cd kmp-app && CONSTRUCT_BASE_URL=http://127.0.0.1:8080 CONSTRUCT_WORKSPACE=home ./gradlew :desktopApp:run   # terminal 2
+cd kmp-app && CONSTRUCT_BASE_URL=http://127.0.0.1:8080 CONSTRUCT_WORKSPACE=pixelfed_demo ./gradlew :desktopApp:run   # terminal 2
 # stop the server with Ctrl-C in terminal 1: the menu button gets a badge; the menu says Offline
-# click Increment 3 times: the count updates at once and the menu shows "3 pending"
-sqlite3 ~/.construct/cache.db "SELECT id, endpoint, status, retry_count FROM action_outbox;"   # 3 PENDING rows
+# click the heart, then the bookmark: both update at once and the menu shows "2 pending"
+sqlite3 ~/.construct/cache.db "SELECT id, endpoint, status, retry_count FROM action_outbox;"   # 2 PENDING rows
 cargo run -p server                                                  # terminal 1 again: within ~2 s flushed, rows deleted
 sqlite3 ~/.construct/cache.db "SELECT count(*) FROM action_outbox;"     # 0
-curl -s http://127.0.0.1:8080/v1/workspaces/home | jq '.entities["core://counters/home"].count'
 ```
 
 A new layout version reaches an open app without a restart (the M7 push, now driven by a deploy):
 
 ```bash
 cargo run -p server                                                  # terminal 1
-cd kmp-app && CONSTRUCT_BASE_URL=http://127.0.0.1:8080 CONSTRUCT_WORKSPACE=home ./gradlew :desktopApp:run   # terminal 2
-# add layouts/home/0002.json + its layouts::FILES line (see "Adding a new layout version"), then restart terminal 1:
-# the app reconnects its event stream and shows v2 within a few seconds; the menu's Counter history lists it
+cd kmp-app && CONSTRUCT_BASE_URL=http://127.0.0.1:8080 CONSTRUCT_WORKSPACE=pixelfed_demo ./gradlew :desktopApp:run   # terminal 2
+# add layouts/pixelfed_demo/0003.json + its layouts::FILES line (see "Adding a new layout version"), then restart
+# terminal 1: the app reconnects its event stream and shows v3 within a few seconds; the menu's Pixelfed demo history
+# lists it
 ```
 
 ## Fake Pixelfed upstream
@@ -779,8 +777,8 @@ virtual screen (no window), runs a small script against it and writes PNG screen
 2 seconds. Run it from `kmp-app` with `JAVA_HOME` set as above:
 
 ```bash
-./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=home -Pscreen=phone \
-  -Pscript="shot start; click Increment; click Increment; assert-text Count: 2; shot after; offline; shot offline"
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -Pscreen=phone \
+  -Pscript="shot feed; click Like; assert-text Unlike; shot liked; offline; shot offline"
 
 ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -Pscreen=desktop
 ./gradlew -PskipRustBuild :desktopApp:simulate \
@@ -795,7 +793,7 @@ virtual screen (no window), runs a small script against it and writes PNG screen
   -Pscript="shot signed-out; click Sign in with Pixelfed; open-menu; wait-text 20000 @constructdemo; close-menu; wait-text 20000 Alice Lumen; wait-images 20000; shot feed; click Like; shot liked"
 # live menu against a local pod started with CONSTRUCT_SHOW_DEV_APPS=1
 ./gradlew -PskipRustBuild :desktopApp:simulate -PbaseUrl=http://127.0.0.1:8080 \
-  -Pscript="open-menu; open-history Pixelfed; select-version 1; open-menu; open-app Counter; assert-text Count"
+  -Pscript="open-menu; open-history Pixelfed; select-version 1; open-menu; open-app pixelfed_demo; assert-text Sunrise over Boulder"
 ```
 
 Flags (all optional):
@@ -808,7 +806,7 @@ Flags (all optional):
 | `-Pscript` | `shot initial` | Script text (see below). |
 | `-PscriptFile` | | Script read from a file. Use either this or `-Pscript`, not both. |
 | `-Pmode` | `fixture` | `fixture` or `live`. Live mode is selected automatically when `-PbaseUrl` is given. |
-| `-Pfixture` | per workspace | Bundle JSON in fixture mode. Defaults: `home` uses `fixtures/counter_home_bundle.json`, `pixelfed_demo` uses `fixtures/pixelfed_home_bundle.json` (one post), `pixelfed_home` uses `fixtures/pixelfed_home_feed_bundle.json` (the fake upstream's five-post timeline, normalized as the pod does, with `queries`). Other workspaces need `-Pfixture`. |
+| `-Pfixture` | per workspace | Bundle JSON in fixture mode. Defaults: `pixelfed_demo` uses `fixtures/pixelfed_home_bundle.json` (one post), `pixelfed_home` uses `fixtures/pixelfed_home_feed_bundle.json` (the fake upstream's five-post timeline, normalized as the pod does, with `queries`). Other workspaces need `-Pfixture`. |
 | `-PbaseUrl` | `https://the-construct-pod.fly.dev` | Server for live mode (the staging pod unless given; local: `http://127.0.0.1:8080`). |
 | `-PtimeoutMs` | `10000` | Live mode only: how long to wait for the workspace to load before the first step. |
 | `-Pout` | `kmp-app/desktopApp/build/sim/<yyyyMMdd-HHmmss>` | Output directory. |
@@ -816,16 +814,17 @@ Flags (all optional):
 | `-Pstorage` | fresh temp dir | Live mode only: engine storage dir (holds `cache.db`). It is kept after the run, so a second run with the same dir exercises restart persistence. The temp default is deleted on exit. |
 
 Relative paths (`-Pfixture`, `-PscriptFile`, `-Pout`, `-Pstorage`) resolve against the **repo root**, the task's working
-directory, so `-Pfixture=fixtures/counter_home_bundle.json` works.
+directory, so `-Pfixture=fixtures/pixelfed_home_bundle.json` works.
 
 **Fixture mode** (the default) needs no server, and no Rust build when run with `-PskipRustBuild` (without
 it, the desktop compile triggers `:shared:buildRustFfi`, i.e. cargo). A fake in-memory engine
 (`FakeEngineBridge`) loads the bundle, applies `OptimisticMutate` clicks with the D4 expression subset, and
 toggles connectivity for `offline`/`online`. It models the outbox: clicks made while offline are applied
 locally and queued (the menu shows "N pending"), and `online` flushes them FIFO to an in-memory fake
-server. That server rejects a `.../decrement` that would take the count below 0; the fake then rolls the
-field back and re-applies later queued rows (D8). It also serves a fake apps catalog (`FakeAppCatalog`, as with
-`CONSTRUCT_SHOW_DEV_APPS=1`): Pixelfed v1..v3, Pixelfed demo v1..v2, Counter v1..v2. The newest version of each is
+server. That server rejects a `.../decrement` that would take a `count` below 0 (the test-only
+`counter_home_bundle.json`); the fake then rolls the field back and re-applies later queued rows (D8). It also
+serves a fake apps catalog (`FakeAppCatalog`, as with `CONSTRUCT_SHOW_DEV_APPS=1`): Pixelfed v1..v3 and Pixelfed
+demo v1..v2 (a `-Pfixture` bundle of another workspace is added as a one-version app). The newest version of each is
 the fixture's own layout, and `publish-version` adds more. Opening another app switches to that app's fixture.
 **Live mode** runs the real Rust engine through JNA against
 the server. By default it uses a fresh temp storage dir, so it neither reads nor writes `~/.construct`; pass
@@ -866,7 +865,7 @@ entries starting with `#` are comments. An argument cannot contain `;`, and sinc
 | `idle` | Waits until the UI is idle. |
 | `assert-text <text>` | Fails unless some node's text or content description contains `<text>`. Retries for up to 2 s. |
 | `assert-no-text <text>` | The inverse of `assert-text`. |
-| `wait-text <ms> <text>` | Like `assert-text` with a custom timeout (at most 600000), e.g. `wait-text 15000 Count: 3` while a live sync worker retries. |
+| `wait-text <ms> <text>` | Like `assert-text` with a custom timeout (at most 600000), e.g. `wait-text 15000 Alice Lumen` while a live feed loads. |
 | `wait-images [ms]` | Waits until no image is loading (default 10000 ms, at most 600000). Works in both modes. |
 | `swipe-left <target>` / `swipe-right <target>` | Touch-swipes the selected node; `swipe-left` on a carousel shows the next page. |
 | `scroll-to <target>` | Scrolls the feed until the selected node is visible (e.g. `scroll-to Kept my distance`). |
@@ -882,7 +881,7 @@ entries starting with `#` are comments. An argument cannot contain `;`, and sinc
 | `select-version <n or latest>` | In the picker, shows version `n` (`2` or `v2`; presses "Load older" as needed) or follows the latest again; waits for the drawer to close. |
 | `set-server <preset or URL>` | Picks `staging`, `emulator`, `usb` or a custom `http(s)://host[:port]` in the Server section. The simulator records the choice and shows it in the menu, but keeps its engine. |
 
-The menu commands are thin wrappers over clicks on the menu's test tags (`click tag:app-history-home` works too,
+The menu commands are thin wrappers over clicks on the menu's test tags (`click tag:app-history-pixelfed_demo` works too,
 see [The menu](#the-menu-all-surfaces)). Each one waits until idle and until every apps call has finished (they run
 on a background thread), and fails with a hint when its control is missing (e.g. `select-version 2` without
 `open-history`: "no version picker on screen (use open-history first)"). Examples (fixture mode). The menu commands also
@@ -899,14 +898,14 @@ publish-version Bigger photos
 open-menu; assert-text Newer version available; shot newer
 open-history Pixelfed; select-version latest; shot latest
 # another app, then the server picker
-open-menu; open-app Counter; click Increment; assert-text Count: 1; shot counter
+open-menu; open-app pixelfed_demo; click Like; assert-text Unlike; shot demo
 open-menu; set-server http://127.0.0.1:8080; assert-text 127.0.0.1; close-menu
 SCRIPT
 ./gradlew -PskipRustBuild :desktopApp:simulate -PscriptFile=/tmp/menu.txt
 ./gradlew -PskipRustBuild :desktopApp:simulate -Pscreen=desktop -PscriptFile=/tmp/menu.txt
 # offline: the badge and the Connection section
-./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=home \
-  -Pscript="offline; click Increment; open-menu; assert-text Offline; assert-text 1 pending; shot offline"
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo \
+  -Pscript="offline; click Like; open-menu; assert-text Offline; assert-text 1 pending; shot offline"
 ```
 
 A `<target>` is either `tag:<testTag>` (an exact test tag, else the first tag containing it) or text: an exact text
