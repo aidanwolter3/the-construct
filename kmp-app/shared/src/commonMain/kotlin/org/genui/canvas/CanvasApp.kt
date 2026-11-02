@@ -38,13 +38,14 @@ import kotlinx.serialization.json.JsonObject
  * UI state derived from engine snapshots. [workspace] is null until the engine has a layout.
  * [pendingActions] counts queued (unsent) outbox mutations. [seq] is the seq of the last applied
  * snapshot (-1 before the first). [queries] maps a FeedList `query_key` to ordered entity URIs (M6) and
- * [auth] is the sign-in status.
+ * [auth] is the sign-in status. [agent] is the layout agent's status (M7).
  */
 data class CanvasState(
     val workspace: UiNode? = null,
     val entities: Map<String, JsonObject> = emptyMap(),
     val queries: Map<String, List<String>> = emptyMap(),
     val auth: AuthInfo = AuthInfo(),
+    val agent: AgentInfo = AgentInfo(),
     val isOnline: Boolean = false,
     val pendingActions: Int = 0,
     val error: String? = null,
@@ -76,8 +77,8 @@ class CanvasController(private val bridge: CanvasEngineBridge) {
             val entities = if (e.isEmpty() || e == "null") emptyMap() else CanvasJson.decodeEntities(e)
             val queries = decodeQueries(snapshot.queriesJson)
             CanvasState(
-                workspace, entities, queries, AuthInfo.parse(snapshot.authJson), snapshot.isOnline,
-                snapshot.pendingActions, error = null, seq = snapshot.seq,
+                workspace, entities, queries, AuthInfo.parse(snapshot.authJson), AgentInfo.parse(snapshot.agentJson),
+                snapshot.isOnline, snapshot.pendingActions, error = null, seq = snapshot.seq,
             )
         } catch (t: Throwable) {
             println("[Canvas] snapshot decode failed: $t")
@@ -90,6 +91,7 @@ class CanvasController(private val bridge: CanvasEngineBridge) {
                 decoded != null -> decoded
                 else -> cur.copy(
                     auth = AuthInfo.parse(snapshot.authJson),
+                    agent = AgentInfo.parse(snapshot.agentJson),
                     isOnline = snapshot.isOnline,
                     pendingActions = snapshot.pendingActions,
                     error = decodeError,
@@ -128,25 +130,37 @@ fun CanvasApp(controller: CanvasController, modifier: Modifier = Modifier) {
     // Material3 light scheme on a white background and surface (feed photos sit on white, as on Pixelfed/Instagram).
     MaterialTheme(colorScheme = lightColorScheme(background = Color.White, surface = Color.White)) {
         Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.fillMaxSize()) {
-                StatusLine(state.isOnline, state.pendingActions, state.auth, controller::logout)
-                state.error?.let {
-                    Text(
-                        it,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    )
+            Box(Modifier.fillMaxSize()) {
+                Column(Modifier.fillMaxSize()) {
+                    StatusLine(state.isOnline, state.pendingActions, state.auth, controller::logout)
+                    state.error?.let {
+                        Text(
+                            it,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                    }
+                    val workspace = state.workspace
+                    if (workspace == null) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("Loading…", style = MaterialTheme.typography.bodyLarge)
+                        }
+                    } else {
+                        CompositionLocalProvider(LocalCanvasQueries provides state.queries) {
+                            RenderUiNode(workspace, state.entities, controller::dispatch, Modifier.fillMaxSize())
+                        }
+                    }
                 }
-                val workspace = state.workspace
-                if (workspace == null) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("Loading…", style = MaterialTheme.typography.bodyLarge)
-                    }
-                } else {
-                    CompositionLocalProvider(LocalCanvasQueries provides state.queries) {
-                        RenderUiNode(workspace, state.entities, controller::dispatch, Modifier.fillMaxSize())
-                    }
+                // Outside the server-driven tree: a layout swap never resets the prompt (M7, DECISIONS D23).
+                // Insets: the platform root already pads by the safe-drawing insets (Android), so this sits above
+                // the navigation bar and the keyboard.
+                if (state.workspace != null) {
+                    AgentPromptOverlay(
+                        state.agent,
+                        onSend = { controller.dispatch(ActionIntent.PromptAgent(it)) },
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 }
             }
         }

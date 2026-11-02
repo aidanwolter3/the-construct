@@ -612,6 +612,45 @@ async fn upstream_seeded_token_serves_feed() {
 }
 
 #[tokio::test]
+async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
+    let fake = spawn_fake().await;
+    let state = Arc::new(seeded_state(&fake.url, SEED));
+    let pod = serve(server::app(state.clone())).await;
+    let version = |resp: &reqwest::Response| {
+        resp.headers()
+            .get("x-canvas-layout-version")
+            .map(|v| v.to_str().unwrap().to_owned())
+    };
+    let url = format!("{}/v1/workspaces/pixelfed_home", pod.url);
+    let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(version(&resp).as_deref(), Some("1"));
+    // A committed layout replaces the feed layout; entities still come upstream.
+    let mut node = server::layouts::builtin("pixelfed_home").unwrap();
+    if let UiNode::Workspace { title, .. } = &mut node {
+        *title = "Custom".into();
+    }
+    server::layouts::commit(state.store(), "pixelfed_home", &node, None, None, None).unwrap();
+    let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
+    assert_eq!(version(&resp).as_deref(), Some("2"));
+    let spec: WorkspaceSpec = resp.json().await.unwrap();
+    assert_eq!(spec.workspace, node);
+    assert_eq!(spec.queries["timeline:home"].len(), 5);
+    // Signed out (no bearer, or a stale one): unversioned.
+    let resp = client().get(&url).send().await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(version(&resp), None);
+    let resp = client()
+        .get(&url)
+        .bearer_auth("stale")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(version(&resp), None);
+}
+
+#[tokio::test]
 async fn media_proxy_streams_png() {
     let env = env().await;
     let session = sign_in(&env).await;
@@ -685,10 +724,11 @@ async fn media_proxy_neutralizes_non_media_content_types() {
         .save_media_keys(urls.iter().map(|(k, u)| (k, u)))
         .unwrap();
     let pod = spawn_pod(state).await;
-    for ((key, _), want) in urls
-        .iter()
-        .zip(["application/octet-stream", "application/octet-stream", "image/jpeg"])
-    {
+    for ((key, _), want) in urls.iter().zip([
+        "application/octet-stream",
+        "application/octet-stream",
+        "image/jpeg",
+    ]) {
         let resp = client()
             .get(format!("{}/v1/pixelfed/media/{key}", pod.url))
             .send()
@@ -972,7 +1012,10 @@ async fn another_account_cannot_take_over_the_pod() {
     // The owner's stored account (and session) still work.
     let (status, home) = get_home(&env.pod.url, Some("tok")).await;
     assert_eq!(status, StatusCode::OK, "{home}");
-    assert_eq!(home["queries"]["timeline:home"].as_array().unwrap().len(), 5);
+    assert_eq!(
+        home["queries"]["timeline:home"].as_array().unwrap().len(),
+        5
+    );
 }
 
 #[tokio::test]
@@ -1033,7 +1076,10 @@ async fn sessions_expire_after_the_ttl() {
     let dir = tempfile::tempdir().unwrap();
     let env = env_with(AppState::open_dir(dir.path()).unwrap()).await;
     let session = sign_in(&env).await;
-    assert_eq!(get_home(&env.pod.url, Some(&session)).await.0, StatusCode::OK);
+    assert_eq!(
+        get_home(&env.pod.url, Some(&session)).await.0,
+        StatusCode::OK
+    );
     // Age the session past the default 90 days.
     let conn = rusqlite::Connection::open(dir.path().join("server.db")).unwrap();
     conn.execute(
@@ -1124,7 +1170,10 @@ async fn stale_cached_app_is_re_registered() {
     assert_eq!(status, StatusCode::OK, "{a3}");
     assert_ne!(a3["client_id"], a1["client_id"]);
     let session = sign_in(&env).await;
-    assert_eq!(get_home(&env.pod.url, Some(&session)).await.0, StatusCode::OK);
+    assert_eq!(
+        get_home(&env.pod.url, Some(&session)).await.0,
+        StatusCode::OK
+    );
 }
 
 #[tokio::test]
@@ -1135,7 +1184,10 @@ async fn cached_app_is_kept_when_validation_is_inconclusive() {
         client_id: "cached-1".into(),
         client_secret: "s".into(),
     };
-    state.store().save_pixelfed_app(&dead, REDIRECT, &app).unwrap();
+    state
+        .store()
+        .save_pixelfed_app(&dead, REDIRECT, &app)
+        .unwrap();
     let pod = spawn_pod(state).await;
     let (status, body) = post_json(
         &format!("{}/v1/auth/pixelfed/app", pod.url),
@@ -1164,7 +1216,10 @@ async fn media_proxy_ssrf_guards() {
                 "/img.jpg",
                 get(|| async { ([(header::CONTENT_TYPE, "image/jpeg")], "jpg") }),
             )
-            .route("/redir-ok", get(|| async { Redirect::temporary("/img.jpg") }))
+            .route(
+                "/redir-ok",
+                get(|| async { Redirect::temporary("/img.jpg") }),
+            )
             .route(
                 "/redir-out",
                 get(move || {
@@ -1218,7 +1273,10 @@ async fn media_proxy_ssrf_guards() {
     let (out_key, _) = urls.pop().unwrap();
     let resp = fetch(out_key).await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    assert_eq!(resp.json::<Value>().await.unwrap()["error"], "media_host_not_allowed");
+    assert_eq!(
+        resp.json::<Value>().await.unwrap()["error"],
+        "media_host_not_allowed"
+    );
 
     let key = |i: usize| urls[i].0.clone();
     let resp = fetch(key(0)).await;
@@ -1234,7 +1292,10 @@ async fn media_proxy_ssrf_guards() {
     // Too large: refused up front by Content-Length, or cut off while streaming.
     let resp = fetch(key(3)).await;
     assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
-    assert_eq!(resp.json::<Value>().await.unwrap()["error"], "media_too_large");
+    assert_eq!(
+        resp.json::<Value>().await.unwrap()["error"],
+        "media_too_large"
+    );
     let resp = fetch(key(4)).await;
     // Aborted mid-body (Err) is expected; a complete body must be under the cap.
     if let Ok(b) = resp.bytes().await {
@@ -1255,7 +1316,11 @@ async fn surviving_401_does_not_delete_a_replaced_account() {
     // and then rejects the request.
     #[derive(Clone)]
     struct Mock(Arc<AppState>, String, Arc<AtomicUsize>);
-    let mock = Mock(state.clone(), upstream_url.clone(), Arc::new(AtomicUsize::new(0)));
+    let mock = Mock(
+        state.clone(),
+        upstream_url.clone(),
+        Arc::new(AtomicUsize::new(0)),
+    );
     let router = axum::Router::new()
         .route(
             "/api/v1/timelines/home",

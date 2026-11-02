@@ -16,6 +16,8 @@ sealed class SimStep(val command: String, val arg: String = "") {
     /** Swipes the node [target] selects (see README) towards [direction]: left shows the next carousel page. */
     class Swipe(val direction: String, val target: String) : SimStep("swipe-$direction", target)
     class ScrollTo(val target: String) : SimStep("scroll-to", target)
+    /** Replaces the text of the text field [target] selects with [text]. */
+    class Type(val target: String, val text: String) : SimStep("type", "$target $text")
 
     override fun toString(): String = if (arg.isEmpty()) command else "$command $arg"
 }
@@ -82,6 +84,14 @@ fun parseScript(script: String): List<SimStep> {
             )
             "swipe-left", "swipe-right" -> SimStep.Swipe(command.removePrefix("swipe-"), requireArg("a target (text, content description or tag:<testTag>)"))
             "scroll-to" -> SimStep.ScrollTo(requireArg("a target (text, content description or tag:<testTag>)"))
+            "type" -> {
+                val a = requireArg("a target and the text to type")
+                val (target, text) = splitTypeArg(a)
+                    ?: throw ScriptParseException(
+                        "${where()}: 'type' needs '<target> <text>' (target: tag:<testTag>, one word, or \"quoted text\")",
+                    )
+                SimStep.Type(target, text)
+            }
             "offline" -> { noArg(); SimStep.Offline }
             "online" -> { noArg(); SimStep.Online }
             "screen" -> SimStep.Screen(
@@ -94,11 +104,30 @@ fun parseScript(script: String): List<SimStep> {
             else -> throw ScriptParseException(
                 "${where()}: unknown command '$command' (expected one of: " +
                     "shot, click, wait, idle, assert-text, assert-no-text, wait-text, wait-images, swipe-left, swipe-right, " +
-                    "scroll-to, offline, online, screen)",
+                    "scroll-to, type, offline, online, screen)",
             )
         }
     }
     return steps
+}
+
+/**
+ * Splits a `type` argument into target and text: a target in double quotes may contain spaces (`"Search posts" cats`),
+ * otherwise it is the first word (`tag:agent-prompt Hide post captions`). Null when either part is missing.
+ */
+internal fun splitTypeArg(arg: String): Pair<String, String>? {
+    val a = arg.trim()
+    val (target, rest) = if (a.startsWith('"')) {
+        val end = a.indexOf('"', 1)
+        if (end < 0) return null
+        a.substring(1, end) to a.substring(end + 1)
+    } else {
+        val end = a.indexOfFirst { it.isWhitespace() }
+        if (end < 0) return null
+        a.substring(0, end) to a.substring(end)
+    }
+    val text = rest.trim()
+    return if (target.isEmpty() || text.isEmpty()) null else target to text
 }
 
 /** A virtual screen in dp. [defaultDensity] applies unless a density is given explicitly. */

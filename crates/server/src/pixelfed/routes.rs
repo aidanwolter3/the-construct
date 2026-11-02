@@ -57,7 +57,7 @@ fn new_session_token() -> String {
     URL_SAFE_NO_PAD.encode(buf)
 }
 
-fn bearer(headers: &HeaderMap) -> Option<&str> {
+pub(crate) fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(header::AUTHORIZATION)?
         .to_str()
@@ -68,7 +68,7 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
         .filter(|t| !t.is_empty())
 }
 
-fn unauthorized() -> Response {
+pub(crate) fn unauthorized() -> Response {
     (
         StatusCode::UNAUTHORIZED,
         [(header::WWW_AUTHENTICATE, "Bearer")],
@@ -322,7 +322,10 @@ async fn register_app(
         return instance_not_allowed(&state, instance_url);
     }
     if !redirect_allowed(redirect_uri, &state.pixelfed.extra_redirects) {
-        tracing::warn!(redirect_uri, "app registration for a disallowed redirect_uri rejected");
+        tracing::warn!(
+            redirect_uri,
+            "app registration for a disallowed redirect_uri rejected"
+        );
         return json_error(
             StatusCode::BAD_REQUEST,
             json!({
@@ -575,7 +578,8 @@ pub const SESSION_HEADER: &str = "x-canvas-session";
 /// stored account, or the upstream rejected the stored token): 401 with the
 /// signed-out bundle as the body and `X-Canvas-Session: invalid`, so the
 /// client learns its session is stale (it clears it and refetches without
-/// the bearer).
+/// the bearer). The signed-in feed's layout is the latest layout version
+/// (`X-Canvas-Layout-Version`); the signed-out screen is not versioned.
 pub async fn home_workspace(state: &Arc<AppState>, headers: &HeaderMap) -> Response {
     let had_bearer = bearer(headers).is_some();
     let signed_out = || {
@@ -631,7 +635,14 @@ pub async fn home_workspace(state: &Arc<AppState>, headers: &HeaderMap) -> Respo
         entities = timeline.entities.len(),
         "pixelfed_home served"
     );
-    Json(layout::home_feed(timeline.entities, timeline.order)).into_response()
+    let (version, node) = match crate::layouts::latest_async(state, layout::WORKSPACE_ID).await {
+        Ok(Some(v)) => v,
+        Ok(None) => unreachable!("pixelfed_home is a versioned workspace"),
+        Err(e) => return e.into_response(),
+    };
+    let mut spec = layout::home_feed(timeline.entities, timeline.order);
+    spec.workspace = node;
+    ([crate::layouts::version_header(version)], Json(spec)).into_response()
 }
 
 // ---------- actions ----------
@@ -797,7 +808,10 @@ async fn media(State(state): State<Arc<AppState>>, Path(key): Path<String>) -> R
             HeaderValue::from_static("public, max-age=86400"),
         )
         .header(header::CONTENT_TYPE, content_type)
-        .header(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"))
+        .header(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        )
         .header(
             header::CONTENT_SECURITY_POLICY,
             HeaderValue::from_static("default-src 'none'; sandbox"),

@@ -37,8 +37,16 @@
 //! `Authorization: Bearer` on workspace fetches and outbox POSTs. A 401 from
 //! the pod clears the session; an outbox row that got a 401 stays PENDING
 //! and flushing pauses until the next sign-in.
+//!
+//! M7 (docs/DECISIONS.md D24): `ActionIntent::PromptAgent` posts the prompt
+//! to `POST /v1/agent/modify_layout` on a background thread and applies the
+//! returned layout; progress is in `agent_json`. The engine tracks the
+//! layout version (`X-Canvas-Layout-Version`), and a third background thread
+//! ([`events`]) listens on the workspace's SSE push channel and refetches
+//! when a newer version is announced.
 
 pub mod auth;
+pub mod events;
 pub mod expr;
 pub mod store;
 
@@ -81,6 +89,15 @@ const PRIVATE_DOMAINS: &[&str] = &["pixelfed"];
 const AUTHED_ENDPOINT_PREFIX: &str = "/v1/pixelfed/";
 /// `auth_json` error when a custom-scheme redirect matches no sign-in.
 pub const SIGN_IN_INTERRUPTED: &str = "Sign-in was interrupted; please try again";
+/// `agent_json` until the first prompt.
+pub const IDLE_AGENT_JSON: &str = r#"{"state":"idle"}"#;
+/// `agent_json` message when the prompt could not reach the pod.
+pub const AGENT_OFFLINE: &str = "offline: try again when online";
+/// Response header carrying the served layout version.
+pub const LAYOUT_VERSION_HEADER: &str = "X-Canvas-Layout-Version";
+/// Timeout for `POST /v1/agent/modify_layout` (an LLM provider may take
+/// up to 120 s plus retries on the pod).
+const AGENT_HTTP_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Engine timing knobs. [`EngineConfig::default`] is what `init` uses;
 /// tests shorten the intervals so they do not sleep for seconds.
@@ -255,6 +272,8 @@ enum FetchOutcome {
 /// - `auth_json`: `{"state":"signed_out"|"pending"|"signed_in"|"error",
 ///   "username"?, "display_name"?, "avatar_url"?, "error"?}` (the account
 ///   fields when signed in, `error` with a message in the error state).
+/// - `agent_json`: the last layout prompt, `{"state":"idle"|"running"|
+///   "done"|"error","message"?,"provider"?,"layout_version"?}`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateSnapshot {
     pub workspace_json: String,
@@ -264,6 +283,7 @@ pub struct StateSnapshot {
     pub pending_actions: u32,
     pub queries_json: String,
     pub auth_json: String,
+    pub agent_json: String,
 }
 
 struct Observer {
@@ -303,6 +323,13 @@ struct State {
     /// An outbox POST got a 401: flushing pauses until the next sign-in
     /// (the row stays PENDING instead of being rolled back).
     auth_blocked: bool,
+    /// Agent prompt status JSON (see [`StateSnapshot::agent_json`]); empty
+    /// means idle.
+    agent_json: String,
+    /// Version of the applied layout (`X-Canvas-Layout-Version` of the
+    /// last fetch, or a prompt response's `layout_version`); `None` when
+    /// unknown or the served layout is not versioned.
+    layout_version: Option<u64>,
     is_online: bool,
     /// Bumped on every change (cache load, fetch attempt, mutation). Used to
     /// drop stale out-of-order deliveries.
@@ -331,6 +358,11 @@ impl State {
         } else {
             self.auth_json.clone()
         };
+        let agent_json = if self.agent_json.is_empty() {
+            IDLE_AGENT_JSON.to_string()
+        } else {
+            self.agent_json.clone()
+        };
         StateSnapshot {
             workspace_json,
             entities_json,
@@ -339,6 +371,7 @@ impl State {
             pending_actions: self.pending_actions,
             queries_json,
             auth_json,
+            agent_json,
         }
     }
 
@@ -458,6 +491,25 @@ impl State {
         self.workspace = Some(workspace);
         self.entities = merged;
         self.queries = queries;
+    }
+
+    /// Replace only the layout (an agent response carries no entities):
+    /// entities, queries and the outbox are untouched; the cached
+    /// `active_workspace` row keeps its entity URIs and queries and gets
+    /// the new layout. A persistence failure is logged; memory is updated.
+    fn apply_layout(&mut self, workspace_id: &str, layout: UiNode) {
+        if let Some(store) = self.store.as_mut() {
+            let uris = match store.load_workspace(workspace_id) {
+                Ok(Some(w)) => w.entity_uris,
+                _ => self.entities.keys().cloned().collect(),
+            };
+            if let Err(e) =
+                store.save_workspace(workspace_id, &layout, &uris, &self.queries, unix_now())
+            {
+                eprintln!("[CanvasEngine] failed to persist the new layout of '{workspace_id}': {e}");
+            }
+        }
+        self.workspace = Some(layout);
     }
 
     /// Sign-out: forget the cached private (signed-in) data, in memory and in
@@ -749,6 +801,10 @@ struct Inner {
     session_key: String,
     /// `pending_auth:<base_url>` (custom-scheme mode only).
     pending_key: String,
+    /// `{base}/v1/agent/modify_layout`.
+    agent_url: String,
+    /// Bumped per prompt; only the latest prompt reports in `agent_json`.
+    agent_gen: AtomicU64,
     /// The sign-in in progress, if any. Never held during secure-store I/O.
     flow: Mutex<Option<Arc<Flow>>>,
     /// Serializes writes of `session_key` (see [`Inner::sync_session_store`]).
@@ -979,6 +1035,8 @@ impl CanvasEngine {
             loopback_port,
             session_key,
             pending_key: auth::pending_auth_key(base),
+            agent_url: format!("{base}/v1/agent/modify_layout"),
+            agent_gen: AtomicU64::new(0),
             flow: Mutex::new(None),
             session_io: Mutex::new(()),
             pending_io: Mutex::new(()),
@@ -1018,6 +1076,16 @@ impl CanvasEngine {
             .spawn(move || sync_worker(worker, signal));
         if let Err(e) = spawned {
             eprintln!("[CanvasEngine] failed to spawn sync worker: {e}");
+        }
+
+        let events: Weak<Inner> = Arc::downgrade(&inner);
+        let events_signal = Arc::clone(&inner.signal);
+        let events_url = format!("{base}/v1/workspaces/{workspace_id}/events");
+        let spawned = thread::Builder::new()
+            .name("canvas-engine-events".into())
+            .spawn(move || events::events_thread(events, events_signal, events_url, poll_interval));
+        if let Err(e) = spawned {
+            eprintln!("[CanvasEngine] failed to spawn the events thread: {e}");
         }
 
         Self { inner }
@@ -1202,7 +1270,7 @@ impl Inner {
                     st.is_online = true;
                     outcome = FetchOutcome::Fetched;
                 }
-                Ok(spec) => {
+                Ok((mut spec, version)) => {
                     let failures = std::mem::take(&mut st.fetch_failures);
                     st.last_fetch_error = None;
                     let after = if failures > 0 {
@@ -1216,6 +1284,19 @@ impl Inner {
                         spec.entities.len(),
                         self.workspace_url
                     );
+                    match (version, st.layout_version, &st.workspace) {
+                        (Some(v), Some(have), Some(current)) if v < have => {
+                            // A fetch that started before a newer layout was
+                            // applied (agent response or a later fetch):
+                            // keep the newer layout, take the entities.
+                            println!(
+                                "[CanvasEngine] fetched layout v{v} is older than the applied \
+                                 v{have}; layout kept"
+                            );
+                            spec.workspace = current.clone();
+                        }
+                        _ => st.layout_version = version,
+                    }
                     st.apply_fetched(&self.workspace_id, spec);
                     st.is_online = true;
                     outcome = FetchOutcome::Fetched;
@@ -1514,6 +1595,7 @@ impl Inner {
                 also,
             ),
             ActionIntent::AuthLogin { instance_url } => self.start_login(instance_url),
+            ActionIntent::PromptAgent { prompt_text } => self.start_prompt(prompt_text),
             other => {
                 eprintln!(
                     "[CanvasEngine] dispatch: intent not handled by client-core yet: {other:?}"
@@ -1626,6 +1708,145 @@ impl Inner {
         let snap = {
             let mut st = lock(&self.state);
             st.auth_json = auth_json;
+            st.seq += 1;
+            st.snapshot()
+        };
+        self.notify(snap);
+    }
+
+    /// Set `agent_json` (bump seq) and notify.
+    fn set_agent_json(&self, agent_json: String) {
+        let snap = {
+            let mut st = lock(&self.state);
+            st.agent_json = agent_json;
+            st.seq += 1;
+            st.snapshot()
+        };
+        self.notify(snap);
+    }
+
+    /// `ActionIntent::PromptAgent`: go `running` and post the prompt on a
+    /// `canvas-engine-agent` thread (the dispatching thread never blocks).
+    /// A newer prompt supersedes an older one's status report (its layout,
+    /// if it arrives, is still applied when newer).
+    fn start_prompt(self: &Arc<Self>, prompt: String) {
+        let prompt = prompt.trim().to_owned();
+        if prompt.is_empty() {
+            self.set_agent_json(agent_json("error", Some("the prompt is empty"), None, None));
+            return;
+        }
+        let generation = self.agent_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        self.set_agent_json(agent_json("running", None, None, None));
+        let weak = Arc::downgrade(self);
+        let body = json!({ "prompt": prompt, "workspace_id": self.workspace_id });
+        let url = self.agent_url.clone();
+        let spawned = thread::Builder::new()
+            .name("canvas-engine-agent".into())
+            .spawn(move || {
+                let token = match weak.upgrade() {
+                    Some(inner) => inner.session_token(),
+                    None => return,
+                };
+                println!("[CanvasEngine] agent: POST {url} {body}");
+                let result = post_prompt(&url, &body, token.as_deref());
+                let Some(inner) = weak.upgrade() else { return };
+                if inner.signal.is_shut_down() {
+                    return;
+                }
+                inner.finish_prompt(generation, token.as_deref(), result);
+            });
+        if let Err(e) = spawned {
+            eprintln!("[CanvasEngine] failed to spawn the agent thread: {e}");
+            self.set_agent_json(agent_json("error", Some(&format!("cannot start: {e}")), None, None));
+        }
+    }
+
+    /// Record a prompt's outcome. 200: apply the returned layout now (unless
+    /// an equal or newer version is already applied, e.g. by the SSE
+    /// refetch) and go `done`. Otherwise `error` with the pod's message;
+    /// a 401 for the current session signs out like a fetch 401 (D19).
+    fn finish_prompt(&self, generation: u64, token: Option<&str>, result: Result<(u16, String), String>) {
+        let current = || self.agent_gen.load(Ordering::SeqCst) == generation;
+        let (code, body) = match result {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[CanvasEngine] agent: request failed: {e}");
+                if current() {
+                    self.set_agent_json(agent_json("error", Some(AGENT_OFFLINE), None, None));
+                }
+                return;
+            }
+        };
+        if !(200..300).contains(&code) {
+            let message = agent_error_message(code, &body);
+            let provider = serde_json::from_str::<Value>(&body)
+                .ok()
+                .and_then(|v| json_str(&v, "provider"));
+            eprintln!("[CanvasEngine] agent: HTTP {code}: {message}");
+            if current() {
+                let message = if code == 401 && token.is_none() {
+                    format!("sign in to change the layout ({message})")
+                } else {
+                    message
+                };
+                self.set_agent_json(agent_json("error", Some(&message), provider.as_deref(), None));
+            }
+            if code == 401
+                && let Some(snap) = token.and_then(|t| self.expire_session(t, "agent prompt"))
+            {
+                self.notify(snap);
+                self.refresh();
+            }
+            return;
+        }
+        let parsed = serde_json::from_str::<Value>(&body)
+            .map_err(|e| e.to_string())
+            .and_then(|v| {
+                let ws = v.get("workspace").cloned().ok_or("no workspace")?;
+                let layout: UiNode = serde_json::from_value(ws).map_err(|e| e.to_string())?;
+                Ok((layout, v.get("layout_version").and_then(Value::as_u64), json_str(&v, "provider")))
+            });
+        let (layout, version, provider) = match parsed {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("[CanvasEngine] agent: unusable response ({e}): {body}");
+                if current() {
+                    self.set_agent_json(agent_json(
+                        "error",
+                        Some(&format!("unusable response from the pod: {e}")),
+                        None,
+                        None,
+                    ));
+                }
+                return;
+            }
+        };
+        let snap = {
+            let mut st = lock(&self.state);
+            let applied = st.layout_version;
+            if version.is_some() && applied.is_some() && version <= applied {
+                println!(
+                    "[CanvasEngine] agent: layout v{} already applied (have v{})",
+                    version.unwrap_or_default(),
+                    applied.unwrap_or_default()
+                );
+            } else {
+                st.apply_layout(&self.workspace_id, layout);
+                st.layout_version = version;
+                println!(
+                    "[CanvasEngine] agent: applied layout v{} ({})",
+                    version.map_or("?".into(), |v| v.to_string()),
+                    provider.as_deref().unwrap_or("?")
+                );
+            }
+            if current() {
+                let message = format!(
+                    "Layout updated (v{}, {})",
+                    version.map_or("?".into(), |v| v.to_string()),
+                    provider.as_deref().unwrap_or("unknown provider")
+                );
+                st.agent_json = agent_json("done", Some(&message), provider.as_deref(), version);
+            }
             st.seq += 1;
             st.snapshot()
         };
@@ -1953,8 +2174,9 @@ enum FetchError {
     Other(String),
 }
 
-/// `GET url`, with `Authorization: Bearer <token>` when signed in.
-fn fetch(url: &str, token: Option<&str>) -> Result<WorkspaceSpec, FetchError> {
+/// `GET url`, with `Authorization: Bearer <token>` when signed in. Returns
+/// the bundle and its [`LAYOUT_VERSION_HEADER`], if present and numeric.
+fn fetch(url: &str, token: Option<&str>) -> Result<(WorkspaceSpec, Option<u64>), FetchError> {
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(5))
@@ -1971,8 +2193,80 @@ fn fetch(url: &str, token: Option<&str>) -> Result<WorkspaceSpec, FetchError> {
     if !status.is_success() {
         return Err(FetchError::Status(status.as_u16()));
     }
+    let version = resp
+        .headers()
+        .get(LAYOUT_VERSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
     let raw = resp.text().map_err(|e| FetchError::Other(e.to_string()))?;
-    serde_json::from_str(&raw).map_err(|e| FetchError::Other(format!("bad bundle: {e}")))
+    let spec =
+        serde_json::from_str(&raw).map_err(|e| FetchError::Other(format!("bad bundle: {e}")))?;
+    Ok((spec, version))
+}
+
+/// `POST url` with a JSON body (bearer when signed in): `(status, body)`,
+/// or the transport error.
+fn post_prompt(url: &str, body: &Value, token: Option<&str>) -> Result<(u16, String), String> {
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(AGENT_HTTP_TIMEOUT)
+        .build()
+        .map_err(|e| format!("client build: {e}"))?;
+    let mut req = client.post(url).json(body);
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let resp = req.send().map_err(|e| e.to_string())?;
+    let code = resp.status().as_u16();
+    Ok((code, resp.text().map_err(|e| e.to_string())?))
+}
+
+/// What a failed agent call shows: the pod's `error` code with its
+/// `detail` (or its `supported` example prompts), else the status and the
+/// start of the body.
+fn agent_error_message(code: u16, body: &str) -> String {
+    let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+    let error = v.get("error").and_then(Value::as_str).filter(|s| !s.is_empty());
+    let detail = match v.get("detail") {
+        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+        Some(Value::Null) | None | Some(Value::String(_)) => None,
+        Some(other) => Some(other.to_string()),
+    };
+    let supported: Vec<&str> = v
+        .get("supported")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    match (error, detail) {
+        (Some(e), Some(d)) => format!("{e}: {d}"),
+        (None, Some(d)) => d,
+        (Some(e), None) if !supported.is_empty() => {
+            format!("{e}; try: {}", supported.join("; "))
+        }
+        (Some(e), None) => e.to_owned(),
+        (None, None) => {
+            let text: String = body.trim().chars().take(200).collect();
+            if text.is_empty() {
+                format!("HTTP {code}")
+            } else {
+                format!("HTTP {code}: {text}")
+            }
+        }
+    }
+}
+
+fn agent_json(state: &str, message: Option<&str>, provider: Option<&str>, version: Option<u64>) -> String {
+    let mut v = json!({ "state": state });
+    if let Some(m) = message {
+        v["message"] = json!(m);
+    }
+    if let Some(p) = provider {
+        v["provider"] = json!(p);
+    }
+    if let Some(n) = version {
+        v["layout_version"] = json!(n);
+    }
+    v.to_string()
 }
 
 fn auth_client() -> Result<reqwest::blocking::Client, String> {

@@ -12,7 +12,8 @@ app (see [Android](#android)). A headless simulation mode renders the shared UI 
 ```
 crates/protocol      UiNode / ActionIntent / WorkspaceSpec (hydration bundle) / EntityRecord
 crates/server        Axum server: GET /v1/workspaces/{home,pixelfed_demo,pixelfed_home}, persistent counters
-                     (SQLite), Pixelfed adapter (auth, feed normalization, actions, media proxy)
+                     (SQLite), Pixelfed adapter (auth, feed normalization, actions, media proxy),
+                     versioned layouts + SSE push channel
 crates/client-core   CanvasEngine: fetches the workspace, holds state, applies optimistic mutations (SQLite cache + outbox),
                      OAuth2 PKCE sign-in (pod session in a secure store)
 crates/client-ffi    UniFFI bridge (EngineHandle, FfiStateSnapshot, StateObserver) + uniffi-bindgen bin
@@ -57,6 +58,31 @@ Server details:
 - Test hook, only when started with `CANVAS_TEST_HOOKS=1` (otherwise 404): `POST /v1/test/fault` with
   `{"status":503,"count":3}` makes the next 3 POSTs (other than `/v1/test/*`) return that status (400-599)
   without being applied; `"count":0` clears it. Each injected fault is logged.
+
+Versioned layouts and push channel (M7, DECISIONS D22). The layouts of `home`, `pixelfed_demo` and the signed-in
+`pixelfed_home` feed are versioned (append-only; version 1 is the built-in layout, stored on first use; entities
+are not versioned). The signed-out `pixelfed_home` screen is not versioned.
+
+- `GET /v1/workspaces/{id}` serves the latest layout version and sets `X-Canvas-Layout-Version: N` (absent on the
+  signed-out `pixelfed_home` screen and on its 401).
+- `GET /v1/workspaces/{id}/versions` -> `[{version, created_at, prompt, provider}]`, newest first.
+- `POST /v1/workspaces/{id}/rollback {"version": N}` -> appends a copy of version N as a new version, pushes it,
+  and returns `{version, rolled_back_to, workspace}`. Unknown version: 404 `version_not_found`; unversioned
+  workspace: 404 `workspace_not_found`; bad body: 400.
+- Versions and rollback (and the agent endpoint) need a valid pod session (`Authorization: Bearer <session>`,
+  else 401) unless the server runs with `CANVAS_AGENT_OPEN=1` (dev/demo only; logged as a warning at startup).
+- `GET /v1/workspaces/{id}/events` (SSE): first message is the current version, then one message per new version
+  of that workspace, `event: layout` / `data: {"version":N,"workspace_id":"home"}`, and a `: keepalive` comment
+  every 15 s. No session needed (events carry only a version number; clients refetch the workspace, which is
+  authorized as usual); for `pixelfed_home` a bearer that is not a valid session gets 401 like the workspace GET.
+
+```bash
+CANVAS_AGENT_OPEN=1 cargo run -p server
+curl -sN http://127.0.0.1:8080/v1/workspaces/home/events &                  # event: layout, version 1
+curl -s -X POST -H 'content-type: application/json' -d '{"version":1}' \
+  http://127.0.0.1:8080/v1/workspaces/home/rollback | jq .version         # 2 (and the stream gets version 2)
+curl -s http://127.0.0.1:8080/v1/workspaces/home/versions | jq .
+```
 
 ```bash
 CANVAS_TEST_HOOKS=1 cargo run -p server
@@ -250,6 +276,23 @@ Per platform (DECISIONS D21):
 - **Simulator** (live mode): in-memory store and an auto-approving "browser" for the fake, or a scripted Pixelfed
   web login for a real instance with `-PpixelfedLogin=<user>:<password>` (see Simulation mode).
 
+### Layout agent and live layout updates (client)
+
+client-core side of M7 (docs/DECISIONS.md D24):
+
+- `{"intent":"action.agent.prompt","prompt_text":".."}` posts the prompt to `POST /v1/agent/modify_layout` (with
+  the engine's workspace id and the bearer when signed in) on a background thread. `agent_json` in every snapshot:
+  `{"state":"idle"}` -> `running` -> `done` (`message` "Layout updated (vN, rules)", `provider`, `layout_version`;
+  the returned layout is shown at once, entities and queued actions untouched) or `error` with the pod's
+  `error`/`detail` (e.g. `invalid_patch: ...`) or "offline: try again when online".
+- The engine remembers the served layout version (`X-Canvas-Layout-Version`) and, while online, keeps
+  `GET /v1/workspaces/<id>/events` open on a `canvas-engine-events` thread. A `layout` event with a newer version
+  refetches the workspace (queued optimistic changes are re-applied on top); equal or older versions are ignored.
+  The stream reconnects after errors with a 1 s -> 30 s backoff (and after 45 s of silence), and closes when the
+  engine is dropped. Log lines: `[CanvasEngine] events: connected to ...`, `events: layout v3 pushed (have v2);
+  refetching`, `agent: applied layout v3 (rules)`.
+- FFI: `FfiStateSnapshot.agentJson` -> `EngineSnapshot.agentJson`.
+
 ## Local Pixelfed instance (real, dev only)
 
 A real Pixelfed (v0.15.2, `ghcr.io/pixelfed/pixelfed`, digest-pinned) + MariaDB 11.4 + Redis 7.4 in Docker, for
@@ -360,6 +403,9 @@ virtual screen (no window), runs a small script against it and writes PNG screen
 ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -Pscreen=desktop
 ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_home \
   -Pscript="wait-images; shot feed; swipe-left tag:carousel:; assert-text Page 2 of 3; shot page2; click Like; assert-text 28; shot liked"
+# layout agent (fixture mode: the fake engine's rules subset; live mode: the pod's agent endpoint)
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_home \
+  -Pscript="click tag:agent-fab; type tag:agent-prompt Hide post captions and put media at the very top; click tag:agent-send; wait-text 2000 Layout updated; shot after"
 ./gradlew -PskipRustBuild :desktopApp:simulate -PscriptFile=my_script.txt -Pdensity=1 -Pout=/tmp/shots
 ./gradlew -PskipRustBuild :desktopApp:simulate -PbaseUrl=http://127.0.0.1:8080 -Pscript="shot live"   # live mode
 # live sign-in against the pod + fake upstream (see "Sign in (client)")
@@ -393,7 +439,11 @@ it, the desktop compile triggers `:shared:buildRustFfi`, i.e. cargo). A fake in-
 toggles connectivity for `offline`/`online`. It models the outbox: clicks made while offline are applied
 locally and queued (the status line shows "N pending"), and `online` flushes them FIFO to an in-memory fake
 server. That server rejects a `.../decrement` that would take the count below 0; the fake then rolls the
-field back and re-applies later queued rows (D8). **Live mode** runs the real Rust engine through JNA against
+field back and re-applies later queued rows (D8). The fake also answers the layout agent (`PromptAgent`) with a small
+built-in rules subset (D23): "hide (post) captions", "media at the (very) top" / "photos first" and "add a weather
+widget", composable in one prompt; each success bumps the layout version and the panel shows
+"Layout updated (vN, fake-rules)"; anything else shows "unsupported prompt (try: ...)", and so does nothing while
+offline (error "offline: ..."). **Live mode** runs the real Rust engine through JNA against
 the server. By default it uses a fresh temp storage dir, so it neither reads nor writes `~/.canvas`; pass
 `-Pstorage=<dir>` to keep a persistent one. If the workspace
 does not load within `timeoutMs`, it logs a warning and still runs the script (shots show Loading/Offline).
@@ -436,6 +486,7 @@ entries starting with `#` are comments. An argument cannot contain `;`, and sinc
 | `wait-images [ms]` | Waits until no image is loading (default 10000 ms, at most 600000). Works in both modes. |
 | `swipe-left <target>` / `swipe-right <target>` | Touch-swipes the selected node; `swipe-left` on a carousel shows the next page. |
 | `scroll-to <target>` | Scrolls the feed until the selected node is visible (e.g. `scroll-to Kept my distance`). |
+| `type <target> <text>` | Replaces the text of the selected text field with `<text>` (clear, then type), e.g. `type tag:agent-prompt Hide post captions`. The target is `tag:<testTag>`, a single word, or `"quoted text"` (may contain spaces); the text is the rest of the command. |
 | `offline` / `online` | Fixture mode only: flips the engine's connectivity. |
 | `screen <WxH or preset>` | Restarts the renderer at the new size. Engine state carries over; UI state such as scroll position does not. |
 
@@ -445,6 +496,10 @@ first match wins. Pixelfed widgets carry content descriptions `Like`/`Unlike`, `
 `Comment`, the image alt text, and `Page n of N` on the carousel dots (plus an `n/N` badge text), and test tags
 `carousel:<post uri>`, `carousel-dots:<post uri>`, `like:<post uri>`, `bookmark:<post uri>`, `comment:<post uri>`,
 e.g. `click tag:like:pixelfed://posts/781254316723458049` or `swipe-left tag:carousel:` (the first carousel).
+The layout agent's controls (drawn over every workspace once it has loaded): the FAB `agent-fab` (content
+description `Edit layout with AI`), and in its panel the field `agent-prompt`, the chips `Hide captions`,
+`Media at the very top`, `Add a weather widget` (they fill the field), `agent-send` ("Send"), `agent-status`
+("Applying...", "Layout updated (v3, rules)" or the error) and `agent-close` ("Close").
 
 The output directory holds the PNGs, `steps.log` (human-readable) and `steps.json` (one entry per step:
 `index`, `command`, `arg`, `status` (`ok`/`fail`), `message`, `file`, `elapsed_ms`). Its absolute path is

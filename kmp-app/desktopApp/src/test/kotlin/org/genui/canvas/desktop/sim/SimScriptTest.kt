@@ -135,4 +135,20 @@ class SimScriptTest {
         assertFailsWith<ScriptParseException> { parseScript("scroll-to") }
         assertFailsWith<ScriptParseException> { parseScript("swipe-up x") }
     }
+
+    @Test
+    fun typeTakesATargetThenText() {
+        val steps = parseScript("type tag:agent-prompt Hide post captions; type \"Describe a change\" media first ")
+        val a = assertIs<SimStep.Type>(steps[0])
+        assertEquals("tag:agent-prompt", a.target)
+        assertEquals("Hide post captions", a.text)
+        assertEquals("type", a.command)
+        val b = assertIs<SimStep.Type>(steps[1])
+        assertEquals("Describe a change", b.target)
+        assertEquals("media first", b.text)
+        assertFailsWith<ScriptParseException> { parseScript("type") }
+        assertFailsWith<ScriptParseException> { parseScript("type tag:agent-prompt") }
+        assertFailsWith<ScriptParseException> { parseScript("type \"unterminated text") }
+        assertFailsWith<ScriptParseException> { parseScript("type \"\" text") }
+    }
 }

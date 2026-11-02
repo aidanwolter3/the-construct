@@ -14,6 +14,8 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextClearance
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
@@ -187,6 +189,14 @@ class SimRunner(
                 waitForIdle()
                 val (node, how) = findTarget(step.target)
                 node.performScrollTo()
+                waitForIdle()
+                return how to null
+            }
+            is SimStep.Type -> {
+                waitForIdle()
+                val (node, how) = findTarget(step.target)
+                node.performTextClearance()
+                node.performTextInput(step.text)
                 waitForIdle()
                 return how to null
             }

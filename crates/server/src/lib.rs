@@ -1,11 +1,13 @@
 //! Project Canvas backend: serves fixture hydration bundles, persists
 //! counter mutations in SQLite (M5, see [`store`]) and adapts a Pixelfed
 //! instance (M6, see [`pixelfed`]; the pod owns the upstream token).
+//! Workspace layouts are versioned and pushed over SSE (M7, see [`layouts`]).
 //!
 //! Fixtures are embedded at compile time and parsed into
 //! [`protocol::WorkspaceSpec`] once, so an invalid fixture fails loudly
 //! (panics on first access, which the integration tests exercise).
 
+pub mod layouts;
 pub mod pixelfed;
 pub mod store;
 
@@ -193,6 +195,14 @@ pub struct AppState {
     /// Serializes upstream token refreshes (Passport rotates the refresh
     /// token, so two concurrent refreshes would revoke each other).
     pixelfed_refresh: tokio::sync::Mutex<()>,
+    /// `CANVAS_AGENT_OPEN=1`: versions/rollback/agent need no session (dev only).
+    agent_open: bool,
+    /// New layout versions, fanned out to SSE subscribers.
+    layout_tx: tokio::sync::broadcast::Sender<layouts::LayoutEvent>,
+    /// SSE keepalive interval (15 s; shorter in tests).
+    sse_keepalive: std::time::Duration,
+    /// Set by [`AppState::shutdown`]: open SSE streams end.
+    shutdown: tokio::sync::watch::Sender<bool>,
 }
 
 impl AppState {
@@ -207,7 +217,54 @@ impl AppState {
             media_allow,
             pixelfed,
             pixelfed_refresh: tokio::sync::Mutex::new(()),
+            agent_open: false,
+            layout_tx: tokio::sync::broadcast::channel(layouts::CHANNEL_CAPACITY).0,
+            sse_keepalive: layouts::DEFAULT_KEEPALIVE,
+            shutdown: tokio::sync::watch::channel(false).0,
         }
+    }
+
+    /// `CANVAS_AGENT_OPEN=1`: layout history / rollback / agent endpoints
+    /// accept requests without a pod session (dev and demo only).
+    pub fn with_agent_open(mut self, open: bool) -> Self {
+        self.agent_open = open;
+        self
+    }
+
+    pub fn agent_open(&self) -> bool {
+        self.agent_open
+    }
+
+    /// Override the SSE keepalive interval (tests).
+    pub fn with_sse_keepalive(mut self, interval: std::time::Duration) -> Self {
+        self.sse_keepalive = interval;
+        self
+    }
+
+    pub fn sse_keepalive(&self) -> std::time::Duration {
+        self.sse_keepalive
+    }
+
+    /// Broadcast a new layout version to SSE subscribers (no-op without any).
+    pub fn publish_layout(&self, workspace_id: &str, version: i64) {
+        let _ = self.layout_tx.send(layouts::LayoutEvent {
+            workspace_id: workspace_id.to_owned(),
+            version,
+        });
+    }
+
+    /// End all open SSE streams (call before graceful shutdown, which
+    /// otherwise waits for those never-ending responses).
+    pub fn shutdown(&self) {
+        self.shutdown.send_replace(true);
+    }
+
+    pub(crate) fn shutdown_signal(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.shutdown.subscribe()
+    }
+
+    pub fn subscribe_layouts(&self) -> tokio::sync::broadcast::Receiver<layouts::LayoutEvent> {
+        self.layout_tx.subscribe()
     }
 
     /// Point the Pixelfed adapter at another instance.
@@ -263,7 +320,8 @@ pub fn app(state: Arc<AppState>) -> Router {
         .route("/v1/workspaces/{id}", get(get_workspace))
         .route("/v1/counters/{id}/{op}", post(counter_mutation))
         .route("/v1/demo/ack", post(demo_ack))
-        .merge(pixelfed::routes::router());
+        .merge(pixelfed::routes::router())
+        .merge(layouts::router());
     if state.test_hooks {
         router = router.route("/v1/test/fault", post(set_fault));
     }
@@ -316,19 +374,24 @@ async fn get_workspace(
             json!({ "error": "workspace_not_found", "id": id }),
         );
     };
-    if id != "home" {
-        return Json(spec).into_response();
-    }
-    let count = match blocking(&state, |s| s.counter("home")).await {
-        Ok(n) => n,
+    let (version, layout) = match layouts::latest_async(&state, &id).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return Json(spec).into_response(),
         Err(e) => return e.into_response(),
     };
     let mut spec = spec.clone();
-    spec.entities
-        .entry(HOME_COUNTER_URI.to_owned())
-        .or_default()
-        .set("count", count);
-    Json(spec).into_response()
+    spec.workspace = layout;
+    if id == "home" {
+        let count = match blocking(&state, |s| s.counter("home")).await {
+            Ok(n) => n,
+            Err(e) => return e.into_response(),
+        };
+        spec.entities
+            .entry(HOME_COUNTER_URI.to_owned())
+            .or_default()
+            .set("count", count);
+    }
+    ([layouts::version_header(version)], Json(spec)).into_response()
 }
 
 /// A JSON error response, kept small so it can travel in `Result::Err`.

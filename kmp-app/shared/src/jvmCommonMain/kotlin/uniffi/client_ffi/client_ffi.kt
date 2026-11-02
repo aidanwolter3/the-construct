@@ -1797,7 +1797,9 @@ public object FfiConverterTypeEngineHandle: FfiConverter<EngineHandle, Pointer> 
  * the last applied one); `pending_actions` counts unsent outbox rows.
  * `queries_json` is the bundle's `{query_key: [entity uri, ...]}` (`"{}"`
  * when none); `auth_json` is `{"state":"signed_out"|"pending"|"signed_in"|
- * "error","username"?,"error"?}`.
+ * "error","username"?,"error"?}`; `agent_json` is the last layout prompt's
+ * `{"state":"idle"|"running"|"done"|"error","message"?,"provider"?,
+ * "layout_version"?}`.
  */
 data class FfiStateSnapshot (
     var `workspaceJson`: kotlin.String, 
@@ -1806,7 +1808,8 @@ data class FfiStateSnapshot (
     var `seq`: kotlin.ULong, 
     var `pendingActions`: kotlin.UInt, 
     var `queriesJson`: kotlin.String, 
-    var `authJson`: kotlin.String
+    var `authJson`: kotlin.String, 
+    var `agentJson`: kotlin.String
 ) {
     
     companion object
@@ -1825,6 +1828,7 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterUInt.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
@@ -1835,7 +1839,8 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterULong.allocationSize(value.`seq`) +
             FfiConverterUInt.allocationSize(value.`pendingActions`) +
             FfiConverterString.allocationSize(value.`queriesJson`) +
-            FfiConverterString.allocationSize(value.`authJson`)
+            FfiConverterString.allocationSize(value.`authJson`) +
+            FfiConverterString.allocationSize(value.`agentJson`)
     )
 
     override fun write(value: FfiStateSnapshot, buf: ByteBuffer) {
@@ -1846,6 +1851,7 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterUInt.write(value.`pendingActions`, buf)
             FfiConverterString.write(value.`queriesJson`, buf)
             FfiConverterString.write(value.`authJson`, buf)
+            FfiConverterString.write(value.`agentJson`, buf)
     }
 }
 

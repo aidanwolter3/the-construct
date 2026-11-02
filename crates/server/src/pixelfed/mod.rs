@@ -270,10 +270,9 @@ impl MediaAllowlist {
                 })
             };
             match parsed {
-                Ok((u, port)) if u.host_str().is_some() => origins.push((
-                    u.host_str().unwrap_or_default().to_ascii_lowercase(),
-                    port,
-                )),
+                Ok((u, port)) if u.host_str().is_some() => {
+                    origins.push((u.host_str().unwrap_or_default().to_ascii_lowercase(), port))
+                }
                 _ => tracing::warn!(host, "ignoring unparseable PIXELFED_MEDIA_HOSTS entry"),
             }
         }
@@ -1144,7 +1143,10 @@ mod tests {
             "1 < 2 & <3 &bogus; &"
         );
         assert_eq!(html_to_text(""), "");
-        assert_eq!(decode_entities("&#x1F600; &#128512;"), "\u{1F600} \u{1F600}");
+        assert_eq!(
+            decode_entities("&#x1F600; &#128512;"),
+            "\u{1F600} \u{1F600}"
+        );
         // Many `&` and a `;` only at the very end: linear, and nothing decoded.
         let amps = format!("{};", "&".repeat(200_000));
         let t = std::time::Instant::now();

@@ -149,6 +149,14 @@ class ModelTest {
     }
 
     @Test
+    fun promptAgentWireFormat() {
+        assertEquals(
+            """{"intent":"action.agent.prompt","prompt_text":"Hide captions"}""",
+            CanvasJson.encodeIntent(ActionIntent.PromptAgent("Hide captions")),
+        )
+    }
+
+    @Test
     fun decodesEntitiesMap() {
         val e = CanvasJson.decodeEntities("""{"core://counters/home":{"id":"home","count":3}}""")
         assertEquals(JsonPrimitive(3), e.getValue("core://counters/home")["count"])

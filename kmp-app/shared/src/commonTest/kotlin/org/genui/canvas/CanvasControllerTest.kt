@@ -164,6 +164,54 @@ class CanvasControllerTest {
         assertEquals(0, controller.state.value.pendingActions)
     }
 
+    @Test
+    fun agentStatusFollowsSnapshotsAndPromptDispatchesTheAgentIntent() {
+        val bridge = FakeBridge()
+        val controller = CanvasController(bridge)
+        val (ws, ents) = snapshotOf(COUNTER_BUNDLE_JSON)
+        bridge.emit(ws, ents, true)
+        assertEquals(AgentInfo(), controller.state.value.agent) // default agentJson is idle
+        bridge.listener!!(
+            EngineSnapshot(ws, ents, true, 50, 0, agentJson = """{"state":"done","provider":"rules","layout_version":3}"""),
+        )
+        assertEquals(AgentInfo("done", null, "rules", 3), controller.state.value.agent)
+        // A decode failure still carries the agent status.
+        bridge.listener!!(EngineSnapshot("{not json", ents, true, 51, 0, agentJson = """{"state":"running"}"""))
+        assertNotNull(controller.state.value.error)
+        assertEquals("running", controller.state.value.agent.state)
+
+        controller.dispatch(ActionIntent.PromptAgent("Hide captions"))
+        assertEquals("""{"intent":"action.agent.prompt","prompt_text":"Hide captions"}""", bridge.dispatched.last())
+    }
+
+    @Test
+    fun agentInfoParsingAndStatusText() {
+        assertEquals(AgentInfo(), AgentInfo.parse("{not json"))
+        assertEquals(AgentInfo(), AgentInfo.parse("""{"state":null}"""))
+        assertEquals(
+            AgentInfo("error", "unsupported prompt", null, null),
+            AgentInfo.parse("""{"state":"error","message":"unsupported prompt","layout_version":"x"}"""),
+        )
+        assertNull(agentStatusText(AgentInfo()))
+        assertEquals("Applying...", agentStatusText(AgentInfo("running")))
+        assertEquals("Layout updated (v3, rules)", agentStatusText(AgentInfo("done", provider = "rules", layoutVersion = 3)))
+        assertEquals("Layout updated", agentStatusText(AgentInfo("done")))
+        assertEquals("unsupported prompt", agentStatusText(AgentInfo("error", "unsupported prompt")))
+        assertEquals("The layout agent failed", agentStatusText(AgentInfo("error")))
+    }
+
+    @Test
+    fun postCardSlotKeysAreUniquePerKind() {
+        val text = UiNode.Text("x", TextStyle.Body)
+        val header = UiNode.AuthorHeader("\$item.author_uri")
+        assertEquals(
+            listOf("AuthorHeader#0", "Text#0", "Text#1"),
+            postCardSlotKeys(listOf(header, text, text)).map { it.first },
+        )
+        // The same node keeps its key when it moves to another slot.
+        assertEquals("AuthorHeader#0", postCardSlotKeys(listOf(text, header)).last().first)
+    }
+
     private companion object {
         const val COUNT_1 = """{"core://counters/home":{"count":1}}"""
         const val COUNT_3 = """{"core://counters/home":{"count":3}}"""

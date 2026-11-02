@@ -526,3 +526,86 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   e-mail; a bare login gets `@example.test`, the seed domain) and the Passport consent form (the form without
   `_method=DELETE`) with its own cookie jar and no auto-redirects, then follows the final redirect to the loopback
   listener on a daemon thread. Credentials are a dev convenience for the local seeded instance only.
+
+## D22: Versioned layouts and the SSE push channel (`server::layouts`)
+
+- **Storage:** migration v5 `layout_versions(id, workspace_id, version, json, prompt, provider, patch_json,
+  created_at, UNIQUE(workspace_id, version))`. Only the workspace root `UiNode` is versioned; entities still come
+  from fixtures / the upstream. Versioned workspaces: `home`, `pixelfed_demo`, `pixelfed_home` (signed-in feed
+  layout only; the signed-out screen is a different screen and carries no version header). Version 1 is the
+  built-in layout, inserted lazily (`INSERT ... WHERE NOT EXISTS`) on first read or commit. Appends compute
+  `MAX(version) + 1` inside the INSERT, under the store mutex, so versions are gapless and never reused.
+- **Append-only:** a rollback copies version N into a new version (provider `rollback`, prompt `rollback to vN`);
+  nothing is ever updated or deleted. Old fixture changes don't reach an existing database's v1 (by design: the
+  stored history is what clients saw); delete `server.db` to reseed.
+- **Internal API (for the agent endpoint):** `layouts::latest(store, ws) -> Option<(version, UiNode)>`,
+  `layouts::commit(store, ws, &UiNode, prompt, provider, patch) -> version` (no validation, no broadcast),
+  `layouts::commit_and_publish(&state, ...)` (async; commit + broadcast), `layouts::require_agent_auth`.
+- **Auth:** versions/rollback/agent require a valid pod session unless `CANVAS_AGENT_OPEN=1` (dev/demo, so QA can
+  curl without signing in). The SSE endpoint follows the workspace GET: anonymous subscriptions are allowed because
+  an event carries only `{workspace_id, version}` (no layout, no entities); a client must still fetch the workspace
+  with its own credentials. A stale bearer on `pixelfed_home` gets 401 so the client notices.
+- **Push:** a `tokio::sync::broadcast` channel (capacity 64) in `AppState`; each SSE stream subscribes before
+  reading the current version (no missed commit; a duplicate version is harmless), filters by workspace, and on
+  `Lagged` re-sends the current version instead of the skipped ones. Keepalive is axum's `KeepAlive` comment
+  (`: keepalive`, 15 s, configurable via `AppState::with_sse_keepalive` for tests). `AppState::shutdown()` ends
+  open streams; `main` calls it on Ctrl-C so graceful shutdown is not held open by subscribers.
+
+## D23: In-app layout agent UI (shared Compose) and the simulator's fake rules
+
+- **Panel, not ModalBottomSheet:** a FAB (`agent-fab`, "Edit layout with AI") bottom-end opens an in-tree animated
+  bottom panel (`agent-panel`: `agent-prompt` field, suggestion chips, `agent-send`, `agent-status`, `agent-close`).
+  An in-tree panel renders in the headless harness's `onRoot().captureToImage()` and leaves the feed visible and
+  interactive above it, so the layout change is seen as it happens. Insets come from the platform root (Android pads by
+  `safeDrawing`, which includes the IME).
+- **State outside the server-driven tree:** `AgentPromptOverlay` is drawn by `CanvasApp` over the workspace;
+  `rememberSaveable` open flag and prompt text. The text is cleared only when the agent status, after this panel's
+  send, changes to `done`; an error keeps it for editing. Send is disabled while blank or `running`.
+- **Status:** `EngineSnapshot.agentJson` (default `{"state":"idle"}`) -> `CanvasState.agent` (`AgentInfo`):
+  "Applying...", "Layout updated (v3, rules)", or the error message.
+- **Recomposition stability:** workspace slots are keyed by `slot_id` and the PostCard's author/media/action slots by
+  node kind (`postCardSlotKeys`), on top of FeedList items keyed by URI. So a carousel keeps its page when captions are
+  hidden, when the carousel moves to the top slot, and when a slot is inserted above the feed (tested).
+- **Fixture mode:** `FakeEngineBridge` answers `PromptAgent` with `FakeLayoutRules` (hide captions, media at the top /
+  photos first, add a weather widget; composable, tree-walking, same shapes as the server's rules provider), bumps
+  its layout version and reports provider `fake-rules`; unknown prompts -> error "unsupported prompt (try: ...)",
+  offline -> error. Live mode sends the intent to the real engine.
+- **Simulator `type <target> <text>`:** clears the field then `performTextInput`; target `tag:<t>`, one word, or
+  `"quoted text"`.
+
+## D24: Client agent prompt, layout version and push subscriber (client-core)
+
+- **PromptAgent:** dispatch trims the prompt (blank -> `agent_json` error, no request), goes `running` and POSTs
+  `{"prompt","workspace_id": <engine's workspace>}` to `/v1/agent/modify_layout` on a `canvas-engine-agent` thread
+  (bearer when signed in, 180 s timeout: the pod's LLM call may take 120 s plus retries). A per-prompt generation
+  counter lets only the latest prompt report status; an older one's layout is still applied if newer.
+- **200:** the response's `workspace` is applied at once (no refetch): layout only, `State::apply_layout` keeps
+  entities, queries and the outbox and rewrites the cached `active_workspace` row with its existing entity URIs and
+  queries (the response carries `entities: {}`, so the fetch merge must not be used). Skipped if an equal or newer
+  version is already applied (the SSE refetch may win the race): both paths are idempotent. `agent_json` =
+  `{"state":"done","message":"Layout updated (vN, <provider>)","provider","layout_version"}`.
+- **Errors:** non-2xx -> `error` with `"<error>: <detail>"`, `"<error>; try: <supported...>"` (unsupported_prompt),
+  or `HTTP <code>: <body start>`, plus `provider` when the pod names one; transport failure -> `"offline: try again
+  when online"`. A 401 for the current session signs out like a fetch 401 (D19) and refetches; signed out, the
+  message asks to sign in.
+- **Layout version:** from `X-Canvas-Layout-Version` on every applied fetch (absent -> `None`, e.g. the signed-out
+  `pixelfed_home` screen), or the prompt response's `layout_version`. In memory only (a restart refetches anyway). A
+  fetch whose header is older than the applied version (it started before a prompt response was applied) keeps the
+  newer layout and takes only the entities.
+- **Push subscriber (`client_core::events`):** a `canvas-engine-events` thread, connected only while `is_online`,
+  `GET /v1/workspaces/<id>/events` with `Accept: text/event-stream` and the bearer when signed in. Async reqwest on a
+  private current-thread Tokio runtime (`tokio` with `rt,time,net`), read in 200 ms slices (`chunk()` is
+  cancel-safe), so a dropped engine closes the connection within a slice and a session change reconnects with the
+  new bearer. Blocking reqwest could not do this: its client timeout is both the per-read and the header timeout.
+  The thread holds only a `Weak` while reading; the refetch (blocking `refresh`, under the `net` lock as usual) runs
+  outside the runtime. No bytes for 45 s (3 missed 15 s keepalives) -> reconnect. Reconnect backoff 1 s doubling to
+  30 s, reset by the first bytes received; repeated identical errors are logged once. Stream 401 with a session ->
+  same sign-out as a fetch 401.
+- **Parser:** WHATWG event-stream rules: LF/CRLF/CR line ends (also split across chunks), `:` comments ignored,
+  one leading space stripped, multi-line `data` joined with `\n`, blank line dispatches only if data was seen,
+  unknown fields ignored. `event: layout` with `{"workspace_id","version"}` for this workspace and a version newer
+  than the applied one (or none known) -> refetch; equal/older ignored, so the server's on-connect "current
+  version" message costs nothing unless the client missed a change. The refetch merge (D14) re-applies PENDING
+  outbox rows, so optimistic values survive a pushed layout change.
+- **Snapshot/FFI:** `StateSnapshot.agent_json` / `FfiStateSnapshot.agent_json` (default `{"state":"idle"}`), mapped
+  to `EngineSnapshot.agentJson` in `UniffiEngineBridge`.

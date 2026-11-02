@@ -5,7 +5,8 @@ package org.genui.canvas
  * [CanvasJson.decodeNode]; `"null"` before the first load), [entitiesJson] the URI-keyed entities map
  * ([CanvasJson.decodeEntities]). [seq] strictly increases per engine; consumers drop snapshots whose
  * seq is not above the last applied one. [pendingActions] counts outbox rows not yet sent.
- * [queriesJson] and [authJson] are M6 additions with defaults so older call sites keep compiling.
+ * [queriesJson] and [authJson] are M6 additions, [agentJson] an M7 one, with defaults so older call sites keep
+ * compiling.
  */
 data class EngineSnapshot(
     val workspaceJson: String,
@@ -17,6 +18,11 @@ data class EngineSnapshot(
     val queriesJson: String = "{}",
     /** Auth status: `{"state":"signed_out"|"pending"|"signed_in"|"error","username"?,"error"?}`. */
     val authJson: String = "{\"state\":\"signed_out\"}",
+    /**
+     * Layout agent status (M7): `{"state":"idle"|"running"|"done"|"error","message"?,"provider"?,"layout_version"?}`;
+     * parse with [AgentInfo.parse].
+     */
+    val agentJson: String = "{\"state\":\"idle\"}",
 )
 
 /**

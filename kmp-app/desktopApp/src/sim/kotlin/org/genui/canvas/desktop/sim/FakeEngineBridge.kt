@@ -35,6 +35,10 @@ import org.genui.canvas.UiNode
  * their previous values (the primary field falls back to `rollback_value` if its previous value was
  * null/absent), and later queued rows for the same entity touching any of those fields are re-applied
  * on top. No 5xx/retry simulation.
+ *
+ * Layout agent (M7, DECISIONS D23): `PromptAgent` runs [FakeLayoutRules] on the current layout (no server): a
+ * recognized prompt replaces the layout, bumps [layoutVersion] and sets `agent_json` to done (provider
+ * `fake-rules`); an unrecognized one (or any prompt while offline) sets it to error and leaves the layout alone.
  */
 class FakeEngineBridge(
     bundleJson: String,
@@ -44,7 +48,12 @@ class FakeEngineBridge(
     /** [prevValues]: field -> value before this row was applied (null = absent). */
     private class Row(val intent: ActionIntent.OptimisticMutate, var prevValues: Map<String, JsonElement?>)
 
-    private val workspace: UiNode
+    private var workspace: UiNode
+    private var agentJson = "{\"state\":\"idle\"}"
+
+    /** Layout version: 1 for the bundle's layout, +1 per applied prompt. */
+    var layoutVersion = 1
+        private set
     private val queriesJson: String
     private val entities: MutableMap<String, JsonObject>
     private val server: MutableMap<String, JsonObject>
@@ -82,6 +91,10 @@ class FakeEngineBridge(
     override fun dispatch(intentJson: String) {
         println("[sim] dispatch: $intentJson")
         val intent = CanvasJson.decodeIntent(intentJson)
+        if (intent is ActionIntent.PromptAgent) {
+            promptAgent(intent.promptText)
+            return
+        }
         if (intent !is ActionIntent.OptimisticMutate) {
             println("[sim] ignoring non-mutation intent")
             return
@@ -102,6 +115,29 @@ class FakeEngineBridge(
             outbox.addLast(Row(intent, updates.keys.associateWith { entity[it] }))
             println("[sim] ${intent.entityUri} ${updates.entries.joinToString { "#${it.key} = ${it.value}" }} (queued; ${outbox.size} pending)")
             if (isOnline) flushLocked()
+            seq++
+        }
+        emit()
+    }
+
+    private fun promptAgent(prompt: String) {
+        synchronized(lock) {
+            agentJson = agentJson(state = "running")
+            seq++
+        }
+        emit()
+        synchronized(lock) {
+            val result = if (isOnline) FakeLayoutRules.apply(prompt, workspace) else null
+            agentJson = when {
+                !isOnline -> agentJson(state = "error", message = "offline: the layout agent needs a connection")
+                result == null -> agentJson(state = "error", message = FakeLayoutRules.UNSUPPORTED)
+                else -> {
+                    workspace = result
+                    layoutVersion++
+                    agentJson(state = "done", provider = FakeLayoutRules.PROVIDER, layoutVersion = layoutVersion)
+                }
+            }
+            println("[sim] agent prompt '$prompt' -> $agentJson")
             seq++
         }
         emit()
@@ -191,6 +227,7 @@ class FakeEngineBridge(
         pendingActions = outbox.size,
         queriesJson = queriesJson,
         authJson = authJson,
+        agentJson = agentJson,
     )
 
     private fun emit() {
@@ -199,6 +236,16 @@ class FakeEngineBridge(
     }
 
     companion object {
+        private fun agentJson(state: String, message: String? = null, provider: String? = null, layoutVersion: Int? = null): String =
+            JsonObject(
+                buildMap {
+                    put("state", JsonPrimitive(state))
+                    message?.let { put("message", JsonPrimitive(it)) }
+                    provider?.let { put("provider", JsonPrimitive(it)) }
+                    layoutVersion?.let { put("layout_version", JsonPrimitive(it)) }
+                },
+            ).toString()
+
         private val queriesSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
         private val FIELD = Regex("""entity\.([A-Za-z0-9_]+)""")
 

@@ -4,7 +4,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -54,8 +56,14 @@ fun RenderUiNode(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             )
             node.slots.forEach { slot ->
-                RenderUiNode(slot.content, entities, onDispatch, Modifier, item)
+                // Keyed by slot id: a layout change that inserts a slot above (e.g. the agent adding a widget at
+                // the top) keeps the state of the slots below (feed pager positions).
+                key(slot.slotId) {
+                    RenderUiNode(slot.content, entities, onDispatch, Modifier, item)
+                }
             }
+            // Room to scroll the last item out from under the agent FAB (CanvasApp).
+            Spacer(Modifier.height(88.dp))
         }
 
         is UiNode.Container -> {
@@ -124,9 +132,14 @@ fun RenderUiNode(
             val post = postUri?.let { uri -> entities[uri]?.let { JsonObject(it + ("uri" to JsonPrimitive(uri))) } }
                 ?: item
             Column(modifier.fillMaxWidth().padding(bottom = 12.dp)) {
-                RenderUiNode(node.authorSlot, entities, onDispatch, Modifier, post)
-                RenderUiNode(node.mediaSlot, entities, onDispatch, Modifier, post)
-                RenderUiNode(node.actionSlot, entities, onDispatch, Modifier, post)
+                // Fixed render order author, media, action (then caption), whatever node each slot holds. Each is
+                // keyed by its node type, so when a layout change moves a node to another slot (e.g. media to the
+                // top) its state (the carousel page) moves with it.
+                postCardSlotKeys(listOf(node.authorSlot, node.mediaSlot, node.actionSlot)).forEach { (slotKey, slot) ->
+                    key(slotKey) {
+                        RenderUiNode(slot, entities, onDispatch, Modifier, post)
+                    }
+                }
                 post?.str("content_warning")?.let {
                     ContentWarningLabel(it, Modifier.padding(start = 14.dp, end = 14.dp, bottom = 6.dp))
                 }
@@ -151,5 +164,19 @@ fun RenderUiNode(
             color = Color.Gray,
             modifier = modifier.padding(4.dp),
         )
+    }
+}
+
+/** Pairs each node with a key unique among [slots]: its node kind plus an occurrence index ("ActionBar#0"). */
+internal fun postCardSlotKeys(slots: List<UiNode>): List<Pair<String, UiNode>> {
+    val seen = mutableMapOf<String, Int>()
+    return slots.map { n ->
+        val type = when (n) {
+            is UiNode.Unknown -> "unknown:${n.type}"
+            else -> n::class.simpleName ?: "node"
+        }
+        val i = seen[type] ?: 0
+        seen[type] = i + 1
+        "$type#$i" to n
     }
 }

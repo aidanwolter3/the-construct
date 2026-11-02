@@ -5,6 +5,8 @@
 //! - `CANVAS_DATA_DIR`: directory for `server.db` (default `~/.canvas-server`,
 //!   created if missing).
 //! - `CANVAS_TEST_HOOKS=1`: enables `POST /v1/test/fault`.
+//! - `CANVAS_AGENT_OPEN=1`: layout versions / rollback / agent endpoints accept
+//!   requests without a pod session (dev and demo only).
 //! - `PIXELFED_INSTANCE_URL`: Pixelfed instance for pod->upstream calls
 //!   (default `http://127.0.0.1:8081`, the local fake; `http://localhost:8090` for the
 //!   local real Pixelfed, whose web/OAuth routes only answer on Host `localhost`).
@@ -39,10 +41,12 @@ async fn main() -> std::io::Result<()> {
 
     let dir = data_dir();
     let test_hooks = std::env::var("CANVAS_TEST_HOOKS").is_ok_and(|v| v == "1");
+    let agent_open = std::env::var("CANVAS_AGENT_OPEN").is_ok_and(|v| v == "1");
     let state = server::AppState::open_dir(&dir)
         .map_err(|e| std::io::Error::other(format!("failed to open {}: {e}", dir.display())))?
         .with_test_hooks(test_hooks)
-        .with_pixelfed(server::PixelfedConfig::from_env());
+        .with_pixelfed(server::PixelfedConfig::from_env())
+        .with_agent_open(agent_open);
     let pixelfed = state.pixelfed_config();
     tracing::info!(
         instance = %pixelfed.instance_url,
@@ -52,6 +56,11 @@ async fn main() -> std::io::Result<()> {
     tracing::info!(db = %dir.join("server.db").display(), "server database opened");
     if test_hooks {
         tracing::warn!("CANVAS_TEST_HOOKS=1: POST /v1/test/fault is enabled");
+    }
+    if agent_open {
+        tracing::warn!(
+            "CANVAS_AGENT_OPEN=1: layout versions/rollback/agent endpoints need no session (dev only)"
+        );
     }
 
     let addr = std::env::var("CANVAS_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_owned());
@@ -63,9 +72,12 @@ async fn main() -> std::io::Result<()> {
         listener.local_addr()?
     );
 
-    axum::serve(listener, server::app(Arc::new(state)))
-        .with_graceful_shutdown(async {
+    let state = Arc::new(state);
+    let app = server::app(state.clone());
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;
+            state.shutdown(); // end SSE streams so shutdown can complete
         })
         .await
 }

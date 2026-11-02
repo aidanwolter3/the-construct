@@ -56,7 +56,39 @@ const MIGRATIONS: &[&str] = &[
      );
      INSERT INTO pixelfed_owner (instance, account_id, created_at)
          SELECT instance, account_id, created_at FROM pixelfed_account;",
+    // v5 (M7): versioned workspace layouts (D22). Append-only history; `json`
+    // is the workspace root UiNode. Version 1 (the built-in layout) is
+    // inserted lazily by `layouts::latest`.
+    "CREATE TABLE layout_versions (
+         id           INTEGER PRIMARY KEY,
+         workspace_id TEXT NOT NULL,
+         version      INTEGER NOT NULL,
+         json         TEXT NOT NULL,
+         prompt       TEXT,
+         provider     TEXT,
+         patch_json   TEXT,
+         created_at   INTEGER NOT NULL,
+         UNIQUE (workspace_id, version)
+     );",
 ];
+
+/// One row of [`Store::layout_versions`] (metadata only, no layout JSON).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct LayoutVersionInfo {
+    pub version: i64,
+    pub created_at: i64,
+    pub prompt: Option<String>,
+    pub provider: Option<String>,
+}
+
+/// Metadata stored with a new layout version.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LayoutMeta {
+    pub prompt: Option<String>,
+    pub provider: Option<String>,
+    /// The RFC 6902 patch that produced the layout, as JSON text.
+    pub patch_json: Option<String>,
+}
 
 /// Outcome of [`Store::sign_in_pixelfed`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +148,30 @@ fn save_account_on(
         ],
     )?;
     Ok(())
+}
+
+fn append_layout_on(
+    conn: &Connection,
+    workspace_id: &str,
+    json: &str,
+    meta: &LayoutMeta,
+) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "INSERT INTO layout_versions
+             (workspace_id, version, json, prompt, provider, patch_json, created_at)
+         SELECT ?1, COALESCE(MAX(version), 0) + 1, ?2, ?3, ?4, ?5, ?6
+         FROM layout_versions WHERE workspace_id = ?1
+         RETURNING version",
+        params![
+            workspace_id,
+            json,
+            meta.prompt,
+            meta.provider,
+            meta.patch_json,
+            now_secs()
+        ],
+        |r| r.get(0),
+    )
 }
 
 /// Result of a decrement that would take the count below zero.
@@ -434,6 +490,94 @@ impl Store {
         tx.commit()
     }
 
+    // ---------- Layout versions (v5) ----------
+
+    /// Insert version 1 for `workspace_id` unless any version exists.
+    /// Returns whether a row was inserted.
+    pub fn seed_layout(&self, workspace_id: &str, json: &str) -> rusqlite::Result<bool> {
+        Ok(self.conn().execute(
+            "INSERT INTO layout_versions (workspace_id, version, json, created_at)
+             SELECT ?1, 1, ?2, ?3
+             WHERE NOT EXISTS (SELECT 1 FROM layout_versions WHERE workspace_id = ?1)",
+            params![workspace_id, json, now_secs()],
+        )? > 0)
+    }
+
+    /// The newest `(version, json)` for `workspace_id`.
+    pub fn latest_layout(&self, workspace_id: &str) -> rusqlite::Result<Option<(i64, String)>> {
+        self.conn()
+            .query_row(
+                "SELECT version, json FROM layout_versions WHERE workspace_id = ?1
+                 ORDER BY version DESC LIMIT 1",
+                [workspace_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+    }
+
+    /// The layout JSON of one version.
+    pub fn layout_at(&self, workspace_id: &str, version: i64) -> rusqlite::Result<Option<String>> {
+        self.conn()
+            .query_row(
+                "SELECT json FROM layout_versions WHERE workspace_id = ?1 AND version = ?2",
+                params![workspace_id, version],
+                |r| r.get(0),
+            )
+            .optional()
+    }
+
+    /// Append a version (max + 1, atomically) and return its number.
+    pub fn append_layout(
+        &self,
+        workspace_id: &str,
+        json: &str,
+        meta: &LayoutMeta,
+    ) -> rusqlite::Result<i64> {
+        append_layout_on(&self.conn(), workspace_id, json, meta)
+    }
+
+    /// Copy version `from` into a new version; `None` if `from` is unknown.
+    pub fn copy_layout(
+        &self,
+        workspace_id: &str,
+        from: i64,
+        meta: &LayoutMeta,
+    ) -> rusqlite::Result<Option<(i64, String)>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let json: Option<String> = tx
+            .query_row(
+                "SELECT json FROM layout_versions WHERE workspace_id = ?1 AND version = ?2",
+                params![workspace_id, from],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(json) = json else {
+            return Ok(None);
+        };
+        let version = append_layout_on(&tx, workspace_id, &json, meta)?;
+        tx.commit()?;
+        Ok(Some((version, json)))
+    }
+
+    /// All versions of `workspace_id`, newest first.
+    pub fn layout_versions(&self, workspace_id: &str) -> rusqlite::Result<Vec<LayoutVersionInfo>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare_cached(
+            "SELECT version, created_at, prompt, provider FROM layout_versions
+             WHERE workspace_id = ?1 ORDER BY version DESC",
+        )?;
+        stmt.query_map([workspace_id], |r| {
+            Ok(LayoutVersionInfo {
+                version: r.get(0)?,
+                created_at: r.get(1)?,
+                prompt: r.get(2)?,
+                provider: r.get(3)?,
+            })
+        })?
+        .collect()
+    }
+
     pub fn media_url(&self, key: &str) -> rusqlite::Result<Option<String>> {
         self.conn()
             .query_row(
@@ -485,7 +629,8 @@ mod tests {
             for (i, sql) in MIGRATIONS[..3].iter().enumerate() {
                 let tx = conn.transaction().unwrap();
                 tx.execute_batch(sql).unwrap();
-                tx.pragma_update(None, "user_version", (i + 1) as i64).unwrap();
+                tx.pragma_update(None, "user_version", (i + 1) as i64)
+                    .unwrap();
                 tx.commit().unwrap();
             }
             save_account_on(&conn, "i", &account("7", "t")).unwrap();
@@ -499,11 +644,13 @@ mod tests {
         let s = Store::open_in_memory().unwrap();
         let ttl = 86_400;
         assert_eq!(
-            s.sign_in_pixelfed("i", &account("1", "a"), "h1", false, ttl).unwrap(),
+            s.sign_in_pixelfed("i", &account("1", "a"), "h1", false, ttl)
+                .unwrap(),
             SignIn::Ok
         );
         assert_eq!(
-            s.sign_in_pixelfed("i", &account("2", "b"), "h2", false, ttl).unwrap(),
+            s.sign_in_pixelfed("i", &account("2", "b"), "h2", false, ttl)
+                .unwrap(),
             SignIn::NotOwner { owner: "1".into() }
         );
         // Nothing changed: account, owner, no session for the rejected sign-in.
@@ -511,11 +658,13 @@ mod tests {
         assert!(!s.session_exists("h2").unwrap());
         // Same account again; then a forced replacement.
         assert_eq!(
-            s.sign_in_pixelfed("i", &account("1", "c"), "h3", false, ttl).unwrap(),
+            s.sign_in_pixelfed("i", &account("1", "c"), "h3", false, ttl)
+                .unwrap(),
             SignIn::Ok
         );
         assert_eq!(
-            s.sign_in_pixelfed("i", &account("2", "d"), "h4", true, ttl).unwrap(),
+            s.sign_in_pixelfed("i", &account("2", "d"), "h4", true, ttl)
+                .unwrap(),
             SignIn::Ok
         );
         assert_eq!(s.pixelfed_owner("i").unwrap().as_deref(), Some("2"));
@@ -548,6 +697,38 @@ mod tests {
         assert!(s.pixelfed_account("i").unwrap().is_some());
         assert!(s.delete_pixelfed_account_if_token("i", "new").unwrap());
         assert!(s.pixelfed_account("i").unwrap().is_none());
+    }
+
+    #[test]
+    fn layout_versions_are_append_only_and_per_workspace() {
+        let s = Store::open_in_memory().unwrap();
+        assert!(s.seed_layout("a", "{\"v\":1}").unwrap());
+        assert!(!s.seed_layout("a", "{\"other\":1}").unwrap(), "seeded once");
+        let meta = LayoutMeta {
+            prompt: Some("p".into()),
+            provider: Some("rules".into()),
+            patch_json: Some("[]".into()),
+        };
+        assert_eq!(s.append_layout("a", "{\"v\":2}", &meta).unwrap(), 2);
+        assert_eq!(s.append_layout("b", "{\"b\":1}", &meta).unwrap(), 1);
+        assert_eq!(s.latest_layout("a").unwrap(), Some((2, "{\"v\":2}".into())));
+        assert_eq!(
+            s.copy_layout("a", 1, &LayoutMeta::default()).unwrap(),
+            Some((3, "{\"v\":1}".into()))
+        );
+        assert_eq!(s.copy_layout("a", 9, &LayoutMeta::default()).unwrap(), None);
+        assert_eq!(s.layout_at("a", 2).unwrap().as_deref(), Some("{\"v\":2}"));
+        let versions: Vec<i64> = s
+            .layout_versions("a")
+            .unwrap()
+            .iter()
+            .map(|v| v.version)
+            .collect();
+        assert_eq!(versions, [3, 2, 1]);
+        assert_eq!(
+            s.layout_versions("a").unwrap()[1].provider.as_deref(),
+            Some("rules")
+        );
     }
 
     #[test]

@@ -21,7 +21,9 @@ fn platform_init() {
 /// the last applied one); `pending_actions` counts unsent outbox rows.
 /// `queries_json` is the bundle's `{query_key: [entity uri, ...]}` (`"{}"`
 /// when none); `auth_json` is `{"state":"signed_out"|"pending"|"signed_in"|
-/// "error","username"?,"error"?}`.
+/// "error","username"?,"error"?}`; `agent_json` is the last layout prompt's
+/// `{"state":"idle"|"running"|"done"|"error","message"?,"provider"?,
+/// "layout_version"?}`.
 #[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
 pub struct FfiStateSnapshot {
     pub workspace_json: String,
@@ -31,6 +33,7 @@ pub struct FfiStateSnapshot {
     pub pending_actions: u32,
     pub queries_json: String,
     pub auth_json: String,
+    pub agent_json: String,
 }
 
 impl From<StateSnapshot> for FfiStateSnapshot {
@@ -43,6 +46,7 @@ impl From<StateSnapshot> for FfiStateSnapshot {
             pending_actions: s.pending_actions,
             queries_json: s.queries_json,
             auth_json: s.auth_json,
+            agent_json: s.agent_json,
         }
     }
 }
@@ -326,6 +330,7 @@ mod tests {
         let snap = handle.snapshot();
         assert_eq!(snap.queries_json, "{}");
         assert_eq!(snap.auth_json, r#"{"state":"signed_out"}"#);
+        assert_eq!(snap.agent_json, r#"{"state":"idle"}"#);
 
         let core = StateSnapshot {
             workspace_json: "null".into(),
@@ -335,10 +340,12 @@ mod tests {
             pending_actions: 2,
             queries_json: r#"{"timeline:home":["pixelfed://posts/1"]}"#.into(),
             auth_json: r#"{"state":"signed_in","username":"a"}"#.into(),
+            agent_json: r#"{"state":"done","provider":"rules","layout_version":3}"#.into(),
         };
         let ffi: FfiStateSnapshot = core.clone().into();
         assert_eq!(ffi.queries_json, core.queries_json);
         assert_eq!(ffi.auth_json, core.auth_json);
+        assert_eq!(ffi.agent_json, core.agent_json);
         assert_eq!((ffi.seq, ffi.pending_actions), (7, 2));
     }
 }
