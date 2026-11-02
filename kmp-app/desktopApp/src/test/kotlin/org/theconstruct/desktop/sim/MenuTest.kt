@@ -9,7 +9,9 @@ import androidx.compose.ui.test.runSkikoComposeUiTest
 import androidx.compose.ui.unit.Density
 import org.theconstruct.ConstructApp
 import org.theconstruct.ConstructController
+import org.theconstruct.ConstructEngineBridge
 import org.theconstruct.ConstructJson
+import org.theconstruct.EngineSnapshot
 import org.theconstruct.UiNode
 import org.theconstruct.displayedWorkspace
 import java.io.File
@@ -145,6 +147,53 @@ class MenuTest {
     }
 
     @Test
+    fun coldStartShowsNoOfflineBadgeUntilTheFirstSnapshot() {
+        val silent = object : ConstructEngineBridge {
+            override fun subscribe(onState: (EngineSnapshot) -> Unit) {}
+            override fun dispatch(intentJson: String) {}
+        }
+        val controller = ConstructController(silent, "pixelfed_home")
+        compose(controller) {
+            assertFalse(has("menu-badge"), "connectivity is unknown, not offline")
+            controller.menu.openMenu()
+            waitForIdle()
+            onNode(hasText("Connecting…")).assertExists()
+            assertTrue(onAllNodes(hasText("Offline")).fetchSemanticsNodes().isEmpty())
+        }
+    }
+
+    @Test
+    fun offlineDrawerKeepsTheListWithoutAnErrorAndRefreshesWhenBackOnline() {
+        val fake = feed()
+        val controller = ConstructController(fake, fake.appId)
+        runner(fake, controller).ok(
+            "open-menu; assert-text Counter; close-menu; offline; open-menu; assert-text Offline; assert-text Counter; " +
+                "assert-text Pixelfed demo; assert-no-text Can't reach your pod; assert-no-text Try again",
+        )
+        assertTrue(controller.menu.appsFailedOffline)
+        runner(fake, controller).ok("online; open-menu; assert-text Online; assert-text Counter")
+        assertFalse(controller.menu.appsFailedOffline, "the list was reloaded once back online")
+    }
+
+    @Test
+    fun aPinOnAnOlderPageStaysVisibleAsAPinnedRow() {
+        val fake = feed()
+        repeat(22) { fake.publishVersion("Change ${it + 1}") }
+        val controller = ConstructController(fake, fake.appId)
+        val r = runner(fake, controller).ok(
+            "open-history Pixelfed; select-version 2; open-history Pixelfed; assert-text Pinned: v2; " +
+                "click tag:versions-more; assert-no-text Pinned: v2; assert-text v2",
+        )
+        assertEquals("20 version(s) listed", r.steps[2].message)
+        assertEquals(2L, controller.pinned.value?.version)
+        compose(controller) {
+            controller.menu.showHistory("pixelfed_home")
+            waitForIdle()
+            assertTrue(has("version-pinned"), "the pinned version is on page 2: shown as a checked row under Latest")
+        }
+    }
+
+    @Test
     fun olderVersionsArePaged() {
         val fake = feed()
         repeat(22) { fake.publishVersion("Change ${it + 1}") }
@@ -176,7 +225,7 @@ class MenuTest {
         assertNotNull(opened)
         // Snapshots of the closed engine are ignored.
         first.setOnline(false)
-        assertTrue(controller.state.value.isOnline)
+        assertEquals(true, controller.state.value.isOnline)
         assertTrue((controller.state.value.workspace as UiNode.Workspace).id == "home")
     }
 

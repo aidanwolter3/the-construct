@@ -982,7 +982,7 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   names (none contained "canvas"), the `kmp-app` directory, git history, and earlier D-entries' narrative (their
   identifiers were updated to match the code).
 
-## D32: One app, layouts as code, read-only versions API (`server::layouts`, migration v7)
+## D32: One app, layouts as code, read-only versions API (`server::layouts`, migrations v7, v8)
 
 - **Product rule:** the pod serves ONE app, Pixelfed (workspace `pixelfed_home`), at its latest layout version. New
   versions come only from the developer, as files in the repo plus a deploy. No client can change layout or version
@@ -998,21 +998,40 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   or if a listed file is missing. `0001.json` of each app holds the former built-in default (the classic feed / the
   counter). The named alternatives (Editorial, Compact, Minimal, Big counter; `fixtures/layouts/`) are deleted.
   Files are validated with the agent's structural validator (`agent::validate_structure`: depth, size, slot rules,
-  aspect ratio, padding, `/v1/` endpoint prefix). Intents may be new, since a developer wrote the file.
-- **Startup sync (`layouts::sync`, from `AppState::try_new`, before listening):** this runs per app, in one
-  transaction, and is idempotent. A file already recorded (`file_key` `<app>/NNNN`) must have the same layout hash
-  and note. A new file is appended as version `MAX(version) + 1` with source `file`, its note and its key. Anything
-  else stops the start and names the file:
-  - "layouts/pixelfed_home/0002.json changed after it was deployed as version 7; layout files are append-only, add
-    0003.json instead" (reformatting with the same layout and note is not a change)
-  - "layouts/<app>/NNNN.json was deployed as version N but is missing; layout files are append-only, restore it
-    (and add NNNN.json for a change)"
-  - "... is new but numbered below ..., which is already deployed; ... number new files after the newest one"
+  aspect ratio, padding, `/v1/` endpoint prefix). Intents may be new action types the validator has no rule for,
+  since a developer wrote the file, but every intent tag must be one this build knows: a tag that would deserialize
+  as `ActionIntent::Unknown` (a typo, the removed `action.agent.prompt`, `action.unknown` itself) is refused, naming
+  the file, the tag and its JSON pointer ("layouts/pixelfed_home/0002.json: invalid layout: unknown action intent
+  'action.navigation.opne' at /layout/slots/0/..."). Legacy stored versions stay lenient (see below).
+- **File hash (migration v8, `app_versions.file_hash TEXT NULL`):** the append-only check compares
+  `layouts::file_hash` = SHA-256 of the canonical JSON (keys sorted recursively, no whitespace) of
+  `{"layout": <the file's layout as written>, "note": <trimmed note>}`. It depends only on the file's content, not
+  on the Rust types, so a protocol refactor (field order, a new defaulted field) that changes how `UiNode`
+  re-serializes cannot make every pod refuse to start; reformatting or reordering keys in a file is not a change
+  either. The served layout is still the canonical `UiNode` blob (`hash`), recorded when the file was first
+  deployed. Rows recorded before v8 have `file_hash` NULL: on the first sync the pod adopts the file's hash only if
+  the file's canonical `UiNode` hash and note still equal what was recorded (else the changed-file error), and
+  compares `file_hash` from then on.
+- **Startup sync (`layouts::sync`, from `AppState::try_new`, before listening):** this runs over all apps in ONE
+  (IMMEDIATE) transaction and is idempotent; a refusal writes nothing for any app. A file already recorded
+  (`file_key` `<app>/NNNN`) must have the same `file_hash`. A new file is appended as version `MAX(version) + 1`
+  with source `file`, its note, key and hash. A recorded file missing from the build (a rollback deploy, an older
+  branch) is only a warning: "layouts/<app>/NNNN.json was deployed as version V but is missing from this build;
+  serving the recorded history unchanged"; files numbered after the highest recorded one still append. These stop
+  the start (exit code 1), naming the file and how to recover:
+  - "layouts/pixelfed_home/0002.json changed after it was deployed as version 7; layout files are append-only. To
+    recover, restore the deployed content of layouts/pixelfed_home/0002.json (git log -p -- ...) and put the change
+    in a new file, 0003.json" (a file with the same number as a recorded-but-missing one is that file: same check)
+  - "... is new but numbered below layouts/<app>/NNNN.json, which is already deployed; layout files are
+    append-only. To recover, move its content to a new file numbered after the newest deployed one, NNNN.json"
   - "...: layout files are numbered without gaps, expected NNNN.json next", "... is listed twice", "not valid
-    JSON", "unknown key", "\"note\" must be a non-empty string", "invalid layout: ..."
+    JSON", "unknown key", "\"note\" must be a non-empty string", "invalid layout: ..." (including unknown intents)
 
   On a fresh DB `pixelfed_home/0001` becomes version 1. On a migrated DB the files continue after the existing
-  maximum, so every 0001 appears once more as the newest version, with the same content as the old built-in.
+  maximum, so every 0001 appears once more as the newest version, with the same content as the old built-in. On
+  staging, `pixelfed_home` v2 "Classic feed" (source `file`) therefore duplicates v1 (the migrated seed): expected.
+- **Migrations** run each step in an IMMEDIATE transaction that re-reads `user_version`, so two processes
+  starting on the same database never both run a step.
 - **Migration v7 (Rust step):** this adds `app_versions(app_id, version, hash -> layout_blobs, source, note,
   file_key UNIQUE NULL, created_at, PRIMARY KEY(app_id, version))`. Revision R of each workspace
   (`workspace_revisions`) becomes app version R. Its content is the layout shown at that revision (`layout_id` at
@@ -1035,7 +1054,9 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   - `GET /v1/apps` -> `{"apps":[{id, title, icon, latest_version, updated_at}]}` (RFC 3339 UTC).
   - `GET /v1/apps/{id}/versions[?limit=1..=100 (20)&before=N]` -> `{app_id, latest_version, versions:[{version,
     created_at, source, note?}], next_before?}`, newest first; `next_before` is present iff older versions exist.
-  - `GET /v1/apps/{id}/versions/{n}` -> `{app_id, version, created_at, source, note?, layout}`.
+  - `GET /v1/apps/{id}/versions/{n}` -> `{app_id, version, created_at, source, note?, layout}`. A legacy version
+    whose stored layout is not a `UiNode` this build reads is served as stored (raw JSON); one that is not JSON at
+    all is a 500 `corrupt_version`.
 
   Errors: 400 `invalid_workspace_id`, 404 `app_not_found` / `version_not_found`, 400 `invalid_request` (bad query
   or version). The version API is public because the pod serves the same layouts to everyone (no entities).
@@ -1055,7 +1076,9 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   deserializes to it (its fields are dropped) instead of failing the whole layout. This matters because AI-edited
   legacy versions, migrated into the history, still contain `action.agent.prompt` buttons. Without it, those
   versions could not be served by the pod or rendered by clients. Such an action does nothing. Kotlin already
-  degraded unknown intents to `Unknown`. Layout files should never use it (rejecting it in files is a follow-up).
+  degraded unknown intents to `Unknown`. Layout files never use it: the startup sync refuses unknown tags in files.
+  A version recorded with an unknown intent (legacy) is served by the versions API and the workspace GET with
+  `{"intent": "action.unknown"}`.
 
 ## D33: Clients: read-only apps API, hamburger menu and version picker, server picker in all builds
 
@@ -1068,7 +1091,7 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
     old catalog reads, with their FFI exports and Kotlin wrappers.
   - Snapshot `layout_json` = `{"app_id": "<workspace>", "version": n}` from the applied
     `X-Construct-Layout-Version`, or `"{}"` when unversioned (the signed-out `pixelfed_home` screen).
-    `ActiveLayout` also reads the old D27 shape.
+    `ActiveLayout` reads only this shape (the D27 `layout_id`/`revision` fallback is gone).
   - `UniffiEngineBridge.close()` frees the Rust engine; later calls do nothing.
 - **Kotlin bridge:** `ConstructEngineBridge.listApps()`, `appVersions(appId, before: Long?, limit: Int?)` and
   `appVersion(appId, version: Long)` are blocking (call them on `Dispatchers.IO`) and throw `LayoutApiException`.
@@ -1079,12 +1102,15 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   overlay (`menu-button`, content description "Menu"). There is no status line, account text, FAB or debug chip; the
   sign-in prompts inside the layout stay.
   - Badge (`menu-badge`, a dot) when offline, when actions are pending, or when a pinned version is behind a newer
-    one (`showMenuBadge`).
+    one (`showMenuBadge`). `ConstructState.isOnline` is null (unknown, no badge, "Connecting…") until the first
+    snapshot; `openApp` carries it over (same server).
 - **Drawer:** a Material3 `ModalNavigationDrawer` in the same root (`menu-drawer`), so headless captures see it.
   The menu state lives in `ConstructController`, so an open drawer, the picker and a half-typed URL survive
   rotation. Back closes the innermost level (custom URL field, picker, drawer). Sections:
   - Apps: rows `app-<id>` open the app, and `app-history-<id>` opens its version picker.
-  - Connection (`menu-connection`): "Online" / "Offline", "N pending".
+  - Connection (`menu-connection`): "Online" / "Offline", "N pending". When an apps reload fails with
+    `Kind.Offline` while a list is shown, no error is shown under Apps (Connection says Offline); the list reloads
+    when the engine reports online again.
   - Account (`menu-account`): "Signed in as @x" with `menu-sign-out`, or `menu-sign-in`, which starts the sign-in
     intent the screen offers.
   - Server (`menu-server`).
@@ -1095,7 +1121,13 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   factory, the row says "Opening other apps isn't available here yet.".
 - **Version picker (`version-picker`):**
   - Rows: "Latest" (`version-latest`), then versions newest first (`version-<n>`: "vN", relative time, the note or
-    the source). Pages of 20 with "Load older" (`versions-more`). The version on screen is checked.
+    the source). Pages of 20 with "Load older" (`versions-more`). The version on screen is checked (a pin counts
+    only where `pinApplies`, as in the Apps rows). A pin on a version not in the loaded pages shows as a checked
+    "Pinned: vN" row (`version-pinned`) under "Latest" until its page is loaded, rather than auto-loading pages: no
+    extra calls, works offline, and the selection is visible at the top.
+  - `ConstructController.close()` sets a closed flag (under the switch lock): `openApp`/`pin` then return false, and
+    an engine created while closing is closed, so a version selection finishing after a server switch or
+    `onCleared` cannot leak an engine.
   - Selecting is **client-local**: no mutating call exists. It fetches that version's spec (cached), opens the app
     if needed, renders the spec against the current entities, and closes the drawer.
   - The pin is held by the controller (it survives rotation) but is not persisted: every launch shows the latest.
@@ -1110,22 +1142,30 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 - **Server picker in all builds:** the drawer's Server section replaces the debug-only chip (D29).
   - Android presets: Staging, Local emulator (`http://10.0.2.2:8080`), Local USB (`http://127.0.0.1:8080`), plus
     "Build default" when that is not a preset, and a Custom URL validated as `http(s)://host[:port]`
-    (`ServerUrls.parse`).
-  - Android saves the choice in SharedPreferences `server` / `baseUrl` (choosing the build default clears it; the
-    old `debug_server` choice is still read as a fallback) and restarts the activity with a new engine on that server's own
-    storage. Precedence: the `baseUrl` intent extra (debug builds only) > saved choice > `BuildConfig`.
+    (`ServerUrls.check` with `ServerChoice.cleartextHosts`): on Android `https://` to any host, `http://` only to
+    `localhost`, `127.0.0.1` and `10.0.2.2` (the cleartext hosts below; Rust would reach others, but Coil images
+    would be blocked), with the hint "Use https:// for remote servers". Desktop accepts any `http://`.
+  - Android switches in place: the ViewModel starts a new session (engine on that server's own storage, same app),
+    and only then saves the choice in SharedPreferences `server` / `baseUrl` (choosing the build default clears it;
+    the old `debug_server` choice is still read as a fallback) and closes the old engine. If the engine can't be
+    created nothing is saved. Precedence: the `baseUrl` intent extra (debug builds only; dropped after a switch) >
+    saved choice > `BuildConfig`.
   - Cleartext: because the picker ships in release, the main `network_security_config.xml` now allows cleartext to
-    `10.0.2.2`, `localhost` and `127.0.0.1` in **all** builds (loopback only, so a release build can reach a local
-    pod over `adb reverse` or the emulator). Everything else keeps the platform default. As before (D11), this
+    `10.0.2.2`, `localhost` and `127.0.0.1` in **all** builds, so a release build can reach a local pod over
+    `adb reverse` (loopback) or from the emulator (`10.0.2.2` is its alias for the host; on a physical device it is
+    just a LAN address). Everything else keeps the platform default. As before (D11), this
     governs only Java/Kotlin traffic (images); engine traffic goes through Rust, and HTTPS enforcement there is a
     follow-up.
   - Desktop presets: Staging, Local (`http://127.0.0.1:8080`). The choice is saved in `java.util.prefs`, node
     `org/theconstruct/desktop`, key `baseUrl` (choosing staging clears it), and the switch happens live: a new
-    session on that server, then the old engine is closed.
+    session on that server, then the choice is saved and the old engine is closed (nothing is saved if the engine
+    can't be created).
   - Desktop precedence: `-Dconstruct.baseUrl` > `CONSTRUCT_BASE_URL` > saved choice > staging. An override only
     decides the launch server; a menu pick still switches the current run.
   - Storage per server as in D29 (`~/.construct/servers/<url>` for anything but staging). The engine is closed on
-    window close.
+    window close. `~/.construct` itself now belongs to staging, so a developer's old local-pod cache and outbox
+    there would be shown on, and flushed to, staging: if you used a local pod with older builds, delete
+    `~/.construct/cache.db` once.
 - **Simulator commands:**
   - `open-menu`, `close-menu`
   - `open-app <id|title>`

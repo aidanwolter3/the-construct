@@ -80,19 +80,22 @@ fun main() {
     }
 }
 
-/** The menu's server picker: saves [url] and replaces [current] with a session on it (same app), closing the old engine. */
+/**
+ * The menu's server picker: replaces [current] with a session on [url] (same app), then saves the choice and closes the
+ * old engine. If the new engine can't be created, nothing changes and nothing is saved.
+ */
 private fun switchServer(root: File, current: Session, url: String, defaultWorkspace: String) {
     if (url.trimEnd('/') == current.baseUrl) {
         current.controller.menu.closeMenu()
         return
     }
-    DesktopServerPrefs.save(url)
     val next = try {
         openSession(root, url.trimEnd('/'), current.controller.currentAppId() ?: defaultWorkspace)
     } catch (t: Throwable) {
         println("[desktop] cannot start an engine for $url: $t")
         return
     }
+    DesktopServerPrefs.save(url)
     session = next
     try {
         current.controller.close()

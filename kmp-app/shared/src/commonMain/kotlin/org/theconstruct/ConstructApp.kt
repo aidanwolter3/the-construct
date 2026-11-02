@@ -28,7 +28,8 @@ import kotlinx.serialization.json.JsonObject
  * UI state derived from engine snapshots. [workspace] is null until the engine has a layout.
  * [pendingActions] counts queued (unsent) outbox mutations. [seq] is the seq of the last applied
  * snapshot (-1 before the first). [queries] maps a FeedList `query_key` to ordered entity URIs (M6) and
- * [auth] is the sign-in status. [activeLayout] names the app on display and its latest version.
+ * [auth] is the sign-in status. [activeLayout] names the app on display and its latest version. [isOnline] is null
+ * while connectivity is unknown (before the first snapshot; no offline badge then).
  * [engine] counts engine switches ([ConstructController.openApp]): a snapshot of a replaced engine is dropped.
  */
 data class ConstructState(
@@ -36,7 +37,7 @@ data class ConstructState(
     val entities: Map<String, JsonObject> = emptyMap(),
     val queries: Map<String, List<String>> = emptyMap(),
     val auth: AuthInfo = AuthInfo(),
-    val isOnline: Boolean = false,
+    val isOnline: Boolean? = null,
     val pendingActions: Int = 0,
     val error: String? = null,
     val seq: Long = -1,
@@ -89,6 +90,13 @@ class ConstructController(
     val menu: MenuState = MenuState(this)
 
     private val switchLock = Any()
+
+    /** Set by [close] (under [switchLock]): [openApp] and [pin] then do nothing, so no engine outlives the controller. */
+    @Volatile
+    private var closed = false
+
+    /** Whether [close] was called. */
+    val isClosed: Boolean get() = closed
 
     init {
         subscribe(bridge, 0)
@@ -162,14 +170,26 @@ class ConstructController(
     /** Forwards an OAuth redirect to the current engine ([ConstructEngineBridge.handleAuthRedirect]). */
     fun handleAuthRedirect(url: String): Boolean = bridge.handleAuthRedirect(url)
 
-    /** Closes the current engine (the platform calls this when the UI goes away for good). */
+    /**
+     * Closes the current engine (the platform calls this when the UI goes away for good). Idempotent; afterwards
+     * [openApp] and [pin] are no-ops, so a version selection finishing late can't create an engine nobody closes.
+     */
     fun close() {
-        bridge.close()
+        synchronized(switchLock) {
+            if (closed) return
+            closed = true
+            bridge.close()
+        }
     }
 
-    /** Shows [version] of the current app ([layout] = its spec) instead of the latest, until [followLatest]. */
-    fun pin(appId: String, version: Long, layout: UiNode) {
+    /**
+     * Shows [version] of the current app ([layout] = its spec) instead of the latest, until [followLatest]. False (and
+     * nothing changes) once [close]d.
+     */
+    fun pin(appId: String, version: Long, layout: UiNode): Boolean {
+        if (closed) return false
         _pinned.value = PinnedVersion(appId, version, layout)
+        return true
     }
 
     /** Back to the latest version (and following new ones as they are published). */
@@ -179,17 +199,29 @@ class ConstructController(
 
     /**
      * Opens app [id]: a no-op (true) when it is already on screen; otherwise creates its engine with the platform's
-     * factory, shows it (starting from "Loading...", following its latest version) and closes the old engine. False,
-     * with nothing changed, when this platform can't open other apps or the engine could not be created.
+     * factory, shows it (starting from "Loading...", following its latest version; connectivity carries over, it is
+     * the same server) and closes the old engine. False, with nothing changed, when this platform can't open other apps,
+     * the engine could not be created, or the controller is [close]d.
      */
     fun openApp(id: String): Boolean {
+        if (closed) return false
         if (id == currentAppId()) return true
         val factory = openBridge ?: return false
         synchronized(switchLock) {
+            if (closed) return false
             val next = try {
                 factory(id)
             } catch (t: Throwable) {
                 println("[Construct] cannot open app $id: $t")
+                return false
+            }
+            if (closed) {
+                // Closed meanwhile (e.g. by the factory's thread re-entering): this engine would never be closed.
+                try {
+                    next.close()
+                } catch (t: Throwable) {
+                    println("[Construct] closing the unused engine failed: $t")
+                }
                 return false
             }
             val old = bridge
@@ -197,7 +229,7 @@ class ConstructController(
             bridge = next
             _appId.value = id
             _pinned.value = null
-            _state.value = ConstructState(engine = engine)
+            _state.value = ConstructState(isOnline = _state.value.isOnline, engine = engine)
             subscribe(next, engine)
             try {
                 old.close()

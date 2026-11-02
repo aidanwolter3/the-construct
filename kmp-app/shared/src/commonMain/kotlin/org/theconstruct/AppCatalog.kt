@@ -23,8 +23,7 @@ import kotlinx.serialization.json.longOrNull
 /**
  * The layout on display, from [EngineSnapshot.layoutJson]: the app ([appId], i.e. the workspace id) and its latest
  * [version] the engine applied. [version] is null while unknown and on an unversioned screen (the signed-out
- * `pixelfed_home`). The older D27 shape (`layout_id` `<app>.<name>`, `revision`) is still read: its `revision` is the
- * number the app history continues from.
+ * `pixelfed_home`). The engine emits `{"app_id","version"}` (D33).
  */
 data class ActiveLayout(
     val appId: String? = null,
@@ -35,9 +34,8 @@ data class ActiveLayout(
         fun parse(json: String): ActiveLayout = try {
             val o = ConstructJson.json.parseToJsonElement(json).jsonObject
             ActiveLayout(
-                appId = o.jStr("app_id")?.takeIf { it.isNotBlank() }
-                    ?: o.jStr("layout_id")?.takeIf { it.isNotBlank() }?.substringBefore('.'),
-                version = o.jLong("version") ?: o.jLong("revision"),
+                appId = o.jStr("app_id")?.takeIf { it.isNotBlank() },
+                version = o.jLong("version"),
             )
         } catch (t: Exception) {
             ActiveLayout()
@@ -319,9 +317,29 @@ fun newerVersionAvailable(state: ConstructState, pin: PinnedVersion?): Boolean {
     return latest > pin!!.version
 }
 
-/** The hamburger's badge dot: offline, mutations waiting to be sent, or a pinned version with a newer one out. */
+/**
+ * The hamburger's badge dot: offline, mutations waiting to be sent, or a pinned version with a newer one out. Unknown
+ * connectivity (before the first snapshot) does not badge.
+ */
 fun showMenuBadge(state: ConstructState, pin: PinnedVersion?): Boolean =
-    !state.isOnline || state.pendingActions > 0 || newerVersionAvailable(state, pin)
+    state.isOnline == false || state.pendingActions > 0 || newerVersionAvailable(state, pin)
+
+/**
+ * The pin of [appId] the version picker checks: [pin] when that app is on screen ([isCurrent]) and the pin applies
+ * ([pinApplies]), as in the Apps section. Otherwise null ("Latest" is checked for the app on screen).
+ */
+fun pinnedInPicker(state: ConstructState, pin: PinnedVersion?, appId: String, isCurrent: Boolean): PinnedVersion? =
+    pin?.takeIf { isCurrent && it.appId == appId && pinApplies(state, it) }
+
+/**
+ * The picker's "Pinned: vN" row (`version-pinned`, checked, under "Latest"): the pinned version when it is not among
+ * the loaded history rows (it is on an older page), so the selection stays visible; null once its own row is listed.
+ */
+fun pinnedRowVersion(pinned: PinnedVersion?, history: VersionHistory): Long? {
+    val v = pinned?.version ?: return null
+    if (!history.loaded || history.versions.any { it.version == v }) return null
+    return v
+}
 
 /**
  * The menu's "Sign in" action: the first sign-in intent the current screen offers (the signed-out screen's button
@@ -344,12 +362,16 @@ data class ServerOption(val key: String, val label: String, val url: String)
 
 /**
  * The menu's Server section, supplied by the platform: the [currentUrl], the [options] (e.g. Staging / Local emulator /
- * Local USB) and [onSelect], called with a preset's URL or a validated custom one ([ServerUrls.parse]). The platform
- * applies it (Android: save and restart the engine). No section without one.
+ * Local USB) and [onSelect], called with a preset's URL or a custom one that passed [ServerUrls.check] with
+ * [cleartextHosts]. The platform applies it (creates the new engine, then saves the choice). No section without one.
+ *
+ * [cleartextHosts]: the hosts a custom `http://` URL may name (Android: the loopback / emulator hosts its network
+ * security config lets images load from, [ServerUrls.ANDROID_CLEARTEXT_HOSTS]); null = any host (desktop).
  */
 class ServerChoice(
     val currentUrl: String,
     val options: List<ServerOption>,
+    val cleartextHosts: Set<String>? = null,
     val onSelect: (String) -> Unit,
 ) {
     /** The preset's label for [url], else the URL itself. */
@@ -357,9 +379,43 @@ class ServerChoice(
         options.firstOrNull { it.url.trimEnd('/') == url.trimEnd('/') }?.label ?: url
 }
 
+/** A custom server URL as typed: [Ok] (normalized), [Invalid] (not `http(s)://host[:port]`) or [NeedsHttps]. */
+sealed class ServerUrlCheck {
+    data class Ok(val url: String) : ServerUrlCheck()
+    object Invalid : ServerUrlCheck()
+
+    /** `http://` to a host the platform only reaches over HTTPS (Android: anything but the loopback hosts). */
+    object NeedsHttps : ServerUrlCheck()
+}
+
 object ServerUrls {
     private const val LABEL = """[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"""
     private val URL = Regex("""(https?)://($LABEL(?:\.$LABEL)*|\[[0-9A-Fa-f:.]+])(?::(\d{1,5}))?""")
+
+    /**
+     * Android's cleartext hosts (network_security_config.xml): the emulator's alias for the host machine and the
+     * loopback names (`adb reverse` on a device). Coil loads images over Java's stack, which blocks `http://` elsewhere.
+     */
+    val ANDROID_CLEARTEXT_HOSTS: Set<String> = setOf("localhost", "127.0.0.1", "10.0.2.2")
+
+    /** Hint under the custom URL field when [check] says [ServerUrlCheck.NeedsHttps]. */
+    const val NEEDS_HTTPS_HINT = "Use https:// for remote servers (http:// only for localhost, 127.0.0.1 or 10.0.2.2)"
+
+    /** Hint under the custom URL field for an [ServerUrlCheck.Invalid] URL. */
+    const val FORMAT_HINT = "http(s)://host[:port]"
+
+    /**
+     * [parse] plus the platform's cleartext policy: `https://` to any host; `http://` only to a host in
+     * [cleartextHosts] (case-insensitive), or to any host when it is null.
+     */
+    fun check(input: String, cleartextHosts: Set<String>? = null): ServerUrlCheck {
+        val url = parse(input) ?: return ServerUrlCheck.Invalid
+        val m = URL.matchEntire(url)!!
+        if (m.groupValues[1].lowercase() == "http" && cleartextHosts != null && m.groupValues[2].lowercase() !in cleartextHosts) {
+            return ServerUrlCheck.NeedsHttps
+        }
+        return ServerUrlCheck.Ok(url)
+    }
 
     /**
      * The normalized URL (trimmed, trailing `/` dropped) if [input] is `http(s)://host[:port]` (no path, query or

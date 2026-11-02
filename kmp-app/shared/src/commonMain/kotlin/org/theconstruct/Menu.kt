@@ -155,18 +155,32 @@ class MenuState internal constructor(private val controller: ConstructController
         appsToken++
     }
 
-    /** The last apps reload failed while an older list is still shown. */
+    /**
+     * The last apps reload failed while an older list is still shown. Not set when it failed because the pod can't be
+     * reached: Connection already says "Offline", and the list reloads once back online ([appsFailedOffline]).
+     */
     var appsStaleError by mutableStateOf<String?>(null)
         private set
 
-    /** (Re)loads the apps; a failed reload keeps the last list (with the error under it). */
+    /** The last apps load failed because the pod was unreachable: the drawer reloads when the engine is back online. */
+    var appsFailedOffline by mutableStateOf(false)
+        private set
+
+    /** (Re)loads the apps; a failed reload keeps the last list (with the error under it unless offline). */
     internal suspend fun loadApps() {
         if (apps !is Load.Ready) apps = Load.Loading
         try {
             apps = Load.Ready(controller.apps.apps())
             appsStaleError = null
+            appsFailedOffline = false
         } catch (e: LayoutApiException) {
-            if (apps is Load.Ready) appsStaleError = e.message else apps = Load.Failed(e.message)
+            val offline = e.kind == LayoutApiException.Kind.Offline
+            appsFailedOffline = offline
+            when {
+                apps !is Load.Ready -> apps = Load.Failed(e.message)
+                offline -> appsStaleError = null
+                else -> appsStaleError = e.message
+            }
         }
     }
 
@@ -235,11 +249,11 @@ class MenuState internal constructor(private val controller: ConstructController
             withContext(NonCancellable) {
                 try {
                     val spec = controller.apps.spec(appId, version)
-                    if (controller.openApp(appId)) {
-                        controller.pin(appId, version, spec)
-                        closeMenu()
-                    } else {
-                        selectError = OPEN_APP_UNAVAILABLE
+                    when {
+                        // The UI went away meanwhile (desktop server switch, Android onCleared): change nothing.
+                        controller.isClosed -> Unit
+                        controller.openApp(appId) && controller.pin(appId, version, spec) -> closeMenu()
+                        !controller.isClosed -> selectError = OPEN_APP_UNAVAILABLE
                     }
                 } catch (e: LayoutApiException) {
                     selectError = e.message
@@ -334,6 +348,10 @@ internal fun MenuDrawer(
 private fun MenuSections(controller: ConstructController, state: ConstructState, pin: PinnedVersion?, server: ServerChoice?) {
     val menu = controller.menu
     LaunchedEffect(menu.appsToken) { menu.loadApps() }
+    // Back online after a load that couldn't reach the pod: refresh the list.
+    LaunchedEffect(state.isOnline) {
+        if (state.isOnline == true && menu.appsFailedOffline) menu.retryApps()
+    }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("menu-drawer").padding(bottom = 16.dp)) {
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -425,7 +443,7 @@ private fun AppsSection(controller: ConstructController, state: ConstructState, 
     }
     apps.forEach { app ->
         val isCurrent = app.id == current
-        val pinnedHere = pin?.takeIf { isCurrent && it.appId == app.id && pinApplies(state, it) }
+        val pinnedHere = pinnedInPicker(state, pin, app.id, isCurrent)
         val latest = (if (isCurrent) state.activeLayout.version else null) ?: app.latestVersion
         val subtitle = when {
             pinnedHere != null -> "Showing v${pinnedHere.version}" + (latest?.let { " · latest v$it" } ?: "")
@@ -494,10 +512,18 @@ private fun AppRow(
 @Composable
 private fun ConnectionSection(state: ConstructState) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp).testTag("menu-connection")) {
+        val online = state.isOnline
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(10.dp).background(if (state.isOnline) Color(0xFF2E7D32) else Color(0xFF9E9E9E), CircleShape))
+            Box(Modifier.size(10.dp).background(if (online == true) Color(0xFF2E7D32) else Color(0xFF9E9E9E), CircleShape))
             Spacer(Modifier.width(10.dp))
-            Text(if (state.isOnline) "Online" else "Offline", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                when (online) {
+                    true -> "Online"
+                    false -> "Offline"
+                    null -> "Connecting…"
+                },
+                style = MaterialTheme.typography.bodyLarge,
+            )
             if (state.pendingActions > 0) {
                 Spacer(Modifier.width(16.dp))
                 Box(Modifier.size(10.dp).background(Color(0xFFF9A825), CircleShape))
@@ -505,7 +531,7 @@ private fun ConnectionSection(state: ConstructState) {
                 Text("${state.pendingActions} pending", style = MaterialTheme.typography.bodyLarge)
             }
         }
-        if (!state.isOnline) {
+        if (online == false) {
             Text(
                 "Changes are saved and sent when you're back online.",
                 style = MaterialTheme.typography.bodySmall,
@@ -604,13 +630,14 @@ private fun ServerSection(menu: MenuState, server: ServerChoice) {
         val isCustom = server.options.none { it.url.trimEnd('/') == server.currentUrl.trimEnd('/') }
         ChoiceRow(
             title = "Custom URL…",
-            subtitle = if (isCustom) server.currentUrl else "http(s)://host[:port]",
+            subtitle = if (isCustom) server.currentUrl else if (server.cleartextHosts == null) ServerUrls.FORMAT_HINT else "https://host[:port]",
             checked = isCustom,
             tag = "server-custom",
-            onClick = { menu.customUrl = if (isCustom) server.currentUrl else "http://" },
+            onClick = { menu.customUrl = if (isCustom) server.currentUrl else if (server.cleartextHosts == null) "http://" else "https://" },
         )
         if (custom != null) {
-            val url = ServerUrls.parse(custom)
+            val check = ServerUrls.check(custom, server.cleartextHosts)
+            val url = (check as? ServerUrlCheck.Ok)?.url
             Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp)) {
                 OutlinedTextField(
                     value = custom,
@@ -618,7 +645,13 @@ private fun ServerSection(menu: MenuState, server: ServerChoice) {
                     singleLine = true,
                     isError = url == null,
                     label = { Text("Server URL") },
-                    supportingText = { if (url == null) Text("http(s)://host[:port]") },
+                    supportingText = {
+                        when (check) {
+                            is ServerUrlCheck.Ok -> Unit
+                            ServerUrlCheck.Invalid -> Text(ServerUrls.FORMAT_HINT)
+                            ServerUrlCheck.NeedsHttps -> Text(ServerUrls.NEEDS_HTTPS_HINT, Modifier.testTag("server-custom-hint"))
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth().testTag("server-custom-url"),
                 )
                 Row(Modifier.align(Alignment.End)) {
@@ -689,7 +722,8 @@ private fun ChoiceRow(
 /**
  * The version picker (`version-picker`) of [appId]: "Latest" (`version-latest`), then the history newest first
  * (`version-<n>`: "vN", relative time, note or source), paged with "Load older" (`versions-more`). The version on
- * screen is checked.
+ * screen is checked; when it is pinned to a version on an older page, a checked "Pinned: vN" row (`version-pinned`)
+ * sits under "Latest" until that page is loaded.
  */
 @Composable
 private fun VersionPicker(controller: ConstructController, state: ConstructState, pin: PinnedVersion?, appId: String) {
@@ -703,7 +737,7 @@ private fun VersionPicker(controller: ConstructController, state: ConstructState
     val title = (menu.apps as? Load.Ready)?.value?.firstOrNull { it.id == appId }?.title
         ?: if (isCurrent) (state.workspace as? UiNode.Workspace)?.title ?: appId else appId
     val h = menu.history[appId] ?: VersionHistory()
-    val pinnedHere = pin?.takeIf { isCurrent && it.appId == appId }
+    val pinnedHere = pinnedInPicker(state, pin, appId, isCurrent)
     val now = nowEpochSeconds()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("version-picker").padding(bottom = 16.dp)) {
         Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -726,6 +760,17 @@ private fun VersionPicker(controller: ConstructController, state: ConstructState
             onClick = { menu.selectLatest(appId) },
             bold = true,
         )
+        pinnedRowVersion(pinnedHere, h)?.let { v ->
+            ChoiceRow(
+                title = "Pinned: v$v",
+                subtitle = null,
+                detail = "The version on screen (older versions are below \"Load older\")",
+                checked = true,
+                busy = menu.selecting == v,
+                tag = "version-pinned",
+                onClick = { menu.selectVersion(appId, v, scope) },
+            )
+        }
         HorizontalDivider(Modifier.padding(horizontal = 20.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant)
         h.versions.forEach { v ->
             ChoiceRow(

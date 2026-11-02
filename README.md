@@ -160,7 +160,9 @@ Options for the desktop app (set as `-D` JVM properties or environment variables
   `baseUrl`), then the staging pod `https://the-construct-pod.fly.dev`. Local server: `http://127.0.0.1:8080`. An
   override only decides the launch server; picking a server in the menu still switches the running app (and saves
   the choice for the next launch without an override). Any server but staging gets its own storage,
-  `~/.construct/servers/<url>`.
+  `~/.construct/servers/<url>`; `~/.construct` itself now belongs to staging. If you ran older builds against a
+  local pod, its cache and pending outbox there would be shown on, and flushed to, staging: delete
+  `~/.construct/cache.db` once.
 - `construct.workspace` / `CONSTRUCT_WORKSPACE`: default `pixelfed_home`. Use `home` for the counter and
   `pixelfed_demo` for the one-post demo. Other apps can also be opened from the menu.
 
@@ -304,19 +306,24 @@ offline, when actions wait to be sent, or when the version you picked has a newe
   newest first ("vN", age, note), with "Load older". Picking a version shows that layout with your current data.
   This happens only on this device: nothing changes on the pod, and the next launch shows the latest again. While
   you view an older version and a newer one is published, the drawer shows "Newer version available" with
-  **Show latest**. Picking "Latest" follows new versions again.
-- **Connection:** Online / Offline and "N pending".
+  **Show latest**. Picking "Latest" follows new versions again. When the version you picked is on an older page,
+  a checked "Pinned: vN" row sits under "Latest" until "Load older" lists it.
+- **Connection:** Online / Offline and "N pending" ("Connecting…" until the engine first reports; no offline badge
+  then). Offline, the Apps list from the last load stays without an error, and it reloads once back online.
 - **Account:** "Signed in as @you" with **Sign out**, or **Sign in**.
 - **Server:** Staging, Local emulator (`http://10.0.2.2:8080`), Local USB (`http://127.0.0.1:8080`) or a custom
-  `http(s)://host[:port]` on Android; Staging or Local (`http://127.0.0.1:8080`) on desktop. This is in every
-  build, release included. Android saves the choice and restarts the activity with a new engine; desktop switches
-  in place and saves it for the next launch. Each server keeps its own cache and outbox.
+  URL on Android; Staging, Local (`http://127.0.0.1:8080`) or a custom `http(s)://host[:port]` on desktop. On
+  Android a custom URL must be `https://` unless it is `localhost`, `127.0.0.1` or `10.0.2.2` ("Use https:// for
+  remote servers"), since images can only load over cleartext from those hosts. This is in every build, release
+  included. Both switch in place: the new engine is started first, and the choice is saved only once it started.
+  Each server keeps its own cache and outbox.
 
 Back (Android) closes the innermost level (custom URL field, picker, drawer). Test tags: `menu-button`,
 `menu-badge`, `menu-drawer`, `menu-close`, `menu-back`, `app-<id>`, `app-history-<id>`, `app-error`, `apps-error`,
 `menu-newer`, `menu-newer-latest`, `menu-connection`, `menu-account`, `menu-sign-in`, `menu-sign-out`,
-`menu-server`, `server-<key>`, `server-custom`, `server-custom-url`, `server-custom-use`, `version-picker`,
-`version-latest`, `version-<n>`, `versions-more`, `versions-error`, `version-error`.
+`menu-server`, `server-<key>`, `server-custom`, `server-custom-url`, `server-custom-hint`, `server-custom-use`,
+`version-picker`, `version-latest`, `version-pinned`, `version-<n>`, `versions-more`, `versions-error`,
+`version-error`.
 
 ## Milestone check recipes
 

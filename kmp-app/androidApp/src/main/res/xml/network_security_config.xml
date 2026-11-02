@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- All builds (the menu's server picker ships in release too): cleartext HTTP only to the local dev server
-     addresses. 10.0.2.2 is the emulator's alias for the host's loopback; localhost/127.0.0.1 cover
-     `adb reverse tcp:8080 tcp:8080` on a physical device. These are loopback-only, so nothing remote can be reached
-     in cleartext. Everything else keeps the platform default (cleartext blocked on targetSdk 28+). This governs the
-     Java stack (Coil image loads); the engine's Rust HTTP client is not bound by it (DECISIONS D11). -->
+     addresses. localhost/127.0.0.1 are the device's own loopback (a physical device reaches the dev machine there
+     through `adb reverse tcp:8080 tcp:8080`). 10.0.2.2 is the emulator's alias for the host machine's loopback; on a
+     physical device it is just an address on whatever network it is on (usually nothing), so a dev server on the
+     LAN must be reached over https:// or through `adb reverse`. Everything else keeps the platform default (cleartext
+     blocked on targetSdk 28+). The menu's custom URL field enforces the same list (ServerUrls.ANDROID_CLEARTEXT_HOSTS:
+     https:// to any host, http:// only to these). This governs the Java stack (Coil image loads); the engine's Rust
+     HTTP client is not bound by it (DECISIONS D11). -->
 <network-security-config>
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">10.0.2.2</domain>

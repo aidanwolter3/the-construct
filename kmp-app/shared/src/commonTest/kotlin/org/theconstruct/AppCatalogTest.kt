@@ -17,10 +17,11 @@ class AppCatalogTest {
         ConstructState(workspace = feed, isOnline = online, pendingActions = pending, seq = 1, activeLayout = ActiveLayout(appId, version))
 
     @Test
-    fun activeLayoutReadsTheNewAndTheOldShape() {
+    fun activeLayoutReadsAppIdAndVersion() {
         assertEquals(ActiveLayout("pixelfed_home", 3), ActiveLayout.parse("""{"app_id":"pixelfed_home","version":3}"""))
         assertEquals(ActiveLayout("pixelfed_home", null), ActiveLayout.parse("""{"app_id":"pixelfed_home"}"""))
-        assertEquals(ActiveLayout("home", 5), ActiveLayout.parse("""{"layout_id":"home.counter","layout_version":2,"revision":5}"""))
+        // The D27 shape is no longer read.
+        assertEquals(ActiveLayout(), ActiveLayout.parse("""{"layout_id":"home.counter","layout_version":2,"revision":5}"""))
         assertEquals(ActiveLayout(), ActiveLayout.parse("{}"))
         assertEquals(ActiveLayout(), ActiveLayout.parse("not json"))
         assertEquals(ActiveLayout(null, null), ActiveLayout.parse("""{"app_id":7,"version":"2"}"""))
@@ -120,6 +121,32 @@ class AppCatalogTest {
         assertTrue(showMenuBadge(state(3, online = false), null))
         assertTrue(showMenuBadge(state(3, pending = 2), null))
         assertFalse(showMenuBadge(state(null), pinnedLatest.copy(version = 1)))
+        // Connectivity unknown (before the first snapshot): no badge.
+        assertFalse(showMenuBadge(ConstructState(), null))
+        assertFalse(showMenuBadge(state(3).copy(isOnline = null), null))
+    }
+
+    @Test
+    fun pickerChecksThePinOnlyWhereItAppliesAndKeepsAnOlderPinVisible() {
+        val pin = PinnedVersion("pixelfed_home", 2, older)
+        assertEquals(pin, pinnedInPicker(state(25), pin, "pixelfed_home", isCurrent = true))
+        // Signed out (no version): the pin doesn't apply, "Latest" is checked as in the Apps section.
+        assertNull(pinnedInPicker(state(null), pin, "pixelfed_home", isCurrent = true))
+        assertNull(pinnedInPicker(state(25), pin, "pixelfed_home", isCurrent = false))
+        assertNull(pinnedInPicker(state(25), pin, "home", isCurrent = true))
+
+        // 25 versions, pinned to v2: the first page (v25..v6) doesn't list it, so a "Pinned: v2" row shows.
+        fun page(from: Long, to: Long, nextBefore: Long?) = AppVersionPage((from downTo to).map { AppVersionInfo(it) }, nextBefore)
+        val first = VersionHistory().withFirstPage(page(25, 6, nextBefore = 6))
+        assertEquals(20, first.versions.size)
+        assertEquals(2L, pinnedRowVersion(pin, first))
+        // Once "Load older" lists v2, its own row is checked instead.
+        val all = first.withOlderPage(6, page(5, 1, nextBefore = null))
+        assertNull(pinnedRowVersion(pin, all))
+        // Nothing pinned, or the history not loaded yet: no row.
+        assertNull(pinnedRowVersion(null, first))
+        assertNull(pinnedRowVersion(pin, VersionHistory()))
+        assertNull(pinnedRowVersion(pin.copy(version = 20), first))
     }
 
     @Test
@@ -152,6 +179,19 @@ class AppCatalogTest {
         )) {
             assertNull(ServerUrls.parse(bad), bad)
         }
+        // Android's policy: https to any host, http only to the loopback / emulator hosts (images load over Java).
+        val android = ServerUrls.ANDROID_CLEARTEXT_HOSTS
+        assertEquals(ServerUrlCheck.Ok("https://192.168.1.5:8443"), ServerUrls.check("https://192.168.1.5:8443", android))
+        assertEquals(ServerUrlCheck.Ok("https://pod.example.com"), ServerUrls.check("https://pod.example.com/", android))
+        assertEquals(ServerUrlCheck.Ok("http://10.0.2.2:8080"), ServerUrls.check("http://10.0.2.2:8080", android))
+        assertEquals(ServerUrlCheck.Ok("http://127.0.0.1:8080"), ServerUrls.check("http://127.0.0.1:8080", android))
+        assertEquals(ServerUrlCheck.Ok("http://LocalHost:8080"), ServerUrls.check("http://LocalHost:8080", android))
+        assertEquals(ServerUrlCheck.NeedsHttps, ServerUrls.check("http://192.168.1.5:8080", android))
+        assertEquals(ServerUrlCheck.NeedsHttps, ServerUrls.check("http://pod.example.com", android))
+        assertEquals(ServerUrlCheck.NeedsHttps, ServerUrls.check("http://10.0.2.20", android))
+        assertEquals(ServerUrlCheck.Invalid, ServerUrls.check("http://host/path", android))
+        // Desktop (no policy): any http host.
+        assertEquals(ServerUrlCheck.Ok("http://192.168.1.5:8080"), ServerUrls.check("http://192.168.1.5:8080"))
         val choice = ServerChoice("http://10.0.2.2:8080/", listOf(ServerOption("emulator", "Local emulator", "http://10.0.2.2:8080"))) {}
         assertEquals("Local emulator", choice.label())
         assertEquals("http://x:1", choice.label("http://x:1"))

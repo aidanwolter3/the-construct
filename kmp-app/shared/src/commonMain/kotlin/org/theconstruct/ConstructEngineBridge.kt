@@ -21,7 +21,7 @@ data class EngineSnapshot(
     /**
      * The layout on display: `{"app_id","version"?}` (`version` = the app's latest version, as applied from
      * `X-Construct-Layout-Version`; omitted on an unversioned screen such as the signed-out one); `"{}"` while unknown.
-     * Parse with [ActiveLayout.parse] (which also reads the older D27 shape).
+     * Parse with [ActiveLayout.parse].
      */
     val layoutJson: String = "{}",
 )

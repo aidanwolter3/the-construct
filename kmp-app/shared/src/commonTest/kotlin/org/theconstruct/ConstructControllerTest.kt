@@ -57,7 +57,7 @@ class ConstructControllerTest {
 
         val s = controller.state.value
         assertNull(s.error)
-        assertTrue(s.isOnline)
+        assertEquals(true, s.isOnline)
         val workspace = assertIs<UiNode.Workspace>(s.workspace)
         assertEquals("Home", workspace.title)
         assertEquals(0, s.entities["core://counters/home"]!!["count"]!!.jsonPrimitive.int)
@@ -130,7 +130,7 @@ class ConstructControllerTest {
         var s = controller.state.value
         assertEquals(10, s.seq)
         assertEquals(3, s.entities["core://counters/home"]!!["count"]!!.jsonPrimitive.int)
-        assertTrue(s.isOnline)
+        assertEquals(true, s.isOnline)
         assertEquals(0, s.pendingActions)
 
         bridge.emit(ws, COUNT_1, false, pending = 2, seq = 11)
@@ -148,7 +148,7 @@ class ConstructControllerTest {
         bridge.emit(ws, ents, true, seq = 5)
         bridge.emit("{not json", ents, false, seq = 4)
         assertNull(controller.state.value.error)
-        assertTrue(controller.state.value.isOnline)
+        assertEquals(true, controller.state.value.isOnline)
     }
 
     @Test
@@ -192,10 +192,60 @@ class ConstructControllerTest {
         second.emit(ws, COUNT_1, true, seq = 1)
         first.emit(ws, COUNT_3, false, seq = 41)
         assertEquals(1, controller.state.value.entities["core://counters/home"]!!["count"]!!.jsonPrimitive.int)
-        assertTrue(controller.state.value.isOnline)
+        assertEquals(true, controller.state.value.isOnline)
         controller.dispatch(ActionIntent.NavigateBack)
         assertEquals(1, second.dispatched.size)
         assertEquals(0, first.dispatched.size)
+    }
+
+    @Test
+    fun connectivityIsUnknownUntilTheFirstSnapshotAndCarriesAcrossOpenApp() {
+        val first = FakeBridge()
+        val second = FakeBridge()
+        val controller = ConstructController(first, "pixelfed_home") { second }
+        assertNull(controller.state.value.isOnline, "unknown at cold start")
+        assertFalse(showMenuBadge(controller.state.value, null), "no offline badge while unknown")
+        val (ws, ents) = snapshotOf(COUNTER_BUNDLE_JSON)
+        first.emit(ws, ents, false)
+        assertEquals(false, controller.state.value.isOnline)
+        assertTrue(showMenuBadge(controller.state.value, null))
+        first.emit(ws, ents, true)
+        assertTrue(controller.openApp("home"))
+        assertEquals(true, controller.state.value.isOnline, "same server: connectivity carries over until the new engine reports")
+        assertFalse(showMenuBadge(controller.state.value, null))
+        second.emit(ws, ents, false, seq = 1)
+        assertEquals(false, controller.state.value.isOnline)
+    }
+
+    @Test
+    fun openAppAndPinAfterCloseDoNothing() {
+        val first = FakeBridge()
+        var created = 0
+        val controller = ConstructController(first, "pixelfed_home") { created++; FakeBridge() }
+        controller.close()
+        controller.close()
+        assertEquals(1, first.closes, "close is idempotent")
+        assertTrue(controller.isClosed)
+        assertFalse(controller.openApp("home"))
+        assertFalse(controller.openApp("pixelfed_home"), "not even the app on screen")
+        assertEquals(0, created, "no engine is created after close")
+        assertEquals("pixelfed_home", controller.currentAppId())
+        assertFalse(controller.pin("pixelfed_home", 1, UiNode.Text("old", TextStyle.Body)))
+        assertNull(controller.pinned.value)
+    }
+
+    @Test
+    fun anEngineCreatedWhileClosingIsClosed() {
+        val first = FakeBridge()
+        val next = FakeBridge()
+        lateinit var controller: ConstructController
+        // The UI goes away while the factory runs (here: re-entrantly, from the factory itself).
+        controller = ConstructController(first, "pixelfed_home") { controller.close(); next }
+        assertFalse(controller.openApp("home"))
+        assertEquals(1, first.closes)
+        assertEquals(1, next.closes, "the engine created meanwhile is closed, not leaked")
+        assertEquals("pixelfed_home", controller.currentAppId())
+        assertNull(next.listener, "never subscribed: its snapshots can't reach the UI")
     }
 
     @Test
