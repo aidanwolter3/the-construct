@@ -8,7 +8,8 @@ One geometry definition (scene()) is emitted three ways, so every output matches
                  macOS .icns (via iconutil) and Windows .ico
 
 Detail levels: "full" (large PNGs, SVG master), "launcher" (Android adaptive layers: heavier lines, bigger cube, since
-launchers show them at ~48 dp inside a circle) and "small" (PNGs <= 48 px: fewer, heavier lines).
+launchers show them at ~48 dp inside a circle), "small" (48 px PNGs: fewer, heavier lines) and "tiny" (PNGs <= 32 px:
+a few heavy grid lines, a darker sky/floor and frame so the tile reads on white, a dark cube outline).
 Run via scripts/gen_icons.sh (needs python3 + Pillow + numpy; iconutil on macOS for the .icns).
 """
 import math
@@ -34,12 +35,21 @@ FLOOR_HORIZON, FLOOR_NEAR = "#FFFFFF", "#DCE1E7"
 GRID = "#98A1AC"
 
 # Per detail level: grid spacing (world), stroke width (art units), farthest depth line, haze depth, cube size,
-# grid colour (smaller renderings get darker lines), cube edge width factor.
+# grid colour (smaller renderings get darker lines), cube edge width factor. Optional overrides (tiny only): sky / floor
+# gradient ends, cube edge and face colours, tile frame colour.
 DETAIL = {
     "full":     dict(cell=0.45, line_w=0.014, z_far=6.0, haze_z=1.25, cube=1.12, grid=GRID, edge_k=1.15),
     "launcher": dict(cell=0.52, line_w=0.022, z_far=5.0, haze_z=1.35, cube=1.32, grid="#8A94A0", edge_k=1.1),
     "small":    dict(cell=0.62, line_w=0.034, z_far=3.8, haze_z=1.5, cube=1.3, grid="#85909C", edge_k=1.0),
+    "tiny":     dict(cell=0.8, line_w=0.05, z_far=2.4, haze_z=2.2, cube=1.3, grid="#77828F", edge_k=1.3,
+                     sky_top="#D9DFE6", floor_near="#D3D9E0", edge="#4A5563", face_left="#D2D8E0",
+                     face_right="#E8ECF1", frame="#8E98A4"),
 }
+FRAME = "#C3C9D1"
+
+
+def detail_for(size):
+    return "tiny" if size <= 32 else "small" if size <= 48 else "full"
 HAZE = "#FFFFFF"
 EDGE = "#768190"
 FACE_TOP, FACE_LEFT, FACE_RIGHT = "#FFFFFF", "#E3E7EC", "#F2F4F7"
@@ -62,8 +72,8 @@ def scene(detail="full"):
 
     bg, fg = [], []
     # Sky and floor gradients (extend past the unit square so adaptive-icon viewports are covered).
-    bg.append(("grad", (-1, -1, 2, HORIZON), [(0.0, SKY_TOP, 1), (1.0, SKY_HORIZON, 1)]))
-    bg.append(("grad", (-1, HORIZON, 2, 2), [(0.0, FLOOR_HORIZON, 1), (1.0, FLOOR_NEAR, 1)]))
+    bg.append(("grad", (-1, -1, 2, HORIZON), [(0.0, d.get("sky_top", SKY_TOP), 1), (1.0, SKY_HORIZON, 1)]))
+    bg.append(("grad", (-1, HORIZON, 2, 2), [(0.0, FLOOR_HORIZON, 1), (1.0, d.get("floor_near", FLOOR_NEAR), 1)]))
 
     # Depth (horizontal) lines at regular world spacing -> denser toward the horizon.
     lines = []
@@ -102,12 +112,12 @@ def scene(detail="full"):
     # Contact shadow: the footprint pushed back and spread a little.
     sh = [cube_pt(x * 1.2 + 0.08, 0, z * 1.2 - 0.1) for (x, z) in base.values()]
     fg.append(("poly", [sh[0], sh[1], sh[3], sh[2]], SHADOW, 0.20))
-    fg.append(("poly", [P["f0"], P["l0"], P["l1"], P["f1"]], FACE_LEFT, 1))
-    fg.append(("poly", [P["f0"], P["r0"], P["r1"], P["f1"]], FACE_RIGHT, 1))
+    fg.append(("poly", [P["f0"], P["l0"], P["l1"], P["f1"]], d.get("face_left", FACE_LEFT), 1))
+    fg.append(("poly", [P["f0"], P["r0"], P["r1"], P["f1"]], d.get("face_right", FACE_RIGHT), 1))
     fg.append(("poly", [P["f1"], P["l1"], P["b1"], P["r1"]], FACE_TOP, 1))
     edges = [("f0", "l0"), ("f0", "r0"), ("f0", "f1"), ("l0", "l1"), ("r0", "r1"),
              ("f1", "l1"), ("f1", "r1"), ("l1", "b1"), ("r1", "b1")]
-    fg.append(("lines", [(P[a], P[b]) for a, b in edges], EDGE, line_w * d["edge_k"]))
+    fg.append(("lines", [(P[a], P[b]) for a, b in edges], d.get("edge", EDGE), line_w * d["edge_k"]))
     return {"background": bg, "foreground": fg}
 
 
@@ -345,7 +355,8 @@ def rounded_mask(size, rect, radius):
 
 def tile_png(size, shape="squircle"):
     """Full-bleed tile (PNG set, legacy Android mipmaps, desktop window icon)."""
-    detail = "small" if size <= 48 else "full"
+    detail = detail_for(size)
+    frame_col = rgb(DETAIL[detail].get("frame", FRAME)) + (255,)
     img = raster_ops(all_ops(scene(detail)), size, (0, 0, size))
     n = size * SS
     if shape == "circle":
@@ -359,17 +370,17 @@ def tile_png(size, shape="squircle"):
     frame = Image.new("RGBA", (n, n), (0, 0, 0, 0))
     fw = max(SS, int(round(n / 256)))
     if shape == "circle":
-        ImageDraw.Draw(frame).ellipse([0, 0, n - 1, n - 1], outline=rgb("#C3C9D1") + (255,), width=fw)
+        ImageDraw.Draw(frame).ellipse([0, 0, n - 1, n - 1], outline=frame_col, width=fw)
     else:
         ImageDraw.Draw(frame).rounded_rectangle([0, 0, n - 1, n - 1], radius=size * 0.2237 * SS,
-                                                outline=rgb("#C3C9D1") + (255,), width=fw)
+                                                outline=frame_col, width=fw)
     out = Image.alpha_composite(out, frame)
     return out.resize((size, size), Image.LANCZOS)
 
 
 def macos_png(size):
     """macOS (Big Sur grid): 824/1024 body, ~185/1024 corner radius, soft drop shadow."""
-    detail = "small" if size <= 48 else "full"
+    detail = detail_for(size)
     k = size / 1024
     bx, bw, br = 100 * k, 824 * k, 185 * k
     n = size * SS
@@ -386,7 +397,7 @@ def macos_png(size):
     out = Image.alpha_composite(out, body)
     frame = Image.new("RGBA", (n, n), (0, 0, 0, 0))
     ImageDraw.Draw(frame).rounded_rectangle([bx * SS, bx * SS, (bx + bw) * SS - 1, (bx + bw) * SS - 1],
-                                            radius=br * SS, outline=rgb("#C3C9D1") + (255,),
+                                            radius=br * SS, outline=rgb(DETAIL[detail].get("frame", FRAME)) + (255,),
                                             width=max(SS, int(round(2 * k * SS))))
     out = Image.alpha_composite(out, frame)
     return out.resize((size, size), Image.LANCZOS)
@@ -414,8 +425,10 @@ def main():
     # PNG set (Linux / web).
     for s in (16, 32, 48, 64, 128, 192, 256, 512, 1024):
         tile_png(s).save(os.path.join(ICON_DIR, "png", f"construct-{s}.png"))
-    tile_png(256).save(os.path.join(ICON_DIR, "construct.ico"), sizes=[(16, 16), (32, 32), (48, 48), (64, 64),
-                                                                        (128, 128), (256, 256)])
+    # .ico: every entry rendered at its own size (so 16/32 get the "tiny" detail level), not downscaled from 256.
+    ico_sizes = (16, 32, 48, 64, 128, 256)
+    tile_png(256).save(os.path.join(ICON_DIR, "construct.ico"), sizes=[(s, s) for s in ico_sizes],
+                       append_images=[tile_png(s) for s in ico_sizes[:-1]])
 
     # Android adaptive icon layers (VectorDrawable) + legacy PNG mipmaps.
     sc = scene("launcher")
