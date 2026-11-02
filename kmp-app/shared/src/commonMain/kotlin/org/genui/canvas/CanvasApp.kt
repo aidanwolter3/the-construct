@@ -21,10 +21,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,6 +71,9 @@ class CanvasController(private val bridge: CanvasEngineBridge) {
 
     /** The layout catalog (D26/D27) for the layout browser; its spec cache lives as long as this controller. */
     val layouts: LayoutRepository = LayoutRepository(bridge)
+
+    /** The layout browser's state (D30): kept here so it outlives the composition (Android rotation). */
+    internal val layoutBrowser: LayoutBrowserState = LayoutBrowserState(layouts) { _state.value.activeLayout }
 
     init {
         bridge.subscribe(::onSnapshot)
@@ -140,11 +141,13 @@ class CanvasController(private val bridge: CanvasEngineBridge) {
 @Composable
 fun CanvasApp(controller: CanvasController, modifier: Modifier = Modifier) {
     val state by controller.state.collectAsState()
-    // The layout browser (D30): navigation saved across rotation; writes run in this scope.
-    val navState = rememberSaveable(stateSaver = LayoutNavSaver) { mutableStateOf(LayoutNav()) }
-    val activeLayout = rememberUpdatedState(state.activeLayout)
-    val scope = rememberCoroutineScope()
-    val layouts = remember(controller) { LayoutBrowserState(controller.layouts, navState, scope, activeLayout) }
+    // The layout browser (D30): its state lives in the controller (survives rotation); its navigation is also saved
+    // here for process death and restored once into a fresh controller.
+    val layouts = controller.layoutBrowser
+    val savedNav: LayoutNav = rememberSaveable(
+        saver = Saver<LayoutNav, Any>(save = { with(LayoutNavSaver) { save(layouts.nav) } }, restore = { LayoutNavSaver.restore(it) }),
+    ) { layouts.nav }
+    remember(layouts) { layouts.restoreNav(savedNav) }
     // Material3 light scheme on a white background and surface (feed photos sit on white, as on Pixelfed/Instagram).
     MaterialTheme(colorScheme = lightColorScheme(background = Color.White, surface = Color.White)) {
         Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {

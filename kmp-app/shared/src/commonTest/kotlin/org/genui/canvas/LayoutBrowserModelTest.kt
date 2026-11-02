@@ -2,6 +2,7 @@ package org.genui.canvas
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -35,6 +36,19 @@ class LayoutBrowserModelTest {
         val nav = LayoutNav(true, "home.counter", 2, confirming = true)
         assertEquals(nav, LayoutNav.fromSaveable(nav.toSaveable()))
         assertEquals(LayoutNav(), LayoutNav.fromSaveable(emptyList()))
+    }
+
+    @Test
+    fun undoIsOfferedOnlyWhileTheScreenShowsWhatTheChangeProduced() {
+        val snack = LayoutSnack("Switched", LayoutChange.Activate("ws.classic", 4), 1, after = ActiveLayout("ws.editorial", 1))
+        assertTrue(undoStillApplies(snack, ActiveLayout("ws.editorial", 1, 7)))
+        // Unknown values never block it.
+        assertTrue(undoStillApplies(snack, ActiveLayout()))
+        assertTrue(undoStillApplies(snack.copy(after = null), ActiveLayout("ws.minimal", 1)))
+        // Another device switched layouts, or an AI edit added a version: undo would revert that instead.
+        assertFalse(undoStillApplies(snack, ActiveLayout("ws.minimal", 1)))
+        assertFalse(undoStillApplies(snack, ActiveLayout("ws.editorial", 2)))
+        assertFalse(undoStillApplies(snack.copy(undo = null), ActiveLayout("ws.editorial", 1)))
     }
 
     private val classic = LayoutSummary("ws.classic", "Classic feed", currentVersion = 4, active = true, activeVersion = 4)

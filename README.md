@@ -629,7 +629,9 @@ Every surface (desktop, Android, simulator) has the same shared-Compose browser 
   nothing is ever lost); on another layout, "Use this version" switches to that version.
 - Every change asks for confirmation, then closes the browser, shows the new layout at once and offers **Undo** in a
   snackbar for 8 s (undo is itself a new version / switch, never a deletion).
-- Back (Android) closes one level at a time; rotation keeps the open level. Errors show inline with "Try again"
+- Back (Android) closes one level at a time; rotation keeps the open level, a running change and the snackbar's Undo
+  (Undo disappears once the screen shows something else, e.g. another device switched layouts). Errors show inline
+  with "Try again"
   (offline: "Can't reach your pod. ..."; writes without a session: "Sign in to change layouts.", unless the pod runs
   with `CANVAS_AGENT_OPEN=1`).
 - Test tags: `layouts-button`, `layouts-browser`, `layouts-close`, `layouts-back`, `layout-item-<id>`,

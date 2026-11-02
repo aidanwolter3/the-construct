@@ -412,12 +412,17 @@ class SimRunner(
             return tags.firstOrNull { it == "layout-item-$id" } ?: tags.firstOrNull { it.endsWith(".$id") }
         }
         match()?.let { return it }
-        try {
-            waitUntil("layout item $id", LAYOUT_TIMEOUT_MS) { match() != null }
-        } catch (e: ComposeTimeoutException) {
+        fun missing(): Nothing {
             val listed = tagsStartingWith("layout-item-").map { it.removePrefix("layout-item-") }
             val err = if (hasTag("layouts-error")) "; error shown: ${textUnder("layouts-error")}" else ""
             throw StepFailure("no layout '$id' in the browser; listed: $listed$err")
+        }
+        // The caller waited for the catalog calls: a loaded list (or its error) without the id fails at once.
+        if (tagsStartingWith("layout-item-").isNotEmpty() || hasTag("layouts-error")) missing()
+        try {
+            waitUntil("layout item $id", LAYOUT_TIMEOUT_MS) { match() != null }
+        } catch (e: ComposeTimeoutException) {
+            missing()
         }
         return match()!!
     }

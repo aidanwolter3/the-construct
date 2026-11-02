@@ -270,8 +270,14 @@ Note: the environment restarted twice mid-work; work is now committed in small w
   - Tests: shared `LayoutBrowserModelTest` (navigation, offered change, undo bookkeeping, messages, labels, relative
     time, lenient parsers), desktop `LayoutBrowserTest` (switch keeps the carousel page + undo, restore + undo is
     append-only, previews never dispatch and the browser blocks the feed, Back per level, offline error + retry,
-    401 write keeps the dialog, the agent prompt survives a switch, command failures, command parsing). :shared 58,
-    :desktopApp 65.
+    401 write keeps the dialog, the agent prompt survives a switch, the open level and Undo survive a new composition,
+    command failures, command parsing). :shared 59, :desktopApp 66.
+  - Review/QA pass: the browser state moved into `CanvasController` (rotation keeps a running write and the Undo
+    snackbar; nav still saved for process death), writes run `NonCancellable`, Back is ignored while a change runs,
+    Undo hides once the screen moved on elsewhere (`undoStillApplies`), "Load older" can't stay spinning or append a
+    stale page, previews render at most 3 feed items per query (no N x timeline image loads), `select-layout` of a
+    missing id fails at once. Re-verified in fixture + live (SSE refreshes the open list's Active badge; 401 path)
+    and on the emulator (Undo after rotation).
 - Status: A3 DONE (layout browser + version history on every surface).
 
 ### Deferred / known issues (M6/M7)

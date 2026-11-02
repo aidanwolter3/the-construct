@@ -132,6 +132,18 @@ class LayoutBrowserTest {
     }
 
     @Test
+    fun theOpenLevelAndUndoSurviveANewComposition() {
+        val fake = feed()
+        // `screen` disposes the composition and starts a new one on the same controller, like an Android rotation.
+        val (_, controller) = run(
+            fake, fake,
+            "open-layouts; select-layout editorial; screen tablet; assert-text Use this layout; use-layout; confirm; " +
+                "screen phone; assert-text Switched to Editorial journal; undo; assert-text Undone. Back to Classic feed",
+        )
+        assertEquals("pixelfed_home.classic", controller.state.value.activeLayout.layoutId)
+    }
+
+    @Test
     fun theAgentPromptSurvivesASwitch() {
         val fake = feed()
         run(

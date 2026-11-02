@@ -851,15 +851,20 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   `CanvasApp` above the workspace, so the headless harness's `onRoot().captureToImage()` sees them (a Material
   `AlertDialog` opens a second root). The browser is a full-screen `Surface`, which also blocks touches to the feed.
 - **Navigation model:** `LayoutNav(open, layoutId?, version?, confirming)`, a pure value: list -> details -> preview,
-  `back()` closes the innermost level (dialog, preview, details, list); saved with `rememberSaveable` (`LayoutNavSaver`,
-  a list of primitives), so rotation keeps the level, the selected layout/version and an open dialog.
+  `back()` closes the innermost level (dialog, preview, details, list; ignored while the dialog's change runs, like its
+  disabled Cancel). The whole browser state (`LayoutBrowserState`: nav, list, histories, the running write, the
+  snackbar) is owned by `CanvasController`, so on Android it lives in the ViewModel and a rotation keeps the level, an
+  open dialog, a write in flight and the snackbar's Undo; `CanvasApp` also saves the nav with `rememberSaveable`
+  (`LayoutNavSaver`, a list of primitives) and restores it once into a fresh controller after process death.
   `PlatformBackHandler(enabled = open)` maps system Back to `back()` (registered after the agent panel's).
 - **Loading:** `LayoutRepository` (owned by `CanvasController`, so it survives rotation with the Android ViewModel)
   runs the D27 calls with `withContext(layoutIoDispatcher)`, parses leniently (`LayoutCatalogJson`) and caches version
   specs per (id, version) (immutable on the pod). List and history loads run in `LaunchedEffect`s keyed on the open
   level, Retry tokens and `state.activeLayout`, so closing a level cancels its load and an AI edit or a switch made
   elsewhere reloads it (a reload keeps the stale list on screen). History pages of 20 (`versions-more` uses
-  `next_before`). Writes and Undo run in `CanvasApp`'s scope, so closing the browser never drops a result.
+  `next_before`; a page that arrives after the newest page was reloaded is dropped, and "Load older" never stays
+  spinning when the details close mid-load). Writes and Undo are launched from the UI's scope but run under
+  `NonCancellable`, so neither closing the browser nor a rotation drops a result.
   `LayoutCalls.inFlight` counts calls in flight (like `ImageLoads`) for the simulator.
 - **Live thumbnails:** `LayoutPreview` renders the real `RenderUiNode` of the layout's current version against the
   current entities and queries at 390 dp (a phone) and scales it into a 120x200 dp box with `graphicsLayer`
@@ -868,7 +873,8 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   `clearAndSetSemantics` hides the inner nodes from screen readers and tests. The on-screen layout uses
   `state.workspace` directly; others fetch their spec lazily; a `preview_hint` placeholder shows while loading or on
   failure. The version preview is the same composable at full height (render width = the box's width, at least
-  360 dp).
+  360 dp). Feeds are plain Columns (every item composed, its images loaded), so previews render at most 3 items per
+  query: N thumbnails never mean N x the whole timeline's images.
 - **Changes offered:** details of an inactive layout -> "Use this layout" (`layout-use`, activate); preview of a
   version of the active layout -> "Restore this version" (`version-restore`, restore; none for the current version);
   preview of an inactive layout -> "Use this version" (`version-use`, activate with that version, or plain activate for
@@ -880,7 +886,9 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 - **Undo is append-only:** `undoFor(change, before, outcome)` with `before` = `state.activeLayout` when the change
   started: a switch is undone by `activateLayout(previousId, previousVersion)` (no new version when that is still its
   newest content), a restore by `restoreLayoutVersion(id, previousVersion)` (a new copy on top). No undo when the pod
-  answered `unchanged` or the previous layout was unknown. The undo's own snackbar has no Undo.
+  answered `unchanged` or the previous layout was unknown. The undo's own snackbar has no Undo. Undo is offered only
+  while the screen still shows the layout id and version the change produced (`undoStillApplies`): once another
+  device, an AI edit or a later change moved on, Undo would silently revert that instead, so the action disappears.
 - **State across a switch:** nothing in the browser touches the workspace tree, so the D23 keys apply: slots by
   `slot_id`, posts by URI, PostCard slots by node kind (a carousel keeps its page when Editorial moves it to another
   slot; tested), the agent prompt text and the outbox are untouched (the engine's merge re-applies pending rows).

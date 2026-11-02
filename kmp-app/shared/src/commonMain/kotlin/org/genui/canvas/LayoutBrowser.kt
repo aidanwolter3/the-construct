@@ -48,9 +48,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -81,8 +79,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 
 // The layout browser (DECISIONS D30): a layouts button next to the AI FAB opens an in-tree, full-screen overlay
@@ -95,6 +96,12 @@ private val RENDER_WIDTH = 390.dp
 private val THUMB_WIDTH = 120.dp
 private val THUMB_HEIGHT = 200.dp
 private val CONTENT_MAX_WIDTH = 760.dp
+
+/**
+ * Items per feed query a thumbnail or preview renders: the scaled box shows one or two posts, and feeds are plain
+ * Columns (every item composed and its images loaded), so N thumbnails x a long timeline must not mean N x all images.
+ */
+private const val PREVIEW_MAX_ITEMS = 3
 
 /** How long the result snackbar stays (it also goes on the next change or a tap on Undo). */
 private const val SNACK_MS = 8_000L
@@ -115,8 +122,30 @@ internal data class HistoryState(
     val error: String? = null,
 )
 
-/** The result snackbar: [undo] is offered as its action; [error] colors it as a failure. */
-internal data class LayoutSnack(val message: String, val undo: LayoutChange?, val id: Long, val error: Boolean = false)
+/**
+ * The result snackbar: [undo] is offered as its action while the screen still shows [after] (the layout id and
+ * version the change produced); [error] colors it as a failure.
+ */
+internal data class LayoutSnack(
+    val message: String,
+    val undo: LayoutChange?,
+    val id: Long,
+    val error: Boolean = false,
+    val after: ActiveLayout? = null,
+)
+
+/**
+ * Whether [snack]'s Undo still means "go back": false once the screen shows another layout or version than the change
+ * produced (another device, an AI edit or a later change moved on; undoing would silently revert that instead).
+ * Unknown values never block it.
+ */
+internal fun undoStillApplies(snack: LayoutSnack, now: ActiveLayout): Boolean {
+    if (snack.undo == null) return false
+    val after = snack.after ?: return true
+    if (now.layoutId != null && after.layoutId != null && now.layoutId != after.layoutId) return false
+    if (now.layoutVersion != null && after.layoutVersion != null && now.layoutVersion != after.layoutVersion) return false
+    return true
+}
 
 /** Saves [LayoutNav] across rotation / process death as a list of primitives. */
 internal val LayoutNavSaver: Saver<LayoutNav, Any> = listSaver(
@@ -129,19 +158,30 @@ internal val LayoutNavSaver: Saver<LayoutNav, Any> = listSaver(
 )
 
 /**
- * The browser's state: [nav] (saveable, owned by [CanvasApp]), the loaded list and histories, the running write and
- * the snackbar. Reads run in the composables' effects (cancelled when their level closes); writes and undo run in
- * [scope] (the app's), so closing the browser never drops a result the user is waiting for.
+ * The browser's state: [nav], the loaded list and histories, the running write and the snackbar. Owned by
+ * [CanvasController] (so on Android it lives in the ViewModel and survives rotation with the snackbar's Undo and a
+ * write in flight); [CanvasApp] also saves [nav] for process death ([restoreNav]). Reads run in the composables'
+ * effects (cancelled when their level closes); writes and undo are launched in the caller's (the app's) scope but run
+ * to completion even if that scope ends (rotation), so their result is never dropped.
  */
 @Stable
 internal class LayoutBrowserState(
     val repo: LayoutRepository,
-    navState: MutableState<LayoutNav>,
-    private val scope: CoroutineScope,
     /** What is on screen now, read when a change starts (its undo goes back to it). */
-    private val currentActive: State<ActiveLayout>,
+    private val currentActive: () -> ActiveLayout,
 ) {
-    var nav: LayoutNav by navState
+    var nav: LayoutNav by mutableStateOf(LayoutNav())
+    private var composedOnce = false
+
+    /**
+     * Called by [CanvasApp] on its first composition with the navigation saved before a process death (or the current one):
+     * applied only to a fresh state, since after a rotation this state (kept by the controller) is already current.
+     */
+    fun restoreNav(saved: LayoutNav) {
+        if (composedOnce) return
+        composedOnce = true
+        nav = saved
+    }
     var list: Load<List<LayoutSummary>> by mutableStateOf(Load.Loading)
         private set
     /** Bumped by Retry: the list effect is keyed on it. */
@@ -165,6 +205,8 @@ internal class LayoutBrowserState(
     }
 
     fun back() {
+        // Like the dialog's disabled Cancel: while its change runs, Back must not leave a level the result then closes.
+        if (nav.confirming && writing) return
         if (nav.confirming) writeError = null
         nav = nav.back()
     }
@@ -213,12 +255,17 @@ internal class LayoutBrowserState(
         if (cur.loadingMore) return
         history[id] = cur.copy(loadingMore = true, error = null)
         scope.launch {
-            history[id] = try {
+            try {
                 val page = repo.versions(id, before = before)
-                val now = history[id] ?: cur
-                now.copy(versions = now.versions + page.versions, nextBefore = page.nextBefore, loadingMore = false)
+                val now = history[id] ?: return@launch
+                // A reload of the newest page (a new version arrived) replaced the history meanwhile: drop this page.
+                if (now.nextBefore != before) return@launch
+                history[id] = now.copy(versions = now.versions + page.versions, nextBefore = page.nextBefore, loadingMore = false)
             } catch (e: LayoutApiException) {
-                (history[id] ?: cur).copy(loadingMore = false, error = e.message)
+                history[id]?.let { history[id] = it.copy(loadingMore = false, error = e.message) }
+            } finally {
+                // Also when the details closed mid-load (their scope is cancelled): never leave "Load older" spinning.
+                history[id]?.let { if (it.loadingMore) history[id] = it.copy(loadingMore = false) }
             }
         }
     }
@@ -229,12 +276,12 @@ internal class LayoutBrowserState(
     }
 
     /** Runs the confirmed [change]; on success closes the browser and offers Undo, on failure keeps the dialog open. */
-    fun confirm(change: LayoutChange) {
+    fun confirm(change: LayoutChange, scope: CoroutineScope) {
         if (writing) return
-        val before = currentActive.value
+        val before = currentActive()
         writing = true
         writeError = null
-        scope.launch {
+        launchWrite(scope) {
             try {
                 val outcome = repo.apply(change)
                 nav = LayoutNav()
@@ -244,31 +291,48 @@ internal class LayoutBrowserState(
                     changeMessage(change, outcome, repo.titleOf(outcome.layoutId)),
                     undoFor(change, before, outcome),
                     ++snackSeq,
+                    after = ActiveLayout(outcome.layoutId, outcome.version),
                 )
             } catch (e: LayoutApiException) {
                 writeError = e.message
-            } finally {
-                writing = false
             }
         }
     }
 
     /** The snackbar's Undo: runs its change at once (append-only on the pod) and reports the result. */
-    fun undo() {
+    fun undo(scope: CoroutineScope) {
         val s = snack ?: return
         val change = s.undo ?: return
         if (writing) return
         snack = null
+        if (!undoStillApplies(s, currentActive())) {
+            snack = LayoutSnack("Not undone: the layout changed since.", null, ++snackSeq, error = true)
+            return
+        }
         writing = true
-        scope.launch {
+        launchWrite(scope) {
             try {
                 val outcome = repo.apply(change)
                 history.clear()
                 snack = LayoutSnack(changeMessage(change, outcome, repo.titleOf(outcome.layoutId), isUndo = true), null, ++snackSeq)
             } catch (e: LayoutApiException) {
                 snack = LayoutSnack("Couldn't undo: ${e.message}", null, ++snackSeq, error = true)
-            } finally {
-                writing = false
+            }
+        }
+    }
+
+    /**
+     * Runs a write launched from [scope] to completion even when that scope ends meanwhile (an Android rotation
+     * disposes the composition; this state outlives it), so its result and Undo still land; then clears [writing].
+     */
+    private fun launchWrite(scope: CoroutineScope, block: suspend () -> Unit) {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            withContext(NonCancellable) {
+                try {
+                    block()
+                } finally {
+                    writing = false
+                }
             }
         }
     }
@@ -305,13 +369,14 @@ internal fun LayoutBrowserHost(st: LayoutBrowserState, state: CanvasState, modif
         ) {
             LayoutBrowserScreen(st, state)
         }
-        LayoutSnackbarHost(st, Modifier.align(Alignment.BottomCenter))
+        LayoutSnackbarHost(st, state.activeLayout, Modifier.align(Alignment.BottomCenter))
     }
 }
 
 @Composable
 private fun LayoutBrowserScreen(st: LayoutBrowserState, state: CanvasState) {
     val nav = st.nav
+    val scope = rememberCoroutineScope()
     // Surface blocks touches to the workspace below.
     Surface(Modifier.fillMaxSize().testTag("layouts-browser"), color = MaterialTheme.colorScheme.background) {
         Box(Modifier.fillMaxSize()) {
@@ -334,7 +399,7 @@ private fun LayoutBrowserScreen(st: LayoutBrowserState, state: CanvasState) {
             val layout = st.layout(nav.layoutId)
             val change = layout?.let { offeredChange(it, nav.version) }
             if (nav.confirming && layout != null && change != null) {
-                ConfirmDialog(st, confirmCopy(change, layout), onConfirm = { st.confirm(change) }, onCancel = st::back)
+                ConfirmDialog(st, confirmCopy(change, layout), onConfirm = { st.confirm(change, scope) }, onCancel = st::back)
             }
         }
     }
@@ -563,7 +628,8 @@ internal fun LayoutPreview(
                     transformOrigin = TransformOrigin(0f, 0f)
                 },
         ) {
-            CompositionLocalProvider(LocalCanvasQueries provides queries) {
+            val shown = remember(queries) { queries.mapValues { (_, uris) -> uris.take(PREVIEW_MAX_ITEMS) } }
+            CompositionLocalProvider(LocalCanvasQueries provides shown) {
                 RenderUiNode(node, entities, onDispatch = NO_DISPATCH, modifier = Modifier.fillMaxSize())
             }
         }
@@ -872,7 +938,8 @@ private fun ConfirmDialog(st: LayoutBrowserState, copy: ConfirmCopy, onConfirm: 
 }
 
 @Composable
-private fun LayoutSnackbarHost(st: LayoutBrowserState, modifier: Modifier) {
+private fun LayoutSnackbarHost(st: LayoutBrowserState, active: ActiveLayout, modifier: Modifier) {
+    val scope = rememberCoroutineScope()
     val snack = st.snack
     // The last snack keeps showing while the exit animation runs.
     var last by remember { mutableStateOf(snack) }
@@ -894,9 +961,10 @@ private fun LayoutSnackbarHost(st: LayoutBrowserState, modifier: Modifier) {
         ) {
             val shown = last ?: return@AnimatedVisibility
             Snackbar(
-                action = shown.undo?.let {
+                // Undo only while the screen still shows what the change produced (see undoStillApplies).
+                action = shown.undo?.takeIf { undoStillApplies(shown, active) }?.let {
                     {
-                        TextButton(onClick = st::undo, modifier = Modifier.testTag("snackbar-undo")) {
+                        TextButton(onClick = { st.undo(scope) }, modifier = Modifier.testTag("snackbar-undo")) {
                             Text("Undo", color = MaterialTheme.colorScheme.inversePrimary, fontWeight = FontWeight.SemiBold)
                         }
                     }
