@@ -188,6 +188,10 @@ class SimRunner(
                 awaitCondition("text '${step.text}' to be absent") { !hasAnyText(step.text) }
                 return "" to null
             }
+            is SimStep.WaitText -> {
+                awaitCondition("text '${step.text}' to be present", step.timeoutMs) { hasAnyText(step.text) }
+                return "" to null
+            }
             SimStep.Offline, SimStep.Online -> {
                 val set = setOnline ?: throw StepFailure("'${step.command}' is not supported in $modeName mode")
                 set(step == SimStep.Online)
@@ -208,13 +212,13 @@ class SimRunner(
         null
     }
 
-    private fun SkikoComposeUiTest.awaitCondition(what: String, condition: () -> Boolean) {
+    private fun SkikoComposeUiTest.awaitCondition(what: String, timeoutMs: Long = textTimeoutMs, condition: () -> Boolean) {
         waitForIdle()
         if (condition()) return
         try {
-            waitUntil(what, textTimeoutMs, condition)
+            waitUntil(what, timeoutMs, condition)
         } catch (e: ComposeTimeoutException) {
-            throw StepFailure("timed out after $textTimeoutMs ms waiting for $what; visible text: ${visibleText()}")
+            throw StepFailure("timed out after $timeoutMs ms waiting for $what; visible text: ${visibleText()}")
         }
     }
 

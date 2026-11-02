@@ -95,8 +95,13 @@ feedback.
   `main`, and tests see `sim`. The test harness stays off the shipping app's runtime classpath.
 - **Fake engine:** `FakeEngineBridge` implements `CanvasEngineBridge` in memory. It emits D6-shaped snapshots
   from a bundle and applies `OptimisticMutate` with the D4 subset, mirroring `client-core/src/expr.rs`. That
-  lets fixture runs exercise real interactions without Rust or a server. Live mode uses the real JNA engine
-  with temp storage.
+  lets fixture runs exercise real interactions without Rust or a server. It also models the M5 outbox (D13):
+  every mutation is applied locally and queued. While online the queue flushes at once to an in-memory fake
+  server, so the pending count stays 0. While offline the rows stay queued. Going online flushes them FIFO. The
+  fake server rejects a `.../decrement` whose result would be below 0, like the real server's 422. The row is then
+  dropped, the field is restored to its previous value (or `rollback_value` when that is null), and later
+  queued rows for the same field are re-applied. There is no 5xx/backoff simulation. Snapshots carry an
+  increasing `seq`. Live mode uses the real JNA engine with temp storage, or a persistent `-Pstorage` dir.
 - **Screen sizes and density:** presets are in dp: phone 390x844 at density 3, tablet 820x1180 at 2, desktop
   1280x800 at 2. A custom `WxH` uses density 2. `-Pdensity` overrides any of these. The PNG is dp x density
   pixels, so text is legible at phone-like scale.
@@ -209,7 +214,7 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
   commits). Schema behind `PRAGMA user_version` (v1). The bundled SQLite adds no Android `.so` dependencies.
 - **Schema extensions over DESIGN §2.3:** `entities.domain`/`entity_type` are derived from the URI
   `<domain>://<type>/...`. `action_outbox` adds `field`, `value_expr`, `prev_value_json`,
-  `rollback_value_json`, `next_attempt_at` (unix s, default 0) and `last_error`, so the sync worker can roll a
+  `rollback_value_json`, `next_attempt_at` (unix ms, default 0) and `last_error`, so the sync worker can roll a
   rejected row back and re-apply later rows without the original intent. `active_workspace` adds
   `entity_uris_json` (URIs the bundle carried); startup loads those entities plus any entity with a PENDING row.
 - **In-memory state + write-through:** `State` stays the snapshot source; every change is written to SQLite
@@ -221,4 +226,38 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
 - **`"$value"` token:** any JSON string exactly `"$value"` inside an intent's `payload` is replaced by the new
   optimistic field value before the row is stored, so toggles can send the desired state.
 - **Snapshot:** `StateSnapshot`/`FfiStateSnapshot` carry `seq` (strictly increasing per engine) and
-  `pending_actions` (PENDING outbox rows).
+  `pending_actions` (PENDING outbox rows). Kotlin receives them as `EngineSnapshot(seq: Long, pendingActions:
+  Int)`. `CanvasController` drops a snapshot whose seq is <= the last applied one. The check and the write are one
+  atomic `MutableStateFlow.update`, because observers fire from several engine threads. The status line shows
+  "N pending" when N > 0.
+
+## D14: Outbox sync worker and refetch merge
+
+- **Threads, not Tokio:** DESIGN suggests a Tokio worker; client-core keeps its blocking-reqwest + thread
+  pattern. A `canvas-engine-sync` thread waits on a `Condvar` (woken after every dispatch and whenever the engine
+  goes online: successful fetch or probe) and holds only a `Weak` to the engine between passes; dropping the
+  engine signals it to exit. HTTP never runs with the state mutex held. A separate `net` mutex serializes a
+  workspace fetch+merge with an outbox POST+apply, so a bundle never races a flush (which could count a row
+  twice or drop it).
+- **Pass:** while online, take the lowest-id PENDING row; if its `next_attempt_at` (unix **ms**, so test
+  backoffs can be sub-second) is in the future, sleep until then (FIFO never skips ahead). POST
+  `base_url + endpoint` with `payload_json`. 2xx: delete. 4xx: delete + roll back (below). 5xx or anything else
+  non-2xx/4xx, and network errors: `retry_count += 1`, `next_attempt_at = now + min(base * 2^retry_count, cap)`
+  (defaults 1 s and 60 s, so 2, 4, ... 60 s), `last_error`, stop the pass. A network error also marks the engine
+  offline; the 2 s `/healthz` probe flips it back and wakes the worker. Deletes and rollbacks bump `seq` and
+  notify; a retry does not (nothing visible changes) unless it took the engine offline. Each attempt is logged
+  (`outbox #id POST url -> 200, deleted (N pending)`, 4xx with the response body).
+- **Rollback:** set `entity[field]` to `prev_value_json`, or `rollback_value_json` when prev is null/absent,
+  then re-evaluate `value_expr` of every later PENDING row for the same entity+field FIFO, updating their
+  `prev_value_json`. Delete + entity + prev updates are one transaction; memory changes only if it commits.
+- **Refetch merge:** a fetched bundle replaces its entities, then every PENDING row for those entities is
+  re-applied FIFO (same re-evaluation, `prev_value_json` rebased on the fetched value), persisted with the layout
+  in one transaction. Entities outside the bundle with pending rows keep their local value. A flush does not
+  trigger a refetch: the displayed value already includes the flushed row.
+- **Toggle edge case:** re-applying re-evaluates `value_expr` against the new base, but the stored payload is
+  not rewritten (a `"$value"` was substituted at dispatch). For relative expressions (`entity.count + 1`) the
+  server applies the same relative op, so both agree. For a toggle (`!entity.liked` with payload
+  `{"liked": "$value"}`) a rollback or refetch can flip the local value while the queued payload still carries
+  the old desired state; local and server state can then differ until the next fetch.
+- **Config:** `EngineConfig { poll_interval, backoff_base, backoff_cap }` via
+  `CanvasEngine::init_with_config` (Rust only; `init` uses the defaults; FFI unchanged). Tests shorten them.

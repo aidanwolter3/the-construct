@@ -66,7 +66,7 @@ tasks.withType<Test>().configureEach {
 val repoRoot = rootDir.parentFile
 
 // Headless simulator: renders CanvasApp offscreen and writes PNG screenshots driven by a script.
-// Relative paths (-Pfixture, -Pout, -PscriptFile) resolve against the repo root (the working dir).
+// Relative paths (-Pfixture, -Pout, -PscriptFile, -Pstorage) resolve against the repo root (the working dir).
 //   ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=home -Pscreen=phone \
 //       -Pscript="shot start; click Increment; assert-text Count: 1; shot after"
 val simulate by tasks.registering(JavaExec::class) {
@@ -78,7 +78,7 @@ val simulate by tasks.registering(JavaExec::class) {
     jvmArgs("-Djava.awt.headless=true")
     systemProperty("canvas.sim.defaultOutRoot", layout.buildDirectory.dir("sim").get().asFile.absolutePath)
     // Forward -P<name>=<value> as --<name>=<value>.
-    val names = listOf("workspace", "screen", "script", "scriptFile", "fixture", "baseUrl", "mode", "out", "density", "timeoutMs")
+    val names = listOf("workspace", "screen", "script", "scriptFile", "fixture", "baseUrl", "mode", "out", "density", "timeoutMs", "storage")
     // providers.gradleProperty reads only -P / gradle.properties (project.findProperty("script")
     // would pick up an unrelated built-in project property).
     val forwarded = names.mapNotNull { n -> providers.gradleProperty(n).orNull?.let { "--$n=$it" } }

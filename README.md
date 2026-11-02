@@ -93,7 +93,17 @@ The engine keeps a SQLite cache at `~/.canvas/cache.db` (tables `entities`, `act
 loaded on startup, so the last workspace shows when the server is unreachable; the fetch is retried every
 2 seconds until the server responds. Each click updates the entity and queues a PENDING `action_outbox` row in
 one transaction (`sqlite3 ~/.canvas/cache.db "SELECT * FROM action_outbox;"`). The old
-`workspace_<id>.json` cache files are ignored. Sending queued rows to the server is not implemented yet.
+`workspace_<id>.json` cache files are ignored.
+
+Queued rows are sent by a background sync worker (docs/DECISIONS.md D14), oldest first and one at a time,
+as `POST <base_url><endpoint>`. Clicks made while offline (or with the app closed before they were sent) stay
+in the queue and the UI shows "N pending"; they are flushed as soon as the server is reachable again,
+including on the next launch. Each accepted row is deleted. A row the server rejects with a 4xx (e.g.
+decrementing below 0) is deleted and its field rolled back, with later queued clicks re-applied on top. A 5xx
+or network error keeps the row and retries it with exponential backoff (2 s, 4 s, ... capped at 60 s). A
+re-fetched workspace has the still-pending clicks re-applied, so they never visibly disappear. The engine logs
+each attempt, e.g. `[CanvasEngine] outbox #3 POST http://127.0.0.1:8080/v1/counters/home/increment -> 200,
+deleted (0 pending)`.
 
 ## Simulation mode
 
@@ -124,15 +134,20 @@ Flags (all optional):
 | `-PbaseUrl` | `http://127.0.0.1:8080` | Server for live mode. |
 | `-PtimeoutMs` | `10000` | Live mode only: how long to wait for the workspace to load before the first step. |
 | `-Pout` | `kmp-app/desktopApp/build/sim/<yyyyMMdd-HHmmss>` | Output directory. |
+| `-Pstorage` | fresh temp dir | Live mode only: engine storage dir (holds `cache.db`). It is kept after the run, so a second run with the same dir exercises restart persistence. The temp default is deleted on exit. |
 
-Relative paths (`-Pfixture`, `-PscriptFile`, `-Pout`) resolve against the **repo root**, the task's working
+Relative paths (`-Pfixture`, `-PscriptFile`, `-Pout`, `-Pstorage`) resolve against the **repo root**, the task's working
 directory, so `-Pfixture=fixtures/counter_home_bundle.json` works.
 
 **Fixture mode** (the default) needs no server, and no Rust build when run with `-PskipRustBuild` (without
 it, the desktop compile triggers `:shared:buildRustFfi`, i.e. cargo). A fake in-memory engine
 (`FakeEngineBridge`) loads the bundle, applies `OptimisticMutate` clicks with the D4 expression subset, and
-toggles connectivity for `offline`/`online`. **Live mode** runs the real Rust engine through JNA against
-the server. It uses a fresh temp storage dir, so it neither reads nor writes `~/.canvas`. If the workspace
+toggles connectivity for `offline`/`online`. It models the outbox: clicks made while offline are applied
+locally and queued (the status line shows "N pending"), and `online` flushes them FIFO to an in-memory fake
+server. That server rejects a `.../decrement` that would take the count below 0; the fake then rolls the
+field back and re-applies later queued rows (D8). **Live mode** runs the real Rust engine through JNA against
+the server. By default it uses a fresh temp storage dir, so it neither reads nor writes `~/.canvas`; pass
+`-Pstorage=<dir>` to keep a persistent one. If the workspace
 does not load within `timeoutMs`, it logs a warning and still runs the script (shots show Loading/Offline).
 `offline`/`online` are not supported in live mode; a live-mode script containing them is rejected before any
 step runs.
@@ -149,6 +164,7 @@ entries starting with `#` are comments. An argument cannot contain `;`, and sinc
 | `idle` | Waits until the UI is idle. |
 | `assert-text <text>` | Fails unless some node's text contains `<text>`. Retries for up to 2 s. |
 | `assert-no-text <text>` | The inverse of `assert-text`. |
+| `wait-text <ms> <text>` | Like `assert-text` with a custom timeout (at most 600000), e.g. `wait-text 15000 Count: 3` while a live sync worker retries. |
 | `offline` / `online` | Fixture mode only: flips the engine's connectivity. |
 | `screen <WxH or preset>` | Restarts the renderer at the new size. Engine state carries over; UI state such as scroll position does not. |
 

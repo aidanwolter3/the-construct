@@ -1,6 +1,7 @@
 package org.genui.canvas.engine
 
 import org.genui.canvas.CanvasEngineBridge
+import org.genui.canvas.EngineSnapshot
 import uniffi.client_ffi.EngineHandle
 import uniffi.client_ffi.FfiStateSnapshot
 import uniffi.client_ffi.StateObserver
@@ -18,10 +19,10 @@ import uniffi.client_ffi.StateObserver
 class UniffiEngineBridge(val handle: EngineHandle) : CanvasEngineBridge {
     private val observers = mutableListOf<StateObserver>()
 
-    override fun subscribe(onState: (workspaceJson: String, entitiesJson: String, isOnline: Boolean) -> Unit) {
+    override fun subscribe(onState: (EngineSnapshot) -> Unit) {
         val observer = object : StateObserver {
             override fun onStateUpdated(snapshot: FfiStateSnapshot) {
-                onState(snapshot.workspaceJson, snapshot.entitiesJson, snapshot.isOnline)
+                onState(snapshot.toEngineSnapshot())
             }
         }
         synchronized(observers) { observers += observer }
@@ -45,6 +46,18 @@ class UniffiEngineBridge(val handle: EngineHandle) : CanvasEngineBridge {
         }
     }
 }
+
+/**
+ * u64 seq -> Long (clamped: a seq past Long.MAX_VALUE is unreachable in practice) and u32 pending count
+ * -> Int (clamped likewise).
+ */
+internal fun FfiStateSnapshot.toEngineSnapshot(): EngineSnapshot = EngineSnapshot(
+    workspaceJson = workspaceJson,
+    entitiesJson = entitiesJson,
+    isOnline = isOnline,
+    seq = if (seq > Long.MAX_VALUE.toULong()) Long.MAX_VALUE else seq.toLong(),
+    pendingActions = if (pendingActions > Int.MAX_VALUE.toUInt()) Int.MAX_VALUE else pendingActions.toInt(),
+)
 
 /** Platform log line: stdout with a `[desktop]` prefix on desktop, logcat tag `CanvasEngine` on Android. */
 internal expect fun engineLog(message: String)

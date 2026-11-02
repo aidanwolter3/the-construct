@@ -54,8 +54,10 @@ class EngineBridgeTest {
             storage.absolutePath, "http://127.0.0.1:${server.address.port}", "home",
         )
         val counts = LinkedBlockingQueue<Int>()
-        bridge.subscribe { _, entitiesJson, _ ->
-            val e = entitiesJson.trim()
+        val seqs = mutableListOf<Long>()
+        bridge.subscribe { snapshot ->
+            synchronized(seqs) { seqs += snapshot.seq }
+            val e = snapshot.entitiesJson.trim()
             if (e.isNotEmpty() && e != "null") {
                 CanvasJson.decodeEntities(e)["core://counters/home"]?.get("count")
                     ?.toString()?.toIntOrNull()?.let(counts::add)
@@ -73,6 +75,9 @@ class EngineBridgeTest {
         }
         assertTrue(out.toString().contains("[desktop] dispatch: $INCREMENT"), "missing dispatch log: $out")
         awaitCount(counts, 1)
+        // seq is carried through the FFI and grows across snapshots (callbacks may interleave, so not
+        // necessarily monotonic in arrival order).
+        synchronized(seqs) { assertTrue(seqs.size >= 2 && seqs.max() > seqs.min(), "seqs: $seqs") }
     }
 
     private fun awaitCount(counts: LinkedBlockingQueue<Int>, expected: Int) {

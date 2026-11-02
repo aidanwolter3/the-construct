@@ -8,6 +8,7 @@ sealed class SimStep(val command: String, val arg: String = "") {
     object Idle : SimStep("idle")
     class AssertText(val text: String) : SimStep("assert-text", text)
     class AssertNoText(val text: String) : SimStep("assert-no-text", text)
+    class WaitText(val timeoutMs: Long, val text: String) : SimStep("wait-text", "$timeoutMs $text")
     object Offline : SimStep("offline")
     object Online : SimStep("online")
     class Screen(val spec: ScreenSpec) : SimStep("screen", spec.label)
@@ -59,6 +60,15 @@ fun parseScript(script: String): List<SimStep> {
             "idle" -> { noArg(); SimStep.Idle }
             "assert-text" -> SimStep.AssertText(requireArg("the expected text"))
             "assert-no-text" -> SimStep.AssertNoText(requireArg("the text that must be absent"))
+            "wait-text" -> {
+                val a = requireArg("a timeout in ms and the text")
+                val ms = a.substringBefore(' ').toLongOrNull()?.takeIf { it in 0..MAX_WAIT_MS }
+                val text = a.substringAfter(' ', "").trim()
+                if (ms == null || text.isEmpty()) {
+                    throw ScriptParseException("${where()}: 'wait-text' needs '<ms in 0..$MAX_WAIT_MS> <text>'")
+                }
+                SimStep.WaitText(ms, text)
+            }
             "offline" -> { noArg(); SimStep.Offline }
             "online" -> { noArg(); SimStep.Online }
             "screen" -> SimStep.Screen(
@@ -70,7 +80,7 @@ fun parseScript(script: String): List<SimStep> {
             )
             else -> throw ScriptParseException(
                 "${where()}: unknown command '$command' (expected one of: " +
-                    "shot, click, wait, idle, assert-text, assert-no-text, offline, online, screen)",
+                    "shot, click, wait, idle, assert-text, assert-no-text, wait-text, offline, online, screen)",
             )
         }
     }

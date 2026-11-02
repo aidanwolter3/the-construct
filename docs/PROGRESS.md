@@ -122,12 +122,14 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 - Done: server counters persist in SQLite (`CANVAS_DATA_DIR`, decrement rejects below zero with 422, test fault
   hook `CANVAS_TEST_HOOKS=1`). client-core uses `<storage>/cache.db` with transactional optimistic mutate +
   outbox insert, `seq`/`pending_actions` in snapshots, FFI bindings regenerated, Android .so builds.
+- Done: sync worker thread (FIFO flush, 2xx delete, 4xx rollback + re-apply, 5xx/network capped backoff) and
+  refetch merge (D14); Kotlin EngineSnapshot with seq stale-drop, "N pending" indicator, fake-engine outbox,
+  simulator `-Pstorage` and `wait-text`.
 
 ## Next steps
 
-1. M5 remaining: sync worker (FIFO flush, 2xx delete, 4xx rollback + re-apply, 5xx/network backoff) and
-   refetch-merge (`State::apply_fetched`) in client-core; Kotlin: snapshot seq drop + "N pending" indicator,
-   FakeEngineBridge outbox, simulator `-Pstorage`; then review + QA (desktop sqlite3 check, Android).
+1. M5 remaining: independent review (Rust + Kotlin) and QA (desktop sqlite3 outbox check, simulator live
+   `-Pstorage`, Android emulator offline/online flush). Known: Reset button wraps on phone width (3 buttons).
 2. M6 Pixelfed + OAuth PKCE against a fake upstream; M7 AI layout engine (rules provider + Anthropic provider).
 3. Small follow-ups: 404 "workspace not found" UI state; HTTPS enforcement for release; golden-image diffing for
    the simulator (Roborazzi or a pixel diff on sim PNGs); Android host tests for :shared.

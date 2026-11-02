@@ -9,6 +9,7 @@ import kotlinx.serialization.json.longOrNull
 import org.genui.canvas.ActionIntent
 import org.genui.canvas.CanvasEngineBridge
 import org.genui.canvas.CanvasJson
+import org.genui.canvas.EngineSnapshot
 import org.genui.canvas.UiNode
 
 /**
@@ -16,28 +17,42 @@ import org.genui.canvas.UiNode
  *
  * Loads a hydration bundle (`{version, workspace, entities}`, DECISIONS D2) and emits snapshots
  * shaped like the real engine's (D6: workspace JSON = the layout node, entities JSON = the
- * URI-keyed map). `OptimisticMutate` intents are applied with the D4 expression subset; other
- * intents are logged and ignored. [setOnline] flips connectivity and re-emits.
+ * URI-keyed map; `seq` increases with every state change). `OptimisticMutate` intents are applied
+ * with the D4 expression subset; other intents are logged and ignored.
+ *
+ * Outbox model (mirrors the M5 sync worker; DECISIONS D8, D13): every mutation is applied locally and queued; while
+ * online the queue is flushed at once against an in-memory "server" copy of the entities, so the
+ * pending count stays 0. While offline rows stay queued (`pendingActions` = queue size). [setOnline]
+ * flips connectivity; going online flushes FIFO. The fake server rejects a `.../decrement` whose
+ * result would be below 0 (like crates/server's 422): the row is dropped and the field rolled back to
+ * its previous value (or `rollback_value` if that was null/absent), and later queued rows for the same
+ * entity field are re-applied on top. No 5xx/retry simulation.
  */
 class FakeEngineBridge(bundleJson: String, online: Boolean = true) : CanvasEngineBridge {
+    private class Row(val intent: ActionIntent.OptimisticMutate, var prevValue: JsonElement?)
+
     private val workspace: UiNode
     private val entities: MutableMap<String, JsonObject>
-    private val listeners = mutableListOf<(String, String, Boolean) -> Unit>()
+    private val server: MutableMap<String, JsonObject>
+    private val outbox = ArrayDeque<Row>()
+    private val listeners = mutableListOf<(EngineSnapshot) -> Unit>()
     private var isOnline = online
+    private var seq = 0L
     private val lock = Any()
 
     init {
         val bundle = CanvasJson.decodeBundle(bundleJson)
         workspace = bundle.workspace
         entities = LinkedHashMap(bundle.entities)
+        server = LinkedHashMap(bundle.entities)
     }
 
-    override fun subscribe(onState: (workspaceJson: String, entitiesJson: String, isOnline: Boolean) -> Unit) {
+    override fun subscribe(onState: (EngineSnapshot) -> Unit) {
         val snapshot = synchronized(lock) {
             listeners += onState
             snapshotLocked()
         }
-        onState(snapshot.first, snapshot.second, snapshot.third)
+        onState(snapshot)
     }
 
     override fun dispatch(intentJson: String) {
@@ -60,28 +75,86 @@ class FakeEngineBridge(bundleJson: String, online: Boolean = true) : CanvasEngin
                 return
             }
             entities[intent.entityUri] = JsonObject(entity + (intent.field to value))
-            println("[sim] ${intent.entityUri}#${intent.field} = $value")
+            outbox.addLast(Row(intent, entity[intent.field]))
+            println("[sim] ${intent.entityUri}#${intent.field} = $value (queued; ${outbox.size} pending)")
+            if (isOnline) flushLocked()
+            seq++
         }
         emit()
     }
 
     fun setOnline(online: Boolean) {
-        synchronized(lock) { isOnline = online }
+        synchronized(lock) {
+            isOnline = online
+            if (online) flushLocked()
+            seq++
+        }
         emit()
     }
 
     /** Current value of [field] on entity [uri], for tests. */
     fun entityField(uri: String, field: String): JsonElement? = synchronized(lock) { entities[uri]?.get(field) }
 
-    private fun snapshotLocked(): Triple<String, String, Boolean> = Triple(
-        CanvasJson.encodeNode(workspace),
-        CanvasJson.json.encodeToString(JsonObject.serializer(), JsonObject(entities)),
-        isOnline,
+    /** Value of [field] on the fake server's copy of entity [uri], for tests. */
+    fun serverField(uri: String, field: String): JsonElement? = synchronized(lock) { server[uri]?.get(field) }
+
+    /** Number of queued (unsent) mutations. */
+    val pendingActions: Int get() = synchronized(lock) { outbox.size }
+
+    /** Sends queued rows FIFO to the fake server. */
+    private fun flushLocked() {
+        while (outbox.isNotEmpty()) {
+            val row = outbox.removeFirst()
+            val i = row.intent
+            val serverEntity = server[i.entityUri] ?: JsonObject(emptyMap())
+            val result = try {
+                evalMutation(i.valueExpr, serverEntity)
+            } catch (e: RuntimeException) {
+                null
+            }
+            val belowZero = i.endpoint.endsWith("/decrement") && ((result as? JsonPrimitive)?.longOrNull ?: 0L) < 0
+            if (result != null && !belowZero) {
+                server[i.entityUri] = JsonObject(serverEntity + (i.field to result))
+                println("[sim] sent ${i.endpoint}: server ${i.entityUri}#${i.field} = $result")
+                continue
+            }
+            println("[sim] server rejected ${i.endpoint} (${if (belowZero) "count_below_zero" else "bad expression"}); rolling back")
+            rollbackLocked(row)
+        }
+    }
+
+    /** Restores the field to [row]'s previous value, then re-applies later rows for the same field. */
+    private fun rollbackLocked(row: Row) {
+        val i = row.intent
+        val restored = row.prevValue?.takeIf { it !is JsonNull } ?: i.rollbackValue
+        var current = restored
+        for (later in outbox) {
+            val li = later.intent
+            if (li.entityUri != i.entityUri || li.field != i.field) continue
+            later.prevValue = current
+            val entity = JsonObject((entities[i.entityUri] ?: JsonObject(emptyMap())) + (i.field to current))
+            current = try {
+                evalMutation(li.valueExpr, entity)
+            } catch (e: RuntimeException) {
+                current
+            }
+        }
+        val entity = entities[i.entityUri] ?: JsonObject(emptyMap())
+        entities[i.entityUri] = JsonObject(entity + (i.field to current))
+        println("[sim] ${i.entityUri}#${i.field} rolled back to $restored (now $current)")
+    }
+
+    private fun snapshotLocked(): EngineSnapshot = EngineSnapshot(
+        workspaceJson = CanvasJson.encodeNode(workspace),
+        entitiesJson = CanvasJson.json.encodeToString(JsonObject.serializer(), JsonObject(entities)),
+        isOnline = isOnline,
+        seq = seq,
+        pendingActions = outbox.size,
     )
 
     private fun emit() {
         val (snapshot, targets) = synchronized(lock) { snapshotLocked() to listeners.toList() }
-        targets.forEach { it(snapshot.first, snapshot.second, snapshot.third) }
+        targets.forEach { it(snapshot) }
     }
 
     companion object {

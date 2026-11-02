@@ -52,6 +52,17 @@ class SimScriptTest {
         parseScript("wait 600000")
         assertFailsWith<ScriptParseException> { parseScript("idle now") }
         assertFailsWith<ScriptParseException> { parseScript("screen huge") }
+        assertFailsWith<ScriptParseException> { parseScript("wait-text 5000") }
+        assertFailsWith<ScriptParseException> { parseScript("wait-text soon Count: 1") }
+        assertFailsWith<ScriptParseException> { parseScript("wait-text 600001 Count: 1") }
+    }
+
+    @Test
+    fun waitTextTakesTimeoutThenText() {
+        val step = assertIs<SimStep.WaitText>(parseScript("wait-text 15000 Count: 3").single())
+        assertEquals(15000L, step.timeoutMs)
+        assertEquals("Count: 3", step.text)
+        assertEquals("wait-text 15000 Count: 3", step.toString())
     }
 
     @Test

@@ -17,8 +17,14 @@
 //! the server answers; after that it probes `GET {base_url}/healthz` on the
 //! same interval so `is_online` tracks the server going away and coming
 //! back. Reconnecting does not re-fetch the workspace, so local optimistic
-//! changes survive. Flushing the outbox to the server (sync worker) and
-//! merging pending rows into re-fetched bundles are not implemented yet.
+//! changes survive.
+//!
+//! A second background thread (the sync worker, docs/DECISIONS.md D14)
+//! flushes PENDING outbox rows FIFO to `POST {base_url}{endpoint}` while
+//! online: 2xx deletes the row, 4xx deletes it and rolls the field back
+//! (re-applying later pending rows), 5xx / network errors keep it with
+//! exponential backoff. A fetched bundle has every pending row re-applied
+//! on top of it, so optimistic values are never clobbered.
 
 pub mod expr;
 pub mod store;
@@ -28,24 +34,57 @@ use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use protocol::{ActionIntent, EntityRecord, UiNode, WorkspaceSpec};
 use serde_json::Value;
 
-use store::{NewOutboxRow, Store, StoreOps};
+use store::{NewOutboxRow, OutboxRow, Store, StoreOps};
 
 const DEFAULT_WORKSPACE_ID: &str = "home";
 /// SQLite file name inside `storage_path`.
 pub const CACHE_DB_FILE: &str = "cache.db";
 /// Payload token replaced by the new optimistic field value at dispatch.
 pub const VALUE_TOKEN: &str = "$value";
-/// Delay between background fetch retries / reachability probes.
-const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Timeout for a single reachability probe.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+/// Timeout for a single outbox POST.
+const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Engine timing knobs. [`EngineConfig::default`] is what `init` uses;
+/// tests shorten the intervals so they do not sleep for seconds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EngineConfig {
+    /// Delay between background fetch retries / reachability probes.
+    pub poll_interval: Duration,
+    /// Outbox retry delay after the n-th failed attempt is
+    /// `min(backoff_base * 2^n, backoff_cap)`.
+    pub backoff_base: Duration,
+    pub backoff_cap: Duration,
+}
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self {
+            poll_interval: Duration::from_secs(2),
+            backoff_base: Duration::from_secs(1),
+            backoff_cap: Duration::from_secs(60),
+        }
+    }
+}
+
+impl EngineConfig {
+    /// Delay before the next attempt of a row that has now failed
+    /// `retry_count` times: `min(backoff_base * 2^retry_count, backoff_cap)`.
+    pub fn backoff(&self, retry_count: i64) -> Duration {
+        let exp = retry_count.clamp(0, 30) as u32;
+        self.backoff_base
+            .saturating_mul(1u32 << exp)
+            .min(self.backoff_cap)
+    }
+}
 
 /// Outcome of a fetch attempt.
 enum FetchOutcome {
@@ -167,17 +206,58 @@ impl State {
         }
     }
 
-    /// Persist a fetched bundle (layout + entities, one transaction) and
-    /// apply it in memory. A persistence failure is logged; the fetched
-    /// state is still applied (the store is only a fallback for it).
+    /// Merge a fetched bundle: replace the bundle's entities, then re-apply
+    /// every PENDING outbox row for those entities FIFO (re-evaluating its
+    /// `value_expr` and updating its `prev_value_json`), so optimistic
+    /// values survive a refetch. Entities outside the bundle that have
+    /// pending rows are kept as they are. Layout, entities and the rows'
+    /// new `prev_value_json` are persisted in one transaction; a
+    /// persistence failure is logged and the merged state is still applied
+    /// (the store is only a fallback for it).
     fn apply_fetched(&mut self, workspace_id: &str, spec: WorkspaceSpec) {
+        let WorkspaceSpec {
+            workspace,
+            entities: fetched,
+            ..
+        } = spec;
+        let pending = match self.store.as_ref().map(|s| s.pending_outbox()) {
+            Some(Ok(rows)) => rows,
+            Some(Err(e)) => {
+                eprintln!("[CanvasEngine] failed to read the outbox for the refetch merge: {e}");
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
+        let uris: Vec<String> = fetched.keys().cloned().collect();
+        let mut merged = fetched;
+        let mut prev_updates = Vec::new();
+        for row in &pending {
+            if let Some(entity) = merged.get_mut(&row.entity_uri) {
+                if uris.binary_search(&row.entity_uri).is_ok()
+                    && let Some(prev) = reapply_row(entity, row)
+                {
+                    prev_updates.push((row.id, prev));
+                }
+            } else if let Some(local) = self.entities.get(&row.entity_uri) {
+                merged.insert(row.entity_uri.clone(), local.clone());
+            }
+        }
+        if !prev_updates.is_empty() {
+            println!(
+                "[CanvasEngine] re-applied {} pending action(s) onto the fetched workspace \
+                 '{workspace_id}'",
+                prev_updates.len()
+            );
+        }
         if let Some(store) = self.store.as_mut() {
             let now = unix_now();
-            let uris: Vec<String> = spec.entities.keys().cloned().collect();
             let result = store.transaction(|tx| {
-                tx.save_workspace(workspace_id, &spec.workspace, &uris, now)?;
-                for (uri, entity) in &spec.entities {
-                    tx.upsert_entity(uri, entity, now)?;
+                tx.save_workspace(workspace_id, &workspace, &uris, now)?;
+                for uri in &uris {
+                    tx.upsert_entity(uri, &merged[uri], now)?;
+                }
+                for (id, prev) in &prev_updates {
+                    tx.set_outbox_prev_value(*id, prev)?;
                 }
                 Ok(())
             });
@@ -185,17 +265,176 @@ impl State {
                 eprintln!("[CanvasEngine] failed to persist workspace '{workspace_id}': {e}");
             }
         }
-        self.workspace = Some(spec.workspace);
-        self.entities = spec.entities;
+        self.workspace = Some(workspace);
+        self.entities = merged;
     }
+
+    /// Re-read the PENDING count from the store (after a delete).
+    fn sync_pending_count(&mut self) {
+        if let Some(store) = &self.store {
+            match store.pending_count() {
+                Ok(n) => self.pending_actions = n,
+                Err(e) => eprintln!("[CanvasEngine] failed to count pending actions: {e}"),
+            }
+        }
+    }
+
+    /// The server rejected `row` (4xx): delete it, set the entity field
+    /// back to `prev_value` (or `rollback_value` if prev is null/absent),
+    /// then re-apply every later PENDING row for the same entity+field FIFO.
+    /// One transaction; memory is only changed if it commits. Returns the
+    /// restored value, the field's final value and the number of re-applied
+    /// rows.
+    fn reject_row(&mut self, row: &OutboxRow) -> store::StoreResult<(Value, Value, usize)> {
+        let Some(store) = self.store.as_mut() else {
+            return Err(store::StoreError::InvalidQuery);
+        };
+        let Some(field) = row.field.clone() else {
+            // No field recorded: nothing to roll back.
+            store.delete_outbox(row.id)?;
+            self.sync_pending_count();
+            return Ok((Value::Null, Value::Null, 0));
+        };
+        let parse = |s: &Option<String>| {
+            s.as_deref()
+                .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                .filter(|v| !v.is_null())
+        };
+        let restored = parse(&row.prev_value_json)
+            .or_else(|| parse(&row.rollback_value_json))
+            .unwrap_or(Value::Null);
+        let mut entity = self
+            .entities
+            .get(&row.entity_uri)
+            .cloned()
+            .unwrap_or_default();
+        entity.set(field.clone(), restored.clone());
+        let mut prev_updates = Vec::new();
+        for later in store.pending_outbox()? {
+            if later.id > row.id
+                && later.entity_uri == row.entity_uri
+                && later.field.as_deref() == Some(field.as_str())
+                && let Some(prev) = reapply_row(&mut entity, &later)
+            {
+                prev_updates.push((later.id, prev));
+            }
+        }
+        let now = unix_now();
+        store.transaction(|tx| {
+            tx.delete_outbox(row.id)?;
+            tx.upsert_entity(&row.entity_uri, &entity, now)?;
+            for (id, prev) in &prev_updates {
+                tx.set_outbox_prev_value(*id, prev)?;
+            }
+            Ok(())
+        })?;
+        let final_value = entity.get(&field).cloned().unwrap_or(Value::Null);
+        self.entities.insert(row.entity_uri.clone(), entity);
+        self.sync_pending_count();
+        Ok((restored, final_value, prev_updates.len()))
+    }
+}
+
+/// Re-apply a pending row to `entity`: re-evaluate its `value_expr` and set
+/// its field. Returns the field's previous value as JSON (the row's new
+/// `prev_value_json`), or `None` if the row has no field/expression. If the
+/// expression fails the field is left unchanged (logged).
+fn reapply_row(entity: &mut EntityRecord, row: &OutboxRow) -> Option<String> {
+    let (Some(field), Some(expr)) = (&row.field, &row.value_expr) else {
+        return None;
+    };
+    let prev = entity.get(field).cloned().unwrap_or(Value::Null);
+    match expr::eval(expr, entity) {
+        Ok(v) => {
+            entity.set(field.clone(), v);
+        }
+        Err(e) => eprintln!(
+            "[CanvasEngine] re-apply outbox #{} {}#{field}: {e}; field unchanged",
+            row.id, row.entity_uri
+        ),
+    }
+    Some(prev.to_string())
+}
+
+/// Wakes the sync worker. Lives outside `Inner` so the worker can wait on
+/// it while holding only a `Weak<Inner>`.
+#[derive(Default)]
+struct WorkerSignal {
+    /// (wake requested, shut down)
+    flags: Mutex<(bool, bool)>,
+    cv: Condvar,
+}
+
+impl WorkerSignal {
+    fn wake(&self) {
+        lock(&self.flags).0 = true;
+        self.cv.notify_all();
+    }
+
+    fn shutdown(&self) {
+        lock(&self.flags).1 = true;
+        self.cv.notify_all();
+    }
+
+    /// Block until woken, shut down or `timeout` (None = no timeout)
+    /// elapses. Returns false once shut down.
+    fn wait(&self, timeout: Option<Duration>) -> bool {
+        let deadline = timeout.map(|t| Instant::now() + t);
+        let mut flags = lock(&self.flags);
+        loop {
+            if flags.1 {
+                return false;
+            }
+            if flags.0 {
+                flags.0 = false;
+                return true;
+            }
+            flags = match deadline {
+                None => self.cv.wait(flags).unwrap_or_else(|e| e.into_inner()),
+                Some(d) => {
+                    let now = Instant::now();
+                    if now >= d {
+                        return true;
+                    }
+                    self.cv
+                        .wait_timeout(flags, d - now)
+                        .unwrap_or_else(|e| e.into_inner())
+                        .0
+                }
+            };
+        }
+    }
+}
+
+/// Result of one outbox POST.
+enum FlushResult {
+    Accepted(u16),
+    Rejected(u16, String),
+    /// 5xx or any other non-2xx/4xx status.
+    ServerError(u16, String),
+    Network(String),
 }
 
 struct Inner {
     state: Mutex<State>,
     observers: Mutex<Vec<Arc<Observer>>>,
+    /// Serializes a workspace fetch+merge with an outbox POST+apply, so a
+    /// bundle never races a flush (the row would be counted twice or
+    /// dropped). Never held together with HTTP on the state mutex, and
+    /// released before observers are notified.
+    net: Mutex<()>,
+    signal: Arc<WorkerSignal>,
+    config: EngineConfig,
     workspace_id: String,
+    base_url: String,
     workspace_url: String,
     health_url: String,
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        self.signal.shutdown();
+    }
 }
 
 /// The client-side state engine. Cheap to share behind an `Arc`.
@@ -212,6 +451,14 @@ fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Unix time in milliseconds (`action_outbox.next_attempt_at`).
+fn unix_now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
 }
 
@@ -272,6 +519,16 @@ impl CanvasEngine {
 
     /// Like [`CanvasEngine::init`], fetching `GET {base_url}/v1/workspaces/{workspace_id}`.
     pub fn init_with_workspace(storage_path: &str, base_url: &str, workspace_id: &str) -> Self {
+        Self::init_with_config(storage_path, base_url, workspace_id, EngineConfig::default())
+    }
+
+    /// Like [`CanvasEngine::init_with_workspace`] with custom timing.
+    pub fn init_with_config(
+        storage_path: &str,
+        base_url: &str,
+        workspace_id: &str,
+        config: EngineConfig,
+    ) -> Self {
         let mut state = State {
             store: open_store(storage_path),
             ..State::default()
@@ -279,18 +536,25 @@ impl CanvasEngine {
         state.load_cached(workspace_id);
 
         let base = base_url.trim_end_matches('/');
+        let poll_interval = config.poll_interval;
+        let signal = Arc::new(WorkerSignal::default());
         let inner = Arc::new(Inner {
             state: Mutex::new(state),
             observers: Mutex::new(Vec::new()),
+            net: Mutex::new(()),
+            signal: Arc::clone(&signal),
+            config,
             workspace_id: workspace_id.to_string(),
+            base_url: base.to_string(),
             workspace_url: format!("{base}/v1/workspaces/{workspace_id}"),
             health_url: format!("{base}/healthz"),
         });
 
-        // The background thread holds only a Weak reference between
-        // attempts, so it exits once the engine is dropped instead of
-        // keeping it alive. Until the server has answered once it retries
-        // the full fetch; afterwards it only probes reachability.
+        // Both background threads hold only a Weak reference between
+        // passes, so they exit once the engine is dropped instead of
+        // keeping it alive. Until the server has answered once the fetch
+        // thread retries the full fetch; afterwards it only probes
+        // reachability.
         let bg: Weak<Inner> = Arc::downgrade(&inner);
         let spawned = thread::Builder::new()
             .name("canvas-engine-fetch".into())
@@ -304,11 +568,19 @@ impl CanvasEngine {
                         answered = !matches!(inner.refresh(), FetchOutcome::Failed);
                     }
                     drop(inner);
-                    thread::sleep(POLL_INTERVAL);
+                    thread::sleep(poll_interval);
                 }
             });
         if let Err(e) = spawned {
             eprintln!("[CanvasEngine] failed to spawn fetch thread: {e}");
+        }
+
+        let worker: Weak<Inner> = Arc::downgrade(&inner);
+        let spawned = thread::Builder::new()
+            .name("canvas-engine-sync".into())
+            .spawn(move || sync_worker(worker, signal));
+        if let Err(e) = spawned {
+            eprintln!("[CanvasEngine] failed to spawn sync worker: {e}");
         }
 
         Self { inner }
@@ -373,10 +645,14 @@ impl Inner {
             st.seq += 1;
             st.snapshot()
         };
+        if reachable {
+            self.signal.wake();
+        }
         self.notify(snap);
     }
 
     fn refresh(&self) -> FetchOutcome {
+        let net = lock(&self.net);
         let result = fetch(&self.workspace_url);
         let outcome;
         let snap = {
@@ -419,8 +695,132 @@ impl Inner {
             st.seq += 1;
             st.snapshot()
         };
+        drop(net);
+        if snap.is_online {
+            self.signal.wake();
+        }
         self.notify(snap);
         outcome
+    }
+
+    /// One sync-worker pass: flush due PENDING rows FIFO, one at a time,
+    /// while online. Returns how long to wait before the next pass (`None`:
+    /// until woken by a dispatch or by going online).
+    fn flush_pass(&self, client: &reqwest::blocking::Client) -> Option<Duration> {
+        loop {
+            let net = lock(&self.net);
+            let row = {
+                let st = lock(&self.state);
+                if !st.is_online {
+                    return None;
+                }
+                let store = st.store.as_ref()?;
+                match store.first_pending() {
+                    Ok(Some(row)) => row,
+                    Ok(None) => return None,
+                    Err(e) => {
+                        eprintln!("[CanvasEngine] sync worker: cannot read the outbox: {e}");
+                        return Some(self.config.poll_interval);
+                    }
+                }
+            };
+            let now = unix_now_ms();
+            if row.next_attempt_at > now {
+                // FIFO: never skip past a row that is not due yet.
+                return Some(Duration::from_millis((row.next_attempt_at - now) as u64));
+            }
+
+            let url = format!("{}{}", self.base_url, row.endpoint);
+            let result = post_json(client, &url, &row.payload_json);
+            let (snap, failed) = self.apply_flush_result(&row, &url, result);
+            drop(net);
+            if let Some(snap) = snap {
+                self.notify(snap);
+            }
+            if failed {
+                // Next pass re-reads the row and waits for its
+                // next_attempt_at (or for going online again).
+                return Some(self.config.backoff(row.retry_count + 1));
+            }
+        }
+    }
+
+    /// Record the outcome of POSTing `row` (state lock held only here).
+    /// Returns a snapshot to deliver if anything visible changed, and
+    /// whether the row is still pending (failure: stop the pass).
+    fn apply_flush_result(
+        &self,
+        row: &OutboxRow,
+        url: &str,
+        result: FlushResult,
+    ) -> (Option<StateSnapshot>, bool) {
+        let id = row.id;
+        let mut st = lock(&self.state);
+        let (error, network) = match result {
+            FlushResult::Accepted(code) => {
+                let deleted = st.store.as_ref().map(|s| s.delete_outbox(id));
+                if let Some(Err(e)) = deleted {
+                    // The row stays and will be sent again.
+                    eprintln!(
+                        "[CanvasEngine] outbox #{id} POST {url} -> {code}, but deleting the row \
+                         failed: {e}"
+                    );
+                    return (None, true);
+                }
+                st.sync_pending_count();
+                println!(
+                    "[CanvasEngine] outbox #{id} POST {url} -> {code}, deleted ({} pending)",
+                    st.pending_actions
+                );
+                st.seq += 1;
+                return (Some(st.snapshot()), false);
+            }
+            FlushResult::Rejected(code, body) => {
+                let field = row.field.as_deref().unwrap_or("?");
+                match st.reject_row(row) {
+                    Ok((restored, now_value, reapplied)) => {
+                        println!(
+                            "[CanvasEngine] outbox #{id} POST {url} -> {code}, rejected: {body}; \
+                             rolled back {}#{field} to {restored}, re-applied {reapplied} later \
+                             row(s) -> {now_value} ({} pending)",
+                            row.entity_uri, st.pending_actions
+                        );
+                        st.seq += 1;
+                        return (Some(st.snapshot()), false);
+                    }
+                    Err(e) => {
+                        // Keep the row; retry the rollback on a later pass.
+                        eprintln!(
+                            "[CanvasEngine] outbox #{id} POST {url} -> {code}, rejected: {body}; \
+                             rollback failed to persist ({e}); will retry"
+                        );
+                        (format!("HTTP {code}: {body}; rollback failed: {e}"), false)
+                    }
+                }
+            }
+            FlushResult::ServerError(code, body) => (format!("HTTP {code}: {body}"), false),
+            FlushResult::Network(e) => (e, true),
+        };
+
+        let retry_count = row.retry_count + 1;
+        let delay = self.config.backoff(retry_count);
+        let next = unix_now_ms() + delay.as_millis() as i64;
+        if let Some(Err(e)) = st.store.as_ref().map(|s| s.mark_retry(id, next, &error)) {
+            eprintln!("[CanvasEngine] outbox #{id}: failed to record the retry: {e}");
+        }
+        eprintln!(
+            "[CanvasEngine] outbox #{id} POST {url} -> {error}; retry #{retry_count} in {} ms \
+             ({} pending)",
+            delay.as_millis(),
+            st.pending_actions
+        );
+        if network && st.is_online {
+            eprintln!("[CanvasEngine] server unreachable ({url}); offline");
+            st.is_online = false;
+            st.seq += 1;
+            return (Some(st.snapshot()), true);
+        }
+        (None, true)
     }
 
     fn dispatch(&self, intent_json: &str) {
@@ -526,6 +926,7 @@ impl Inner {
         };
         let pending = snap.pending_actions;
         self.notify(snap);
+        self.signal.wake();
         println!(
             "[CanvasEngine] mutate {entity_uri}#{field} = {value} (outbox #{outbox_id}, \
              {pending} pending); dispatch->notify {} us",
@@ -568,6 +969,54 @@ fn fetch(url: &str) -> Result<WorkspaceSpec, FetchError> {
     serde_json::from_str(&raw).map_err(|e| FetchError::Other(format!("bad bundle: {e}")))
 }
 
+/// The sync worker thread: runs flush passes until the engine is dropped.
+/// Holds only a `Weak<Inner>` while waiting.
+fn sync_worker(engine: Weak<Inner>, signal: Arc<WorkerSignal>) {
+    let client = match reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(FLUSH_TIMEOUT)
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[CanvasEngine] sync worker: cannot build HTTP client: {e}; outbox disabled");
+            return;
+        }
+    };
+    loop {
+        let wait = {
+            let Some(inner) = engine.upgrade() else { return };
+            inner.flush_pass(&client)
+        };
+        if !signal.wait(wait) {
+            return;
+        }
+    }
+}
+
+/// `POST url` with a JSON body, classified for the outbox.
+fn post_json(client: &reqwest::blocking::Client, url: &str, body: &str) -> FlushResult {
+    let resp = match client
+        .post(url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body.to_string())
+        .send()
+    {
+        Ok(r) => r,
+        Err(e) => return FlushResult::Network(e.to_string()),
+    };
+    let code = resp.status().as_u16();
+    if resp.status().is_success() {
+        return FlushResult::Accepted(code);
+    }
+    let body = resp.text().unwrap_or_default();
+    if (400..500).contains(&code) {
+        FlushResult::Rejected(code, body)
+    } else {
+        FlushResult::ServerError(code, body)
+    }
+}
+
 /// True if the server sent any HTTP response to `GET url`.
 fn reachable(url: &str) -> bool {
     reqwest::blocking::Client::builder()
@@ -582,6 +1031,21 @@ fn reachable(url: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn backoff_doubles_and_is_capped() {
+        let c = EngineConfig::default();
+        let secs: Vec<u64> = (1..=8).map(|n| c.backoff(n).as_secs()).collect();
+        assert_eq!(secs, vec![2, 4, 8, 16, 32, 60, 60, 60]);
+        assert_eq!(c.backoff(10_000), Duration::from_secs(60));
+        let fast = EngineConfig {
+            backoff_base: Duration::from_millis(10),
+            backoff_cap: Duration::from_millis(80),
+            ..EngineConfig::default()
+        };
+        assert_eq!(fast.backoff(2), Duration::from_millis(40));
+        assert_eq!(fast.backoff(4), Duration::from_millis(80));
+    }
 
     #[test]
     fn value_token_substituted_everywhere() {

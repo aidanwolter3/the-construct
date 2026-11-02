@@ -27,18 +27,26 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.JsonObject
 
-/** UI state derived from engine snapshots. [workspace] is null until the engine has a layout. */
+/**
+ * UI state derived from engine snapshots. [workspace] is null until the engine has a layout.
+ * [pendingActions] counts queued (unsent) outbox mutations. [seq] is the seq of the last applied
+ * snapshot (-1 before the first).
+ */
 data class CanvasState(
     val workspace: UiNode? = null,
     val entities: Map<String, JsonObject> = emptyMap(),
     val isOnline: Boolean = false,
+    val pendingActions: Int = 0,
     val error: String? = null,
+    val seq: Long = -1,
 )
 
 /**
  * Bridges a [CanvasEngineBridge] to Compose. Snapshot callbacks may arrive on any thread;
- * [state] is a thread-safe [StateFlow]. Decode failures are surfaced in [CanvasState.error]
- * (keeping the last good workspace/entities) instead of throwing into the engine.
+ * [state] is a thread-safe [StateFlow]. A snapshot whose seq is not above the last applied one is
+ * dropped (the engine notifies from several threads, so an older snapshot can arrive late); the check
+ * and the write are one atomic [MutableStateFlow.update]. Decode failures are surfaced in
+ * [CanvasState.error] (keeping the last good workspace/entities) instead of throwing into the engine.
  */
 class CanvasController(private val bridge: CanvasEngineBridge) {
     private val _state = MutableStateFlow(CanvasState())
@@ -48,16 +56,31 @@ class CanvasController(private val bridge: CanvasEngineBridge) {
         bridge.subscribe(::onSnapshot)
     }
 
-    private fun onSnapshot(workspaceJson: String, entitiesJson: String, isOnline: Boolean) {
-        try {
-            val trimmed = workspaceJson.trim()
+    private fun onSnapshot(snapshot: EngineSnapshot) {
+        if (snapshot.seq <= _state.value.seq) return // cheap pre-check; re-checked atomically below
+        var decodeError: String? = null
+        val decoded: CanvasState? = try {
+            val trimmed = snapshot.workspaceJson.trim()
             val workspace = if (trimmed.isEmpty() || trimmed == "null") null else CanvasJson.decodeNode(trimmed)
-            val e = entitiesJson.trim()
+            val e = snapshot.entitiesJson.trim()
             val entities = if (e.isEmpty() || e == "null") emptyMap() else CanvasJson.decodeEntities(e)
-            _state.value = CanvasState(workspace, entities, isOnline, error = null)
+            CanvasState(workspace, entities, snapshot.isOnline, snapshot.pendingActions, error = null, seq = snapshot.seq)
         } catch (t: Throwable) {
             println("[Canvas] snapshot decode failed: $t")
-            _state.update { it.copy(isOnline = isOnline, error = "Failed to decode engine state: ${t.message}") }
+            decodeError = "Failed to decode engine state: ${t.message}"
+            null
+        }
+        _state.update { cur ->
+            when {
+                snapshot.seq <= cur.seq -> cur
+                decoded != null -> decoded
+                else -> cur.copy(
+                    isOnline = snapshot.isOnline,
+                    pendingActions = snapshot.pendingActions,
+                    error = decodeError,
+                    seq = snapshot.seq,
+                )
+            }
         }
     }
 
@@ -80,7 +103,7 @@ fun CanvasApp(controller: CanvasController, modifier: Modifier = Modifier) {
     MaterialTheme {
         Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize()) {
-                StatusLine(state.isOnline)
+                StatusLine(state.isOnline, state.pendingActions)
                 state.error?.let {
                     Text(
                         it,
@@ -102,8 +125,9 @@ fun CanvasApp(controller: CanvasController, modifier: Modifier = Modifier) {
     }
 }
 
+/** Connectivity, plus "N pending" (amber dot) while queued mutations wait to be sent. */
 @Composable
-private fun StatusLine(isOnline: Boolean) {
+private fun StatusLine(isOnline: Boolean, pendingActions: Int) {
     Row(
         Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 16.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -115,5 +139,15 @@ private fun StatusLine(isOnline: Boolean) {
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (pendingActions > 0) {
+            Spacer(Modifier.width(16.dp))
+            Box(Modifier.size(8.dp).background(Color(0xFFF9A825), CircleShape))
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "$pendingActions pending",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }

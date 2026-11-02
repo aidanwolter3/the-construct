@@ -20,6 +20,8 @@ const INCREMENT: &str = r#"{"intent":"action.mutation.optimistic","entity_uri":"
 const RESET: &str = r#"{"intent":"action.mutation.optimistic","entity_uri":"core://counters/home","field":"count","value_expr":"0","rollback_value":0,"endpoint":"/v1/counters/home/reset","payload":{}}"#;
 
 /// Serve the counter fixture at `/v1/workspaces/home` (404 elsewhere).
+/// POSTs (outbox flushes) get 503, so queued rows stay PENDING in these
+/// tests; tests/outbox.rs covers flushing against the real server.
 /// Returns the base URL.
 fn serve_fixture() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -40,16 +42,27 @@ fn handle(mut stream: TcpStream) {
     if reader.read_line(&mut request_line).is_err() {
         return;
     }
-    // Drain headers.
+    // Drain headers, then the body (so closing never resets the connection).
+    let mut content_length = 0usize;
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
             Ok(0) | Err(_) => break,
             Ok(_) if line == "\r\n" || line == "\n" => break,
-            Ok(_) => {}
+            Ok(_) => {
+                if let Some((k, v)) = line.split_once(':')
+                    && k.eq_ignore_ascii_case("content-length")
+                {
+                    content_length = v.trim().parse().unwrap_or(0);
+                }
+            }
         }
     }
-    let (status, body) = if request_line.starts_with("GET /v1/workspaces/home ") {
+    let mut body_buf = vec![0u8; content_length];
+    let _ = std::io::Read::read_exact(&mut reader, &mut body_buf);
+    let (status, body) = if request_line.starts_with("POST ") {
+        ("503 Service Unavailable", "fixture server does not accept mutations")
+    } else if request_line.starts_with("GET /v1/workspaces/home ") {
         ("200 OK", FIXTURE)
     } else if request_line.starts_with("GET /healthz ") {
         ("200 OK", "ok")
@@ -475,8 +488,10 @@ fn restart_persists_entities_workspace_and_outbox() {
     assert_eq!(rows[1].prev_value_json.as_deref(), Some("1"));
     assert_eq!(r.rollback_value_json.as_deref(), Some("0"));
     assert_eq!(r.status, "PENDING");
-    assert_eq!(r.retry_count, 0);
-    assert_eq!(r.next_attempt_at, 0);
+    // The sync worker may already have tried once (the fixture answers 503).
+    assert!(r.retry_count <= 1, "retry_count {}", r.retry_count);
+    assert_eq!(r.next_attempt_at == 0, r.retry_count == 0);
+    assert_eq!(rows[1].retry_count, 0, "FIFO: the second row is never tried first");
     assert!(r.created_at > 1_600_000_000, "created_at is unix seconds");
 
     // "Restart": a fresh engine on the same dir, server unreachable.

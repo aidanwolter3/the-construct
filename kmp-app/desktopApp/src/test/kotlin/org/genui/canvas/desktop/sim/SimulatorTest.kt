@@ -70,6 +70,58 @@ class SimulatorTest {
     }
 
     @Test
+    fun offlineMutationsQueueAndFlushOnReconnect() {
+        val fake = FakeEngineBridge(bundle("counter_home_bundle.json"))
+        val result = run(
+            fake,
+            "assert-no-text pending; offline; click Increment; click Increment; click Increment; " +
+                "assert-text 3 pending; assert-text Count: 3; online; assert-no-text pending; wait-text 1000 Count: 3",
+        )
+        assertTrue(result.ok, result.steps.joinToString("\n") { it.logLine() })
+        assertEquals(0, fake.pendingActions)
+        assertEquals(JsonPrimitive(3), fake.serverField("core://counters/home", "count"))
+    }
+
+    @Test
+    fun rejectedDecrementRollsBackAtFlush() {
+        val fake = FakeEngineBridge(bundle("counter_home_bundle.json"))
+        val controller = CanvasController(fake)
+        fake.setOnline(false)
+        // Server count is 0: the decrement will be rejected, the two increments accepted.
+        fake.dispatch(intent("entity.count - 1", "/v1/counters/home/decrement"))
+        fake.dispatch(intent("entity.count + 1", "/v1/counters/home/increment"))
+        fake.dispatch(intent("entity.count + 1", "/v1/counters/home/increment"))
+        assertEquals(JsonPrimitive(1), fake.entityField(COUNTER, "count"))
+        assertEquals(3, controller.state.value.pendingActions)
+        val seqBefore = controller.state.value.seq
+
+        fake.setOnline(true)
+        assertEquals(0, controller.state.value.pendingActions)
+        assertTrue(controller.state.value.seq > seqBefore)
+        // Rolled back to 0, then the later increments re-applied on top.
+        assertEquals(JsonPrimitive(2), fake.entityField(COUNTER, "count"))
+        assertEquals(JsonPrimitive(2), fake.serverField(COUNTER, "count"))
+    }
+
+    @Test
+    fun onlineMutationsNeverShowPending() {
+        val fake = FakeEngineBridge(bundle("counter_home_bundle.json"))
+        val controller = CanvasController(fake)
+        fake.dispatch(intent("entity.count + 1", "/v1/counters/home/increment"))
+        assertEquals(0, controller.state.value.pendingActions)
+        assertEquals(JsonPrimitive(1), fake.serverField(COUNTER, "count"))
+        // Online decrement below zero: rejected immediately and rolled back.
+        fake.dispatch(intent("entity.count - 1", "/v1/counters/home/decrement"))
+        fake.dispatch(intent("entity.count - 1", "/v1/counters/home/decrement"))
+        assertEquals(JsonPrimitive(0), fake.entityField(COUNTER, "count"))
+        assertEquals(JsonPrimitive(0), fake.serverField(COUNTER, "count"))
+    }
+
+    private fun intent(expr: String, endpoint: String) =
+        """{"intent":"action.mutation.optimistic","entity_uri":"$COUNTER","field":"count","value_expr":"$expr",""" +
+            """"rollback_value":0,"endpoint":"$endpoint","payload":{}}"""
+
+    @Test
     fun pixelfedFixtureRendersFixtureText() {
         val fake = FakeEngineBridge(bundle("pixelfed_home_bundle.json"))
         val result = run(fake, "assert-text Sunrise over Boulder; assert-text @aidan; shot feed", screen = "desktop")
@@ -100,5 +152,9 @@ class SimulatorTest {
         validateStepsForMode(steps, "fixture")
         val e = assertFailsWith<ScriptParseException> { validateStepsForMode(steps, "live") }
         assertTrue(e.message!!.contains("step 2 'offline' is not supported in live mode"), e.message)
+    }
+
+    private companion object {
+        const val COUNTER = "core://counters/home"
     }
 }

@@ -13,7 +13,8 @@ import kotlin.system.exitProcess
  * `./gradlew :desktopApp:simulate -P<name>=<value>`, which forwards each property as `--<name>=<value>`.
  *
  * Options: workspace (home), screen (phone), script / scriptFile (default "shot initial"),
- * mode (fixture|live), fixture, baseUrl, out, density, timeoutMs (live load wait, 10000).
+ * mode (fixture|live), fixture, baseUrl, out, density, timeoutMs (live load wait, 10000),
+ * storage (live only: persistent engine storage dir; default a fresh temp dir deleted on exit).
  * Relative paths resolve against the working directory (the repo root under Gradle).
  * Exit codes: 0 all steps ok, 1 a step failed, 2 bad arguments or script.
  */
@@ -41,6 +42,7 @@ class UsageException(message: String) : Exception(message)
 
 private val KNOWN_OPTIONS = setOf(
     "workspace", "screen", "script", "scriptFile", "mode", "fixture", "baseUrl", "out", "density", "timeoutMs",
+    "storage",
 )
 
 // Kept reachable for the whole run: the bridge owns the engine handle and the JNA callback observers.
@@ -88,6 +90,7 @@ private fun runCli(args: Array<String>): Int {
     if (mode != "fixture" && mode != "live") throw UsageException("bad mode '$mode' (expected fixture or live)")
     if (mode == "live" && opts["fixture"] != null) throw UsageException("fixture cannot be combined with live mode")
     if (mode == "fixture" && opts["baseUrl"] != null) throw UsageException("baseUrl cannot be combined with fixture mode")
+    if (mode == "fixture" && opts["storage"] != null) throw UsageException("storage cannot be combined with fixture mode")
     try {
         validateStepsForMode(steps, mode)
     } catch (e: ScriptParseException) {
@@ -115,9 +118,11 @@ private fun runCli(args: Array<String>): Int {
         controller = CanvasController(fake)
     } else {
         val baseUrl = opts["baseUrl"] ?: "http://127.0.0.1:8080"
-        // Temp storage so live runs never read or write the app's ~/.canvas offline cache.
-        val storage = Files.createTempDirectory("canvas-sim").toFile()
-        liveStorage = storage
+        // By default temp storage (deleted on exit) so live runs never read or write the app's ~/.canvas
+        // cache; -Pstorage=<dir> keeps a persistent dir (restart-persistence QA, inspecting cache.db).
+        val storage = opts["storage"]?.let { dir ->
+            path(dir).absoluteFile.also { requireWritableDir(it, "storage directory") }
+        } ?: Files.createTempDirectory("canvas-sim").toFile().also { liveStorage = it }
         println("[sim] mode=live workspace=$workspace baseUrl=$baseUrl storage=$storage")
         val bridge = UniffiEngineBridge.create(storage.absolutePath, baseUrl, workspace)
         liveBridge = bridge
@@ -154,13 +159,13 @@ private fun runCli(args: Array<String>): Int {
 }
 
 /** Creates [dir] if needed; a usage error unless it ends up a writable directory. */
-fun requireWritableDir(dir: File) {
+fun requireWritableDir(dir: File, what: String = "output directory") {
     try {
         Files.createDirectories(dir.toPath())
     } catch (e: Exception) {
-        throw UsageException("cannot create output directory $dir: ${e::class.simpleName}: ${e.message}")
+        throw UsageException("cannot create $what $dir: ${e::class.simpleName}: ${e.message}")
     }
-    if (!dir.isDirectory || !Files.isWritable(dir.toPath())) throw UsageException("output directory $dir is not a writable directory")
+    if (!dir.isDirectory || !Files.isWritable(dir.toPath())) throw UsageException("$what $dir is not a writable directory")
 }
 
 /** fixtures/ next to (or above) [from]: counter bundle for `home`, Pixelfed bundle for `pixelfed_demo`. */

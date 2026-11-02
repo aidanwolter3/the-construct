@@ -10,3 +10,9 @@ protocol.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
 rusqlite.workspace = true
+
+[dev-dependencies]
+# tests/outbox.rs runs the real server (in-process, random port).
+server = { path = "../server" }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "net"] }
