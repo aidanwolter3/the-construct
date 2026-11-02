@@ -1200,15 +1200,24 @@ impl Inner {
                 return None;
             }
             let url = format!("{}{}", self.base_url, row.endpoint);
-            let result = post_json(client, &url, &row.payload_json, token.as_deref());
+            // The pod session is only ever sent to the pod itself: an
+            // endpoint such as `@evil.example/x` or `.evil.example/x` would
+            // otherwise move the request (and the bearer) to another host.
+            let sent = token.as_deref().filter(|_| same_origin(&self.base_url, &url));
+            let result = post_json(client, &url, &row.payload_json, sent);
             if let FlushResult::Unauthorized = result {
-                let snap = self.outbox_unauthorized(&row, &url, token.as_deref());
+                let (snap, blocked) =
+                    self.outbox_unauthorized(&row, &url, sent, token.as_deref());
                 drop(net);
                 if let Some(snap) = snap {
                     self.notify(snap);
                 }
-                // Paused until a sign-in wakes the worker.
-                return None;
+                if blocked {
+                    // Paused until a sign-in wakes the worker.
+                    return None;
+                }
+                // The session changed during the POST: retry with the new one.
+                continue;
             }
             let (snap, failed) = self.apply_flush_result(&row, &url, result);
             drop(net);
@@ -1226,25 +1235,39 @@ impl Inner {
     /// An outbox POST got a 401. The row stays PENDING with its optimistic
     /// value (not rolled back, retry count unchanged): flushing pauses
     /// (`auth_blocked`) until the next sign-in, and the session that was
-    /// sent, if any, is forgotten.
+    /// sent (`sent`), if any, is forgotten. If the session changed while the
+    /// POST was in flight (`session` is the one current when it started; a
+    /// sign-in or logout completed meanwhile), nothing is paused or
+    /// forgotten. Returns the snapshot to deliver, if any, and whether
+    /// flushing is now paused.
     fn outbox_unauthorized(
         &self,
         row: &OutboxRow,
         url: &str,
-        token: Option<&str>,
-    ) -> Option<StateSnapshot> {
-        let expired = token.and_then(|t| self.expire_session(t, "outbox POST"));
+        sent: Option<&str>,
+        session: Option<&str>,
+    ) -> (Option<StateSnapshot>, bool) {
+        let expired = sent.and_then(|t| self.expire_session(t, "outbox POST"));
         let mut st = lock(&self.state);
+        if expired.is_none() && st.session.as_ref().map(|s| s.token.as_str()) != session {
+            eprintln!(
+                "[CanvasEngine] outbox #{} POST {url} -> 401 with a session that has since \
+                 changed; retrying",
+                row.id
+            );
+            return (None, false);
+        }
         eprintln!(
             "[CanvasEngine] outbox #{} POST {url} -> 401; kept PENDING, flushing paused until \
              sign-in ({} pending)",
             row.id, st.pending_actions
         );
         st.auth_blocked = true;
-        expired.map(|_| {
+        let snap = expired.map(|_| {
             st.seq += 1;
             st.snapshot()
-        })
+        });
+        (snap, true)
     }
 
     /// Record the outcome of POSTing `row` (state lock held only here).
@@ -1898,6 +1921,14 @@ fn sync_worker(engine: Weak<Inner>, signal: Arc<WorkerSignal>) {
     }
 }
 
+/// Whether `url` has the same scheme, host and port as `base`.
+fn same_origin(base: &str, url: &str) -> bool {
+    match (reqwest::Url::parse(base), reqwest::Url::parse(url)) {
+        (Ok(a), Ok(b)) => a.origin() == b.origin() && a.origin().is_tuple(),
+        _ => false,
+    }
+}
+
 /// `POST url` with a JSON body (and the bearer when signed in),
 /// classified for the outbox.
 fn post_json(
@@ -1983,5 +2014,80 @@ mod tests {
             })
         );
         assert_eq!(substitute_value_token(json!("$value"), &json!(5)), json!(5));
+    }
+
+    #[test]
+    fn bearer_only_goes_to_the_pod_origin() {
+        let base = "http://pod.example:8080";
+        assert!(same_origin(base, &format!("{base}/v1/pixelfed/posts/like")));
+        for endpoint in ["@evil.example/x", ".evil.example/x", "0/x", ":9/x"] {
+            assert!(
+                !same_origin(base, &format!("{base}{endpoint}")),
+                "{endpoint}"
+            );
+        }
+        assert!(!same_origin("http://pod.example", "http://pod.example.evil.example/x"));
+        assert!(!same_origin("not a url", "not a url/x"));
+    }
+
+    fn session(token: &str) -> Session {
+        Session {
+            token: token.into(),
+            username: None,
+            display_name: None,
+            avatar_url: None,
+        }
+    }
+
+    fn outbox_row() -> OutboxRow {
+        OutboxRow {
+            id: 1,
+            entity_uri: "pixelfed://posts/1".into(),
+            endpoint: "/x".into(),
+            payload_json: "{}".into(),
+            created_at: 0,
+            retry_count: 0,
+            status: store::STATUS_PENDING.into(),
+            field: None,
+            value_expr: None,
+            prev_value_json: None,
+            rollback_value_json: None,
+            next_attempt_at: 0,
+            last_error: None,
+            also: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn outbox_401_after_a_concurrent_sign_in_does_not_pause_flushing() {
+        let engine = CanvasEngine::init_with_config(
+            "",
+            "http://127.0.0.1:1",
+            "home",
+            EngineConfig::default(),
+        );
+        let inner = &engine.inner;
+        let row = outbox_row();
+        // A sign-in completed while a POST with the old (or no) token was in flight.
+        lock(&inner.state).session = Some(session("new"));
+        for sent in [Some("old"), None] {
+            let (snap, blocked) = inner.outbox_unauthorized(&row, "u", sent, sent);
+            assert!(snap.is_none() && !blocked, "{sent:?}");
+            let st = lock(&inner.state);
+            assert!(!st.auth_blocked);
+            assert_eq!(st.session.as_ref().map(|s| s.token.as_str()), Some("new"));
+        }
+        // The current session itself was rejected: forget it and pause.
+        let (snap, blocked) = inner.outbox_unauthorized(&row, "u", Some("new"), Some("new"));
+        assert!(blocked);
+        assert!(snap.unwrap().auth_json.contains("signed_out"));
+        let st = lock(&inner.state);
+        assert!(st.auth_blocked && st.session.is_none());
+        drop(st);
+        // Signed in, but the bearer was withheld (cross-origin endpoint): pause.
+        lock(&inner.state).auth_blocked = false;
+        lock(&inner.state).session = Some(session("s"));
+        let (_, blocked) = inner.outbox_unauthorized(&row, "u", None, Some("s"));
+        assert!(blocked && lock(&inner.state).auth_blocked);
     }
 }

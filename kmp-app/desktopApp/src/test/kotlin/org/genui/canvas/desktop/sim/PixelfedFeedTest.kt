@@ -55,6 +55,18 @@ class PixelfedFeedTest {
     }
 
     @Test
+    fun carouselPageSurvivesSnapshotUpdates() {
+        // A new snapshot (here: liking the post, which rebuilds entities and feed items) must not reset the
+        // per-post pager state: items are keyed by entity URI.
+        run(
+            fake(),
+            "swipe-left tag:carousel:$CAROUSEL; assert-text Page 2 of 3; " +
+                "click tag:like:$CAROUSEL; assert-text 28; assert-text Page 2 of 3; " +
+                "click tag:bookmark:$CAROUSEL; assert-text Page 2 of 3",
+        )
+    }
+
+    @Test
     fun signedInStatusLineShowsUsernameAndSignOutSignsOut() {
         val fake = FakeEngineBridge(
             assertNotNull(findFixture("pixelfed_home_feed_bundle.json")).readText(),

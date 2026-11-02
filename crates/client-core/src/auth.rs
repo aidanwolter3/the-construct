@@ -10,7 +10,7 @@
 //! is driven by the engine (`lib.rs`) on a background thread.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Mutex;
@@ -24,6 +24,10 @@ use sha2::{Digest, Sha256};
 pub const REDIRECT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// Path of the loopback redirect URI.
 pub const LOOPBACK_PATH: &str = "/callback";
+/// Cap on one loopback request (request line + headers).
+const MAX_REQUEST_BYTES: u64 = 16 * 1024;
+/// Time one loopback connection may take to send its request.
+const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// Length of a generated code verifier (RFC 7636 allows 43..=128).
 pub const VERIFIER_LEN: usize = 64;
 
@@ -412,24 +416,32 @@ impl LoopbackListener {
 /// Answer one connection; returns the redirect if it was an accepted callback.
 fn handle_conn(stream: TcpStream, accept: &dyn Fn(&Redirect) -> bool) -> Option<Redirect> {
     let _ = stream.set_nonblocking(false);
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
-    let mut reader = BufReader::new(stream);
+    // Bounded in size and time: another local process must not be able to
+    // grow memory without limit or hold the (single-threaded) listener.
+    let deadline = Instant::now() + REQUEST_READ_TIMEOUT;
+    let mut reader = BufReader::new(stream.take(MAX_REQUEST_BYTES));
+    let mut read_line = |buf: &mut String| -> bool {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        let _ = reader.get_ref().get_ref().set_read_timeout(Some(left));
+        matches!(reader.read_line(buf), Ok(n) if n > 0)
+    };
     let mut request_line = String::new();
-    if reader.read_line(&mut request_line).is_err() {
+    if !read_line(&mut request_line) {
         return None;
     }
     // Drain the headers (up to the blank line) so the client sees a clean reply.
     let mut line = String::new();
     for _ in 0..100 {
         line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(_) if line == "\r\n" || line == "\n" => break,
-            Ok(_) => {}
+        if !read_line(&mut line) || line == "\r\n" || line == "\n" {
+            break;
         }
     }
-    let mut stream = reader.into_inner();
+    let mut stream = reader.into_inner().into_inner();
     let mut parts = request_line.split_whitespace();
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
     let path = target.split('?').next().unwrap_or("");
@@ -596,6 +608,28 @@ mod tests {
                 state: Some("good".into())
             }
         );
+        t.join().unwrap();
+    }
+
+    #[test]
+    fn loopback_survives_an_oversized_request() {
+        let l = LoopbackListener::bind().unwrap();
+        let port = l.port();
+        let t = std::thread::spawn(move || {
+            // 1 MiB without a newline: read up to the cap, answered 404, closed.
+            let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            let _ = s.write_all(&vec![b'A'; 1 << 20]);
+            drop(s);
+            let ok = reqwest::blocking::Client::new()
+                .get(format!("http://127.0.0.1:{port}/callback?code=c&state=s"))
+                .send()
+                .unwrap();
+            assert_eq!(ok.status().as_u16(), 200);
+        });
+        let r = l
+            .wait(Duration::from_secs(10), &|| false, &|r| r.state() == Some("s"))
+            .unwrap();
+        assert_eq!(r.state(), Some("s"));
         t.join().unwrap();
     }
 

@@ -90,8 +90,10 @@ internal fun CanvasImage(
             is AsyncImagePainter.State.Error -> error()
             else -> placeholder()
         }
+        val context = LocalPlatformContext.current
+        val request = remember(url, context) { ImageRequest.Builder(context).data(url).crossfade(true).build() }
         AsyncImage(
-            model = ImageRequest.Builder(LocalPlatformContext.current).data(url).crossfade(true).build(),
+            model = request,
             contentDescription = contentDescription,
             modifier = Modifier.matchParentSize(),
             contentScale = contentScale,

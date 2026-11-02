@@ -641,6 +641,61 @@ async fn media_proxy_streams_png() {
     }
 }
 
+/// A media URL from upstream content that serves HTML/SVG is passed through
+/// as inert bytes, never as a page on the pod's origin.
+#[tokio::test]
+async fn media_proxy_neutralizes_non_media_content_types() {
+    use axum::{http::header, routing::get};
+    let origin = serve(
+        axum::Router::new()
+            .route(
+                "/page",
+                get(|| async { ([(header::CONTENT_TYPE, "text/html")], "<script>x</script>") }),
+            )
+            .route(
+                "/img.svg",
+                get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], "<svg/>") }),
+            )
+            .route(
+                "/img.jpg",
+                get(|| async { ([(header::CONTENT_TYPE, "image/jpeg")], "jpg") }),
+            ),
+    )
+    .await;
+    let state = AppState::in_memory();
+    let urls: Vec<(String, String)> = ["page", "img.svg", "img.jpg"]
+        .iter()
+        .map(|p| {
+            let url = format!("{}/{p}", origin.url);
+            (server::pixelfed::media_key(&url), url)
+        })
+        .collect();
+    state
+        .store()
+        .save_media_keys(urls.iter().map(|(k, u)| (k, u)))
+        .unwrap();
+    let pod = spawn_pod(state).await;
+    for ((key, _), want) in urls
+        .iter()
+        .zip(["application/octet-stream", "application/octet-stream", "image/jpeg"])
+    {
+        let resp = client()
+            .get(format!("{}/v1/pixelfed/media/{key}", pod.url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers()["content-type"], want);
+        assert_eq!(resp.headers()["x-content-type-options"], "nosniff");
+        assert!(
+            resp.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .contains("sandbox")
+        );
+    }
+}
+
 #[tokio::test]
 async fn session_tokens_are_stored_hashed() {
     let dir = tempfile::tempdir().unwrap();

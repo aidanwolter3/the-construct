@@ -347,8 +347,10 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   else `meta.small`, else 1.0.
 - **Media proxy:** every image URL becomes `<scheme>://<Host>/v1/pixelfed/media/<key>` (scheme from
   `X-Forwarded-Proto`, else http), key = first 128 bits of SHA-256(url) in hex, persisted so keys survive a pod
-  restart. `GET` streams the upstream bytes with the upstream content type and no auth (keys are opaque and the
-  media are public upstream). URLs under `PIXELFED_PUBLIC_URL` are fetched via `PIXELFED_INSTANCE_URL`.
+  restart. `GET` streams the upstream bytes with no auth (keys are opaque and the media are public upstream).
+  The URLs come from upstream content, so the reply is inert: the upstream content type only if it is
+  `image/*` (not SVG), `video/*` or `audio/*`, else `application/octet-stream`, plus `nosniff` and
+  `CSP: default-src 'none'; sandbox`. URLs under `PIXELFED_PUBLIC_URL` are fetched via `PIXELFED_INSTANCE_URL`.
 - **Demo:** the static `pixelfed_demo` like intent posts to `POST /v1/demo/ack` (stateless 200).
 - **Real Pixelfed (M6-RA):** the timeline request adds `include_reblogs=true` (Pixelfed hides boosts otherwise; the
   pod reads one page, so Pixelfed's Link headers, which drop the flag, are not followed). Every optional field is
@@ -414,10 +416,13 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   elsewhere. `init`/`init_with_workspace` use the default; `init_with_config` (tests) uses in-memory. Platform
   callbacks (store, opener) run inside `catch_unwind`, so a foreign exception surfaced as a panic is contained.
 - **Bearer:** `Authorization: Bearer <session>` on workspace fetches and outbox POSTs; not on `/healthz` probes.
+  An outbox POST gets it only if `base_url + endpoint` keeps the pod's origin (an endpoint like `@host/x` does not).
 - **401 policy:** fetch 401 with a session -> session cleared (memory + store), signed_out, one retry without the
   bearer. Outbox POST 401 -> the row stays PENDING with its optimistic value (no rollback, retry count unchanged),
   the session is cleared, and flushing pauses (`auth_blocked`, in memory) until the next sign-in wakes the worker;
-  after a restart the row is tried once more and pauses again on another 401. A user's like is never silently
+  after a restart the row is tried once more and pauses again on another 401. A 401 for a session that was
+  replaced while the POST was in flight (a sign-in or logout finished) neither pauses nor clears anything; the
+  row is retried with the current session. A user's like is never silently
   undone just because the session expired. The pod answers a stale bearer on `pixelfed_home` with 401 (D17), so
   a stale session is cleared on the first workspace fetch (e.g. at startup) and the signed-out bundle follows.
 - **Logout:** non-blocking: cancel flow, clear session + store, notify signed_out; then on a thread `POST
@@ -458,7 +463,7 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   forwards `canvas://oauth` VIEW intents to the ViewModel's bridge. `KeystoreSecureStore`: AES-256/GCM/NoPadding key
   `canvas_session_key` in AndroidKeyStore (generated on first use), value stored as `base64(iv):base64(ciphertext)`
   in private SharedPreferences `canvas_secure` (`commit()`, synchronized); undecryptable values read as absent.
-  `AndroidUrlOpener` posts `startActivity(ACTION_VIEW, NEW_TASK)` to the main thread and waits up to 5 s; false on
+  `AndroidUrlOpener` posts `startActivity(ACTION_VIEW, NEW_TASK)` to the main thread and waits up to 5 s (calls it directly when already on the main thread); false on
   `ActivityNotFoundException`. Custom Tabs are not used (no extra dependency).
 - **Simulator:** `InMemorySecureStore`; `AutoApproveBrowser` GETs `<authorize>&auto=1` without following redirects;
   only a 3xx whose `Location` starts with the URL's `redirect_uri` is followed (on a daemon thread, with

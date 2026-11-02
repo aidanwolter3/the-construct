@@ -97,21 +97,30 @@ class MainActivity : ComponentActivity() {
 internal class AndroidUrlOpener(private val context: Context) : UrlOpener {
     override fun open(url: String): Boolean {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        // Already on the main thread: start directly. Posting and then waiting here would block the main
+        // looper for the whole timeout and report false although the browser opens right after.
+        if (Looper.myLooper() == Looper.getMainLooper()) return start(intent)
         val ok = AtomicBoolean(false)
         val done = CountDownLatch(1)
         Handler(Looper.getMainLooper()).post {
             try {
-                context.startActivity(intent)
-                ok.set(true)
-            } catch (e: ActivityNotFoundException) {
-                Log.w(TAG, "no activity can open the sign-in URL")
-            } catch (e: Exception) {
-                Log.w(TAG, "cannot open the sign-in URL: $e")
+                ok.set(start(intent))
             } finally {
                 done.countDown()
             }
         }
         return done.await(5, TimeUnit.SECONDS) && ok.get()
+    }
+
+    private fun start(intent: Intent): Boolean = try {
+        context.startActivity(intent)
+        true
+    } catch (e: ActivityNotFoundException) {
+        Log.w(TAG, "no activity can open the sign-in URL")
+        false
+    } catch (e: Exception) {
+        Log.w(TAG, "cannot open the sign-in URL: $e")
+        false
     }
 }
 

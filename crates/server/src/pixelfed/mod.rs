@@ -505,9 +505,12 @@ pub fn decode_entities(s: &str) -> String {
     while let Some(amp) = rest.find('&') {
         out.push_str(&rest[..amp]);
         let after = &rest[amp + 1..];
+        // Only look a few bytes ahead (the longest entity is `#x10FFFF`), so
+        // a long run of `&` without `;` stays linear.
         let decoded = after
-            .find(';')
-            .filter(|&semi| semi <= 10)
+            .bytes()
+            .take(11)
+            .position(|b| b == b';')
             .and_then(|semi| entity(&after[..semi]).map(|c| (c, semi)));
         match decoded {
             Some((c, semi)) => {
@@ -979,6 +982,12 @@ mod tests {
             "1 < 2 & <3 &bogus; &"
         );
         assert_eq!(html_to_text(""), "");
+        assert_eq!(decode_entities("&#x1F600; &#128512;"), "\u{1F600} \u{1F600}");
+        // Many `&` and a `;` only at the very end: linear, and nothing decoded.
+        let amps = format!("{};", "&".repeat(200_000));
+        let t = std::time::Instant::now();
+        assert_eq!(decode_entities(&amps), amps);
+        assert!(t.elapsed() < std::time::Duration::from_secs(1));
         assert_eq!(parse_rfc3339("1970-01-01T00:00:00Z"), Some(0));
         assert_eq!(
             parse_rfc3339("2026-10-31T18:42:10.000000Z"),

@@ -659,14 +659,37 @@ async fn media(State(state): State<Arc<AppState>>, Path(key): Path<String>) -> R
         }
         Err(e) => return bad_gateway(&e),
     };
-    let mut out = Response::builder().status(StatusCode::OK).header(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=86400"),
-    );
-    for name in [header::CONTENT_TYPE, header::CONTENT_LENGTH] {
-        if let Some(v) = resp.headers().get(&name) {
-            out = out.header(name, v.clone());
-        }
+    // The URL came from upstream content (possibly a federated post), so the
+    // response is served as inert media only: a non-media Content-Type (e.g.
+    // text/html) becomes application/octet-stream, sniffing is off, and the
+    // CSP sandboxes anything a browser might still render on the pod origin.
+    let content_type = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .filter(|v| {
+            v.to_str().is_ok_and(|t| {
+                let t = t.trim_start().to_ascii_lowercase();
+                (t.starts_with("image/") && !t.starts_with("image/svg"))
+                    || t.starts_with("video/")
+                    || t.starts_with("audio/")
+            })
+        })
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("application/octet-stream"));
+    let mut out = Response::builder()
+        .status(StatusCode::OK)
+        .header(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=86400"),
+        )
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"))
+        .header(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static("default-src 'none'; sandbox"),
+        );
+    if let Some(v) = resp.headers().get(header::CONTENT_LENGTH) {
+        out = out.header(header::CONTENT_LENGTH, v.clone());
     }
     out.body(Body::from_stream(resp.bytes_stream()))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())

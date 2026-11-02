@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Provision a fresh Hetzner server (Ubuntu 24.04, x86_64) as a Project Canvas
+# Provision a fresh Hetzner server (Ubuntu 24.04, arm64 or x86_64) as a Project Canvas
 # dev/e2e box: construct server, local Pixelfed (Docker), Rust + JDK toolchains,
 # headless simulator deps, Claude Code, and optionally the Android SDK/emulator,
 # HTTPS via Caddy, and a GitHub Actions self-hosted runner.
@@ -62,7 +62,9 @@ log() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 as_dev() { sudo -u "$DEV_USER" -H bash -lc "$1"; }
 
 [[ $EUID -eq 0 ]] || { echo "run as root" >&2; exit 1; }
-[[ "$(uname -m)" == "x86_64" ]] || echo "WARNING: not x86_64; the Android SDK tools on Linux are x86_64-only."
+if [[ $WANT_ANDROID -eq 1 && "$(uname -m)" != "x86_64" ]]; then
+  echo "--android needs an x86_64 server (the Android SDK tools on Linux are x86_64-only)." >&2; exit 2
+fi
 if [[ -n "$RUNNER_URL" && -z "$RUNNER_TOKEN" ]] || [[ -z "$RUNNER_URL" && -n "$RUNNER_TOKEN" ]]; then
   echo "--runner-url and --runner-token must be given together" >&2; exit 2
 fi
@@ -146,8 +148,10 @@ log "Claude Code"
 as_dev 'command -v claude >/dev/null || curl -fsSL https://claude.ai/install.sh | bash'
 
 # Headless JVM rendering (simulator) needs no display; make that the default.
-cat > /etc/profile.d/canvas.sh <<'EOF'
-export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+cat > /etc/profile.d/canvas.sh <<EOF
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-$(dpkg --print-architecture)
+EOF
+cat >> /etc/profile.d/canvas.sh <<'EOF'
 export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Djava.awt.headless=true"
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 EOF

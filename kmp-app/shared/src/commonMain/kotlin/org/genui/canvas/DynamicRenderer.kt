@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -94,7 +95,9 @@ fun RenderUiNode(
 
         is UiNode.FeedList -> {
             // Nested inside the Workspace's scrolling Column, so a plain Column (not LazyColumn).
-            val posts = feedItems(node.queryKey, LocalCanvasQueries.current, entities)
+            // Recomputed only when a snapshot changes the inputs, not on every recomposition of the list.
+            val queries = LocalCanvasQueries.current
+            val posts = remember(node.queryKey, queries, entities) { feedItems(node.queryKey, queries, entities) }
             Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                 if (posts.isEmpty()) {
                     Text(
