@@ -21,7 +21,8 @@ import org.genui.canvas.UiNode
  * Loads a hydration bundle (`{version, workspace, entities, queries}`, DECISIONS D2) and emits snapshots
  * shaped like the real engine's (D6: workspace JSON = the layout node, entities JSON = the
  * URI-keyed map, queries JSON = the bundle's queries; `seq` increases with every state change).
- * [authJson] is passed through unchanged (default signed out). `OptimisticMutate` intents are applied
+ * [authJson] is passed through unchanged (default signed out) until [logout] sets it to signed out.
+ * `OptimisticMutate` intents are applied
  * with the D4 expression subset (including the M6 ternary); other intents are logged and ignored.
  * The primary field and every `also` field are evaluated against the PRE-mutation entity and
  * applied together; a rollback restores all of them.
@@ -38,7 +39,7 @@ import org.genui.canvas.UiNode
 class FakeEngineBridge(
     bundleJson: String,
     online: Boolean = true,
-    private val authJson: String = "{\"state\":\"signed_out\"}",
+    private var authJson: String = "{\"state\":\"signed_out\"}",
 ) : CanvasEngineBridge {
     /** [prevValues]: field -> value before this row was applied (null = absent). */
     private class Row(val intent: ActionIntent.OptimisticMutate, var prevValues: Map<String, JsonElement?>)
@@ -67,6 +68,15 @@ class FakeEngineBridge(
             snapshotLocked()
         }
         onState(snapshot)
+    }
+
+    override fun logout() {
+        println("[sim] logout")
+        synchronized(lock) {
+            authJson = "{\"state\":\"signed_out\"}"
+            seq++
+        }
+        emit()
     }
 
     override fun dispatch(intentJson: String) {

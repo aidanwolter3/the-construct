@@ -124,7 +124,13 @@ private fun runCli(args: Array<String>): Int {
             path(dir).absoluteFile.also { requireWritableDir(it, "storage directory") }
         } ?: Files.createTempDirectory("canvas-sim").toFile().also { liveStorage = it }
         println("[sim] mode=live workspace=$workspace baseUrl=$baseUrl storage=$storage")
-        val bridge = UniffiEngineBridge.create(storage.absolutePath, baseUrl, workspace)
+        // Sign-in: in-memory session store and a browser that auto-approves (works with the fake upstream);
+        // loopback redirect. A script signs in with e.g. `click Sign in with Pixelfed; wait-text 20000 @canvasdemo`.
+        val bridge = UniffiEngineBridge.create(
+            storage.absolutePath, baseUrl, workspace,
+            secureStore = InMemorySecureStore(),
+            urlOpener = AutoApproveBrowser(),
+        )
         liveBridge = bridge
         controller = CanvasController(bridge)
         val deadline = System.nanoTime() + timeoutMs * 1_000_000

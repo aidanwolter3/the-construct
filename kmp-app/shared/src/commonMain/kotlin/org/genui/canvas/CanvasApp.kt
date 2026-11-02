@@ -1,6 +1,7 @@
 package org.genui.canvas
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -21,6 +23,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -105,6 +110,16 @@ class CanvasController(private val bridge: CanvasEngineBridge) {
             _state.update { it.copy(error = "Dispatch failed: ${t.message}") }
         }
     }
+
+    /** Signs out ("Sign out" in the status line); the engine notifies `signed_out` and refetches. */
+    fun logout() {
+        try {
+            bridge.logout()
+        } catch (t: Throwable) {
+            println("[Canvas] logout failed: $t")
+            _state.update { it.copy(error = "Sign-out failed: ${t.message}") }
+        }
+    }
 }
 
 @Composable
@@ -114,7 +129,7 @@ fun CanvasApp(controller: CanvasController, modifier: Modifier = Modifier) {
     MaterialTheme(colorScheme = lightColorScheme(background = Color.White, surface = Color.White)) {
         Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize()) {
-                StatusLine(state.isOnline, state.pendingActions, state.auth)
+                StatusLine(state.isOnline, state.pendingActions, state.auth, controller::logout)
                 state.error?.let {
                     Text(
                         it,
@@ -140,10 +155,10 @@ fun CanvasApp(controller: CanvasController, modifier: Modifier = Modifier) {
 
 /**
  * Connectivity, plus "N pending" (amber dot) while queued mutations wait to be sent, plus the sign-in
- * status on the right unless signed out.
+ * status on the right unless signed out: "@username" and a "Sign out" button, "Signing in…", or the error.
  */
 @Composable
-private fun StatusLine(isOnline: Boolean, pendingActions: Int, auth: AuthInfo) {
+private fun StatusLine(isOnline: Boolean, pendingActions: Int, auth: AuthInfo, onSignOut: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 16.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -178,7 +193,22 @@ private fun StatusLine(isOnline: Boolean, pendingActions: Int, auth: AuthInfo) {
                 style = MaterialTheme.typography.labelMedium,
                 color = if (auth.state == "error") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
             )
+            if (auth.state == "signed_in") {
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Sign out",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable(role = Role.Button, onClick = onSignOut)
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                )
+            }
         }
     }
 }

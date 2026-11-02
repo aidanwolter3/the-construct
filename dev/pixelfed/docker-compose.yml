@@ -1,0 +1,98 @@
+# Local, loopback-only Pixelfed for end-to-end tests (DEV ONLY). Driven by scripts/pixelfed_dev.sh.
+# Only 127.0.0.1:8090 is published on the host; db/redis stay on the internal compose network.
+# Federation is disabled in pixelfed.env. The scheduler container from upstream's compose is left out on
+# purpose (cron-style maintenance only; not needed for tests, saves ~150 MB RAM), and Horizon is replaced by one
+# queue worker (see `worker`).
+name: canvas-pixelfed
+
+x-pixelfed: &pixelfed
+  # v0.15.2 (2026-10-21), multi-arch (arm64 + amd64). Digest pinned for reproducibility.
+  image: ghcr.io/pixelfed/pixelfed:v0.15.2@sha256:f1237913ef0d392a5afef1dab8e3dd01234435ea90314a3a7221a2ea00932132
+  restart: unless-stopped
+  env_file: [pixelfed.env]
+  volumes:
+    - pf-storage:/var/www/html/storage
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  db:
+    image: mariadb:11.4
+    restart: unless-stopped
+    env_file: [pixelfed.env]
+    command: ["--innodb-buffer-pool-size=128M", "--performance-schema=OFF"]
+    volumes:
+      - pf-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb"]
+    volumes:
+      - pf-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    <<: *pixelfed
+    ports:
+      - "127.0.0.1:8090:8080"
+    environment:
+      LOG_OUTPUT_LEVEL: "warn"
+      SSL_MODE: "off"
+      PHP_OPCACHE_ENABLE: "1"
+      AUTORUN_ENABLED: "true"
+      AUTORUN_LARAVEL_MIGRATION: "true"
+      AUTORUN_LARAVEL_MIGRATION_ISOLATION: "false"
+      AUTORUN_LARAVEL_STORAGE_LINK: "true"
+      AUTORUN_LARAVEL_EVENT_CACHE: "false"
+      AUTORUN_LARAVEL_ROUTE_CACHE: "false"
+      AUTORUN_LARAVEL_VIEW_CACHE: "false"
+      AUTORUN_LARAVEL_CONFIG_CACHE: "false"
+    healthcheck:
+      # The image has no /up route and no healthcheck-frankenphp helper: probe a cheap public API route.
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8080/api/v1/instance"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # Queue worker: media processing, home-timeline fan-out, follows, likes run as jobs. Upstream runs Horizon,
+  # which auto-balances one PHP worker per queue (~16 processes, >1 GB RSS); a single queue:work over all
+  # Pixelfed queues (same Redis queue connection) is plenty for a dev instance and uses ~100 MB.
+  worker:
+    <<: *pixelfed
+    command:
+      - php
+      - artisan
+      - queue:work
+      - redis
+      - --queue=high,inbox,pushnotify,follow,default,shared,feed,story,groups,deliver,mmo,low,delete,adelete,move,intbg
+      - --sleep=1
+      - --tries=3
+      - --timeout=300
+      - --memory=192
+    environment:
+      AUTORUN_ENABLED: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  pf-db:
+  pf-redis:
+  pf-storage:

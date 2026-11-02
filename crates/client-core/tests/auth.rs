@@ -131,10 +131,13 @@ impl Drop for Env {
 #[derive(Default)]
 struct AutoApproveBrowser {
     results: Arc<Mutex<Vec<(u16, String)>>>,
+    /// Every authorize URL opened.
+    urls: Mutex<Vec<String>>,
 }
 
 impl UrlOpener for AutoApproveBrowser {
     fn open(&self, url: &str) -> bool {
+        self.urls.lock().unwrap().push(url.to_owned());
         let url = format!("{url}&auto=1");
         let results = Arc::clone(&self.results);
         thread::spawn(move || {
@@ -172,6 +175,8 @@ fn engine(
             secure_store: Some(Arc::clone(store) as Arc<dyn SecureStore>),
             url_opener: opener,
             redirect,
+            // Random ports: tests run in parallel (the fixed default is covered below).
+            loopback_port: 0,
         },
     )
 }
@@ -549,4 +554,77 @@ fn fetch_401_clears_the_session() {
     });
     assert!(store.get(&session_key(&base)).is_none());
     rt.shutdown_background();
+}
+
+#[test]
+fn stale_session_is_cleared_by_the_pods_401_on_fetch() {
+    // The real pod answers a bearer it does not know with 401 (+ the signed-out bundle and
+    // `X-Canvas-Session: invalid`): the engine forgets the session and refetches without it.
+    let env = Env::start();
+    let store = Arc::new(MemoryStore::new());
+    {
+        let engine = loopback_engine(&env, &store);
+        engine.dispatch(&env.login_intent());
+        wait_signed_in(&engine);
+    }
+    let token = stored_token(&env, &store);
+    let revoked = reqwest::blocking::Client::new()
+        .post(format!("{}/v1/auth/logout", env.pod))
+        .bearer_auth(&token)
+        .send()
+        .unwrap();
+    assert_eq!(revoked.status().as_u16(), 200);
+
+    // Restart with the stale session in the store.
+    let engine = engine(&env.pod, &store, None, RedirectMode::Loopback);
+    assert_eq!(auth(&engine.snapshot())["state"], "signed_in");
+    wait_signed_out_bundle(&engine);
+    assert_eq!(auth(&engine.snapshot())["state"], "signed_out");
+    assert!(store.get(&session_key(&env.pod)).is_none());
+}
+
+fn redirect_uri_of(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .unwrap()
+        .query_pairs()
+        .find(|(k, _)| k == "redirect_uri")
+        .unwrap()
+        .1
+        .into_owned()
+}
+
+#[test]
+fn loopback_reuses_the_preferred_port_across_sign_ins() {
+    let env = Env::start();
+    let store = Arc::new(MemoryStore::new());
+    let port = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let browser = Arc::new(AutoApproveBrowser::default());
+    let engine = CanvasEngine::init_with_options(
+        "",
+        &env.pod,
+        WORKSPACE,
+        EngineOptions {
+            config: fast_config(),
+            secure_store: Some(Arc::clone(&store) as Arc<dyn SecureStore>),
+            url_opener: Some(Arc::clone(&browser) as Arc<dyn UrlOpener>),
+            redirect: RedirectMode::Loopback,
+            loopback_port: port,
+        },
+    );
+    engine.dispatch(&env.login_intent());
+    wait_signed_in(&engine);
+    engine.logout();
+    wait_signed_out_bundle(&engine);
+    engine.dispatch(&env.login_intent());
+    wait_signed_in(&engine);
+
+    let urls = browser.urls.lock().unwrap().clone();
+    assert_eq!(urls.len(), 2);
+    let want = format!("http://127.0.0.1:{port}/callback");
+    assert_eq!(redirect_uri_of(&urls[0]), want);
+    assert_eq!(redirect_uri_of(&urls[1]), want);
 }

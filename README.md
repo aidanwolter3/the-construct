@@ -166,9 +166,10 @@ Endpoints:
   account:{id, username, display_name, avatar_url}}`. Upstream rejection -> 400 `oauth_exchange_failed`.
 - `POST /v1/auth/logout` (bearer) -> `{ok:true}`; deletes the session (401 if it is not valid).
 - `GET /v1/workspaces/pixelfed_home`: with a valid session, the home feed bundle (`queries["timeline:home"]` +
-  posts/users/media entities, PostCard layout with like/bookmark optimistic mutations); without one (or when the
-  upstream rejects the stored token) a signed-out bundle with a "Sign in with Pixelfed" `action.auth.login`
-  button; upstream unreachable -> 502.
+  posts/users/media entities, PostCard layout with like/bookmark optimistic mutations). Without a bearer: 200 with a
+  signed-out bundle (a "Sign in with Pixelfed" `action.auth.login` button). With a bearer that no longer works
+  (unknown session, or the upstream rejected the stored token): 401 with the same signed-out bundle as the body and
+  `X-Canvas-Session: invalid`, so the client drops its stale session. Upstream unreachable -> 502.
 - `POST /v1/pixelfed/posts/like {id, liked}` and `POST /v1/pixelfed/posts/bookmark {id, bookmarked}` -> `{ok, id,
   is_liked, like_count, is_bookmarked}`. No session 401; upstream 4xx passed through; upstream 5xx/unreachable 502.
 - `GET /v1/pixelfed/media/{key}`: unauthenticated media/avatar proxy. Every image URL in a bundle is rewritten to
@@ -198,15 +199,106 @@ thread; `auth_json` in every snapshot goes `pending` -> `signed_in` (username, d
 - FFI: `EngineHandle.newWithOptions(storagePath, baseUrl, workspaceId, secureStore?, urlOpener?, redirectUri?)`,
   `handleAuthRedirect(url): Boolean`, `logout()`. `SecureStore` (get/set/delete) and `UrlOpener` (open -> Boolean)
   are Kotlin callback interfaces; exceptions in them are contained.
-- `redirectUri = null`: loopback (desktop). The engine listens once on `http://127.0.0.1:<random>/callback` for 5
-  minutes. A custom URI (Android: `canvas://oauth`): the app forwards the redirect to `handleAuthRedirect`.
+- `redirectUri = null`: loopback (desktop). The engine listens once on `http://127.0.0.1:47823/callback` for 5
+  minutes (a fixed port so the pod reuses one upstream OAuth app; if 47823 is busy, a random port, which registers
+  another app). A custom URI (Android: `canvas://oauth`): the app forwards the redirect to `handleAuthRedirect`.
 - `secureStore = null`: macOS Keychain (service `dev.canvas.client`, key `pod_session:<baseUrl>`), in-memory
   elsewhere. The session survives restarts; `logout()` deletes it on the pod and locally.
 - `urlOpener = null` (or `open` returns false): `auth_json` says "no browser available" and the authorize URL is
   logged (`[CanvasEngine] no browser available; to sign in, open this URL ...`); opening it by hand still works.
   With the fake, append `&auto=1` to approve without clicking.
-- A 401 from the pod signs the client out. A like queued while the session was invalid stays pending (not rolled
-  back) and is sent after the next sign-in.
+- A 401 from the pod signs the client out (a stale session on `pixelfed_home` gets one, see above). A like queued
+  while the session was invalid stays pending (not rolled back) and is sent after the next sign-in.
+- UI: while signed in the status line shows `@username` and a **Sign out** button (`CanvasController.logout()`);
+  "Signing in…" while pending; "Sign-in failed: <message>" on error.
+
+Per platform (DECISIONS D21):
+
+- **Desktop** (`desktopApp` Main.kt): no store (Keychain), loopback redirect, and the default browser via
+  `java.awt.Desktop.browse` (else `open <url>`). Clicking "Sign in with Pixelfed" opens the browser; after approving,
+  the browser lands on the "Signed in" page and the window shows the feed.
+- **Android**: `canvas://oauth` intent filter on `MainActivity` (`launchMode="singleTask"`, so the redirect returns to
+  the same activity and engine through `onNewIntent`); the session is encrypted with an AndroidKeyStore AES/GCM key
+  (`canvas_session_key`) and kept in SharedPreferences `canvas_secure`; the authorize page opens with `ACTION_VIEW`.
+  For the emulator, start the pod with `PIXELFED_PUBLIC_URL=http://10.0.2.2:8081` (and the fake with
+  `FAKE_PIXELFED_PUBLIC_URL=http://10.0.2.2:8081`) so the browser can reach the authorize page. If the browser is not
+  usable (e.g. Chrome's first-run screen), deliver the redirect by hand:
+  `adb shell am start -a android.intent.action.VIEW -d '"canvas://oauth?code=...&state=..."'`.
+- **Simulator** (live mode): in-memory store and an auto-approving "browser" (see Simulation mode).
+
+## Local Pixelfed instance (real, dev only)
+
+A real Pixelfed (v0.15.2, `ghcr.io/pixelfed/pixelfed`, digest-pinned) + MariaDB 11.4 + Redis 7.4 in Docker, for
+end-to-end tests against the genuine API. It is loopback-only (`127.0.0.1:8090`), federation is off, open
+registration is off, and every secret in `dev/pixelfed/pixelfed.env` is a committed dev-only dummy. It never talks
+to a public instance. docs/DECISIONS.md D20.
+
+```bash
+scripts/pixelfed_dev.sh up       # start colima if needed, compose up, wait healthy, first-run init
+scripts/pixelfed_dev.sh seed     # users + posts; prints the admin token (also dev/pixelfed/.seed/admin_token)
+scripts/pixelfed_dev.sh record   # re-record fixtures/pixelfed/recorded/*.json with the admin token
+scripts/pixelfed_dev.sh status   # | logs [svc] | down (keeps data) | reset (deletes all data)
+```
+
+Seeded data (idempotent: existing users/posts are kept, a fresh token is minted per run): `canvasadmin` /
+`canvas-dev-pass` (admin), `alice` / `alice-dev-pass`, `bob` / `bob-dev-pass`; tokens in
+`dev/pixelfed/.seed/{admin,alice,bob}_token` (gitignored). canvasadmin follows alice; alice posts a 3-image
+carousel, a portrait single image without alt text, a landscape image with alt text and a sensitive post with a CW;
+bob posts one image that alice boosts. Images come from `fixtures/pixelfed/images/` (numbered, coloured JPEGs).
+
+Point the pod at it with `PIXELFED_INSTANCE_URL=http://localhost:8090` (use `localhost`, not `127.0.0.1`: see
+below). Things the real instance does differently from the fake:
+
+- Web routes (`/login`, `/oauth/authorize`, `/oauth/token`) only answer for Host `localhost` (Laravel domain
+  routing on `APP_DOMAIN`, port ignored); with Host `127.0.0.1` or `10.0.2.2` they are 404. `/api/*` and
+  `/storage/*` answer on any Host. For the Android emulator use `adb reverse tcp:8090 tcp:8090` and
+  `localhost:8090`.
+- `/oauth/authorize` and `/oauth/token` are throttled to 10 requests/minute per IP (429).
+- The home timeline hides boosts unless `include_reblogs=true`, hides text-only posts, and emits absolute `Link`
+  headers built from `APP_URL` that drop `include_reblogs`.
+- Media/avatar URLs are absolute `http://localhost:8090/storage/...`.
+
+Upstream quirks handled by the script: the image ships without `storage/app/public` (default avatar/header are
+installed from `fixtures/pixelfed/images/`); OAuth client ids start at 1000 because Passport 13 rejects a token
+whose user id equals its (first-party, confidential) client id; a user's first `POST /api/v1/media` can answer
+`200 []` (retried). Upstream's Horizon and scheduler containers are replaced by one `queue:work` worker (~75 MB
+instead of >1 GB).
+
+### Container runtime (no Homebrew, no sudo)
+
+Colima + Lima + docker CLI + compose plugin as release binaries in `~/.local/bin` (Lima's guest agents and
+templates in `~/.local/share/lima`, the compose plugin in `~/.docker/cli-plugins/`). Versions used: Colima
+v0.10.3, Lima v2.2.1, docker CLI 29.9.2 (static), Compose v5.6.1.
+
+```bash
+mkdir -p ~/.local/bin ~/.docker/cli-plugins && cd "$(mktemp -d)"
+curl -fLO https://github.com/abiosoft/colima/releases/download/v0.10.3/colima-Darwin-arm64
+curl -fLO https://github.com/abiosoft/colima/releases/download/v0.10.3/colima-Darwin-arm64.sha256sum
+curl -fLO https://github.com/lima-vm/lima/releases/download/v2.2.1/lima-2.2.1-Darwin-arm64.tar.gz
+curl -fLO https://github.com/lima-vm/lima/releases/download/v2.2.1/SHA256SUMS
+curl -fLO https://github.com/docker/compose/releases/download/v5.6.1/docker-compose-darwin-aarch64
+curl -fLO https://github.com/docker/compose/releases/download/v5.6.1/docker-compose-darwin-aarch64.sha256
+curl -fLO https://download.docker.com/mac/static/stable/aarch64/docker-29.9.2.tgz
+shasum -a 256 -c colima-Darwin-arm64.sha256sum
+grep ' lima-2.2.1-Darwin-arm64.tar.gz$' SHA256SUMS | shasum -a 256 -c
+shasum -a 256 -c docker-compose-darwin-aarch64.sha256
+# docker-29.9.2.tgz: download.docker.com publishes no checksum; expected sha256
+# ea8a2ce5ac31f9f5f3fb711a7a485e1e46cc7a69798a629a70306f6e6af25b7a (as downloaded 2026-11-01)
+tar xzf lima-2.2.1-Darwin-arm64.tar.gz -C ~/.local          # bin/limactl, bin/lima, share/lima/...
+install -m 755 colima-Darwin-arm64 ~/.local/bin/colima
+tar xzf docker-29.9.2.tgz && install -m 755 docker/docker ~/.local/bin/docker
+install -m 755 docker-compose-darwin-aarch64 ~/.docker/cli-plugins/docker-compose
+export PATH="$HOME/.local/bin:$PATH"
+colima start --cpu 2 --memory 4 --disk 15 --vm-type vz --mount-type virtiofs
+```
+
+Footprint: the four containers use ~290 MB RAM idle; images 2.6 GB (pixelfed 2.04 GB, mariadb 481 MB, redis
+59 MB); `~/.colima` ~4 GB on the host (sparse VM disks).
+
+Uninstall: `scripts/pixelfed_dev.sh reset; colima stop; colima delete -f; rm -rf ~/.colima ~/.lima
+~/.local/share/lima ~/.local/share/doc/lima; rm -f ~/.local/bin/{colima,limactl,lima,docker,*.lima}
+~/.docker/cli-plugins/docker-compose`, and drop the `colima` context from `~/.docker/config.json` (or
+`docker context rm colima` before removing the CLI).
 
 ## Simulation mode
 
@@ -223,6 +315,9 @@ virtual screen (no window), runs a small script against it and writes PNG screen
   -Pscript="wait-images; shot feed; swipe-left tag:carousel:; assert-text Page 2 of 3; shot page2; click Like; assert-text 28; shot liked"
 ./gradlew -PskipRustBuild :desktopApp:simulate -PscriptFile=my_script.txt -Pdensity=1 -Pout=/tmp/shots
 ./gradlew -PskipRustBuild :desktopApp:simulate -PbaseUrl=http://127.0.0.1:8080 -Pscript="shot live"   # live mode
+# live sign-in against the pod + fake upstream (see "Sign in (client)")
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_home -PbaseUrl=http://127.0.0.1:8080 \
+  -Pscript="shot signed-out; click Sign in with Pixelfed; wait-text 20000 @canvasdemo; wait-images 20000; shot feed; click Like; shot liked"
 ```
 
 Flags (all optional):
@@ -255,7 +350,12 @@ the server. By default it uses a fresh temp storage dir, so it neither reads nor
 `-Pstorage=<dir>` to keep a persistent one. If the workspace
 does not load within `timeoutMs`, it logs a warning and still runs the script (shots show Loading/Offline).
 `offline`/`online` are not supported in live mode; a live-mode script containing them is rejected before any
-step runs.
+step runs. **Sign-in in live mode:** the engine gets an in-memory session store (every run starts signed out; the
+Keychain is never touched) and a "browser" that GETs the authorize URL with `auto=1`; when the answer is a redirect to
+the engine's loopback `redirect_uri` (the fake upstream does that, with or without `FAKE_PIXELFED_AUTO_APPROVE`), it
+follows it, so `click Sign in with Pixelfed; wait-text 20000 @canvasdemo` signs in. A real Pixelfed answers with its
+login page instead: the simulator prints the authorize URL and the status line shows "no browser available"
+(opening the URL in a real browser and logging in still completes the sign-in while the script waits).
 
 **Images** (Coil, DECISIONS D18) are deterministic. In fixture mode the network is never used: any image URL whose
 path ends in `/storage/<file>` or `/v1/pixelfed/media/<file>` is served from `fixtures/pixelfed/media/<file>` (the
@@ -385,7 +485,8 @@ engine rejects patterns that `java.util.regex` accepts). Two checks run on a boo
                                                           # server, then stops both at the end
 ../scripts/android_smoke.sh --help                        # --workspaces, --skip-install, --skip-rust, --wait, --timeout
 
-# Instrumented tests (androidApp/src/androidTest): runs the shared interpolation regexes on the device.
+# Instrumented tests (androidApp/src/androidTest): the shared interpolation regexes on the device, and the
+# AndroidKeyStore session store round trip (set/get/delete, survives a new instance, encrypted at rest).
 # Note: AGP uninstalls the app afterwards, so don't follow this with android_smoke.sh --skip-install.
 ./gradlew :androidApp:connectedDebugAndroidTest
 ```

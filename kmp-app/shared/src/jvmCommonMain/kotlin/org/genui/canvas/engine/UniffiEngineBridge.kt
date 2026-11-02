@@ -4,7 +4,9 @@ import org.genui.canvas.CanvasEngineBridge
 import org.genui.canvas.EngineSnapshot
 import uniffi.client_ffi.EngineHandle
 import uniffi.client_ffi.FfiStateSnapshot
+import uniffi.client_ffi.SecureStore
 import uniffi.client_ffi.StateObserver
+import uniffi.client_ffi.UrlOpener
 
 /**
  * [CanvasEngineBridge] backed by the Rust engine through the UniFFI/JNA bindings. Shared by the
@@ -34,14 +36,41 @@ class UniffiEngineBridge(val handle: EngineHandle) : CanvasEngineBridge {
         handle.dispatch(intentJson)
     }
 
+    override fun handleAuthRedirect(url: String): Boolean {
+        val accepted = handle.handleAuthRedirect(url)
+        // Log only the scheme/host part: the query carries the one-time code.
+        engineLog("auth redirect ${url.substringBefore('?')} accepted=$accepted")
+        return accepted
+    }
+
+    override fun logout() {
+        engineLog("logout")
+        handle.logout()
+    }
+
     companion object {
         /**
          * Creates the engine (which starts loading [workspace] from [baseUrl] in the background,
          * caching under [storageDir]) and wraps it. [storageDir] must exist and be writable.
+         *
+         * Sign-in (DECISIONS D19): [secureStore] null = the platform default (macOS Keychain, in-memory
+         * elsewhere); [urlOpener] null = sign-in reports "no browser available"; [redirectUri] null = loopback
+         * redirect (desktop), else a custom scheme (Android `canvas://oauth`) whose redirects the app passes
+         * to [handleAuthRedirect].
          */
-        fun create(storageDir: String, baseUrl: String, workspace: String): UniffiEngineBridge {
-            val handle = EngineHandle.newWithWorkspace(storageDir, baseUrl, workspace)
-            engineLog("engine created base_url=$baseUrl workspace=$workspace")
+        fun create(
+            storageDir: String,
+            baseUrl: String,
+            workspace: String,
+            secureStore: SecureStore? = null,
+            urlOpener: UrlOpener? = null,
+            redirectUri: String? = null,
+        ): UniffiEngineBridge {
+            val handle = EngineHandle.newWithOptions(storageDir, baseUrl, workspace, secureStore, urlOpener, redirectUri)
+            engineLog(
+                "engine created base_url=$baseUrl workspace=$workspace redirect=${redirectUri ?: "loopback"} " +
+                    "store=${if (secureStore == null) "default" else "app"} opener=${urlOpener != null}",
+            )
             return UniffiEngineBridge(handle)
         }
     }

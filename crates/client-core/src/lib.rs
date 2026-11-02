@@ -119,7 +119,14 @@ pub struct EngineOptions {
     /// available" and logs the URL (the flow keeps waiting for a redirect).
     pub url_opener: Option<Arc<dyn UrlOpener>>,
     pub redirect: RedirectMode,
+    /// Loopback mode: the port tried first for the redirect listener
+    /// ([`DEFAULT_LOOPBACK_PORT`]); a random port if it is busy. 0 = always
+    /// random.
+    pub loopback_port: u16,
 }
+
+/// Default loopback redirect port (`http://127.0.0.1:47823/callback`).
+pub const DEFAULT_LOOPBACK_PORT: u16 = 47823;
 
 impl Default for EngineOptions {
     fn default() -> Self {
@@ -128,6 +135,7 @@ impl Default for EngineOptions {
             secure_store: None,
             url_opener: None,
             redirect: RedirectMode::Loopback,
+            loopback_port: DEFAULT_LOOPBACK_PORT,
         }
     }
 }
@@ -671,6 +679,7 @@ struct Inner {
     secure_store: Arc<dyn SecureStore>,
     url_opener: Option<Arc<dyn UrlOpener>>,
     redirect: RedirectMode,
+    loopback_port: u16,
     /// `pod_session:<base_url>`.
     session_key: String,
     /// The sign-in in progress, if any.
@@ -857,6 +866,7 @@ impl CanvasEngine {
             secure_store,
             url_opener,
             redirect,
+            loopback_port,
         } = options;
         let secure_store: Arc<dyn SecureStore> =
             secure_store.unwrap_or_else(|| Arc::from(auth::default_secure_store()));
@@ -894,6 +904,7 @@ impl CanvasEngine {
             secure_store,
             url_opener,
             redirect,
+            loopback_port,
             session_key,
             flow: Mutex::new(None),
         });
@@ -1715,12 +1726,13 @@ fn login_flow(
     redirect_rx: Option<mpsc::Receiver<Redirect>>,
 ) -> Result<(), LoginError> {
     let failed = LoginError::Failed;
-    let (base_url, opener, redirect_mode, signal) = {
+    let (base_url, opener, redirect_mode, loopback_port, signal) = {
         let inner = weak.upgrade().ok_or(LoginError::Cancelled)?;
         (
             inner.base_url.clone(),
             inner.url_opener.clone(),
             inner.redirect.clone(),
+            inner.loopback_port,
             Arc::clone(&inner.signal),
         )
     };
@@ -1728,7 +1740,7 @@ fn login_flow(
 
     let listener = match redirect_mode {
         RedirectMode::Loopback => Some(
-            LoopbackListener::bind()
+            LoopbackListener::bind_preferred(loopback_port)
                 .map_err(|e| failed(format!("cannot open the loopback redirect listener: {e}")))?,
         ),
         RedirectMode::Custom(_) => None,

@@ -1,0 +1,2 @@
+# Seed output (access tokens) is local-only.
+.seed/

@@ -24,6 +24,12 @@ private class FakeBridge : CanvasEngineBridge {
         dispatched += intentJson
     }
 
+    var logouts = 0
+
+    override fun logout() {
+        logouts++
+    }
+
     /** Emits with an auto-incremented seq unless [seq] is given. */
     fun emit(workspace: String, entities: String, online: Boolean, pending: Int = 0, seq: Long = nextSeq++) =
         listener!!(EngineSnapshot(workspace, entities, online, seq, pending))
@@ -61,6 +67,15 @@ class CanvasControllerTest {
         assertTrue(json.contains("\"action.mutation.optimistic\""), json)
         assertTrue(json.contains("core://counters/home"), json)
         assertEquals(increment.onClick, CanvasJson.decodeIntent(json))
+    }
+
+    @Test
+    fun logoutIsForwardedAndFakesDefaultToNoAuthRedirect() {
+        val bridge = FakeBridge()
+        val controller = CanvasController(bridge)
+        controller.logout()
+        assertEquals(1, bridge.logouts)
+        assertEquals(false, bridge.handleAuthRedirect("canvas://oauth?code=x&state=y"))
     }
 
     @Test

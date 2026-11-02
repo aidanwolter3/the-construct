@@ -311,7 +311,7 @@ impl std::fmt::Display for WaitError {
     }
 }
 
-/// One-shot HTTP listener on `127.0.0.1:<random port>` for the loopback
+/// One-shot HTTP listener on `127.0.0.1:<port>` for the loopback
 /// redirect (RFC 8252 §7.3).
 pub struct LoopbackListener {
     listener: TcpListener,
@@ -330,8 +330,38 @@ fn page(title: &str, text: &str) -> String {
 }
 
 impl LoopbackListener {
+    /// Bind `127.0.0.1:<random port>`.
     pub fn bind() -> std::io::Result<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
+        Self::bind_preferred(0)
+    }
+
+    /// Bind `127.0.0.1:<preferred>` so the redirect URI (and with it the
+    /// upstream OAuth app the pod registers per redirect URI) stays the same
+    /// across sign-ins; if that port is busy (e.g. a cancelled flow's
+    /// listener is still closing, or another app owns it), retry briefly,
+    /// then fall back to a random port. `preferred == 0`: random only.
+    pub fn bind_preferred(preferred: u16) -> std::io::Result<Self> {
+        let listener = if preferred == 0 {
+            TcpListener::bind("127.0.0.1:0")?
+        } else {
+            let mut attempt = 0;
+            loop {
+                match TcpListener::bind(("127.0.0.1", preferred)) {
+                    Ok(l) => break l,
+                    Err(_) if attempt < 3 => {
+                        attempt += 1;
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[CanvasEngine] loopback port {preferred} unavailable ({e}); using a \
+                             random port"
+                        );
+                        break TcpListener::bind("127.0.0.1:0")?;
+                    }
+                }
+            }
+        };
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
         Ok(Self { listener, port })
@@ -580,6 +610,26 @@ mod tests {
             l.wait(Duration::from_secs(10), &|| true, &|_| true),
             Err(WaitError::Cancelled)
         );
+    }
+
+    #[test]
+    fn loopback_prefers_the_given_port_and_falls_back_when_busy() {
+        // A free port (released right away; the tiny reuse race is acceptable in a test).
+        let free = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let l = LoopbackListener::bind_preferred(free).unwrap();
+        assert_eq!(l.port(), free);
+        assert_eq!(
+            l.redirect_uri(),
+            format!("http://127.0.0.1:{free}/callback")
+        );
+        // Busy (held by `l`): a different, random port.
+        let other = LoopbackListener::bind_preferred(free).unwrap();
+        assert_ne!(other.port(), free);
+        assert_ne!(other.port(), 0);
     }
 
     #[test]

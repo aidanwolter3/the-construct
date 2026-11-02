@@ -30,4 +30,13 @@ interface CanvasEngineBridge {
 
     /** Sends an intent JSON produced by [CanvasJson.encodeIntent]. */
     fun dispatch(intentJson: String)
+
+    /**
+     * Delivers an OAuth redirect (custom-scheme mode, e.g. Android's `canvas://oauth?...`) to the pending
+     * sign-in. True if it was accepted. Fakes without sign-in return false.
+     */
+    fun handleAuthRedirect(url: String): Boolean = false
+
+    /** Signs out (non-blocking). No-op for fakes without sign-in. */
+    fun logout() {}
 }

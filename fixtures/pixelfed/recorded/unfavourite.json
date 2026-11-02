@@ -1,0 +1,126 @@
+{
+    "id": "1022706475674484741",
+    "uri": "http://localhost:8090/p/alice/1022706475674484741",
+    "url": "http://localhost:8090/p/alice/1022706475674484741",
+    "in_reply_to_id": null,
+    "in_reply_to_account_id": null,
+    "reblog": null,
+    "content": "Carousel: one, two, three <a href=\"http://localhost:8090/discover/tags/canvas?src=hash\" title=\"#canvas\" class=\"u-url hashtag\" rel=\"external nofollow noopener\">#canvas</a>",
+    "created_at": "2026-11-02T03:10:24.000Z",
+    "emojis": [],
+    "reblogs_count": 0,
+    "favourites_count": 1,
+    "reblogged": false,
+    "favourited": false,
+    "muted": false,
+    "sensitive": false,
+    "spoiler_text": "",
+    "visibility": "public",
+    "application": {
+        "name": "web",
+        "website": null
+    },
+    "language": null,
+    "mentions": [],
+    "tags": [
+        {
+            "name": "canvas",
+            "url": "http://localhost:8090/discover/tags/canvas"
+        }
+    ],
+    "poll": null,
+    "edited_at": null,
+    "pinned": false,
+    "account": {
+        "id": "1022706462152876034",
+        "username": "alice",
+        "acct": "alice",
+        "display_name": "Alice Example",
+        "discoverable": true,
+        "locked": false,
+        "followers_count": 1,
+        "following_count": 0,
+        "statuses_count": 4,
+        "note": "",
+        "url": "http://localhost:8090/alice",
+        "avatar": "http://localhost:8090/storage/avatars/default.jpg",
+        "created_at": "2026-11-02T03:10:21.000000Z",
+        "avatar_static": "http://localhost:8090/storage/avatars/default.jpg",
+        "bot": false,
+        "emojis": [],
+        "fields": [],
+        "header": "http://localhost:8090/storage/headers/missing.png",
+        "header_static": "http://localhost:8090/storage/headers/missing.png",
+        "last_status_at": null
+    },
+    "replies_count": 0,
+    "media_attachments": [
+        {
+            "id": "2",
+            "type": "image",
+            "url": "http://localhost:8090/storage/m/_v2/1022706462152876034/4796c06ff-5eacf7/V68rCAQqF02A/HmsxCziQSZe3sJDLYgv3Lqoy4XCeNykLVEMpJANn.jpg",
+            "remote_url": null,
+            "preview_url": "http://localhost:8090/storage/m/_v2/1022706462152876034/4796c06ff-5eacf7/V68rCAQqF02A/HmsxCziQSZe3sJDLYgv3Lqoy4XCeNykLVEMpJANn_thumb.jpg",
+            "text_url": null,
+            "meta": {
+                "focus": {
+                    "x": 0,
+                    "y": 0
+                },
+                "original": {
+                    "width": 800,
+                    "height": 800,
+                    "size": "800x800",
+                    "aspect": 1
+                }
+            },
+            "description": "Red square with the number 1",
+            "blurhash": "U4O]9-$iR*-B-Bj[aeaykWj[*Jae#Rayo}kC"
+        },
+        {
+            "id": "3",
+            "type": "image",
+            "url": "http://localhost:8090/storage/m/_v2/1022706462152876034/4796c06ff-5eacf7/Z52pAno6QyJw/AaL3h8kKGxAvW8hwslhcjWFWmghN42k1sYoOAj9U.jpg",
+            "remote_url": null,
+            "preview_url": "http://localhost:8090/storage/m/_v2/1022706462152876034/4796c06ff-5eacf7/Z52pAno6QyJw/AaL3h8kKGxAvW8hwslhcjWFWmghN42k1sYoOAj9U_thumb.jpg",
+            "text_url": null,
+            "meta": {
+                "focus": {
+                    "x": 0,
+                    "y": 0
+                },
+                "original": {
+                    "width": 800,
+                    "height": 800,
+                    "size": "800x800",
+                    "aspect": 1
+                }
+            },
+            "description": "Blue square with the number 2",
+            "blurhash": "U7BF|{kXE2o#bwazoLj[Ipj@~AaytSj[WCWC"
+        },
+        {
+            "id": "4",
+            "type": "image",
+            "url": "http://localhost:8090/storage/m/_v2/1022706462152876034/4796c06ff-5eacf7/rXmLhVOzqf47/m00DdmqXW9fgVDSkvzTVpjToiSbGPlJhtgh2hH4u.jpg",
+            "remote_url": null,
+            "preview_url": "http://localhost:8090/storage/m/_v2/1022706462152876034/4796c06ff-5eacf7/rXmLhVOzqf47/m00DdmqXW9fgVDSkvzTVpjToiSbGPlJhtgh2hH4u_thumb.jpg",
+            "text_url": null,
+            "meta": {
+                "focus": {
+                    "x": 0,
+                    "y": 0
+                },
+                "original": {
+                    "width": 800,
+                    "height": 800,
+                    "size": "800x800",
+                    "aspect": 1
+                }
+            },
+            "description": "Green square with the number 3",
+            "blurhash": "U6Ahd{b[EKx[o|fQa|a|NFoM}^R%koa|j[j["
+        }
+    ],
+    "bookmarked": false
+}

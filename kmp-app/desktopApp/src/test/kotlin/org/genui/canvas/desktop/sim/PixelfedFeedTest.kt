@@ -55,6 +55,43 @@ class PixelfedFeedTest {
     }
 
     @Test
+    fun signedInStatusLineShowsUsernameAndSignOutSignsOut() {
+        val fake = FakeEngineBridge(
+            assertNotNull(findFixture("pixelfed_home_feed_bundle.json")).readText(),
+            authJson = """{"state":"signed_in","username":"canvasdemo","display_name":"Canvas Demo"}""",
+        )
+        run(fake, "assert-text @canvasdemo; click Sign out; assert-no-text @canvasdemo; assert-no-text Sign out")
+    }
+
+    @Test
+    fun pendingAndErrorAuthStatesShowInTheStatusLine() {
+        val bundle = assertNotNull(findFixture("pixelfed_home_feed_bundle.json")).readText()
+        run(FakeEngineBridge(bundle, authJson = """{"state":"pending"}"""), "assert-text Signing in; assert-no-text Sign out")
+        run(
+            FakeEngineBridge(bundle, authJson = """{"state":"error","error":"no browser available"}"""),
+            "assert-text no browser available; assert-no-text Sign out",
+        )
+    }
+
+    @Test
+    fun autoApproveBrowserReadsTheRedirectUriAndRefusesUnreachableAuthorizePages() {
+        assertEquals(
+            "http://127.0.0.1:47823/callback",
+            AutoApproveBrowser.queryParam(
+                "http://h/oauth/authorize?client_id=1&redirect_uri=http%3A%2F%2F127.0.0.1%3A47823%2Fcallback&scope=read%20write",
+                "redirect_uri",
+            ),
+        )
+        assertNull(AutoApproveBrowser.queryParam("http://h/oauth/authorize?a=1", "redirect_uri"))
+        // Nothing listens on port 9 (discard): the "browser" reports false so the engine logs the URL.
+        val logs = mutableListOf<String>()
+        val opened = AutoApproveBrowser { logs += it }
+            .open("http://127.0.0.1:9/oauth/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A1%2Fcallback")
+        assertEquals(false, opened)
+        assertTrue(logs.any { "Open: http://127.0.0.1:9/oauth/authorize" in it }, logs.toString())
+    }
+
+    @Test
     fun likeFillsHeartAndCountsAndUnlikeRestores() {
         val fake = fake()
         run(fake, "assert-text 27; click tag:like:$CAROUSEL; assert-text 28; assert-no-text 27")

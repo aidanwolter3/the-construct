@@ -101,12 +101,22 @@ async fn post_json(url: &str, bearer: Option<&str>, body: Value) -> (StatusCode,
 }
 
 async fn get_home(pod: &str, bearer: Option<&str>) -> (StatusCode, Value) {
+    let (status, _, body) = get_home_full(pod, bearer).await;
+    (status, body)
+}
+
+/// Like [`get_home`], plus the `X-Canvas-Session` response header.
+async fn get_home_full(pod: &str, bearer: Option<&str>) -> (StatusCode, Option<String>, Value) {
     let mut req = client().get(format!("{pod}/v1/workspaces/pixelfed_home"));
     if let Some(t) = bearer {
         req = req.bearer_auth(t);
     }
     let resp = req.send().await.unwrap();
-    (resp.status(), resp.json().await.unwrap())
+    let session = resp
+        .headers()
+        .get("x-canvas-session")
+        .map(|v| v.to_str().unwrap().to_owned());
+    (resp.status(), session, resp.json().await.unwrap())
 }
 
 /// A real RFC 7636 verifier (64 unreserved chars) and its S256 challenge.
@@ -340,9 +350,15 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
 #[tokio::test]
 async fn pixelfed_home_signed_out_without_valid_session() {
     let env = env().await;
-    for bearer in [None, Some("not-a-session")] {
-        let (status, body) = get_home(&env.pod.url, bearer).await;
-        assert_eq!(status, StatusCode::OK);
+    // No bearer: 200. A bearer that is not a session: 401 + `X-Canvas-Session: invalid`, so the
+    // client learns its session is stale; the body is the same signed-out bundle either way.
+    for (bearer, want_status, want_header) in [
+        (None, StatusCode::OK, None),
+        (Some("not-a-session"), StatusCode::UNAUTHORIZED, Some("invalid")),
+    ] {
+        let (status, header, body) = get_home_full(&env.pod.url, bearer).await;
+        assert_eq!(status, want_status);
+        assert_eq!(header.as_deref(), want_header);
         let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
         assert!(spec.entities.is_empty() && spec.queries.is_empty());
         let (label, intent) = signed_out_button(&spec);
@@ -486,9 +502,15 @@ async fn logout_ends_the_session() {
     assert_eq!(body["ok"], true);
     let (status, _) = post_json(&logout, Some(&session), json!({})).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+    let (status, header, home) = get_home_full(&env.pod.url, Some(&session)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(header.as_deref(), Some("invalid"));
     let spec: WorkspaceSpec = serde_json::from_value(home).unwrap();
     signed_out_button(&spec);
+    // Without the stale bearer: the plain 200 signed-out bundle.
+    let (status, home) = get_home(&env.pod.url, None).await;
+    assert_eq!(status, StatusCode::OK);
+    signed_out_button(&serde_json::from_value(home).unwrap());
 }
 
 /// A pod whose store already has a session + upstream account for `instance`.
@@ -536,8 +558,9 @@ async fn upstream_down_is_502() {
 async fn upstream_401_means_signed_out() {
     let fake = spawn_fake().await;
     let pod = spawn_pod(seeded_state(&fake.url, "revoked-token")).await;
-    let (status, body) = get_home(&pod.url, Some("tok")).await;
-    assert_eq!(status, StatusCode::OK);
+    let (status, header, body) = get_home_full(&pod.url, Some("tok")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(header.as_deref(), Some("invalid"));
     let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
     signed_out_button(&spec);
     // The dead upstream token was dropped, so actions are now 401.

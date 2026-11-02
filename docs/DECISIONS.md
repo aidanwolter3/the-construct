@@ -336,9 +336,10 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   only the session. Only the configured instance is accepted in auth calls (`PIXELFED_INSTANCE_URL` or
   `PIXELFED_PUBLIC_URL`, trailing slash ignored), so the pod never calls a client-chosen host. Sessions do not
   expire yet.
-- **Status mapping:** `GET /v1/workspaces/pixelfed_home` without a valid session -> 200 signed-out bundle (AuthLogin
-  button). Upstream 401 -> the stored account is deleted and the signed-out bundle is served. Unreachable/5xx ->
-  502. Actions: no session 401, upstream 4xx passed through (client rolls back), 5xx/unreachable 502 (retry).
+- **Status mapping:** `GET /v1/workspaces/pixelfed_home` without a bearer -> 200 signed-out bundle (AuthLogin
+  button). With a bearer that gets no feed (unknown session, no stored account, or upstream 401, which also deletes
+  the stored account) -> 401 + `WWW-Authenticate: Bearer` + `X-Canvas-Session: invalid`, body = the same signed-out
+  bundle, so the client learns its session is stale (D19 fetch-401 path). Unreachable/5xx -> 502. Actions: no session 401, upstream 4xx passed through (client rolls back), 5xx/unreachable 502 (retry).
 - **Normalization** is pure (`server::pixelfed`): lenient serde types (absent/null optional fields default; an
   unparseable status is skipped and logged); a reblog becomes the inner post plus `reblogged_by_uri`, with the
   outer order kept and duplicates dropped; captions are HTML -> text (`<br>` newline, paragraphs separated by a
@@ -385,7 +386,11 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
 - **Redirect handling:** a redirect whose `state` does not match is ignored (loopback: 400 page; custom:
   `handle_auth_redirect` returns false) and the flow keeps waiting, so a stray or forged redirect cannot kill the
   real sign-in. Other loopback paths (favicon) get 404. `error=` with the right state ends the flow as `error`.
-  Loopback registers one upstream app per port (the pod caches apps per redirect_uri); acceptable for now.
+  **Loopback port:** the pod registers one upstream app per redirect_uri, so a random port per sign-in would
+  register a new app on the instance every time. The listener first tries `127.0.0.1:47823`
+  (`EngineOptions.loopback_port`, default `DEFAULT_LOOPBACK_PORT`; 0 = always random), retrying 3x100 ms (a
+  cancelled flow's listener may still be closing), then falls back to a random port (logged; that sign-in registers
+  another app). The FFI uses the default.
 - **No browser:** no opener, `open` returning false or throwing -> `auth_json` error "no browser available" and the
   authorize URL is logged; the flow keeps waiting so a human can open it (success then moves to signed_in).
 - **auth_json:** `{"state":"signed_out"}`, `{"state":"pending"}`, `{"state":"signed_in","username",
@@ -401,8 +406,45 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   bearer. Outbox POST 401 -> the row stays PENDING with its optimistic value (no rollback, retry count unchanged),
   the session is cleared, and flushing pauses (`auth_blocked`, in memory) until the next sign-in wakes the worker;
   after a restart the row is tried once more and pauses again on another 401. A user's like is never silently
-  undone just because the session expired. Note: the pod answers an invalid session on `pixelfed_home` with a 200
-  signed-out bundle, not 401, so a stale session shows the sign-in button (signing in replaces it) and is cleared
-  on the first outbox 401.
+  undone just because the session expired. The pod answers a stale bearer on `pixelfed_home` with 401 (D17), so
+  a stale session is cleared on the first workspace fetch (e.g. at startup) and the signed-out bundle follows.
 - **Logout:** non-blocking: cancel flow, clear session + store, notify signed_out; then on a thread `POST
   /v1/auth/logout` (best effort) and refetch.
+
+## D20: Local real Pixelfed for end-to-end tests (`dev/pixelfed`, `scripts/pixelfed_dev.sh`)
+
+- **Runtime:** Colima (vz) + Lima + docker CLI + compose plugin as checksummed release binaries in `~/.local`
+  (no Homebrew/sudo available). VM 2 CPU / 4 GB / 15 GB.
+- **Stack:** official `ghcr.io/pixelfed/pixelfed:v0.15.2` pinned by digest, MariaDB 11.4, Redis 7.4, named
+  volumes, only `127.0.0.1:8090` published. Federation, open registration, mail (log driver) off; HTTP without
+  https forcing. Committed `pixelfed.env` holds dev-only dummy secrets.
+- **Horizon replaced** by one `php artisan queue:work redis --queue=<all Pixelfed queues>` (Horizon's auto balance
+  ran ~16 workers, >1 GB RSS; the single worker uses ~75 MB). The scheduler is omitted.
+- **`APP_DOMAIN=localhost`:** Pixelfed's web routes (including `/oauth/*`) are domain-bound, so the pod must use
+  `http://localhost:8090`, and the emulator `adb reverse` + `localhost` rather than `10.0.2.2`.
+- **Upstream workarounds:** OAuth client ids start at 1000 (Passport 13 rejects a token whose user id equals a
+  first-party confidential client's id), default avatar/header installed into the storage volume (the image's
+  `.dockerignore` drops `storage/app/public`), media upload retried on `200 []` (first write of a fresh user).
+- **Tokens for seeding/tests** are personal access tokens minted via tinker (scopes read write follow push); the
+  real PKCE flow was verified separately with curl (see `fixtures/pixelfed/recorded/` and the M6 report).
+
+## D21: Platform sign-in glue (desktop, Android, simulator)
+
+- **Bridge:** `UniffiEngineBridge.create(storageDir, baseUrl, workspace, secureStore?, urlOpener?, redirectUri?)`
+  wraps `EngineHandle.newWithOptions`. `CanvasEngineBridge` gained `handleAuthRedirect(url): Boolean` and `logout()`
+  with no-op defaults so fakes compile unchanged; `CanvasController.logout()` backs the status line's "Sign out"
+  (a small clickable label, not a Material `TextButton`, whose 40 dp minimum height would bloat the status line).
+- **Desktop:** no store (Keychain), loopback, `java.awt.Desktop.browse` if `BROWSE` is supported, else
+  `ProcessBuilder("open", url)`; false if both fail.
+- **Android:** `launchMode="singleTask"`, not singleTop: the browser is started with `FLAG_ACTIVITY_NEW_TASK` and runs
+  in its own task, so with singleTop the `canvas://oauth` VIEW intent would create a second `MainActivity` (and a
+  second engine without the pending flow) in the browser's task. `onNewIntent` (and `onCreate` on a fresh start)
+  forwards `canvas://oauth` VIEW intents to the ViewModel's bridge. `KeystoreSecureStore`: AES-256/GCM/NoPadding key
+  `canvas_session_key` in AndroidKeyStore (generated on first use), value stored as `base64(iv):base64(ciphertext)`
+  in private SharedPreferences `canvas_secure` (`commit()`, synchronized); undecryptable values read as absent.
+  `AndroidUrlOpener` posts `startActivity(ACTION_VIEW, NEW_TASK)` to the main thread and waits up to 5 s; false on
+  `ActivityNotFoundException`. Custom Tabs are not used (no extra dependency).
+- **Simulator:** `InMemorySecureStore`; `AutoApproveBrowser` GETs `<authorize>&auto=1` without following redirects;
+  only a 3xx whose `Location` starts with the URL's `redirect_uri` is followed (on a daemon thread, with
+  `Redirect.NORMAL`, because the engine serves the loopback listener only after `open` returns). Anything else (a
+  real instance's login page) prints the URL and returns false.

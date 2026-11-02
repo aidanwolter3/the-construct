@@ -369,9 +369,33 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
 
 // ---------- home feed ----------
 
-/// `GET /v1/workspaces/pixelfed_home`.
+/// Response header on a 401 from `GET /v1/workspaces/pixelfed_home`.
+pub const SESSION_HEADER: &str = "x-canvas-session";
+
+/// `GET /v1/workspaces/pixelfed_home`. Without a bearer: 200 signed-out
+/// bundle. With a bearer that no longer gets a feed (unknown session, no
+/// stored account, or the upstream rejected the stored token): 401 with the
+/// signed-out bundle as the body and `X-Canvas-Session: invalid`, so the
+/// client learns its session is stale (it clears it and refetches without
+/// the bearer).
 pub async fn home_workspace(state: &Arc<AppState>, headers: &HeaderMap) -> Response {
-    let signed_out = || Json(layout::signed_out(&state.pixelfed.instance_url)).into_response();
+    let had_bearer = bearer(headers).is_some();
+    let signed_out = || {
+        let body = Json(layout::signed_out(&state.pixelfed.instance_url));
+        if had_bearer {
+            (
+                StatusCode::UNAUTHORIZED,
+                [
+                    (header::WWW_AUTHENTICATE, "Bearer"),
+                    (header::HeaderName::from_static(SESSION_HEADER), "invalid"),
+                ],
+                body,
+            )
+                .into_response()
+        } else {
+            body.into_response()
+        }
+    };
     let account = match signed_in_account(state, headers).await {
         Ok(Some(a)) => a,
         Ok(None) => return signed_out(),
