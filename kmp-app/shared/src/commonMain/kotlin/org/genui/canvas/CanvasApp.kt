@@ -39,7 +39,8 @@ import kotlinx.serialization.json.JsonObject
  * UI state derived from engine snapshots. [workspace] is null until the engine has a layout.
  * [pendingActions] counts queued (unsent) outbox mutations. [seq] is the seq of the last applied
  * snapshot (-1 before the first). [queries] maps a FeedList `query_key` to ordered entity URIs (M6) and
- * [auth] is the sign-in status. [agent] is the layout agent's status (M7).
+ * [auth] is the sign-in status. [agent] is the layout agent's status (M7). [activeLayout] names the catalog layout on
+ * display and its version (D27).
  */
 data class CanvasState(
     val workspace: UiNode? = null,
@@ -51,6 +52,7 @@ data class CanvasState(
     val pendingActions: Int = 0,
     val error: String? = null,
     val seq: Long = -1,
+    val activeLayout: ActiveLayout = ActiveLayout(),
 )
 
 /**
@@ -80,6 +82,7 @@ class CanvasController(private val bridge: CanvasEngineBridge) {
             CanvasState(
                 workspace, entities, queries, AuthInfo.parse(snapshot.authJson), AgentInfo.parse(snapshot.agentJson),
                 snapshot.isOnline, snapshot.pendingActions, error = null, seq = snapshot.seq,
+                activeLayout = ActiveLayout.parse(snapshot.layoutJson),
             )
         } catch (t: Throwable) {
             println("[Canvas] snapshot decode failed: $t")
@@ -97,6 +100,7 @@ class CanvasController(private val bridge: CanvasEngineBridge) {
                     pendingActions = snapshot.pendingActions,
                     error = decodeError,
                     seq = snapshot.seq,
+                    activeLayout = ActiveLayout.parse(snapshot.layoutJson),
                 )
             }
         }

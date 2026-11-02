@@ -2,6 +2,7 @@ package org.genui.canvas.engine
 
 import org.genui.canvas.CanvasEngineBridge
 import org.genui.canvas.EngineSnapshot
+import org.genui.canvas.LayoutApiException
 import uniffi.client_ffi.EngineHandle
 import uniffi.client_ffi.FfiStateSnapshot
 import uniffi.client_ffi.SecureStore
@@ -48,6 +49,31 @@ class UniffiEngineBridge(val handle: EngineHandle) : CanvasEngineBridge {
         handle.logout()
     }
 
+    override fun listLayouts(): String = catalog("list layouts") { handle.listLayouts() }
+
+    override fun layoutVersions(layoutId: String, before: Int?, limit: Int?): String =
+        catalog("versions of $layoutId") { handle.layoutVersions(layoutId, before?.toUIntArg(), limit?.toUIntArg()) }
+
+    override fun layoutVersion(layoutId: String, version: Int): String =
+        catalog("$layoutId v$version") { handle.layoutVersion(layoutId, version.toUIntArg()) }
+
+    override fun activateLayout(layoutId: String, version: Int?): String =
+        catalog("activate $layoutId${version?.let { " v$it" } ?: ""}") {
+            handle.activateLayout(layoutId, version?.toUIntArg())
+        }
+
+    override fun restoreLayoutVersion(layoutId: String, version: Int): String =
+        catalog("restore $layoutId v$version") { handle.restoreLayoutVersion(layoutId, version.toUIntArg()) }
+
+    /** Runs a blocking catalog call, mapping the UniFFI error to a [LayoutApiException] with the engine's sentence. */
+    private inline fun catalog(what: String, call: () -> String): String = try {
+        call()
+    } catch (e: uniffi.client_ffi.LayoutApiException) {
+        val mapped = e.toLayoutApiException()
+        engineLog("layouts: $what failed: ${mapped.kind} ${mapped.message}")
+        throw mapped
+    }
+
     companion object {
         /**
          * Creates the engine (which starts loading [workspace] from [baseUrl] in the background,
@@ -89,7 +115,20 @@ internal fun FfiStateSnapshot.toEngineSnapshot(): EngineSnapshot = EngineSnapsho
     queriesJson = queriesJson,
     authJson = authJson,
     agentJson = agentJson,
+    layoutJson = layoutJson,
 )
+
+/** A negative version / limit can't be meant; 0 makes the pod answer 400 or 404 with a readable error. */
+private fun Int.toUIntArg(): UInt = if (this < 0) 0u else toUInt()
+
+internal fun uniffi.client_ffi.LayoutApiException.toLayoutApiException(): LayoutApiException = when (this) {
+    is uniffi.client_ffi.LayoutApiException.Offline -> LayoutApiException(reason, LayoutApiException.Kind.Offline)
+    is uniffi.client_ffi.LayoutApiException.Unauthorized ->
+        LayoutApiException(reason, LayoutApiException.Kind.Unauthorized)
+    is uniffi.client_ffi.LayoutApiException.NotFound -> LayoutApiException(reason, LayoutApiException.Kind.NotFound)
+    is uniffi.client_ffi.LayoutApiException.Server ->
+        LayoutApiException(reason, LayoutApiException.Kind.Server, status.toInt())
+}
 
 /** Platform log line: stdout with a `[desktop]` prefix on desktop, logcat tag `CanvasEngine` on Android. */
 internal expect fun engineLog(message: String)

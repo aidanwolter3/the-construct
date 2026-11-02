@@ -591,6 +591,30 @@ client-core side of M7 (docs/DECISIONS.md D24):
   refetching`, `agent: applied layout v3 (rules)`.
 - FFI: `FfiStateSnapshot.agentJson` -> `EngineSnapshot.agentJson`.
 
+### Layout catalog (client)
+
+client-core / FFI / bridge API over the pod's `/v1/layouts` endpoints (docs/DECISIONS.md D26, D27), for a layout
+browser. All calls are blocking: on Kotlin call them on `Dispatchers.IO`, never the UI thread.
+
+| Kotlin (`CanvasEngineBridge`) | Rust (`CanvasEngine` / `EngineHandle`) | Pod |
+|---|---|---|
+| `listLayouts()` | `list_layouts()` | `GET /v1/layouts?workspace_id=<engine's>` |
+| `layoutVersions(id, before?, limit?)` | `layout_versions(id, before, limit)` | `GET /v1/layouts/:id/versions` |
+| `layoutVersion(id, n)` | `layout_version(id, n)` | `GET /v1/layouts/:id/versions/:n` (with `layout`) |
+| `activateLayout(id, version?)` | `activate_layout(id, version)` | `POST /v1/layouts/:id/activate` |
+| `restoreLayoutVersion(id, n)` | `restore_layout_version(id, n)` | `POST /v1/layouts/:id/restore` |
+
+- Each returns the pod's JSON body. Failures throw `LayoutApiException` (Kotlin; `kind` Offline / Unauthorized /
+  NotFound / Server) with a readable message, e.g. "Sign in to change layouts." (writes need a session unless the
+  pod runs with `CANVAS_AGENT_OPEN=1`) or "Can't reach your pod. Check your connection and try again.". A 401 with
+  a stale session signs out like any other request.
+- An activate / restore that changes the screen refetches the workspace before returning, so the UI shows the new
+  layout immediately (the SSE echo is a no-op).
+- Every snapshot carries `layout_json` = `{"layout_id","layout_version","revision"}` (`CanvasState.activeLayout`
+  in Kotlin) to mark the active layout and version; `{}` when unknown.
+- Simulation mode: `FakeEngineBridge` serves a small in-memory catalog (`home`: counter, big_counter;
+  `pixelfed_demo`: classic with 3 versions, editorial, compact).
+
 ## Local Pixelfed instance (real, optional)
 
 Optional: the fake above is the primary e2e target. Use the real instance to re-record

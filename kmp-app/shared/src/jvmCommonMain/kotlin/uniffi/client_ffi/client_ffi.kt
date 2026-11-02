@@ -809,6 +809,16 @@ internal open class UniffiVTableCallbackInterfaceUrlOpener(
 
 
 
+
+
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -824,13 +834,23 @@ internal open class UniffiVTableCallbackInterfaceUrlOpener(
 // when the library is loaded.
 internal interface IntegrityCheckingUniffiLib : Library {
     // Integrity check functions only
-    fun uniffi_client_ffi_checksum_method_enginehandle_dispatch(
+    fun uniffi_client_ffi_checksum_method_enginehandle_activate_layout(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_dispatch(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_handle_auth_redirect(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_layout_version(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_layout_versions(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_list_layouts(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_logout(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_refresh(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_restore_layout_version(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_snapshot(
 ): Short
@@ -914,14 +934,24 @@ fun uniffi_client_ffi_fn_constructor_enginehandle_new_with_options(`storagePath`
 ): Pointer
 fun uniffi_client_ffi_fn_constructor_enginehandle_new_with_workspace(`storagePath`: RustBuffer.ByValue,`baseUrl`: RustBuffer.ByValue,`workspaceId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Pointer
+fun uniffi_client_ffi_fn_method_enginehandle_activate_layout(`ptr`: Pointer,`layoutId`: RustBuffer.ByValue,`version`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_dispatch(`ptr`: Pointer,`intentJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_handle_auth_redirect(`ptr`: Pointer,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
+fun uniffi_client_ffi_fn_method_enginehandle_layout_version(`ptr`: Pointer,`layoutId`: RustBuffer.ByValue,`version`: Int,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_client_ffi_fn_method_enginehandle_layout_versions(`ptr`: Pointer,`layoutId`: RustBuffer.ByValue,`before`: RustBuffer.ByValue,`limit`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_client_ffi_fn_method_enginehandle_list_layouts(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_logout(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_refresh(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_client_ffi_fn_method_enginehandle_restore_layout_version(`ptr`: Pointer,`layoutId`: RustBuffer.ByValue,`version`: Int,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_snapshot(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_subscribe(`ptr`: Pointer,`observer`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -1058,16 +1088,31 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_activate_layout() != 23575.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_dispatch() != 57352.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_handle_auth_redirect() != 36756.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_layout_version() != 934.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_layout_versions() != 59162.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_list_layouts() != 3618.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_logout() != 63659.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_refresh() != 33148.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_restore_layout_version() != 21883.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_snapshot() != 50695.toShort()) {
@@ -1272,6 +1317,29 @@ private class JavaLangRefCleanable(
     val cleanable: java.lang.ref.Cleaner.Cleanable
 ) : UniffiCleaner.Cleanable {
     override fun clean() = cleanable.clean()
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterUShort: FfiConverter<UShort, Short> {
+    override fun lift(value: Short): UShort {
+        return value.toUShort()
+    }
+
+    override fun read(buf: ByteBuffer): UShort {
+        return lift(buf.getShort())
+    }
+
+    override fun lower(value: UShort): Short {
+        return value.toShort()
+    }
+
+    override fun allocationSize(value: UShort) = 2UL
+
+    override fun write(value: UShort, buf: ByteBuffer) {
+        buf.putShort(value.toShort())
+    }
 }
 
 /**
@@ -1502,6 +1570,12 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
 public interface EngineHandleInterface {
     
     /**
+     * Make the layout active (with `version`: restore it first); the
+     * workspace is refetched before this returns when it changed.
+     */
+    fun `activateLayout`(`layoutId`: kotlin.String, `version`: kotlin.UInt?): kotlin.String
+    
+    /**
      * Handle an `ActionIntent` JSON string. Never panics.
      */
     fun `dispatch`(`intentJson`: kotlin.String)
@@ -1515,6 +1589,21 @@ public interface EngineHandleInterface {
     fun `handleAuthRedirect`(`url`: kotlin.String): kotlin.Boolean
     
     /**
+     * One version's metadata plus its full `layout`.
+     */
+    fun `layoutVersion`(`layoutId`: kotlin.String, `version`: kotlin.UInt): kotlin.String
+    
+    /**
+     * One page of a layout's history, newest first (`next_before` pages on).
+     */
+    fun `layoutVersions`(`layoutId`: kotlin.String, `before`: kotlin.UInt?, `limit`: kotlin.UInt?): kotlin.String
+    
+    /**
+     * The engine workspace's layouts (`GET /v1/layouts?workspace_id=`).
+     */
+    fun `listLayouts`(): kotlin.String
+    
+    /**
      * Sign out (non-blocking): forgets the session, notifies `signed_out`;
      * the pod logout call and the refetch run in the background.
      */
@@ -1524,6 +1613,12 @@ public interface EngineHandleInterface {
      * Re-fetch the workspace on the calling thread (blocking), then notify.
      */
     fun `refresh`()
+    
+    /**
+     * Append a copy of `version` as the layout's newest version (refetches
+     * when the layout is the active one).
+     */
+    fun `restoreLayoutVersion`(`layoutId`: kotlin.String, `version`: kotlin.UInt): kotlin.String
     
     /**
      * The current snapshot.
@@ -1633,6 +1728,23 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
 
     
     /**
+     * Make the layout active (with `version`: restore it first); the
+     * workspace is refetched before this returns when it changed.
+     */
+    @Throws(LayoutApiException::class)override fun `activateLayout`(`layoutId`: kotlin.String, `version`: kotlin.UInt?): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_activate_layout(
+        it, FfiConverterString.lower(`layoutId`),FfiConverterOptionalUInt.lower(`version`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Handle an `ActionIntent` JSON string. Never panics.
      */override fun `dispatch`(`intentJson`: kotlin.String)
         = 
@@ -1657,6 +1769,54 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_handle_auth_redirect(
         it, FfiConverterString.lower(`url`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * One version's metadata plus its full `layout`.
+     */
+    @Throws(LayoutApiException::class)override fun `layoutVersion`(`layoutId`: kotlin.String, `version`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_layout_version(
+        it, FfiConverterString.lower(`layoutId`),FfiConverterUInt.lower(`version`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * One page of a layout's history, newest first (`next_before` pages on).
+     */
+    @Throws(LayoutApiException::class)override fun `layoutVersions`(`layoutId`: kotlin.String, `before`: kotlin.UInt?, `limit`: kotlin.UInt?): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_layout_versions(
+        it, FfiConverterString.lower(`layoutId`),FfiConverterOptionalUInt.lower(`before`),FfiConverterOptionalUInt.lower(`limit`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * The engine workspace's layouts (`GET /v1/layouts?workspace_id=`).
+     */
+    @Throws(LayoutApiException::class)override fun `listLayouts`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_list_layouts(
+        it, _status)
 }
     }
     )
@@ -1690,6 +1850,23 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
 }
     }
     
+    
+
+    
+    /**
+     * Append a copy of `version` as the layout's newest version (refetches
+     * when the layout is the active one).
+     */
+    @Throws(LayoutApiException::class)override fun `restoreLayoutVersion`(`layoutId`: kotlin.String, `version`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_restore_layout_version(
+        it, FfiConverterString.lower(`layoutId`),FfiConverterUInt.lower(`version`),_status)
+}
+    }
+    )
+    }
     
 
     
@@ -1799,7 +1976,8 @@ public object FfiConverterTypeEngineHandle: FfiConverter<EngineHandle, Pointer> 
  * when none); `auth_json` is `{"state":"signed_out"|"pending"|"signed_in"|
  * "error","username"?,"error"?}`; `agent_json` is the last layout prompt's
  * `{"state":"idle"|"running"|"done"|"error","message"?,"provider"?,
- * "layout_version"?}`.
+ * "layout_version"?}`; `layout_json` is the layout on display,
+ * `{"layout_id"?,"layout_version"?,"revision"?}` (`"{}"` while unknown).
  */
 data class FfiStateSnapshot (
     var `workspaceJson`: kotlin.String, 
@@ -1809,7 +1987,8 @@ data class FfiStateSnapshot (
     var `pendingActions`: kotlin.UInt, 
     var `queriesJson`: kotlin.String, 
     var `authJson`: kotlin.String, 
-    var `agentJson`: kotlin.String
+    var `agentJson`: kotlin.String, 
+    var `layoutJson`: kotlin.String
 ) {
     
     companion object
@@ -1829,6 +2008,7 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
@@ -1840,7 +2020,8 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterUInt.allocationSize(value.`pendingActions`) +
             FfiConverterString.allocationSize(value.`queriesJson`) +
             FfiConverterString.allocationSize(value.`authJson`) +
-            FfiConverterString.allocationSize(value.`agentJson`)
+            FfiConverterString.allocationSize(value.`agentJson`) +
+            FfiConverterString.allocationSize(value.`layoutJson`)
     )
 
     override fun write(value: FfiStateSnapshot, buf: ByteBuffer) {
@@ -1852,7 +2033,151 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterString.write(value.`queriesJson`, buf)
             FfiConverterString.write(value.`authJson`, buf)
             FfiConverterString.write(value.`agentJson`, buf)
+            FfiConverterString.write(value.`layoutJson`, buf)
     }
+}
+
+
+
+
+
+/**
+ * A layout catalog call failed (docs/DECISIONS.md D27). `reason` is a short
+ * sentence for the UI (e.g. "Sign in to change layouts.").
+ */
+sealed class LayoutApiException: kotlin.Exception() {
+    
+    /**
+     * The pod could not be reached.
+     */
+    class Offline(
+        
+        val `reason`: kotlin.String
+        ) : LayoutApiException() {
+        override val message
+            get() = "reason=${ `reason` }"
+    }
+    
+    /**
+     * HTTP 401 (no or a stale session; a stale one is signed out).
+     */
+    class Unauthorized(
+        
+        val `reason`: kotlin.String
+        ) : LayoutApiException() {
+        override val message
+            get() = "reason=${ `reason` }"
+    }
+    
+    /**
+     * HTTP 404 (unknown layout, version or workspace).
+     */
+    class NotFound(
+        
+        val `reason`: kotlin.String
+        ) : LayoutApiException() {
+        override val message
+            get() = "reason=${ `reason` }"
+    }
+    
+    /**
+     * Any other failure; `status` 0 when there was no HTTP status.
+     */
+    class Server(
+        
+        val `status`: kotlin.UShort, 
+        
+        val `reason`: kotlin.String
+        ) : LayoutApiException() {
+        override val message
+            get() = "status=${ `status` }, reason=${ `reason` }"
+    }
+    
+
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<LayoutApiException> {
+        override fun lift(error_buf: RustBuffer.ByValue): LayoutApiException = FfiConverterTypeLayoutApiError.lift(error_buf)
+    }
+
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLayoutApiError : FfiConverterRustBuffer<LayoutApiException> {
+    override fun read(buf: ByteBuffer): LayoutApiException {
+        
+
+        return when(buf.getInt()) {
+            1 -> LayoutApiException.Offline(
+                FfiConverterString.read(buf),
+                )
+            2 -> LayoutApiException.Unauthorized(
+                FfiConverterString.read(buf),
+                )
+            3 -> LayoutApiException.NotFound(
+                FfiConverterString.read(buf),
+                )
+            4 -> LayoutApiException.Server(
+                FfiConverterUShort.read(buf),
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: LayoutApiException): ULong {
+        return when(value) {
+            is LayoutApiException.Offline -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+            is LayoutApiException.Unauthorized -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+            is LayoutApiException.NotFound -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+            is LayoutApiException.Server -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterUShort.allocationSize(value.`status`)
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+    }
+
+    override fun write(value: LayoutApiException, buf: ByteBuffer) {
+        when(value) {
+            is LayoutApiException.Offline -> {
+                buf.putInt(1)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+            is LayoutApiException.Unauthorized -> {
+                buf.putInt(2)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+            is LayoutApiException.NotFound -> {
+                buf.putInt(3)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+            is LayoutApiException.Server -> {
+                buf.putInt(4)
+                FfiConverterUShort.write(value.`status`, buf)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+
 }
 
 
@@ -2058,6 +2383,38 @@ internal object uniffiCallbackInterfaceUrlOpener {
  * @suppress
  */
 public object FfiConverterTypeUrlOpener: FfiConverterCallbackInterface<UrlOpener>()
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalUInt: FfiConverterRustBuffer<kotlin.UInt?> {
+    override fun read(buf: ByteBuffer): kotlin.UInt? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterUInt.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.UInt?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterUInt.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.UInt?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterUInt.write(value, buf)
+        }
+    }
+}
 
 
 

@@ -46,6 +46,7 @@
 //! when a newer version is announced.
 
 pub mod auth;
+pub mod catalog;
 pub mod events;
 pub mod expr;
 pub mod store;
@@ -63,6 +64,7 @@ use protocol::{ActionIntent, EntityRecord, FieldUpdate, UiNode, WorkspaceSpec};
 use serde_json::{Value, json};
 
 pub use auth::{MemoryStore, RedirectMode, SecureStore, UrlOpener};
+pub use catalog::LayoutApiError;
 use auth::{LoopbackListener, PendingAuth, Pkce, Redirect, guarded};
 use store::{AlsoUpdate, NewOutboxRow, OutboxRow, Store, StoreOps};
 
@@ -95,6 +97,10 @@ pub const IDLE_AGENT_JSON: &str = r#"{"state":"idle"}"#;
 pub const AGENT_OFFLINE: &str = "offline: try again when online";
 /// Response header carrying the served layout version.
 pub const LAYOUT_VERSION_HEADER: &str = "X-Canvas-Layout-Version";
+/// Response header naming the active layout of the workspace (D26).
+pub const LAYOUT_ID_HEADER: &str = "X-Canvas-Layout-Id";
+/// Response header with that layout's own (per-layout) version (D26).
+pub const LAYOUT_ID_VERSION_HEADER: &str = "X-Canvas-Layout-Id-Version";
 /// Timeout for `POST /v1/agent/modify_layout` (an LLM provider may take
 /// up to 120 s plus retries on the pod).
 const AGENT_HTTP_TIMEOUT: Duration = Duration::from_secs(180);
@@ -294,6 +300,10 @@ enum FetchOutcome {
 ///   "done"|"error","message"?,"provider"?,"layout_version"?,"unchanged"?}`
 ///   (`unchanged: true` when the pod found nothing to change). Back to idle
 ///   when a newer layout version arrives that the last prompt didn't make.
+/// - `layout_json`: the layout on display, `{"layout_id","layout_version",
+///   "revision"}` (D26/D27: the active catalog layout, its per-layout version
+///   and the workspace revision, from the fetch headers or a prompt
+///   response); `"{}"` while unknown or when the screen is not versioned.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateSnapshot {
     pub workspace_json: String,
@@ -304,6 +314,7 @@ pub struct StateSnapshot {
     pub queries_json: String,
     pub auth_json: String,
     pub agent_json: String,
+    pub layout_json: String,
 }
 
 struct Observer {
@@ -350,6 +361,10 @@ struct State {
     /// last fetch, or a prompt response's `layout_version`); `None` when
     /// unknown or the served layout is not versioned.
     layout_version: Option<u64>,
+    /// The active catalog layout on display and its per-layout version
+    /// (`X-Canvas-Layout-Id` / `X-Canvas-Layout-Id-Version`, D26).
+    layout_id: Option<String>,
+    layout_id_version: Option<u64>,
     is_online: bool,
     /// Bumped on every change (cache load, fetch attempt, mutation). Used to
     /// drop stale out-of-order deliveries.
@@ -392,7 +407,23 @@ impl State {
             queries_json,
             auth_json,
             agent_json,
+            layout_json: self.layout_json(),
         }
+    }
+
+    /// See [`StateSnapshot::layout_json`].
+    fn layout_json(&self) -> String {
+        let mut v = json!({});
+        if let Some(id) = &self.layout_id {
+            v["layout_id"] = json!(id);
+        }
+        if let Some(n) = self.layout_id_version {
+            v["layout_version"] = json!(n);
+        }
+        if let Some(n) = self.layout_version {
+            v["revision"] = json!(n);
+        }
+        v.to_string()
     }
 
     /// Load the cached workspace, its queries, its entities (including every
@@ -1313,7 +1344,8 @@ impl Inner {
                     st.is_online = true;
                     outcome = FetchOutcome::Fetched;
                 }
-                Ok((mut spec, version)) => {
+                Ok((mut spec, served)) => {
+                    let version = served.revision;
                     let failures = std::mem::take(&mut st.fetch_failures);
                     st.last_fetch_error = None;
                     let after = if failures > 0 {
@@ -1345,6 +1377,8 @@ impl Inner {
                                 st.clear_stale_agent_status(v);
                             }
                             st.layout_version = version;
+                            st.layout_id = served.layout_id;
+                            st.layout_id_version = served.layout_id_version;
                         }
                     }
                     st.apply_fetched(&self.workspace_id, spec);
@@ -1854,9 +1888,13 @@ impl Inner {
                     v.get("layout_version").and_then(Value::as_u64),
                     json_str(&v, "provider"),
                     v.get("unchanged").and_then(Value::as_bool).unwrap_or(false),
+                    (
+                        json_str(&v, "layout_id"),
+                        v.get("layout_id_version").and_then(Value::as_u64),
+                    ),
                 ))
             });
-        let (layout, version, provider, unchanged) = match parsed {
+        let (layout, version, provider, unchanged, (layout_id, layout_id_version)) = match parsed {
             Ok(p) => p,
             Err(e) => {
                 eprintln!("[CanvasEngine] agent: unusable response ({e}): {body}");
@@ -1897,6 +1935,10 @@ impl Inner {
             } else {
                 st.apply_layout(&self.workspace_id, layout);
                 st.layout_version = version;
+                if layout_id.is_some() {
+                    st.layout_id = layout_id;
+                    st.layout_id_version = layout_id_version;
+                }
                 println!(
                     "[CanvasEngine] agent: applied layout v{} ({})",
                     version.map_or("?".into(), |v| v.to_string()),
@@ -2289,9 +2331,18 @@ enum FetchError {
     Other(String),
 }
 
+/// What a workspace fetch says about the layout it served (headers; each
+/// `None` when absent, e.g. the unversioned signed-out `pixelfed_home`).
+struct Served {
+    /// [`LAYOUT_VERSION_HEADER`]: the workspace revision.
+    revision: Option<u64>,
+    layout_id: Option<String>,
+    layout_id_version: Option<u64>,
+}
+
 /// `GET url`, with `Authorization: Bearer <token>` when signed in. Returns
-/// the bundle and its [`LAYOUT_VERSION_HEADER`], if present and numeric.
-fn fetch(url: &str, token: Option<&str>) -> Result<(WorkspaceSpec, Option<u64>), FetchError> {
+/// the bundle and its layout headers ([`Served`]).
+fn fetch(url: &str, token: Option<&str>) -> Result<(WorkspaceSpec, Served), FetchError> {
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(5))
@@ -2308,15 +2359,22 @@ fn fetch(url: &str, token: Option<&str>) -> Result<(WorkspaceSpec, Option<u64>),
     if !status.is_success() {
         return Err(FetchError::Status(status.as_u16()));
     }
-    let version = resp
-        .headers()
-        .get(LAYOUT_VERSION_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.trim().parse::<u64>().ok());
+    let header = |name: &str| {
+        resp.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty())
+    };
+    let served = Served {
+        revision: header(LAYOUT_VERSION_HEADER).and_then(|v| v.parse().ok()),
+        layout_id: header(LAYOUT_ID_HEADER),
+        layout_id_version: header(LAYOUT_ID_VERSION_HEADER).and_then(|v| v.parse().ok()),
+    };
     let raw = resp.text().map_err(|e| FetchError::Other(e.to_string()))?;
     let spec =
         serde_json::from_str(&raw).map_err(|e| FetchError::Other(format!("bad bundle: {e}")))?;
-    Ok((spec, version))
+    Ok((spec, served))
 }
 
 /// `POST url` with a JSON body (bearer when signed in): `(status, body)`,

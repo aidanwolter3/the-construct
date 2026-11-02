@@ -13,6 +13,7 @@ import org.genui.canvas.ActionIntent
 import org.genui.canvas.CanvasEngineBridge
 import org.genui.canvas.CanvasJson
 import org.genui.canvas.EngineSnapshot
+import org.genui.canvas.LayoutApiException
 import org.genui.canvas.UiNode
 
 /**
@@ -40,6 +41,11 @@ import org.genui.canvas.UiNode
  * recognized prompt replaces the layout, bumps [layoutVersion] (unless the layout is already in the requested state)
  * and sets `agent_json` to done (provider `fake-rules`); an unrecognized one, a caption/media rule on a layout
  * without a PostCard, or any prompt while offline sets it to error and leaves the layout alone.
+ *
+ * Layout catalog (D27): [FakeLayoutCatalog.fixture] (`pixelfed_demo` for a bundle with `pixelfed://` entities, else
+ * `home`) answers the catalog calls with the pod's JSON shapes; activate / restore of the active layout replace the
+ * layout and bump [layoutVersion] (the workspace revision); an applied prompt appends to the active layout's
+ * history. Offline, every catalog call throws [LayoutApiException] (Offline).
  */
 class FakeEngineBridge(
     bundleJson: String,
@@ -56,6 +62,7 @@ class FakeEngineBridge(
     var layoutVersion = 1
         private set
     private val queriesJson: String
+    private val catalog: FakeLayoutCatalog
     private val entities: MutableMap<String, JsonObject>
     private val server: MutableMap<String, JsonObject>
     private val outbox = ArrayDeque<Row>()
@@ -70,6 +77,7 @@ class FakeEngineBridge(
         queriesJson = CanvasJson.json.encodeToString(queriesSerializer, bundle.queries)
         entities = LinkedHashMap(bundle.entities)
         server = LinkedHashMap(bundle.entities)
+        catalog = FakeLayoutCatalog.fixture(workspace, pixelfed = entities.keys.any { it.startsWith("pixelfed://") })
     }
 
     override fun subscribe(onState: (EngineSnapshot) -> Unit) {
@@ -136,6 +144,7 @@ class FakeEngineBridge(
                     if (result.layout != workspace) {
                         workspace = result.layout
                         layoutVersion++
+                        catalog.appendActive(result.layout, prompt)
                         agentJson(state = "done", provider = FakeLayoutRules.PROVIDER, layoutVersion = layoutVersion)
                     } else {
                         // Already in the requested state: no new version, reported like client-core reports the
@@ -151,6 +160,50 @@ class FakeEngineBridge(
             seq++
         }
         emit()
+    }
+
+    override fun listLayouts(): String = catalogRead { catalog.listJson(layoutVersion) }
+
+    override fun layoutVersions(layoutId: String, before: Int?, limit: Int?): String =
+        catalogRead { catalog.versionsJson(layoutId, before, limit) }
+
+    override fun layoutVersion(layoutId: String, version: Int): String =
+        catalogRead { catalog.versionJson(layoutId, version) }
+
+    override fun activateLayout(layoutId: String, version: Int?): String =
+        catalogWrite { catalog.activate(layoutId, version, layoutVersion + 1, layoutVersion) }
+
+    override fun restoreLayoutVersion(layoutId: String, version: Int): String =
+        catalogWrite { catalog.restore(layoutId, version, layoutVersion + 1, layoutVersion) }
+
+    private fun checkOnlineLocked() {
+        if (!isOnline) {
+            throw LayoutApiException(
+                "Can't reach your pod. Check your connection and try again.", LayoutApiException.Kind.Offline,
+            )
+        }
+    }
+
+    private fun catalogRead(read: () -> String): String = synchronized(lock) {
+        checkOnlineLocked()
+        read()
+    }
+
+    /** Runs a write; when it changed the screen, shows the active layout's newest version and notifies. */
+    private fun catalogWrite(write: () -> FakeLayoutCatalog.Write): String {
+        val result = synchronized(lock) {
+            checkOnlineLocked()
+            write().also {
+                if (it.screenChanged) {
+                    workspace = catalog.activeLayout
+                    layoutVersion++
+                    seq++
+                }
+            }
+        }
+        println("[sim] layouts: ${result.body}")
+        if (result.screenChanged) emit()
+        return result.body
     }
 
     fun setOnline(online: Boolean) {
@@ -238,6 +291,7 @@ class FakeEngineBridge(
         queriesJson = queriesJson,
         authJson = authJson,
         agentJson = agentJson,
+        layoutJson = catalog.layoutJson(layoutVersion),
     )
 
     private fun emit() {

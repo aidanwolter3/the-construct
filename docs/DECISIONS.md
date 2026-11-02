@@ -793,3 +793,44 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   Writes (activate, restore) need a session unless `CANVAS_AGENT_OPEN=1` (D22).
 - **f32 in responses:** layouts are turned into JSON values through their text form (`layouts::node_value`), since
   `serde_json::to_value` widens `aspect_ratio` 0.8 to 0.800000011920929.
+
+## D27: Client layout catalog API (client-core, FFI)
+
+- **Calls** (`client_core::catalog`, methods on `CanvasEngine`): `list_layouts()` (`GET
+  /v1/layouts?workspace_id=<engine's workspace>`), `layout_versions(id, before?, limit?)`, `layout_version(id, n)`,
+  `activate_layout(id, version?)` (`{}` | `{"version": n}`), `restore_layout_version(id, n)`. Each returns the pod's
+  JSON body as a `String` (D26 shapes; the same pass-through style as the snapshot's `*_json` fields, so the FFI
+  needs no record per response). **Blocking** on the caller's thread with its own reqwest client (connect 5 s,
+  total 15 s), not on an engine thread: the platform already has a background dispatcher (`Dispatchers.IO`), and a
+  result-returning call is simpler than a status field in the snapshot. Not under the `net` lock (reads do not
+  race the outbox). Bearer = the current pod session; layout ids are percent-encoded as path segments.
+- **Errors:** `LayoutApiError::{Offline, Unauthorized, NotFound, Server{status}}`, each with a short `reason` for the
+  UI: transport -> "Can't reach your pod. Check your connection and try again."; 401 -> "Sign in to change
+  layouts." (writes) / "Sign in to see these layouts." (reads); 404 by the pod's `error`: `version_not_found` ->
+  "That version doesn't exist.", `workspace_not_found` -> "This workspace has no layouts.", else "That layout
+  doesn't exist."; 400 `invalid_layout_id` -> "That isn't a valid layout id.", other codes -> "The pod answered
+  HTTP n (code).", 5xx without a code -> "The pod had a problem (HTTP n). Please try again." The URL, status and
+  body start go to the log. A 401 for the session that is still current signs out exactly like a fetch 401 (D19:
+  memory + store cleared, private cache purged, pending rows kept) and refetches; a 401 without a session changes
+  nothing. The UniFFI error's field is `reason`, not `message` (UniFFI's Kotlin exceptions override `message`).
+- **Applying a write:** after a 2xx activate (not `unchanged`, `workspace_id` = the engine's) or restore (`active`
+  and not `unchanged`), the call runs the normal blocking refetch before returning, so the next snapshot already
+  shows the new layout without waiting for SSE. The SSE echo then carries an equal revision and is ignored (D24);
+  the fetch merge re-applies PENDING outbox rows (D14). The response itself carries no layout, so applying it
+  directly (as the agent path does) is not possible.
+- **Snapshot:** `StateSnapshot.layout_json` / `FfiStateSnapshot.layout_json` = `{"layout_id","layout_version",
+  "revision"}` (the active catalog layout, its per-layout version, the workspace revision) from
+  `X-Canvas-Layout-Id`, `X-Canvas-Layout-Id-Version` and `X-Canvas-Layout-Version` of the applied fetch, or the agent
+  response's `layout_id` / `layout_id_version` / `layout_version`; absent keys are omitted, `"{}"` when nothing is
+  known (unversioned screen, before the first fetch). In memory only, like the revision.
+- **Kotlin:** `CanvasEngineBridge` gained `listLayouts()`, `layoutVersions(layoutId, before?, limit?)`,
+  `layoutVersion(layoutId, version)`, `activateLayout(layoutId, version?)`, `restoreLayoutVersion(layoutId, version)`:
+  plain blocking `String`-returning functions (call on `Dispatchers.IO`) that throw
+  `org.genui.canvas.LayoutApiException(message, kind, status)`; the interface defaults throw "Layouts aren't
+  available here." so other fakes compile. `UniffiEngineBridge` maps `uniffi.client_ffi.LayoutApiException` (Int
+  args clamped to `UInt`, negatives -> 0, which the pod rejects readably). `EngineSnapshot.layoutJson` (default `{}`)
+  -> `CanvasState.activeLayout` (`ActiveLayout(layoutId?, layoutVersion?, revision?)`, lenient parse).
+  `FakeEngineBridge` serves `FakeLayoutCatalog` (same JSON shapes; `pixelfed_demo` for a bundle with
+  `pixelfed://` entities, else `home`; the active layout's newest version is the bundle's layout so the screen starts
+  unchanged; activate/restore of the active layout swap the layout and bump the revision; an applied prompt appends
+  to the active layout; offline -> `Kind.Offline`).

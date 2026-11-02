@@ -5,8 +5,8 @@ package org.genui.canvas
  * [CanvasJson.decodeNode]; `"null"` before the first load), [entitiesJson] the URI-keyed entities map
  * ([CanvasJson.decodeEntities]). [seq] strictly increases per engine; consumers drop snapshots whose
  * seq is not above the last applied one. [pendingActions] counts outbox rows not yet sent.
- * [queriesJson] and [authJson] are M6 additions, [agentJson] an M7 one, with defaults so older call sites keep
- * compiling.
+ * [queriesJson] and [authJson] are M6 additions, [agentJson] an M7 one and [layoutJson] a D27 one, with defaults so
+ * older call sites keep compiling.
  */
 data class EngineSnapshot(
     val workspaceJson: String,
@@ -23,6 +23,11 @@ data class EngineSnapshot(
      * parse with [AgentInfo.parse].
      */
     val agentJson: String = "{\"state\":\"idle\"}",
+    /**
+     * The layout on display (D27): `{"layout_id"?,"layout_version"?,"revision"?}` (`layout_version` = the active
+     * layout's own version, `revision` = the workspace revision); `"{}"` while unknown. Parse with [ActiveLayout.parse].
+     */
+    val layoutJson: String = "{}",
 )
 
 /**
@@ -45,4 +50,31 @@ interface CanvasEngineBridge {
 
     /** Signs out (non-blocking). No-op for fakes without sign-in. */
     fun logout() {}
+
+    // Layout catalog (DECISIONS D26/D27). All BLOCKING network calls: call them off the UI thread (e.g. on
+    // Dispatchers.IO). Each returns the pod's JSON body or throws [LayoutApiException] with a readable message.
+    // The defaults throw, so fakes without a catalog compile unchanged.
+
+    /** This workspace's layouts: `{"layouts":[{id,title,description,current_version,active,active_version?,...}],...}`. */
+    fun listLayouts(): String = throw catalogUnavailable()
+
+    /**
+     * One page of [layoutId]'s history, newest first: `{"versions":[{version,created_at,source,prompt?,...}],
+     * "next_before"?}`; pass `next_before` as [before] for the next page. [limit] null = the pod's default (100).
+     */
+    fun layoutVersions(layoutId: String, before: Int? = null, limit: Int? = null): String = throw catalogUnavailable()
+
+    /** One version's metadata plus its full `layout` (a workspace [UiNode] JSON). */
+    fun layoutVersion(layoutId: String, version: Int): String = throw catalogUnavailable()
+
+    /**
+     * Makes [layoutId] the workspace's active layout ([version] non-null: restore that version first). When it changed
+     * the screen, the engine has already applied the new layout when this returns.
+     */
+    fun activateLayout(layoutId: String, version: Int? = null): String = throw catalogUnavailable()
+
+    /** Appends a copy of [version] as [layoutId]'s newest version (applied at once when it is the active layout). */
+    fun restoreLayoutVersion(layoutId: String, version: Int): String = throw catalogUnavailable()
 }
+
+private fun catalogUnavailable() = LayoutApiException("Layouts aren't available here.")

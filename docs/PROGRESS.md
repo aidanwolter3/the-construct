@@ -224,6 +224,27 @@ Note: the environment restarted twice mid-work; work is now committed in small w
     restore, auth, agent on a non-default layout, a switch during generation, restart idempotency). cargo 272.
   - Measurement tool: `cargo run -p server --release --example layout_storage [N]`.
 - Status: A1 DONE (server); the surfaces' layout browser UI is the client half.
+- A2 (client-core + FFI, D27): catalog API for the browser UI.
+  - `CanvasEngine::{list_layouts, layout_versions(id, before, limit), layout_version(id, n), activate_layout(id,
+    version?), restore_layout_version(id, n)}`: blocking (callers use a background thread), engine base URL + pod
+    session, 15 s timeout, the pod's JSON passed through. Errors: `LayoutApiError::{Offline, Unauthorized, NotFound,
+    Server{status}}` with a readable `reason` ("Sign in to change layouts.", "That version doesn't exist.", ...); a
+    401 for the current session signs out and refetches (D19 policy). An activate / restore that changed this
+    workspace's screen refetches before returning, so the caller's next snapshot already shows the new layout
+    (pending outbox rows re-applied by the merge; the SSE echo is a no-op).
+  - Snapshot: `layout_json` = `{"layout_id","layout_version","revision"}` from the new headers (and the agent
+    response), `"{}"` when unknown / unversioned. FFI: `EngineHandle` methods returning `Result<String,
+    LayoutApiError>` (Kotlin `uniffi.client_ffi.LayoutApiException`), `FfiStateSnapshot.layout_json`.
+  - Kotlin: `CanvasEngineBridge.{listLayouts, layoutVersions, layoutVersion, activateLayout, restoreLayoutVersion}`
+    (blocking; default implementations throw), `LayoutApiException(message, kind, status)`,
+    `EngineSnapshot.layoutJson` -> `CanvasState.activeLayout` (`ActiveLayout`). `UniffiEngineBridge` maps the UniFFI
+    error; `FakeEngineBridge` serves an in-memory `FakeLayoutCatalog` (home: counter/big_counter; pixelfed_demo:
+    classic with 3 versions, editorial, compact) with the pod's JSON shapes.
+  - Tests: `client-core/tests/layouts.rs` against the in-process pod (list + snapshot layout_json, version paging
+    and fetch, activate applies before returning, restore of active/inactive layouts, 401 without / with a stale
+    session (signed out), offline), unit tests for error sentences; FFI offline mapping; shared `LayoutCatalogTest`,
+    desktop `FakeLayoutCatalogTest`. cargo 280, :shared 51, :desktopApp 56.
+- Status: A2 DONE (client API); the browser UI (A3) is next.
 
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
@@ -243,9 +264,10 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 
 ## Next steps
 
-1. Layout browser UI on every surface (client half of D26): list `GET /v1/layouts?workspace_id=`, preview by
-   `preview_hint`, activate, per-layout history with restore; client-core needs no change for refreshes (the
-   revision contract is unchanged). Optional later: user-created layouts (copy a layout), a zstd dictionary for
+1. Layout browser UI on every surface (A3) on top of the D27 bridge calls (`listLayouts`, `layoutVersions`,
+   `layoutVersion`, `activateLayout`, `restoreLayoutVersion` on `Dispatchers.IO`; `CanvasState.activeLayout` marks
+   the active layout/version): preview by `preview_hint` or the version's `layout`, activate, history with restore.
+   Optional later: user-created layouts (copy a layout), a zstd dictionary for
    blobs (measured ~6x smaller edits), a retention policy.
 2. Feed as a `LazyColumn` with pagination (`max_id` / `Link: next`).
 3. Outbox idempotency keys (client-generated, honoured by the pod).
