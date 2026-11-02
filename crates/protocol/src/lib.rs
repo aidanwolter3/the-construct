@@ -12,4 +12,4 @@ pub mod intent;
 
 pub use ast::{ListBinding, Orientation, SlotSpec, TextStyle, UiNode};
 pub use bundle::{EntityRecord, WorkspaceSpec};
-pub use intent::{ActionIntent, PresentationMode};
+pub use intent::{ActionIntent, FieldUpdate, PresentationMode};

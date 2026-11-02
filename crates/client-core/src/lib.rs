@@ -973,15 +973,27 @@ impl Inner {
                 rollback_value,
                 endpoint,
                 payload,
-            } => self.optimistic_mutate(
-                started,
-                entity_uri,
-                field,
-                value_expr,
-                rollback_value,
-                endpoint,
-                payload,
-            ),
+                also,
+            } => {
+                // TODO(M6-C1): multi-field outbox support (store `also` with
+                // prev values, apply/roll back/re-apply all fields together).
+                if !also.is_empty() {
+                    eprintln!(
+                        "[CanvasEngine] mutate {entity_uri}#{field}: {} `also` update(s) not \
+                         supported yet; applying only the primary field",
+                        also.len()
+                    );
+                }
+                self.optimistic_mutate(
+                    started,
+                    entity_uri,
+                    field,
+                    value_expr,
+                    rollback_value,
+                    endpoint,
+                    payload,
+                )
+            }
             other => {
                 eprintln!(
                     "[CanvasEngine] dispatch: intent not handled by client-core yet: {other:?}"

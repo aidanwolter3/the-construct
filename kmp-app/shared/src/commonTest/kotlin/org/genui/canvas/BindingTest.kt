@@ -95,4 +95,34 @@ class BindingTest {
         assertEquals(listOf("a", "b"), resolveMediaRefs(MediaRefs.Items(listOf("a", "b")), null))
         assertEquals(emptyList(), resolveMediaRefs(MediaRefs.Expr("${'$'}item.missing"), post))
     }
+
+    @Test
+    fun bindIntentKeepsAlsoAndValueTokenUntouched() {
+        val d = '$'
+        val intent = ActionIntent.OptimisticMutate(
+            entityUri = "${d}item.uri",
+            field = "is_liked",
+            valueExpr = "!entity.is_liked",
+            rollbackValue = JsonPrimitive(false),
+            endpoint = "/v1/pixelfed/posts/like",
+            payload = JsonObject(mapOf("id" to JsonPrimitive("${d}item.id"), "liked" to JsonPrimitive("${d}value"))),
+            also = listOf(FieldUpdate("like_count", "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1")),
+        )
+        val bound = assertIs<ActionIntent.OptimisticMutate>(bindIntent(intent, post))
+        assertEquals("pixelfed://posts/101", bound.entityUri)
+        assertEquals("101", bound.payload.jsonObject["id"]!!.jsonPrimitive.content)
+        // "$value" is substituted by the engine with the primary field's new value, not by binding.
+        assertEquals("${d}value", bound.payload.jsonObject["liked"]!!.jsonPrimitive.content)
+        assertEquals(intent.also, bound.also)
+
+        // The dispatch path (CanvasApp) re-encodes the bound intent: `also` must survive.
+        val encoded = CanvasJson.json.parseToJsonElement(CanvasJson.encodeIntent(bound)).jsonObject
+        val also = encoded["also"] as JsonArray
+        assertEquals("like_count", also[0].jsonObject["field"]!!.jsonPrimitive.content)
+        assertEquals(
+            "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1",
+            also[0].jsonObject["value_expr"]!!.jsonPrimitive.content,
+        )
+        assertEquals("${d}value", encoded["payload"]!!.jsonObject["liked"]!!.jsonPrimitive.content)
+    }
 }

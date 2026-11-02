@@ -18,18 +18,22 @@ import org.genui.canvas.UiNode
  * Loads a hydration bundle (`{version, workspace, entities}`, DECISIONS D2) and emits snapshots
  * shaped like the real engine's (D6: workspace JSON = the layout node, entities JSON = the
  * URI-keyed map; `seq` increases with every state change). `OptimisticMutate` intents are applied
- * with the D4 expression subset; other intents are logged and ignored.
+ * with the D4 expression subset (including the M6 ternary); other intents are logged and ignored.
+ * The primary field and every `also` field are evaluated against the PRE-mutation entity and
+ * applied together; a rollback restores all of them.
  *
  * Outbox model (mirrors the M5 sync worker; DECISIONS D8, D13): every mutation is applied locally and queued; while
  * online the queue is flushed at once against an in-memory "server" copy of the entities, so the
  * pending count stays 0. While offline rows stay queued (`pendingActions` = queue size). [setOnline]
  * flips connectivity; going online flushes FIFO. The fake server rejects a `.../decrement` whose
- * result would be below 0 (like crates/server's 422): the row is dropped and the field rolled back to
- * its previous value (or `rollback_value` if that was null/absent), and later queued rows for the same
- * entity field are re-applied on top. No 5xx/retry simulation.
+ * result would be below 0 (like crates/server's 422): the row is dropped and its fields rolled back to
+ * their previous values (the primary field falls back to `rollback_value` if its previous value was
+ * null/absent), and later queued rows for the same entity touching any of those fields are re-applied
+ * on top. No 5xx/retry simulation.
  */
 class FakeEngineBridge(bundleJson: String, online: Boolean = true) : CanvasEngineBridge {
-    private class Row(val intent: ActionIntent.OptimisticMutate, var prevValue: JsonElement?)
+    /** [prevValues]: field -> value before this row was applied (null = absent). */
+    private class Row(val intent: ActionIntent.OptimisticMutate, var prevValues: Map<String, JsonElement?>)
 
     private val workspace: UiNode
     private val entities: MutableMap<String, JsonObject>
@@ -68,15 +72,15 @@ class FakeEngineBridge(bundleJson: String, online: Boolean = true) : CanvasEngin
                 println("[sim] unknown entity ${intent.entityUri}")
                 return
             }
-            val value = try {
-                evalMutation(intent.valueExpr, entity)
+            val updates = try {
+                evalUpdates(intent, entity)
             } catch (e: RuntimeException) { // IllegalArgumentException or ArithmeticException (overflow)
                 println("[sim] ${e.message}; nothing changed")
                 return
             }
-            entities[intent.entityUri] = JsonObject(entity + (intent.field to value))
-            outbox.addLast(Row(intent, entity[intent.field]))
-            println("[sim] ${intent.entityUri}#${intent.field} = $value (queued; ${outbox.size} pending)")
+            entities[intent.entityUri] = JsonObject(entity + updates)
+            outbox.addLast(Row(intent, updates.keys.associateWith { entity[it] }))
+            println("[sim] ${intent.entityUri} ${updates.entries.joinToString { "#${it.key} = ${it.value}" }} (queued; ${outbox.size} pending)")
             if (isOnline) flushLocked()
             seq++
         }
@@ -108,14 +112,15 @@ class FakeEngineBridge(bundleJson: String, online: Boolean = true) : CanvasEngin
             val i = row.intent
             val serverEntity = server[i.entityUri] ?: JsonObject(emptyMap())
             val result = try {
-                evalMutation(i.valueExpr, serverEntity)
+                evalUpdates(i, serverEntity)
             } catch (e: RuntimeException) {
                 null
             }
-            val belowZero = i.endpoint.endsWith("/decrement") && ((result as? JsonPrimitive)?.longOrNull ?: 0L) < 0
+            val belowZero = i.endpoint.endsWith("/decrement") &&
+                ((result?.get(i.field) as? JsonPrimitive)?.longOrNull ?: 0L) < 0
             if (result != null && !belowZero) {
-                server[i.entityUri] = JsonObject(serverEntity + (i.field to result))
-                println("[sim] sent ${i.endpoint}: server ${i.entityUri}#${i.field} = $result")
+                server[i.entityUri] = JsonObject(serverEntity + result)
+                println("[sim] sent ${i.endpoint}: server ${i.entityUri} = $result")
                 continue
             }
             println("[sim] server rejected ${i.endpoint} (${if (belowZero) "count_below_zero" else "bad expression"}); rolling back")
@@ -123,25 +128,39 @@ class FakeEngineBridge(bundleJson: String, online: Boolean = true) : CanvasEngin
         }
     }
 
-    /** Restores the field to [row]'s previous value, then re-applies later rows for the same field. */
+    /**
+     * Restores every field [row] changed to its previous value, then re-applies (re-evaluating all
+     * of their fields) later rows for the same entity that touch any of those fields.
+     */
     private fun rollbackLocked(row: Row) {
         val i = row.intent
-        val restored = row.prevValue?.takeIf { it !is JsonNull } ?: i.rollbackValue
-        var current = restored
+        var entity = entities[i.entityUri] ?: JsonObject(emptyMap())
+        val restored = LinkedHashMap<String, JsonElement?>(row.prevValues)
+        if (restored[i.field] == null || restored[i.field] is JsonNull) restored[i.field] = i.rollbackValue
+        entity = withFields(entity, restored)
+        val touched = restored.keys.toMutableSet()
         for (later in outbox) {
             val li = later.intent
-            if (li.entityUri != i.entityUri || li.field != i.field) continue
-            later.prevValue = current
-            val entity = JsonObject((entities[i.entityUri] ?: JsonObject(emptyMap())) + (i.field to current))
-            current = try {
-                evalMutation(li.valueExpr, entity)
+            if (li.entityUri != i.entityUri) continue
+            val laterFields = listOf(li.field) + li.also.map { it.field }
+            if (laterFields.none { it in touched }) continue
+            val updates = try {
+                evalUpdates(li, entity)
             } catch (e: RuntimeException) {
-                current
+                continue
             }
+            later.prevValues = updates.keys.associateWith { entity[it] }
+            entity = JsonObject(entity + updates)
+            touched += updates.keys
         }
-        val entity = entities[i.entityUri] ?: JsonObject(emptyMap())
-        entities[i.entityUri] = JsonObject(entity + (i.field to current))
-        println("[sim] ${i.entityUri}#${i.field} rolled back to $restored (now $current)")
+        entities[i.entityUri] = entity
+        println("[sim] ${i.entityUri} rolled back to $restored (now ${touched.associateWith { entity[it] }})")
+    }
+
+    private fun withFields(entity: JsonObject, fields: Map<String, JsonElement?>): JsonObject {
+        val m = LinkedHashMap(entity)
+        for ((k, v) in fields) if (v == null) m.remove(k) else m[k] = v
+        return JsonObject(m)
     }
 
     private fun snapshotLocked(): EngineSnapshot = EngineSnapshot(
@@ -159,14 +178,78 @@ class FakeEngineBridge(bundleJson: String, online: Boolean = true) : CanvasEngin
 
     companion object {
         private val FIELD = Regex("""entity\.([A-Za-z0-9_]+)""")
+
+        /**
+         * Evaluates the primary field and every `also` field of [intent] against the same
+         * PRE-mutation [entity]. Returns field -> new value (primary first). Throws like
+         * [evalMutation].
+         */
+        fun evalUpdates(intent: ActionIntent.OptimisticMutate, entity: JsonObject): Map<String, JsonElement> {
+            val out = LinkedHashMap<String, JsonElement>()
+            out[intent.field] = evalMutation(intent.valueExpr, entity)
+            for (u in intent.also) out[u.field] = evalMutation(u.valueExpr, entity)
+            return out
+        }
         private val BINARY = Regex("""entity\.([A-Za-z0-9_]+)\s*([+-])\s*(\d+)""")
 
         /**
          * D4 mutation subset, mirroring crates/client-core/src/expr.rs: a JSON literal,
-         * `entity.f`, `!entity.f` (bool), `entity.f + N` / `entity.f - N` (integer; missing = 0).
-         * Throws [IllegalArgumentException] for anything else.
+         * `entity.f`, `!entity.f` (bool), `entity.f + N` / `entity.f - N` (integer; missing = 0),
+         * and `<cond> ? <expr> : <expr>` with cond `entity.f` / `!entity.f` (a bool field) and
+         * non-ternary branches. Throws [IllegalArgumentException] for anything else.
          */
         fun evalMutation(expr: String, entity: JsonObject): JsonElement {
+            val e = expr.trim()
+            val q = e.indexOf('?')
+            if (q >= 0) {
+                val cond = e.substring(0, q).trim()
+                val negate = cond.startsWith("!")
+                val condField = FIELD.matchEntire(if (negate) cond.substring(1).trim() else cond)?.groupValues?.get(1)
+                if (condField != null) {
+                    val (thenBranch, elseBranch) = splitTopLevelColon(e.substring(q + 1))
+                        ?: throw IllegalArgumentException("unsupported expression: $e")
+                    val b = when (val v = entity[condField]) {
+                        null -> throw IllegalArgumentException("missing field: $condField")
+                        else -> (v as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
+                            ?: throw IllegalArgumentException("field $condField is not a bool")
+                    }
+                    return evalSimple(if (b != negate) thenBranch else elseBranch, entity)
+                }
+            }
+            return evalSimple(e, entity)
+        }
+
+        /** First `:` outside JSON strings/arrays/objects; null if absent, a side is empty, or a nested `?`. */
+        private fun splitTopLevelColon(s: String): Pair<String, String>? {
+            var depth = 0
+            var inStr = false
+            var escaped = false
+            var split = -1
+            var hasQuestion = false
+            for ((i, c) in s.withIndex()) {
+                if (inStr) {
+                    when {
+                        escaped -> escaped = false
+                        c == '\\' -> escaped = true
+                        c == '"' -> inStr = false
+                    }
+                    continue
+                }
+                when (c) {
+                    '"' -> inStr = true
+                    '[', '{' -> depth++
+                    ']', '}' -> depth--
+                    ':' -> if (depth == 0 && split < 0) split = i
+                    '?' -> if (depth == 0) hasQuestion = true
+                }
+            }
+            if (split < 0 || hasQuestion) return null
+            val a = s.substring(0, split).trim()
+            val b = s.substring(split + 1).trim()
+            return if (a.isEmpty() || b.isEmpty()) null else a to b
+        }
+
+        private fun evalSimple(expr: String, entity: JsonObject): JsonElement {
             val e = expr.trim()
             if (e.startsWith("!")) {
                 val field = FIELD.matchEntire(e.substring(1).trim())?.groupValues?.get(1)

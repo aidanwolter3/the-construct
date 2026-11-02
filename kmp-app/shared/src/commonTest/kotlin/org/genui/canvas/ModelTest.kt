@@ -153,4 +153,40 @@ class ModelTest {
         val e = CanvasJson.decodeEntities("""{"core://counters/home":{"id":"home","count":3}}""")
         assertEquals(JsonPrimitive(3), e.getValue("core://counters/home")["count"])
     }
+
+    @Test
+    fun mutateAlsoRoundTripsAndIsOmittedWhenEmpty() {
+        val d = '$'
+        val wire = """{"intent":"action.mutation.optimistic","entity_uri":"pixelfed://posts/1","field":"is_liked",""" +
+            """"value_expr":"!entity.is_liked","rollback_value":false,"endpoint":"/v1/pixelfed/posts/like",""" +
+            """"payload":{"id":"1","liked":"${d}value"},""" +
+            """"also":[{"field":"like_count","value_expr":"entity.is_liked ? entity.like_count - 1 : entity.like_count + 1"}]}"""
+        val intent = assertIs<ActionIntent.OptimisticMutate>(CanvasJson.decodeIntent(wire))
+        assertEquals(
+            listOf(FieldUpdate("like_count", "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1")),
+            intent.also,
+        )
+        // Byte-for-byte re-encode (Kotlin re-encodes intents before dispatching to Rust).
+        assertEquals(wire, CanvasJson.encodeIntent(intent))
+
+        val noAlso = """{"intent":"action.mutation.optimistic","entity_uri":"e","field":"f","value_expr":"0",""" +
+            """"rollback_value":0,"endpoint":"/x","payload":{}}"""
+        val plain = assertIs<ActionIntent.OptimisticMutate>(CanvasJson.decodeIntent(noAlso))
+        assertEquals(emptyList(), plain.also)
+        assertEquals(noAlso, CanvasJson.encodeIntent(plain))
+    }
+
+    @Test
+    fun bundleQueriesDecodeInOrderAndAreOmittedWhenEmpty() {
+        val spec = CanvasJson.decodeBundle(COUNTER_BUNDLE_JSON)
+        assertEquals(emptyMap(), spec.queries)
+        assertTrue(!CanvasJson.encodeBundle(spec).contains("\"queries\""))
+
+        val withQueries = CanvasJson.decodeBundle(
+            """{"version":"1","workspace":{"type":"core://Text","value_expr":"x","style":"Body"},""" +
+                """"queries":{"timeline:home":["p://3","p://1","p://2"]}}"""
+        )
+        assertEquals(listOf("p://3", "p://1", "p://2"), withQueries.queries["timeline:home"])
+        assertEquals(withQueries, CanvasJson.decodeBundle(CanvasJson.encodeBundle(withQueries)))
+    }
 }

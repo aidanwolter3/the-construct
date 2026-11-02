@@ -94,6 +94,27 @@ class SimScriptTest {
     }
 
     @Test
+    fun mutationTernary() {
+        val liked = JsonObject(mapOf("is_liked" to JsonPrimitive(true), "like_count" to JsonPrimitive(5), "n" to JsonPrimitive(1)))
+        val unliked = JsonObject(mapOf("is_liked" to JsonPrimitive(false), "like_count" to JsonPrimitive(5)))
+        val expr = "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1"
+        assertEquals(JsonPrimitive(4), FakeEngineBridge.evalMutation(expr, liked))
+        assertEquals(JsonPrimitive(6), FakeEngineBridge.evalMutation(expr, unliked))
+        assertEquals(JsonPrimitive("b"), FakeEngineBridge.evalMutation("!entity.is_liked ? \"a\" : \"b\"", liked))
+        assertEquals(JsonPrimitive("x:y?"), FakeEngineBridge.evalMutation("entity.is_liked ? {\"a\":1} : \"x:y?\"", unliked))
+        assertEquals(JsonPrimitive(false), FakeEngineBridge.evalMutation("entity.is_liked ? !entity.is_liked : 0", liked))
+        assertEquals(JsonPrimitive("a?b:c"), FakeEngineBridge.evalMutation("\"a?b:c\"", liked))
+        // Same error cases as expr.rs `ternary_errors`.
+        for (bad in listOf(
+            "entity.missing ? 1 : 2", "!entity.missing ? 1 : 2", "entity.n ? 1 : 2", "entity.is_liked ? 1",
+            "entity.is_liked ? : 2", "entity.is_liked ? 1 :", "entity.is_liked ? entity.is_liked ? 1 : 2 : 3",
+            "entity.is_liked ? 1 : entity.is_liked ? 2 : 3", "entity.is_liked ? 1 * 2 : 3", "true ? 1 : 2",
+        )) {
+            assertFailsWith<IllegalArgumentException>(bad) { FakeEngineBridge.evalMutation(bad, liked) }
+        }
+    }
+
+    @Test
     fun unknownCommandWhoseLowercaseIsLongerIsAParseError() {
         assertFailsWith<ScriptParseException> { parseScript("İ") }
     }

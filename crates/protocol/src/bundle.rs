@@ -19,6 +19,10 @@ pub struct WorkspaceSpec {
     /// Entities keyed by URI (e.g. `"pixelfed://posts/101"`).
     #[serde(default)]
     pub entities: BTreeMap<String, EntityRecord>,
+    /// Resolved queries: `query_key` -> ordered entity URIs. A `FeedList`
+    /// renders `queries[query_key]` in order (docs/DECISIONS.md D7).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub queries: BTreeMap<String, Vec<String>>,
 }
 
 /// A schemaless entity: an arbitrary JSON object whose fields round-trip

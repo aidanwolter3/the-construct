@@ -31,6 +31,8 @@ data class WorkspaceSpec(
     val version: String,
     val workspace: UiNode,
     val entities: Map<String, JsonObject> = emptyMap(),
+    /** query_key -> ordered entity URIs (M6); omitted when empty, like serde skip_serializing_if. */
+    val queries: Map<String, List<String>> = emptyMap(),
 )
 
 @Serializable
@@ -143,6 +145,11 @@ sealed class ActionIntent {
         @SerialName("rollback_value") val rollbackValue: JsonElement,
         val endpoint: String,
         val payload: JsonElement,
+        /**
+         * Extra fields of the same entity, evaluated against the PRE-mutation entity and applied
+         * (and rolled back) together with [field]. Omitted when empty (encodeDefaults = false).
+         */
+        val also: List<FieldUpdate> = emptyList(),
     ) : ActionIntent()
 
     @Serializable
@@ -158,6 +165,13 @@ sealed class ActionIntent {
     /** An intent whose `intent` tag this client does not know. [raw] is the full original object. */
     data class Unknown(val intent: String, val raw: JsonObject) : ActionIntent()
 }
+
+/** One extra field update in [ActionIntent.OptimisticMutate.also]. */
+@Serializable
+data class FieldUpdate(
+    val field: String,
+    @SerialName("value_expr") val valueExpr: String,
+)
 
 // ---------------------------------------------------------------------------
 // MediaRefs (DECISIONS D1: protocol::ListBinding, untagged)

@@ -1,6 +1,6 @@
 use protocol::{
-    ActionIntent, EntityRecord, ListBinding, Orientation, PresentationMode, SlotSpec, TextStyle,
-    UiNode, WorkspaceSpec,
+    ActionIntent, EntityRecord, FieldUpdate, ListBinding, Orientation, PresentationMode, SlotSpec,
+    TextStyle, UiNode, WorkspaceSpec,
 };
 use serde_json::{Value, json};
 
@@ -15,6 +15,7 @@ fn like_intent() -> ActionIntent {
         rollback_value: json!(false),
         endpoint: "/api/v1/posts/like".into(),
         payload: json!({ "id": "$item.id" }),
+        also: vec![],
     }
 }
 
@@ -347,6 +348,7 @@ fn every_action_intent_round_trips() {
                 rollback_value: json!(0),
                 endpoint: "/v1/counters/home".into(),
                 payload: json!({ "op": "increment" }),
+                also: vec![],
             },
             json!({
                 "intent": "action.mutation.optimistic",
@@ -356,6 +358,34 @@ fn every_action_intent_round_trips() {
                 "rollback_value": 0,
                 "endpoint": "/v1/counters/home",
                 "payload": { "op": "increment" }
+            }),
+        ),
+        (
+            ActionIntent::OptimisticMutate {
+                entity_uri: "$item.uri".into(),
+                field: "is_liked".into(),
+                value_expr: "!entity.is_liked".into(),
+                rollback_value: json!(false),
+                endpoint: "/v1/pixelfed/posts/like".into(),
+                payload: json!({ "id": "$item.id", "liked": "$value" }),
+                also: vec![FieldUpdate {
+                    field: "like_count".into(),
+                    value_expr: "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1"
+                        .into(),
+                }],
+            },
+            json!({
+                "intent": "action.mutation.optimistic",
+                "entity_uri": "$item.uri",
+                "field": "is_liked",
+                "value_expr": "!entity.is_liked",
+                "rollback_value": false,
+                "endpoint": "/v1/pixelfed/posts/like",
+                "payload": { "id": "$item.id", "liked": "$value" },
+                "also": [{
+                    "field": "like_count",
+                    "value_expr": "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1"
+                }]
             }),
         ),
         (
@@ -444,4 +474,54 @@ fn list_binding_accessors() {
     let l = ListBinding::from(vec!["a".to_string()]);
     assert_eq!(l.as_list(), Some(&["a".to_string()][..]));
     assert_eq!(l.as_expr(), None);
+}
+
+#[test]
+fn empty_also_is_omitted_and_defaults() {
+    let wire = r#"{"intent":"action.mutation.optimistic","entity_uri":"e","field":"f","value_expr":"0","rollback_value":0,"endpoint":"/x","payload":{}}"#;
+    let parsed: ActionIntent = serde_json::from_str(wire).unwrap();
+    let ActionIntent::OptimisticMutate { also, .. } = &parsed else {
+        panic!("not a mutate");
+    };
+    assert!(also.is_empty());
+    // Byte-for-byte: no `"also":[]` appears.
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
+    // An explicit empty list also parses (and is dropped on re-encode).
+    let explicit = wire.replace(r#""payload":{}"#, r#""payload":{},"also":[]"#);
+    let p2: ActionIntent = serde_json::from_str(&explicit).unwrap();
+    assert_eq!(p2, parsed);
+}
+
+#[test]
+fn bundle_queries_round_trip() {
+    // Without queries: field defaults to empty and is not serialized.
+    let without = r#"{"version":"1.0.0","workspace":{"type":"core://Text","value_expr":"hi","style":"Body"},"entities":{}}"#;
+    let spec: WorkspaceSpec = serde_json::from_str(without).unwrap();
+    assert!(spec.queries.is_empty());
+    assert_eq!(serde_json::to_string(&spec).unwrap(), without);
+
+    // With queries: order within each list is preserved.
+    let with = r#"{"version":"1.0.0","workspace":{"type":"core://Text","value_expr":"hi","style":"Body"},"entities":{},"queries":{"timeline:home":["pixelfed://posts/3","pixelfed://posts/1","pixelfed://posts/2"]}}"#;
+    let spec: WorkspaceSpec = serde_json::from_str(with).unwrap();
+    assert_eq!(
+        spec.queries["timeline:home"],
+        [
+            "pixelfed://posts/3",
+            "pixelfed://posts/1",
+            "pixelfed://posts/2"
+        ]
+    );
+    assert_eq!(serde_json::to_string(&spec).unwrap(), with);
+    let back: WorkspaceSpec = serde_json::from_str(&serde_json::to_string(&spec).unwrap()).unwrap();
+    assert_eq!(back, spec);
+}
+
+#[test]
+fn fixtures_have_no_new_fields() {
+    for fixture in [PIXELFED_FIXTURE, COUNTER_FIXTURE] {
+        let bundle: WorkspaceSpec = serde_json::from_str(fixture).unwrap();
+        assert!(bundle.queries.is_empty());
+        let s = serde_json::to_string(&bundle).unwrap();
+        assert!(!s.contains("\"queries\"") && !s.contains("\"also\""));
+    }
 }

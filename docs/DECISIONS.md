@@ -35,8 +35,13 @@ Until a real CEL evaluator exists, a small expression subset stands in:
 
 - **Mutation `value_expr`**, evaluated in client-core against the target entity's current
   payload: a JSON literal (`0`, `true`, `"x"`); `entity.<field>`; `!entity.<field>` (boolean
-  negation); `entity.<field> + N` and `entity.<field> - N` (integer arithmetic). Anything else
-  logs a warning and changes nothing.
+  negation); `entity.<field> + N` and `entity.<field> - N` (integer arithmetic). Since M6 also the
+  ternary `<cond> ? <expr> : <expr>`, where `<cond>` is `entity.<field>` or `!entity.<field>` and
+  each branch is one of the forms above (no nesting), e.g.
+  `entity.is_liked ? entity.like_count - 1 : entity.like_count + 1`. The cond field must be a JSON
+  bool: a missing or non-bool field is an error (as for `!entity.<field>`), not "false". Anything
+  else logs a warning and changes nothing. The desktop simulator's `FakeEngineBridge.evalMutation`
+  mirrors this subset.
 - **Text `value_expr` interpolation**, done by the renderer: each `${<entity_uri>#<field>}` is
   replaced by that entity field's value, or by an empty string when it is missing. Inside an
   item template, an expression that is exactly `entity.<field>` or `$item.<field>` resolves
@@ -79,6 +84,11 @@ at `<storage>/workspace_<id>.json`.
 
 Until query resolution exists, `FeedList` ignores `query_key`. It renders `item_template` once for each entity
 whose URI contains `/posts/`, ordered by `created_at` (newest first), and binds the item's URI as `uri`.
+
+Resolved in M6 by `WorkspaceSpec.queries` (`query_key` -> ordered entity URIs; omitted from the JSON when empty, so
+older bundles are unchanged): a `FeedList` renders `queries[query_key]` in order and falls back to the behavior
+above when the key is absent. The protocol field (Rust and the Kotlin `WorkspaceSpec`) exists now; the engine
+snapshot (`queries_json`) and the renderer change land in later M6 units.
 
 ## D8: Simulation mode harness
 
@@ -279,3 +289,25 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
   the old desired state; local and server state can then differ until the next fetch.
 - **Config:** `EngineConfig { poll_interval, backoff_base, backoff_cap }` via
   `CanvasEngine::init_with_config` (Rust only; `init` uses the defaults; FFI unchanged). Tests shorten them.
+
+## D15: `OptimisticMutate.also` (multi-field optimistic updates)
+
+A like must flip `is_liked` and adjust `like_count` together. `ActionIntent::OptimisticMutate` gains
+`also: Vec<FieldUpdate>` (`FieldUpdate { field, value_expr }`), default empty and omitted from the JSON when empty,
+so existing intents round-trip byte for byte. Rules: the primary `value_expr` and every `also` expression are
+evaluated against the PRE-mutation entity, then all are applied together; a rollback restores every field; a
+re-apply re-evaluates all of them. `"$value"` in the payload is still the primary field's new value. Kotlin
+mirrors `also` in `Model.kt` and keeps it through item binding and the re-encode before dispatch; the desktop
+simulator's `FakeEngineBridge` implements the full semantics. client-core (as of M6-P) parses `also` but applies
+only the primary field and logs a warning when `also` is non-empty; storing `also` in the outbox comes in M6-C1.
+
+## D16: Fake Pixelfed upstream (`crates/fake-pixelfed`)
+
+No Pixelfed account exists, so M6 runs against a local Mastodon-compatible fake serving `fixtures/pixelfed/`.
+Fixture JSON carries a `{{BASE}}` placeholder replaced with `FAKE_PIXELFED_PUBLIC_URL` at load time, so the same
+files work for pod->fake (127.0.0.1) and emulator (10.0.2.2) URLs. State (apps, codes, tokens, favourites,
+bookmarks) is in memory and resets on restart. The token endpoint really checks S256 PKCE, the client secret and
+redirect_uri; a code is consumed by any exchange attempt (also a failed one). Acting on a reblog acts on the
+reblogged status (Mastodon behaviour); favourite/bookmark are idempotent. Media are generated PNGs (solid colour +
+big digit/letter) so screenshots show which carousel page is visible; their `meta.original` sizes are the
+advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a valid 1x1 (DC-only) hash.

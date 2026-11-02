@@ -26,6 +26,11 @@ pub enum ActionIntent {
         rollback_value: Value,
         endpoint: String,
         payload: Value,
+        /// Extra fields of the same entity updated together with `field`.
+        /// Every `value_expr` here (and the primary one) is evaluated against
+        /// the PRE-mutation entity; all are applied and rolled back together.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        also: Vec<FieldUpdate>,
     },
 
     #[serde(rename = "action.auth.login")]
@@ -33,6 +38,14 @@ pub enum ActionIntent {
 
     #[serde(rename = "action.agent.prompt")]
     PromptAgent { prompt_text: String },
+}
+
+/// One extra field update carried by `ActionIntent::OptimisticMutate.also`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct FieldUpdate {
+    pub field: String,
+    /// Same expression subset as the primary `value_expr`.
+    pub value_expr: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]

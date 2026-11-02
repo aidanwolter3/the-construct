@@ -14,7 +14,9 @@ crates/protocol      UiNode / ActionIntent / WorkspaceSpec (hydration bundle) / 
 crates/server        Axum server: GET /v1/workspaces/{home,pixelfed_demo}, persistent counters (SQLite)
 crates/client-core   CanvasEngine: fetches the workspace, holds state, applies optimistic mutations (SQLite cache + outbox)
 crates/client-ffi    UniFFI bridge (EngineHandle, FfiStateSnapshot, StateObserver) + uniffi-bindgen bin
-fixtures/            counter_home_bundle.json, pixelfed_home_bundle.json (DESIGN.md §2.2C)
+crates/fake-pixelfed local fake Pixelfed (Mastodon API + OAuth PKCE) upstream for development and tests
+fixtures/            counter_home_bundle.json, pixelfed_home_bundle.json (DESIGN.md §2.2C);
+                     pixelfed/ (Mastodon API JSON + media served by fake-pixelfed)
 scripts/build_ffi.sh builds libclient_ffi.dylib and regenerates the Kotlin bindings
 scripts/build_android.sh  cross-compiles libclient_ffi.so for Android (cargo-ndk)
 scripts/android_smoke.sh  installs and launches the Android app on an emulator, checks it renders (Tests)
@@ -104,6 +106,42 @@ decrementing below 0) is deleted and its field rolled back, with later queued cl
 re-fetched workspace has the still-pending clicks re-applied, so they never visibly disappear. The engine logs
 each attempt, e.g. `[CanvasEngine] outbox #3 POST http://127.0.0.1:8080/v1/counters/home/increment -> 200,
 deleted (0 pending)`.
+
+## Fake Pixelfed upstream
+
+`crates/fake-pixelfed` is a local Mastodon-compatible stand-in for a Pixelfed instance (no real account is
+needed; docs/DECISIONS.md D16). It serves `fixtures/pixelfed/` with in-memory state that resets on restart.
+
+```bash
+cargo run -p fake-pixelfed                       # listens on 127.0.0.1:8081
+curl -s -H 'Authorization: Bearer dev' http://127.0.0.1:8081/api/v1/timelines/home | jq '.[].id'
+                                                 # (started with FAKE_PIXELFED_TOKEN=dev)
+```
+
+Environment:
+
+- `FAKE_PIXELFED_ADDR` (default `127.0.0.1:8081`).
+- `FAKE_PIXELFED_PUBLIC_URL` (default `http://<bound addr>`): every `{{BASE}}` in the fixture JSON is replaced
+  with it, so emitted media/profile/status URLs point at it. Use `http://10.0.2.2:8081` when the Android
+  emulator must load them directly.
+- `FAKE_PIXELFED_AUTO_APPROVE=1`: `GET /oauth/authorize` redirects straight back with a code (same as adding
+  `auto=1` to the query); otherwise it shows an HTML page with an **Authorize** button.
+- `FAKE_PIXELFED_TOKEN=<tok>`: a pre-seeded valid access token, to skip OAuth in QA.
+- `FAKE_PIXELFED_FIXTURES`: fixture directory (default `fixtures/pixelfed`).
+
+Endpoints: `POST /api/v1/apps` and `POST /oauth/token` (form-urlencoded or JSON bodies), `GET|POST
+/oauth/authorize` (authorization code + PKCE; only `S256` accepted, the verifier is checked, codes are single-use
+and expire after 10 minutes), `GET /api/v1/accounts/verify_credentials`, `GET /api/v1/timelines/home` (`limit`,
+`max_id`, `Link: rel="next"`), `POST /api/v1/statuses/{id}/{favourite,unfavourite,bookmark,unbookmark}`
+(idempotent, returns the updated status; a reblog id acts on the reblogged status; unknown id -> 404
+`{"error":"Record not found"}`) and media under `/storage/<file>`. The `/api/v1` endpoints other than apps need
+`Authorization: Bearer <token>`, else 401 `{"error":"The access token is invalid"}`. Each request, app
+registration, code/token issuance and favourite/bookmark change is logged at info.
+
+The timeline has five entries: a 3-image carousel, a reblog of a single-image post, a landscape single image
+(already favourited, no alt text), a text-only post, and a content-warning (sensitive) post with a portrait
+image. Media are small generated PNGs with a big digit (1-6) or avatar letter so screenshots show which image is
+visible.
 
 ## Simulation mode
 
