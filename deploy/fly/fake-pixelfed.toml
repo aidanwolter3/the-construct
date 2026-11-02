@@ -1,0 +1,26 @@
+# Fake Pixelfed upstream for the staging pod. Stateless (in-memory, fixtures compiled in), so it
+# may stop when idle; the Fly proxy starts it again on the next request (state resets, which is fine).
+# From the repo root:
+#   flyctl deploy . --config deploy/fly/fake-pixelfed.toml --dockerfile crates/fake-pixelfed/Dockerfile --remote-only
+
+app = "the-construct-fake-pixelfed"
+primary_region = "dfw"
+
+[env]
+  FAKE_PIXELFED_ADDR = "0.0.0.0:8081"
+  # Every media/profile/status URL in the fixtures points here (the pod's media proxy fetches them).
+  FAKE_PIXELFED_PUBLIC_URL = "https://the-construct-fake-pixelfed.fly.dev"
+  # Admin/fault endpoints stay off on the public internet.
+  FAKE_PIXELFED_ADMIN = "0"
+  RUST_LOG = "info"
+
+[http_service]
+  internal_port = 8081
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
