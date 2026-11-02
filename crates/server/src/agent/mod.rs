@@ -168,7 +168,9 @@ pub fn apply_and_validate(layout: &Value, ops: &[Value]) -> Result<UiNode, Strin
     }
     let patch_size = serde_json::to_vec(ops).map_or(usize::MAX, |b| b.len());
     if patch_size > MAX_PATCH_BYTES {
-        return Err(format!("patch is {patch_size} bytes (max {MAX_PATCH_BYTES})"));
+        return Err(format!(
+            "patch is {patch_size} bytes (max {MAX_PATCH_BYTES})"
+        ));
     }
     let patch: json_patch::Patch = serde_json::from_value(Value::Array(ops.to_vec()))
         .map_err(|e| format!("not an RFC 6902 patch: {e}"))?;
@@ -420,8 +422,8 @@ async fn modify_layout(
         }
     };
     let started = Instant::now();
-    let (base_version, layout) = match layouts::latest_async(&state, workspace_id).await {
-        Ok(Some(x)) => x,
+    let (base, layout) = match layouts::active_async(&state, workspace_id).await {
+        Ok(Some(x)) => (x.active, x.layout),
         Ok(None) => {
             return json_error(
                 StatusCode::NOT_FOUND,
@@ -489,12 +491,16 @@ async fn modify_layout(
     let patch = Value::Array(generated.ops.clone());
     let op_count = generated.ops.len();
 
-    let respond = |version: i64, workspace: &UiNode, unchanged: bool| {
+    // `layout_version` is the workspace revision (the client's one number per
+    // workspace, D24); `layout_id` / `layout_id_version` name the layout.
+    let respond = |active: &layouts::ActiveLayout, workspace: &UiNode, unchanged: bool| {
         let mut body = json!({
             "version": crate::pixelfed::layout::BUNDLE_VERSION,
-            "workspace": workspace,
+            "workspace": layouts::node_value(workspace),
             "entities": {},
-            "layout_version": version,
+            "layout_version": active.revision,
+            "layout_id": active.layout_id,
+            "layout_id_version": active.layout_version,
             "provider": provider_name,
             "model": model,
             "patch": patch,
@@ -505,7 +511,7 @@ async fn modify_layout(
         if unchanged {
             body["unchanged"] = json!(true);
         }
-        ([layouts::version_header(version)], Json(body)).into_response()
+        (layouts::served_headers(active), Json(body)).into_response()
     };
 
     if generated.ops.is_empty() {
@@ -516,27 +522,29 @@ async fn modify_layout(
             0,
             generated.explanation.as_deref().unwrap_or_default(),
         );
-        return respond(base_version, &layout, true);
+        return respond(&base, &layout, true);
     }
 
     // Apply to the version the patch was made for. If another version was
-    // committed meanwhile (a concurrent prompt or a rollback during a slow
-    // provider call), re-apply the same patch on the new latest instead of
-    // overwriting that change with a layout derived from the old one.
-    let (mut base_version, mut layout, mut layout_json) = (base_version, layout, layout_json);
-    let first_base = base_version;
+    // committed meanwhile (a concurrent prompt, a rollback/restore, or a switch
+    // of the active layout during a slow provider call), re-apply the same
+    // patch on the new active latest instead of overwriting that change with a
+    // layout derived from the old one.
+    let (mut base, mut layout, mut layout_json) = (base, layout, layout_json);
+    let first_base = base.revision;
     let mut attempt = 0;
     loop {
         let new_layout = match apply_and_validate(&layout_json, &generated.ops) {
             Ok(node) => node,
             Err(detail) => {
                 log("invalid_patch", op_count, &detail);
-                let detail = if base_version == first_base {
+                let detail = if base.revision == first_base {
                     detail
                 } else {
                     format!(
-                        "{detail} (the layout changed to v{base_version} while the patch for \
-                         v{first_base} was generated)"
+                        "{detail} (the layout changed to v{} while the patch for \
+                         v{first_base} was generated)",
+                        base.revision
                     )
                 };
                 return json_error(
@@ -548,29 +556,24 @@ async fn modify_layout(
         };
         if new_layout == layout {
             log("unchanged", op_count, "patch is a no-op");
-            return respond(base_version, &layout, true);
+            return respond(&base, &layout, true);
         }
         let meta = layouts::LayoutMeta {
             prompt: Some(prompt.to_owned()),
             provider: Some(provider_name.clone()),
             patch_json: Some(patch.to_string()),
         };
-        match layouts::commit_on_and_publish(
-            &state,
-            workspace_id,
-            base_version,
-            new_layout.clone(),
-            meta,
-        )
-        .await
-        {
-            Ok(Some(version)) => {
+        match layouts::commit_on_and_publish(&state, &base, new_layout.clone(), meta).await {
+            Ok(Some(active)) => {
                 log(
                     "committed",
                     op_count,
-                    &format!("v{base_version} -> v{version}"),
+                    &format!(
+                        "v{} -> v{} ({} v{})",
+                        base.revision, active.revision, active.layout_id, active.layout_version
+                    ),
                 );
-                return respond(version, &new_layout, false);
+                return respond(&active, &new_layout, false);
             }
             Ok(None) if attempt < MAX_COMMIT_RETRIES => attempt += 1,
             Ok(None) => {
@@ -586,8 +589,8 @@ async fn modify_layout(
                 return e.into_response();
             }
         }
-        (base_version, layout) = match layouts::latest_async(&state, workspace_id).await {
-            Ok(Some(x)) => x,
+        (base, layout) = match layouts::active_async(&state, workspace_id).await {
+            Ok(Some(x)) => (x.active, x.layout),
             Ok(None) => return internal("the workspace lost its versions"),
             Err(e) => return e.into_response(),
         };

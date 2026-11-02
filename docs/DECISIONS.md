@@ -574,7 +574,7 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 ## D22: Versioned layouts and the SSE push channel (`server::layouts`)
 
 - **Storage:** migration v5 `layout_versions(id, workspace_id, version, json, prompt, provider, patch_json,
-  created_at, UNIQUE(workspace_id, version))`. Only the workspace root `UiNode` is versioned; entities still come
+  created_at, UNIQUE(workspace_id, version))`. Replaced by the v6 catalog (D26); the rules below still hold per layout. Only the workspace root `UiNode` is versioned; entities still come
   from fixtures / the upstream. Versioned workspaces: `home`, `pixelfed_demo`, `pixelfed_home` (signed-in feed
   layout only; the signed-out screen is a different screen and carries no version header). Version 1 is the
   built-in layout, inserted lazily (`INSERT ... WHERE NOT EXISTS`) on first read or commit. Appends compute
@@ -718,3 +718,78 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 - **Registry:** `schemars::JsonSchema` derived on the protocol AST/intent types behind protocol's `schema` feature
   (the server enables it); `agent::registry()` = `schema_for!(UiNode)` (intents under `$defs`). A new variant must
   derive the schema to compile, and a test checks every variant tag is in the registry.
+
+## D26: Layout catalog, per-layout history and the workspace revision (`server::layouts`, migration v6)
+
+- **Model:** a workspace has several layouts (`layouts(id, workspace_id, title, description, preview_hint, builtin,
+  created_at)`, ids `<workspace>.<name>`, 1..=128 chars of `[A-Za-z0-9_.-]`), each with its own append-only,
+  gapless history `layout_versions(layout_id, version, hash, source, prompt, provider, patch_json, created_at)`;
+  `source` is `seed` | `agent` | `rollback` | `restore` | `manual`. Exactly one layout per workspace is ACTIVE: the
+  latest row of `workspace_revisions(workspace_id, revision, layout_id, layout_version, reason, created_at)`. Every
+  visible change appends a revision in the same transaction as its version: an agent commit to the active layout,
+  a restore/rollback of the active layout, an activation. Nothing is updated or deleted.
+- **Client contract kept (D24):** `X-Canvas-Layout-Version` and the SSE `version` are the workspace REVISION, so
+  client-core still sees one monotonic number per workspace. Additive: headers `X-Canvas-Layout-Id` and
+  `X-Canvas-Layout-Id-Version` (the layout's own version) on the workspace GET, rollback and agent responses; SSE
+  data `{"workspace_id","version","layout_id","layout_version"}`; agent response `layout_id`, `layout_id_version`
+  (its `layout_version` stays the revision). In the catalog endpoints `version` / `layout_version` always mean the
+  per-layout version and `revision` the workspace revision.
+- **Built-ins:** `fixtures/layouts/*.json` (`include_str!`) plus the existing defaults: `pixelfed_home` and
+  `pixelfed_demo`: `classic` (the built-in feed, default), `editorial` (media first at 0.8 portrait, then the
+  author, then the caption; no action bar), `compact` (wide 1.91 media inset by a 24 dp Container, Caption-style
+  caption), `minimal` (no action bar: an empty Container); `home`: `counter` (default), `big_counter` (count first,
+  buttons, small title). The PostCard renders its slots in a fixed order, so variants move nodes between slots, as
+  the rules provider does. A test validates every seed with the agent validator against its workspace's default
+  layout (same root id, slots, bounds, no new restricted intents) and checks it is canonical and distinct.
+- **Seeding:** once per `Store` (an atomic flag), lazily on first catalog/workspace use, in one transaction:
+  metadata upserted, version 1 (`seed`) only for a layout without versions, revision 1 on the default layout only
+  for a workspace without revisions. So new built-ins reach existing databases, and fixture changes never rewrite
+  history (as in D22, delete `server.db` to reseed).
+- **Migration v6 (Rust step; `MIGRATIONS` now holds SQL or Rust steps):** the v5 table is renamed, each row (W, N)
+  becomes version N of W's default layout (`home.counter`, `<ws>.classic`) with its prompt, provider, patch and
+  time (source: `rollback` for provider rollback, `seed` for an unannotated v1, else `agent`/`manual`) and revision
+  N of W; then the v5 table is dropped. The revision therefore continues at the old max version and a connected
+  client's number never goes backwards. Tested on a database built with migrations 1..=5 and by hand on a db
+  written by the previous binary.
+- **Storage:** specs are content-addressed: `layout_blobs(hash = SHA-256 hex of the canonical JSON (the `UiNode`
+  serialization), encoding, raw_len, data)`, zstd level 19 when smaller (else raw); a restore, rollback, activation
+  with a version, or re-seed of identical content adds only a version row and maybe a revision row. Patches stay
+  TEXT (191 -> 132 B with zstd: not worth it). Measured (`cargo run -p server --release --example layout_storage
+  [N]`, VACUUM'd file, 1k and 10k runs agree):
+
+  | | raw JSON | stored | per distinct edit | per restore | 1k versions | 100k versions |
+  |---|---:|---:|---:|---:|---:|---:|
+  | v5 (raw row per version) | ~1.0-1.5 KB | same | 2077 B | 2077 B | 2.0 MB | 198 MB |
+  | dedupe only | | same | | | 1.3 MB | 124 MB |
+  | v6 (dedupe + zstd-19) | ~1.0-1.5 KB | 340-565 B | 1155 B | 184 B | 0.65 MB | 64 MB |
+
+  (1k/100k = half distinct edits, half restores; all-distinct edits: 1.1 MB / 110 MB.) zstd-19 costs ~0.17 ms per
+  commit. A zstd dictionary built from the built-ins would shrink an edited layout blob from 616 to ~101 B, but it
+  would freeze the dictionary into the storage format; deferred. Every version is kept: no
+  `CANVAS_LAYOUT_RETENTION` (deleting versions would break gapless numbering, restore targets and history, and the
+  numbers above do not call for it).
+- **Endpoints:** `GET /v1/layouts[?workspace_id=]` -> `{"layouts":[{id, workspace_id, title, description,
+  preview_hint, builtin, current_version, created_at, updated_at, active, active_version?}], "workspaces":
+  [{workspace_id, revision, layout_id, layout_version}]}` (+ `workspace_id`, `workspace_revision` when filtered);
+  `GET /v1/layouts/:id` (same object + `workspace_revision`); `GET /v1/layouts/:id/versions[?limit=1..1000
+  (100)&before=V]` -> `{layout_id, workspace_id, current_version, versions:[{version, created_at, source, prompt?,
+  provider?, hash, bytes}], next_before?}` newest first; `GET /v1/layouts/:id/versions/:n` -> metadata + `layout`;
+  `POST /v1/layouts/:id/activate` `{}` | `{"version": n}` (restore n first unless equal to the newest content) ->
+  `{workspace_id, revision, layout_id, layout_version, unchanged, restored_version?}`; `POST
+  /v1/layouts/:id/restore {"version": n}` -> `{layout_id, workspace_id, version, restored_from, unchanged, active,
+  revision?}` (content equal to the newest -> `unchanged`, nothing appended; a restore is itself undoable). Changes
+  to the active layout broadcast on the SSE channel; an inactive layout's restore does not. Errors: 400
+  `invalid_layout_id` / `invalid_request`, 404 `layout_not_found` / `version_not_found` / `workspace_not_found`.
+- **Legacy endpoints:** `GET /v1/workspaces/:id/versions` lists the ACTIVE layout's versions (same shape as D22);
+  `POST /v1/workspaces/:id/rollback` appends to the active layout (always appends, as before) and answers `version`
+  = the layout's new version plus `revision` and `layout_id`. On a fresh database revision and version coincide
+  until the first switch, so the existing tests kept their numbers.
+- **Agent:** commits to the active layout with compare-and-append on `(layout_id, layout_version)`; a concurrent
+  edit, restore or SWITCH makes it re-apply the same patch on the new active layout's latest (up to 3 more times,
+  then 409), so a switch during a slow provider call is not reverted and the edit lands on what the user now sees.
+- **Auth:** reads follow the workspace GET per layout's workspace: `home`/`pixelfed_demo` anonymous, `pixelfed_home`
+  needs a valid session (no bearer -> 401 with the agent detail, stale bearer -> 401 like the GET) unless
+  `CANVAS_AGENT_OPEN=1`; the unfiltered list omits `pixelfed_home` for anonymous callers (stale bearer -> 401).
+  Writes (activate, restore) need a session unless `CANVAS_AGENT_OPEN=1` (D22).
+- **f32 in responses:** layouts are turned into JSON values through their text form (`layouts::node_value`), since
+  `serde_json::to_value` widens `aspect_ratio` 0.8 to 0.800000011920929.

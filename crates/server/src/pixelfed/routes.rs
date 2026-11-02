@@ -635,14 +635,14 @@ pub async fn home_workspace(state: &Arc<AppState>, headers: &HeaderMap) -> Respo
         entities = timeline.entities.len(),
         "pixelfed_home served"
     );
-    let (version, node) = match crate::layouts::latest_async(state, layout::WORKSPACE_ID).await {
+    let served = match crate::layouts::active_async(state, layout::WORKSPACE_ID).await {
         Ok(Some(v)) => v,
         Ok(None) => unreachable!("pixelfed_home is a versioned workspace"),
         Err(e) => return e.into_response(),
     };
     let mut spec = layout::home_feed(timeline.entities, timeline.order);
-    spec.workspace = node;
-    ([crate::layouts::version_header(version)], Json(spec)).into_response()
+    spec.workspace = served.layout;
+    (crate::layouts::served_headers(&served.active), Json(spec)).into_response()
 }
 
 // ---------- actions ----------

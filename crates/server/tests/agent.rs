@@ -364,7 +364,8 @@ async fn successful_prompt_broadcasts_a_layout_event() {
     let msg = |v: i64| {
         format!(
             "event: layout\ndata: {}",
-            json!({ "workspace_id": "pixelfed_home", "version": v })
+            json!({ "workspace_id": "pixelfed_home", "version": v,
+                    "layout_id": "pixelfed_home.classic", "layout_version": v })
         )
     };
     assert_eq!(next().await, msg(1));
@@ -397,7 +398,10 @@ async fn auth_and_request_validation() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     let b: Value = resp.json().await.unwrap();
-    assert!(b["detail"].as_str().unwrap().contains("CANVAS_AGENT_OPEN"), "{b}");
+    assert!(
+        b["detail"].as_str().unwrap().contains("CANVAS_AGENT_OPEN"),
+        "{b}"
+    );
     assert_eq!(version_count(&pod, "pixelfed_home"), 0);
     let (s, _, b) = prompt_raw(&pod, json!({ "prompt": DESIGN_PROMPT }), Some("tok")).await;
     assert_eq!(s, StatusCode::OK, "{b}");
@@ -430,7 +434,10 @@ async fn malformed_workspace_ids_are_400_with_a_truncated_echo() {
     let check = |s: StatusCode, b: &Value, what: &str| {
         assert_eq!(s, StatusCode::BAD_REQUEST, "{what}: {b}");
         assert_eq!(b["error"], "invalid_workspace_id", "{what}");
-        assert!(b["id"].as_str().unwrap().len() <= 67, "{what}: echo is truncated");
+        assert!(
+            b["id"].as_str().unwrap().len() <= 67,
+            "{what}: echo is truncated"
+        );
     };
     let (s, b) = prompt_ws(&pod, &huge, "hide captions").await;
     check(s, &b, "agent");
@@ -970,7 +977,10 @@ fn validation_bounds_depth_size_growth_and_values() {
         .map(|i| json!({ "op": "copy", "from": "", "path": format!("/x{i}") }))
         .collect();
     let err = ok(Value::Array(bomb)).unwrap_err();
-    assert!(err.contains("after operation") && err.contains("bytes"), "{err}");
+    assert!(
+        err.contains("after operation") && err.contains("bytes"),
+        "{err}"
+    );
 
     // Too many operations.
     let many: Vec<Value> = (0..201)
@@ -1009,8 +1019,10 @@ fn validation_rejects_invented_intents_but_allows_copies() {
     let err = ok(json!([{ "op": "replace", "path": caption, "value": login }])).unwrap_err();
     assert!(err.contains("action.auth.login"), "{err}");
     // Retargeting a pod mutation (still /v1/) is not a copy either.
-    let err = ok(json!([{ "op": "replace", "path": format!("{action}/like_intent/endpoint"),
-        "value": "/v1/workspaces/pixelfed_home/rollback" }]))
+    let err = ok(
+        json!([{ "op": "replace", "path": format!("{action}/like_intent/endpoint"),
+        "value": "/v1/workspaces/pixelfed_home/rollback" }]),
+    )
     .unwrap_err();
     assert!(err.contains("copies of intents"), "{err}");
     // Moving or copying existing intents is fine, and PromptAgent buttons are allowed.

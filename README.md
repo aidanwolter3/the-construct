@@ -77,19 +77,23 @@ Versioned layouts and push channel (M7, DECISIONS D22). The layouts of `home`, `
 `pixelfed_home` feed are versioned (append-only; version 1 is the built-in layout, stored on first use; entities
 are not versioned). The signed-out `pixelfed_home` screen is not versioned.
 
-- `GET /v1/workspaces/{id}` serves the latest layout version and sets `X-Canvas-Layout-Version: N` (absent on the
-  signed-out `pixelfed_home` screen and on its 401).
-- `GET /v1/workspaces/{id}/versions` -> `[{version, created_at, prompt, provider}]`, newest first.
-- `POST /v1/workspaces/{id}/rollback {"version": N}` -> appends a copy of version N as a new version, pushes it,
-  and returns `{version, rolled_back_to, workspace}`. Unknown version: 404 `version_not_found`; unversioned
-  workspace: 404 `workspace_not_found`; bad body: 400.
+- `GET /v1/workspaces/{id}` serves the workspace's ACTIVE layout (see the layout catalog below) and sets
+  `X-Canvas-Layout-Version: <workspace revision>` plus `X-Canvas-Layout-Id` / `X-Canvas-Layout-Id-Version` (absent
+  on the signed-out `pixelfed_home` screen and on its 401). The revision bumps on every visible change (an edit, a
+  restore, a switch to another layout), so clients track one number per workspace.
+- `GET /v1/workspaces/{id}/versions` -> `[{version, created_at, prompt, provider}]`, newest first (the active
+  layout's history).
+- `POST /v1/workspaces/{id}/rollback {"version": N}` -> appends a copy of version N of the active layout as a new
+  version, pushes it, and returns `{version, rolled_back_to, workspace, revision, layout_id}`. Unknown version: 404
+  `version_not_found`; unversioned workspace: 404 `workspace_not_found`; bad body: 400.
 - Versions and rollback (and the agent endpoint) need a valid pod session (`Authorization: Bearer <session>`,
   else 401 with a `detail` saying so) unless the server runs with `CANVAS_AGENT_OPEN=1` (dev/demo only; logged as a
   warning at startup).
 - Workspace ids are 1..=64 characters of `[A-Za-z0-9_-]`; anything else gets 400 `invalid_workspace_id` (with the
   id truncated in the echo) on the workspace GET, versions, rollback, events and the agent endpoint.
-- `GET /v1/workspaces/{id}/events` (SSE): first message is the current version, then one message per new version
-  of that workspace, `event: layout` / `data: {"version":N,"workspace_id":"home"}`, and a `: keepalive` comment
+- `GET /v1/workspaces/{id}/events` (SSE): first message is the current revision, then one message per new revision
+  of that workspace, `event: layout` / `data: {"layout_id":"home.counter","layout_version":1,"version":N,
+  "workspace_id":"home"}` (`version` = the revision), and a `: keepalive` comment
   every 15 s. No session needed (events carry only a version number; clients refetch the workspace, which is
   authorized as usual); for `pixelfed_home` a bearer that is not a valid session gets 401 like the workspace GET.
 
@@ -99,6 +103,39 @@ curl -sN http://127.0.0.1:8080/v1/workspaces/home/events &                  # ev
 curl -s -X POST -H 'content-type: application/json' -d '{"version":1}' \
   http://127.0.0.1:8080/v1/workspaces/home/rollback | jq .version         # 2 (and the stream gets version 2)
 curl -s http://127.0.0.1:8080/v1/workspaces/home/versions | jq .
+```
+
+Layout catalog (DECISIONS D26). Each versioned workspace has several layouts (`<workspace>.<name>`), each with its
+own append-only history, and one active layout. Built-ins: `pixelfed_home.*` and `pixelfed_demo.*`: `classic`
+(default), `editorial`, `compact`, `minimal`; `home.counter` (default), `home.big_counter`. Specs are stored once
+per distinct content (SHA-256, zstd), so a restore costs a ~0.2 KB row and a distinct edit ~1.2 KB.
+
+- `GET /v1/layouts[?workspace_id=<ws>]` -> `{"layouts":[{id, workspace_id, title, description, preview_hint,
+  builtin, current_version, created_at, updated_at, active, active_version?}], "workspaces":[{workspace_id,
+  revision, layout_id, layout_version}]}` (filtered: also `workspace_id`, `workspace_revision`).
+- `GET /v1/layouts/{id}`; `GET /v1/layouts/{id}/versions[?limit=N&before=V]` -> `{"versions":[{version,
+  created_at, source, prompt?, provider?, hash, bytes}], "next_before"?}` newest first (`source`: `seed`, `agent`,
+  `rollback`, `restore`, `manual`); `GET /v1/layouts/{id}/versions/{n}` -> metadata plus `layout` (the root node).
+- `POST /v1/layouts/{id}/activate` `{}` or `{"version": n}` (restores n into the layout first) -> `{workspace_id,
+  revision, layout_id, layout_version, unchanged}`; pushed on the SSE channel.
+- `POST /v1/layouts/{id}/restore {"version": n}` -> appends a copy as a new version (undoable itself; content
+  equal to the newest -> `"unchanged": true`) -> `{layout_id, workspace_id, version, restored_from, unchanged,
+  active, revision?}`; pushed when the layout is active.
+- Reads follow the workspace GET (`pixelfed_home` layouts need a session; the unfiltered list hides them from
+  anonymous callers); activate/restore need a session unless `CANVAS_AGENT_OPEN=1`. Errors: 400
+  `invalid_layout_id` / `invalid_request`, 404 `layout_not_found` / `version_not_found`.
+
+```bash
+CANVAS_AGENT_OPEN=1 cargo run -p server
+curl -s 'http://127.0.0.1:8080/v1/layouts?workspace_id=pixelfed_demo' | jq '.layouts[] | {id, title, active}'
+curl -s -X POST -H 'content-type: application/json' -d '{}' \
+  http://127.0.0.1:8080/v1/layouts/pixelfed_demo.editorial/activate
+# -> {"layout_id":"pixelfed_demo.editorial","layout_version":1,"revision":2,"unchanged":false,"workspace_id":"pixelfed_demo"}
+curl -s http://127.0.0.1:8080/v1/layouts/pixelfed_demo.classic/versions | jq '.versions[] | {version, source, prompt}'
+curl -s -X POST -H 'content-type: application/json' -d '{"version":1}' \
+  http://127.0.0.1:8080/v1/layouts/pixelfed_demo.classic/restore
+# -> {"active":false,"layout_id":"pixelfed_demo.classic","restored_from":1,"unchanged":true,"version":1,...}
+curl -s http://127.0.0.1:8080/v1/layouts/home.big_counter/versions/1 | jq .layout
 ```
 
 Layout agent (M7, DECISIONS D25). `POST /v1/agent/modify_layout {"prompt": "...", "workspace_id": "pixelfed_home"}`
@@ -209,7 +246,7 @@ Pixelfed instance, database path and layout agent provider are logged at startup
 | `PIXELFED_OWNER_ACCOUNT_ID` | unset | The only upstream account id allowed to sign in (replaces a pinned owner). Unset: the first account to sign in is pinned; others get 403 `account_not_owner`. |
 | `PIXELFED_ALLOW_ACCOUNT_CHANGE` | unset | `1`/`true`: any account may sign in and replace the stored one (no pinning). |
 | `CANVAS_SESSION_TTL_DAYS` | `90` | Pod session lifetime in days (1..=36500; other values warn and use 90). |
-| `CANVAS_AGENT_OPEN` | unset | `1`: layout versions, rollback and the agent endpoint need no pod session. Local demos only (warned at startup). |
+| `CANVAS_AGENT_OPEN` | unset | `1`: layout versions, rollback, the agent endpoint, layout activate/restore and `pixelfed_home` catalog reads need no pod session. Local demos only (warned at startup). |
 | `CANVAS_LLM_PROVIDER` | `auto` | Layout agent provider: `auto` (`anthropic` if `ANTHROPIC_API_KEY` is set, else `rules`), `anthropic`, `rules`. `anthropic` without a key: the server starts and prompts answer 503. |
 | `ANTHROPIC_API_KEY` | unset | Enables the Anthropic provider (never logged). |
 | `CANVAS_LLM_MODEL` | `claude-opus-5-5` | Model id for the Anthropic provider (`agent::anthropic::DEFAULT_MODEL`). |
@@ -300,6 +337,17 @@ and pushes it to every connected client over SSE (D22, D25).
   curl -s http://127.0.0.1:8080/v1/workspaces/pixelfed_home/versions | jq .
   curl -s -X POST -H 'content-type: application/json' -d '{"version":1}' \
     http://127.0.0.1:8080/v1/workspaces/pixelfed_home/rollback | jq '{version, rolled_back_to}'
+  ```
+
+- **Other layouts and going back in time** (D26): the agent edits the workspace's active layout. Switch layouts or
+  restore any earlier version of one; both are pushed to connected clients:
+
+  ```bash
+  curl -s http://127.0.0.1:8080/v1/layouts?workspace_id=pixelfed_home | jq '.layouts[] | {id, title, active, current_version}'
+  curl -s -X POST -H 'content-type: application/json' -d '{}' \
+    http://127.0.0.1:8080/v1/layouts/pixelfed_home.minimal/activate | jq .
+  curl -s -X POST -H 'content-type: application/json' -d '{"version":2}' \
+    http://127.0.0.1:8080/v1/layouts/pixelfed_home.classic/restore | jq .
   ```
 
 ## Milestone check recipes

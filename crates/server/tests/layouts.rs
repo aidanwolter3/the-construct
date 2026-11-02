@@ -338,10 +338,17 @@ impl SseReader {
     }
 }
 
+/// An SSE `layout` event of a workspace still on its default layout (whose
+/// version equals the revision).
 fn layout_msg(ws: &str, version: i64) -> String {
+    event_msg(ws, version, &layouts::default_layout_id(ws), version)
+}
+
+fn event_msg(ws: &str, revision: i64, layout_id: &str, layout_version: i64) -> String {
     format!(
         "event: layout\ndata: {}",
-        json!({ "workspace_id": ws, "version": version })
+        json!({ "workspace_id": ws, "version": revision,
+                "layout_id": layout_id, "layout_version": layout_version })
     )
 }
 

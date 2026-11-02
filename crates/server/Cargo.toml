@@ -32,6 +32,7 @@ futures-util = { version = "0.3", default-features = false }
 # Layout agent (M7): RFC 6902 patches and the component registry (JSON Schema).
 json-patch = "4"
 schemars = "1"
+zstd = "0.13"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

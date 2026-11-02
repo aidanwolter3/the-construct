@@ -194,6 +194,37 @@ Note: the environment restarted twice mid-work; work is now committed in small w
   against the local instance in M6-X).
 - Status: DONE.
 
+## Layout browser + version history
+
+- A1 (server, D26): layout catalog. Each versioned workspace has several layouts (`<ws>.<name>`), each with its own
+  append-only, gapless history, and exactly one active layout.
+  - Built-ins seeded idempotently (`fixtures/layouts/`, `include_str!`): `pixelfed_home` / `pixelfed_demo`:
+    Classic feed (default), Editorial journal, Compact, Minimal; `home`: Counter (default), Big counter. New
+    built-ins reach existing databases without touching history or the active layout. Every seed validates against
+    its workspace's default layout with the agent validator (tested).
+  - Workspace revision log (`workspace_revisions`): one monotonic number per workspace, bumped by agent commits,
+    restores of the active layout and switches. `X-Canvas-Layout-Version` and SSE `version` carry it, so client-core
+    is unchanged; new `X-Canvas-Layout-Id` / `X-Canvas-Layout-Id-Version` headers and `layout_id` /
+    `layout_version` fields in the SSE event and `layout_id` / `layout_id_version` in the agent response.
+  - Endpoints: `GET /v1/layouts[?workspace_id=]`, `GET /v1/layouts/:id`, `GET /v1/layouts/:id/versions[?limit,
+    before]`, `GET /v1/layouts/:id/versions/:n`, `POST /v1/layouts/:id/activate {version?}`, `POST
+    /v1/layouts/:id/restore {version}` (append-only copy; equal content -> `unchanged`). Reads follow the workspace
+    GET's auth (pixelfed_home needs a session; the unfiltered list hides it from anonymous callers), writes need a
+    session unless `CANVAS_AGENT_OPEN=1`. `/v1/workspaces/:id/versions` and `/rollback` act on the active layout.
+  - Agent commits to the active layout; compare-and-append also detects a switch (re-applies the patch on the new
+    active layout, else 409).
+  - Storage (migration v6): specs are content-addressed zstd-19 blobs (`layout_blobs`), so restores, rollbacks and
+    re-seeds store no new blob. Measured: a distinct agent edit ~1.16 KB vs ~2.08 KB before; a restore ~0.18 KB vs
+    ~2.08 KB; 100k versions ~64 MB (50/50 edits/restores) vs ~198 MB. Every version is kept (no retention knob).
+    v5 history becomes the history of each workspace's default layout (same numbers, prompts, patches, times), so
+    revisions continue from the old version and connected clients never see the number go backwards (tested on a
+    v5 db built with migrations 1..=5, and by hand with a database written by the previous server binary).
+  - Tests: store unit tests (seeding, compare-and-append across switches, dedupe, activate/restore, v5 -> v6
+    migration, blob codec), `tests/catalog.rs` (list/get/versions/activate/restore over HTTP, SSE on switch and
+    restore, auth, agent on a non-default layout, a switch during generation, restart idempotency). cargo 272.
+  - Measurement tool: `cargo run -p server --release --example layout_storage [N]`.
+- Status: A1 DONE (server); the surfaces' layout browser UI is the client half.
+
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
   bookmarks are idempotent upstream, counters are not).
@@ -212,10 +243,14 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 
 ## Next steps
 
-1. Feed as a `LazyColumn` with pagination (`max_id` / `Link: next`).
-2. Outbox idempotency keys (client-generated, honoured by the pod).
-3. Live test of the Anthropic provider once a key exists (prompt quality, latency, refusals).
-4. Real-Pixelfed contract test in scheduled CI on a throwaway instance (`scripts/e2e.sh --upstream real`).
-5. HTTPS enforcement in the engine for release builds; a cap on SSE subscribers.
-6. Web target for the shared UI; small follow-ups: 404 "workspace not found" UI state, golden-image diffing for
+1. Layout browser UI on every surface (client half of D26): list `GET /v1/layouts?workspace_id=`, preview by
+   `preview_hint`, activate, per-layout history with restore; client-core needs no change for refreshes (the
+   revision contract is unchanged). Optional later: user-created layouts (copy a layout), a zstd dictionary for
+   blobs (measured ~6x smaller edits), a retention policy.
+2. Feed as a `LazyColumn` with pagination (`max_id` / `Link: next`).
+3. Outbox idempotency keys (client-generated, honoured by the pod).
+4. Live test of the Anthropic provider once a key exists (prompt quality, latency, refusals).
+5. Real-Pixelfed contract test in scheduled CI on a throwaway instance (`scripts/e2e.sh --upstream real`).
+6. HTTPS enforcement in the engine for release builds; a cap on SSE subscribers.
+7. Web target for the shared UI; small follow-ups: 404 "workspace not found" UI state, golden-image diffing for
    the simulator, Android host tests for :shared.

@@ -199,7 +199,7 @@ pub struct AppState {
     pixelfed_refresh: tokio::sync::Mutex<()>,
     /// `CANVAS_AGENT_OPEN=1`: versions/rollback/agent need no session (dev only).
     agent_open: bool,
-    /// New layout versions, fanned out to SSE subscribers.
+    /// New workspace revisions, fanned out to SSE subscribers.
     layout_tx: tokio::sync::broadcast::Sender<layouts::LayoutEvent>,
     /// SSE keepalive interval (15 s; shorter in tests).
     sse_keepalive: std::time::Duration,
@@ -260,12 +260,9 @@ impl AppState {
         self.sse_keepalive
     }
 
-    /// Broadcast a new layout version to SSE subscribers (no-op without any).
-    pub fn publish_layout(&self, workspace_id: &str, version: i64) {
-        let _ = self.layout_tx.send(layouts::LayoutEvent {
-            workspace_id: workspace_id.to_owned(),
-            version,
-        });
+    /// Broadcast a new workspace revision to SSE subscribers (no-op without any).
+    pub fn publish_layout(&self, active: &layouts::ActiveLayout) {
+        let _ = self.layout_tx.send(layouts::LayoutEvent::from(active));
     }
 
     /// End all open SSE streams (call before graceful shutdown, which
@@ -393,13 +390,13 @@ async fn get_workspace(
             json!({ "error": "workspace_not_found", "id": id }),
         );
     };
-    let (version, layout) = match layouts::latest_async(&state, &id).await {
+    let served = match layouts::active_async(&state, &id).await {
         Ok(Some(v)) => v,
         Ok(None) => return Json(spec).into_response(),
         Err(e) => return e.into_response(),
     };
     let mut spec = spec.clone();
-    spec.workspace = layout;
+    spec.workspace = served.layout;
     if id == "home" {
         let count = match blocking(&state, |s| s.counter("home")).await {
             Ok(n) => n,
@@ -410,7 +407,7 @@ async fn get_workspace(
             .or_default()
             .set("count", count);
     }
-    ([layouts::version_header(version)], Json(spec)).into_response()
+    (layouts::served_headers(&served.active), Json(spec)).into_response()
 }
 
 /// A JSON error response, kept small so it can travel in `Result::Err`.

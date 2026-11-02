@@ -1,0 +1,74 @@
+{
+  "type": "core://Workspace",
+  "id": "home",
+  "title": "Home",
+  "slots": [
+    {
+      "slot_id": "counter",
+      "provider_uri": "core://counter",
+      "content": {
+        "type": "core://Container",
+        "orientation": "Vertical",
+        "padding_dp": 32,
+        "children": [
+          {
+            "type": "core://Text",
+            "value_expr": "${core://counters/home#count}",
+            "style": "Headline"
+          },
+          {
+            "type": "core://Container",
+            "orientation": "Horizontal",
+            "padding_dp": 0,
+            "children": [
+              {
+                "type": "core://Button",
+                "label": "Increment",
+                "on_click": {
+                  "intent": "action.mutation.optimistic",
+                  "entity_uri": "core://counters/home",
+                  "field": "count",
+                  "value_expr": "entity.count + 1",
+                  "rollback_value": 0,
+                  "endpoint": "/v1/counters/home/increment",
+                  "payload": {}
+                }
+              },
+              {
+                "type": "core://Button",
+                "label": "Decrement",
+                "on_click": {
+                  "intent": "action.mutation.optimistic",
+                  "entity_uri": "core://counters/home",
+                  "field": "count",
+                  "value_expr": "entity.count - 1",
+                  "rollback_value": 0,
+                  "endpoint": "/v1/counters/home/decrement",
+                  "payload": {}
+                }
+              },
+              {
+                "type": "core://Button",
+                "label": "Reset",
+                "on_click": {
+                  "intent": "action.mutation.optimistic",
+                  "entity_uri": "core://counters/home",
+                  "field": "count",
+                  "value_expr": "0",
+                  "rollback_value": 0,
+                  "endpoint": "/v1/counters/home/reset",
+                  "payload": {}
+                }
+              }
+            ]
+          },
+          {
+            "type": "core://Text",
+            "value_expr": "Project Canvas Counter",
+            "style": "Caption"
+          }
+        ]
+      }
+    }
+  ]
+}

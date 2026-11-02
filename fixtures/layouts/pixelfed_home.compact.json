@@ -1,0 +1,78 @@
+{
+  "type": "core://Workspace",
+  "id": "pixelfed_home",
+  "title": "Pixelfed",
+  "slots": [
+    {
+      "slot_id": "feed",
+      "provider_uri": "pixelfed://home_timeline",
+      "content": {
+        "type": "pixelfed://FeedList",
+        "query_key": "timeline:home",
+        "item_template": {
+          "type": "pixelfed://PostCard",
+          "post_ref": "$item.uri",
+          "author_slot": {
+            "type": "pixelfed://AuthorHeader",
+            "user_ref": "$item.author_uri"
+          },
+          "media_slot": {
+            "type": "core://Container",
+            "orientation": "Vertical",
+            "padding_dp": 24,
+            "children": [
+              {
+                "type": "pixelfed://MediaCarousel",
+                "media_refs": "$item.media_uris",
+                "aspect_ratio": 1.91
+              }
+            ]
+          },
+          "action_slot": {
+            "type": "pixelfed://ActionBar",
+            "like_intent": {
+              "intent": "action.mutation.optimistic",
+              "entity_uri": "$item.uri",
+              "field": "is_liked",
+              "value_expr": "!entity.is_liked",
+              "rollback_value": false,
+              "endpoint": "/v1/pixelfed/posts/like",
+              "payload": {
+                "id": "$item.id",
+                "liked": "$value"
+              },
+              "also": [
+                {
+                  "field": "like_count",
+                  "value_expr": "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1"
+                }
+              ]
+            },
+            "bookmark_intent": {
+              "intent": "action.mutation.optimistic",
+              "entity_uri": "$item.uri",
+              "field": "is_bookmarked",
+              "value_expr": "!entity.is_bookmarked",
+              "rollback_value": false,
+              "endpoint": "/v1/pixelfed/posts/bookmark",
+              "payload": {
+                "bookmarked": "$value",
+                "id": "$item.id"
+              }
+            },
+            "comment_intent": {
+              "intent": "action.navigation.open",
+              "target_uri": "pixelfed://posts/$item.id/comments",
+              "presentation": "Modal"
+            }
+          },
+          "caption_slot": {
+            "type": "core://Text",
+            "value_expr": "entity.caption",
+            "style": "Caption"
+          }
+        }
+      }
+    }
+  ]
+}
