@@ -41,7 +41,7 @@ crates/client-ffi    UniFFI bridge (EngineHandle, FfiStateSnapshot, StateObserve
 crates/fake-pixelfed fake Pixelfed (Mastodon API + OAuth PKCE, admin/fault controls), the primary e2e upstream;
                      single binary with embedded fixtures, Dockerfile for a sidecar image
 crates/e2e           end-to-end suite: pod + engine in-process against the fake (default) or a real Pixelfed
-layouts/             layouts as code: <app>/NNNN.json ({"note", "layout"}), embedded in the pod, append-only
+layouts/             layouts as code: <app>/NNNN.json ({"note", "schema", "layout"}), embedded in the pod, append-only
 fixtures/            counter_home_bundle.json, pixelfed_home_bundle.json (DESIGN.md §2.2C),
                      pixelfed_home_feed_bundle.json (simulator); pixelfed/ (Mastodon API JSON + media served by
                      fake-pixelfed, recorded/ real-instance responses, images/ seed JPEGs)
@@ -116,8 +116,9 @@ signed-out `pixelfed_home` screen is not versioned. Apps: `pixelfed_home` "Pixel
 ```bash
 CONSTRUCT_SHOW_DEV_APPS=1 cargo run -p server
 curl -s http://127.0.0.1:8080/v1/apps | jq '.apps[] | {id, latest_version}'
-curl -s http://127.0.0.1:8080/v1/apps/pixelfed_home/versions | jq '.versions[] | {version, source, note}'
-# -> {"version":1,"source":"file","note":"Classic feed"} on a fresh database
+curl -s http://127.0.0.1:8080/v1/apps/pixelfed_home/versions | jq '.versions[] | {version, note, schema, compatible}'
+# -> {"version":1,"note":"Classic feed","schema":1,"compatible":true} on a fresh database (no header = schema 1,
+#    so version 2, written for schema 2, says "compatible": false, "incompatible": "update_required")
 curl -s http://127.0.0.1:8080/v1/apps/pixelfed_home/versions/1 | jq .layout.id     # "pixelfed_home"
 curl -sN http://127.0.0.1:8080/v1/workspaces/home/events    # event: layout, data: {"version":1,"workspace_id":"home"}
 ```
@@ -278,9 +279,11 @@ Notes:
 The only way to change what the app looks like is a new layout file plus a deploy (DECISIONS D32):
 
 1. Copy the newest file of the app, e.g. `layouts/pixelfed_home/0001.json` to `layouts/pixelfed_home/0002.json`
-   (4 digits, the next number, no gaps), and edit it. The format is `{"note": "short changelog line", "layout":
-   <UiNode>}`. The note is what the menu's version history shows. The layout root is the app's
-   `core://Workspace`, and its id is the app id.
+   (4 digits, the next number, no gaps), and edit it. The format is `{"note": "short changelog line", "schema": N,
+   "layout": <UiNode>}`. The note is what the menu's version history shows. `schema` is the client schema the
+   layout is written for: normally the current `protocol::SCHEMA_VERSION` (the pod refuses a value below what the
+   layout's vocabulary needs, or above the current one). The layout root is the app's `core://Workspace`, and its
+   id is the app id.
 2. Add one line to `layouts::FILES` in `crates/server/src/layouts.rs`: `layout_file!("pixelfed_home", "0002"),`.
 3. Run `cargo test` (`-p server` is enough). It validates every file (structure, size, slots, aspect ratios,
    endpoints) and fails if a file in `layouts/` is not listed.
@@ -293,7 +296,8 @@ Files are **append-only**. Never edit, rename or delete a deployed file: the pod
 file (e.g. "layouts/pixelfed_home/0002.json changed after it was deployed as version 7; layout files are
 append-only, add 0003.json instead"). A gap in the numbering, an invalid layout or a wrong root id also stops the
 start. Reformatting a file without changing its layout or note is fine. To undo a change, add a new file with the
-old content.
+old content. A file's `schema` is append-only too (it is recorded separately from the content hash, since it was
+added to the first files after they deployed).
 
 ### Screens, generic nodes and actions (D34)
 
@@ -317,9 +321,16 @@ client build. The engine and the clients know no app.
   through the offline outbox, then reloads the paths that list the query (and the workspace with
   `refresh_workspace`); a 4xx removes the entity. `$nonce` is a fresh value per dispatch, for temporary URIs and
   idempotency keys.
-- **Schema versions:** the engine sends `X-Construct-Schema: 2`. The pod serves each client the newest version of
-  an app whose vocabulary it can draw, so an older app (no header = 1) keeps getting the last version without
-  screens or the new nodes. Using any of the above makes a layout version need schema 2.
+- **Schema versions (D36):** the engine sends `X-Construct-Schema: 2` (workspace fetches, data loads and the apps
+  API). Every version records the schema it was written for (`"schema"` in its file). The pod serves each client
+  the newest version it can draw, so an older app (no header = 1) keeps getting the last version without screens
+  or the new nodes. Using any of the above needs `"schema": 2`. `GET /v1/apps/{id}/versions[/{n}]` adds `schema`,
+  `compatible` and, when false, `incompatible` (`update_required`: written for a newer app; `retired`: written for
+  a schema this app no longer draws) per version; the menu greys those rows out and won't pin them.
+- **A breaking schema change:** bump `protocol::SCHEMA_VERSION` and add `(new schema, oldest layout schema it still
+  draws)` to `protocol::RETIRED`. Older versions then show as incompatible to new clients and are never served to
+  them; the old files are not edited. Today `RETIRED` is empty: schema 2 was additive, so every version still
+  draws on current clients.
 
 `layouts/pixelfed_home/0002.json` uses all of this for comments: the feed's comment button (already
 `pixelfed://posts/$item.id/comments`) opens the `comments` screen, which loads

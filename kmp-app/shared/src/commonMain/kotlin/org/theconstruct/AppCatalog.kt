@@ -12,6 +12,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
@@ -64,13 +65,28 @@ data class AppSummary(
     val updatedAt: Long = 0,
 )
 
-/** One history row. [createdAt] is in epoch seconds (0 = unknown). */
+/**
+ * One history row. [createdAt] is in epoch seconds (0 = unknown). [schema] is the client schema the version was
+ * written for; [incompatible] is why this build can't draw it (`update_required`, `retired`, or another reason a newer
+ * pod sends), null when it can (or the pod is too old to say).
+ */
 data class AppVersionInfo(
     val version: Long,
     val createdAt: Long = 0,
     val source: String = "",
     val note: String? = null,
-)
+    val schema: Long? = null,
+    val incompatible: String? = null,
+) {
+    val compatible: Boolean get() = incompatible == null
+}
+
+/** The picker's line (and the error) for a version this build can't draw. */
+fun incompatibleLabel(reason: String): String = when (reason) {
+    "update_required" -> "Needs a newer version of the app"
+    "retired" -> "Made for an older version of the app"
+    else -> "This version of the app can't show it"
+}
 
 /** A page of history, newest first; pass [nextBefore] as `before` for the next (older) page. */
 data class AppVersionPage(
@@ -135,11 +151,22 @@ object AppCatalogJson {
         createdAt = parseTimestamp(v["created_at"]),
         source = v.jStr("source").orEmpty(),
         note = v.jStr("note")?.takeIf { it.isNotBlank() },
+        schema = v.jLong("schema"),
+        incompatible = incompatibility(v),
     )
 
-    /** The version's full layout (`layout`, a workspace [UiNode]). */
+    /** Null when the pod says (or doesn't say otherwise) that this build can draw the version. */
+    private fun incompatibility(v: JsonObject): String? =
+        if (v.jPrim("compatible")?.takeIf { !it.isString }?.booleanOrNull == false) v.jStr("incompatible") ?: "" else null
+
+    /**
+     * The version's full layout (`layout`, a workspace [UiNode]). Throws a [LayoutApiException] when the pod says this
+     * build can't draw it.
+     */
     fun parseVersionLayout(json: String): UiNode {
-        val layout: JsonElement = obj(json)["layout"] ?: throw IllegalArgumentException("the version has no layout")
+        val o = obj(json)
+        incompatibility(o)?.let { throw LayoutApiException("${incompatibleLabel(it)}.") }
+        val layout: JsonElement = o["layout"] ?: throw IllegalArgumentException("the version has no layout")
         return ConstructJson.decodeNode(layout.toString())
     }
 }
@@ -192,8 +219,9 @@ fun versionSourceLabel(source: String): String = when (source) {
     else -> source.replaceFirstChar { it.uppercase() }
 }
 
-/** The line under a history row: its note, else its source. */
-fun versionDetail(v: AppVersionInfo): String = v.note ?: versionSourceLabel(v.source)
+/** The line under a history row: why this build can't draw it, else its note, else its source. */
+fun versionDetail(v: AppVersionInfo): String =
+    v.incompatible?.let { incompatibleLabel(it) + (v.note?.let { n -> " · $n" } ?: "") } ?: v.note ?: versionSourceLabel(v.source)
 
 /** "just now", "5 min ago", "3 h ago", "yesterday", "4 days ago"; null for a month or more (show the date only). */
 fun relativeTime(epochSeconds: Long, nowSeconds: Long): String? {

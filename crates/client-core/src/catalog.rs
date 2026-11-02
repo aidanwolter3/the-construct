@@ -115,10 +115,18 @@ impl Inner {
                 status: 0,
                 reason: format!("cannot start the request: {e}"),
             })?;
-        let sent = client.get(&url).send().and_then(|r| {
-            let status = r.status().as_u16();
-            r.text().map(|t| (status, t))
-        });
+        // The schema header lets the pod say which versions this build can draw.
+        let sent = client
+            .get(&url)
+            .header(
+                protocol::SCHEMA_HEADER,
+                protocol::SCHEMA_VERSION.to_string(),
+            )
+            .send()
+            .and_then(|r| {
+                let status = r.status().as_u16();
+                r.text().map(|t| (status, t))
+            });
         let (status, text) = match sent {
             Ok(x) => x,
             Err(e) => {
@@ -170,8 +178,9 @@ impl ConstructEngine {
 
     /// `GET /v1/apps/<id>/versions[?before=N&limit=L]`: one page of the app's
     /// history, newest first (`{app_id, latest_version, versions:[{version,
-    /// created_at, source, note?}], next_before?}`; pass `next_before` as
-    /// `before` for the next page). Blocking.
+    /// created_at, source, note?, schema, compatible, incompatible?}],
+    /// next_before?}`; `compatible` is for this build's schema; pass
+    /// `next_before` as `before` for the next page). Blocking.
     pub fn app_versions(
         &self,
         app_id: &str,

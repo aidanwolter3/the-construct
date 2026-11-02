@@ -13,8 +13,12 @@
 //! 1. Copy the newest file, e.g. `layouts/pixelfed_home/0001.json` to
 //!    `layouts/pixelfed_home/0002.json` (4 digits, the next number: numbering
 //!    is contiguous from 0001), and edit it. The format is
-//!    `{"note": "short changelog line", "layout": <UiNode>}`; the layout root
-//!    is the app's `core://Workspace` (id = the app id).
+//!    `{"note": "short changelog line", "schema": N, "layout": <UiNode>}`;
+//!    the layout root is the app's `core://Workspace` (id = the app id).
+//!    `schema` is the client schema the layout is written for, normally
+//!    [`protocol::SCHEMA_VERSION`] (at least what its vocabulary needs,
+//!    [`protocol::required_schema`]); clients of other schemas are served the
+//!    newest version they can draw ([`protocol::compatibility`], D36).
 //! 2. Add one line to [`FILES`]: `layout_file!("pixelfed_home", "0002"),`
 //!    (a test fails if a file in `layouts/` is not listed).
 //! 3. `cargo test -p server` (validates every file), deploy. On start the pod
@@ -25,15 +29,19 @@
 //! refuses to start, naming the file and how to recover, if its content
 //! differs from what it recorded: [`file_hash`], the hash of the file's own
 //! note and layout JSON, independent of how the Rust types serialize it); add
-//! a new file instead. A gap in the numbering, a file that is not a valid
+//! a new file instead. `schema` is not part of the hash (it was added to
+//! deployed files later) but is recorded and append-only too: to stop clients
+//! drawing old versions after a breaking schema change, add an entry to
+//! [`protocol::RETIRED`] rather than editing files. A gap in the numbering, a file that is not a valid
 //! layout (structure checked by [`crate::agent::validate_structure`]), an
 //! unknown action intent tag, a root id that is not the app id, or a new file
 //! numbered below a deployed one also stop the start. A deployed file missing
 //! from the build (a rollback deploy, an older branch) only logs a warning:
 //! the recorded history is served unchanged.
 //!
-//! `X-Construct-Layout-Version` on `GET /v1/workspaces/:id` and the SSE
-//! `version` carry the app's latest version number.
+//! `X-Construct-Layout-Version` on `GET /v1/workspaces/:id` carries the
+//! served version (the newest the client can draw); the SSE `version` carries
+//! the app's latest version number.
 
 // Helpers return a ready error `Response` for the handler to send as is.
 #![allow(clippy::result_large_err)]
@@ -157,6 +165,8 @@ pub struct LayoutFile {
     pub layout: UiNode,
     /// [`file_hash`] of the file's note and layout.
     pub file_hash: String,
+    /// The client schema the layout is written for (`"schema"`).
+    pub schema: u32,
 }
 
 impl LayoutFile {
@@ -168,6 +178,7 @@ impl LayoutFile {
             note: self.note.clone(),
             json: to_json(&self.layout),
             file_hash: self.file_hash.clone(),
+            schema: self.schema,
         }
     }
 }
@@ -278,11 +289,16 @@ pub fn parse_file(src: &LayoutSource) -> Result<LayoutFile, String> {
     let doc: Value =
         serde_json::from_str(src.text).map_err(|e| fail(format!("not valid JSON: {e}")))?;
     let Value::Object(obj) = &doc else {
-        return Err(fail(r#"expected {"note": "...", "layout": {...}}"#.into()));
+        return Err(fail(
+            r#"expected {"note": "...", "schema": N, "layout": {...}}"#.into(),
+        ));
     };
-    if let Some(k) = obj.keys().find(|k| *k != "note" && *k != "layout") {
+    if let Some(k) = obj
+        .keys()
+        .find(|k| !matches!(k.as_str(), "note" | "schema" | "layout"))
+    {
         return Err(fail(format!(
-            "unknown key '{k}' (only \"note\" and \"layout\")"
+            "unknown key '{k}' (only \"note\", \"schema\" and \"layout\")"
         )));
     }
     let note = obj
@@ -313,6 +329,25 @@ pub fn parse_file(src: &LayoutSource) -> Result<LayoutFile, String> {
             "invalid layout: {what} (a typo? this build does not know it)"
         )));
     }
+    let schema = obj
+        .get("schema")
+        .and_then(Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|n| (1..=protocol::SCHEMA_VERSION).contains(n))
+        .ok_or_else(|| {
+            fail(format!(
+                "\"schema\" must be the client schema the layout is written for, 1..={} \
+                 (normally the current one, {})",
+                protocol::SCHEMA_VERSION,
+                protocol::SCHEMA_VERSION
+            ))
+        })?;
+    let needs = protocol::required_schema(&parsed);
+    if needs > schema {
+        return Err(fail(format!(
+            "\"schema\" is {schema} but the layout uses vocabulary from schema {needs}"
+        )));
+    }
     let file_hash = file_hash(&note, layout);
     Ok(LayoutFile {
         app_id: src.app_id.to_owned(),
@@ -321,6 +356,7 @@ pub fn parse_file(src: &LayoutSource) -> Result<LayoutFile, String> {
         note,
         layout: parsed,
         file_hash,
+        schema,
     })
 }
 
@@ -348,7 +384,8 @@ pub fn parse_files(sources: &[LayoutSource]) -> Result<Vec<LayoutFile>, String> 
     Ok(files)
 }
 
-/// Append every new layout file (all apps, one transaction) to the store;
+/// Append every new layout file (all apps, one transaction) to the store, and
+/// record the declared schema of files deployed before it existed;
 /// see the module docs. Blocking; idempotent. `Err` is the message to stop
 /// the start with.
 pub fn sync(store: &Store) -> Result<SyncReport, String> {
@@ -442,36 +479,48 @@ pub fn client_schema(headers: &HeaderMap) -> u32 {
         .unwrap_or(1)
 }
 
-/// The newest version of an app a client of schema `schema` can draw
-/// ([`protocol::required_schema`]); `None` if the workspace is not an app or
-/// no version fits (version 1 of every app is schema 1). Blocking.
+/// The newest version of an app a client of schema `schema` can draw (the
+/// version's declared schema, [`protocol::compatibility`]); `None` if the
+/// workspace is not an app or no version fits. Blocking.
 pub fn active_for(
     store: &Store,
     workspace_id: &str,
     schema: u32,
 ) -> rusqlite::Result<Option<Served>> {
-    let Some(latest) = active(store, workspace_id)? else {
+    if !is_versioned(workspace_id) {
+        return Ok(None);
+    }
+    let Some(latest) = store.app_latest_meta(workspace_id)? else {
         return Ok(None);
     };
-    if protocol::required_schema(&latest.layout) <= schema {
-        return Ok(Some(latest));
-    }
-    for version in (1..latest.version).rev() {
-        if let Some((_, json)) = store.app_version(workspace_id, version)? {
-            let layout = from_json(&json)?;
-            if protocol::required_schema(&layout) <= schema {
-                tracing::info!(
-                    app = workspace_id,
-                    latest = latest.version,
-                    served = version,
-                    schema,
-                    "served an older layout version the client can draw"
-                );
-                return Ok(Some(Served { version, layout }));
-            }
+    let mut before = None;
+    loop {
+        let page = store.app_versions(workspace_id, before, DEFAULT_VERSIONS_LIMIT)?;
+        let Some(last) = page.last() else {
+            return Ok(None);
+        };
+        before = Some(last.version);
+        let fits = page.iter().find(|v| {
+            protocol::compatibility(v.schema(), schema) == protocol::Compatibility::Compatible
+        });
+        let Some(v) = fits else { continue };
+        let Some((_, json)) = store.app_version(workspace_id, v.version)? else {
+            return Ok(None);
+        };
+        if v.version != latest.version {
+            tracing::info!(
+                app = workspace_id,
+                latest = latest.version,
+                served = v.version,
+                schema,
+                "served an older layout version the client can draw"
+            );
         }
+        return Ok(Some(Served {
+            version: v.version,
+            layout: from_json(&json)?,
+        }));
     }
-    Ok(None)
 }
 
 /// Async [`active_for`] with the schema read from the request headers.
@@ -604,14 +653,23 @@ fn known_app(id: &str) -> Result<&'static App, Response> {
     })
 }
 
-fn version_json(v: &AppVersion) -> Value {
+/// One version's metadata for a client of schema `client`: `schema` (what it
+/// was written for), `compatible`, and `incompatible`
+/// (`update_required` | `retired`) when the client cannot draw it.
+fn version_json(v: &AppVersion, client: u32) -> Value {
+    let compat = protocol::compatibility(v.schema(), client);
     let mut out = json!({
         "version": v.version,
         "created_at": rfc3339(v.created_at),
         "source": v.source,
+        "schema": v.schema(),
+        "compatible": compat.reason().is_none(),
     });
     if let Some(n) = &v.note {
         out["note"] = json!(n);
+    }
+    if let Some(r) = compat.reason() {
+        out["incompatible"] = json!(r);
     }
     out
 }
@@ -660,12 +718,14 @@ fn bad_query() -> Response {
 
 /// `GET /v1/apps/:id/versions[?limit=1..=100 (20)&before=N]` ->
 /// `{app_id, latest_version, versions: [{version, created_at, source,
-/// note?}], next_before?}` newest first; `next_before` iff older versions
-/// exist (pass it as `before` for the next page).
+/// note?, schema, compatible, incompatible?}], next_before?}` newest first;
+/// `next_before` iff older versions exist (pass it as `before` for the next
+/// page). `compatible` is for the client's [`protocol::SCHEMA_HEADER`].
 async fn app_versions(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(query): Query<HashMap<String, String>>,
+    headers: HeaderMap,
 ) -> Response {
     let app = match known_app(&id) {
         Ok(a) => a,
@@ -701,7 +761,10 @@ async fn app_versions(
     let mut body = json!({
         "app_id": app.id,
         "latest_version": latest,
-        "versions": page.iter().map(version_json).collect::<Vec<_>>(),
+        "versions": page
+            .iter()
+            .map(|v| version_json(v, client_schema(&headers)))
+            .collect::<Vec<_>>(),
     });
     if more && let Some(last) = page.last() {
         body["next_before"] = json!(last.version);
@@ -710,10 +773,12 @@ async fn app_versions(
 }
 
 /// `GET /v1/apps/:id/versions/:n` -> `{app_id, version, created_at, source,
-/// note?, layout}`.
+/// note?, schema, compatible, incompatible?, layout}` (the layout is served
+/// even when incompatible: it is history to look at).
 async fn app_version(
     State(state): State<Arc<AppState>>,
     Path((id, n)): Path<(String, String)>,
+    headers: HeaderMap,
 ) -> Response {
     let app = match known_app(&id) {
         Ok(a) => a,
@@ -728,7 +793,7 @@ async fn app_version(
     let found = blocking(&state, move |s| s.app_version(app.id, n)).await;
     match found {
         Ok(Some((v, stored))) => {
-            let mut body = version_json(&v);
+            let mut body = version_json(&v, client_schema(&headers));
             body["app_id"] = json!(app.id);
             body["layout"] = match from_json(&stored) {
                 Ok(layout) => node_value(&layout),
@@ -974,7 +1039,8 @@ mod tests {
     #[test]
     fn invalid_files_are_refused_with_their_path() {
         let ok = FILES.iter().find(|f| f.app_id == "home").unwrap().text;
-        let cases: [(LayoutSource, &str); 8] = [
+        assert_eq!((FILES[1].app_id, FILES[1].name), ("pixelfed_home", "0002"));
+        let cases: [(LayoutSource, &str); 12] = [
             (
                 src("home", "0001", "{"),
                 "layouts/home/0001.json: not valid JSON",
@@ -1010,6 +1076,38 @@ mod tests {
             (
                 src("pixelfed_demo", "0001", ok),
                 "invalid layout: workspace id changed from 'pixelfed_demo' to 'home'",
+            ),
+            (
+                src(
+                    "home",
+                    "0001",
+                    leak(ok.replacen("  \"schema\": 1,\n", "", 1)),
+                ),
+                "layouts/home/0001.json: \"schema\" must be the client schema",
+            ),
+            (
+                src(
+                    "home",
+                    "0001",
+                    leak(ok.replacen("\"schema\": 1", "\"schema\": 0", 1)),
+                ),
+                "\"schema\" must be the client schema the layout is written for, 1..=",
+            ),
+            (
+                src(
+                    "home",
+                    "0001",
+                    leak(ok.replacen("\"schema\": 1", "\"schema\": 999", 1)),
+                ),
+                "\"schema\" must be",
+            ),
+            (
+                src(
+                    "pixelfed_home",
+                    "0001",
+                    leak(FILES[1].text.replacen("\"schema\": 2", "\"schema\": 1", 1)),
+                ),
+                "\"schema\" is 1 but the layout uses vocabulary from schema 2",
             ),
         ];
         for (s, want) in cases {
@@ -1097,7 +1195,7 @@ mod tests {
         // Compact, keys sorted (serde_json's map), top-level keys reversed.
         let v: Value = serde_json::from_str(one).unwrap();
         let compact = leak(format!(
-            "{{\"layout\":{},\"note\":{}}}",
+            "{{\"layout\":{},\"schema\":1,\"note\":{}}}",
             serde_json::to_string(&v["layout"]).unwrap(),
             v["note"]
         ));
@@ -1124,6 +1222,11 @@ mod tests {
             );
         }
         assert_eq!(parsed.file_hash.len(), 64);
+        // `schema` is not hashed: it was added to files after they deployed
+        // (it is recorded and append-only on its own, see the store).
+        let v2 = leak(one.replacen("\"schema\": 1", "\"schema\": 2", 1));
+        let p2 = parse_file(&src("home", "0001", v2)).unwrap();
+        assert_eq!((p2.file_hash, p2.schema), (parsed.file_hash, 2));
     }
 
     #[test]

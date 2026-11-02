@@ -2,7 +2,7 @@
 
 Server-driven UI: a Rust "pod" serves app layouts (JSON `UiNode` trees) plus normalized entities; native clients
 (macOS desktop, Android, headless simulator) render them with shared Compose code and a shared Rust engine.
-Only app today: Pixelfed (`pixelfed_home`). Read `README.md` for details and `docs/DECISIONS.md` (D1–D33) before
+Only app today: Pixelfed (`pixelfed_home`). Read `README.md` for details and `docs/DECISIONS.md` (D1–D36) before
 changing architecture; `docs/PROGRESS.md` has history and next steps. `DESIGN.md` is the original design doc
 (product renamed from "Project Canvas"; AI layout editing was built, then shelved — see D32/D33).
 
@@ -47,9 +47,12 @@ needs a device check.
 - Prefer branches + PRs for non-trivial work; check `gh run list` after pushing.
 
 ## Layouts as code (only way to publish a new layout version)
-Add `layouts/<app>/NNNN.json` (`{"note": "...", "layout": {...}}`, next number, no gaps), add one
+Add `layouts/<app>/NNNN.json` (`{"note": "...", "schema": N, "layout": {...}}`, next number, no gaps; `schema` =
+the current `protocol::SCHEMA_VERSION`), add one
 `layout_file!("<app>", "NNNN")` line to `layouts::FILES` in `crates/server/src/layouts.rs`, run `cargo test`,
-push. Never edit or renumber a deployed file — the server refuses to start. Clients are read-only for layout state.
+push. Never edit or renumber a deployed file (its `schema` included) — the server refuses to start. A breaking
+schema change retires old versions via `protocol::RETIRED`, not by editing files (D36). Clients are read-only for
+layout state.
 
 ## Conventions
 - The engine (client-core) and the shared UI must not know any app (D34/D35): app changes ship as layout files
