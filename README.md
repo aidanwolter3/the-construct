@@ -868,7 +868,8 @@ Intent extras `baseUrl` and `workspace` override the `BuildConfig` defaults (deb
 ignore them). Debug builds also show a small "server: ..." chip at the bottom left: it switches between Staging,
 Local (emulator, `http://10.0.2.2:8080`), Local (USB, `http://127.0.0.1:8080`), a custom URL and the build default.
 The choice is saved (SharedPreferences) and the activity restarts with a new engine; the `baseUrl` extra still
-wins over it. `scripts/android_smoke.sh` passes `--es baseUrl http://10.0.2.2:8080` (its `--base-url`). They are read when the engine is
+wins over it. A server other than the build default gets its own storage dir (`filesDir/servers/<url>`), so cached
+entities and pending outbox rows never cross servers. `scripts/android_smoke.sh` passes `--es baseUrl http://10.0.2.2:8080` (its `--base-url`). They are read when the engine is
 created, so use `am start -S` (force-stop first) to switch workspace on a running app. Rotation keeps the
 same engine. Logcat tag `CanvasEngine` carries both the Kotlin log lines (`starting base_url=...`,
 `dispatch: ...`) and the Rust engine's stdout/stderr. The stdout/stderr redirect is process-wide, so the tag also
@@ -913,7 +914,7 @@ engine rejects patterns that `java.util.regex` accepts). Two checks run on a boo
 ../scripts/android_smoke.sh --pixelfed                    # device and server already running
 ../scripts/android_smoke.sh --boot --server --pixelfed    # boots Medium_Phone_API_36 headless and starts the
                                                           # server, then stops both at the end
-../scripts/android_smoke.sh --help                        # --workspaces, --skip-install, --skip-rust, --wait, --timeout
+../scripts/android_smoke.sh --help                        # --workspaces, --base-url, --skip-install, --skip-rust, --wait, --timeout
 
 # Instrumented tests (androidApp/src/androidTest): the shared interpolation regexes on the device, and the
 # AndroidKeyStore session store round trip (set/get/delete, survives a new instance, encrypted at rest).

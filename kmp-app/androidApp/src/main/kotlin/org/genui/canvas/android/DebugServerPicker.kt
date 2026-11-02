@@ -14,7 +14,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -49,13 +49,23 @@ internal object DebugServer {
     }
 
     fun label(url: String): String = presets.firstOrNull { it.second == url }?.first ?: url
+
+    /** The normalized URL if [input] is an http(s) URL with a host (no path beyond `/`), else null. */
+    fun parse(input: String): String? {
+        val url = input.trim().trimEnd('/')
+        val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return null
+        if (uri.scheme != "http" && uri.scheme != "https") return null
+        if (uri.host.isNullOrEmpty() || !uri.rawPath.isNullOrEmpty() || uri.rawQuery != null || uri.rawFragment != null) return null
+        return url
+    }
 }
 
 /** A small "server: …" chip; tap for the menu. [onPick] gets the new URL (null = build default). */
 @Composable
 internal fun DebugServerChip(current: String, onPick: (String?) -> Unit, modifier: Modifier = Modifier) {
-    var menu by remember { mutableStateOf(false) }
-    var custom by remember { mutableStateOf<String?>(null) }
+    // Saveable: the menu and a half-typed custom URL survive rotation.
+    var menu by rememberSaveable { mutableStateOf(false) }
+    var custom by rememberSaveable { mutableStateOf<String?>(null) }
     Box(modifier) {
         Surface(
             onClick = { menu = true },
@@ -88,13 +98,19 @@ internal fun DebugServerChip(current: String, onPick: (String?) -> Unit, modifie
         AlertDialog(
             onDismissRequest = { custom = null },
             title = { Text("Server URL") },
-            text = { OutlinedTextField(value = text, onValueChange = { custom = it }, singleLine = true) },
+            text = {
+                val invalid = DebugServer.parse(text) == null
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { custom = it },
+                    singleLine = true,
+                    isError = invalid,
+                    supportingText = { if (invalid) Text("http(s)://host[:port]") },
+                )
+            },
             confirmButton = {
-                TextButton(onClick = {
-                    val url = text.trim().trimEnd('/')
-                    custom = null
-                    if (url.startsWith("http://") || url.startsWith("https://")) onPick(url)
-                }) { Text("Use") }
+                val url = DebugServer.parse(text)
+                TextButton(enabled = url != null, onClick = { custom = null; url?.let(onPick) }) { Text("Use") }
             },
             dismissButton = { TextButton(onClick = { custom = null }) { Text("Cancel") } },
         )

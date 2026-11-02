@@ -162,13 +162,28 @@ internal data class EngineConfig(val storageDir: File, val baseUrl: String, val 
          */
         fun from(intent: Intent?, storageDir: File, savedBaseUrl: String? = null): EngineConfig {
             val extras = if (BuildConfig.DEBUG) intent else null
-            return EngineConfig(
-                storageDir = storageDir,
-                baseUrl = extras?.getStringExtra(EXTRA_BASE_URL)?.takeIf { it.isNotBlank() }
+            val baseUrl = (
+                extras?.getStringExtra(EXTRA_BASE_URL)?.takeIf { it.isNotBlank() }
                     ?: savedBaseUrl?.takeIf { BuildConfig.DEBUG }
-                    ?: BuildConfig.CANVAS_BASE_URL,
+                    ?: BuildConfig.CANVAS_BASE_URL
+                ).trimEnd('/')
+            return EngineConfig(
+                storageDir = storageDirFor(storageDir, baseUrl),
+                baseUrl = baseUrl,
                 workspace = extras?.getStringExtra(EXTRA_WORKSPACE)?.takeIf { it.isNotBlank() } ?: BuildConfig.CANVAS_WORKSPACE,
             )
+        }
+
+        /**
+         * The build-default server keeps `filesDir`; any other server (debug overrides only) gets its own
+         * `filesDir/servers/<sanitized url>` so one server's cached entities and PENDING outbox rows are never shown
+         * for, or flushed to, another. It also means a picker switch never opens the old engine's `cache.db`
+         * while that engine is still closing.
+         */
+        internal fun storageDirFor(filesDir: File, baseUrl: String): File {
+            if (baseUrl == BuildConfig.CANVAS_BASE_URL.trimEnd('/')) return filesDir
+            val name = baseUrl.replace(Regex("[^A-Za-z0-9.-]"), "_")  // e.g. http___10.0.2.2_8080
+            return File(File(filesDir, "servers"), name)
         }
     }
 }

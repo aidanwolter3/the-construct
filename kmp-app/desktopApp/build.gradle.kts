@@ -47,6 +47,10 @@ compose.desktop {
         mainClass = "org.genui.canvas.desktop.MainKt"
         // Applies to `:desktopApp:run` and packaged distributions.
         jvmArgs += "-Djna.library.path=$rustLibDir"
+        // `./gradlew :desktopApp:run -Dcanvas.baseUrl=...` sets the property in Gradle's JVM, not the app's: forward it.
+        listOf("canvas.baseUrl", "canvas.workspace").forEach { key ->
+            providers.systemProperty(key).orNull?.takeIf { it.isNotBlank() }?.let { jvmArgs += "-D$key=$it" }
+        }
         nativeDistributions {
             targetFormats(TargetFormat.Dmg)
             packageName = "ProjectCanvas"
