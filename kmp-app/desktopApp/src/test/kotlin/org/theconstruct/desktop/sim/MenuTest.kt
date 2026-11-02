@@ -12,6 +12,9 @@ import org.theconstruct.ConstructController
 import org.theconstruct.ConstructEngineBridge
 import org.theconstruct.ConstructJson
 import org.theconstruct.EngineSnapshot
+import org.theconstruct.LayoutApiException
+import org.theconstruct.ServerChoice
+import org.theconstruct.ServerOption
 import org.theconstruct.UiNode
 import org.theconstruct.displayedWorkspace
 import java.io.File
@@ -51,10 +54,10 @@ class MenuTest {
     private fun SkikoComposeUiTest.has(tag: String): Boolean =
         onAllNodes(hasTestTag(tag), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
 
-    private fun compose(controller: ConstructController, block: SkikoComposeUiTest.() -> Unit) {
+    private fun compose(controller: ConstructController, server: ServerChoice? = null, block: SkikoComposeUiTest.() -> Unit) {
         SimImages.install("fixture")
         runSkikoComposeUiTest(size = Size(390f, 844f), density = Density(1f)) {
-            setContent { ConstructApp(controller) }
+            setContent { ConstructApp(controller, server = server) }
             waitForIdle()
             block()
         }
@@ -173,6 +176,35 @@ class MenuTest {
         assertTrue(controller.menu.appsFailedOffline)
         runner(fake, controller).ok("online; open-menu; assert-text Online; assert-text Counter")
         assertFalse(controller.menu.appsFailedOffline, "the list was reloaded once back online")
+    }
+
+    @Test
+    fun anOfflineKindFailureWhileOnlineShowsTryAgain() {
+        val fake = feed()
+        var fail = false
+        // Online, but the apps call fails like a timeout or a closed engine (Kind.Offline).
+        val bridge = object : ConstructEngineBridge by fake {
+            override fun listApps(): String =
+                if (fail) throw LayoutApiException("Can't reach your pod.", LayoutApiException.Kind.Offline) else fake.listApps()
+        }
+        val controller = ConstructController(bridge, fake.appId)
+        runner(fake, controller).ok("open-menu; assert-text Counter; close-menu")
+        fail = true
+        runner(fake, controller).ok("open-menu; assert-text Online; assert-text Counter; assert-text Can't reach your pod.; assert-text Try again")
+    }
+
+    @Test
+    fun aFailedServerSwitchIsShownInTheServerSection() {
+        val controller = ConstructController(feed())
+        val error = ServerChoice.switchFailed("https://example.com/", IllegalStateException("boom"))
+        assertEquals("Couldn't switch to https://example.com: boom", error)
+        val server = ServerChoice("https://staging.example", listOf(ServerOption("staging", "Staging", "https://staging.example")), error = error) {}
+        compose(controller, server) {
+            controller.menu.openMenu()
+            waitForIdle()
+            onNode(hasTestTag("server-error"), useUnmergedTree = true).assertExists()
+            onNode(hasText(error)).assertExists()
+        }
     }
 
     @Test

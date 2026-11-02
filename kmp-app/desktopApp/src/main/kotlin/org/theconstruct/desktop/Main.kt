@@ -30,6 +30,9 @@ private class Session(val baseUrl: String, val controller: ConstructController)
 // callback observers), so it stays strongly reachable for the whole life of the JVM process.
 private var session: Session? by mutableStateOf(null)
 
+/** Why the last server switch failed (the menu's Server section shows it); cleared by the next attempt. */
+private var switchError: String? by mutableStateOf(null)
+
 /**
  * A controller for [workspace] on [baseUrl], with an engine factory so the menu can open the server's other apps.
  * Sign-in (DECISIONS D19): no secure store (the engine uses the macOS Keychain), the system browser, and a loopback
@@ -74,7 +77,7 @@ fun main() {
             state = rememberWindowState(width = 480.dp, height = 720.dp),
         ) {
             val current = session ?: return@Window
-            val server = ServerChoice(current.baseUrl, DESKTOP_SERVERS) { url -> switchServer(root, current, url, workspace) }
+            val server = ServerChoice(current.baseUrl, DESKTOP_SERVERS, error = switchError) { url -> switchServer(root, current, url, workspace) }
             key(current) { ConstructApp(current.controller, server = server) }
         }
     }
@@ -82,9 +85,10 @@ fun main() {
 
 /**
  * The menu's server picker: replaces [current] with a session on [url] (same app), then saves the choice and closes the
- * old engine. If the new engine can't be created, nothing changes and nothing is saved.
+ * old engine. If the new engine can't be created, nothing changes and nothing is saved; the Server section says why.
  */
 private fun switchServer(root: File, current: Session, url: String, defaultWorkspace: String) {
+    switchError = null
     if (url.trimEnd('/') == current.baseUrl) {
         current.controller.menu.closeMenu()
         return
@@ -93,6 +97,7 @@ private fun switchServer(root: File, current: Session, url: String, defaultWorks
         openSession(root, url.trimEnd('/'), current.controller.currentAppId() ?: defaultWorkspace)
     } catch (t: Throwable) {
         println("[desktop] cannot start an engine for $url: $t")
+        switchError = ServerChoice.switchFailed(url, t)
         return
     }
     DesktopServerPrefs.save(url)

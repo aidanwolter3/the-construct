@@ -350,13 +350,24 @@ from a client (D32, D33).
 - **Platforms (D33):** default app `pixelfed_home` everywhere. Android, desktop and both simulator modes open other
   apps through an engine factory.
   - Android: the debug server chip is replaced by the drawer's Server section in all builds (SharedPreferences
-    `server`, activity restart, per-server storage). Cleartext to the loopback hosts is now allowed in release too.
+    `server`, in-place switch, per-server storage). Cleartext to the loopback hosts is now allowed in release too.
   - Desktop: Staging/Local picker in `java.util.prefs`; `-Dconstruct.baseUrl` / `CONSTRUCT_BASE_URL` still win at
     launch; switches happen in place; the engine is closed on window close.
   - `android_smoke.sh` checks the Menu button.
 - **Tests:** cargo 270, :shared 59, :desktopApp 58 (all passing). README simulator examples re-run in fixture mode
   (phone and desktop) and live against a local pod + fake Pixelfed (sign-in, history, select-version, open-app).
-- Review/QA: in progress.
+- Review/QA: two review rounds and two QA rounds (simulator phone + desktop; emulator against a local pod + fake
+  Pixelfed, including a new layout file appearing live as "Newer version available"; the in-place server switch;
+  staging sign-in + like).
+  - Fixed: stable file hash (migration v8), unknown intents rejected in files, missing files tolerated, the
+    closed-controller race, custom URL https policy, connectivity badge, pinned row, offline drawer (stale apps
+    error only while online), the WAL busy race at startup (`PRAGMA journal_mode` retried on SQLITE_BUSY), failed
+    server switch feedback, the launch `baseUrl` extra no longer winning after a switch, and a clear "This server
+    doesn't look like a Construct pod." for a non-pod custom URL.
+  - Deferred (LOW): Android creates the new engine on the main thread during a server switch; the simulator's server
+    list uses the desktop URL policy; staging's duplicate `pixelfed_home` v2 "Classic feed" is by design (D32).
+  - Tests: cargo 281, :shared 63, :desktopApp 63 (all passing).
+- Status: DONE.
 
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and

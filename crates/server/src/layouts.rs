@@ -214,33 +214,45 @@ fn write_canonical(v: &Value, out: &mut String) {
     }
 }
 
-/// Whether this build knows the intent tag (an unknown one deserializes as
+/// Whether this build knows the intent tag (an unknown one, and the
+/// `action.unknown` fallback tag itself, deserializes as
 /// [`protocol::ActionIntent::Unknown`]; layout files must not use one).
 fn is_known_intent(tag: &str) -> bool {
     !matches!(
         serde_json::from_value::<protocol::ActionIntent>(json!({ "intent": tag })),
         Ok(protocol::ActionIntent::Unknown)
-    ) && tag != "action.unknown"
+    )
 }
 
-/// `(JSON pointer, tag)` of each object in `v` whose `"intent"` tag is not
-/// known to this build.
+/// `(JSON pointer, tag)` of each intent in `v` (the value of an `on_click`
+/// or `*_intent` key) whose `"intent"` tag is not known to this build.
 fn unknown_intent_tags(v: &Value, at: &str, out: &mut Vec<(String, String)>) {
+    collect_unknown_intent_tags(v, at, false, out);
+}
+
+fn collect_unknown_intent_tags(
+    v: &Value,
+    at: &str,
+    intent_position: bool,
+    out: &mut Vec<(String, String)>,
+) {
     match v {
         Value::Object(map) => {
-            if let Some(Value::String(tag)) = map.get("intent")
+            if intent_position
+                && let Some(Value::String(tag)) = map.get("intent")
                 && !is_known_intent(tag)
             {
                 out.push((at.to_owned(), tag.clone()));
             }
             for (k, child) in map {
+                let is_intent = k == "on_click" || k.ends_with("_intent");
                 let k = k.replace('~', "~0").replace('/', "~1");
-                unknown_intent_tags(child, &format!("{at}/{k}"), out);
+                collect_unknown_intent_tags(child, &format!("{at}/{k}"), is_intent, out);
             }
         }
         Value::Array(items) => {
             for (i, child) in items.iter().enumerate() {
-                unknown_intent_tags(child, &format!("{at}/{i}"), out);
+                collect_unknown_intent_tags(child, &format!("{at}/{i}"), false, out);
             }
         }
         _ => {}

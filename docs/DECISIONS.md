@@ -1011,7 +1011,8 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   either. The served layout is still the canonical `UiNode` blob (`hash`), recorded when the file was first
   deployed. Rows recorded before v8 have `file_hash` NULL: on the first sync the pod adopts the file's hash only if
   the file's canonical `UiNode` hash and note still equal what was recorded (else the changed-file error), and
-  compares `file_hash` from then on.
+  compares `file_hash` from then on. Numbers hash as written (`1e2`, `100` and `100.0` differ), so rewriting a
+  number's notation counts as a change: the check errs toward refusing; keep a deployed file's numbers as written.
 - **Startup sync (`layouts::sync`, from `AppState::try_new`, before listening):** this runs over all apps in ONE
   (IMMEDIATE) transaction and is idempotent; a refusal writes nothing for any app. A file already recorded
   (`file_key` `<app>/NNNN`) must have the same `file_hash`. A new file is appended as version `MAX(version) + 1`
@@ -1086,7 +1087,9 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   n)}` call `GET /v1/apps...`. They are blocking, public (no bearer) and pass the pod's JSON through, in the D27
   style: own reqwest client, caller's thread, `LayoutApiError` with readable `reason`s such as "That app doesn't
   exist.", "That version doesn't exist.", "That isn't a valid app id." and "Can't reach your pod. Check your
-  connection and try again.".
+  connection and try again.". `list_apps` reports a 404 or a 2xx that is not `{"apps": [...]}` as "This server
+  doesn't look like a Construct pod." (a custom URL pointing at some other web server); "That app doesn't exist."
+  stays for `app_not_found` from the per-app endpoints.
   - Removed: `PromptAgent` dispatch, the agent thread, `agent_json`, the catalog writes (activate/restore) and the
     old catalog reads, with their FFI exports and Kotlin wrappers.
   - Snapshot `layout_json` = `{"app_id": "<workspace>", "version": n}` from the applied
@@ -1108,9 +1111,10 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   The menu state lives in `ConstructController`, so an open drawer, the picker and a half-typed URL survive
   rotation. Back closes the innermost level (custom URL field, picker, drawer). Sections:
   - Apps: rows `app-<id>` open the app, and `app-history-<id>` opens its version picker.
-  - Connection (`menu-connection`): "Online" / "Offline", "N pending". When an apps reload fails with
-    `Kind.Offline` while a list is shown, no error is shown under Apps (Connection says Offline); the list reloads
-    when the engine reports online again.
+  - Connection (`menu-connection`): "Online" / "Offline", "N pending". When an apps reload fails while a list is
+    shown, the error (with Try again) shows under Apps only while the engine reports online: offline, Connection
+    already says so. A reload that failed with `Kind.Offline` reruns when the engine reports online again; an
+    Offline-kind failure while online (a timeout, a closed engine) shows its error.
   - Account (`menu-account`): "Signed in as @x" with `menu-sign-out`, or `menu-sign-in`, which starts the sign-in
     intent the screen offers.
   - Server (`menu-server`).
@@ -1148,8 +1152,13 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   - Android switches in place: the ViewModel starts a new session (engine on that server's own storage, same app),
     and only then saves the choice in SharedPreferences `server` / `baseUrl` (choosing the build default clears it;
     the old `debug_server` choice is still read as a fallback) and closes the old engine. If the engine can't be
-    created nothing is saved. Precedence: the `baseUrl` intent extra (debug builds only; dropped after a switch) >
-    saved choice > `BuildConfig`.
+    created nothing is saved. Precedence: the `baseUrl` intent extra (debug builds only) > saved choice >
+    `BuildConfig`. After a switch the extra no longer applies: the ViewModel keeps the session across configuration
+    changes, and the activity saves a `switchedServer` flag in `savedInstanceState`, so a re-creation after process
+    death (e.g. from recents, whose intent still carries the extra) starts on the saved choice.
+  - A failed switch (the engine can't be created) changes nothing and the Server section says so under its header
+    (`server-error`, `ServerChoice.error`): "Couldn't switch to <url>: <reason>". The next attempt clears it. Same
+    on desktop.
   - Cleartext: because the picker ships in release, the main `network_security_config.xml` now allows cleartext to
     `10.0.2.2`, `localhost` and `127.0.0.1` in **all** builds, so a release build can reach a local pod over
     `adb reverse` (loopback) or from the emulator (`10.0.2.2` is its alias for the host; on a physical device it is

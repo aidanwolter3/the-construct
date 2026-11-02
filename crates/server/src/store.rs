@@ -735,13 +735,47 @@ pub struct Store {
     conn: Mutex<Connection>,
 }
 
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Switch the database to WAL. SQLite answers the journal-mode change with
+/// SQLITE_BUSY immediately (the busy handler is not invoked) when another
+/// connection holds a lock, so skip it when already in WAL and otherwise
+/// retry with a short backoff up to the busy timeout.
+fn enable_wal(conn: &Connection) -> rusqlite::Result<()> {
+    let start = std::time::Instant::now();
+    let mut delay = std::time::Duration::from_millis(10);
+    loop {
+        let attempt = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get::<_, String>(0))
+            .and_then(|mode| {
+                if mode.eq_ignore_ascii_case("wal") {
+                    Ok(())
+                } else {
+                    conn.pragma_update(None, "journal_mode", "WAL")
+                }
+            });
+        match attempt {
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if matches!(
+                    e.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ) && start.elapsed() < BUSY_TIMEOUT =>
+            {
+                std::thread::sleep(delay);
+                delay = (delay * 2).min(std::time::Duration::from_millis(50));
+            }
+            other => return other,
+        }
+    }
+}
+
 impl Store {
     /// Open (creating if needed) the database file and run migrations.
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
         let conn = Connection::open(path)?;
         // Before WAL: switching the journal mode can meet a concurrent starter.
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        enable_wal(&conn)?;
         Self::init(conn)
     }
 

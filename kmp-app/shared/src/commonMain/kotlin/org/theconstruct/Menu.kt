@@ -156,8 +156,9 @@ class MenuState internal constructor(private val controller: ConstructController
     }
 
     /**
-     * The last apps reload failed while an older list is still shown. Not set when it failed because the pod can't be
-     * reached: Connection already says "Offline", and the list reloads once back online ([appsFailedOffline]).
+     * The last apps reload failed while an older list is still shown. The drawer shows it only while the engine is
+     * online: offline, Connection already says "Offline" and the list reloads once back online ([appsFailedOffline]);
+     * online, even an Offline-kind failure (a timeout, a closed engine) shows with Try again.
      */
     var appsStaleError by mutableStateOf<String?>(null)
         private set
@@ -166,7 +167,7 @@ class MenuState internal constructor(private val controller: ConstructController
     var appsFailedOffline by mutableStateOf(false)
         private set
 
-    /** (Re)loads the apps; a failed reload keeps the last list (with the error under it unless offline). */
+    /** (Re)loads the apps; a failed reload keeps the last list (with the error under it while online). */
     internal suspend fun loadApps() {
         if (apps !is Load.Ready) apps = Load.Loading
         try {
@@ -174,13 +175,8 @@ class MenuState internal constructor(private val controller: ConstructController
             appsStaleError = null
             appsFailedOffline = false
         } catch (e: LayoutApiException) {
-            val offline = e.kind == LayoutApiException.Kind.Offline
-            appsFailedOffline = offline
-            when {
-                apps !is Load.Ready -> apps = Load.Failed(e.message)
-                offline -> appsStaleError = null
-                else -> appsStaleError = e.message
-            }
+            appsFailedOffline = e.kind == LayoutApiException.Kind.Offline
+            if (apps is Load.Ready) appsStaleError = e.message else apps = Load.Failed(e.message)
         }
     }
 
@@ -460,7 +456,8 @@ private fun AppsSection(controller: ConstructController, state: ConstructState, 
     when (val a = menu.apps) {
         Load.Loading -> if (loaded.isEmpty()) LoadingRow("Loading apps…")
         is Load.Failed -> InlineError(a.message, tag = "apps-error", onRetry = menu::retryApps)
-        is Load.Ready -> menu.appsStaleError?.let { InlineError(it, tag = "apps-error", onRetry = menu::retryApps) }
+        is Load.Ready -> menu.appsStaleError?.takeIf { state.isOnline == true }
+            ?.let { InlineError(it, tag = "apps-error", onRetry = menu::retryApps) }
     }
     menu.appError?.let { InlineError(it, tag = "app-error", onRetry = null) }
 }
@@ -610,6 +607,14 @@ private fun ServerSection(menu: MenuState, server: ServerChoice) {
             Icon(
                 if (menu.serverExpanded) ConstructIcons.ExpandLess else ConstructIcons.ExpandMore,
                 contentDescription = if (menu.serverExpanded) "Hide servers" else "Choose a server",
+            )
+        }
+        server.error?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(start = 20.dp, end = 16.dp, bottom = 4.dp).testTag("server-error"),
             )
         }
         if (!menu.serverExpanded) return@Column

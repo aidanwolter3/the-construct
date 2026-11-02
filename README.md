@@ -881,9 +881,10 @@ adb exec-out screencap -p > screen.png
 Intent extras `baseUrl` and `workspace` override the `BuildConfig` defaults (debug builds only; release builds
 ignore them). In every build, release included, the menu's **Server** section switches between Staging, Local
 emulator (`http://10.0.2.2:8080`), Local USB (`http://127.0.0.1:8080`), a custom `http(s)://host[:port]` and
-"Build default" (when that is not a preset). The choice is saved (SharedPreferences `server`, key `baseUrl`) and
-the activity restarts with a new engine. Precedence: the `baseUrl` extra (debug only), then the saved choice, then
-`BuildConfig`. A server other than the build default gets its own storage dir (`filesDir/servers/<url>`), so cached
+"Build default" (when that is not a preset). The switch happens in place (a new engine on that server, same app,
+then the old one is closed) and the choice is saved (SharedPreferences `server`, key `baseUrl`); if the new engine
+can't be created, nothing changes and the Server section shows why. Precedence: the `baseUrl` extra (debug only,
+and no longer once the menu has switched servers), then the saved choice, then `BuildConfig`. A server other than the build default gets its own storage dir (`filesDir/servers/<url>`), so cached
 entities and pending outbox rows never cross servers. Other apps open from the menu's Apps section (with a pod that
 lists them, `CONSTRUCT_SHOW_DEV_APPS=1`). `scripts/android_smoke.sh` passes `--es baseUrl http://10.0.2.2:8080` (its
 `--base-url`). The extras are read when the engine is
@@ -920,7 +921,7 @@ cd kmp-app && ./gradlew :shared:allTests :desktopApp:test
 ./gradlew :androidApp:assembleDebug   # Android build check only: it doesn't launch anything
 ```
 
-Counts at the time of writing: `cargo test --workspace` 270, `:shared:allTests` 59, `:desktopApp:test` 58 (all
+Counts at the time of writing: `cargo test --workspace` 281, `:shared:allTests` 63, `:desktopApp:test` 63 (all
 passing).
 
 `assembleDebug` and the JVM host tests can't catch Android-only runtime failures (for example, Android's ICU regex

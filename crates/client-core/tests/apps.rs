@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use client_core::catalog::LAYOUTS_OFFLINE;
+use client_core::catalog::{LAYOUTS_NOT_A_POD, LAYOUTS_OFFLINE};
 use client_core::{ConstructEngine, EngineConfig, LayoutApiError};
 use protocol::UiNode;
 use serde_json::{Value, json};
@@ -217,6 +217,57 @@ fn unreachable_pod_is_offline() {
             }
         );
     }
+}
+
+/// A plain web server (not a pod) on a local port: every path answers
+/// `status` with an HTML body.
+fn web_server(status: u16) -> (String, tokio::runtime::Runtime) {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let status = axum::http::StatusCode::from_u16(status).unwrap();
+    let app = axum::Router::new().fallback(move || async move {
+        (
+            status,
+            [("content-type", "text/html")],
+            "<!doctype html><title>Example Domain</title>",
+        )
+    });
+    rt.spawn(async move {
+        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        axum::serve(listener, app).await.unwrap();
+    });
+    (base, rt)
+}
+
+#[test]
+fn a_server_that_is_not_a_pod_says_so() {
+    let (base, _rt) = web_server(404);
+    let e = engine(&base, "pixelfed_home");
+    assert_eq!(
+        e.list_apps().unwrap_err(),
+        LayoutApiError::NotFound {
+            reason: LAYOUTS_NOT_A_POD.into()
+        }
+    );
+    // The per-app endpoints keep their own sentence.
+    assert_eq!(
+        e.app_versions("pixelfed_home", None, None)
+            .unwrap_err()
+            .reason(),
+        "That app doesn't exist."
+    );
+
+    let (base, _rt) = web_server(200);
+    let e = engine(&base, "pixelfed_home");
+    let err = e.list_apps().unwrap_err();
+    assert_eq!(err.reason(), LAYOUTS_NOT_A_POD);
+    assert!(matches!(err, LayoutApiError::Server { .. }), "{err:?}");
 }
 
 #[test]

@@ -23,6 +23,9 @@ const CATALOG_HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 pub const LAYOUTS_OFFLINE: &str = "Can't reach your pod. Check your connection and try again.";
 /// `reason` of a 401 (not expected: the app endpoints are public).
 pub const LAYOUTS_UNAUTHORIZED: &str = "The pod refused this request.";
+/// `reason` when `GET /v1/apps` gets a 404 or a 2xx that is not the pod's
+/// apps JSON: the base URL is some other web server.
+pub const LAYOUTS_NOT_A_POD: &str = "This server doesn't look like a Construct pod.";
 
 /// Why a catalog call failed. `reason` is a short sentence for the UI; the
 /// URL, status and body go to the log.
@@ -140,9 +143,29 @@ impl Inner {
 
 impl ConstructEngine {
     /// `GET /v1/apps`: `{"apps":[{id, title, icon, latest_version,
-    /// updated_at}]}`. Blocking.
+    /// updated_at}]}`. Blocking. Every pod serves this list, so a 404 or a
+    /// 2xx without an `apps` array means the base URL is not a pod
+    /// ([`LAYOUTS_NOT_A_POD`]), not that an app is missing.
     pub fn list_apps(&self) -> Result<String, LayoutApiError> {
-        self.inner.catalog_get("/v1/apps")
+        match self.inner.catalog_get("/v1/apps") {
+            Ok(body) => {
+                let is_pod = serde_json::from_str::<Value>(&body)
+                    .is_ok_and(|v| v.get("apps").is_some_and(Value::is_array));
+                if is_pod {
+                    return Ok(body);
+                }
+                let start: String = body.trim().chars().take(200).collect();
+                eprintln!("[ConstructEngine] apps: GET /v1/apps is not a pod's list: {start}");
+                Err(LayoutApiError::Server {
+                    status: 200,
+                    reason: LAYOUTS_NOT_A_POD.to_owned(),
+                })
+            }
+            Err(LayoutApiError::NotFound { .. }) => Err(LayoutApiError::NotFound {
+                reason: LAYOUTS_NOT_A_POD.to_owned(),
+            }),
+            Err(e) => Err(e),
+        }
     }
 
     /// `GET /v1/apps/<id>/versions[?before=N&limit=L]`: one page of the app's

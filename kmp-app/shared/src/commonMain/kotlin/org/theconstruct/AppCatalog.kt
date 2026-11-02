@@ -367,13 +367,23 @@ data class ServerOption(val key: String, val label: String, val url: String)
  *
  * [cleartextHosts]: the hosts a custom `http://` URL may name (Android: the loopback / emulator hosts its network
  * security config lets images load from, [ServerUrls.ANDROID_CLEARTEXT_HOSTS]); null = any host (desktop).
+ *
+ * [error]: why the last switch failed ([switchFailed]), shown under the section's header; the platform clears it on the
+ * next attempt.
  */
 class ServerChoice(
     val currentUrl: String,
     val options: List<ServerOption>,
     val cleartextHosts: Set<String>? = null,
+    val error: String? = null,
     val onSelect: (String) -> Unit,
 ) {
+    companion object {
+        /** The Server section's message for a switch to [url] whose engine could not be created. */
+        fun switchFailed(url: String, reason: Throwable): String =
+            "Couldn't switch to ${url.trimEnd('/')}: ${reason.message?.takeIf { it.isNotBlank() } ?: reason::class.simpleName}"
+    }
+
     /** The preset's label for [url], else the URL itself. */
     fun label(url: String = currentUrl): String =
         options.firstOrNull { it.url.trimEnd('/') == url.trimEnd('/') }?.label ?: url

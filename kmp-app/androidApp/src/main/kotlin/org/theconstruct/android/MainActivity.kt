@@ -46,6 +46,9 @@ private const val TAG = "ConstructEngine"
 private const val EXTRA_BASE_URL = "baseUrl"
 private const val EXTRA_WORKSPACE = "workspace"
 
+/** savedInstanceState key: the user switched servers in the menu, so a launch `baseUrl` extra no longer applies. */
+private const val STATE_SWITCHED_SERVER = "switchedServer"
+
 /** OAuth redirect URI (custom scheme); the manifest's intent filter routes it back to [MainActivity]. */
 internal const val AUTH_REDIRECT_URI = "construct://oauth"
 
@@ -68,11 +71,15 @@ class MainActivity : ComponentActivity() {
 
         val storageDir = filesDir
         val appContext = applicationContext
+        // Re-created after process death (e.g. from recents) with the launch intent: a server switch made in the menu
+        // since then wins over that intent's `baseUrl` extra.
+        val switched = savedInstanceState?.getBoolean(STATE_SWITCHED_SERVER) == true
         vm = ViewModelProvider(
             this,
             viewModelFactory {
                 initializer {
-                    ConstructViewModel(EngineConfig.from(intent, storageDir, ServerPrefs.saved(appContext)), appContext)
+                    val config = EngineConfig.from(intent, storageDir, ServerPrefs.saved(appContext), ignoreBaseUrlExtra = switched)
+                    ConstructViewModel(config, appContext).also { if (switched) it.switchedServer = true }
                 }
             },
         )[ConstructViewModel::class.java]
@@ -84,7 +91,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             val session = vm.session
             // Cleartext (http://) custom URLs only to the hosts network_security_config.xml allows, or images break.
-            val server = ServerChoice(session.baseUrl, ServerPrefs.options(), ServerUrls.ANDROID_CLEARTEXT_HOSTS, ::switchServer)
+            val server = ServerChoice(
+                session.baseUrl, ServerPrefs.options(), ServerUrls.ANDROID_CLEARTEXT_HOSTS,
+                error = vm.switchError, onSelect = vm::switchServer,
+            )
             // The shared UI's menu button sits at the top-left of this padded box, clear of the system bars.
             Box(Modifier.fillMaxSize().background(Color.White).safeDrawingPadding()) {
                 key(session) { ConstructApp(session.controller, server = server) }
@@ -93,12 +103,12 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * The menu's server picker (all builds): the ViewModel starts an engine on [url] (that server's own storage, same
-     * app) and only then saves the choice and closes the old engine. A launch `baseUrl` extra is dropped so a
-     * re-created activity doesn't go back to it.
+     * After a menu server switch the launch `baseUrl` extra must not win again: the ViewModel covers configuration
+     * changes, and this flag a re-creation after process death (whose intent still carries the extra).
      */
-    private fun switchServer(url: String) {
-        if (vm.switchServer(url)) intent?.removeExtra(EXTRA_BASE_URL)
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (vm.switchedServer) outState.putBoolean(STATE_SWITCHED_SERVER, true)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -156,12 +166,13 @@ internal data class EngineConfig(val storageDir: File, val baseUrl: String, val 
          * the BuildConfig default (-PconstructBaseUrl at build time; default the staging pod). Workspace: intent extra
          * (debug only), else BuildConfig (-PconstructWorkspace; default `pixelfed_home`). Extras are honored only in
          * debug builds: the activity is exported (launcher), so in a release build any other app could otherwise point
-         * the engine at an arbitrary server.
+         * the engine at an arbitrary server. [ignoreBaseUrlExtra]: the user has switched servers since this launch, so
+         * the saved choice wins over the extra.
          */
-        fun from(intent: Intent?, storageDir: File, savedBaseUrl: String? = null): EngineConfig {
+        fun from(intent: Intent?, storageDir: File, savedBaseUrl: String? = null, ignoreBaseUrlExtra: Boolean = false): EngineConfig {
             val extras = if (BuildConfig.DEBUG) intent else null
             val baseUrl = (
-                extras?.getStringExtra(EXTRA_BASE_URL)?.takeIf { it.isNotBlank() }
+                extras?.takeUnless { ignoreBaseUrlExtra }?.getStringExtra(EXTRA_BASE_URL)?.takeIf { it.isNotBlank() }
                     ?: savedBaseUrl
                     ?: BuildConfig.CONSTRUCT_BASE_URL
                 ).trimEnd('/')
@@ -239,6 +250,13 @@ internal class ConstructViewModel(config: EngineConfig, private val appContext: 
 
     val controller: ConstructController get() = session.controller
 
+    /** Why the last server switch failed (the menu's Server section shows it); cleared by the next attempt. */
+    var switchError: String? by mutableStateOf(null)
+        private set
+
+    /** The menu switched servers during this launch (the activity saves it, see [MainActivity.onSaveInstanceState]). */
+    var switchedServer = false
+
     private fun openSession(config: EngineConfig): Session {
         Log.i(TAG, "starting base_url=${config.baseUrl} workspace=${config.workspace} storage=${config.storageDir}")
         config.storageDir.mkdirs()
@@ -261,14 +279,16 @@ internal class ConstructViewModel(config: EngineConfig, private val appContext: 
 
     /**
      * Switches to [url]: a new session (engine on that server's own storage, same app), then the choice is saved and
-     * the old engine closed. If the engine can't be created nothing changes (and nothing is saved). True if switched.
+     * the old engine closed. If the engine can't be created nothing changes (and nothing is saved) and [switchError]
+     * says why.
      */
-    fun switchServer(url: String): Boolean {
+    fun switchServer(url: String) {
         val current = session
         val baseUrl = url.trimEnd('/')
+        switchError = null
         if (baseUrl == current.baseUrl) {
             current.controller.menu.closeMenu()
-            return false
+            return
         }
         val filesDir = appContext.filesDir
         val config = EngineConfig(
@@ -279,9 +299,11 @@ internal class ConstructViewModel(config: EngineConfig, private val appContext: 
             openSession(config)
         } catch (t: Throwable) {
             Log.w(TAG, "cannot start an engine for $baseUrl: $t")
-            return false
+            switchError = ServerChoice.switchFailed(baseUrl, t)
+            return
         }
         ServerPrefs.save(appContext, baseUrl)
+        switchedServer = true
         Log.i(TAG, "server picker: switched to $baseUrl")
         session = next
         try {
@@ -289,7 +311,6 @@ internal class ConstructViewModel(config: EngineConfig, private val appContext: 
         } catch (t: Throwable) {
             Log.w(TAG, "closing the previous engine failed: $t")
         }
-        return true
     }
 
     /** Forwards a `construct://oauth?...` redirect to the current engine's pending sign-in. */
