@@ -1,0 +1,112 @@
+name: CI
+
+# Every PR and push: Rust checks, JVM/shared-UI tests and headless simulator screenshots (artifact).
+# Push to main: if Rust checks pass, deploy the fake Pixelfed and the pod to Fly.io staging.
+#   https://the-construct-pod.fly.dev   (deploy/fly/pod.toml)
+#   https://the-construct-fake-pixelfed.fly.dev   (deploy/fly/fake-pixelfed.toml)
+# Deploys need repo secrets FLY_API_TOKEN_POD and FLY_API_TOKEN_FAKE (app-scoped Fly deploy tokens);
+# without them the deploy steps are skipped, not failed.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (clippy + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  jvm:
+    name: JVM tests + simulator screenshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build the Rust engine for the JVM (target/release/libclient_ffi.so)
+        run: cargo build -p client-ffi --release
+      - name: Shared + desktop tests
+        working-directory: kmp-app
+        # gradle.properties pins a macOS JDK path; point Gradle at the runner's JDK instead.
+        run: ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :shared:allTests :desktopApp:test
+      - name: Simulator screenshots (fixture mode)
+        working-directory: kmp-app
+        run: |
+          ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate \
+            -Pworkspace=home -Pscreen=phone -Pout="$RUNNER_TEMP/sim/home" \
+            -Pscript="shot start; click Increment; click Increment; assert-text Count: 2; shot after; offline; shot offline"
+          ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate \
+            -Pworkspace=pixelfed_demo -Pscreen=phone -Pout="$RUNNER_TEMP/sim/pixelfed" \
+            -Pscript="shot feed"
+      - name: Upload screenshots and test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-and-test-reports
+          path: |
+            ${{ runner.temp }}/sim
+            kmp-app/**/build/reports/tests
+          if-no-files-found: ignore
+          retention-days: 14
+
+  deploy:
+    name: Deploy to Fly.io staging
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+    env:
+      FLY_TOKEN_POD: ${{ secrets.FLY_API_TOKEN_POD }}
+      FLY_TOKEN_FAKE: ${{ secrets.FLY_API_TOKEN_FAKE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy fake Pixelfed
+        if: env.FLY_TOKEN_FAKE != ''
+        env:
+          FLY_API_TOKEN: ${{ env.FLY_TOKEN_FAKE }}
+        run: flyctl deploy . --config deploy/fly/fake-pixelfed.toml --dockerfile crates/fake-pixelfed/Dockerfile --remote-only --ha=false
+      - name: Deploy pod
+        if: env.FLY_TOKEN_POD != ''
+        env:
+          FLY_API_TOKEN: ${{ env.FLY_TOKEN_POD }}
+        run: flyctl deploy . --config deploy/fly/pod.toml --dockerfile deploy/pod.Dockerfile --remote-only --ha=false
+      - name: Smoke test
+        if: env.FLY_TOKEN_POD != ''
+        run: |
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://the-construct-pod.fly.dev/healthz) && [ "$code" = 200 ] && break
+            sleep 3
+          done
+          [ "$code" = 200 ] || { echo "healthz returned $code"; exit 1; }
+          curl -fsS https://the-construct-pod.fly.dev/v1/workspaces/home | jq -e '.workspace.id == "home"'
+      - name: Note skipped deploy
+        if: env.FLY_TOKEN_POD == '' || env.FLY_TOKEN_FAKE == ''
+        run: echo "::warning::FLY_API_TOKEN_POD / FLY_API_TOKEN_FAKE secrets missing; some deploy steps were skipped."
