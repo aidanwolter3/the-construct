@@ -35,6 +35,19 @@
                 },
                 {
                   "type": "core://Button",
+                  "label": "Decrement",
+                  "on_click": {
+                    "intent": "action.mutation.optimistic",
+                    "entity_uri": "core://counters/home",
+                    "field": "count",
+                    "value_expr": "entity.count - 1",
+                    "rollback_value": 0,
+                    "endpoint": "/v1/counters/home/decrement",
+                    "payload": {}
+                  }
+                },
+                {
+                  "type": "core://Button",
                   "label": "Reset",
                   "on_click": {
                     "intent": "action.mutation.optimistic",

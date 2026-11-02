@@ -294,7 +294,7 @@ fn counter_fixture_parses_and_reserializes_identically() {
             other => panic!("expected mutate Button, got {other:?}"),
         })
         .collect();
-    assert_eq!(labels, ["Increment", "Reset"]);
+    assert_eq!(labels, ["Increment", "Decrement", "Reset"]);
 
     assert_eq!(
         bundle.entities["core://counters/home"].get_i64("count"),

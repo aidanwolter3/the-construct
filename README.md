@@ -11,8 +11,8 @@ app (see [Android](#android)). A headless simulation mode renders the shared UI 
 
 ```
 crates/protocol      UiNode / ActionIntent / WorkspaceSpec (hydration bundle) / EntityRecord
-crates/server        Axum server: GET /v1/workspaces/{home,pixelfed_demo}
-crates/client-core   CanvasEngine: fetches the workspace, holds state, applies optimistic mutations
+crates/server        Axum server: GET /v1/workspaces/{home,pixelfed_demo}, persistent counters (SQLite)
+crates/client-core   CanvasEngine: fetches the workspace, holds state, applies optimistic mutations (SQLite cache + outbox)
 crates/client-ffi    UniFFI bridge (EngineHandle, FfiStateSnapshot, StateObserver) + uniffi-bindgen bin
 fixtures/            counter_home_bundle.json, pixelfed_home_bundle.json (DESIGN.md §2.2C)
 scripts/build_ffi.sh builds libclient_ffi.dylib and regenerates the Kotlin bindings
@@ -42,6 +42,25 @@ cargo run -p server
 curl -s http://127.0.0.1:8080/v1/workspaces/home | jq .
 ```
 
+Server details:
+
+- State lives in SQLite at `$CANVAS_DATA_DIR/server.db`; `CANVAS_DATA_DIR` defaults to `~/.canvas-server`
+  (created if missing). The path is logged at startup. Delete the file to start from a zero count.
+- `GET /v1/workspaces/home` returns the counter fixture with `core://counters/home`.count set to the stored count.
+- `POST /v1/counters/home/{increment,decrement,reset}` (optional JSON body, ignored) returns
+  `{"ok":true,"count":N}`. Decrementing at 0 is refused with 422 `{"error":"count_below_zero","count":0}` and
+  changes nothing. Unknown counters/ops are 404. Every mutation is logged at info with the resulting count.
+- Test hook, only when started with `CANVAS_TEST_HOOKS=1` (otherwise 404): `POST /v1/test/fault` with
+  `{"status":503,"count":3}` makes the next 3 POSTs (other than `/v1/test/*`) return that status (400-599)
+  without being applied; `"count":0` clears it. Each injected fault is logged.
+
+```bash
+CANVAS_TEST_HOOKS=1 cargo run -p server
+curl -s -X POST http://127.0.0.1:8080/v1/counters/home/increment          # {"count":1,"ok":true}
+curl -s -X POST -H 'content-type: application/json' \
+  -d '{"status":503,"count":2}' http://127.0.0.1:8080/v1/test/fault       # next 2 mutations -> 503
+```
+
 Terminal 2: build the FFI library and bindings, then run the desktop app.
 
 ```bash
@@ -69,10 +88,12 @@ Options for the desktop app (set as `-D` JVM properties or environment variables
 Separately, `-PskipRustBuild` is a Gradle property (`./gradlew -PskipRustBuild :desktopApp:run`) that skips
 the cargo build step.
 
-Clicks are applied locally only: there is no server sync until the action outbox lands in M5, so the count
-resets when the app restarts. The engine caches the last fetched bundle per workspace in
-`~/.canvas/workspace_<id>.json` (e.g. `workspace_home.json`) and uses it when the server is unreachable;
-it retries the fetch every 5 seconds until the server responds.
+The engine keeps a SQLite cache at `~/.canvas/cache.db` (tables `entities`, `active_workspace`,
+`action_outbox`; see docs/DECISIONS.md D13). Every fetched workspace (layout + entities) is written there and
+loaded on startup, so the last workspace shows when the server is unreachable; the fetch is retried every
+2 seconds until the server responds. Each click updates the entity and queues a PENDING `action_outbox` row in
+one transaction (`sqlite3 ~/.canvas/cache.db "SELECT * FROM action_outbox;"`). The old
+`workspace_<id>.json` cache files are ignored. Sending queued rows to the server is not implemented yet.
 
 ## Simulation mode
 
@@ -193,7 +214,7 @@ ignore them). They are read when the engine is
 created, so use `am start -S` (force-stop first) to switch workspace on a running app. Rotation keeps the
 same engine. Logcat tag `CanvasEngine` carries both the Kotlin log lines (`starting base_url=...`,
 `dispatch: ...`) and the Rust engine's stdout/stderr. The stdout/stderr redirect is process-wide, so the tag also
-shows other native output from the app process (e.g. GL/EGL driver lines). The workspace cache is in the app's
+shows other native output from the app process (e.g. GL/EGL driver lines). The SQLite cache (`cache.db`) is in the app's
 `filesDir`.
 
 On a physical phone, use `adb reverse tcp:8080 tcp:8080` and `--es baseUrl http://127.0.0.1:8080`.

@@ -116,9 +116,18 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 - :shared has no Android host tests; Android-only behaviour is covered by the smoke script + instrumented test.
 - Deprecated `compose.runtime/foundation/ui` accessors in shared/build.gradle.kts.
 
+## Milestone 5: SQLite cache + outbox (in progress)
+
+- Contract for the M5 units: DESIGN §2.3 plus D12 (server persistence) and D13 (client storage).
+- Done: server counters persist in SQLite (`CANVAS_DATA_DIR`, decrement rejects below zero with 422, test fault
+  hook `CANVAS_TEST_HOOKS=1`). client-core uses `<storage>/cache.db` with transactional optimistic mutate +
+  outbox insert, `seq`/`pending_actions` in snapshots, FFI bindings regenerated, Android .so builds.
+
 ## Next steps
 
-1. M5: SQLite entity cache + action outbox in client-core (rusqlite bundled; also builds for Android via cargo-ndk),
-   server sync of optimistic mutations, real rollback_value, snapshot sequence numbers.
-2. Small follow-ups: 404 "workspace not found" UI state; HTTPS enforcement for release; golden-image diffing for
+1. M5 remaining: sync worker (FIFO flush, 2xx delete, 4xx rollback + re-apply, 5xx/network backoff) and
+   refetch-merge (`State::apply_fetched`) in client-core; Kotlin: snapshot seq drop + "N pending" indicator,
+   FakeEngineBridge outbox, simulator `-Pstorage`; then review + QA (desktop sqlite3 check, Android).
+2. M6 Pixelfed + OAuth PKCE against a fake upstream; M7 AI layout engine (rules provider + Anthropic provider).
+3. Small follow-ups: 404 "workspace not found" UI state; HTTPS enforcement for release; golden-image diffing for
    the simulator (Roborazzi or a pixel diff on sim PNGs); Android host tests for :shared.

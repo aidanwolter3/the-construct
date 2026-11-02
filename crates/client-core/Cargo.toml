@@ -9,3 +9,4 @@ publish.workspace = true
 protocol.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
+rusqlite.workspace = true

@@ -17,11 +17,15 @@ fn platform_init() {
 }
 
 /// A snapshot of engine state; JSON payloads are passed through as strings.
+/// `seq` strictly increases per engine (drop snapshots with a seq not above
+/// the last applied one); `pending_actions` counts unsent outbox rows.
 #[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
 pub struct FfiStateSnapshot {
     pub workspace_json: String,
     pub entities_json: String,
     pub is_online: bool,
+    pub seq: u64,
+    pub pending_actions: u32,
 }
 
 impl From<StateSnapshot> for FfiStateSnapshot {
@@ -30,6 +34,8 @@ impl From<StateSnapshot> for FfiStateSnapshot {
             workspace_json: s.workspace_json,
             entities_json: s.entities_json,
             is_online: s.is_online,
+            seq: s.seq,
+            pending_actions: s.pending_actions,
         }
     }
 }
@@ -150,5 +156,19 @@ mod tests {
         );
         let snap = handle.snapshot();
         assert!(!snap.is_online);
+    }
+
+    #[test]
+    fn snapshot_carries_seq_and_pending_actions() {
+        let handle = EngineHandle::new(String::new(), "http://127.0.0.1:1".to_string());
+        let before = handle.snapshot();
+        assert_eq!(before.pending_actions, 0);
+        handle.dispatch(
+            r#"{"intent":"action.mutation.optimistic","entity_uri":"core://counters/home","field":"count","value_expr":"entity.count + 1","rollback_value":0,"endpoint":"/v1/counters/home/increment","payload":{}}"#
+                .to_string(),
+        );
+        let after = handle.snapshot();
+        assert_eq!(after.pending_actions, 1);
+        assert!(after.seq > before.seq);
     }
 }

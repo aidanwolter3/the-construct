@@ -1168,6 +1168,52 @@ private class JavaLangRefCleanable(
 /**
  * @suppress
  */
+public object FfiConverterUInt: FfiConverter<UInt, Int> {
+    override fun lift(value: Int): UInt {
+        return value.toUInt()
+    }
+
+    override fun read(buf: ByteBuffer): UInt {
+        return lift(buf.getInt())
+    }
+
+    override fun lower(value: UInt): Int {
+        return value.toInt()
+    }
+
+    override fun allocationSize(value: UInt) = 4UL
+
+    override fun write(value: UInt, buf: ByteBuffer) {
+        buf.putInt(value.toInt())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterULong: FfiConverter<ULong, Long> {
+    override fun lift(value: Long): ULong {
+        return value.toULong()
+    }
+
+    override fun read(buf: ByteBuffer): ULong {
+        return lift(buf.getLong())
+    }
+
+    override fun lower(value: ULong): Long {
+        return value.toLong()
+    }
+
+    override fun allocationSize(value: ULong) = 8UL
+
+    override fun write(value: ULong, buf: ByteBuffer) {
+        buf.putLong(value.toLong())
+    }
+}
+
+/**
+ * @suppress
+ */
 public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
     override fun lift(value: Byte): Boolean {
         return value.toInt() != 0
@@ -1573,11 +1619,15 @@ public object FfiConverterTypeEngineHandle: FfiConverter<EngineHandle, Pointer> 
 
 /**
  * A snapshot of engine state; JSON payloads are passed through as strings.
+ * `seq` strictly increases per engine (drop snapshots with a seq not above
+ * the last applied one); `pending_actions` counts unsent outbox rows.
  */
 data class FfiStateSnapshot (
     var `workspaceJson`: kotlin.String, 
     var `entitiesJson`: kotlin.String, 
-    var `isOnline`: kotlin.Boolean
+    var `isOnline`: kotlin.Boolean, 
+    var `seq`: kotlin.ULong, 
+    var `pendingActions`: kotlin.UInt
 ) {
     
     companion object
@@ -1592,19 +1642,25 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterUInt.read(buf),
         )
     }
 
     override fun allocationSize(value: FfiStateSnapshot) = (
             FfiConverterString.allocationSize(value.`workspaceJson`) +
             FfiConverterString.allocationSize(value.`entitiesJson`) +
-            FfiConverterBoolean.allocationSize(value.`isOnline`)
+            FfiConverterBoolean.allocationSize(value.`isOnline`) +
+            FfiConverterULong.allocationSize(value.`seq`) +
+            FfiConverterUInt.allocationSize(value.`pendingActions`)
     )
 
     override fun write(value: FfiStateSnapshot, buf: ByteBuffer) {
             FfiConverterString.write(value.`workspaceJson`, buf)
             FfiConverterString.write(value.`entitiesJson`, buf)
             FfiConverterBoolean.write(value.`isOnline`, buf)
+            FfiConverterULong.write(value.`seq`, buf)
+            FfiConverterUInt.write(value.`pendingActions`, buf)
     }
 }
 

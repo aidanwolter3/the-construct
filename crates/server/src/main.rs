@@ -1,9 +1,24 @@
-//! Project Canvas server binary. Listens on `CANVAS_ADDR` (default
-//! `127.0.0.1:8080`).
+//! Project Canvas server binary.
+//!
+//! Environment:
+//! - `CANVAS_ADDR`: listen address (default `127.0.0.1:8080`).
+//! - `CANVAS_DATA_DIR`: directory for `server.db` (default `~/.canvas-server`,
+//!   created if missing).
+//! - `CANVAS_TEST_HOOKS=1`: enables `POST /v1/test/fault`.
 
 use std::io::IsTerminal;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use tracing_subscriber::EnvFilter;
+
+fn data_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("CANVAS_DATA_DIR").filter(|d| !d.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
+    home.join(".canvas-server")
+}
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -17,6 +32,16 @@ async fn main() -> std::io::Result<()> {
 
     server::validate_fixtures();
 
+    let dir = data_dir();
+    let test_hooks = std::env::var("CANVAS_TEST_HOOKS").is_ok_and(|v| v == "1");
+    let state = server::AppState::open_dir(&dir)
+        .map_err(|e| std::io::Error::other(format!("failed to open {}: {e}", dir.display())))?
+        .with_test_hooks(test_hooks);
+    tracing::info!(db = %dir.join("server.db").display(), "server database opened");
+    if test_hooks {
+        tracing::warn!("CANVAS_TEST_HOOKS=1: POST /v1/test/fault is enabled");
+    }
+
     let addr = std::env::var("CANVAS_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_owned());
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
@@ -26,7 +51,7 @@ async fn main() -> std::io::Result<()> {
         listener.local_addr()?
     );
 
-    axum::serve(listener, server::app())
+    axum::serve(listener, server::app(Arc::new(state)))
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })

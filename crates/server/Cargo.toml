@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 protocol.workspace = true
 serde_json.workspace = true
+rusqlite.workspace = true
 # `http2` enables h2c (prior knowledge) alongside HTTP/1.1 per DESIGN.md M2.
 axum = { version = "0.8", features = ["http2"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
@@ -25,3 +26,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
+tempfile = "3"

@@ -20,3 +20,4 @@ protocol = { path = "crates/protocol" }
 client-core = { path = "crates/client-core" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 uniffi = "0.29"
+rusqlite = { version = "0.39", features = ["bundled"] }

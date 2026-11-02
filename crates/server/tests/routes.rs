@@ -8,7 +8,7 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 async fn send(req: Request<Body>) -> (StatusCode, Vec<u8>) {
-    let resp = server::app().oneshot(req).await.unwrap();
+    let resp = server::app_in_memory().oneshot(req).await.unwrap();
     let status = resp.status();
     let bytes = resp
         .into_body()
@@ -63,6 +63,10 @@ async fn home_workspace_is_counter_bundle() {
     collect_button_labels(&spec.workspace, &mut labels);
     assert!(
         labels.iter().any(|l| l == "Increment"),
+        "labels: {labels:?}"
+    );
+    assert!(
+        labels.iter().any(|l| l == "Decrement"),
         "labels: {labels:?}"
     );
     assert!(labels.iter().any(|l| l == "Reset"), "labels: {labels:?}");
@@ -178,7 +182,7 @@ async fn wrong_method_is_405() {
 
 #[tokio::test]
 async fn workspace_response_is_json_content_type() {
-    let resp = server::app()
+    let resp = server::app_in_memory()
         .oneshot(
             Request::get("/v1/workspaces/home")
                 .body(Body::empty())
@@ -193,7 +197,7 @@ async fn workspace_response_is_json_content_type() {
 async fn real_tcp_listener() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let handle = tokio::spawn(async move { axum::serve(listener, server::app()).await });
+    let handle = tokio::spawn(async move { axum::serve(listener, server::app_in_memory()).await });
 
     let spec: WorkspaceSpec = reqwest::get(format!("http://{addr}/v1/workspaces/home"))
         .await

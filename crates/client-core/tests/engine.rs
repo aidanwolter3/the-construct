@@ -8,7 +8,9 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use client_core::store::{Store, StoreOps};
 use client_core::{CanvasEngine, StateSnapshot};
+use protocol::WorkspaceSpec;
 use serde_json::Value;
 
 const FIXTURE: &str = include_str!("../../../fixtures/counter_home_bundle.json");
@@ -146,6 +148,24 @@ fn temp_dir(tag: &str) -> PathBuf {
     ))
 }
 
+/// Write the counter fixture into `<dir>/cache.db` as workspace `id`, the
+/// way a successful fetch would.
+fn seed_cache(dir: &std::path::Path, id: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    let spec: WorkspaceSpec = serde_json::from_str(FIXTURE).unwrap();
+    let mut store = Store::open(&dir.join("cache.db")).unwrap();
+    let uris: Vec<String> = spec.entities.keys().cloned().collect();
+    store
+        .transaction(|tx| {
+            tx.save_workspace(id, &spec.workspace, &uris, 1)?;
+            for (uri, e) in &spec.entities {
+                tx.upsert_entity(uri, e, 1)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+}
+
 fn count(snap: &StateSnapshot) -> i64 {
     let entities: Value = serde_json::from_str(&snap.entities_json).unwrap();
     entities["core://counters/home"]["count"].as_i64().unwrap()
@@ -193,15 +213,26 @@ fn fetch_increment_reset() {
     engine.dispatch(RESET);
     assert_eq!(count(&rx.recv_timeout(TIMEOUT).unwrap()), 0);
 
-    // Cache was written.
-    let cached = std::fs::read_to_string(dir.join("workspace_home.json")).unwrap();
-    assert_eq!(cached, FIXTURE);
+    // The SQLite cache was written: layout, entity URI list, entity, and
+    // one outbox row per mutation.
+    let store = Store::open(&dir.join("cache.db")).unwrap();
+    let cached = store.load_workspace("home").unwrap().expect("workspace cached");
+    assert_eq!(serde_json::to_string(&cached.layout).unwrap(), first.workspace_json);
+    assert_eq!(cached.entity_uris, vec!["core://counters/home".to_string()]);
+    assert_eq!(
+        store.get_entity("core://counters/home").unwrap().unwrap().get_i64("count"),
+        Some(0)
+    );
+    assert_eq!(store.pending_count().unwrap(), 3);
+    assert!(!dir.join("workspace_home.json").exists(), "no JSON cache written");
 
     // A second engine on the same storage dir with the server unreachable
     // starts from the cached workspace, offline.
     let offline = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
     let snap = offline.snapshot();
     assert_eq!(snap.workspace_json, first.workspace_json);
+    assert_eq!(count(&snap), 0);
+    assert_eq!(snap.pending_actions, 3);
     assert!(!snap.is_online);
     offline.refresh();
     let snap = offline.snapshot();
@@ -270,13 +301,14 @@ fn unreachable_server_reports_offline() {
 #[test]
 fn offline_falls_back_to_cache() {
     let dir = temp_dir("cache");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("workspace_home.json"), FIXTURE).unwrap();
+    seed_cache(&dir, "home");
 
     let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
     // Cached state is available synchronously.
     let snap = engine.snapshot();
     assert_ne!(snap.workspace_json, "null");
+    assert_eq!(count(&snap), 0);
+    assert_eq!(snap.seq, 1);
     assert!(!snap.is_online);
 
     engine.dispatch(INCREMENT);
@@ -342,10 +374,9 @@ fn panicking_observer_does_not_propagate() {
 #[test]
 fn cache_is_keyed_by_workspace_id() {
     let dir = temp_dir("keyed");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("workspace_home.json"), FIXTURE).unwrap();
+    seed_cache(&dir, "home");
 
-    // A different workspace must not pick up the "home" cache.
+    // A different workspace must not pick up the "home" layout/entities.
     let other = CanvasEngine::init_with_workspace(
         dir.to_str().unwrap(),
         "http://127.0.0.1:1",
@@ -355,11 +386,14 @@ fn cache_is_keyed_by_workspace_id() {
     assert_eq!(snap.workspace_json, "null");
     assert_eq!(snap.entities_json, "{}");
 
-    // Ids are sanitized into the file name.
-    std::fs::write(dir.join("workspace_a_b__c.json"), FIXTURE).unwrap();
+    // Ids are stored verbatim (no file-name sanitizing any more).
+    seed_cache(&dir, "a/b..c");
     let odd =
         CanvasEngine::init_with_workspace(dir.to_str().unwrap(), "http://127.0.0.1:1", "a/b..c");
     assert_ne!(odd.snapshot().workspace_json, "null");
+    let near =
+        CanvasEngine::init_with_workspace(dir.to_str().unwrap(), "http://127.0.0.1:1", "a_b__c");
+    assert_eq!(near.snapshot().workspace_json, "null");
 
     // "home" still finds its own cache.
     let home =
@@ -386,4 +420,228 @@ fn http_404_keeps_engine_online() {
     assert_eq!(s.entities_json, "{}");
     engine.refresh();
     assert!(engine.snapshot().is_online);
+}
+
+fn outbox_rows(dir: &std::path::Path) -> Vec<client_core::store::OutboxRow> {
+    Store::open(&dir.join("cache.db"))
+        .unwrap()
+        .pending_outbox()
+        .unwrap()
+}
+
+#[test]
+fn json_cache_files_are_ignored() {
+    let dir = temp_dir("jsonignored");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("workspace_home.json"), FIXTURE).unwrap();
+    std::fs::write(dir.join("last_workspace.json"), FIXTURE).unwrap();
+
+    let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let snap = engine.snapshot();
+    assert_eq!(snap.workspace_json, "null", "old JSON cache must not be read");
+    assert_eq!(snap.entities_json, "{}");
+    assert!(dir.join("workspace_home.json").exists(), "not deleted");
+    assert!(dir.join("last_workspace.json").exists(), "not deleted");
+    assert!(dir.join("cache.db").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn restart_persists_entities_workspace_and_outbox() {
+    let base = serve_fixture();
+    let dir = temp_dir("restart");
+    let first_ws;
+    {
+        let engine = CanvasEngine::init(dir.to_str().unwrap(), &base);
+        let rx = subscribe_channel(&engine);
+        first_ws = wait_online(&rx).workspace_json;
+        engine.dispatch(INCREMENT);
+        engine.dispatch(INCREMENT);
+        let s = engine.snapshot();
+        assert_eq!(count(&s), 2);
+        assert_eq!(s.pending_actions, 2);
+    }
+
+    let rows = outbox_rows(&dir);
+    assert_eq!(rows.len(), 2);
+    assert!(rows[0].id < rows[1].id);
+    let r = &rows[0];
+    assert_eq!(r.entity_uri, "core://counters/home");
+    assert_eq!(r.endpoint, "/v1/counters/home/increment");
+    assert_eq!(r.payload_json, "{}");
+    assert_eq!(r.field.as_deref(), Some("count"));
+    assert_eq!(r.value_expr.as_deref(), Some("entity.count + 1"));
+    assert_eq!(r.prev_value_json.as_deref(), Some("0"));
+    assert_eq!(rows[1].prev_value_json.as_deref(), Some("1"));
+    assert_eq!(r.rollback_value_json.as_deref(), Some("0"));
+    assert_eq!(r.status, "PENDING");
+    assert_eq!(r.retry_count, 0);
+    assert_eq!(r.next_attempt_at, 0);
+    assert!(r.created_at > 1_600_000_000, "created_at is unix seconds");
+
+    // "Restart": a fresh engine on the same dir, server unreachable.
+    let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let snap = engine.snapshot();
+    assert_eq!(snap.workspace_json, first_ws);
+    assert_eq!(count(&snap), 2);
+    assert_eq!(snap.pending_actions, 2);
+    engine.dispatch(INCREMENT);
+    assert_eq!(count(&engine.snapshot()), 3);
+    assert_eq!(engine.snapshot().pending_actions, 3);
+    assert_eq!(outbox_rows(&dir).len(), 3);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn pending_entity_outside_workspace_survives_restart() {
+    let dir = temp_dir("pendingextra");
+    seed_cache(&dir, "home");
+    let new_uri = "core://counters/new";
+    {
+        let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+        engine.dispatch(&INCREMENT.replace("core://counters/home", new_uri));
+    }
+    let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let entities: Value = serde_json::from_str(&engine.snapshot().entities_json).unwrap();
+    assert_eq!(entities[new_uri]["count"], 1);
+    assert_eq!(entities["core://counters/home"]["count"], 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// If the outbox insert fails, the entity update in the same transaction
+/// must roll back and the in-memory state must not change.
+#[test]
+fn failed_mutate_transaction_changes_nothing() {
+    let dir = temp_dir("atomic");
+    seed_cache(&dir, "home");
+    let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let rx = subscribe_channel(&engine);
+    let before = engine.snapshot();
+    assert_eq!(count(&before), 0);
+
+    // Break the outbox from a second connection.
+    let raw = rusqlite::Connection::open(dir.join("cache.db")).unwrap();
+    raw.execute_batch("ALTER TABLE action_outbox RENAME TO action_outbox_broken")
+        .unwrap();
+
+    engine.dispatch(INCREMENT);
+    let after = engine.snapshot();
+    assert_eq!(after.entities_json, before.entities_json, "memory unchanged");
+    assert_eq!(after.pending_actions, 0);
+    let stored: String = raw
+        .query_row(
+            "SELECT payload_json FROM entities WHERE uri = 'core://counters/home'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let stored: Value = serde_json::from_str(&stored).unwrap();
+    assert_eq!(stored["count"], 0, "entity update rolled back");
+    let rows: i64 = raw
+        .query_row("SELECT COUNT(*) FROM action_outbox_broken", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(rows, 0, "no outbox row");
+    while let Ok(s) = rx.try_recv() {
+        assert_eq!(count(&s), 0, "no snapshot with the failed mutation");
+    }
+
+    // Repair: the engine recovers and the next mutate goes through.
+    raw.execute_batch("ALTER TABLE action_outbox_broken RENAME TO action_outbox")
+        .unwrap();
+    engine.dispatch(INCREMENT);
+    let s = engine.snapshot();
+    assert_eq!(count(&s), 1);
+    assert_eq!(s.pending_actions, 1);
+    assert_eq!(outbox_rows(&dir).len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn value_token_is_substituted_in_outbox_payload() {
+    let dir = temp_dir("valuetoken");
+    seed_cache(&dir, "home");
+    let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let intent = INCREMENT.replace(
+        r#""payload":{}"#,
+        r#""payload":{"count":"$value","nested":["$value","$values"]}"#,
+    );
+    engine.dispatch(&intent);
+    engine.dispatch(&intent);
+    let rows = outbox_rows(&dir);
+    assert_eq!(rows.len(), 2);
+    let p0: Value = serde_json::from_str(&rows[0].payload_json).unwrap();
+    let p1: Value = serde_json::from_str(&rows[1].payload_json).unwrap();
+    assert_eq!(p0, serde_json::json!({"count": 1, "nested": [1, "$values"]}));
+    assert_eq!(p1, serde_json::json!({"count": 2, "nested": [2, "$values"]}));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn snapshot_reports_seq_and_pending_actions() {
+    let engine = CanvasEngine::init("", "http://127.0.0.1:1");
+    let rx = subscribe_channel(&engine);
+    for expected in 1..=3u32 {
+        engine.dispatch(INCREMENT);
+        assert_eq!(engine.snapshot().pending_actions, expected);
+    }
+    engine.dispatch("not json"); // no change, no seq bump
+    engine.refresh(); // failed fetch: still bumps seq
+
+    let mut seqs = Vec::new();
+    let mut pendings = Vec::new();
+    while let Ok(s) = rx.recv_timeout(Duration::from_millis(200)) {
+        seqs.push(s.seq);
+        pendings.push(s.pending_actions);
+    }
+    assert!(seqs.len() >= 5, "initial + 3 mutations + refresh: {seqs:?}");
+    assert!(
+        seqs.windows(2).all(|w| w[0] < w[1]),
+        "seq strictly increases: {seqs:?}"
+    );
+    assert!(pendings.contains(&1) && pendings.contains(&2));
+    assert_eq!(*pendings.last().unwrap(), 3);
+    assert_eq!(engine.snapshot().seq, *seqs.last().unwrap());
+}
+
+/// DESIGN §2.3 target: an optimistic mutate reaches observers in < 5 ms.
+/// Asserted with a generous bound to avoid flakiness on loaded machines.
+#[test]
+fn mutate_dispatch_to_notify_latency() {
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    let dir = temp_dir("latency");
+    seed_cache(&dir, "home");
+    let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let seen: Arc<Mutex<Vec<(i64, Instant)>>> = Arc::default();
+    let seen2 = Arc::clone(&seen);
+    engine.subscribe(move |s| {
+        let at = Instant::now();
+        seen2.lock().unwrap().push((count(&s), at));
+    });
+
+    let mut samples = Vec::new();
+    for i in 1..=50i64 {
+        let t0 = Instant::now();
+        engine.dispatch(INCREMENT);
+        let at = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(c, _)| *c == i)
+            .map(|(_, at)| *at)
+            .expect("observer notified synchronously");
+        samples.push(at.duration_since(t0));
+    }
+    samples.sort();
+    let median = samples[samples.len() / 2];
+    println!(
+        "mutate dispatch->notify over {} file-backed mutations: median {} us, max {} us",
+        samples.len(),
+        median.as_micros(),
+        samples.last().unwrap().as_micros()
+    );
+    assert!(median < Duration::from_millis(20), "median {median:?}");
+    assert_eq!(engine.snapshot().pending_actions, 50);
+    let _ = std::fs::remove_dir_all(&dir);
 }

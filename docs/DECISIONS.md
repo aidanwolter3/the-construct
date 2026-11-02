@@ -185,3 +185,40 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
   `ndk.abiFilters`, so the APK contains only ABIs that have `libclient_ffi.so` (the JNA aar ships more).
 - **Minify:** off for debug and release. `androidApp/proguard-rules.pro` already keeps `com.sun.jna.**` and
   `uniffi.**` (JNA uses reflection and native lookups) for when release minify is turned on.
+
+## D12: Server persistence (SQLite counters, fault-injection hook)
+
+- **Store:** one SQLite file, `$CANVAS_DATA_DIR/server.db` (default `~/.canvas-server`), via `rusqlite`
+  (`bundled`, workspace dependency shared with client-core), WAL mode. A single `Connection` behind a `Mutex`
+  in `AppState` (an `Arc` passed to `server::app(state)`); handlers run store calls in `spawn_blocking`. Tests
+  use `AppState::in_memory()` / `server::app_in_memory()` or `AppState::open_dir(tempdir)`.
+- **Migrations:** `PRAGMA user_version`; `store::MIGRATIONS[i]` upgrades v`i` to v`i+1` in one transaction.
+  v1 = `counters(id PK, count)`. Later milestones append steps (layout versions, Pixelfed tokens).
+- **Counters:** the fixture is still the layout source; `GET /v1/workspaces/home` overlays the stored count on
+  `core://counters/home`. Decrement is a conditional `UPDATE ... WHERE count > 0`, so the floor check and write
+  are atomic; at 0 it answers 422 `count_below_zero` with the unchanged count (the client rolls back on 4xx).
+- **Fault hook:** `CANVAS_TEST_HOOKS=1` registers `POST /v1/test/fault {status,count}`; otherwise the route
+  does not exist (404). A route layer answers the next `count` POSTs (except `/v1/test/*`) with `status`
+  before they reach a handler, so nothing is applied. In-memory only; it does not survive a restart.
+
+## D13: Client SQLite cache and outbox (schema extensions, write-through)
+
+- **File:** `<storage_path>/cache.db` (desktop `~/.canvas/cache.db`, Android `filesDir`); empty `storage_path`
+  (simulation, tests) uses an in-memory DB, and so does a file that cannot be opened (logged). `rusqlite`
+  `bundled`, WAL with `synchronous=NORMAL` (a crash never corrupts the DB; a power loss can drop the last
+  commits). Schema behind `PRAGMA user_version` (v1). The bundled SQLite adds no Android `.so` dependencies.
+- **Schema extensions over DESIGN §2.3:** `entities.domain`/`entity_type` are derived from the URI
+  `<domain>://<type>/...`. `action_outbox` adds `field`, `value_expr`, `prev_value_json`,
+  `rollback_value_json`, `next_attempt_at` (unix s, default 0) and `last_error`, so the sync worker can roll a
+  rejected row back and re-apply later rows without the original intent. `active_workspace` adds
+  `entity_uris_json` (URIs the bundle carried); startup loads those entities plus any entity with a PENDING row.
+- **In-memory state + write-through:** `State` stays the snapshot source; every change is written to SQLite
+  inside the state lock. An optimistic mutate commits entity update + outbox insert in one transaction before
+  touching memory; if it fails, nothing changes and no snapshot is sent. Dispatch->notify is logged in
+  microseconds (about 30-80 us measured on a file DB, target < 5 ms). Fetched bundles are persisted in one
+  transaction; a persist failure is logged and the fetched state is still shown.
+- **JSON cache ignored:** `workspace_<id>.json` / `last_workspace.json` from M3/M4 are neither read nor deleted.
+- **`"$value"` token:** any JSON string exactly `"$value"` inside an intent's `payload` is replaced by the new
+  optimistic field value before the row is stored, so toggles can send the desired state.
+- **Snapshot:** `StateSnapshot`/`FfiStateSnapshot` carry `seq` (strictly increasing per engine) and
+  `pending_actions` (PENDING outbox rows).
