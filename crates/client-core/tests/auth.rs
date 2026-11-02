@@ -89,7 +89,7 @@ impl Env {
     }
 
     fn login_intent(&self) -> String {
-        json!({ "intent": "action.auth.login", "instance_url": self.fake }).to_string()
+        json!({ "intent": "action.auth.login", "instance_url": self.fake, "app_path": "/v1/auth/pixelfed/app", "token_path": "/v1/auth/pixelfed/token" }).to_string()
     }
 
     /// The fake's view of a status (via the seeded token).
@@ -729,6 +729,7 @@ fn unmatched_or_expired_persisted_sign_in_reports_interrupted() {
         code_verifier: "v".repeat(64),
         redirect_uri: CUSTOM_REDIRECT.into(),
         instance_url: env.fake.clone(),
+        token_path: "/v1/auth/pixelfed/token".into(),
         created_at: 1,
     };
     store.set(&pending_auth_key(&env.pod), &stale.to_json());
@@ -1055,7 +1056,7 @@ fn state_param(url: &str) -> String {
 /// redirect was accepted.
 fn stub_sign_in(engine: &ConstructEngine, rx: &mpsc::Receiver<String>) {
     engine.dispatch(
-        &json!({ "intent": "action.auth.login", "instance_url": "http://stub" }).to_string(),
+        &json!({ "intent": "action.auth.login", "instance_url": "http://stub", "app_path": "/v1/auth/pixelfed/app", "token_path": "/v1/auth/pixelfed/token" }).to_string(),
     );
     let url = rx.recv_timeout(TIMEOUT).unwrap();
     assert!(engine.handle_auth_redirect(&format!(
@@ -1090,7 +1091,7 @@ fn auth_stays_pending_until_the_first_feed_and_ignores_a_second_tap() {
     });
     // A second tap on "Sign in" (the signed-out screen is still shown) is ignored.
     engine.dispatch(
-        &json!({ "intent": "action.auth.login", "instance_url": "http://stub" }).to_string(),
+        &json!({ "intent": "action.auth.login", "instance_url": "http://stub", "app_path": "/v1/auth/pixelfed/app", "token_path": "/v1/auth/pixelfed/token" }).to_string(),
     );
     thread::sleep(Duration::from_millis(300));
     assert!(rx.try_recv().is_err(), "a second browser flow was started");
@@ -1153,7 +1154,7 @@ fn sign_in_errors_are_short_human_messages() {
         json!({ "error": "upstream_unreachable", "detail": "connection refused" }),
     ));
     engine.dispatch(
-        &json!({ "intent": "action.auth.login", "instance_url": "http://stub" }).to_string(),
+        &json!({ "intent": "action.auth.login", "instance_url": "http://stub", "app_path": "/v1/auth/pixelfed/app", "token_path": "/v1/auth/pixelfed/token" }).to_string(),
     );
     wait_until("upstream error", || {
         auth(&engine.snapshot())["error"] == SIGN_IN_UPSTREAM_DOWN
@@ -1169,7 +1170,7 @@ fn sign_in_errors_are_short_human_messages() {
     };
     let (engine, _rx) = stub_engine(&dead);
     engine.dispatch(
-        &json!({ "intent": "action.auth.login", "instance_url": "http://stub" }).to_string(),
+        &json!({ "intent": "action.auth.login", "instance_url": "http://stub", "app_path": "/v1/auth/pixelfed/app", "token_path": "/v1/auth/pixelfed/token" }).to_string(),
     );
     assert_eq!(error(&engine), SIGN_IN_POD_UNREACHABLE);
 }
@@ -1230,9 +1231,37 @@ fn the_engine_fetches_the_newest_layout_its_schema_draws() {
     wait_signed_in(&engine);
     let snap = engine.snapshot();
     let layout: Value = serde_json::from_str(&snap.layout_json).unwrap();
-    assert_eq!(layout["version"], 2);
+    assert_eq!(layout["version"], 3);
     let ws: Value = serde_json::from_str(&snap.workspace_json).unwrap();
     assert_eq!(ws["screens"][0]["route"], "pixelfed://posts/{id}/comments");
+    // Generic nodes only.
+    assert!(
+        !snap.workspace_json.contains("\"type\":\"pixelfed://"),
+        "{}",
+        snap.workspace_json
+    );
+}
+
+#[test]
+fn a_sign_in_button_without_pod_paths_reports_an_error() {
+    let env = Env::start();
+    let store = Arc::new(MemoryStore::new());
+    let engine = loopback_engine(&env, &store);
+    engine
+        .dispatch(&json!({ "intent": "action.auth.login", "instance_url": env.fake }).to_string());
+    let a = auth(&engine.snapshot());
+    assert_eq!(a["state"], "error");
+    assert_eq!(a["error"], client_core::SIGN_IN_BUTTON_OUTDATED);
+    // Paths to another host are refused too.
+    engine.dispatch(
+        &json!({ "intent": "action.auth.login", "instance_url": env.fake,
+                 "app_path": "//evil.example/app", "token_path": "/v1/x" })
+        .to_string(),
+    );
+    assert_eq!(
+        auth(&engine.snapshot())["error"],
+        client_core::SIGN_IN_BUTTON_OUTDATED
+    );
 }
 
 #[test]

@@ -33,7 +33,7 @@ pub use rusqlite::Error as StoreError;
 pub type StoreResult<T> = Result<T, StoreError>;
 
 /// Current schema version (`PRAGMA user_version`).
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Outbox row status for rows not yet accepted or rejected by the server.
 pub const STATUS_PENDING: &str = "PENDING";
@@ -93,8 +93,17 @@ CREATE TABLE IF NOT EXISTS data_loads (
 ALTER TABLE action_outbox ADD COLUMN create_json TEXT;
 ";
 
+/// Schema v4 (D36): whether an outbox row was queued while signed in (it
+/// needs the session, so an explicit logout drops it). Rows from before v4
+/// count as signed in: keeping a row that can only fail is worse than
+/// dropping one at logout.
+const MIGRATION_V4: &str = "
+ALTER TABLE action_outbox ADD COLUMN session_bound INTEGER NOT NULL DEFAULT 1;
+";
+
 /// `MIGRATIONS[i]` upgrades schema v`i` to v`i+1`, each in one transaction.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [MIGRATION_V1, MIGRATION_V2, MIGRATION_V3];
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] =
+    [MIGRATION_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4];
 
 /// `(domain, entity_type)` from a `<domain>://<type>/<id...>` URI, e.g.
 /// `pixelfed://posts/101` -> `("pixelfed", "posts")`. Missing parts are `""`.
@@ -166,6 +175,8 @@ pub struct NewOutboxRow {
     pub also: Vec<AlsoUpdate>,
     /// Set for a create row (then `field`/`value_expr` are stored as NULL).
     pub create: Option<CreateInfo>,
+    /// Queued while signed in: it needs the session (dropped at logout).
+    pub session_bound: bool,
 }
 
 /// A full `action_outbox` row.
@@ -301,16 +312,24 @@ pub trait StoreOps {
         Ok(())
     }
 
-    /// Delete every entity of `domain` that no PENDING outbox row targets.
+    /// Delete every entity that no PENDING outbox row targets (sign-out:
+    /// the cache may hold the account's data, whatever app it came from).
     /// Returns the number deleted.
-    fn delete_unreferenced_entities(&self, domain: &str) -> StoreResult<usize> {
+    fn delete_unreferenced_entities(&self) -> StoreResult<usize> {
         self.conn()
             .prepare_cached(
-                "DELETE FROM entities WHERE domain = ?1 AND uri NOT IN (
+                "DELETE FROM entities WHERE uri NOT IN (
                      SELECT entity_uri FROM action_outbox
                      WHERE COALESCE(status, 'PENDING') = 'PENDING')",
             )?
-            .execute([domain])
+            .execute([])
+    }
+
+    /// Delete every cached data path answer. Returns the number deleted.
+    fn delete_all_data_loads(&self) -> StoreResult<usize> {
+        self.conn()
+            .prepare_cached("DELETE FROM data_loads")?
+            .execute([])
     }
 
     // ---- active_workspace ----
@@ -442,8 +461,9 @@ pub trait StoreOps {
         self.conn()
             .prepare_cached(
                 "INSERT INTO action_outbox (entity_uri, endpoint, payload_json, created_at,
-                     field, value_expr, prev_value_json, rollback_value_json, also_json, create_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                     field, value_expr, prev_value_json, rollback_value_json, also_json, create_json,
+                     session_bound)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             )?
             .execute(params![
                 row.entity_uri,
@@ -460,6 +480,7 @@ pub trait StoreOps {
                     .map(serde_json::to_string)
                     .transpose()
                     .map_err(json_err)?,
+                row.session_bound,
             ])?;
         Ok(self.conn().last_insert_rowid())
     }
@@ -515,15 +536,15 @@ pub trait StoreOps {
         Ok(n > 0)
     }
 
-    /// Delete every PENDING row whose endpoint starts with `prefix`. Returns
-    /// the number deleted.
-    fn delete_pending_outbox_with_endpoint_prefix(&self, prefix: &str) -> StoreResult<usize> {
+    /// Delete every PENDING row queued while signed in (explicit logout:
+    /// nobody could send them any more). Returns the number deleted.
+    fn delete_pending_session_rows(&self) -> StoreResult<usize> {
         self.conn()
             .prepare_cached(
                 "DELETE FROM action_outbox WHERE COALESCE(status, 'PENDING') = 'PENDING'
-                     AND substr(endpoint, 1, length(?1)) = ?1",
+                     AND session_bound != 0",
             )?
-            .execute([prefix])
+            .execute([])
     }
 
     /// Record a failed attempt: `retry_count += 1`, set `next_attempt_at`
@@ -815,6 +836,7 @@ mod tests {
             rollback_value_json: "0".into(),
             also: Vec::new(),
             create: None,
+            session_bound: false,
         }
     }
 
@@ -911,38 +933,35 @@ mod tests {
     }
 
     #[test]
-    fn private_purge_helpers() {
+    fn sign_out_purge_helpers() {
         let s = Store::open_in_memory().unwrap();
-        for uri in [
-            "pixelfed://posts/1",
-            "pixelfed://posts/2",
-            "core://counters/home",
-        ] {
+        for uri in ["x://posts/1", "x://posts/2", "y://counters/home"] {
             s.upsert_entity(uri, &entity("{}"), 1).unwrap();
         }
-        let like = s
+        // Queued while signed in, and while signed out.
+        let signed_in = s
             .insert_outbox(&NewOutboxRow {
-                endpoint: "/v1/pixelfed/posts/like".into(),
-                ..new_row("pixelfed://posts/1")
+                session_bound: true,
+                ..new_row("x://posts/1")
             })
             .unwrap();
-        s.insert_outbox(&new_row("core://counters/home")).unwrap();
-        assert_eq!(s.delete_unreferenced_entities("pixelfed").unwrap(), 1);
+        s.insert_outbox(&new_row("y://counters/home")).unwrap();
+        // Every entity no pending row targets goes, whatever its domain.
+        assert_eq!(s.delete_unreferenced_entities().unwrap(), 1);
         assert!(
-            s.get_entity("pixelfed://posts/1").unwrap().is_some(),
+            s.get_entity("x://posts/1").unwrap().is_some(),
             "pending row keeps it"
         );
-        assert!(s.get_entity("pixelfed://posts/2").unwrap().is_none());
-        assert!(s.get_entity("core://counters/home").unwrap().is_some());
+        assert!(s.get_entity("x://posts/2").unwrap().is_none());
+        assert!(s.get_entity("y://counters/home").unwrap().is_some());
 
-        assert_eq!(
-            s.delete_pending_outbox_with_endpoint_prefix("/v1/pixelfed/")
-                .unwrap(),
-            1
-        );
-        assert!(s.get_outbox(like).unwrap().is_none());
+        assert_eq!(s.delete_pending_session_rows().unwrap(), 1);
+        assert!(s.get_outbox(signed_in).unwrap().is_none());
         assert_eq!(s.pending_count().unwrap(), 1);
-        assert_eq!(s.delete_unreferenced_entities("pixelfed").unwrap(), 1);
+        assert_eq!(s.delete_unreferenced_entities().unwrap(), 1);
+
+        s.save_data_load("/v1/x", &DataLoad::default(), 1).unwrap();
+        assert_eq!(s.delete_all_data_loads().unwrap(), 1);
 
         let layout: UiNode = serde_json::from_str(
             r#"{"type":"core://Workspace","id":"home","title":"Home","slots":[]}"#,
@@ -1032,7 +1051,10 @@ mod tests {
                     1,
                 )?;
             }
-            tx.upsert_entity("core://counters/home", &entity(r#"{"count":1}"#), 1)
+            tx.upsert_entity("core://counters/home", &entity(r#"{"count":1}"#), 1)?;
+            // A pending action keeps the counter.
+            tx.insert_outbox(&new_row("core://counters/home"))
+                .map(|_| ())
         })
         .unwrap();
         // Moved into the main file, as a long-running app would have.
@@ -1040,7 +1062,7 @@ mod tests {
         assert!(file_contains(&path, CAPTION.as_bytes()));
 
         let n = s
-            .transaction(|tx| tx.delete_unreferenced_entities("pixelfed"))
+            .transaction(|tx| tx.delete_unreferenced_entities())
             .unwrap();
         assert_eq!(n, 50);
         assert!(s.checkpoint_truncate().unwrap());

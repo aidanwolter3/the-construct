@@ -1204,8 +1204,9 @@ impl Store {
     }
 
     /// Append a version outside the file sync (tests and tooling only; no
-    /// HTTP route reaches this), recorded as written for the schema its
-    /// vocabulary needs. Returns the new version number.
+    /// HTTP route reaches this), recorded as written for the current schema
+    /// (this build wrote it), or 1 when this build cannot fully read it.
+    /// Returns the new version number.
     pub fn append_app_version(
         &self,
         app_id: &str,
@@ -1213,7 +1214,12 @@ impl Store {
         source: &str,
         note: Option<&str>,
     ) -> rusqlite::Result<i64> {
-        let schema = schema_of_json(json);
+        let current = serde_json::from_str::<protocol::UiNode>(json).is_ok_and(|n| {
+            n.walk()
+                .iter()
+                .all(|n| protocol::NODE_TYPES.contains(&n.type_tag().as_ref()))
+        });
+        let schema = if current { protocol::SCHEMA_VERSION } else { 1 };
         append_app_version_on(&self.conn(), app_id, json, source, note, None, schema)
     }
 

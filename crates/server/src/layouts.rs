@@ -33,7 +33,7 @@
 //! deployed files later) but is recorded and append-only too: to stop clients
 //! drawing old versions after a breaking schema change, add an entry to
 //! [`protocol::RETIRED`] rather than editing files. A gap in the numbering, a file that is not a valid
-//! layout (structure checked by [`crate::agent::validate_structure`]), an
+//! layout (structure checked by [`crate::validate::validate_structure`]), an
 //! unknown action intent tag, a root id that is not the app id, or a new file
 //! numbered below a deployed one also stop the start. A deployed file missing
 //! from the build (a rollback deploy, an older branch) only logs a warning:
@@ -150,8 +150,11 @@ macro_rules! layout_file {
 pub const FILES: &[LayoutSource] = &[
     layout_file!("pixelfed_home", "0001"),
     layout_file!("pixelfed_home", "0002"),
+    layout_file!("pixelfed_home", "0003"),
     layout_file!("pixelfed_demo", "0001"),
+    layout_file!("pixelfed_demo", "0002"),
     layout_file!("home", "0001"),
+    layout_file!("home", "0002"),
 ];
 
 /// A parsed, validated layout file.
@@ -257,7 +260,7 @@ fn collect_unknown_intent_tags(
                 out.push((at.to_owned(), tag.clone()));
             }
             for (k, child) in map {
-                let is_intent = k == "on_click" || k.ends_with("_intent");
+                let is_intent = k == "on_click" || k == "on_submit" || k.ends_with("_intent");
                 let k = k.replace('~', "~0").replace('/', "~1");
                 collect_unknown_intent_tags(child, &format!("{at}/{k}"), is_intent, out);
             }
@@ -270,6 +273,15 @@ fn collect_unknown_intent_tags(
         _ => {}
     }
 }
+
+/// Files deployed with node types that were later removed (the `pixelfed://`
+/// widgets, D36). They still parse (as [`UiNode::Unknown`]) and are served to
+/// the clients that draw them; no other file may hold an unknown node type.
+pub const LEGACY_FILES: &[(&str, u32)] = &[
+    ("pixelfed_home", 1),
+    ("pixelfed_home", 2),
+    ("pixelfed_demo", 1),
+];
 
 /// Parse and validate one file (`Err` names the file).
 pub fn parse_file(src: &LayoutSource) -> Result<LayoutFile, String> {
@@ -311,11 +323,11 @@ pub fn parse_file(src: &LayoutSource) -> Result<LayoutFile, String> {
     let layout = obj
         .get("layout")
         .ok_or_else(|| fail("\"layout\" is missing".into()))?;
-    let parsed = crate::agent::validate_structure(src.app_id, layout)
+    let parsed = crate::validate::validate_structure(src.app_id, layout)
         .map_err(|e| fail(format!("invalid layout: {e}")))?;
     // An unknown intent tag would deserialize as `ActionIntent::Unknown` and
     // ship as a dead action (lenient only for legacy stored versions).
-    if crate::agent::intents(&parsed)
+    if crate::validate::intents(&parsed)
         .iter()
         .any(|i| matches!(i, protocol::ActionIntent::Unknown))
     {
@@ -327,6 +339,16 @@ pub fn parse_file(src: &LayoutSource) -> Result<LayoutFile, String> {
         };
         return Err(fail(format!(
             "invalid layout: {what} (a typo? this build does not know it)"
+        )));
+    }
+    // Node types this build doesn't know are only allowed where they were
+    // deployed before they were removed (D37): the `pixelfed://` widgets.
+    let unknown = crate::validate::unknown_node_types(&parsed);
+    if let Some(t) = unknown.first()
+        && !LEGACY_FILES.contains(&(src.app_id, number))
+    {
+        return Err(fail(format!(
+            "invalid layout: unknown node type '{t}' (a typo? this build does not know it)"
         )));
     }
     let schema = obj
@@ -411,18 +433,17 @@ pub fn sync_sources(store: &Store, sources: &[LayoutSource]) -> Result<SyncRepor
         .map_err(|e| format!("syncing layouts/: {e}"))?
 }
 
-/// The original built-in default layout of an app (what each `0001.json`
-/// holds: the classic feed / the counter), built from code. (The
-/// `pixelfed_demo` fixture's root id is `home_stream`; its file uses the app
-/// id, as every layout file must.)
+/// An app's first layout (its `0001.json`). Panics if the embedded files are
+/// invalid (the pod would not start either).
 pub fn builtin(workspace_id: &str) -> Option<UiNode> {
-    match workspace_id {
-        "home" | "pixelfed_demo" => crate::workspace(workspace_id).map(|s| s.workspace.clone()),
-        crate::pixelfed::layout::WORKSPACE_ID => {
-            Some(crate::pixelfed::layout::home_feed(Default::default(), Vec::new()).workspace)
-        }
-        _ => None,
-    }
+    let src = FILES
+        .iter()
+        .find(|f| f.app_id == workspace_id && f.name == "0001")?;
+    Some(
+        parse_file(src)
+            .expect("embedded layout files are valid")
+            .layout,
+    )
 }
 
 fn to_json(node: &UiNode) -> String {
@@ -1022,12 +1043,7 @@ mod tests {
                 .iter()
                 .find(|f| f.app_id == app_id && f.number == 1)
                 .unwrap();
-            let mut want = builtin(app_id).unwrap();
-            // The demo fixture's root id was `home_stream`; files use the app id.
-            if let UiNode::Workspace { id, .. } = &mut want {
-                *id = app_id.to_owned();
-            }
-            assert_eq!(f.layout, want, "{app_id}");
+            assert_eq!(Some(f.layout.clone()), builtin(app_id), "{app_id}");
             assert_eq!(f.note, note);
         }
     }
@@ -1138,15 +1154,50 @@ mod tests {
         parse_files(&[src("home", "0001", new_intent)]).unwrap();
     }
 
+    #[test]
+    fn removed_node_types_only_parse_in_their_deployed_files() {
+        let legacy = FILES
+            .iter()
+            .find(|f| f.app_id == "pixelfed_home" && f.name == "0001")
+            .unwrap();
+        // The deployed file still parses: its widgets are opaque unknown nodes.
+        let parsed = parse_file(legacy).unwrap();
+        assert_eq!(
+            crate::validate::unknown_node_types(&parsed.layout),
+            ["pixelfed://FeedList"]
+        );
+        // The same content as a new file is refused.
+        let err = parse_file(&src("pixelfed_home", "0004", legacy.text)).unwrap_err();
+        assert!(
+            err.contains("unknown node type 'pixelfed://FeedList'"),
+            "{err}"
+        );
+        // So is a typo'd type in a generic file.
+        let ok = FILES.iter().find(|f| f.app_id == "home").unwrap().text;
+        let typo = leak(ok.replacen("\"core://Button\"", "\"core://Buton\"", 1));
+        let err = parse_file(&src("home", "0001", typo)).unwrap_err();
+        assert!(err.contains("unknown node type 'core://Buton'"), "{err}");
+        // An unknown icon is refused too.
+        let feed = FILES
+            .iter()
+            .find(|f| f.app_id == "pixelfed_home" && f.name == "0003")
+            .unwrap()
+            .text;
+        let icon = leak(feed.replacen("\"chat_bubble\"", "\"chat_bubbles\"", 1));
+        let err = parse_file(&src("pixelfed_home", "0003", icon)).unwrap_err();
+        assert!(err.contains("unknown icon 'chat_bubbles'"), "{err}");
+    }
+
     fn leak(s: String) -> &'static str {
         Box::leak(s.into_boxed_str())
     }
 
     #[test]
     fn unknown_intent_tags_are_refused_in_files() {
+        // The newest feed file: generic nodes, so its intents are typed.
         let ok = FILES
             .iter()
-            .find(|f| f.app_id == "pixelfed_home")
+            .find(|f| f.app_id == "pixelfed_home" && f.name == "0003")
             .unwrap()
             .text;
         // A typo'd tag (would deserialize as ActionIntent::Unknown).
@@ -1155,10 +1206,10 @@ mod tests {
             "\"action.navigation.opne\"",
             1,
         ));
-        let err = parse_files(&[src("pixelfed_home", "0001", typo)]).unwrap_err();
+        let err = parse_files(&[src("pixelfed_home", "0003", typo)]).unwrap_err();
         assert!(
             err.starts_with(
-                "layouts/pixelfed_home/0001.json: invalid layout: unknown action intent \
+                "layouts/pixelfed_home/0003.json: invalid layout: unknown action intent \
                  'action.navigation.opne' at /layout/"
             ),
             "{err}"
@@ -1174,7 +1225,7 @@ mod tests {
         // The removed agent intent and the fallback tag itself.
         for tag in ["action.agent.prompt", "action.unknown"] {
             let bad = leak(ok.replacen("\"action.mutation.optimistic\"", &format!("\"{tag}\""), 1));
-            let err = parse_files(&[src("pixelfed_home", "0001", bad)]).unwrap_err();
+            let err = parse_files(&[src("pixelfed_home", "0003", bad)]).unwrap_err();
             assert!(
                 err.contains(&format!("unknown action intent '{tag}'")),
                 "{err}"
@@ -1237,41 +1288,35 @@ mod tests {
         assert!(report.adopted.is_empty() && report.missing.is_empty());
         assert_eq!(sync(&store).unwrap(), SyncReport::default(), "idempotent");
         let (v, layout) = latest(&store, "pixelfed_home").unwrap().unwrap();
-        assert_eq!(v, 2, "0002 adds the comments screen");
-        let mut feed = layout.clone();
-        if let UiNode::Workspace { screens, .. } = &mut feed {
-            assert_eq!(screens.len(), 1);
-            screens.clear();
+        assert_eq!(v, 3, "0003: the generic feed");
+        assert!(crate::validate::unknown_node_types(&layout).is_empty());
+        // Each client gets the newest version it can draw.
+        for (schema, version) in [(1, 1), (2, 2), (protocol::SCHEMA_VERSION, 3)] {
+            let served = active_for(&store, "pixelfed_home", schema)
+                .unwrap()
+                .unwrap();
+            assert_eq!(served.version, version, "schema {schema}");
+            assert!(protocol::required_schema(&served.layout) <= schema);
         }
-        assert_eq!(feed, builtin("pixelfed_home").unwrap(), "same feed as 0001");
-        // A client from before screens (schema 1) still gets version 1.
-        let old = active_for(&store, "pixelfed_home", 1).unwrap().unwrap();
-        assert_eq!(old.version, 1);
-        assert_eq!(protocol::required_schema(&old.layout), 1);
-        let new = active_for(&store, "pixelfed_home", protocol::SCHEMA_VERSION)
-            .unwrap()
-            .unwrap();
-        assert_eq!(new.version, 2);
-        assert_eq!(protocol::required_schema(&new.layout), 2);
-        // A second home file.
-        let one = FILES.iter().find(|f| f.app_id == "home").copied().unwrap();
+        // A third home file.
+        let one = FILES.iter().rfind(|f| f.app_id == "home").copied().unwrap();
         let two_text = one.text.replace("The Construct Counter", "Counter v2");
         let two_text: &'static str = Box::leak(two_text.into_boxed_str());
-        let two = src("home", "0002", two_text);
+        let two = src("home", "0003", two_text);
         let mut sources = FILES.to_vec();
         sources.push(two);
         assert_eq!(
             sync_sources(&store, &sources).unwrap().appended,
-            [("layouts/home/0002.json".to_owned(), 2)]
+            [("layouts/home/0003.json".to_owned(), 3)]
         );
         // Changing a deployed file stops the start, naming it.
         let mut changed = FILES.to_vec();
-        changed.push(src("home", "0002", one.text));
+        changed.push(src("home", "0003", one.text));
         assert_eq!(
             sync_sources(&store, &changed).unwrap_err(),
-            "layouts/home/0002.json changed after it was deployed as version 2; layout files are \
-             append-only. To recover, restore the deployed content of layouts/home/0002.json \
-             (git log -p -- layouts/home/0002.json) and put the change in a new file, 0003.json"
+            "layouts/home/0003.json changed after it was deployed as version 3; layout files are \
+             append-only. To recover, restore the deployed content of layouts/home/0003.json \
+             (git log -p -- layouts/home/0003.json) and put the change in a new file, 0004.json"
         );
         // Reformatting a file (same layout and note) is not a change.
         let reformatted: Value = serde_json::from_str(two_text).unwrap();
@@ -1281,19 +1326,19 @@ mod tests {
                 .into_boxed_str(),
         );
         let mut same = FILES.to_vec();
-        same.push(src("home", "0002", reformatted));
+        same.push(src("home", "0003", reformatted));
         assert_eq!(sync_sources(&store, &same).unwrap(), SyncReport::default());
-        // A rollback deploy without 0002.json starts, serving v2 unchanged.
+        // A rollback deploy without 0003.json starts, serving v3 unchanged.
         let report = sync(&store).unwrap();
         assert_eq!(
             report.missing,
             [
-                "layouts/home/0002.json was deployed as version 2 but is missing from this build; \
+                "layouts/home/0003.json was deployed as version 3 but is missing from this build; \
               serving the recorded history unchanged"
             ]
         );
         assert!(report.appended.is_empty());
-        assert_eq!(latest(&store, "home").unwrap().unwrap().0, 2);
+        assert_eq!(latest(&store, "home").unwrap().unwrap().0, 3);
     }
 
     #[test]

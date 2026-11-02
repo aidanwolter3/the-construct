@@ -46,7 +46,11 @@ data class SlotSpec(
 enum class Orientation { Vertical, Horizontal }
 
 @Serializable
-enum class TextStyle { Headline, Title, Body, Caption }
+enum class TextStyle { Headline, Title, Body, Caption, Label, Secondary }
+
+/** `core://Chip` colour. */
+@Serializable
+enum class Tone { Neutral, Warning }
 
 @Serializable
 enum class PresentationMode { Push, Modal, Replace }
@@ -111,41 +115,6 @@ sealed class UiNode {
         @SerialName("on_click") val onClick: ActionIntent,
     ) : UiNode()
 
-    @Serializable
-    data class PostCard(
-        @SerialName("post_ref") val postRef: String,
-        @SerialName("author_slot") val authorSlot: UiNode,
-        @SerialName("media_slot") val mediaSlot: UiNode,
-        @SerialName("action_slot") val actionSlot: UiNode,
-        @SerialName("caption_slot") val captionSlot: UiNode,
-    ) : UiNode()
-
-    @Serializable
-    data class MediaCarousel(
-        @SerialName("media_refs") val mediaRefs: MediaRefs,
-        @SerialName("aspect_ratio") val aspectRatio: Float,
-    ) : UiNode()
-
-    @Serializable
-    data class AuthorHeader(
-        @SerialName("user_ref") val userRef: String,
-        // DECISIONS D3: omitted when null, defaults to null when missing.
-        @SerialName("on_click") val onClick: ActionIntent? = null,
-    ) : UiNode()
-
-    @Serializable
-    data class ActionBar(
-        @SerialName("like_intent") val likeIntent: ActionIntent,
-        @SerialName("bookmark_intent") val bookmarkIntent: ActionIntent,
-        @SerialName("comment_intent") val commentIntent: ActionIntent,
-    ) : UiNode()
-
-    @Serializable
-    data class FeedList(
-        @SerialName("query_key") val queryKey: String,
-        @SerialName("item_template") val itemTemplate: UiNode,
-    ) : UiNode()
-
     /** `core://List` (D34): the entities of `queries[queryKey]`, each rendered with [itemTemplate]. */
     @Serializable
     data class ItemList(
@@ -155,7 +124,11 @@ sealed class UiNode {
         @SerialName("empty_text") val emptyText: String? = null,
     ) : UiNode()
 
-    /** `core://Image` (D34): [url] is a literal or a binding such as `$item.avatar_url`. */
+    /**
+     * `core://Image` (D34): [url] is a literal or a binding such as `$item.avatar_url`. Without [sizeDp] it fills a
+     * carousel page, else the width at [aspectRatio] (default 1). [blurhash] colours the placeholder; on error the
+     * [contentDescription] shows.
+     */
     @Serializable
     data class Image(
         val url: String,
@@ -163,6 +136,7 @@ sealed class UiNode {
         @SerialName("size_dp") val sizeDp: Int? = null,
         @SerialName("aspect_ratio") val aspectRatio: Float? = null,
         @SerialName("content_description") val contentDescription: String? = null,
+        val blurhash: String? = null,
     ) : UiNode()
 
     /** `core://TextField` (D34): edits the form value `$form.<field>`; [onSubmit] is sent with it, then it clears. */
@@ -173,6 +147,72 @@ sealed class UiNode {
         @SerialName("max_length") val maxLength: Int? = null,
         @SerialName("on_submit") val onSubmit: ActionIntent? = null,
     ) : UiNode()
+
+    // Schema 3 (DECISIONS D36): generic building blocks for composing any app on the pod.
+
+    /** Children side by side, vertically centred, not wrapping; a [Spacer] without a size takes the rest. */
+    @Serializable
+    data class Row(
+        val children: List<UiNode>,
+        @SerialName("spacing_dp") val spacingDp: Int = 0,
+        @SerialName("padding_h_dp") val paddingHDp: Int = 0,
+        @SerialName("padding_v_dp") val paddingVDp: Int = 0,
+    ) : UiNode()
+
+    /** Children stacked, full width. */
+    @Serializable
+    data class Column(
+        val children: List<UiNode>,
+        @SerialName("spacing_dp") val spacingDp: Int = 0,
+        @SerialName("padding_h_dp") val paddingHDp: Int = 0,
+        @SerialName("padding_v_dp") val paddingVDp: Int = 0,
+    ) : UiNode()
+
+    /** Empty space: [sizeDp], or (null, in a [Row]) the remaining width. */
+    @Serializable
+    data class Spacer(@SerialName("size_dp") val sizeDp: Int? = null) : UiNode()
+
+    /** A thin horizontal line. */
+    @Serializable
+    data object Divider : UiNode()
+
+    /** [content] only when [value] (e.g. `$item.caption`) is truthy ([isTruthy]). */
+    @Serializable
+    data class Conditional(val value: String, val content: UiNode) : UiNode()
+
+    /** A pager over the entities [items] names, each drawn with [itemTemplate]; see protocol `core://Carousel`. */
+    @Serializable
+    data class Carousel(
+        val items: ListBinding,
+        @SerialName("item_template") val itemTemplate: UiNode,
+        @SerialName("aspect_ratio") val aspectRatio: Double = 1.0,
+        @SerialName("aspect_field") val aspectField: String? = null,
+        @SerialName("min_aspect") val minAspect: Double? = null,
+        @SerialName("max_aspect") val maxAspect: Double? = null,
+        val tag: String? = null,
+    ) : UiNode()
+
+    /** An icon button; [active] (a binding to a bool) switches to the active icon, tint and description. */
+    @Serializable
+    data class IconButton(
+        val icon: String,
+        @SerialName("content_description") val contentDescription: String,
+        @SerialName("on_click") val onClick: ActionIntent,
+        val active: String? = null,
+        @SerialName("active_icon") val activeIcon: String? = null,
+        @SerialName("active_tint") val activeTint: String? = null,
+        @SerialName("active_content_description") val activeContentDescription: String? = null,
+        @SerialName("size_dp") val sizeDp: Int? = null,
+        val tag: String? = null,
+    ) : UiNode()
+
+    /** A small label with an optional icon, coloured by [tone]. */
+    @Serializable
+    data class Chip(val text: String, val icon: String? = null, val tone: Tone = Tone.Neutral) : UiNode()
+
+    /** A one-line note with a small icon, e.g. "Bob boosted". */
+    @Serializable
+    data class Badge(val text: String, val icon: String) : UiNode()
 
     /** A node whose `type` this client does not know. [raw] is the full original object. */
     data class Unknown(val type: String, val raw: JsonObject) : UiNode()
@@ -208,9 +248,12 @@ sealed class ActionIntent {
         val also: List<FieldUpdate> = emptyList(),
     ) : ActionIntent()
 
+    /** Sign in; [appPath] / [tokenPath] are the pod's sign-in endpoints (D36). */
     @Serializable
     data class AuthLogin(
         @SerialName("instance_url") val instanceUrl: String,
+        @SerialName("app_path") val appPath: String = "",
+        @SerialName("token_path") val tokenPath: String = "",
     ) : ActionIntent()
 
     /** `action.data.load` (D34): the engine loads a pod path (a screen's `data`) and caches its answer. */
@@ -246,40 +289,40 @@ data class FieldUpdate(
 )
 
 // ---------------------------------------------------------------------------
-// MediaRefs (DECISIONS D1: protocol::ListBinding, untagged)
+// ListBinding (DECISIONS D1: protocol::ListBinding, untagged)
 // ---------------------------------------------------------------------------
 
-@Serializable(with = MediaRefsSerializer::class)
-sealed class MediaRefs {
+@Serializable(with = ListBindingSerializer::class)
+sealed class ListBinding {
     /** A binding expression such as `"$item.media_uris"`. */
-    data class Expr(val expr: String) : MediaRefs()
+    data class Expr(val expr: String) : ListBinding()
 
     /** A literal list of entity URIs. */
-    data class Items(val items: List<String>) : MediaRefs()
+    data class Items(val items: List<String>) : ListBinding()
 }
 
-object MediaRefsSerializer : KSerializer<MediaRefs> {
-    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("org.theconstruct.MediaRefs")
+object ListBindingSerializer : KSerializer<ListBinding> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("org.theconstruct.ListBinding")
 
-    override fun deserialize(decoder: Decoder): MediaRefs {
-        val input = decoder as? JsonDecoder ?: throw SerializationException("MediaRefs supports JSON only")
+    override fun deserialize(decoder: Decoder): ListBinding {
+        val input = decoder as? JsonDecoder ?: throw SerializationException("ListBinding supports JSON only")
         val e = input.decodeJsonElement()
         return when {
-            e is JsonPrimitive && e.isString -> MediaRefs.Expr(e.content)
-            e is JsonArray -> MediaRefs.Items(
+            e is JsonPrimitive && e.isString -> ListBinding.Expr(e.content)
+            e is JsonArray -> ListBinding.Items(
                 e.map { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content
-                    ?: throw SerializationException("media_refs array must contain strings, got $it") }
+                    ?: throw SerializationException("a list binding array must contain strings, got $it") }
             )
-            else -> throw SerializationException("media_refs must be a string or an array of strings, got $e")
+            else -> throw SerializationException("a list binding must be a string or an array of strings, got $e")
         }
     }
 
-    override fun serialize(encoder: Encoder, value: MediaRefs) {
-        val output = encoder as? JsonEncoder ?: throw SerializationException("MediaRefs supports JSON only")
+    override fun serialize(encoder: Encoder, value: ListBinding) {
+        val output = encoder as? JsonEncoder ?: throw SerializationException("ListBinding supports JSON only")
         output.encodeJsonElement(
             when (value) {
-                is MediaRefs.Expr -> JsonPrimitive(value.expr)
-                is MediaRefs.Items -> JsonArray(value.items.map(::JsonPrimitive))
+                is ListBinding.Expr -> JsonPrimitive(value.expr)
+                is ListBinding.Items -> JsonArray(value.items.map(::JsonPrimitive))
             }
         )
     }
@@ -329,14 +372,18 @@ object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode
         Variant("core://Container", UiNode.Container::class, UiNode.Container.serializer()),
         Variant("core://Text", UiNode.Text::class, UiNode.Text.serializer()),
         Variant("core://Button", UiNode.Button::class, UiNode.Button.serializer()),
-        Variant("pixelfed://PostCard", UiNode.PostCard::class, UiNode.PostCard.serializer()),
-        Variant("pixelfed://MediaCarousel", UiNode.MediaCarousel::class, UiNode.MediaCarousel.serializer()),
-        Variant("pixelfed://AuthorHeader", UiNode.AuthorHeader::class, UiNode.AuthorHeader.serializer()),
-        Variant("pixelfed://ActionBar", UiNode.ActionBar::class, UiNode.ActionBar.serializer()),
-        Variant("pixelfed://FeedList", UiNode.FeedList::class, UiNode.FeedList.serializer()),
         Variant("core://List", UiNode.ItemList::class, UiNode.ItemList.serializer()),
         Variant("core://Image", UiNode.Image::class, UiNode.Image.serializer()),
         Variant("core://TextField", UiNode.TextField::class, UiNode.TextField.serializer()),
+        Variant("core://Row", UiNode.Row::class, UiNode.Row.serializer()),
+        Variant("core://Column", UiNode.Column::class, UiNode.Column.serializer()),
+        Variant("core://Spacer", UiNode.Spacer::class, UiNode.Spacer.serializer()),
+        Variant("core://Divider", UiNode.Divider::class, UiNode.Divider.serializer()),
+        Variant("core://Conditional", UiNode.Conditional::class, UiNode.Conditional.serializer()),
+        Variant("core://Carousel", UiNode.Carousel::class, UiNode.Carousel.serializer()),
+        Variant("core://IconButton", UiNode.IconButton::class, UiNode.IconButton.serializer()),
+        Variant("core://Chip", UiNode.Chip::class, UiNode.Chip.serializer()),
+        Variant("core://Badge", UiNode.Badge::class, UiNode.Badge.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): UiNode = UiNode.Unknown(tag, raw)

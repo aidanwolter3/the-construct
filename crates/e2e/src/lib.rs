@@ -357,7 +357,13 @@ impl Harness {
 
     /// The `action.auth.login` intent for this upstream.
     pub fn login_intent(&self) -> String {
-        json!({ "intent": "action.auth.login", "instance_url": self.upstream.url() }).to_string()
+        json!({
+            "intent": "action.auth.login",
+            "instance_url": self.upstream.url(),
+            "app_path": "/v1/auth/pixelfed/app",
+            "token_path": "/v1/auth/pixelfed/token",
+        })
+        .to_string()
     }
 
     /// Every request the pod answered so far.
@@ -785,7 +791,7 @@ pub fn fresh_post(snap: &StateSnapshot) -> (String, i64) {
         .expect("a post that is neither liked nor bookmarked")
 }
 
-/// Toggle `is_liked` (with the like count), as the PostCard's heart does.
+/// Toggle `is_liked` (with the like count), as the feed's heart button does.
 pub fn like_intent(id: &str) -> String {
     json!({
         "intent": "action.mutation.optimistic",
@@ -800,7 +806,7 @@ pub fn like_intent(id: &str) -> String {
     .to_string()
 }
 
-/// Toggle `is_bookmarked`, as the PostCard's bookmark button does.
+/// Toggle `is_bookmarked`, as the feed's bookmark button does.
 pub fn bookmark_intent(id: &str) -> String {
     json!({
         "intent": "action.mutation.optimistic",

@@ -9,8 +9,3 @@ publish.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-schemars = { version = "1", optional = true }
-
-[features]
-# JSON Schema for the AST / intents (the pod's layout agent registry).
-schema = ["dep:schemars"]

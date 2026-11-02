@@ -1285,3 +1285,41 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   `pixelfed_home/0001` the comment button opens nothing: that version has no comments screen.)
 - **Not yet:** the SSE event and "Newer version available" still use the latest version even when the client can't
   draw it (D35's note). Pins are in memory only, so an app update cannot carry over a pin it can't draw.
+
+## D37: No app-specific nodes anywhere; the post card is a layout (schema 3)
+
+D34 said the engine and clients must not know any app, but the protocol still had `pixelfed://FeedList`,
+`PostCard`, `MediaCarousel`, `AuthorHeader` and `ActionBar`, drawn by Pixelfed widgets in the shared UI, and the
+engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
+
+- **Generic nodes (schema 3):** `core://Row`, `core://Column` (spacing and padding), `core://Spacer` (sized, or the
+  rest of a row), `core://Divider`, `core://Conditional` (content only when a binding is truthy), `core://Carousel`
+  (a pager over a list binding with an item template; aspect ratio fixed or read from the first item, clamped),
+  `core://IconButton` (a named icon from `protocol::ICONS`, with an `active` binding that switches icon, tint and
+  description), `core://Chip` (tone Neutral/Warning) and `core://Badge`. `core://Image` gains `blurhash`; text
+  styles gain `Label` and `Secondary`. `protocol::NODE_TYPES` lists every node type; `required_schema` gives 3 for
+  any of the new vocabulary.
+- **The post card is now layout:** `layouts/pixelfed_home/0003.json` and `layouts/pixelfed_demo/0002.json` build it
+  from those nodes inside a `core://List`. Everything a widget used to compute moved to the pod's entities:
+  `author_name`, `author_handle`, `author_avatar_url`, `reblogged_by_name` and `content_warning_label`. Text binds
+  embedded tokens (`$item.reblogged_by_name boosted`).
+- **Old versions stay servable:** a node type the protocol doesn't know decodes as an opaque `UiNode::Unknown` that
+  re-serialises unchanged, so the deployed `pixelfed://` versions (pixelfed_home 1–2, pixelfed_demo 1, listed in
+  `layouts::LEGACY_FILES`) are still served to old clients (schema 1–2). Any other file using an unknown node type
+  is refused at startup. Kotlin decodes unknown types as `UiNode.Unknown` (drawn as nothing).
+- **Schema 3 is a breaking change (D36):** `protocol::RETIRED = [(3, 3)]`, so schema-3 clients draw only versions
+  written for schema 3; the older versions show as retired in their version picker. `layouts/home/0002.json`
+  re-publishes the unchanged counter as schema 3, since its only version would otherwise be retired. Versions
+  appended outside the files (tests, tooling) are recorded as written for the current schema, or 1 when they hold
+  node types this build doesn't know.
+- **Validation moved to `server::validate`.** The parked agent module (D32) and its tests are deleted, with the
+  `json-patch` and `schemars` dependencies. It can come back from git history.
+- **Generic sign-in and sign-out:** `action.auth.login` carries the pod paths of the sign-in app and token calls
+  (`app_path`, `token_path`, both `/v1/`); a button without them shows "This sign-in button is out of date". Sign-out
+  removes every entity no query or workspace references, every cached data load and the workspace cache, and drops
+  outbox rows made while signed in (store v4 `session_bound`), instead of anything under `pixelfed://`.
+- **Demo fixture:** `fixtures/pixelfed_home_bundle.json` now carries a `timeline:home` query, because a
+  `core://List` shows only what its query lists (the old feed widget showed every post).
+- **Cost:** layouts are longer (the post card is about 150 lines of JSON). Not yet: a generic way to format dates
+  or counts in layouts, so the pod still sends ready-made strings.
+

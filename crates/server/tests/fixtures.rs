@@ -1,8 +1,9 @@
 //! Keeps the simulator's Pixelfed fixtures in step with the pod
 //! (docs/DECISIONS.md D34):
 //!
-//! - `fixtures/pixelfed_home_feed_bundle.json`'s layout is the newest
-//!   `layouts/pixelfed_home/NNNN.json`;
+//! - `fixtures/pixelfed_home_feed_bundle.json` is the signed-in feed bundle
+//!   the pod makes from the fake upstream, with the newest
+//!   `layouts/pixelfed_home/NNNN.json` and the fake's own media URLs;
 //! - `fixtures/pixelfed_screen_data.json` holds the comments screen data of
 //!   every fixture post (`{path: DataBundle}`), made by the pod's own
 //!   normalization from the fake upstream at a fixed "now", with avatar URLs
@@ -14,13 +15,14 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use protocol::{DataBundle, UiNode};
+use protocol::{DataBundle, EntityRecord, UiNode};
 use serde_json::Value;
 use server::pixelfed::{
-    MediaAllowlist, MediaUrls, comment_uri, comments_query, normalize_comments,
+    MediaAllowlist, MediaUrls, comment_uri, comments_query, normalize_comments, normalize_timeline,
 };
 
 const FAKE_URL: &str = "http://127.0.0.1:8081";
+const PROXY: &str = "http://pod/v1/pixelfed/media";
 const SEED: &str = "seed-token";
 const OWN_ACCOUNT: &str = "703641122334455667";
 /// 2026-11-01T12:00:00Z.
@@ -58,14 +60,76 @@ fn newest_layout() -> UiNode {
         .layout
 }
 
-#[test]
-fn feed_fixture_uses_the_newest_layout() {
-    let path = fixture("pixelfed_home_feed_bundle.json");
-    let mut bundle: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    bundle["workspace"] = server::layouts::node_value(&newest_layout());
+/// Every string field holding a proxied media URL back to the fake's own URL
+/// (the simulator serves `/storage/<file>`).
+fn unproxy(entity: &mut EntityRecord, media: &MediaUrls) {
+    let fields: Vec<(String, Value)> = entity
+        .fields()
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    for (k, v) in fields {
+        if let Some(url) = v.as_str()
+            && url.starts_with(PROXY)
+        {
+            let key = url.rsplit('/').next().unwrap();
+            entity.set(k, media.keys[key].clone());
+        }
+    }
+}
+
+async fn fake_upstream() -> (String, reqwest::Client) {
+    let state = Arc::new(
+        fake_pixelfed::AppState::new(fake_pixelfed::Config {
+            seed_token: Some(SEED.to_owned()),
+            ..fake_pixelfed::Config::embedded(FAKE_URL)
+        })
+        .unwrap(),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let local = format!("http://{}", listener.local_addr().unwrap());
+    let router = fake_pixelfed::app(state);
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    (local, reqwest::Client::new())
+}
+
+async fn get(base: &str, client: &reqwest::Client, path: &str) -> Value {
+    client
+        .get(format!("{base}{path}"))
+        .bearer_auth(SEED)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+/// The signed-in feed as the pod serves it (fixed media URLs), with the newest
+/// `pixelfed_home` layout.
+#[tokio::test]
+async fn feed_fixture_is_the_pods_feed() {
+    let (base, client) = fake_upstream().await;
+    let timeline = get(
+        &base,
+        &client,
+        "/api/v1/timelines/home?include_reblogs=true",
+    )
+    .await;
+    let allow = MediaAllowlist::new([FAKE_URL], []);
+    let mut media = MediaUrls::new(PROXY, &allow);
+    let normalized = normalize_timeline(timeline.as_array().unwrap(), &mut media);
+    let mut spec = server::pixelfed::layout::home_feed(normalized.entities, normalized.order);
+    for e in spec.entities.values_mut() {
+        unproxy(e, &media);
+    }
+    spec.workspace = newest_layout();
+    let mut v = serde_json::to_value(&spec).unwrap();
+    // Through text, so f32 fields are not widened (see layouts::node_value).
+    v["workspace"] = server::layouts::node_value(&spec.workspace);
     check_or_write(
         "pixelfed_home_feed_bundle.json",
-        &(serde_json::to_string_pretty(&bundle).unwrap() + "\n"),
+        &(serde_json::to_string_pretty(&v).unwrap() + "\n"),
     );
 }
 

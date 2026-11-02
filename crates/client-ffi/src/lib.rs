@@ -389,7 +389,9 @@ mod tests {
         handle.logout();
         // Sign-in against an unreachable pod ends in the error state.
         handle.dispatch(
-            r#"{"intent":"action.auth.login","instance_url":"http://127.0.0.1:1"}"#.to_string(),
+            r#"{"intent":"action.auth.login","instance_url":"http://127.0.0.1:1",
+                "app_path":"/v1/auth/pixelfed/app","token_path":"/v1/auth/pixelfed/token"}"#
+                .to_string(),
         );
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
