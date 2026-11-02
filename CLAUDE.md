@@ -40,6 +40,24 @@ Android/emulator/device checks and the macOS window need the developer's Mac (`s
 `./gradlew :androidApp:installDebug`); cloud sessions can't run them — say so in your summary when a change
 needs a device check.
 
+### Cloud sessions
+`scripts/cloud_setup.sh` installs the toolchains and warms the caches (client-ffi build + every Gradle
+dependency), so the JVM test command above works without Maven Central rate limits (HTTP 429, issue #4). Gradle
+also tries Google's Maven Central mirror first (`kmp-app/settings.gradle.kts`). The environment's setup script is
+stored in Claude Code settings, not in the repo: on claude.ai/code open the environment menu in the session's
+title bar → Edit → **Setup script**, and paste this (it finds the checkout, or clones one if the setup script runs
+before the repo is cloned):
+```bash
+#!/bin/bash
+set -uo pipefail
+for d in "$PWD" /home/user/the-construct; do
+  [ -f "$d/scripts/cloud_setup.sh" ] && exec bash "$d/scripts/cloud_setup.sh"
+done
+tmp=$(mktemp -d) && git clone --depth 1 https://github.com/aidanwolter3/the-construct "$tmp/the-construct" \
+  && exec bash "$tmp/the-construct/scripts/cloud_setup.sh"
+```
+If a session's environment has no setup script (or the warm-up failed), run `bash scripts/cloud_setup.sh` once.
+
 ## Deploys and CI
 - Every PR/push: clippy + Rust tests, JVM tests, simulator screenshots (artifact).
 - **Push to `main` auto-deploys staging** (https://the-construct-pod.fly.dev + fake Pixelfed) when the Rust job
