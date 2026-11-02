@@ -45,6 +45,8 @@ needs a device check.
 - **Push to `main` auto-deploys staging** (https://the-construct-pod.fly.dev + fake Pixelfed) when the Rust job
   passes. Keep `main` green; server schema changes need a migration that works on staging's existing DB.
 - Prefer branches + PRs for non-trivial work; check `gh run list` after pushing.
+- Keep sessions to one task: file follow-up work as a GitHub issue with the `/ticket` skill
+  (`.claude/skills/ticket`); each issue starts with a link that opens a new session on it.
 
 ## Layouts as code (only way to publish a new layout version)
 Add `layouts/<app>/NNNN.json` (`{"note": "...", "schema": N, "layout": {...}}`, next number, no gaps; `schema` =
