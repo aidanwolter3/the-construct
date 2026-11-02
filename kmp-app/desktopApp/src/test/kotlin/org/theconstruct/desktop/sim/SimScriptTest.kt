@@ -138,17 +138,44 @@ class SimScriptTest {
 
     @Test
     fun typeTakesATargetThenText() {
-        val steps = parseScript("type tag:agent-prompt Hide post captions; type \"Describe a change\" media first ")
+        val steps = parseScript("type tag:server-custom-url http://10.0.0.5:8080; type \"Server URL\" media first ")
         val a = assertIs<SimStep.Type>(steps[0])
-        assertEquals("tag:agent-prompt", a.target)
-        assertEquals("Hide post captions", a.text)
+        assertEquals("tag:server-custom-url", a.target)
+        assertEquals("http://10.0.0.5:8080", a.text)
         assertEquals("type", a.command)
         val b = assertIs<SimStep.Type>(steps[1])
-        assertEquals("Describe a change", b.target)
+        assertEquals("Server URL", b.target)
         assertEquals("media first", b.text)
         assertFailsWith<ScriptParseException> { parseScript("type") }
-        assertFailsWith<ScriptParseException> { parseScript("type tag:agent-prompt") }
+        assertFailsWith<ScriptParseException> { parseScript("type tag:server-custom-url") }
         assertFailsWith<ScriptParseException> { parseScript("type \"unterminated text") }
         assertFailsWith<ScriptParseException> { parseScript("type \"\" text") }
+    }
+
+    @Test
+    fun menuCommandsParse() {
+        val steps = parseScript(
+            "open-menu; close-menu; open-app Pixelfed demo; open-history pixelfed_home; select-version v2; " +
+                "select-version LATEST; set-server emulator; set-server http://192.168.1.5:8080/; publish-version Stories row",
+        )
+        assertEquals(SimStep.OpenMenu, steps[0])
+        assertEquals(SimStep.CloseMenu, steps[1])
+        assertEquals("Pixelfed demo", assertIs<SimStep.OpenApp>(steps[2]).app)
+        assertEquals("pixelfed_home", assertIs<SimStep.OpenHistory>(steps[3]).app)
+        assertEquals(2L, assertIs<SimStep.SelectVersion>(steps[4]).version)
+        assertEquals(null, assertIs<SimStep.SelectVersion>(steps[5]).version)
+        assertEquals("select-version latest", steps[5].toString())
+        assertEquals("emulator", assertIs<SimStep.SetServer>(steps[6]).server)
+        assertEquals("http://192.168.1.5:8080/", assertIs<SimStep.SetServer>(steps[7]).server)
+        assertEquals("Stories row", assertIs<SimStep.PublishVersion>(steps[8]).note)
+        for (bad in listOf("open-menu x", "open-app", "select-version 0", "select-version newest", "set-server ftp://x", "set-server prod", "publish-version")) {
+            assertFailsWith<ScriptParseException>(bad) { parseScript(bad) }
+        }
+        // The old layout browser and AI commands are gone.
+        for (old in listOf("open-layouts", "select-layout classic", "use-layout", "restore-version", "undo")) {
+            assertFailsWith<ScriptParseException>(old) { parseScript(old) }
+        }
+        // publish-version needs the fake pod.
+        assertFailsWith<ScriptParseException> { validateStepsForMode(parseScript("publish-version x"), "live") }
     }
 }

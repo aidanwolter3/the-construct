@@ -52,8 +52,8 @@ class SimulatorTest {
         val fake = FakeEngineBridge(bundle("counter_home_bundle.json"))
         val result = run(
             fake,
-            "shot initial; click Increment; click Increment; assert-text Count: 2; offline; assert-text Offline; " +
-                "assert-no-text Online; shot offline",
+            "shot initial; click Increment; click Increment; assert-text Count: 2; offline; open-menu; assert-text Offline; " +
+                "assert-no-text Online; close-menu; shot offline",
         )
         assertTrue(result.ok, result.steps.joinToString("\n") { it.logLine() })
 
@@ -61,7 +61,7 @@ class SimulatorTest {
         assertEquals(390 * 3, initial.width)
         assertEquals(844 * 3, initial.height)
         assertNotBlank(initial)
-        assertNotBlank(image(result, 8))
+        assertNotBlank(image(result, 10))
         assertEquals(JsonPrimitive(2), fake.entityField("core://counters/home", "count"))
 
         assertTrue(File(outDir, "01-initial.png").isFile)
@@ -74,8 +74,8 @@ class SimulatorTest {
         val fake = FakeEngineBridge(bundle("counter_home_bundle.json"))
         val result = run(
             fake,
-            "assert-no-text pending; offline; click Increment; click Increment; click Increment; " +
-                "assert-text 3 pending; assert-text Count: 3; online; assert-no-text pending; wait-text 1000 Count: 3",
+            "open-menu; assert-no-text pending; close-menu; offline; click Increment; click Increment; click Increment; " +
+                "open-menu; assert-text 3 pending; assert-text Count: 3; online; assert-no-text pending; wait-text 1000 Count: 3",
         )
         assertTrue(result.ok, result.steps.joinToString("\n") { it.logLine() })
         assertEquals(0, fake.pendingActions)

@@ -1,18 +1,10 @@
 package org.theconstruct
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -21,16 +13,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.Saver
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,20 +28,20 @@ import kotlinx.serialization.json.JsonObject
  * UI state derived from engine snapshots. [workspace] is null until the engine has a layout.
  * [pendingActions] counts queued (unsent) outbox mutations. [seq] is the seq of the last applied
  * snapshot (-1 before the first). [queries] maps a FeedList `query_key` to ordered entity URIs (M6) and
- * [auth] is the sign-in status. [agent] is the layout agent's status (M7). [activeLayout] names the catalog layout on
- * display and its version (D27).
+ * [auth] is the sign-in status. [activeLayout] names the app on display and its latest version.
+ * [engine] counts engine switches ([ConstructController.openApp]): a snapshot of a replaced engine is dropped.
  */
 data class ConstructState(
     val workspace: UiNode? = null,
     val entities: Map<String, JsonObject> = emptyMap(),
     val queries: Map<String, List<String>> = emptyMap(),
     val auth: AuthInfo = AuthInfo(),
-    val agent: AgentInfo = AgentInfo(),
     val isOnline: Boolean = false,
     val pendingActions: Int = 0,
     val error: String? = null,
     val seq: Long = -1,
     val activeLayout: ActiveLayout = ActiveLayout(),
+    val engine: Int = 0,
 )
 
 /**
@@ -64,23 +50,60 @@ data class ConstructState(
  * dropped (the engine notifies from several threads, so an older snapshot can arrive late); the check
  * and the write are one atomic [MutableStateFlow.update]. Decode failures are surfaced in
  * [ConstructState.error] (keeping the last good workspace/entities) instead of throwing into the engine.
+ *
+ * [appId] is the app (workspace) the engine shows, when the platform knows it. [openBridge], when given, creates an
+ * engine for another app: [openApp] then swaps engines (the old one is [ConstructEngineBridge.close]d). Without it,
+ * [openApp] only reports that other apps can't be opened here.
+ *
+ * Also holds what must outlive a composition (Android rotation; not process restart): the version the user pinned
+ * ([pinned]) and the menu's state ([menu]).
  */
-class ConstructController(private val bridge: ConstructEngineBridge) {
+class ConstructController(
+    bridge: ConstructEngineBridge,
+    appId: String? = null,
+    private val openBridge: ((appId: String) -> ConstructEngineBridge)? = null,
+) {
+    @Volatile
+    private var bridge: ConstructEngineBridge = bridge
+
     private val _state = MutableStateFlow(ConstructState())
     val state: StateFlow<ConstructState> = _state.asStateFlow()
 
-    /** The layout catalog (D26/D27) for the layout browser; its spec cache lives as long as this controller. */
-    val layouts: LayoutRepository = LayoutRepository(bridge)
+    private val _appId = MutableStateFlow(appId)
 
-    /** The layout browser's state (D30): kept here so it outlives the composition (Android rotation). */
-    internal val layoutBrowser: LayoutBrowserState = LayoutBrowserState(layouts) { _state.value.activeLayout }
+    /** The app this controller's engine was opened for (null: unknown, then the snapshots' `app_id` is used). */
+    val appId: StateFlow<String?> = _appId.asStateFlow()
+
+    private val _pinned = MutableStateFlow<PinnedVersion?>(null)
+
+    /** The version picked in the version picker, or null = follow the latest. */
+    val pinned: StateFlow<PinnedVersion?> = _pinned.asStateFlow()
+
+    /** Whether [openApp] can switch to another app. */
+    val canOpenApps: Boolean get() = openBridge != null
+
+    /** The apps / versions calls (cached version specs live as long as this controller). */
+    val apps: AppRepository = AppRepository({ this.bridge })
+
+    /** The hamburger menu's state: kept here so an open drawer or version picker survives rotation. */
+    val menu: MenuState = MenuState(this)
+
+    private val switchLock = Any()
 
     init {
-        bridge.subscribe(::onSnapshot)
+        subscribe(bridge, 0)
     }
 
-    private fun onSnapshot(snapshot: EngineSnapshot) {
-        if (snapshot.seq <= _state.value.seq) return // cheap pre-check; re-checked atomically below
+    private fun subscribe(b: ConstructEngineBridge, engine: Int) {
+        b.subscribe { onSnapshot(it, engine) }
+    }
+
+    /** The app on screen: the one opened, else what the engine reports. */
+    fun currentAppId(): String? = _appId.value ?: _state.value.activeLayout.appId
+
+    private fun onSnapshot(snapshot: EngineSnapshot, engine: Int) {
+        val pre = _state.value
+        if (pre.engine != engine || snapshot.seq <= pre.seq) return // cheap pre-check; re-checked atomically below
         var decodeError: String? = null
         val decoded: ConstructState? = try {
             val trimmed = snapshot.workspaceJson.trim()
@@ -89,9 +112,9 @@ class ConstructController(private val bridge: ConstructEngineBridge) {
             val entities = if (e.isEmpty() || e == "null") emptyMap() else ConstructJson.decodeEntities(e)
             val queries = decodeQueries(snapshot.queriesJson)
             ConstructState(
-                workspace, entities, queries, AuthInfo.parse(snapshot.authJson), AgentInfo.parse(snapshot.agentJson),
+                workspace, entities, queries, AuthInfo.parse(snapshot.authJson),
                 snapshot.isOnline, snapshot.pendingActions, error = null, seq = snapshot.seq,
-                activeLayout = ActiveLayout.parse(snapshot.layoutJson),
+                activeLayout = ActiveLayout.parse(snapshot.layoutJson), engine = engine,
             )
         } catch (t: Throwable) {
             println("[Construct] snapshot decode failed: $t")
@@ -100,11 +123,10 @@ class ConstructController(private val bridge: ConstructEngineBridge) {
         }
         _state.update { cur ->
             when {
-                snapshot.seq <= cur.seq -> cur
+                cur.engine != engine || snapshot.seq <= cur.seq -> cur
                 decoded != null -> decoded
                 else -> cur.copy(
                     auth = AuthInfo.parse(snapshot.authJson),
-                    agent = AgentInfo.parse(snapshot.agentJson),
                     isOnline = snapshot.isOnline,
                     pendingActions = snapshot.pendingActions,
                     error = decodeError,
@@ -127,7 +149,7 @@ class ConstructController(private val bridge: ConstructEngineBridge) {
         }
     }
 
-    /** Signs out ("Sign out" in the status line); the engine notifies `signed_out` and refetches. */
+    /** Signs out (the menu's "Sign out"); the engine notifies `signed_out` and refetches. */
     fun logout() {
         try {
             bridge.logout()
@@ -136,121 +158,98 @@ class ConstructController(private val bridge: ConstructEngineBridge) {
             _state.update { it.copy(error = "Sign-out failed: ${t.message}") }
         }
     }
-}
 
-@Composable
-fun ConstructApp(controller: ConstructController, modifier: Modifier = Modifier) {
-    val state by controller.state.collectAsState()
-    // The layout browser (D30): its state lives in the controller (survives rotation); its navigation is also saved
-    // here for process death and restored once into a fresh controller.
-    val layouts = controller.layoutBrowser
-    val savedNav: LayoutNav = rememberSaveable(
-        saver = Saver<LayoutNav, Any>(save = { with(LayoutNavSaver) { save(layouts.nav) } }, restore = { LayoutNavSaver.restore(it) }),
-    ) { layouts.nav }
-    remember(layouts) { layouts.restoreNav(savedNav) }
-    // Material3 light scheme on a white background and surface (feed photos sit on white, as on Pixelfed/Instagram).
-    MaterialTheme(colorScheme = lightColorScheme(background = Color.White, surface = Color.White)) {
-        Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Box(Modifier.fillMaxSize()) {
-                Column(Modifier.fillMaxSize()) {
-                    StatusLine(state.isOnline, state.pendingActions, state.auth, controller::logout)
-                    state.error?.let {
-                        Text(
-                            it,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                        )
-                    }
-                    val workspace = state.workspace
-                    if (workspace == null) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("Loading…", style = MaterialTheme.typography.bodyLarge)
-                        }
-                    } else {
-                        CompositionLocalProvider(LocalConstructQueries provides state.queries) {
-                            RenderUiNode(workspace, state.entities, controller::dispatch, Modifier.fillMaxSize())
-                        }
-                    }
-                }
-                // Outside the server-driven tree: a layout swap never resets the prompt (M7, DECISIONS D23).
-                // Insets: the platform root already pads by the safe-drawing insets (Android), so this sits above
-                // the navigation bar and the keyboard.
-                if (state.workspace != null) {
-                    AgentPromptOverlay(
-                        state.agent,
-                        state.seq,
-                        onSend = { controller.dispatch(ActionIntent.PromptAgent(it)) },
-                        modifier = Modifier.fillMaxSize(),
-                        secondaryFab = { LayoutsButton(onClick = layouts::open) },
-                    )
-                    // Above the agent overlay; also outside the server-driven tree, so a switch keeps its state.
-                    LayoutBrowserHost(layouts, state, Modifier.fillMaxSize())
-                }
+    /** Forwards an OAuth redirect to the current engine ([ConstructEngineBridge.handleAuthRedirect]). */
+    fun handleAuthRedirect(url: String): Boolean = bridge.handleAuthRedirect(url)
+
+    /** Closes the current engine (the platform calls this when the UI goes away for good). */
+    fun close() {
+        bridge.close()
+    }
+
+    /** Shows [version] of the current app ([layout] = its spec) instead of the latest, until [followLatest]. */
+    fun pin(appId: String, version: Long, layout: UiNode) {
+        _pinned.value = PinnedVersion(appId, version, layout)
+    }
+
+    /** Back to the latest version (and following new ones as they are published). */
+    fun followLatest() {
+        _pinned.value = null
+    }
+
+    /**
+     * Opens app [id]: a no-op (true) when it is already on screen; otherwise creates its engine with the platform's
+     * factory, shows it (starting from "Loading...", following its latest version) and closes the old engine. False,
+     * with nothing changed, when this platform can't open other apps or the engine could not be created.
+     */
+    fun openApp(id: String): Boolean {
+        if (id == currentAppId()) return true
+        val factory = openBridge ?: return false
+        synchronized(switchLock) {
+            val next = try {
+                factory(id)
+            } catch (t: Throwable) {
+                println("[Construct] cannot open app $id: $t")
+                return false
+            }
+            val old = bridge
+            val engine = _state.value.engine + 1
+            bridge = next
+            _appId.value = id
+            _pinned.value = null
+            _state.value = ConstructState(engine = engine)
+            subscribe(next, engine)
+            try {
+                old.close()
+            } catch (t: Throwable) {
+                println("[Construct] closing the previous engine failed: $t")
             }
         }
+        return true
     }
 }
 
 /**
- * Connectivity, plus "N pending" (amber dot) while queued mutations wait to be sent, plus the sign-in
- * status on the right unless signed out: "@username" and a "Sign out" button, "Signing in…" (or the engine's
- * progress message, e.g. "Loading your feed…"), or the error (wrapped to at most 2 lines).
+ * The shared root UI: the rendered layout and, over it, the hamburger button that opens the menu (apps and their
+ * versions, connection, account, server). [server] is the platform's server picker (null = no Server section).
  */
 @Composable
-private fun StatusLine(isOnline: Boolean, pendingActions: Int, auth: AuthInfo, onSignOut: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 16.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(8.dp).background(if (isOnline) Color(0xFF2E7D32) else Color(0xFF9E9E9E), CircleShape))
-        Spacer(Modifier.width(8.dp))
-        Text(
-            if (isOnline) "Online" else "Offline",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (pendingActions > 0) {
-            Spacer(Modifier.width(16.dp))
-            Box(Modifier.size(8.dp).background(Color(0xFFF9A825), CircleShape))
-            Spacer(Modifier.width(6.dp))
-            Text(
-                "$pendingActions pending",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        val authText = when (auth.state) {
-            "signed_in" -> auth.username?.let { "@$it" } ?: "Signed in"
-            "pending" -> auth.message ?: "Signing in…"
-            "error" -> "Sign-in failed" + (auth.error?.let { ": $it" } ?: "")
-            else -> null
-        }
-        if (authText != null) {
-            // The auth text takes all the remaining width (right-aligned), so an error reason has room to wrap.
-            Spacer(Modifier.width(16.dp))
-            Text(
-                authText,
-                style = MaterialTheme.typography.labelMedium,
-                color = if (auth.state == "error") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                // An error reason wraps (2 lines max) instead of being cut off on a phone.
-                maxLines = if (auth.state == "error") 2 else 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.End,
-                modifier = Modifier.weight(1f),
-            )
-            if (auth.state == "signed_in") {
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "Sign out",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable(role = Role.Button, onClick = onSignOut)
-                        .padding(horizontal = 4.dp, vertical = 2.dp),
-                )
+fun ConstructApp(controller: ConstructController, modifier: Modifier = Modifier, server: ServerChoice? = null) {
+    val state by controller.state.collectAsState()
+    val pin by controller.pinned.collectAsState()
+    // Material3 light scheme on a white background and surface (feed photos sit on white, as on Pixelfed/Instagram).
+    MaterialTheme(colorScheme = lightColorScheme(background = Color.White, surface = Color.White)) {
+        Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            MenuDrawer(controller, state, pin, server) {
+                Box(Modifier.fillMaxSize()) {
+                    val workspace = displayedWorkspace(state, pin)
+                    if (workspace == null) {
+                        Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("Loading…", style = MaterialTheme.typography.bodyLarge)
+                            state.error?.let {
+                                Text(
+                                    it,
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(top = 8.dp),
+                                )
+                            }
+                        }
+                    } else {
+                        CompositionLocalProvider(
+                            LocalConstructQueries provides state.queries,
+                            LocalWorkspaceTitleInset provides MENU_BUTTON_INSET,
+                        ) {
+                            RenderUiNode(workspace, state.entities, controller::dispatch, Modifier.fillMaxSize())
+                        }
+                    }
+                    MenuButton(
+                        badge = showMenuBadge(state, pin),
+                        onClick = controller.menu::openMenu,
+                        modifier = Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 8.dp),
+                    )
+                }
             }
         }
     }

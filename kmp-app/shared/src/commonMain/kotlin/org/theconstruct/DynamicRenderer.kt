@@ -23,6 +23,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -32,6 +33,12 @@ val FEED_MAX_WIDTH = 560.dp
 
 /** The workspace's queries (`query_key` -> ordered entity URIs), read by FeedList. Provided by [ConstructApp]. */
 val LocalConstructQueries: ProvidableCompositionLocal<Map<String, List<String>>> = staticCompositionLocalOf { emptyMap() }
+
+/**
+ * Extra start padding for the workspace title, so it sits beside the menu button [ConstructApp] draws over the top-left
+ * corner instead of under it. 0 outside [ConstructApp].
+ */
+val LocalWorkspaceTitleInset: ProvidableCompositionLocal<Dp> = staticCompositionLocalOf { 0.dp }
 
 /**
  * Renders one [UiNode]. [item] is the current item context inside a FeedList item template
@@ -53,17 +60,16 @@ fun RenderUiNode(
             Text(
                 node.title,
                 style = MaterialTheme.typography.headlineMedium,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                modifier = Modifier.padding(start = 16.dp + LocalWorkspaceTitleInset.current, end = 16.dp, top = 12.dp, bottom = 12.dp),
             )
             node.slots.forEach { slot ->
-                // Keyed by slot id: a layout change that inserts a slot above (e.g. the agent adding a widget at
+                // Keyed by slot id: a layout change that inserts a slot above (e.g. a new version adding a banner at
                 // the top) keeps the state of the slots below (feed pager positions).
                 key(slot.slotId) {
                     RenderUiNode(slot.content, entities, onDispatch, Modifier, item)
                 }
             }
-            // Room to scroll the last item out from under the agent FAB (ConstructApp).
-            Spacer(Modifier.height(88.dp))
+            Spacer(Modifier.height(16.dp))
         }
 
         is UiNode.Container -> {

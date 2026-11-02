@@ -7,7 +7,7 @@ import androidx.compose.ui.graphics.vector.addPathNodes
 import androidx.compose.ui.unit.dp
 
 /**
- * The few Material icons the Pixelfed widgets need, built from their 24x24 path data. Compose MP 1.11 has no
+ * The few Material icons the Pixelfed widgets and the menu need, built from their 24x24 path data. Compose MP 1.11 has no
  * current `material-icons-*` artifact (the last is 1.7.x and the extended set is several MB), so they are inlined.
  * Tint them with `Icon(tint = ...)`.
  */
@@ -45,18 +45,12 @@ internal object ConstructIcons {
             "M18,11.42l3,3.01L21,19c0,1.1 -0.9,2 -2,2L5,21c-1.1,0 -2,-0.9 -2,-2v-6.58l3,2.99 4,-4 4,4 4,-3.99z",
     )
     val Warning = icon("Warning", "M1,21h22L12,2 1,21zM13,18h-2v-2h2v2zM13,14h-2v-4h2v4z")
-    val AutoAwesome = icon(
-        "AutoAwesome",
-        "M19,9l1.25,-2.75L23,5l-2.75,-1.25L19,1l-1.25,2.75L15,5l2.75,1.25L19,9z" +
-            "M11.5,9.5L9,4L6.5,9.5L1,12l5.5,2.5L9,20l2.5,-5.5L17,12L11.5,9.5z" +
-            "M19,15l-1.25,2.75L15,19l2.75,1.25L19,23l1.25,-2.75L23,19l-2.75,-1.25L19,15z",
-    )
     val Close = icon(
         "Close",
         "M19,6.41L17.59,5 12,10.59 6.41,5 5,6.41 10.59,12 5,17.59 6.41,19 12,13.41 17.59,19 19,17.59 13.41,12z",
     )
     val ArrowBack = icon("ArrowBack", "M20,11H7.83l5.59,-5.59L12,4l-8,8 8,8 1.41,-1.41L7.83,13H20v-2z")
-    /** Material "Dashboard": the layouts button and the thumbnail placeholder. */
+    /** Material "Dashboard": an app without a known icon. */
     val Dashboard = icon("Dashboard", "M3,13h8V3H3v10zM3,21h8v-6H3v6zM13,21h8V11h-8v10zM13,3v6h8V3h-8z")
     val ChevronRight = icon("ChevronRight", "M10,6L8.59,7.41 13.17,12l-4.58,4.59L10,18l6,-6z")
     val Check = icon("Check", "M9,16.17L4.83,12l-1.42,1.41L9,19 21,7l-1.41,-1.41z")
@@ -66,4 +60,15 @@ internal object ConstructIcons {
             "c-1.93,0 -3.68,-0.79 -4.94,-2.06l-1.42,1.42C8.27,19.99 10.51,21 13,21c4.97,0 9,-4.03 9,-9s-4.03,-9 -9,-9z" +
             "M12,8v5l4.28,2.54 0.72,-1.21 -3.5,-2.08V8H12z",
     )
+    val Menu = icon("Menu", "M3,18h18v-2H3v2zM3,13h18v-2H3v2zM3,6v2h18V6H3z")
+    /** Material "Image": the Pixelfed apps. */
+    val Photo = icon(
+        "Photo",
+        "M21,19V5c0,-1.1 -0.9,-2 -2,-2H5c-1.1,0 -2,0.9 -2,2v14c0,1.1 0.9,2 2,2h14c1.1,0 2,-0.9 2,-2z" +
+            "M8.5,13.5l2.5,3.01L14.5,12l4.5,6H5l3.5,-4.5z",
+    )
+    /** Material "PlusOne": the counter app. */
+    val PlusOne = icon("PlusOne", "M10,8H8v4H4v2h4v4h2v-4h4v-2h-4zM14.5,6.08V7.9l2.5,-0.5V18h2V5z")
+    val ExpandMore = icon("ExpandMore", "M16.59,8.59L12,13.17 7.41,8.59 6,10l6,6 6,-6z")
+    val ExpandLess = icon("ExpandLess", "M12,8l-6,6 1.41,1.41L12,10.83l4.59,4.58L18,14z")
 }

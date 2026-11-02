@@ -12,7 +12,7 @@ import kotlin.system.exitProcess
  * Headless simulator entry point (README "Simulation mode"). Run through
  * `./gradlew :desktopApp:simulate -P<name>=<value>`, which forwards each property as `--<name>=<value>`.
  *
- * Options: workspace (home), screen (phone), script / scriptFile (default "shot initial"),
+ * Options: workspace (pixelfed_home), screen (phone), script / scriptFile (default "shot initial"),
  * mode (fixture|live), fixture, baseUrl, out, density, timeoutMs (live load wait, 10000),
  * storage (live only: persistent engine storage dir; default a fresh temp dir deleted on exit),
  * pixelfedLogin (live only: `<email or seed username>:<password>` signs in to a real Pixelfed's web UI and
@@ -42,6 +42,12 @@ fun main(args: Array<String>) {
 
 class UsageException(message: String) : Exception(message)
 
+/** The app the simulator shows unless -Pworkspace says otherwise (as on every surface: the one Pixelfed app). */
+const val DEFAULT_WORKSPACE = "pixelfed_home"
+
+/** Live mode's server unless -PbaseUrl is given: the staging pod, as in the desktop app. */
+const val LIVE_DEFAULT_BASE_URL = "https://the-construct-pod.fly.dev"
+
 private val KNOWN_OPTIONS = setOf(
     "workspace", "screen", "script", "scriptFile", "mode", "fixture", "baseUrl", "out", "density", "timeoutMs",
     "storage", "pixelfedLogin",
@@ -63,7 +69,7 @@ private fun runCli(args: Array<String>): Int {
     val cwd = File("").absoluteFile
     fun path(p: String) = File(p).let { if (it.isAbsolute) it else File(cwd, p) }.normalize()
 
-    val workspace = opts["workspace"] ?: "home"
+    val workspace = opts["workspace"] ?: DEFAULT_WORKSPACE
     val screen = try {
         ScreenSpec.parse(opts["screen"] ?: "phone")
     } catch (e: IllegalArgumentException) {
@@ -114,20 +120,29 @@ private fun runCli(args: Array<String>): Int {
 
     val controller: ConstructController
     var setOnline: ((Boolean) -> Unit)? = null
+    var publishVersion: ((String) -> Long)? = null
     if (mode == "fixture") {
         val fixture = opts["fixture"]?.let(::path) ?: defaultFixture(workspace, cwd)
         if (!fixture.isFile) throw UsageException("fixture not found: $fixture")
         println("[sim] mode=fixture workspace=$workspace fixture=$fixture")
-        val fake = try {
-            FakeEngineBridge(fixture.readText())
+        // A custom fixture without -Pworkspace belongs to the app its bundle names.
+        val appId = if (opts["fixture"] != null && opts["workspace"] == null) null else workspace
+        var current = try {
+            FakeEngineBridge(fixture.readText(), appId = appId)
         } catch (e: Exception) {
             throw UsageException("bad fixture $fixture: ${e.message}")
         }
-        setOnline = fake::setOnline
-        controller = ConstructController(fake)
+        setOnline = { current.setOnline(it) }
+        publishVersion = { current.publishVersion(it) }
+        // open-app: a new fake engine on the app's default fixture, sharing the apps catalog and the connectivity.
+        val openBridge = { id: String ->
+            FakeEngineBridge(defaultFixture(id, cwd).readText(), online = current.online, appId = id, apps = current.apps)
+                .also { current = it }
+        }
+        controller = ConstructController(current, current.appId, openBridge)
     } else {
         // Same default as the desktop app (the staging pod); pass -PbaseUrl=http://127.0.0.1:8080 for a local server.
-        val baseUrl = opts["baseUrl"] ?: "https://the-construct-pod.fly.dev"
+        val baseUrl = opts["baseUrl"] ?: LIVE_DEFAULT_BASE_URL
         // By default temp storage (deleted on exit) so live runs never read or write the app's ~/.construct
         // cache; -Pstorage=<dir> keeps a persistent dir (restart-persistence QA, inspecting cache.db).
         val storage = opts["storage"]?.let { dir ->
@@ -147,7 +162,8 @@ private fun runCli(args: Array<String>): Int {
             urlOpener = opener,
         )
         liveBridge = bridge
-        controller = ConstructController(bridge)
+        // No engine factory yet: open-app in live mode reports that other apps can't be opened.
+        controller = ConstructController(bridge, workspace)
         val deadline = System.nanoTime() + timeoutMs * 1_000_000
         while (controller.state.value.workspace == null && System.nanoTime() < deadline) Thread.sleep(50)
         val s = controller.state.value
@@ -166,6 +182,8 @@ private fun runCli(args: Array<String>): Int {
         density = density,
         setOnline = setOnline,
         modeName = mode,
+        publishVersion = publishVersion,
+        server = if (mode == "live") opts["baseUrl"] ?: LIVE_DEFAULT_BASE_URL else SimRunner.SIM_SERVERS.first().url,
     ).run(steps)
     if (result.ok) {
         println("[sim] OK: ${result.steps.size} step(s)")

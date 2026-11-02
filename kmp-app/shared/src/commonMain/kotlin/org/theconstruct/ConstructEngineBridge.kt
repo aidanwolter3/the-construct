@@ -5,8 +5,8 @@ package org.theconstruct
  * [ConstructJson.decodeNode]; `"null"` before the first load), [entitiesJson] the URI-keyed entities map
  * ([ConstructJson.decodeEntities]). [seq] strictly increases per engine; consumers drop snapshots whose
  * seq is not above the last applied one. [pendingActions] counts outbox rows not yet sent.
- * [queriesJson] and [authJson] are M6 additions, [agentJson] an M7 one and [layoutJson] a D27 one, with defaults so
- * older call sites keep compiling.
+ * [queriesJson] and [authJson] are M6 additions and [layoutJson] a D27 one, with defaults so older call sites keep
+ * compiling. [agentJson] is ignored (the AI client UI is gone; the field goes with the FFI's agent status).
  */
 data class EngineSnapshot(
     val workspaceJson: String,
@@ -18,14 +18,12 @@ data class EngineSnapshot(
     val queriesJson: String = "{}",
     /** Auth status: `{"state":"signed_out"|"pending"|"signed_in"|"error","username"?,"error"?}`. */
     val authJson: String = "{\"state\":\"signed_out\"}",
-    /**
-     * Layout agent status (M7): `{"state":"idle"|"running"|"done"|"error","message"?,"provider"?,"layout_version"?}`;
-     * parse with [AgentInfo.parse].
-     */
+    /** Former layout agent status (M7); ignored. */
     val agentJson: String = "{\"state\":\"idle\"}",
     /**
-     * The layout on display (D27): `{"layout_id"?,"layout_version"?,"revision"?}` (`layout_version` = the active
-     * layout's own version, `revision` = the workspace revision); `"{}"` while unknown. Parse with [ActiveLayout.parse].
+     * The layout on display: `{"app_id","version"?}` (`version` = the app's latest version, as applied from
+     * `X-Construct-Layout-Version`; omitted on an unversioned screen such as the signed-out one); `"{}"` while unknown.
+     * Parse with [ActiveLayout.parse] (which also reads the older D27 shape).
      */
     val layoutJson: String = "{}",
 )
@@ -51,9 +49,30 @@ interface ConstructEngineBridge {
     /** Signs out (non-blocking). No-op for fakes without sign-in. */
     fun logout() {}
 
-    // Layout catalog (DECISIONS D26/D27). All BLOCKING network calls: call them off the UI thread (e.g. on
-    // Dispatchers.IO). Each returns the pod's JSON body or throws [LayoutApiException] with a readable message.
-    // The defaults throw, so fakes without a catalog compile unchanged.
+    /**
+     * Releases the engine (called by [ConstructController.openApp] on the bridge it replaces, and by the platform when
+     * the UI goes away for good). Default: nothing to release.
+     */
+    fun close() {}
+
+    // Apps and their version history (the hamburger menu's Apps section and version picker). All BLOCKING network
+    // calls: call them off the UI thread (e.g. on Dispatchers.IO). Each returns the pod's JSON body unchanged or throws
+    // [LayoutApiException] with a readable message. The defaults throw, so fakes without apps compile unchanged.
+
+    /** `GET /v1/apps`: `{"apps":[{"id","title","icon","latest_version","updated_at"}]}`. */
+    fun listApps(): String = throw appsUnavailable()
+
+    /**
+     * `GET /v1/apps/{appId}/versions`: one page, newest first: `{"app_id","latest_version","versions":[{"version",
+     * "created_at","source","note"?}],"next_before"?}`; pass `next_before` as [before] for the next (older) page.
+     * [limit] null = the pod's default (20).
+     */
+    fun appVersions(appId: String, before: Long? = null, limit: Int? = null): String = throw appsUnavailable()
+
+    /** `GET /v1/apps/{appId}/versions/{version}`: the version's metadata plus its full `layout` (a workspace [UiNode]). */
+    fun appVersion(appId: String, version: Long): String = throw appsUnavailable()
+
+    // Old per-layout catalog (D26/D27). No longer used by the UI; kept until the FFI drops it.
 
     /** This workspace's layouts: `{"layouts":[{id,title,description,current_version,active,active_version?,...}],...}`. */
     fun listLayouts(): String = throw catalogUnavailable()
@@ -78,3 +97,5 @@ interface ConstructEngineBridge {
 }
 
 private fun catalogUnavailable() = LayoutApiException("Layouts aren't available here.")
+
+private fun appsUnavailable() = LayoutApiException("Apps aren't available here.")

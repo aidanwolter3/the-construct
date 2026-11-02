@@ -6,6 +6,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.int
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -25,6 +26,11 @@ private class FakeBridge : ConstructEngineBridge {
     }
 
     var logouts = 0
+    var closes = 0
+
+    override fun close() {
+        closes++
+    }
 
     override fun logout() {
         logouts++
@@ -165,47 +171,55 @@ class ConstructControllerTest {
     }
 
     @Test
-    fun agentStatusFollowsSnapshotsAndPromptDispatchesTheAgentIntent() {
-        val bridge = FakeBridge()
-        val controller = ConstructController(bridge)
+    fun openAppSwapsEnginesAndIgnoresTheOldOne() {
+        val first = FakeBridge()
+        val second = FakeBridge()
+        val opened = mutableListOf<String>()
+        val controller = ConstructController(first, "pixelfed_home") { id -> opened += id; second }
         val (ws, ents) = snapshotOf(COUNTER_BUNDLE_JSON)
-        bridge.emit(ws, ents, true)
-        assertEquals(AgentInfo(), controller.state.value.agent) // default agentJson is idle
-        bridge.listener!!(
-            EngineSnapshot(ws, ents, true, 50, 0, agentJson = """{"state":"done","provider":"rules","layout_version":3}"""),
-        )
-        assertEquals(AgentInfo("done", null, "rules", 3), controller.state.value.agent)
-        // A decode failure still carries the agent status.
-        bridge.listener!!(EngineSnapshot("{not json", ents, true, 51, 0, agentJson = """{"state":"running"}"""))
-        assertNotNull(controller.state.value.error)
-        assertEquals("running", controller.state.value.agent.state)
+        first.emit(ws, ents, true, seq = 40)
+        controller.pin("pixelfed_home", 1, UiNode.Text("old", TextStyle.Body))
+        assertTrue(controller.openApp("pixelfed_home"), "already on screen")
+        assertEquals(emptyList(), opened)
 
-        controller.dispatch(ActionIntent.PromptAgent("Hide captions"))
-        assertEquals("""{"intent":"action.agent.prompt","prompt_text":"Hide captions"}""", bridge.dispatched.last())
+        assertTrue(controller.openApp("home"))
+        assertEquals(listOf("home"), opened)
+        assertEquals(1, first.closes)
+        assertEquals("home", controller.currentAppId())
+        assertNull(controller.pinned.value, "a pin belongs to its app")
+        assertNull(controller.state.value.workspace, "Loading... until the new engine's first snapshot")
+        // The new engine's seq starts again; the old engine's late snapshots are dropped.
+        second.emit(ws, COUNT_1, true, seq = 1)
+        first.emit(ws, COUNT_3, false, seq = 41)
+        assertEquals(1, controller.state.value.entities["core://counters/home"]!!["count"]!!.jsonPrimitive.int)
+        assertTrue(controller.state.value.isOnline)
+        controller.dispatch(ActionIntent.NavigateBack)
+        assertEquals(1, second.dispatched.size)
+        assertEquals(0, first.dispatched.size)
     }
 
     @Test
-    fun agentInfoParsingAndStatusText() {
-        assertEquals(AgentInfo(), AgentInfo.parse("{not json"))
-        assertEquals(AgentInfo(), AgentInfo.parse("""{"state":null}"""))
-        assertEquals(
-            AgentInfo("error", "unsupported prompt", null, null),
-            AgentInfo.parse("""{"state":"error","message":"unsupported prompt","layout_version":"x"}"""),
-        )
-        assertNull(agentStatusText(AgentInfo()))
-        assertEquals("Applying...", agentStatusText(AgentInfo("running")))
-        assertEquals("Layout updated (v3, rules)", agentStatusText(AgentInfo("done", provider = "rules", layoutVersion = 3)))
-        assertEquals("Layout updated", agentStatusText(AgentInfo("done")))
-        assertEquals("unsupported prompt", agentStatusText(AgentInfo("error", "unsupported prompt")))
-        assertEquals("The layout agent failed", agentStatusText(AgentInfo("error")))
-        // `unchanged: true` (the pod found nothing to change): the engine's message, not "Layout updated".
-        val unchanged = AgentInfo.parse(
-            """{"state":"done","message":"No change needed (v2)","provider":"rules","layout_version":2,"unchanged":true}""",
-        )
-        assertEquals(AgentInfo("done", "No change needed (v2)", "rules", 2, unchanged = true), unchanged)
-        assertEquals("No change needed (v2)", agentStatusText(unchanged))
-        assertEquals("No change needed (v4)", agentStatusText(AgentInfo("done", layoutVersion = 4, unchanged = true)))
-        assertEquals(false, AgentInfo.parse("""{"state":"done","unchanged":"yes"}""").unchanged)
+    fun openAppWithoutAFactoryChangesNothing() {
+        val bridge = FakeBridge()
+        val controller = ConstructController(bridge, "pixelfed_home")
+        assertFalse(controller.canOpenApps)
+        assertFalse(controller.openApp("home"))
+        assertEquals("pixelfed_home", controller.currentAppId())
+        assertEquals(0, bridge.closes)
+        // A factory that throws is reported the same way.
+        val failing = ConstructController(bridge, "pixelfed_home") { throw IllegalStateException("no engine") }
+        assertFalse(failing.openApp("home"))
+        assertEquals("pixelfed_home", failing.currentAppId())
+    }
+
+    @Test
+    fun appIdFallsBackToTheSnapshot() {
+        val bridge = FakeBridge()
+        val controller = ConstructController(bridge)
+        assertNull(controller.currentAppId())
+        bridge.listener!!(EngineSnapshot("null", "{}", true, 1, 0, layoutJson = """{"app_id":"pixelfed_home","version":7}"""))
+        assertEquals("pixelfed_home", controller.currentAppId())
+        assertEquals(ActiveLayout("pixelfed_home", 7), controller.state.value.activeLayout)
     }
 
     @Test

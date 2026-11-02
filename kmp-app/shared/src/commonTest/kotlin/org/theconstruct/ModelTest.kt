@@ -142,18 +142,17 @@ class ModelTest {
         for (i in listOf(
             ActionIntent.Navigate("pixelfed://bookmarks", PresentationMode.Replace),
             ActionIntent.AuthLogin("https://pixelfed.social"),
-            ActionIntent.PromptAgent("show me cats"),
         )) {
             assertEquals(i, ConstructJson.decodeIntent(ConstructJson.encodeIntent(i)))
         }
     }
 
     @Test
-    fun promptAgentWireFormat() {
-        assertEquals(
-            """{"intent":"action.agent.prompt","prompt_text":"Hide captions"}""",
-            ConstructJson.encodeIntent(ActionIntent.PromptAgent("Hide captions")),
-        )
+    fun removedAgentIntentDegradesToUnknown() {
+        val json = """{"intent":"action.agent.prompt","prompt_text":"Hide captions"}"""
+        val i = ConstructJson.decodeIntent(json)
+        assertEquals("action.agent.prompt", (i as ActionIntent.Unknown).intent)
+        assertEquals(json, ConstructJson.encodeIntent(i))
     }
 
     @Test

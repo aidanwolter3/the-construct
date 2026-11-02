@@ -129,7 +129,6 @@ fun bindIntent(intent: ActionIntent, item: JsonObject?): ActionIntent {
             payload = bindJson(intent.payload, item),
         )
         is ActionIntent.AuthLogin -> intent.copy(instanceUrl = bindItemTokens(intent.instanceUrl, item))
-        is ActionIntent.PromptAgent -> intent.copy(promptText = bindItemTokens(intent.promptText, item))
         ActionIntent.NavigateBack -> intent
         is ActionIntent.Unknown -> intent.copy(
             raw = JsonObject(intent.raw.mapValues { (k, v) -> if (k == "intent") v else bindJson(v, item) })

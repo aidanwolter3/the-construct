@@ -157,12 +157,10 @@ sealed class ActionIntent {
         @SerialName("instance_url") val instanceUrl: String,
     ) : ActionIntent()
 
-    @Serializable
-    data class PromptAgent(
-        @SerialName("prompt_text") val promptText: String,
-    ) : ActionIntent()
-
-    /** An intent whose `intent` tag this client does not know. [raw] is the full original object. */
+    /**
+     * An intent whose `intent` tag this client does not know (e.g. the removed `action.agent.prompt`). [raw] is the full
+     * original object; dispatching it forwards [raw] unchanged.
+     */
     data class Unknown(val intent: String, val raw: JsonObject) : ActionIntent()
 }
 
@@ -274,7 +272,6 @@ object ActionIntentSerializer : TaggedUnionSerializer<ActionIntent>("org.thecons
         Variant("action.navigation.back", ActionIntent.NavigateBack::class, ActionIntent.NavigateBack.serializer()),
         Variant("action.mutation.optimistic", ActionIntent.OptimisticMutate::class, ActionIntent.OptimisticMutate.serializer()),
         Variant("action.auth.login", ActionIntent.AuthLogin::class, ActionIntent.AuthLogin.serializer()),
-        Variant("action.agent.prompt", ActionIntent.PromptAgent::class, ActionIntent.PromptAgent.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): ActionIntent = ActionIntent.Unknown(tag, raw)

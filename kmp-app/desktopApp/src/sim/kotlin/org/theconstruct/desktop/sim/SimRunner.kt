@@ -41,6 +41,14 @@ import org.theconstruct.ConstructController
 import org.theconstruct.ImageLoads
 import org.theconstruct.LayoutCalls
 import org.theconstruct.LocalBackPresses
+import org.theconstruct.MenuState
+import org.theconstruct.ServerChoice
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.performSemanticsAction
+import org.theconstruct.ServerOption
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import org.jetbrains.skia.EncodedImageFormat
 import org.jetbrains.skia.Image
 import java.io.File
@@ -96,7 +104,25 @@ class SimRunner(
     private val log: (String) -> Unit = ::println,
     /** Installs the simulator's Coil ImageLoader for [modeName] ([SimImages]) at the start of [run]. */
     private val installImageLoader: Boolean = true,
+    /** Fixture mode: the fake pod publishes a new version of the app on screen (`publish-version`); returns its number. */
+    private val publishVersion: ((String) -> Long)? = null,
+    /** The server the menu shows at first; `set-server` records the choice (the simulator never switches servers). */
+    server: String = SIM_SERVERS.first().url,
 ) {
+    /** The server the menu shows: the last `set-server` choice. */
+    var serverUrl: String by mutableStateOf(server)
+        private set
+
+    /** Every server chosen in the menu, in order. */
+    val serverSelections = mutableListOf<String>()
+
+    private val serverChoice: ServerChoice
+        get() = ServerChoice(serverUrl, SIM_SERVERS) { url ->
+            log("[sim] server picked: $url (recorded; the simulator keeps its engine)")
+            serverSelections += url
+            serverUrl = url
+        }
+
     private var backPresses: BackPresses? = null
 
     fun run(steps: List<SimStep>): SimResult {
@@ -121,7 +147,9 @@ class SimRunner(
                     // A stand-in for the system Back (the `back` command and the layout browser's levels).
                     val backPresses = BackPresses()
                     this@SimRunner.backPresses = backPresses
-                    setContent { CompositionLocalProvider(LocalBackPresses provides backPresses) { ConstructApp(controller) } }
+                    setContent {
+                        CompositionLocalProvider(LocalBackPresses provides backPresses) { ConstructApp(controller, server = serverChoice) }
+                    }
                     waitForIdle()
                     while (i < steps.size) {
                         val step = steps[i]
@@ -175,8 +203,8 @@ class SimRunner(
     private fun SkikoComposeUiTest.execute(step: SimStep, index: Int): Pair<String, File?> {
         when (step) {
             is SimStep.Shot -> {
-                // Catalog loads (thumbnails) first; then images still loading after SHOT_IMAGE_WAIT_MS are captured as
-                // placeholders (not a failure).
+                // Apps calls first; then images still loading after SHOT_IMAGE_WAIT_MS are captured as placeholders
+                // (not a failure).
                 awaitLayoutCalls()
                 val settled = awaitImages(SHOT_IMAGE_WAIT_MS)
                 val image = onRoot().captureToImage()
@@ -249,88 +277,90 @@ class SimRunner(
             SimStep.Back -> {
                 waitForIdle()
                 val presses = backPresses ?: throw StepFailure("Back is not available")
-                if (!presses.press()) throw StepFailure("nothing on screen handles Back (no open panel or browser)")
+                if (!presses.press()) throw StepFailure("nothing on screen handles Back (the menu is closed)")
                 waitForIdle()
                 return "" to null
             }
-            SimStep.OpenLayouts -> {
-                if (!hasTag("layouts-browser")) {
-                    clickTag("layouts-button", "the layouts button is not on screen (workspace not loaded, or the agent panel is open)")
-                }
-                awaitTag("layouts-browser", "the layouts browser did not open")
+            SimStep.OpenMenu -> {
+                if (!menuShown()) clickTag("menu-button", "the menu button is not on screen")
+                awaitMenu()
                 awaitLayoutCalls()
-                if (hasTag("layouts-error")) return "error shown: ${textUnder("layouts-error")}" to null
-                val n = tagsStartingWith("layout-item-").size
-                return "$n layout(s)" to null
+                if (hasTag("apps-error")) return "error shown: ${textUnder("apps-error")}" to null
+                return (if (hasTag("version-picker")) "version picker" else "${appTags().size} app(s)") to null
             }
-            is SimStep.SelectLayout -> {
-                requireTag("layouts-browser", "the layouts browser is not open (use open-layouts first)")
-                awaitLayoutCalls()
-                val tag = awaitLayoutItem(step.id)
+            SimStep.CloseMenu -> {
+                if (!menuShown()) throw StepFailure("the menu is not open")
+                if (hasTag("version-picker")) clickTag("menu-back", "")
+                clickTag("menu-close", "")
+                awaitCondition("the menu to close", LAYOUT_TIMEOUT_MS) { !menuShown() && !controller.menu.open }
+                return "" to null
+            }
+            is SimStep.OpenApp -> {
+                val tag = appTag(step.app)
+                val id = tag.removePrefix("app-")
+                if (id != controller.currentAppId() && !controller.canOpenApps) {
+                    throw StepFailure("cannot open '$id': ${MenuState.OPEN_APP_UNAVAILABLE} (its row is disabled)")
+                }
                 clickTag(tag, "")
-                awaitTag("layout-details", "the details of '${step.id}' did not open")
                 awaitLayoutCalls()
-                return tag.removePrefix("layout-item-") to null
+                if (hasTag("app-error")) throw StepFailure("cannot open '$id': ${textUnder("app-error")}")
+                awaitCondition("app '$id' to load", LAYOUT_TIMEOUT_MS) {
+                    !menuShown() && controller.currentAppId() == id && controller.state.value.workspace != null
+                }
+                return "opened $id" to null
+            }
+            is SimStep.OpenHistory -> {
+                val id = appTag(step.app).removePrefix("app-")
+                clickTag("app-history-$id", "")
+                awaitTag("version-picker", "the version picker of '$id' did not open")
+                awaitLayoutCalls()
+                if (hasTag("versions-error")) return "error shown: ${textUnder("versions-error")}" to null
+                return "${tagsStartingWith("version-").count { VERSION_TAG.matches(it) }} version(s) listed" to null
             }
             is SimStep.SelectVersion -> {
-                requireTag("layout-details", "no layout details on screen (use select-layout first)")
-                awaitLayoutCalls()
-                val tag = "version-item-${step.version}"
+                requireTag("version-picker", "no version picker on screen (use open-history first)")
+                val tag = step.version?.let { "version-$it" } ?: "version-latest"
                 // Older versions are paged: press "Load older" until the row appears or there is no more history.
                 while (!hasTag(tag) && hasTag("versions-more")) {
                     clickTag("versions-more", "")
                     awaitLayoutCalls()
                 }
                 if (!hasTag(tag)) {
-                    throw StepFailure("no version ${step.version} in the history; listed: ${tagsStartingWith("version-item-").map { "v" + it.removePrefix("version-item-") }}")
+                    val listed = tagsStartingWith("version-").filter { VERSION_TAG.matches(it) }.map { "v" + it.removePrefix("version-") }
+                    val err = if (hasTag("versions-error")) "; error shown: ${textUnder("versions-error")}" else ""
+                    throw StepFailure("no version ${step.version} in the history; listed: $listed$err")
                 }
                 clickTag(tag, "")
-                awaitTag("version-preview", "the preview of v${step.version} did not open")
                 awaitLayoutCalls()
-                return "" to null
+                if (hasTag("version-error")) throw StepFailure("error shown: ${textUnder("version-error")}")
+                awaitCondition("the menu to close", LAYOUT_TIMEOUT_MS) { !menuShown() }
+                val pin = controller.pinned.value
+                return (if (pin == null) "following the latest version" else "showing v${pin.version}") to null
             }
-            SimStep.UseLayout -> {
-                awaitLayoutCalls()
-                val tag = listOf("layout-use", "version-use").firstOrNull { hasTag(it) }
-                    ?: throw StepFailure(
-                        "no 'Use this layout' / 'Use this version' button on screen (it is shown in the details or preview of " +
-                            "a layout that is not active; for the active layout use restore-version)",
-                    )
-                clickTag(tag, "")
-                awaitTag("confirm-dialog", "the confirmation did not open")
-                return tag to null
-            }
-            SimStep.RestoreVersion -> {
-                awaitLayoutCalls()
-                if (!hasTag("version-restore")) {
-                    throw StepFailure(
-                        "no 'Restore this version' button on screen (it is shown in the preview of an older version of the " +
-                            "active layout; for another layout use use-layout)",
-                    )
+            is SimStep.SetServer -> {
+                ensureMenuSections()
+                requireTag("menu-server", "no Server section in the menu")
+                if (!hasTag("server-custom")) clickTag("menu-server", "")
+                val key = step.server.lowercase()
+                if (key in SERVER_PRESETS) {
+                    clickTag("server-$key", "no '$key' server in the menu")
+                } else {
+                    clickTag("server-custom", "")
+                    val field = onAllNodes(hasTestTag("server-custom-url"))
+                    if (field.fetchSemanticsNodes().isEmpty()) throw StepFailure("the custom server URL field did not open")
+                    field[0].performTextClearance()
+                    field[0].performTextInput(step.server)
+                    waitForIdle()
+                    clickTag("server-custom-use", "")
                 }
-                clickTag("version-restore", "")
-                awaitTag("confirm-dialog", "the confirmation did not open")
-                return "" to null
+                waitForIdle()
+                return "server: $serverUrl" to null
             }
-            SimStep.Confirm, SimStep.CancelConfirm -> {
-                val tag = if (step == SimStep.Confirm) "confirm-ok" else "confirm-cancel"
-                requireTag(tag, "no confirmation dialog on screen (use use-layout or restore-version first)")
-                clickTag(tag, "")
-                awaitLayoutCalls()
-                if (hasTag("confirm-error")) return "error shown: ${textUnder("confirm-error", self = true)}" to null
-                return (if (hasTag("layouts-snackbar")) "snackbar: ${textUnder("layouts-snackbar")}" else "") to null
-            }
-            SimStep.Undo -> {
-                requireTag("snackbar-undo", "no Undo on screen (the snackbar shows for 8 s after a change)")
-                clickTag("snackbar-undo", "")
-                awaitLayoutCalls()
-                return (if (hasTag("layouts-snackbar")) "snackbar: ${textUnder("layouts-snackbar")}" else "") to null
-            }
-            SimStep.CloseLayouts -> {
-                requireTag("layouts-close", "the layouts browser is not open")
-                clickTag("layouts-close", "")
-                awaitCondition("the layouts browser to close") { !hasTag("layouts-browser") }
-                return "" to null
+            is SimStep.PublishVersion -> {
+                val publish = publishVersion ?: throw StepFailure("'publish-version' is not supported in $modeName mode")
+                val v = publish(step.note)
+                waitForIdle()
+                return "published v$v" to null
             }
             is SimStep.Screen -> error("handled by run()")
         }
@@ -358,6 +388,12 @@ class SimRunner(
             }
             how = "$found, scrolled into view"
         }
+        // The menu button floats over the top-left corner: a node scrolled under it would get the click meant for it.
+        if (underMenuButton(node)) {
+            node.performSemanticsAction(SemanticsActions.OnClick)
+            waitForIdle()
+            return "$how, under the menu button: clicked via its click action"
+        }
         // A mouse click, then move the pointer off the node: performClick() injects touch
         // events that leave the button in a hovered state, so later shots show a tint.
         node.performMouseInput {
@@ -366,7 +402,7 @@ class SimRunner(
             moveTo(Offset(-1f, -1f))
         }
         waitForIdle()
-        // The click may have opened a screen (the layouts browser) whose node under the old pointer position got a
+        // The click may have opened a screen (the menu) whose node under the old pointer position got a
         // hover enter on its first layout; a second exit clears that tint from later shots.
         onRoot().performMouseInput { moveTo(Offset(1f, 1f)); moveTo(Offset(-1f, -1f)) }
         waitForIdle()
@@ -405,26 +441,43 @@ class SimRunner(
         clickNode(all[0], "test tag", "tag:$tag")
     }
 
-    /** The tag of the list item for [id] (full id or its last segment), waiting for the list to load. */
-    private fun SkikoComposeUiTest.awaitLayoutItem(id: String): String {
-        fun match(): String? {
-            val tags = tagsStartingWith("layout-item-")
-            return tags.firstOrNull { it == "layout-item-$id" } ?: tags.firstOrNull { it.endsWith(".$id") }
-        }
-        match()?.let { return it }
-        fun missing(): Nothing {
-            val listed = tagsStartingWith("layout-item-").map { it.removePrefix("layout-item-") }
-            val err = if (hasTag("layouts-error")) "; error shown: ${textUnder("layouts-error")}" else ""
-            throw StepFailure("no layout '$id' in the browser; listed: $listed$err")
-        }
-        // The caller waited for the catalog calls: a loaded list (or its error) without the id fails at once.
-        if (tagsStartingWith("layout-item-").isNotEmpty() || hasTag("layouts-error")) missing()
+    /** The drawer is showing its sections or the version picker. */
+    private fun SkikoComposeUiTest.menuShown(): Boolean = hasTag("menu-drawer") || hasTag("version-picker")
+
+    private fun SkikoComposeUiTest.awaitMenu() {
+        waitForIdle()
         try {
-            waitUntil("layout item $id", LAYOUT_TIMEOUT_MS) { match() != null }
+            waitUntil("the menu", LAYOUT_TIMEOUT_MS) { menuShown() }
         } catch (e: ComposeTimeoutException) {
-            missing()
+            throw StepFailure("the menu did not open; visible text: ${visibleText()}")
         }
-        return match()!!
+    }
+
+    /** Opens the menu if needed and goes back from the version picker to the sections. */
+    private fun SkikoComposeUiTest.ensureMenuSections() {
+        if (!menuShown()) {
+            clickTag("menu-button", "the menu button is not on screen")
+            awaitMenu()
+        }
+        if (hasTag("version-picker")) {
+            clickTag("menu-back", "")
+            awaitTag("menu-drawer", "the menu did not go back to its sections")
+        }
+        awaitLayoutCalls()
+    }
+
+    private fun SkikoComposeUiTest.appTags(): List<String> =
+        tagsStartingWith("app-").filter { !it.startsWith("app-history-") && it != "app-error" }
+
+    /** The tag of the app row for [app] (an id, else a title, case-insensitive), opening the menu as needed. */
+    private fun SkikoComposeUiTest.appTag(app: String): String {
+        ensureMenuSections()
+        val tags = appTags()
+        tags.firstOrNull { it == "app-$app" }?.let { return it }
+        tags.firstOrNull { it.equals("app-$app", ignoreCase = true) }?.let { return it }
+        tags.firstOrNull { textUnder(it).contains(app, ignoreCase = true) }?.let { return it }
+        val err = if (hasTag("apps-error")) "; error shown: ${textUnder("apps-error")}" else ""
+        throw StepFailure("no app '$app' in the menu; listed: ${tags.map { it.removePrefix("app-") }}$err")
     }
 
     /** Text of the node tagged [tag] and its descendants. */
@@ -436,8 +489,8 @@ class SimRunner(
     }
 
     /**
-     * Waits for idle and for every layout catalog call to finish ([LayoutCalls]: they run on Dispatchers.IO, which
-     * the test clock does not see), twice in a row, since a finished load can start the next (thumbnails).
+     * Waits for idle and for every apps call to finish ([LayoutCalls]: they run on Dispatchers.IO, which the test
+     * clock does not see), twice in a row, since a finished load can start the next.
      */
     private fun SkikoComposeUiTest.awaitLayoutCalls(timeoutMs: Long = LAYOUT_TIMEOUT_MS) {
         val deadline = System.nanoTime() + timeoutMs * 1_000_000
@@ -466,6 +519,13 @@ class SimRunner(
         val clipped = n.layoutInfo.coordinates.boundsInRoot()
         val root = onRoot().fetchSemanticsNode().boundsInRoot
         return n.layoutInfo.isAttached && !clipped.isEmpty && clipped.contains(center) && root.contains(center)
+    }
+
+    private fun SkikoComposeUiTest.underMenuButton(node: SemanticsNodeInteraction): Boolean {
+        val center = node.fetchSemanticsNode().boundsInRoot.center
+        val buttons = onAllNodes(hasTestTag("menu-button"), useUnmergedTree = true).fetchSemanticsNodes()
+        return buttons.any { it.boundsInRoot.contains(center) } &&
+            node.fetchSemanticsNode().config.getOrNull(SemanticsProperties.TestTag) != "menu-button"
     }
 
     private fun SkikoComposeUiTest.describeBounds(node: SemanticsNodeInteraction): String {
@@ -593,7 +653,7 @@ class SimRunner(
     companion object {
         private val PRETTY_JSON = Json { prettyPrint = true }
 
-        /** How long the layout commands wait for their screen or for the catalog calls (live pod calls time out at 15 s). */
+        /** How long the menu commands wait for their screen or for the apps calls (live pod calls time out at 15 s). */
         const val LAYOUT_TIMEOUT_MS = 20_000L
 
         /** How long a `shot` waits for loading images before capturing anyway. */
@@ -601,6 +661,15 @@ class SimRunner(
 
         /** Real time allowed for an image's crossfade (Coil's default is 200 ms, driven by the wall clock). */
         const val CROSSFADE_SETTLE_MS = 300L
+
+        /** The menu's Server presets in the simulator (as on Android: staging, the emulator's host, `adb reverse`). */
+        val SIM_SERVERS = listOf(
+            ServerOption("staging", "Staging", "https://the-construct-pod.fly.dev"),
+            ServerOption("emulator", "Local emulator", "http://10.0.2.2:8080"),
+            ServerOption("usb", "Local USB", "http://127.0.0.1:8080"),
+        )
+
+        private val VERSION_TAG = Regex("version-\\d+")
 
         fun encodePng(image: ImageBitmap): ByteArray =
             Image.makeFromBitmap(image.asSkiaBitmap()).encodeToData(EncodedImageFormat.PNG)?.bytes

@@ -37,33 +37,33 @@ import org.theconstruct.UiNode
  * null/absent), and later queued rows for the same entity touching any of those fields are re-applied
  * on top. No 5xx/retry simulation.
  *
- * Layout agent (M7, DECISIONS D23): `PromptAgent` runs [FakeLayoutRules] on the current layout (no server): a
- * recognized prompt replaces the layout, bumps [layoutVersion] (unless the layout is already in the requested state)
- * and sets `agent_json` to done (provider `fake-rules`); an unrecognized one, a caption/media rule on a layout
- * without a PostCard, or any prompt while offline sets it to error and leaves the layout alone.
- *
- * Layout catalog (D27, D30): [FakeLayoutCatalog.fixture] (the pod's built-ins from `fixtures/layouts/`: `pixelfed_home`
- * for the feed bundle, `pixelfed_demo` for another bundle with `pixelfed://` entities, else
- * `home`) answers the catalog calls with the pod's JSON shapes; activate / restore of the active layout replace the
- * layout and bump [layoutVersion] (the workspace revision); an applied prompt appends to the active layout's
- * history. Offline, every catalog call throws [LayoutApiException] (Offline).
+ * Apps (the hamburger menu): [apps] (by default [FakeAppCatalog.fixture]) answers `listApps` / `appVersions` /
+ * `appVersion` with the pod's JSON shapes; this bridge shows [appId]'s newest version and reports it in `layout_json`
+ * (`{"app_id","version"}`). [publishVersion] appends a new newest version (the developer's deploy) and shows it, like
+ * the engine applying an SSE `layout` event. Offline, every apps call throws [LayoutApiException] (Offline).
  */
 class FakeEngineBridge(
     bundleJson: String,
     online: Boolean = true,
     private var authJson: String = "{\"state\":\"signed_out\"}",
+    appId: String? = null,
+    apps: FakeAppCatalog? = null,
 ) : ConstructEngineBridge {
     /** [prevValues]: field -> value before this row was applied (null = absent). */
     private class Row(val intent: ActionIntent.OptimisticMutate, var prevValues: Map<String, JsonElement?>)
 
     private var workspace: UiNode
-    private var agentJson = "{\"state\":\"idle\"}"
 
-    /** Layout version: 1 for the bundle's layout, +1 per applied prompt. */
-    var layoutVersion = 1
-        private set
+    /** The app this engine shows (the bundle's, see [FakeAppCatalog.appIdFor], unless given). */
+    val appId: String
+
+    /** The apps and their histories (shared with the other bridges of a simulator run). */
+    val apps: FakeAppCatalog
+
+    /** The version on screen: [appId]'s newest. */
+    val layoutVersion: Long get() = synchronized(lock) { shownVersion }
+    private var shownVersion = 1L
     private val queriesJson: String
-    private val catalog: FakeLayoutCatalog
     private val entities: MutableMap<String, JsonObject>
     private val server: MutableMap<String, JsonObject>
     private val outbox = ArrayDeque<Row>()
@@ -78,7 +78,11 @@ class FakeEngineBridge(
         queriesJson = ConstructJson.json.encodeToString(queriesSerializer, bundle.queries)
         entities = LinkedHashMap(bundle.entities)
         server = LinkedHashMap(bundle.entities)
-        catalog = FakeLayoutCatalog.fixture(workspace, pixelfed = entities.keys.any { it.startsWith("pixelfed://") })
+        this.appId = appId ?: FakeAppCatalog.appIdFor(workspace, pixelfed = entities.keys.any { it.startsWith("pixelfed://") })
+        this.apps = apps ?: FakeAppCatalog.fixture(this.appId, workspace)
+        // Show the app's newest version (the bundle's layout in the fixture catalog).
+        this.apps.latestLayout(this.appId)?.let { workspace = it }
+        shownVersion = this.apps.latestVersion(this.appId) ?: 1
     }
 
     override fun subscribe(onState: (EngineSnapshot) -> Unit) {
@@ -101,10 +105,6 @@ class FakeEngineBridge(
     override fun dispatch(intentJson: String) {
         println("[sim] dispatch: $intentJson")
         val intent = ConstructJson.decodeIntent(intentJson)
-        if (intent is ActionIntent.PromptAgent) {
-            promptAgent(intent.promptText)
-            return
-        }
         if (intent !is ActionIntent.OptimisticMutate) {
             println("[sim] ignoring non-mutation intent")
             return
@@ -130,82 +130,49 @@ class FakeEngineBridge(
         emit()
     }
 
-    private fun promptAgent(prompt: String) {
+    override fun close() {
         synchronized(lock) {
-            agentJson = agentJson(state = "running")
-            seq++
+            listeners.clear()
         }
-        emit()
+        println("[sim] engine for $appId closed")
+    }
+
+    override fun listApps(): String = appsCall { apps.appsJson() }
+
+    override fun appVersions(appId: String, before: Long?, limit: Int?): String =
+        appsCall { apps.versionsJson(appId, before, limit) }
+
+    override fun appVersion(appId: String, version: Long): String = appsCall { apps.versionJson(appId, version) }
+
+    private fun appsCall(read: () -> String): String {
         synchronized(lock) {
-            val result = if (isOnline) FakeLayoutRules.run(prompt, workspace) else null
-            agentJson = when (result) {
-                null -> agentJson(state = "error", message = "offline: the layout agent needs a connection")
-                is FakeLayoutRules.Outcome.Failed -> agentJson(state = "error", message = result.message)
-                is FakeLayoutRules.Outcome.Applied -> {
-                    if (result.layout != workspace) {
-                        workspace = result.layout
-                        layoutVersion++
-                        catalog.appendActive(result.layout, prompt)
-                        agentJson(state = "done", provider = FakeLayoutRules.PROVIDER, layoutVersion = layoutVersion)
-                    } else {
-                        // Already in the requested state: no new version, reported like client-core reports the
-                        // server's `unchanged: true`.
-                        agentJson(
-                            state = "done", message = "No change needed (v$layoutVersion)",
-                            provider = FakeLayoutRules.PROVIDER, layoutVersion = layoutVersion, unchanged = true,
-                        )
-                    }
-                }
-            }
-            println("[sim] agent prompt '$prompt' -> $agentJson")
-            seq++
-        }
-        emit()
-    }
-
-    override fun listLayouts(): String = catalogRead { catalog.listJson(layoutVersion) }
-
-    override fun layoutVersions(layoutId: String, before: Int?, limit: Int?): String =
-        catalogRead { catalog.versionsJson(layoutId, before, limit) }
-
-    override fun layoutVersion(layoutId: String, version: Int): String =
-        catalogRead { catalog.versionJson(layoutId, version) }
-
-    override fun activateLayout(layoutId: String, version: Int?): String =
-        catalogWrite { catalog.activate(layoutId, version, layoutVersion + 1, layoutVersion) }
-
-    override fun restoreLayoutVersion(layoutId: String, version: Int): String =
-        catalogWrite { catalog.restore(layoutId, version, layoutVersion + 1, layoutVersion) }
-
-    private fun checkOnlineLocked() {
-        if (!isOnline) {
-            throw LayoutApiException(
-                "Can't reach your pod. Check your connection and try again.", LayoutApiException.Kind.Offline,
-            )
-        }
-    }
-
-    private fun catalogRead(read: () -> String): String = synchronized(lock) {
-        checkOnlineLocked()
-        read()
-    }
-
-    /** Runs a write; when it changed the screen, shows the active layout's newest version and notifies. */
-    private fun catalogWrite(write: () -> FakeLayoutCatalog.Write): String {
-        val result = synchronized(lock) {
-            checkOnlineLocked()
-            write().also {
-                if (it.screenChanged) {
-                    workspace = catalog.activeLayout
-                    layoutVersion++
-                    seq++
-                }
+            if (!isOnline) {
+                throw LayoutApiException(
+                    "Can't reach your pod. Check your connection and try again.", LayoutApiException.Kind.Offline,
+                )
             }
         }
-        println("[sim] layouts: ${result.body}")
-        if (result.screenChanged) emit()
-        return result.body
+        return read()
     }
+
+    /**
+     * Publishes a new newest version of [appId] ([FakeAppCatalog.publish]) and shows it at once, like the engine after
+     * the pod's SSE `layout` event. Returns the new version number.
+     */
+    fun publishVersion(note: String): Long {
+        val v = apps.publish(appId, note)
+        synchronized(lock) {
+            workspace = apps.latestLayout(appId) ?: workspace
+            shownVersion = v
+            seq++
+        }
+        println("[sim] published $appId v$v: $note")
+        emit()
+        return v
+    }
+
+    /** Current connectivity. */
+    val online: Boolean get() = synchronized(lock) { isOnline }
 
     fun setOnline(online: Boolean) {
         synchronized(lock) {
@@ -291,8 +258,7 @@ class FakeEngineBridge(
         pendingActions = outbox.size,
         queriesJson = queriesJson,
         authJson = authJson,
-        agentJson = agentJson,
-        layoutJson = catalog.layoutJson(layoutVersion),
+        layoutJson = JsonObject(mapOf("app_id" to JsonPrimitive(appId), "version" to JsonPrimitive(shownVersion))).toString(),
     )
 
     private fun emit() {
@@ -301,23 +267,6 @@ class FakeEngineBridge(
     }
 
     companion object {
-        private fun agentJson(
-            state: String,
-            message: String? = null,
-            provider: String? = null,
-            layoutVersion: Int? = null,
-            unchanged: Boolean = false,
-        ): String =
-            JsonObject(
-                buildMap {
-                    put("state", JsonPrimitive(state))
-                    message?.let { put("message", JsonPrimitive(it)) }
-                    provider?.let { put("provider", JsonPrimitive(it)) }
-                    layoutVersion?.let { put("layout_version", JsonPrimitive(it)) }
-                    if (unchanged) put("unchanged", JsonPrimitive(true))
-                },
-            ).toString()
-
         private val queriesSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
         private val FIELD = Regex("""entity\.([A-Za-z0-9_]+)""")
 

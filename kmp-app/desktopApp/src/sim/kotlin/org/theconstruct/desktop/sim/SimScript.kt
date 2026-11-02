@@ -1,5 +1,7 @@
 package org.theconstruct.desktop.sim
 
+import org.theconstruct.ServerUrls
+
 /** One simulator script command. [command] and [arg] are what the step log records. */
 sealed class SimStep(val command: String, val arg: String = "") {
     class Shot(val name: String) : SimStep("shot", name)
@@ -21,21 +23,24 @@ sealed class SimStep(val command: String, val arg: String = "") {
     /** A system Back press (Android's Back; the desktop stand-in [org.theconstruct.BackPresses]). */
     object Back : SimStep("back")
 
-    // Layout browser (DECISIONS D30): each waits for idle and for the catalog calls, and fails with a hint when its
-    // control is not on screen.
-    object OpenLayouts : SimStep("open-layouts")
-    /** [id]: a full layout id (`pixelfed_demo.editorial`) or its last segment (`editorial`). */
-    class SelectLayout(val id: String) : SimStep("select-layout", id)
-    class SelectVersion(val version: Int) : SimStep("select-version", version.toString())
-    object UseLayout : SimStep("use-layout")
-    object RestoreVersion : SimStep("restore-version")
-    object Confirm : SimStep("confirm")
-    object CancelConfirm : SimStep("cancel")
-    object Undo : SimStep("undo")
-    object CloseLayouts : SimStep("close-layouts")
+    // Hamburger menu: each waits for idle and for the apps calls, and fails with a hint when its control is missing.
+    object OpenMenu : SimStep("open-menu")
+    object CloseMenu : SimStep("close-menu")
+    /** [app]: an app id (`pixelfed_home`) or its title (`Pixelfed`). */
+    class OpenApp(val app: String) : SimStep("open-app", app)
+    class OpenHistory(val app: String) : SimStep("open-history", app)
+    /** [version] null = "Latest". */
+    class SelectVersion(val version: Long?) : SimStep("select-version", version?.toString() ?: "latest")
+    /** [server]: `staging`, `emulator`, `usb` or an http(s) URL. */
+    class SetServer(val server: String) : SimStep("set-server", server)
+    /** Fixture mode only: the fake pod publishes a new newest version of the app on screen. */
+    class PublishVersion(val note: String) : SimStep("publish-version", note)
 
     override fun toString(): String = if (arg.isEmpty()) command else "$command $arg"
 }
+
+/** The `set-server` presets (the menu's `server-<key>` rows in the simulator). */
+val SERVER_PRESETS = listOf("staging", "emulator", "usb")
 
 class ScriptParseException(message: String) : IllegalArgumentException(message)
 
@@ -45,10 +50,10 @@ const val MAX_WAIT_MS = 600_000L
 /** Default timeout of `wait-images`. */
 const val DEFAULT_WAIT_IMAGES_MS = 10_000L
 
-/** Rejects steps that [mode] can't run: `offline`/`online` need the fixture mode's fake engine. */
+/** Rejects steps that [mode] can't run: `offline`/`online`/`publish-version` need the fixture mode's fake engine. */
 fun validateStepsForMode(steps: List<SimStep>, mode: String) {
     if (mode == "fixture") return
-    val i = steps.indexOfFirst { it == SimStep.Offline || it == SimStep.Online }
+    val i = steps.indexOfFirst { it == SimStep.Offline || it == SimStep.Online || it is SimStep.PublishVersion }
     if (i >= 0) {
         throw ScriptParseException("step ${i + 1} '${steps[i].command}' is not supported in $mode mode (fixture mode only)")
     }
@@ -108,22 +113,29 @@ fun parseScript(script: String): List<SimStep> {
                 SimStep.Type(target, text)
             }
             "back" -> { noArg(); SimStep.Back }
-            "open-layouts" -> { noArg(); SimStep.OpenLayouts }
-            "select-layout" -> SimStep.SelectLayout(
-                requireArg("a layout id (e.g. pixelfed_demo.editorial or editorial)").also {
-                    if (it.contains(' ')) throw ScriptParseException("${where()}: a layout id has no spaces")
-                },
-            )
-            "select-version" -> SimStep.SelectVersion(
-                requireArg("a version number").removePrefix("v").toIntOrNull()?.takeIf { it >= 1 }
-                    ?: throw ScriptParseException("${where()}: 'select-version' needs a version number >= 1 (e.g. 2 or v2)"),
-            )
-            "use-layout" -> { noArg(); SimStep.UseLayout }
-            "restore-version" -> { noArg(); SimStep.RestoreVersion }
-            "confirm" -> { noArg(); SimStep.Confirm }
-            "cancel" -> { noArg(); SimStep.CancelConfirm }
-            "undo" -> { noArg(); SimStep.Undo }
-            "close-layouts" -> { noArg(); SimStep.CloseLayouts }
+            "open-menu" -> { noArg(); SimStep.OpenMenu }
+            "close-menu" -> { noArg(); SimStep.CloseMenu }
+            "open-app" -> SimStep.OpenApp(requireArg("an app id or title (e.g. pixelfed_home or Pixelfed)"))
+            "open-history" -> SimStep.OpenHistory(requireArg("an app id or title (e.g. pixelfed_home or Pixelfed)"))
+            "select-version" -> {
+                val a = requireArg("a version number or 'latest'")
+                SimStep.SelectVersion(
+                    if (a.equals("latest", ignoreCase = true)) {
+                        null
+                    } else {
+                        a.removePrefix("v").toLongOrNull()?.takeIf { it >= 1 }
+                            ?: throw ScriptParseException("${where()}: 'select-version' needs a version number >= 1 (e.g. 2 or v2) or 'latest'")
+                    },
+                )
+            }
+            "set-server" -> {
+                val a = requireArg("staging, emulator, usb or an http(s)://host[:port] URL")
+                if (a.lowercase() !in SERVER_PRESETS && ServerUrls.parse(a) == null) {
+                    throw ScriptParseException("${where()}: 'set-server' needs staging, emulator, usb or an http(s)://host[:port] URL")
+                }
+                SimStep.SetServer(a)
+            }
+            "publish-version" -> SimStep.PublishVersion(requireArg("a note (the changelog line)"))
             "offline" -> { noArg(); SimStep.Offline }
             "online" -> { noArg(); SimStep.Online }
             "screen" -> SimStep.Screen(
@@ -136,8 +148,8 @@ fun parseScript(script: String): List<SimStep> {
             else -> throw ScriptParseException(
                 "${where()}: unknown command '$command' (expected one of: " +
                     "shot, click, wait, idle, assert-text, assert-no-text, wait-text, wait-images, swipe-left, swipe-right, " +
-                    "scroll-to, type, back, open-layouts, select-layout, select-version, use-layout, restore-version, " +
-                    "confirm, cancel, undo, close-layouts, offline, online, screen)",
+                    "scroll-to, type, back, open-menu, close-menu, open-app, open-history, select-version, set-server, " +
+                    "publish-version, offline, online, screen)",
             )
         }
     }
@@ -146,7 +158,7 @@ fun parseScript(script: String): List<SimStep> {
 
 /**
  * Splits a `type` argument into target and text: a target in double quotes may contain spaces (`"Search posts" cats`),
- * otherwise it is the first word (`tag:agent-prompt Hide post captions`). Null when either part is missing.
+ * otherwise it is the first word (`tag:server-custom-url http://10.0.0.5:8080`). Null when either part is missing.
  */
 internal fun splitTypeArg(arg: String): Pair<String, String>? {
     val a = arg.trim()
