@@ -14,7 +14,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -30,11 +32,14 @@ import kotlinx.serialization.json.JsonObject
 /**
  * UI state derived from engine snapshots. [workspace] is null until the engine has a layout.
  * [pendingActions] counts queued (unsent) outbox mutations. [seq] is the seq of the last applied
- * snapshot (-1 before the first).
+ * snapshot (-1 before the first). [queries] maps a FeedList `query_key` to ordered entity URIs (M6) and
+ * [auth] is the sign-in status.
  */
 data class CanvasState(
     val workspace: UiNode? = null,
     val entities: Map<String, JsonObject> = emptyMap(),
+    val queries: Map<String, List<String>> = emptyMap(),
+    val auth: AuthInfo = AuthInfo(),
     val isOnline: Boolean = false,
     val pendingActions: Int = 0,
     val error: String? = null,
@@ -64,7 +69,11 @@ class CanvasController(private val bridge: CanvasEngineBridge) {
             val workspace = if (trimmed.isEmpty() || trimmed == "null") null else CanvasJson.decodeNode(trimmed)
             val e = snapshot.entitiesJson.trim()
             val entities = if (e.isEmpty() || e == "null") emptyMap() else CanvasJson.decodeEntities(e)
-            CanvasState(workspace, entities, snapshot.isOnline, snapshot.pendingActions, error = null, seq = snapshot.seq)
+            val queries = decodeQueries(snapshot.queriesJson)
+            CanvasState(
+                workspace, entities, queries, AuthInfo.parse(snapshot.authJson), snapshot.isOnline,
+                snapshot.pendingActions, error = null, seq = snapshot.seq,
+            )
         } catch (t: Throwable) {
             println("[Canvas] snapshot decode failed: $t")
             decodeError = "Failed to decode engine state: ${t.message}"
@@ -75,6 +84,7 @@ class CanvasController(private val bridge: CanvasEngineBridge) {
                 snapshot.seq <= cur.seq -> cur
                 decoded != null -> decoded
                 else -> cur.copy(
+                    auth = AuthInfo.parse(snapshot.authJson),
                     isOnline = snapshot.isOnline,
                     pendingActions = snapshot.pendingActions,
                     error = decodeError,
@@ -100,10 +110,11 @@ class CanvasController(private val bridge: CanvasEngineBridge) {
 @Composable
 fun CanvasApp(controller: CanvasController, modifier: Modifier = Modifier) {
     val state by controller.state.collectAsState()
-    MaterialTheme {
+    // Material3 light scheme on a white background and surface (feed photos sit on white, as on Pixelfed/Instagram).
+    MaterialTheme(colorScheme = lightColorScheme(background = Color.White, surface = Color.White)) {
         Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize()) {
-                StatusLine(state.isOnline, state.pendingActions)
+                StatusLine(state.isOnline, state.pendingActions, state.auth)
                 state.error?.let {
                     Text(
                         it,
@@ -118,16 +129,21 @@ fun CanvasApp(controller: CanvasController, modifier: Modifier = Modifier) {
                         Text("Loading…", style = MaterialTheme.typography.bodyLarge)
                     }
                 } else {
-                    RenderUiNode(workspace, state.entities, controller::dispatch, Modifier.fillMaxSize())
+                    CompositionLocalProvider(LocalCanvasQueries provides state.queries) {
+                        RenderUiNode(workspace, state.entities, controller::dispatch, Modifier.fillMaxSize())
+                    }
                 }
             }
         }
     }
 }
 
-/** Connectivity, plus "N pending" (amber dot) while queued mutations wait to be sent. */
+/**
+ * Connectivity, plus "N pending" (amber dot) while queued mutations wait to be sent, plus the sign-in
+ * status on the right unless signed out.
+ */
 @Composable
-private fun StatusLine(isOnline: Boolean, pendingActions: Int) {
+private fun StatusLine(isOnline: Boolean, pendingActions: Int, auth: AuthInfo) {
     Row(
         Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 16.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -147,6 +163,21 @@ private fun StatusLine(isOnline: Boolean, pendingActions: Int) {
                 "$pendingActions pending",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        val authText = when (auth.state) {
+            "signed_in" -> auth.username?.let { "@$it" } ?: "Signed in"
+            "pending" -> "Signing in…"
+            "error" -> "Sign-in failed" + (auth.error?.let { ": $it" } ?: "")
+            else -> null
+        }
+        if (authText != null) {
+            Spacer(Modifier.weight(1f))
+            Text(
+                authText,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (auth.state == "error") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
             )
         }
     }

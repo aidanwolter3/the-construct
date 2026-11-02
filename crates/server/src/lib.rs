@@ -1,10 +1,12 @@
-//! Project Canvas backend: serves fixture hydration bundles and persists
-//! counter mutations in SQLite (M5, see [`store`]).
+//! Project Canvas backend: serves fixture hydration bundles, persists
+//! counter mutations in SQLite (M5, see [`store`]) and adapts a Pixelfed
+//! instance (M6, see [`pixelfed`]; the pod owns the upstream token).
 //!
 //! Fixtures are embedded at compile time and parsed into
 //! [`protocol::WorkspaceSpec`] once, so an invalid fixture fails loudly
 //! (panics on first access, which the integration tests exercise).
 
+pub mod pixelfed;
 pub mod store;
 
 use std::path::Path as FsPath;
@@ -19,6 +21,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use pixelfed::upstream::Upstream;
 use protocol::WorkspaceSpec;
 use serde_json::{Value, json};
 use store::Store;
@@ -59,20 +62,88 @@ struct Fault {
     remaining: u32,
 }
 
+/// Default Pixelfed instance: the local fake (`crates/fake-pixelfed`).
+pub const DEFAULT_PIXELFED_URL: &str = "http://127.0.0.1:8081";
+
+/// Which Pixelfed instance the pod talks to (single tenant).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PixelfedConfig {
+    /// Base URL for server->upstream calls (`PIXELFED_INSTANCE_URL`).
+    pub instance_url: String,
+    /// Base URL for browser-facing links such as the authorize endpoint
+    /// (`PIXELFED_PUBLIC_URL`, default = instance URL).
+    pub public_url: String,
+}
+
+impl Default for PixelfedConfig {
+    fn default() -> Self {
+        Self::new(DEFAULT_PIXELFED_URL, None)
+    }
+}
+
+impl PixelfedConfig {
+    pub fn new(instance_url: &str, public_url: Option<&str>) -> Self {
+        let instance_url = normalize_base(instance_url);
+        let public_url = public_url
+            .map(normalize_base)
+            .filter(|u| !u.is_empty())
+            .unwrap_or_else(|| instance_url.clone());
+        Self {
+            instance_url,
+            public_url,
+        }
+    }
+
+    /// From `PIXELFED_INSTANCE_URL` / `PIXELFED_PUBLIC_URL`.
+    pub fn from_env() -> Self {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
+        let instance =
+            var("PIXELFED_INSTANCE_URL").unwrap_or_else(|| DEFAULT_PIXELFED_URL.to_owned());
+        Self::new(&instance, var("PIXELFED_PUBLIC_URL").as_deref())
+    }
+
+    /// Only the configured instance (by its instance or public URL) is accepted
+    /// in auth calls: the pod never talks to a client-chosen host.
+    pub fn accepts(&self, url: &str) -> bool {
+        let url = normalize_base(url);
+        url.eq_ignore_ascii_case(&self.instance_url) || url.eq_ignore_ascii_case(&self.public_url)
+    }
+}
+
+fn normalize_base(url: &str) -> String {
+    url.trim().trim_end_matches('/').to_owned()
+}
+
 /// Shared server state.
 pub struct AppState {
     store: Store,
     test_hooks: bool,
     fault: Mutex<Option<Fault>>,
+    pixelfed: PixelfedConfig,
+    upstream: Upstream,
 }
 
 impl AppState {
     pub fn new(store: Store) -> Self {
+        let pixelfed = PixelfedConfig::default();
         Self {
             store,
             test_hooks: false,
             fault: Mutex::new(None),
+            upstream: Upstream::new(&pixelfed.instance_url),
+            pixelfed,
         }
+    }
+
+    /// Point the Pixelfed adapter at another instance.
+    pub fn with_pixelfed(mut self, config: PixelfedConfig) -> Self {
+        self.upstream = Upstream::new(&config.instance_url);
+        self.pixelfed = config;
+        self
+    }
+
+    pub fn pixelfed_config(&self) -> &PixelfedConfig {
+        &self.pixelfed
     }
 
     /// State backed by `<dir>/server.db` (the directory is created).
@@ -114,7 +185,9 @@ pub fn app(state: Arc<AppState>) -> Router {
     let mut router = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/workspaces/{id}", get(get_workspace))
-        .route("/v1/counters/{id}/{op}", post(counter_mutation));
+        .route("/v1/counters/{id}/{op}", post(counter_mutation))
+        .route("/v1/demo/ack", post(demo_ack))
+        .merge(pixelfed::routes::router());
     if state.test_hooks {
         router = router.route("/v1/test/fault", post(set_fault));
     }
@@ -129,7 +202,7 @@ pub fn app_in_memory() -> Router {
 }
 
 /// Run a blocking store operation off the async workers.
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     state: &Arc<AppState>,
     f: impl FnOnce(&Store) -> rusqlite::Result<T> + Send + 'static,
 ) -> Result<T, ApiError> {
@@ -153,7 +226,14 @@ async fn blocking<T: Send + 'static>(
     }
 }
 
-async fn get_workspace(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+async fn get_workspace(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if id == pixelfed::layout::WORKSPACE_ID {
+        return pixelfed::routes::home_workspace(&state, &headers).await;
+    }
     let Some(spec) = workspace(&id) else {
         return json_error(
             StatusCode::NOT_FOUND,
@@ -176,13 +256,13 @@ async fn get_workspace(State(state): State<Arc<AppState>>, Path(id): Path<String
 }
 
 /// A JSON error response, kept small so it can travel in `Result::Err`.
-type ApiError = (StatusCode, Json<Value>);
+pub(crate) type ApiError = (StatusCode, Json<Value>);
 
-fn api_error(status: StatusCode, body: Value) -> ApiError {
+pub(crate) fn api_error(status: StatusCode, body: Value) -> ApiError {
     (status, Json(body))
 }
 
-fn json_error(status: StatusCode, body: Value) -> Response {
+pub(crate) fn json_error(status: StatusCode, body: Value) -> Response {
     api_error(status, body).into_response()
 }
 
@@ -248,7 +328,7 @@ async fn set_fault(
 /// application/json` is set (common for HTTP clients that add the header
 /// unconditionally). A non-empty body must be JSON-typed and valid; failures
 /// are reported as JSON errors like the other endpoints.
-fn parse_json_body(headers: &HeaderMap, body: &Bytes) -> Result<Value, ApiError> {
+pub(crate) fn parse_json_body(headers: &HeaderMap, body: &Bytes) -> Result<Value, ApiError> {
     if body.iter().all(u8::is_ascii_whitespace) {
         return Ok(Value::Null);
     }
@@ -313,4 +393,11 @@ async fn counter_mutation(
         }
         Err(e) => e.into_response(),
     }
+}
+
+/// `POST /v1/demo/ack`: stateless 200 for the static `pixelfed_demo` fixture's
+/// actions, so live-mode likes there are accepted (and not rolled back).
+async fn demo_ack(body: Bytes) -> Response {
+    tracing::info!(body = %String::from_utf8_lossy(&body), "demo ack");
+    Json(json!({ "ok": true })).into_response()
 }

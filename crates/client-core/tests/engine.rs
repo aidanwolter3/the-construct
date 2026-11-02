@@ -170,7 +170,7 @@ fn seed_cache(dir: &std::path::Path, id: &str) {
     let uris: Vec<String> = spec.entities.keys().cloned().collect();
     store
         .transaction(|tx| {
-            tx.save_workspace(id, &spec.workspace, &uris, 1)?;
+            tx.save_workspace(id, &spec.workspace, &uris, &spec.queries, 1)?;
             for (uri, e) in &spec.entities {
                 tx.upsert_entity(uri, e, 1)?;
             }

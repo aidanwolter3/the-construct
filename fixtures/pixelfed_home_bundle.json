@@ -24,7 +24,7 @@
                 "field": "is_liked",
                 "value_expr": "!entity.is_liked",
                 "rollback_value": false,
-                "endpoint": "/api/v1/posts/like",
+                "endpoint": "/v1/demo/ack",
                 "payload": { "id": "$item.id" }
               },
               "bookmark_intent": { "intent": "action.navigation.open", "target_uri": "pixelfed://bookmarks", "presentation": "Push" },

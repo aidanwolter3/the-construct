@@ -168,11 +168,15 @@ fun requireWritableDir(dir: File, what: String = "output directory") {
     if (!dir.isDirectory || !Files.isWritable(dir.toPath())) throw UsageException("$what $dir is not a writable directory")
 }
 
-/** fixtures/ next to (or above) [from]: counter bundle for `home`, Pixelfed bundle for `pixelfed_demo`. */
+/**
+ * fixtures/ next to (or above) [from]: counter bundle for `home`, the one-post Pixelfed demo for `pixelfed_demo`,
+ * the normalized fake-upstream timeline for `pixelfed_home`.
+ */
 fun defaultFixture(workspace: String, from: File): File {
     val name = when (workspace) {
         "home" -> "counter_home_bundle.json"
         "pixelfed_demo" -> "pixelfed_home_bundle.json"
+        "pixelfed_home" -> "pixelfed_home_feed_bundle.json"
         else -> throw UsageException("no default fixture for workspace '$workspace'; pass -Pfixture=<bundle.json> or use live mode")
     }
     return findFixture(name, from) ?: throw UsageException("fixtures/$name not found above $from")
@@ -182,3 +186,8 @@ fun findFixture(name: String, from: File = File("").absoluteFile): File? =
     generateSequence(from.absoluteFile) { it.parentFile }
         .map { File(it, "fixtures/$name") }
         .firstOrNull { it.isFile }
+
+fun findFixtureDir(name: String, from: File = File("").absoluteFile): File? =
+    generateSequence(from.absoluteFile) { it.parentFile }
+        .map { File(it, "fixtures/$name") }
+        .firstOrNull { it.isDirectory }

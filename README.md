@@ -11,7 +11,8 @@ app (see [Android](#android)). A headless simulation mode renders the shared UI 
 
 ```
 crates/protocol      UiNode / ActionIntent / WorkspaceSpec (hydration bundle) / EntityRecord
-crates/server        Axum server: GET /v1/workspaces/{home,pixelfed_demo}, persistent counters (SQLite)
+crates/server        Axum server: GET /v1/workspaces/{home,pixelfed_demo,pixelfed_home}, persistent counters
+                     (SQLite), Pixelfed adapter (auth, feed normalization, actions, media proxy)
 crates/client-core   CanvasEngine: fetches the workspace, holds state, applies optimistic mutations (SQLite cache + outbox)
 crates/client-ffi    UniFFI bridge (EngineHandle, FfiStateSnapshot, StateObserver) + uniffi-bindgen bin
 crates/fake-pixelfed local fake Pixelfed (Mastodon API + OAuth PKCE) upstream for development and tests
@@ -143,6 +144,50 @@ The timeline has five entries: a 3-image carousel, a reblog of a single-image po
 image. Media are small generated PNGs with a big digit (1-6) or avatar letter so screenshots show which image is
 visible.
 
+## Pixelfed (pod adapter)
+
+The server (`server::pixelfed`, docs/DECISIONS.md D17) adapts one Pixelfed instance: it owns the upstream
+access token, normalizes the home timeline into Canvas entities and serves the `pixelfed_home` workspace. The
+client only holds a pod session token and sends `Authorization: Bearer <session>`.
+
+Environment:
+
+- `PIXELFED_INSTANCE_URL` (default `http://127.0.0.1:8081`, the fake): base for pod->upstream calls. The only
+  instance accepted in auth calls.
+- `PIXELFED_PUBLIC_URL` (default = instance URL): base for browser-facing links (the `authorize_endpoint`),
+  e.g. `http://10.0.2.2:8081` for the Android emulator while the pod calls `127.0.0.1:8081`.
+
+Endpoints:
+
+- `POST /v1/auth/pixelfed/app {instance_url, redirect_uri}` -> `{client_id, scopes, authorize_endpoint}`
+  (registers an app upstream once per redirect_uri). Another instance -> 400 `instance_not_allowed`.
+- `POST /v1/auth/pixelfed/token {instance_url, code, code_verifier, redirect_uri}` -> `{session_token,
+  account:{id, username, display_name, avatar_url}}`. Upstream rejection -> 400 `oauth_exchange_failed`.
+- `POST /v1/auth/logout` (bearer) -> `{ok:true}`; deletes the session (401 if it is not valid).
+- `GET /v1/workspaces/pixelfed_home`: with a valid session, the home feed bundle (`queries["timeline:home"]` +
+  posts/users/media entities, PostCard layout with like/bookmark optimistic mutations); without one (or when the
+  upstream rejects the stored token) a signed-out bundle with a "Sign in with Pixelfed" `action.auth.login`
+  button; upstream unreachable -> 502.
+- `POST /v1/pixelfed/posts/like {id, liked}` and `POST /v1/pixelfed/posts/bookmark {id, bookmarked}` -> `{ok, id,
+  is_liked, like_count, is_bookmarked}`. No session 401; upstream 4xx passed through; upstream 5xx/unreachable 502.
+- `GET /v1/pixelfed/media/{key}`: unauthenticated media/avatar proxy. Every image URL in a bundle is rewritten to
+  `http://<request Host>/v1/pixelfed/media/<key>`; unknown keys are 404.
+- `POST /v1/demo/ack`: stateless 200 used by the static `pixelfed_demo` fixture's like button.
+
+Try it with curl against the fake (auto-approve skips the browser):
+
+```bash
+FAKE_PIXELFED_ADDR=127.0.0.1:8081 FAKE_PIXELFED_AUTO_APPROVE=1 cargo run -p fake-pixelfed &
+cargo run -p server &
+curl -s -X POST -H 'content-type: application/json' http://127.0.0.1:8080/v1/auth/pixelfed/app \
+  -d '{"instance_url":"http://127.0.0.1:8081","redirect_uri":"http://127.0.0.1:9/cb"}'
+# GET <authorize_endpoint>?response_type=code&client_id=..&redirect_uri=..&scope=read+write&state=s
+#   &code_challenge=<S256(verifier)>&code_challenge_method=S256  -> 302 to redirect_uri?code=..
+curl -s -X POST -H 'content-type: application/json' http://127.0.0.1:8080/v1/auth/pixelfed/token \
+  -d '{"instance_url":"http://127.0.0.1:8081","code":"..","code_verifier":"..","redirect_uri":"http://127.0.0.1:9/cb"}'
+curl -s -H "Authorization: Bearer $SESSION" http://127.0.0.1:8080/v1/workspaces/pixelfed_home | jq .queries
+```
+
 ## Simulation mode
 
 A headless feedback loop: `:desktopApp:simulate` renders the real shared `CanvasApp` to an offscreen
@@ -154,6 +199,8 @@ virtual screen (no window), runs a small script against it and writes PNG screen
   -Pscript="shot start; click Increment; click Increment; assert-text Count: 2; shot after; offline; shot offline"
 
 ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -Pscreen=desktop
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_home \
+  -Pscript="wait-images; shot feed; swipe-left tag:carousel:; assert-text Page 2 of 3; shot page2; click Like; assert-text 28; shot liked"
 ./gradlew -PskipRustBuild :desktopApp:simulate -PscriptFile=my_script.txt -Pdensity=1 -Pout=/tmp/shots
 ./gradlew -PskipRustBuild :desktopApp:simulate -PbaseUrl=http://127.0.0.1:8080 -Pscript="shot live"   # live mode
 ```
@@ -168,7 +215,7 @@ Flags (all optional):
 | `-Pscript` | `shot initial` | Script text (see below). |
 | `-PscriptFile` | | Script read from a file. Use either this or `-Pscript`, not both. |
 | `-Pmode` | `fixture` | `fixture` or `live`. Live mode is selected automatically when `-PbaseUrl` is given. |
-| `-Pfixture` | per workspace | Bundle JSON in fixture mode. Defaults: `home` uses `fixtures/counter_home_bundle.json`, `pixelfed_demo` uses `fixtures/pixelfed_home_bundle.json`. Other workspaces need `-Pfixture`. |
+| `-Pfixture` | per workspace | Bundle JSON in fixture mode. Defaults: `home` uses `fixtures/counter_home_bundle.json`, `pixelfed_demo` uses `fixtures/pixelfed_home_bundle.json` (one post), `pixelfed_home` uses `fixtures/pixelfed_home_feed_bundle.json` (the fake upstream's five-post timeline, normalized as the pod does, with `queries`). Other workspaces need `-Pfixture`. |
 | `-PbaseUrl` | `http://127.0.0.1:8080` | Server for live mode. |
 | `-PtimeoutMs` | `10000` | Live mode only: how long to wait for the workspace to load before the first step. |
 | `-Pout` | `kmp-app/desktopApp/build/sim/<yyyyMMdd-HHmmss>` | Output directory. |
@@ -190,6 +237,14 @@ does not load within `timeoutMs`, it logs a warning and still runs the script (s
 `offline`/`online` are not supported in live mode; a live-mode script containing them is rejected before any
 step runs.
 
+**Images** (Coil, DECISIONS D18) are deterministic. In fixture mode the network is never used: any image URL whose
+path ends in `/storage/<file>` or `/v1/pixelfed/media/<file>` is served from `fixtures/pixelfed/media/<file>` (the
+`pixelfed_home` fixture points at `http://127.0.0.1:8081/storage/...`, the fake upstream's URLs); every other URL
+fails at once and the widget shows its error state (e.g. `pixelfed_demo`'s pixelfed.social URL). In live mode
+images load over HTTP from wherever the URLs point (the pod's media proxy). Every `shot` first waits up to 5 s for
+on-screen images to finish loading (and their crossfade to end); `wait-images` waits explicitly and fails on
+timeout.
+
 Script commands are separated by `;` or newlines. Each command is trimmed, blank entries are skipped, and
 entries starting with `#` are comments. An argument cannot contain `;`, and since `;` separates commands, a
 `#` comment ends at the next `;` (the rest of the line is parsed as commands).
@@ -197,14 +252,24 @@ entries starting with `#` are comments. An argument cannot contain `;`, and sinc
 | Command | Effect |
 |---|---|
 | `shot <name>` | Writes `<NN>-<name>.png`, where NN is the step number. |
-| `click <text>` | Clicks the node with that text: an exact match first (clickable nodes preferred), then a substring match. Fails if no node matches. |
+| `click <target>` | Clicks the node `<target>` selects (below). Fails if no node matches. |
 | `wait <ms>` | Sleeps, advances the UI clock, then waits for idle. At most 600000 (10 minutes). |
 | `idle` | Waits until the UI is idle. |
-| `assert-text <text>` | Fails unless some node's text contains `<text>`. Retries for up to 2 s. |
+| `assert-text <text>` | Fails unless some node's text or content description contains `<text>`. Retries for up to 2 s. |
 | `assert-no-text <text>` | The inverse of `assert-text`. |
 | `wait-text <ms> <text>` | Like `assert-text` with a custom timeout (at most 600000), e.g. `wait-text 15000 Count: 3` while a live sync worker retries. |
+| `wait-images [ms]` | Waits until no image is loading (default 10000 ms, at most 600000). Works in both modes. |
+| `swipe-left <target>` / `swipe-right <target>` | Touch-swipes the selected node; `swipe-left` on a carousel shows the next page. |
+| `scroll-to <target>` | Scrolls the feed until the selected node is visible (e.g. `scroll-to Kept my distance`). |
 | `offline` / `online` | Fixture mode only: flips the engine's connectivity. |
 | `screen <WxH or preset>` | Restarts the renderer at the new size. Engine state carries over; UI state such as scroll position does not. |
+
+A `<target>` is either `tag:<testTag>` (an exact test tag, else the first tag containing it) or text: an exact text
+match, then an exact content description (clickable nodes preferred for both), then the same as substrings; the
+first match wins. Pixelfed widgets carry content descriptions `Like`/`Unlike`, `Bookmark`/`Remove bookmark`,
+`Comment`, the image alt text, and `Page n of N` on the carousel dots (plus an `n/N` badge text), and test tags
+`carousel:<post uri>`, `carousel-dots:<post uri>`, `like:<post uri>`, `bookmark:<post uri>`, `comment:<post uri>`,
+e.g. `click tag:like:pixelfed://posts/781254316723458049` or `swipe-left tag:carousel:` (the first carousel).
 
 The output directory holds the PNGs, `steps.log` (human-readable) and `steps.json` (one entry per step:
 `index`, `command`, `arg`, `status` (`ok`/`fail`), `message`, `file`, `elapsed_ms`). Its absolute path is

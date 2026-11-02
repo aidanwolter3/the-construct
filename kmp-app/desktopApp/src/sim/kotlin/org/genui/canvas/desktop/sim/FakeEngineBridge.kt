@@ -1,5 +1,8 @@
 package org.genui.canvas.desktop.sim
 
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -15,9 +18,10 @@ import org.genui.canvas.UiNode
 /**
  * In-memory [CanvasEngineBridge] for simulation mode and tests: no Rust, no server.
  *
- * Loads a hydration bundle (`{version, workspace, entities}`, DECISIONS D2) and emits snapshots
+ * Loads a hydration bundle (`{version, workspace, entities, queries}`, DECISIONS D2) and emits snapshots
  * shaped like the real engine's (D6: workspace JSON = the layout node, entities JSON = the
- * URI-keyed map; `seq` increases with every state change). `OptimisticMutate` intents are applied
+ * URI-keyed map, queries JSON = the bundle's queries; `seq` increases with every state change).
+ * [authJson] is passed through unchanged (default signed out). `OptimisticMutate` intents are applied
  * with the D4 expression subset (including the M6 ternary); other intents are logged and ignored.
  * The primary field and every `also` field are evaluated against the PRE-mutation entity and
  * applied together; a rollback restores all of them.
@@ -31,11 +35,16 @@ import org.genui.canvas.UiNode
  * null/absent), and later queued rows for the same entity touching any of those fields are re-applied
  * on top. No 5xx/retry simulation.
  */
-class FakeEngineBridge(bundleJson: String, online: Boolean = true) : CanvasEngineBridge {
+class FakeEngineBridge(
+    bundleJson: String,
+    online: Boolean = true,
+    private val authJson: String = "{\"state\":\"signed_out\"}",
+) : CanvasEngineBridge {
     /** [prevValues]: field -> value before this row was applied (null = absent). */
     private class Row(val intent: ActionIntent.OptimisticMutate, var prevValues: Map<String, JsonElement?>)
 
     private val workspace: UiNode
+    private val queriesJson: String
     private val entities: MutableMap<String, JsonObject>
     private val server: MutableMap<String, JsonObject>
     private val outbox = ArrayDeque<Row>()
@@ -47,6 +56,7 @@ class FakeEngineBridge(bundleJson: String, online: Boolean = true) : CanvasEngin
     init {
         val bundle = CanvasJson.decodeBundle(bundleJson)
         workspace = bundle.workspace
+        queriesJson = CanvasJson.json.encodeToString(queriesSerializer, bundle.queries)
         entities = LinkedHashMap(bundle.entities)
         server = LinkedHashMap(bundle.entities)
     }
@@ -169,6 +179,8 @@ class FakeEngineBridge(bundleJson: String, online: Boolean = true) : CanvasEngin
         isOnline = isOnline,
         seq = seq,
         pendingActions = outbox.size,
+        queriesJson = queriesJson,
+        authJson = authJson,
     )
 
     private fun emit() {
@@ -177,6 +189,7 @@ class FakeEngineBridge(bundleJson: String, online: Boolean = true) : CanvasEngin
     }
 
     companion object {
+        private val queriesSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
         private val FIELD = Regex("""entity\.([A-Za-z0-9_]+)""")
 
         /**

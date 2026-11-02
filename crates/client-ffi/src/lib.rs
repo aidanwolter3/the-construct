@@ -19,6 +19,9 @@ fn platform_init() {
 /// A snapshot of engine state; JSON payloads are passed through as strings.
 /// `seq` strictly increases per engine (drop snapshots with a seq not above
 /// the last applied one); `pending_actions` counts unsent outbox rows.
+/// `queries_json` is the bundle's `{query_key: [entity uri, ...]}` (`"{}"`
+/// when none); `auth_json` is `{"state":"signed_out"|"pending"|"signed_in"|
+/// "error","username"?,"error"?}`.
 #[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
 pub struct FfiStateSnapshot {
     pub workspace_json: String,
@@ -26,6 +29,8 @@ pub struct FfiStateSnapshot {
     pub is_online: bool,
     pub seq: u64,
     pub pending_actions: u32,
+    pub queries_json: String,
+    pub auth_json: String,
 }
 
 impl From<StateSnapshot> for FfiStateSnapshot {
@@ -36,6 +41,8 @@ impl From<StateSnapshot> for FfiStateSnapshot {
             is_online: s.is_online,
             seq: s.seq,
             pending_actions: s.pending_actions,
+            queries_json: s.queries_json,
+            auth_json: s.auth_json,
         }
     }
 }
@@ -170,5 +177,27 @@ mod tests {
         let after = handle.snapshot();
         assert_eq!(after.pending_actions, 1);
         assert!(after.seq > before.seq);
+    }
+
+    #[test]
+    fn snapshot_carries_queries_and_auth_json() {
+        let handle = EngineHandle::new(String::new(), "http://127.0.0.1:1".to_string());
+        let snap = handle.snapshot();
+        assert_eq!(snap.queries_json, "{}");
+        assert_eq!(snap.auth_json, r#"{"state":"signed_out"}"#);
+
+        let core = StateSnapshot {
+            workspace_json: "null".into(),
+            entities_json: "{}".into(),
+            is_online: true,
+            seq: 7,
+            pending_actions: 2,
+            queries_json: r#"{"timeline:home":["pixelfed://posts/1"]}"#.into(),
+            auth_json: r#"{"state":"signed_in","username":"a"}"#.into(),
+        };
+        let ffi: FfiStateSnapshot = core.clone().into();
+        assert_eq!(ffi.queries_json, core.queries_json);
+        assert_eq!(ffi.auth_json, core.auth_json);
+        assert_eq!((ffi.seq, ffi.pending_actions), (7, 2));
     }
 }

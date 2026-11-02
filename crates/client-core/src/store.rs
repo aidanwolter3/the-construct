@@ -25,13 +25,15 @@ use std::time::Duration;
 
 use protocol::{EntityRecord, UiNode};
 use rusqlite::{Connection, ErrorCode, MAIN_DB, OptionalExtension, Row, params};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub use rusqlite::Error as StoreError;
 
 pub type StoreResult<T> = Result<T, StoreError>;
 
 /// Current schema version (`PRAGMA user_version`).
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Outbox row status for rows not yet accepted or rejected by the server.
 pub const STATUS_PENDING: &str = "PENDING";
@@ -69,6 +71,17 @@ CREATE TABLE IF NOT EXISTS active_workspace (
 );
 ";
 
+/// Schema v2 (M6): the bundle's resolved `queries` per workspace, and the
+/// `also` field updates of a multi-field optimistic mutation per outbox row
+/// (`[{"field","value_expr","prev_value"}]`, NULL for single-field rows).
+const MIGRATION_V2: &str = "
+ALTER TABLE active_workspace ADD COLUMN queries_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE action_outbox ADD COLUMN also_json TEXT;
+";
+
+/// `MIGRATIONS[i]` upgrades schema v`i` to v`i+1`, each in one transaction.
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [MIGRATION_V1, MIGRATION_V2];
+
 /// `(domain, entity_type)` from a `<domain>://<type>/<id...>` URI, e.g.
 /// `pixelfed://posts/101` -> `("pixelfed", "posts")`. Missing parts are `""`.
 pub fn split_uri(uri: &str) -> (&str, &str) {
@@ -85,7 +98,26 @@ pub struct CachedWorkspace {
     pub layout: UiNode,
     /// The entity URIs the fetched bundle carried.
     pub entity_uris: Vec<String>,
+    /// The bundle's resolved queries (`query_key` -> ordered entity URIs).
+    pub queries: BTreeMap<String, Vec<String>>,
     pub updated_at: i64,
+}
+
+/// One `also` field update stored with an outbox row: the expression and
+/// the field's value before the row was (last) applied.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AlsoUpdate {
+    pub field: String,
+    pub value_expr: String,
+    #[serde(default)]
+    pub prev_value: Value,
+}
+
+fn also_to_json(also: &[AlsoUpdate]) -> StoreResult<Option<String>> {
+    if also.is_empty() {
+        return Ok(None);
+    }
+    serde_json::to_string(also).map(Some).map_err(json_err)
 }
 
 /// A new outbox row; `retry_count`, `status`, `next_attempt_at` and
@@ -100,6 +132,8 @@ pub struct NewOutboxRow {
     pub value_expr: String,
     pub prev_value_json: String,
     pub rollback_value_json: String,
+    /// Extra fields updated with `field` (empty for single-field rows).
+    pub also: Vec<AlsoUpdate>,
 }
 
 /// A full `action_outbox` row.
@@ -118,15 +152,27 @@ pub struct OutboxRow {
     pub rollback_value_json: Option<String>,
     pub next_attempt_at: i64,
     pub last_error: Option<String>,
+    /// Extra fields updated with `field`; empty if none (or if the stored
+    /// JSON is corrupt, logged).
+    pub also: Vec<AlsoUpdate>,
 }
 
 const OUTBOX_COLUMNS: &str = "id, entity_uri, endpoint, payload_json, created_at, \
     COALESCE(retry_count, 0), COALESCE(status, 'PENDING'), field, value_expr, prev_value_json, \
-    rollback_value_json, COALESCE(next_attempt_at, 0), last_error";
+    rollback_value_json, COALESCE(next_attempt_at, 0), last_error, also_json";
 
 fn outbox_row(r: &Row<'_>) -> rusqlite::Result<OutboxRow> {
+    let id: i64 = r.get(0)?;
+    let also_json: Option<String> = r.get(13)?;
+    let also = match also_json.as_deref() {
+        None | Some("") => Vec::new(),
+        Some(raw) => serde_json::from_str(raw).unwrap_or_else(|e| {
+            eprintln!("[CanvasEngine] store: outbox #{id}: ignoring corrupt also_json: {e}");
+            Vec::new()
+        }),
+    };
     Ok(OutboxRow {
-        id: r.get(0)?,
+        id,
         entity_uri: r.get(1)?,
         endpoint: r.get(2)?,
         payload_json: r.get(3)?,
@@ -139,6 +185,7 @@ fn outbox_row(r: &Row<'_>) -> rusqlite::Result<OutboxRow> {
         rollback_value_json: r.get(10)?,
         next_attempt_at: r.get(11)?,
         last_error: r.get(12)?,
+        also,
     })
 }
 
@@ -208,44 +255,53 @@ pub trait StoreOps {
 
     // ---- active_workspace ----
 
-    /// Insert or replace a workspace's layout and entity URI list.
+    /// Insert or replace a workspace's layout, entity URI list and queries.
     fn save_workspace(
         &self,
         id: &str,
         layout: &UiNode,
         entity_uris: &[String],
+        queries: &BTreeMap<String, Vec<String>>,
         updated_at: i64,
     ) -> StoreResult<()> {
         let layout = serde_json::to_string(layout).map_err(json_err)?;
         let uris = serde_json::to_string(entity_uris).map_err(json_err)?;
+        let queries = serde_json::to_string(queries).map_err(json_err)?;
         self.conn()
             .prepare_cached(
-                "INSERT INTO active_workspace (id, workspace_json, updated_at, entity_uris_json)
-                 VALUES (?1, ?2, ?3, ?4)
+                "INSERT INTO active_workspace
+                     (id, workspace_json, updated_at, entity_uris_json, queries_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT(id) DO UPDATE SET workspace_json = excluded.workspace_json,
-                     updated_at = excluded.updated_at, entity_uris_json = excluded.entity_uris_json",
+                     updated_at = excluded.updated_at, entity_uris_json = excluded.entity_uris_json,
+                     queries_json = excluded.queries_json",
             )?
-            .execute(params![id, layout, updated_at, uris])?;
+            .execute(params![id, layout, updated_at, uris, queries])?;
         Ok(())
     }
 
     /// The cached workspace, or `None` if absent (or its JSON is corrupt).
     fn load_workspace(&self, id: &str) -> StoreResult<Option<CachedWorkspace>> {
-        let row: Option<(String, String, i64)> = self
+        let row: Option<(String, String, i64, String)> = self
             .conn()
             .prepare_cached(
-                "SELECT workspace_json, entity_uris_json, updated_at
+                "SELECT workspace_json, entity_uris_json, updated_at, queries_json
                  FROM active_workspace WHERE id = ?1",
             )?
-            .query_row([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_row([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
             .optional()?;
-        let Some((layout, uris, updated_at)) = row else {
+        let Some((layout, uris, updated_at, queries)) = row else {
             return Ok(None);
         };
+        let queries = serde_json::from_str(&queries).unwrap_or_else(|e| {
+            eprintln!("[CanvasEngine] store: ignoring corrupt queries of workspace '{id}': {e}");
+            BTreeMap::new()
+        });
         match (serde_json::from_str(&layout), serde_json::from_str(&uris)) {
             (Ok(layout), Ok(entity_uris)) => Ok(Some(CachedWorkspace {
                 layout,
                 entity_uris,
+                queries,
                 updated_at,
             })),
             (Err(e), _) | (_, Err(e)) => {
@@ -262,8 +318,8 @@ pub trait StoreOps {
         self.conn()
             .prepare_cached(
                 "INSERT INTO action_outbox (entity_uri, endpoint, payload_json, created_at,
-                     field, value_expr, prev_value_json, rollback_value_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                     field, value_expr, prev_value_json, rollback_value_json, also_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             )?
             .execute(params![
                 row.entity_uri,
@@ -274,6 +330,7 @@ pub trait StoreOps {
                 row.value_expr,
                 row.prev_value_json,
                 row.rollback_value_json,
+                also_to_json(&row.also)?,
             ])?;
         Ok(self.conn().last_insert_rowid())
     }
@@ -346,6 +403,22 @@ pub trait StoreOps {
         self.conn()
             .prepare_cached("UPDATE action_outbox SET prev_value_json = ?2 WHERE id = ?1")?
             .execute(params![id, prev_value_json])?;
+        Ok(())
+    }
+
+    /// Update a row's primary `prev_value_json` and its `also` updates
+    /// (with their new `prev_value`s) after a re-apply.
+    fn set_outbox_prevs(
+        &self,
+        id: i64,
+        prev_value_json: &str,
+        also: &[AlsoUpdate],
+    ) -> StoreResult<()> {
+        self.conn()
+            .prepare_cached(
+                "UPDATE action_outbox SET prev_value_json = ?2, also_json = ?3 WHERE id = ?1",
+            )?
+            .execute(params![id, prev_value_json, also_to_json(also)?])?;
         Ok(())
     }
 }
@@ -469,10 +542,18 @@ impl Store {
             store
                 .conn
                 .execute("ATTACH DATABASE ?1 AS ro", [readonly_uri(path)])?;
+            // The read-only file cannot be migrated: a v1 file has no
+            // queries_json (the copy then gets the '{}' default).
+            let ro_version: u32 =
+                store.conn.pragma_query_value(Some("ro"), "user_version", |r| r.get(0))?;
+            let queries = if ro_version >= 2 { "queries_json" } else { "'{}'" };
             let ws = store.conn.execute(
-                "INSERT OR REPLACE INTO main.active_workspace
-                     (id, workspace_json, updated_at, entity_uris_json)
-                 SELECT id, workspace_json, updated_at, entity_uris_json FROM ro.active_workspace",
+                &format!(
+                    "INSERT OR REPLACE INTO main.active_workspace
+                         (id, workspace_json, updated_at, entity_uris_json, queries_json)
+                     SELECT id, workspace_json, updated_at, entity_uris_json, {queries}
+                     FROM ro.active_workspace"
+                ),
                 [],
             )?;
             let ents = store.conn.execute(
@@ -516,11 +597,14 @@ impl Store {
             );
             return Ok(());
         }
-        if version < 1 {
+        for (from, step) in MIGRATIONS.iter().enumerate().skip(version as usize) {
             let tx = self.conn.transaction()?;
-            tx.execute_batch(MIGRATION_V1)?;
-            tx.pragma_update(None, "user_version", 1)?;
+            tx.execute_batch(step)?;
+            tx.pragma_update(None, "user_version", from as u32 + 1)?;
             tx.commit()?;
+            if from > 0 {
+                eprintln!("[CanvasEngine] store: migrated schema v{from} -> v{}", from + 1);
+            }
         }
         Ok(())
     }
@@ -563,6 +647,7 @@ mod tests {
             value_expr: "entity.count + 1".into(),
             prev_value_json: "0".into(),
             rollback_value_json: "0".into(),
+            also: Vec::new(),
         }
     }
 
@@ -670,6 +755,90 @@ mod tests {
         assert_eq!(s.pending_count().unwrap(), 1);
     }
 
+    fn temp_db(tag: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "client-core-store-{tag}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("cache.db")
+    }
+
+    /// A schema v1 file (as M5 wrote it) with one workspace and one outbox row.
+    fn write_v1_db(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(MIGRATION_V1).unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        conn.execute(
+            "INSERT INTO active_workspace (id, workspace_json, updated_at, entity_uris_json)
+             VALUES ('home', '{\"type\":\"core://Workspace\",\"id\":\"home\",\"title\":\"Home\",\"slots\":[]}',
+                     1, '[\"core://counters/home\"]')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO action_outbox (entity_uri, endpoint, payload_json, created_at, field,
+                 value_expr, prev_value_json, rollback_value_json)
+             VALUES ('core://counters/home', '/v1/x', '{}', 1, 'count', 'entity.count + 1', '0', '0')",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn v1_db_migrates_to_v2() {
+        let path = temp_db("v1");
+        write_v1_db(&path);
+        let s = Store::open(&path).unwrap();
+        assert_eq!(s.schema_version().unwrap(), 2);
+        let ws = s.load_workspace("home").unwrap().unwrap();
+        assert_eq!(ws.entity_uris, vec!["core://counters/home".to_string()]);
+        assert!(ws.queries.is_empty());
+        let old = s.first_pending().unwrap().unwrap();
+        assert_eq!(old.field.as_deref(), Some("count"));
+        assert!(old.also.is_empty());
+
+        // New columns are writable.
+        let also = vec![AlsoUpdate {
+            field: "like_count".into(),
+            value_expr: "entity.like_count + 1".into(),
+            prev_value: Value::from(5),
+        }];
+        let id = s
+            .insert_outbox(&NewOutboxRow {
+                also: also.clone(),
+                ..new_row("pixelfed://posts/1")
+            })
+            .unwrap();
+        assert_eq!(s.get_outbox(id).unwrap().unwrap().also, also);
+        let rebased = vec![AlsoUpdate {
+            prev_value: Value::from(9),
+            ..also[0].clone()
+        }];
+        s.set_outbox_prevs(id, "true", &rebased).unwrap();
+        let row = s.get_outbox(id).unwrap().unwrap();
+        assert_eq!((row.prev_value_json.as_deref(), row.also), (Some("true"), rebased));
+        drop(s);
+        // Re-opening a v2 DB is a no-op.
+        assert_eq!(Store::open(&path).unwrap().schema_version().unwrap(), 2);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn in_memory_copy_of_a_v1_db_has_empty_queries() {
+        let path = temp_db("v1copy");
+        write_v1_db(&path);
+        let (s, ws, ents) = Store::open_in_memory_copy_of(&path).unwrap();
+        assert_eq!((ws, ents), (1, 0));
+        assert!(s.load_workspace("home").unwrap().unwrap().queries.is_empty());
+        assert_eq!(s.pending_count().unwrap(), 0, "outbox rows are not copied");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
     #[test]
     fn workspace_roundtrip() {
         let s = Store::open_in_memory().unwrap();
@@ -679,10 +848,12 @@ mod tests {
         )
         .unwrap();
         let uris = vec!["core://counters/home".to_string()];
-        s.save_workspace("home", &layout, &uris, 3).unwrap();
+        let queries = BTreeMap::from([("q".to_string(), uris.clone())]);
+        s.save_workspace("home", &layout, &uris, &queries, 3).unwrap();
         let ws = s.load_workspace("home").unwrap().unwrap();
         assert_eq!(ws.layout, layout);
         assert_eq!(ws.entity_uris, uris);
+        assert_eq!(ws.queries, queries);
         assert_eq!(ws.updated_at, 3);
         assert_eq!(s.load_workspace("other").unwrap(), None);
     }

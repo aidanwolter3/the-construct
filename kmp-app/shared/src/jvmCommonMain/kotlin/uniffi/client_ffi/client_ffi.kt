@@ -1621,13 +1621,18 @@ public object FfiConverterTypeEngineHandle: FfiConverter<EngineHandle, Pointer> 
  * A snapshot of engine state; JSON payloads are passed through as strings.
  * `seq` strictly increases per engine (drop snapshots with a seq not above
  * the last applied one); `pending_actions` counts unsent outbox rows.
+ * `queries_json` is the bundle's `{query_key: [entity uri, ...]}` (`"{}"`
+ * when none); `auth_json` is `{"state":"signed_out"|"pending"|"signed_in"|
+ * "error","username"?,"error"?}`.
  */
 data class FfiStateSnapshot (
     var `workspaceJson`: kotlin.String, 
     var `entitiesJson`: kotlin.String, 
     var `isOnline`: kotlin.Boolean, 
     var `seq`: kotlin.ULong, 
-    var `pendingActions`: kotlin.UInt
+    var `pendingActions`: kotlin.UInt, 
+    var `queriesJson`: kotlin.String, 
+    var `authJson`: kotlin.String
 ) {
     
     companion object
@@ -1644,6 +1649,8 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterBoolean.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
@@ -1652,7 +1659,9 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterString.allocationSize(value.`entitiesJson`) +
             FfiConverterBoolean.allocationSize(value.`isOnline`) +
             FfiConverterULong.allocationSize(value.`seq`) +
-            FfiConverterUInt.allocationSize(value.`pendingActions`)
+            FfiConverterUInt.allocationSize(value.`pendingActions`) +
+            FfiConverterString.allocationSize(value.`queriesJson`) +
+            FfiConverterString.allocationSize(value.`authJson`)
     )
 
     override fun write(value: FfiStateSnapshot, buf: ByteBuffer) {
@@ -1661,6 +1670,8 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterBoolean.write(value.`isOnline`, buf)
             FfiConverterULong.write(value.`seq`, buf)
             FfiConverterUInt.write(value.`pendingActions`, buf)
+            FfiConverterString.write(value.`queriesJson`, buf)
+            FfiConverterString.write(value.`authJson`, buf)
     }
 }
 

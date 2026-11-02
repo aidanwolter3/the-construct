@@ -57,6 +57,8 @@ internal fun FfiStateSnapshot.toEngineSnapshot(): EngineSnapshot = EngineSnapsho
     isOnline = isOnline,
     seq = if (seq > Long.MAX_VALUE.toULong()) Long.MAX_VALUE else seq.toLong(),
     pendingActions = if (pendingActions > Int.MAX_VALUE.toUInt()) Int.MAX_VALUE else pendingActions.toInt(),
+    queriesJson = queriesJson,
+    authJson = authJson,
 )
 
 /** Platform log line: stdout with a `[desktop]` prefix on desktop, logcat tag `CanvasEngine` on Android. */

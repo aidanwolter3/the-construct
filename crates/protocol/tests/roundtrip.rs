@@ -13,7 +13,7 @@ fn like_intent() -> ActionIntent {
         field: "is_liked".into(),
         value_expr: "!entity.is_liked".into(),
         rollback_value: json!(false),
-        endpoint: "/api/v1/posts/like".into(),
+        endpoint: "/v1/demo/ack".into(),
         payload: json!({ "id": "$item.id" }),
         also: vec![],
     }

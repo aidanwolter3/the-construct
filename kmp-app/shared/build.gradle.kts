@@ -45,6 +45,8 @@ kotlin {
             implementation(compose.foundation)
             implementation(libs.compose.material3)
             implementation(compose.ui)
+            // AsyncImage. `api` so the apps and the simulator can configure the ImageLoader.
+            api(libs.coil.compose)
             api(libs.kotlinx.serialization.json)
             api(libs.kotlinx.coroutines.core)
         }
@@ -54,6 +56,10 @@ kotlin {
         // JNA is added per platform, never in jvmCommonMain: desktop needs the plain jar, Android
         // the aar (the jar on Android would duplicate classes and lack the Android natives).
         // `api` because the generated bindings expose JNA types (Pointer) in public signatures.
+        // Coil's OkHttp network fetcher (desktop JVM + Android), auto-registered via ServiceLoader.
+        named("jvmCommonMain").dependencies {
+            api(libs.coil.network.okhttp)
+        }
         named("desktopMain").dependencies {
             api(libs.jna)
         }

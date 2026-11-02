@@ -1,40 +1,34 @@
 package org.genui.canvas
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.key
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.longOrNull
+
+/** Maximum width of a FeedList item on wide screens. */
+val FEED_MAX_WIDTH = 560.dp
+
+/** The workspace's queries (`query_key` -> ordered entity URIs), read by FeedList. Provided by [CanvasApp]. */
+val LocalCanvasQueries: ProvidableCompositionLocal<Map<String, List<String>>> = staticCompositionLocalOf { emptyMap() }
 
 /**
  * Renders one [UiNode]. [item] is the current item context inside a FeedList item template
@@ -100,11 +94,8 @@ fun RenderUiNode(
 
         is UiNode.FeedList -> {
             // Nested inside the Workspace's scrolling Column, so a plain Column (not LazyColumn).
-            val posts = entities.entries
-                .filter { it.key.contains("/posts/") }
-                .sortedByDescending { (it.value["created_at"] as? JsonPrimitive)?.longOrNull ?: 0L }
-                .map { (uri, record) -> JsonObject(record + ("uri" to JsonPrimitive(uri))) }
-            Column(modifier.fillMaxWidth()) {
+            val posts = feedItems(node.queryKey, LocalCanvasQueries.current, entities)
+            Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                 if (posts.isEmpty()) {
                     Text(
                         "No posts",
@@ -117,7 +108,8 @@ fun RenderUiNode(
                     // Key by entity URI so per-item state (e.g. pager position) follows the post
                     // when the feed is reordered or a new post is inserted.
                     key(post["uri"]) {
-                        RenderUiNode(node.itemTemplate, entities, onDispatch, Modifier, post)
+                        // Phone: full width. Wider screens: a centered column like Instagram/Pixelfed web.
+                        RenderUiNode(node.itemTemplate, entities, onDispatch, Modifier.widthIn(max = FEED_MAX_WIDTH), post)
                     }
                 }
             }
@@ -128,77 +120,27 @@ fun RenderUiNode(
             val postUri = resolveRef(node.postRef, item)
             val post = postUri?.let { uri -> entities[uri]?.let { JsonObject(it + ("uri" to JsonPrimitive(uri))) } }
                 ?: item
-            Card(modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-                Column {
-                    RenderUiNode(node.authorSlot, entities, onDispatch, Modifier, post)
-                    RenderUiNode(node.mediaSlot, entities, onDispatch, Modifier, post)
-                    RenderUiNode(node.actionSlot, entities, onDispatch, Modifier, post)
-                    RenderUiNode(node.captionSlot, entities, onDispatch, Modifier.padding(12.dp), post)
+            Column(modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+                RenderUiNode(node.authorSlot, entities, onDispatch, Modifier, post)
+                RenderUiNode(node.mediaSlot, entities, onDispatch, Modifier, post)
+                RenderUiNode(node.actionSlot, entities, onDispatch, Modifier, post)
+                post?.str("content_warning")?.let {
+                    ContentWarningLabel(it, Modifier.padding(start = 14.dp, end = 14.dp, bottom = 6.dp))
                 }
+                // An empty caption (e.g. a boost without text) takes no space.
+                val caption = node.captionSlot
+                if (caption !is UiNode.Text || interpolate(caption.valueExpr, entities, post).isNotBlank()) {
+                    RenderUiNode(caption, entities, onDispatch, Modifier.padding(horizontal = 14.dp), post)
+                }
+                HorizontalDivider(Modifier.padding(top = 12.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
             }
         }
 
-        is UiNode.MediaCarousel -> {
-            val refs = resolveMediaRefs(node.mediaRefs, item)
-            val ratio = node.aspectRatio.takeIf { it.isFinite() && it > 0.1f } ?: 1f
-            val boxMod = modifier.fillMaxWidth().aspectRatio(ratio)
-            when (refs.size) {
-                0 -> MediaPlaceholder("No media", boxMod)
-                1 -> MediaPlaceholder(mediaLabel(refs[0], entities), boxMod)
-                else -> {
-                    val pagerState = rememberPagerState { refs.size }
-                    HorizontalPager(state = pagerState, modifier = boxMod) { page ->
-                        MediaPlaceholder(
-                            mediaLabel(refs[page], entities) + "\n(${page + 1}/${refs.size})",
-                            Modifier.fillMaxSize(),
-                        )
-                    }
-                }
-            }
-        }
+        is UiNode.MediaCarousel -> MediaCarousel(node, entities, item, modifier)
 
-        is UiNode.AuthorHeader -> {
-            val userUri = resolveRef(node.userRef, item)
-            val user = userUri?.let { entities[it] }
-            val username = user?.get("username")?.let(::renderJsonValue)?.takeIf { it.isNotBlank() }
-                ?: userUri ?: "unknown"
-            val click = node.onClick
-            Row(
-                modifier
-                    .fillMaxWidth()
-                    .let { if (click != null) it.clickable { dispatch(click) } else it }
-                    .padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    Modifier.size(32.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(username.take(1).uppercase(), style = MaterialTheme.typography.labelLarge)
-                }
-                Spacer(Modifier.width(8.dp))
-                Text("@$username", style = MaterialTheme.typography.titleSmall)
-            }
-        }
+        is UiNode.AuthorHeader -> AuthorHeader(node, entities, item, dispatch, modifier)
 
-        is UiNode.ActionBar -> {
-            val liked = (item?.get("is_liked") as? JsonPrimitive)?.booleanOrNull == true
-            val likeCount = item?.get("like_count")?.let(::renderJsonValue)
-            Row(
-                modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(onClick = { dispatch(node.likeIntent) }) {
-                    Text(
-                        (if (liked) "♥ Like" else "♡ Like") + (likeCount?.let { " ($it)" } ?: ""),
-                        color = if (liked) Color(0xFFE0245E) else MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-                TextButton(onClick = { dispatch(node.commentIntent) }) { Text("Comment") }
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = { dispatch(node.bookmarkIntent) }) { Text("Bookmark") }
-            }
-        }
+        is UiNode.ActionBar -> ActionBar(node, item, dispatch, modifier)
 
         is UiNode.Unknown -> Text(
             "Unsupported component: ${node.type.ifEmpty { "<missing type>" }}",
@@ -206,20 +148,5 @@ fun RenderUiNode(
             color = Color.Gray,
             modifier = modifier.padding(4.dp),
         )
-    }
-}
-
-private fun mediaLabel(uri: String, entities: Map<String, JsonObject>): String {
-    val media = entities[uri]
-    val alt = media?.get("alt_text")?.let(::renderJsonValue).orEmpty()
-    val url = media?.get("url")?.let(::renderJsonValue)?.takeIf { it.isNotBlank() } ?: uri
-    return listOf(alt, url).filter { it.isNotBlank() }.joinToString("\n")
-}
-
-@Composable
-private fun MediaPlaceholder(text: String, modifier: Modifier) {
-    // Image loading (e.g. Coil) comes later; show alt text and URL for now.
-    Box(modifier.background(Color(0xFFDDDDDD)), contentAlignment = Alignment.Center) {
-        Text(text, textAlign = TextAlign.Center, color = Color.DarkGray, modifier = Modifier.padding(16.dp))
     }
 }

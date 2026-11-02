@@ -16,7 +16,53 @@ const MIGRATIONS: &[&str] = &[
          id    TEXT PRIMARY KEY NOT NULL,
          count INTEGER NOT NULL DEFAULT 0
      );",
+    // v2 (M6): Pixelfed adapter. Single tenant: one account per instance; any
+    // valid pod session may use it. Sessions store SHA-256(token), never the
+    // token. pixelfed_media maps opaque proxy keys to upstream media URLs.
+    "CREATE TABLE pixelfed_apps (
+         instance      TEXT NOT NULL,
+         redirect_uri  TEXT NOT NULL,
+         client_id     TEXT NOT NULL,
+         client_secret TEXT NOT NULL,
+         PRIMARY KEY (instance, redirect_uri)
+     );
+     CREATE TABLE pixelfed_account (
+         instance     TEXT PRIMARY KEY NOT NULL,
+         access_token TEXT NOT NULL,
+         account_id   TEXT NOT NULL,
+         username     TEXT NOT NULL,
+         created_at   INTEGER NOT NULL
+     );
+     CREATE TABLE sessions (
+         token_hash TEXT PRIMARY KEY NOT NULL,
+         created_at INTEGER NOT NULL
+     );
+     CREATE TABLE pixelfed_media (
+         key TEXT PRIMARY KEY NOT NULL,
+         url TEXT NOT NULL
+     );",
 ];
+
+/// A registered OAuth app on the upstream instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PixelfedApp {
+    pub client_id: String,
+    pub client_secret: String,
+}
+
+/// The stored upstream account (and its access token).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PixelfedAccount {
+    pub access_token: String,
+    pub account_id: String,
+    pub username: String,
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
 
 /// Result of a decrement that would take the count below zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +161,153 @@ impl Store {
             params![id],
         )?;
         Ok(0)
+    }
+
+    // ---------- Pixelfed (v2) ----------
+
+    pub fn pixelfed_app(
+        &self,
+        instance: &str,
+        redirect_uri: &str,
+    ) -> rusqlite::Result<Option<PixelfedApp>> {
+        self.conn()
+            .query_row(
+                "SELECT client_id, client_secret FROM pixelfed_apps
+                 WHERE instance = ?1 AND redirect_uri = ?2",
+                [instance, redirect_uri],
+                |r| {
+                    Ok(PixelfedApp {
+                        client_id: r.get(0)?,
+                        client_secret: r.get(1)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    pub fn save_pixelfed_app(
+        &self,
+        instance: &str,
+        redirect_uri: &str,
+        app: &PixelfedApp,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR REPLACE INTO pixelfed_apps (instance, redirect_uri, client_id, client_secret)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![instance, redirect_uri, app.client_id, app.client_secret],
+        )?;
+        Ok(())
+    }
+
+    /// Forget a cached app (the upstream no longer knows it).
+    pub fn delete_pixelfed_app(&self, instance: &str, redirect_uri: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "DELETE FROM pixelfed_apps WHERE instance = ?1 AND redirect_uri = ?2",
+            [instance, redirect_uri],
+        )?;
+        Ok(())
+    }
+
+    pub fn pixelfed_account(&self, instance: &str) -> rusqlite::Result<Option<PixelfedAccount>> {
+        self.conn()
+            .query_row(
+                "SELECT access_token, account_id, username FROM pixelfed_account
+                 WHERE instance = ?1",
+                [instance],
+                |r| {
+                    Ok(PixelfedAccount {
+                        access_token: r.get(0)?,
+                        account_id: r.get(1)?,
+                        username: r.get(2)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// Store (replacing any previous) the upstream account for `instance`.
+    pub fn save_pixelfed_account(
+        &self,
+        instance: &str,
+        account: &PixelfedAccount,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR REPLACE INTO pixelfed_account
+                 (instance, access_token, account_id, username, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                instance,
+                account.access_token,
+                account.account_id,
+                account.username,
+                now_secs()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_pixelfed_account(&self, instance: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "DELETE FROM pixelfed_account WHERE instance = ?1",
+            [instance],
+        )?;
+        Ok(())
+    }
+
+    pub fn create_session(&self, token_hash: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO sessions (token_hash, created_at) VALUES (?1, ?2)",
+            params![token_hash, now_secs()],
+        )?;
+        Ok(())
+    }
+
+    pub fn session_exists(&self, token_hash: &str) -> rusqlite::Result<bool> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT 1 FROM sessions WHERE token_hash = ?1",
+                [token_hash],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
+    /// Returns whether a session was deleted.
+    pub fn delete_session(&self, token_hash: &str) -> rusqlite::Result<bool> {
+        Ok(self
+            .conn()
+            .execute("DELETE FROM sessions WHERE token_hash = ?1", [token_hash])?
+            > 0)
+    }
+
+    /// Remember proxy keys (idempotent).
+    pub fn save_media_keys<'a>(
+        &self,
+        keys: impl IntoIterator<Item = (&'a String, &'a String)>,
+    ) -> rusqlite::Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT OR IGNORE INTO pixelfed_media (key, url) VALUES (?1, ?2)",
+            )?;
+            for (key, url) in keys {
+                stmt.execute([key, url])?;
+            }
+        }
+        tx.commit()
+    }
+
+    pub fn media_url(&self, key: &str) -> rusqlite::Result<Option<String>> {
+        self.conn()
+            .query_row(
+                "SELECT url FROM pixelfed_media WHERE key = ?1",
+                [key],
+                |r| r.get(0),
+            )
+            .optional()
     }
 }
 

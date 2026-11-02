@@ -12,6 +12,10 @@ sealed class SimStep(val command: String, val arg: String = "") {
     object Offline : SimStep("offline")
     object Online : SimStep("online")
     class Screen(val spec: ScreenSpec) : SimStep("screen", spec.label)
+    class WaitImages(val timeoutMs: Long) : SimStep("wait-images", timeoutMs.toString())
+    /** Swipes the node [target] selects (see README) towards [direction]: left shows the next carousel page. */
+    class Swipe(val direction: String, val target: String) : SimStep("swipe-$direction", target)
+    class ScrollTo(val target: String) : SimStep("scroll-to", target)
 
     override fun toString(): String = if (arg.isEmpty()) command else "$command $arg"
 }
@@ -20,6 +24,9 @@ class ScriptParseException(message: String) : IllegalArgumentException(message)
 
 /** Upper bound for `wait`, 10 minutes. */
 const val MAX_WAIT_MS = 600_000L
+
+/** Default timeout of `wait-images`. */
+const val DEFAULT_WAIT_IMAGES_MS = 10_000L
 
 /** Rejects steps that [mode] can't run: `offline`/`online` need the fixture mode's fake engine. */
 fun validateStepsForMode(steps: List<SimStep>, mode: String) {
@@ -69,6 +76,12 @@ fun parseScript(script: String): List<SimStep> {
                 }
                 SimStep.WaitText(ms, text)
             }
+            "wait-images" -> SimStep.WaitImages(
+                if (arg.isEmpty()) DEFAULT_WAIT_IMAGES_MS else arg.toLongOrNull()?.takeIf { it in 0..MAX_WAIT_MS }
+                    ?: throw ScriptParseException("${where()}: 'wait-images' takes an optional timeout in ms in 0..$MAX_WAIT_MS"),
+            )
+            "swipe-left", "swipe-right" -> SimStep.Swipe(command.removePrefix("swipe-"), requireArg("a target (text, content description or tag:<testTag>)"))
+            "scroll-to" -> SimStep.ScrollTo(requireArg("a target (text, content description or tag:<testTag>)"))
             "offline" -> { noArg(); SimStep.Offline }
             "online" -> { noArg(); SimStep.Online }
             "screen" -> SimStep.Screen(
@@ -80,7 +93,8 @@ fun parseScript(script: String): List<SimStep> {
             )
             else -> throw ScriptParseException(
                 "${where()}: unknown command '$command' (expected one of: " +
-                    "shot, click, wait, idle, assert-text, assert-no-text, wait-text, offline, online, screen)",
+                    "shot, click, wait, idle, assert-text, assert-no-text, wait-text, wait-images, swipe-left, swipe-right, " +
+                    "scroll-to, offline, online, screen)",
             )
         }
     }

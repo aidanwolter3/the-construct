@@ -87,8 +87,9 @@ whose URI contains `/posts/`, ordered by `created_at` (newest first), and binds 
 
 Resolved in M6 by `WorkspaceSpec.queries` (`query_key` -> ordered entity URIs; omitted from the JSON when empty, so
 older bundles are unchanged): a `FeedList` renders `queries[query_key]` in order and falls back to the behavior
-above when the key is absent. The protocol field (Rust and the Kotlin `WorkspaceSpec`) exists now; the engine
-snapshot (`queries_json`) and the renderer change land in later M6 units.
+above when the key is absent. client-core persists the queries (`active_workspace.queries_json`, D13) and exposes
+them as the snapshot's `queries_json` (`EngineSnapshot.queriesJson` in Kotlin). The Kotlin renderer (`feedItems`, read through
+`LocalCanvasQueries`) skips listed URIs that have no entity and drops duplicates.
 
 ## D8: Simulation mode harness
 
@@ -227,12 +228,16 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
   SQLite's usual seconds: `dispatch` runs on the UI thread on both platforms, so a locked DB costs a click at most
   ~250 ms, after which the mutate fails atomically. `rusqlite`
   `bundled`, WAL with `synchronous=NORMAL` (a crash never corrupts the DB; a power loss can drop the last
-  commits). Schema behind `PRAGMA user_version` (v1). The bundled SQLite adds no Android `.so` dependencies.
+  commits). Schema behind `PRAGMA user_version` (v2; `store::MIGRATIONS[i]` upgrades v`i` to v`i+1`, one
+  transaction each, so M5 v1 files upgrade in place). The bundled SQLite adds no Android `.so` dependencies.
 - **Schema extensions over DESIGN §2.3:** `entities.domain`/`entity_type` are derived from the URI
   `<domain>://<type>/...`. `action_outbox` adds `field`, `value_expr`, `prev_value_json`,
   `rollback_value_json`, `next_attempt_at` (unix ms, default 0) and `last_error`, so the sync worker can roll a
   rejected row back and re-apply later rows without the original intent. `active_workspace` adds
   `entity_uris_json` (URIs the bundle carried); startup loads those entities plus any entity with a PENDING row.
+  v2 (M6) adds `active_workspace.queries_json` (the bundle's `queries`, default `'{}'`; startup also loads every
+  URI they name) and `action_outbox.also_json` (`[{"field","value_expr","prev_value"}]` for a mutation's `also`
+  updates, NULL for single-field rows; D15). The read-only fallback copies `queries_json` only from a v2 file.
 - **In-memory state + write-through:** `State` stays the snapshot source; every change is written to SQLite
   inside the state lock. An optimistic mutate commits entity update + outbox insert in one transaction before
   touching memory; if it fails (logged as `ERROR`), nothing changes and no snapshot is sent. Dispatch->notify is
@@ -246,8 +251,9 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
 - **`"$value"` token:** any JSON string exactly `"$value"` inside an intent's `payload` is replaced by the new
   optimistic field value before the row is stored, so toggles can send the desired state.
 - **Snapshot:** `StateSnapshot`/`FfiStateSnapshot` carry `seq` (strictly increasing per engine) and
-  `pending_actions` (PENDING outbox rows). Kotlin receives them as `EngineSnapshot(seq: Long, pendingActions:
-  Int)`. `CanvasController` drops a snapshot whose seq is <= the last applied one. The check and the write are one
+  `pending_actions` (PENDING outbox rows), and since M6 `queries_json` (`"{}"` when none) and `auth_json`
+  (`{"state":"signed_out"|"pending"|"signed_in"|"error","username"?,"error"?}`; always signed_out until the auth
+  unit). Kotlin receives them as `EngineSnapshot(seq: Long, pendingActions: Int, queriesJson, authJson)`. `CanvasController` drops a snapshot whose seq is <= the last applied one. The check and the write are one
   atomic `MutableStateFlow.update`, because observers fire from several engine threads. The status line shows
   "N pending" when N > 0.
 
@@ -275,11 +281,13 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
   (`outbox #id POST url -> 200, deleted (N pending)`, 4xx with the response body). The fetch retry loop (server
   down at cold start) logs its first failure, then only when the error changes or every 30th attempt (about once
   a minute), and the eventual success says how many attempts failed.
-- **Rollback:** set `entity[field]` to `prev_value_json`, or `rollback_value_json` when prev is null/absent,
-  then re-evaluate `value_expr` of every later PENDING row for the same entity+field FIFO, updating their
-  `prev_value_json`. Delete + entity + prev updates are one transaction; memory changes only if it commits.
+- **Rollback:** rewind every later PENDING row for the same entity (newest first, each field to its stored prev),
+  then restore the rejected row: `entity[field]` to `prev_value_json` (or `rollback_value_json` when prev is
+  null/absent) and each `also` field to its `prev_value`; then re-apply the later rows FIFO (all fields
+  re-evaluated, prevs updated). Rewinding first keeps relative `also` fields of later rows (a like count) from
+  being applied twice. Delete + entity + prev updates are one transaction; memory changes only if it commits.
 - **Refetch merge:** a fetched bundle replaces its entities, then every PENDING row for those entities is
-  re-applied FIFO (same re-evaluation, `prev_value_json` rebased on the fetched value), persisted with the layout
+  re-applied FIFO (same re-evaluation of every field, prevs rebased on the fetched value), persisted with the layout
   in one transaction. Entities outside the bundle with pending rows keep their local value. A flush does not
   trigger a refetch: the displayed value already includes the flushed row.
 - **Toggle edge case:** re-applying re-evaluates `value_expr` against the new base, but the stored payload is
@@ -298,8 +306,9 @@ so existing intents round-trip byte for byte. Rules: the primary `value_expr` an
 evaluated against the PRE-mutation entity, then all are applied together; a rollback restores every field; a
 re-apply re-evaluates all of them. `"$value"` in the payload is still the primary field's new value. Kotlin
 mirrors `also` in `Model.kt` and keeps it through item binding and the re-encode before dispatch; the desktop
-simulator's `FakeEngineBridge` implements the full semantics. client-core (as of M6-P) parses `also` but applies
-only the primary field and logs a warning when `also` is non-empty; storing `also` in the outbox comes in M6-C1.
+simulator's `FakeEngineBridge` implements the full semantics. client-core implements them too: if any expression
+fails nothing changes (no row, no snapshot); the row stores the `also` updates with their prev values in
+`action_outbox.also_json` (D13); rollback and re-apply follow D14.
 
 ## D16: Fake Pixelfed upstream (`crates/fake-pixelfed`)
 
@@ -311,3 +320,55 @@ redirect_uri; a code is consumed by any exchange attempt (also a failed one). Ac
 reblogged status (Mastodon behaviour); favourite/bookmark are idempotent. Media are generated PNGs (solid colour +
 big digit/letter) so screenshots show which carousel page is visible; their `meta.original` sizes are the
 advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a valid 1x1 (DC-only) hash.
+
+## D17: Pixelfed token ownership and the pod adapter (`server::pixelfed`)
+
+- **Token ownership:** the pod holds the upstream access token; private data stays on the pod. The client runs
+  PKCE against the instance's authorize page, then hands `code` + `code_verifier` to `POST
+  /v1/auth/pixelfed/token`; the pod exchanges them with its `client_secret`, calls verify_credentials, stores the
+  token in server SQLite and returns a random 256-bit **pod session token**. The client keeps only that, in a
+  secure store, and sends `Authorization: Bearer <session>` on every pod request.
+- **Store (migration v2):** `pixelfed_apps(instance, redirect_uri, client_id, client_secret)` (one app per
+  redirect_uri, registered lazily with scopes `read write`; deleted when the token endpoint answers 401
+  invalid_client so the next `/app` call re-registers), `pixelfed_account(instance PK, access_token, ...)`,
+  `sessions(token_hash PK, created_at)` holding SHA-256(token) hex only, and `pixelfed_media(key, url)`.
+- **Single tenant:** one account per instance; any valid session uses it; a new sign-in replaces it. Logout deletes
+  only the session. Only the configured instance is accepted in auth calls (`PIXELFED_INSTANCE_URL` or
+  `PIXELFED_PUBLIC_URL`, trailing slash ignored), so the pod never calls a client-chosen host. Sessions do not
+  expire yet.
+- **Status mapping:** `GET /v1/workspaces/pixelfed_home` without a valid session -> 200 signed-out bundle (AuthLogin
+  button). Upstream 401 -> the stored account is deleted and the signed-out bundle is served. Unreachable/5xx ->
+  502. Actions: no session 401, upstream 4xx passed through (client rolls back), 5xx/unreachable 502 (retry).
+- **Normalization** is pure (`server::pixelfed`): lenient serde types (absent/null optional fields default; an
+  unparseable status is skipped and logged); a reblog becomes the inner post plus `reblogged_by_uri`, with the
+  outer order kept and duplicates dropped; captions are HTML -> text (`<br>` newline, paragraphs separated by a
+  blank line, entities decoded, link text kept); `aspect_ratio` = `meta.original.aspect`, else width/height,
+  else `meta.small`, else 1.0.
+- **Media proxy:** every image URL becomes `<scheme>://<Host>/v1/pixelfed/media/<key>` (scheme from
+  `X-Forwarded-Proto`, else http), key = first 128 bits of SHA-256(url) in hex, persisted so keys survive a pod
+  restart. `GET` streams the upstream bytes with the upstream content type and no auth (keys are opaque and the
+  media are public upstream). URLs under `PIXELFED_PUBLIC_URL` are fetched via `PIXELFED_INSTANCE_URL`.
+- **Demo:** the static `pixelfed_demo` like intent posts to `POST /v1/demo/ack` (stateless 200).
+
+## D18: Pixelfed widgets: Coil, carousel aspect rule, simulator images
+
+- **Coil 3.4.0** (`coil-compose` in `:shared` commonMain, `coil-network-okhttp` in jvmCommonMain, auto-registered
+  via ServiceLoader on desktop and Android). 3.4.x is the newest line built against Kotlin 2.3 / Compose 1.9; 3.5+
+  requires Kotlin 2.4 and Compose 1.11.1+, newer than this project's 1.11.0-beta01. OkHttp rather than Ktor: one
+  engine for both JVM targets, no extra client setup. `CanvasImage` wraps `AsyncImage` over a placeholder colour
+  (the BlurHash's average colour when known), crossfade on, `ContentScale.Crop`, an error state with the alt text.
+- **Icons:** the handful needed (heart, bookmark, comment, boost, broken image, warning) are inlined as Material
+  path data (`CanvasIcons`); Compose MP 1.11 has no current material-icons artifact and the extended set is large.
+- **Carousel aspect:** the first media entity's `aspect_ratio` clamped to [0.8, 1.91] (Instagram's 4:5 .. 1.91:1),
+  else the node's `aspect_ratio` (unclamped, must be positive), else 1. Every page uses that one ratio (cropped), so
+  swiping never changes the card height. No media renders nothing. Page dots sit below the image (overlay dots
+  vanish on light images), with an `n/N` badge on the image.
+- **Simulator images:** `SimImages` installs Coil's singleton loader per run. Fixture mode: an interceptor maps
+  `/storage/<file>` and `/v1/pixelfed/media/<file>` URLs to `fixtures/pixelfed/media/` and fails every other URL
+  without touching the network; live mode uses OkHttp. Disk cache off. `ImageLoads.inFlight` (commonMain) counts
+  on-screen images from creation until success/error/disposal, so an image whose request has not started yet also
+  counts; `wait-images` and every `shot` wait for it to reach 0 and then for Coil's crossfade, which runs on the
+  wall clock, not the test clock (300 ms after the last success).
+- **Fixture:** `fixtures/pixelfed_home_feed_bundle.json` is `fixtures/pixelfed/timeline_home.json` normalized by
+  the D17 rules (with `{{BASE}}` = `http://127.0.0.1:8081`, image URLs left un-proxied so the sim can map them)
+  plus the contract's `pixelfed_home` layout and `queries`.

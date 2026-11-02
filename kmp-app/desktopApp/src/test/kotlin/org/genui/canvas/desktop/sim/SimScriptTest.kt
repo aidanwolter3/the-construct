@@ -118,4 +118,21 @@ class SimScriptTest {
     fun unknownCommandWhoseLowercaseIsLongerIsAParseError() {
         assertFailsWith<ScriptParseException> { parseScript("İ") }
     }
+
+    @Test
+    fun imageAndGestureCommands() {
+        val steps = parseScript("wait-images; wait-images 2500; swipe-left tag:carousel:pixelfed://posts/1; swipe-right Alt text; scroll-to Legs")
+        assertEquals(DEFAULT_WAIT_IMAGES_MS, assertIs<SimStep.WaitImages>(steps[0]).timeoutMs)
+        assertEquals(2500L, assertIs<SimStep.WaitImages>(steps[1]).timeoutMs)
+        val left = assertIs<SimStep.Swipe>(steps[2])
+        assertEquals("left", left.direction)
+        assertEquals("tag:carousel:pixelfed://posts/1", left.target)
+        assertEquals("swipe-left", left.command)
+        assertEquals("right", assertIs<SimStep.Swipe>(steps[3]).direction)
+        assertEquals("Legs", assertIs<SimStep.ScrollTo>(steps[4]).target)
+        assertFailsWith<ScriptParseException> { parseScript("wait-images soon") }
+        assertFailsWith<ScriptParseException> { parseScript("swipe-left") }
+        assertFailsWith<ScriptParseException> { parseScript("scroll-to") }
+        assertFailsWith<ScriptParseException> { parseScript("swipe-up x") }
+    }
 }

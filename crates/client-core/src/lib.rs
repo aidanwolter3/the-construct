@@ -13,6 +13,11 @@
 //! an `action_outbox` row in one transaction before observers are notified.
 //! The old JSON cache files (`workspace_<id>.json`) are ignored.
 //!
+//! M6: a mutation's `also` field updates are evaluated against the
+//! pre-mutation entity and applied, stored, rolled back and re-applied
+//! together with the primary field (docs/DECISIONS.md D15). The bundle's
+//! `queries` are persisted and exposed in the snapshot (`queries_json`).
+//!
 //! A background thread retries the initial fetch every few seconds until
 //! the server answers; after that it probes `GET {base_url}/healthz` on the
 //! same interval so `is_online` tracks the server going away and coming
@@ -38,10 +43,10 @@ use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use protocol::{ActionIntent, EntityRecord, UiNode, WorkspaceSpec};
+use protocol::{ActionIntent, EntityRecord, FieldUpdate, UiNode, WorkspaceSpec};
 use serde_json::Value;
 
-use store::{NewOutboxRow, OutboxRow, Store, StoreOps};
+use store::{AlsoUpdate, NewOutboxRow, OutboxRow, Store, StoreOps};
 
 const DEFAULT_WORKSPACE_ID: &str = "home";
 /// SQLite file name inside `storage_path`.
@@ -55,6 +60,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const FETCH_FAILURE_LOG_EVERY: u32 = 30;
 /// Timeout for a single outbox POST.
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
+/// `auth_json` until a sign-in flow sets it.
+pub const SIGNED_OUT_AUTH_JSON: &str = r#"{"state":"signed_out"}"#;
 
 /// Engine timing knobs. [`EngineConfig::default`] is what `init` uses;
 /// tests shorten the intervals so they do not sleep for seconds.
@@ -110,6 +117,11 @@ enum FetchOutcome {
 /// - `seq`: the engine's state sequence number; strictly increases with
 ///   every change, so consumers can drop snapshots that arrive out of order.
 /// - `pending_actions`: number of PENDING `action_outbox` rows.
+/// - `queries_json`: the bundle's resolved queries as a JSON object
+///   (`{query_key: [entity uri, ...]}`, `"{}"` when none). Every URI in it
+///   is also in `entities_json` when the bundle (or cache) carried it.
+/// - `auth_json`: `{"state":"signed_out"|"pending"|"signed_in"|"error",
+///   "username"?, "error"?}`; currently always `{"state":"signed_out"}`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateSnapshot {
     pub workspace_json: String,
@@ -117,6 +129,8 @@ pub struct StateSnapshot {
     pub is_online: bool,
     pub seq: u64,
     pub pending_actions: u32,
+    pub queries_json: String,
+    pub auth_json: String,
 }
 
 struct Observer {
@@ -146,6 +160,11 @@ impl Observer {
 struct State {
     workspace: Option<UiNode>,
     entities: BTreeMap<String, EntityRecord>,
+    /// The bundle's resolved queries (`query_key` -> ordered entity URIs).
+    queries: BTreeMap<String, Vec<String>>,
+    /// Auth status JSON (see [`StateSnapshot::auth_json`]); empty means
+    /// signed out.
+    auth_json: String,
     is_online: bool,
     /// Bumped on every change (cache load, fetch attempt, mutation). Used to
     /// drop stale out-of-order deliveries.
@@ -168,17 +187,26 @@ impl State {
             None => "null".into(),
         };
         let entities_json = serde_json::to_string(&self.entities).unwrap_or_else(|_| "{}".into());
+        let queries_json = serde_json::to_string(&self.queries).unwrap_or_else(|_| "{}".into());
+        let auth_json = if self.auth_json.is_empty() {
+            SIGNED_OUT_AUTH_JSON.to_string()
+        } else {
+            self.auth_json.clone()
+        };
         StateSnapshot {
             workspace_json,
             entities_json,
             is_online: self.is_online,
             seq: self.seq,
             pending_actions: self.pending_actions,
+            queries_json,
+            auth_json,
         }
     }
 
-    /// Load the cached workspace, its entities and every entity with a
-    /// pending outbox row from the store.
+    /// Load the cached workspace, its queries, its entities (including every
+    /// URI its queries reference) and every entity with a pending outbox row
+    /// from the store.
     fn load_cached(&mut self, workspace_id: &str) {
         let Some(store) = &self.store else { return };
         let loaded = (|| {
@@ -188,6 +216,9 @@ impl State {
                 .as_ref()
                 .map(|w| w.entity_uris.clone())
                 .unwrap_or_default();
+            if let Some(w) = &ws {
+                uris.extend(w.queries.values().flatten().cloned());
+            }
             uris.extend(pending.iter().map(|r| r.entity_uri.clone()));
             uris.sort();
             uris.dedup();
@@ -205,7 +236,12 @@ impl State {
                     );
                     self.seq = 1;
                 }
-                self.workspace = ws.map(|w| w.layout);
+                let (layout, queries) = match ws {
+                    Some(w) => (Some(w.layout), w.queries),
+                    None => (None, BTreeMap::new()),
+                };
+                self.workspace = layout;
+                self.queries = queries;
                 self.entities = entities;
                 self.pending_actions = u32::try_from(pending).unwrap_or(u32::MAX);
             }
@@ -215,16 +251,18 @@ impl State {
 
     /// Merge a fetched bundle: replace the bundle's entities, then re-apply
     /// every PENDING outbox row for those entities FIFO (re-evaluating its
-    /// `value_expr` and updating its `prev_value_json`), so optimistic
-    /// values survive a refetch. Entities outside the bundle that have
-    /// pending rows are kept as they are. Layout, entities and the rows'
-    /// new `prev_value_json` are persisted in one transaction; a
+    /// primary and `also` expressions and updating their prev values), so
+    /// optimistic values survive a refetch. Entities outside the bundle that
+    /// have pending rows, or that the bundle's queries reference, are kept as
+    /// they are. Layout, queries, entities and the rows' new prev values are
+    /// persisted in one transaction; a
     /// persistence failure is logged and the merged state is still applied
     /// (the store is only a fallback for it).
     fn apply_fetched(&mut self, workspace_id: &str, spec: WorkspaceSpec) {
         let WorkspaceSpec {
             workspace,
             entities: fetched,
+            queries,
             ..
         } = spec;
         let pending = match self.store.as_ref().map(|s| s.pending_outbox()) {
@@ -241,12 +279,19 @@ impl State {
         for row in &pending {
             if let Some(entity) = merged.get_mut(&row.entity_uri) {
                 if uris.binary_search(&row.entity_uri).is_ok()
-                    && let Some(prev) = reapply_row(entity, row)
+                    && let Some(prevs) = reapply_row(entity, row)
                 {
-                    prev_updates.push((row.id, prev));
+                    prev_updates.push((row.id, prevs));
                 }
             } else if let Some(local) = self.entities.get(&row.entity_uri) {
                 merged.insert(row.entity_uri.clone(), local.clone());
+            }
+        }
+        for uri in queries.values().flatten() {
+            if !merged.contains_key(uri)
+                && let Some(local) = self.entities.get(uri)
+            {
+                merged.insert(uri.clone(), local.clone());
             }
         }
         if !prev_updates.is_empty() {
@@ -259,12 +304,12 @@ impl State {
         if let Some(store) = self.store.as_mut() {
             let now = unix_now();
             let result = store.transaction(|tx| {
-                tx.save_workspace(workspace_id, &workspace, &uris, now)?;
+                tx.save_workspace(workspace_id, &workspace, &uris, &queries, now)?;
                 for uri in &uris {
                     tx.upsert_entity(uri, &merged[uri], now)?;
                 }
-                for (id, prev) in &prev_updates {
-                    tx.set_outbox_prev_value(*id, prev)?;
+                for (id, (prev, also)) in &prev_updates {
+                    tx.set_outbox_prevs(*id, prev, also)?;
                 }
                 Ok(())
             });
@@ -274,6 +319,7 @@ impl State {
         }
         self.workspace = Some(workspace);
         self.entities = merged;
+        self.queries = queries;
     }
 
     /// Re-read the PENDING count from the store (after a delete).
@@ -286,12 +332,15 @@ impl State {
         }
     }
 
-    /// The server rejected `row` (4xx other than 408/429): delete it, set the entity field
-    /// back to `prev_value` (or `rollback_value` if prev is null/absent),
-    /// then re-apply every later PENDING row for the same entity+field FIFO.
-    /// One transaction; memory is only changed if it commits. Returns the
-    /// restored value, the field's final value and the number of re-applied
-    /// rows.
+    /// The server rejected `row` (4xx other than 408/429): delete it and
+    /// restore every field it set: the primary field to `prev_value` (or
+    /// `rollback_value` if prev is null/absent), each `also` field to its
+    /// `prev_value`. Later PENDING rows for the same entity are first
+    /// rewound (newest first, to their stored prev values) and afterwards
+    /// re-applied FIFO on top of the restored entity (all of their fields
+    /// re-evaluated, their prev values updated). One transaction; memory is
+    /// only changed if it commits. Returns the restored primary value, the
+    /// primary field's final value and the number of re-applied rows.
     fn reject_row(&mut self, row: &OutboxRow) -> store::StoreResult<(Value, Value, usize)> {
         let Some(store) = self.store.as_mut() else {
             return Err(store::StoreError::InvalidQuery);
@@ -302,36 +351,32 @@ impl State {
             self.sync_pending_count();
             return Ok((Value::Null, Value::Null, 0));
         };
-        let parse = |s: &Option<String>| {
-            s.as_deref()
-                .and_then(|s| serde_json::from_str::<Value>(s).ok())
-                .filter(|v| !v.is_null())
-        };
-        let restored = parse(&row.prev_value_json)
-            .or_else(|| parse(&row.rollback_value_json))
-            .unwrap_or(Value::Null);
+        let later: Vec<OutboxRow> = store
+            .pending_outbox()?
+            .into_iter()
+            .filter(|r| r.id > row.id && r.entity_uri == row.entity_uri)
+            .collect();
         let mut entity = self
             .entities
             .get(&row.entity_uri)
             .cloned()
             .unwrap_or_default();
-        entity.set(field.clone(), restored.clone());
+        for r in later.iter().rev() {
+            rewind_row(&mut entity, r, None);
+        }
+        let restored = rewind_row(&mut entity, row, row.rollback_value_json.as_deref());
         let mut prev_updates = Vec::new();
-        for later in store.pending_outbox()? {
-            if later.id > row.id
-                && later.entity_uri == row.entity_uri
-                && later.field.as_deref() == Some(field.as_str())
-                && let Some(prev) = reapply_row(&mut entity, &later)
-            {
-                prev_updates.push((later.id, prev));
+        for r in &later {
+            if let Some(prevs) = reapply_row(&mut entity, r) {
+                prev_updates.push((r.id, prevs));
             }
         }
         let now = unix_now();
         store.transaction(|tx| {
             tx.delete_outbox(row.id)?;
             tx.upsert_entity(&row.entity_uri, &entity, now)?;
-            for (id, prev) in &prev_updates {
-                tx.set_outbox_prev_value(*id, prev)?;
+            for (id, (prev, also)) in &prev_updates {
+                tx.set_outbox_prevs(*id, prev, also)?;
             }
             Ok(())
         })?;
@@ -342,25 +387,84 @@ impl State {
     }
 }
 
-/// Re-apply a pending row to `entity`: re-evaluate its `value_expr` and set
-/// its field. Returns the field's previous value as JSON (the row's new
-/// `prev_value_json`), or `None` if the row has no field/expression. If the
-/// expression fails the field is left unchanged (logged).
-fn reapply_row(entity: &mut EntityRecord, row: &OutboxRow) -> Option<String> {
-    let (Some(field), Some(expr)) = (&row.field, &row.value_expr) else {
+/// Parse a stored JSON value; `None` if absent, corrupt or null.
+fn parse_stored(s: Option<&str>) -> Option<Value> {
+    s.and_then(|s| serde_json::from_str::<Value>(s).ok())
+        .filter(|v| !v.is_null())
+}
+
+/// Undo `row` on `entity`: set each `also` field to its stored
+/// `prev_value` and the primary field to `prev_value_json`, or to
+/// `rollback_json` when that is given and prev is null/absent. Returns the
+/// primary field's restored value (`Null` if the row has no field).
+fn rewind_row(entity: &mut EntityRecord, row: &OutboxRow, rollback_json: Option<&str>) -> Value {
+    let Some(field) = &row.field else {
+        return Value::Null;
+    };
+    for a in row.also.iter().rev() {
+        entity.set(a.field.clone(), a.prev_value.clone());
+    }
+    let restored = parse_stored(row.prev_value_json.as_deref())
+        .or_else(|| parse_stored(rollback_json))
+        .unwrap_or(Value::Null);
+    entity.set(field.clone(), restored.clone());
+    restored
+}
+
+/// Evaluate every `(field, expr)` against `entity` as it is now (the
+/// pre-mutation state). Returns each field's current value and the result.
+fn eval_updates(
+    entity: &EntityRecord,
+    updates: &[(&str, &str)],
+) -> Vec<(Value, Result<Value, expr::ExprError>)> {
+    updates
+        .iter()
+        .map(|(field, e)| {
+            let prev = entity.get(field).cloned().unwrap_or(Value::Null);
+            (prev, expr::eval(e, entity))
+        })
+        .collect()
+}
+
+/// Re-apply a pending row to `entity`: re-evaluate its primary and `also`
+/// expressions against the entity as it is before the row, then set them
+/// all. Returns the row's new prev values (`prev_value_json` and the `also`
+/// updates with their `prev_value`), or `None` if the row has no
+/// field/expression. A field whose expression fails is left unchanged
+/// (logged).
+fn reapply_row(entity: &mut EntityRecord, row: &OutboxRow) -> Option<(String, Vec<AlsoUpdate>)> {
+    let (Some(field), Some(value_expr)) = (&row.field, &row.value_expr) else {
         return None;
     };
-    let prev = entity.get(field).cloned().unwrap_or(Value::Null);
-    match expr::eval(expr, entity) {
-        Ok(v) => {
-            entity.set(field.clone(), v);
+    let updates: Vec<(&str, &str)> = std::iter::once((field.as_str(), value_expr.as_str()))
+        .chain(row.also.iter().map(|a| (a.field.as_str(), a.value_expr.as_str())))
+        .collect();
+    let results = eval_updates(entity, &updates);
+    let mut prevs = Vec::with_capacity(results.len());
+    for ((f, _), (prev, result)) in updates.iter().zip(results) {
+        match result {
+            Ok(v) => {
+                entity.set(f.to_string(), v);
+            }
+            Err(e) => eprintln!(
+                "[CanvasEngine] re-apply outbox #{} {}#{f}: {e}; field unchanged",
+                row.id, row.entity_uri
+            ),
         }
-        Err(e) => eprintln!(
-            "[CanvasEngine] re-apply outbox #{} {}#{field}: {e}; field unchanged",
-            row.id, row.entity_uri
-        ),
+        prevs.push(prev);
     }
-    Some(prev.to_string())
+    let mut prevs = prevs.into_iter();
+    let primary_prev = prevs.next().unwrap_or(Value::Null).to_string();
+    let also = row
+        .also
+        .iter()
+        .zip(prevs)
+        .map(|(a, prev_value)| AlsoUpdate {
+            prev_value,
+            ..a.clone()
+        })
+        .collect();
+    Some((primary_prev, also))
 }
 
 /// Wakes the sync worker. Lives outside `Inner` so the worker can wait on
@@ -974,26 +1078,16 @@ impl Inner {
                 endpoint,
                 payload,
                 also,
-            } => {
-                // TODO(M6-C1): multi-field outbox support (store `also` with
-                // prev values, apply/roll back/re-apply all fields together).
-                if !also.is_empty() {
-                    eprintln!(
-                        "[CanvasEngine] mutate {entity_uri}#{field}: {} `also` update(s) not \
-                         supported yet; applying only the primary field",
-                        also.len()
-                    );
-                }
-                self.optimistic_mutate(
-                    started,
-                    entity_uri,
-                    field,
-                    value_expr,
-                    rollback_value,
-                    endpoint,
-                    payload,
-                )
-            }
+            } => self.optimistic_mutate(
+                started,
+                entity_uri,
+                field,
+                value_expr,
+                rollback_value,
+                endpoint,
+                payload,
+                also,
+            ),
             other => {
                 eprintln!(
                     "[CanvasEngine] dispatch: intent not handled by client-core yet: {other:?}"
@@ -1003,8 +1097,10 @@ impl Inner {
     }
 
     /// Apply an optimistic mutation: entity update + outbox row in one
-    /// SQLite transaction, then the in-memory state, then notify. If the
-    /// transaction fails nothing changes and observers are not notified.
+    /// SQLite transaction, then the in-memory state, then notify. The
+    /// primary and every `also` expression are evaluated against the
+    /// pre-mutation entity and applied together; if any expression fails or
+    /// the transaction fails nothing changes and observers are not notified.
     #[allow(clippy::too_many_arguments)]
     fn optimistic_mutate(
         &self,
@@ -1015,21 +1111,39 @@ impl Inner {
         rollback_value: Value,
         endpoint: String,
         payload: Value,
+        also: Vec<FieldUpdate>,
     ) {
         let (snap, value, outbox_id) = {
             let mut guard = lock(&self.state);
             let st = &mut *guard;
             let mut entity = st.entities.get(&entity_uri).cloned().unwrap_or_default();
-            let value = match expr::eval(&value_expr, &entity) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("[CanvasEngine] mutate {entity_uri}#{field}: {e}; no change");
-                    return;
+            let updates: Vec<(&str, &str)> = std::iter::once((field.as_str(), value_expr.as_str()))
+                .chain(also.iter().map(|a| (a.field.as_str(), a.value_expr.as_str())))
+                .collect();
+            let mut evaluated = Vec::with_capacity(updates.len());
+            for ((f, _), (prev, result)) in updates.iter().zip(eval_updates(&entity, &updates)) {
+                match result {
+                    Ok(v) => evaluated.push((prev, v)),
+                    Err(e) => {
+                        eprintln!("[CanvasEngine] mutate {entity_uri}#{f}: {e}; no change");
+                        return;
+                    }
                 }
-            };
-            let prev = entity
-                .set(field.clone(), value.clone())
-                .unwrap_or(Value::Null);
+            }
+            for ((f, _), (_, v)) in updates.iter().zip(&evaluated) {
+                entity.set(f.to_string(), v.clone());
+            }
+            let mut evaluated = evaluated.into_iter();
+            let (prev, value) = evaluated.next().unwrap_or((Value::Null, Value::Null));
+            let also_rows: Vec<AlsoUpdate> = also
+                .into_iter()
+                .zip(evaluated)
+                .map(|(a, (prev_value, _))| AlsoUpdate {
+                    field: a.field,
+                    value_expr: a.value_expr,
+                    prev_value,
+                })
+                .collect();
             let Some(store) = st.store.as_mut() else {
                 eprintln!("[CanvasEngine] mutate {entity_uri}#{field}: no store; no change");
                 return;
@@ -1044,6 +1158,7 @@ impl Inner {
                 value_expr,
                 prev_value_json: prev.to_string(),
                 rollback_value_json: rollback_value.to_string(),
+                also: also_rows,
             };
             let persisted = store.transaction(|tx| {
                 tx.upsert_entity(&entity_uri, &entity, now)?;
@@ -1060,10 +1175,15 @@ impl Inner {
                     return;
                 }
             };
+            let also_desc: String = row
+                .also
+                .iter()
+                .map(|a| format!(", {}={}", a.field, entity.get(&a.field).unwrap_or(&Value::Null)))
+                .collect();
             st.entities.insert(entity_uri.clone(), entity);
             st.pending_actions = st.pending_actions.saturating_add(1);
             st.seq += 1;
-            (st.snapshot(), value, outbox_id)
+            (st.snapshot(), format!("{value}{also_desc}"), outbox_id)
         };
         let pending = snap.pending_actions;
         self.notify(snap);

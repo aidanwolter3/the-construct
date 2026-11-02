@@ -5,6 +5,10 @@
 //! - `CANVAS_DATA_DIR`: directory for `server.db` (default `~/.canvas-server`,
 //!   created if missing).
 //! - `CANVAS_TEST_HOOKS=1`: enables `POST /v1/test/fault`.
+//! - `PIXELFED_INSTANCE_URL`: Pixelfed instance for pod->upstream calls
+//!   (default `http://127.0.0.1:8081`, the local fake).
+//! - `PIXELFED_PUBLIC_URL`: base for browser-facing links such as the authorize
+//!   endpoint (default = instance URL; e.g. `http://10.0.2.2:8081` for the emulator).
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -36,7 +40,14 @@ async fn main() -> std::io::Result<()> {
     let test_hooks = std::env::var("CANVAS_TEST_HOOKS").is_ok_and(|v| v == "1");
     let state = server::AppState::open_dir(&dir)
         .map_err(|e| std::io::Error::other(format!("failed to open {}: {e}", dir.display())))?
-        .with_test_hooks(test_hooks);
+        .with_test_hooks(test_hooks)
+        .with_pixelfed(server::PixelfedConfig::from_env());
+    let pixelfed = state.pixelfed_config();
+    tracing::info!(
+        instance = %pixelfed.instance_url,
+        public = %pixelfed.public_url,
+        "Pixelfed adapter configured"
+    );
     tracing::info!(db = %dir.join("server.db").display(), "server database opened");
     if test_hooks {
         tracing::warn!("CANVAS_TEST_HOOKS=1: POST /v1/test/fault is enabled");

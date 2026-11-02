@@ -21,9 +21,15 @@ axum = { version = "0.8", features = ["http2"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde.workspace = true
+# Async upstream client (Pixelfed). rustls only; `stream` for the media proxy.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+sha2 = "0.10"
+base64 = "0.22"
+getrandom = "0.3"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
 tempfile = "3"
+fake-pixelfed = { path = "../fake-pixelfed" }

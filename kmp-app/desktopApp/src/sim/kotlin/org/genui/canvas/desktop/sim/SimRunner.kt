@@ -7,9 +7,16 @@ import androidx.compose.ui.graphics.asSkiaBitmap
 import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.SemanticsNodeInteractionCollection
 import androidx.compose.ui.test.SkikoComposeUiTest
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.click
@@ -25,6 +32,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.genui.canvas.CanvasApp
 import org.genui.canvas.CanvasController
+import org.genui.canvas.ImageLoads
 import org.jetbrains.skia.EncodedImageFormat
 import org.jetbrains.skia.Image
 import java.io.File
@@ -78,9 +86,12 @@ class SimRunner(
     private val modeName: String = "fixture",
     private val textTimeoutMs: Long = 2_000,
     private val log: (String) -> Unit = ::println,
+    /** Installs the simulator's Coil ImageLoader for [modeName] ([SimImages]) at the start of [run]. */
+    private val installImageLoader: Boolean = true,
 ) {
     fun run(steps: List<SimStep>): SimResult {
         outDir.mkdirs()
+        if (installImageLoader) SimImages.install(modeName)
         val results = mutableListOf<StepResult>()
         var i = 0
         var current = screen
@@ -151,15 +162,37 @@ class SimRunner(
     private fun SkikoComposeUiTest.execute(step: SimStep, index: Int): Pair<String, File?> {
         when (step) {
             is SimStep.Shot -> {
-                waitForIdle()
+                // Images still loading after SHOT_IMAGE_WAIT_MS are captured as placeholders (not a failure).
+                val settled = awaitImages(SHOT_IMAGE_WAIT_MS)
                 val image = onRoot().captureToImage()
                 val file = File(outDir, "%02d-%s.png".format(index, sanitize(step.name)))
                 file.writeBytes(encodePng(image))
-                return "${image.width}x${image.height}" to file
+                val note = if (settled) "" else " (${ImageLoads.inFlight.value} image(s) still loading)"
+                return "${image.width}x${image.height}$note" to file
+            }
+            is SimStep.WaitImages -> {
+                if (!awaitImages(step.timeoutMs)) {
+                    throw StepFailure("timed out after ${step.timeoutMs} ms with ${ImageLoads.inFlight.value} image(s) still loading")
+                }
+                return "" to null
+            }
+            is SimStep.Swipe -> {
+                waitForIdle()
+                val (node, how) = findTarget(step.target)
+                node.performTouchInput { if (step.direction == "left") swipeLeft() else swipeRight() }
+                waitForIdle()
+                return how to null
+            }
+            is SimStep.ScrollTo -> {
+                waitForIdle()
+                val (node, how) = findTarget(step.target)
+                node.performScrollTo()
+                waitForIdle()
+                return how to null
             }
             is SimStep.Click -> {
                 waitForIdle()
-                val (node, how) = findClickTarget(step.text)
+                val (node, how) = findTarget(step.text)
                 // A mouse click, then move the pointer off the node: performClick() injects touch
                 // events that leave the button in a hovered state, so later shots show a tint.
                 node.performMouseInput {
@@ -222,30 +255,70 @@ class SimRunner(
         }
     }
 
+    /** Some node's text or content description contains [text]. */
     private fun SkikoComposeUiTest.hasAnyText(text: String): Boolean =
-        nodes(hasText(text, substring = true)).fetchSemanticsNodes().isNotEmpty()
+        nodes(hasText(text, substring = true) or hasContentDescription(text, substring = true)).fetchSemanticsNodes().isNotEmpty()
+
+    /**
+     * Waits until no [org.genui.canvas.CanvasImage] is loading ([ImageLoads]), then until the last load's
+     * crossfade has finished. False on timeout.
+     */
+    private fun SkikoComposeUiTest.awaitImages(timeoutMs: Long): Boolean {
+        waitForIdle()
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000
+        while (ImageLoads.inFlight.value > 0) {
+            if (System.nanoTime() > deadline) return false
+            Thread.sleep(10)
+            waitForIdle()
+        }
+        val sinceLast = (System.nanoTime() - SimImages.lastSuccessNanos) / 1_000_000
+        if (SimImages.lastSuccessNanos != 0L && sinceLast < CROSSFADE_SETTLE_MS) {
+            Thread.sleep(CROSSFADE_SETTLE_MS - sinceLast)
+        }
+        waitForIdle()
+        return true
+    }
 
     private fun SkikoComposeUiTest.nodes(m: SemanticsMatcher): SemanticsNodeInteractionCollection =
         onAllNodes(m, useUnmergedTree = false)
 
-    /** Exact text on a clickable node, then exact on any node, then the same two with substring. */
-    private fun SkikoComposeUiTest.findClickTarget(text: String) =
-        listOf(
-            hasText(text) and hasClickAction() to "exact match",
-            hasText(text) to "exact match (non-clickable node)",
-            hasText(text, substring = true) and hasClickAction() to "substring match",
-            hasText(text, substring = true) to "substring match (non-clickable node)",
-        ).firstNotNullOfOrNull { (matcher, how) ->
+    /**
+     * Resolves a step target. `tag:<t>`: the node with test tag `t`, else the first whose tag contains `t`.
+     * Otherwise: exact text, then exact content description (clickable nodes first), then the same with substring.
+     */
+    private fun SkikoComposeUiTest.findTarget(target: String): Pair<SemanticsNodeInteraction, String> {
+        val candidates = if (target.startsWith("tag:")) {
+            val tag = target.removePrefix("tag:")
+            listOf(
+                hasTestTag(tag) to "test tag",
+                SemanticsMatcher("testTag contains '$tag'") { it.config.getOrNull(SemanticsProperties.TestTag)?.contains(tag) == true } to
+                    "test tag substring",
+            )
+        } else {
+            listOf(
+                hasText(target) and hasClickAction() to "exact match",
+                hasContentDescription(target) and hasClickAction() to "exact content description",
+                hasText(target) to "exact match (non-clickable node)",
+                hasContentDescription(target) to "exact content description (non-clickable node)",
+                hasText(target, substring = true) and hasClickAction() to "substring match",
+                hasContentDescription(target, substring = true) and hasClickAction() to "content description substring",
+                hasText(target, substring = true) to "substring match (non-clickable node)",
+                hasContentDescription(target, substring = true) to "content description substring (non-clickable node)",
+            )
+        }
+        return candidates.firstNotNullOfOrNull { (matcher, how) ->
             val all = nodes(matcher)
             val n = all.fetchSemanticsNodes().size
             if (n == 0) null else all[0] to (if (n > 1) "$how, first of $n" else how)
-        } ?: throw StepFailure("no node with text '$text'; visible text: ${visibleText()}")
+        } ?: throw StepFailure("no node matches '$target'; visible text: ${visibleText()}")
+    }
 
     private fun SkikoComposeUiTest.visibleText(): String {
         val texts = onAllNodes(SemanticsMatcher("any") { true }, useUnmergedTree = true)
             .fetchSemanticsNodes()
             .flatMap { node ->
-                node.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text }
+                node.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } +
+                    node.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
             }
             .distinct()
         return texts.joinToString(prefix = "[", postfix = "]") { "\"$it\"" }
@@ -280,6 +353,12 @@ class SimRunner(
 
     companion object {
         private val PRETTY_JSON = Json { prettyPrint = true }
+
+        /** How long a `shot` waits for loading images before capturing anyway. */
+        const val SHOT_IMAGE_WAIT_MS = 5_000L
+
+        /** Real time allowed for an image's crossfade (Coil's default is 200 ms, driven by the wall clock). */
+        const val CROSSFADE_SETTLE_MS = 300L
 
         fun encodePng(image: ImageBitmap): ByteArray =
             Image.makeFromBitmap(image.asSkiaBitmap()).encodeToData(EncodedImageFormat.PNG)?.bytes
