@@ -7,15 +7,16 @@
 //! - `CONSTRUCT_TEST_HOOKS=1`: enables `POST /v1/test/fault`.
 //! - `CONSTRUCT_SHOW_DEV_APPS=1`: `GET /v1/apps` also lists the dev apps
 //!   (`pixelfed_demo`, `home`).
-//!
-//! On start, new layout files (`layouts/<app>/NNNN.json`, embedded) are appended
-//! as new app versions before the server listens; a changed, missing,
-//! out-of-order or invalid file stops the start with an error naming it.
 //! - `PIXELFED_INSTANCE_URL`: Pixelfed instance for pod->upstream calls
 //!   (default `http://127.0.0.1:8081`, the local fake; `http://localhost:8090` for the
 //!   local real Pixelfed, whose web/OAuth routes only answer on Host `localhost`).
 //! - `PIXELFED_PUBLIC_URL`: base for browser-facing links such as the authorize
 //!   endpoint (default = instance URL; e.g. `http://10.0.2.2:8081` for the emulator).
+//!
+//! On start, new layout files (`layouts/<app>/NNNN.json`, embedded) are appended
+//! as new app versions before the server listens. A changed, out-of-order or
+//! invalid file stops the start (exit code 1) with an error naming it and how to
+//! recover; a deployed file missing from this build only logs a warning.
 
 use std::io::IsTerminal;
 use std::path::PathBuf;

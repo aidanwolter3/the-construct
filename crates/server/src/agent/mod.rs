@@ -328,6 +328,13 @@ fn check_values(node: &UiNode) -> Result<(), String> {
     }
 }
 
+/// Every action intent in the tree.
+pub fn intents(node: &UiNode) -> Vec<&ActionIntent> {
+    let mut out = Vec::new();
+    collect_intents(node, &mut out);
+    out
+}
+
 fn collect_intents<'a>(node: &'a UiNode, out: &mut Vec<&'a ActionIntent>) {
     match node {
         UiNode::Workspace { slots, .. } => {

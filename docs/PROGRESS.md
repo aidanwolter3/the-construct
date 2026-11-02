@@ -376,16 +376,14 @@ from a client (D32, D33).
 
 ## Next steps
 
-1. Reject `ActionIntent::Unknown` (unknown intent tags) in layout files at startup sync. Today only legacy migrated
-   versions should contain them, but a typo in a file's intent tag would silently become a dead action.
-2. Simulator live mode: make `set-server` recreate the engine on the new server (today it is recorded and shown in
+1. Simulator live mode: make `set-server` recreate the engine on the new server (today it is recorded and shown in
    the menu, but the engine stays).
-3. HTTPS enforcement in the engine for release builds (now more relevant: the server picker with custom URLs ships
+2. HTTPS enforcement in the engine for release builds (now more relevant: the server picker with custom URLs ships
    in release); a cap on SSE subscribers.
-4. Feed as a `LazyColumn` with pagination (`max_id` / `Link: next`).
-5. Outbox idempotency keys (client-generated, honoured by the pod).
-6. Real-Pixelfed contract test in scheduled CI on a throwaway instance (`scripts/e2e.sh --upstream real`).
-7. Web target for the shared UI. Small follow-ups: a 404 "workspace not found" UI state, golden-image diffing for
+3. Feed as a `LazyColumn` with pagination (`max_id` / `Link: next`).
+4. Outbox idempotency keys (client-generated, honoured by the pod).
+5. Real-Pixelfed contract test in scheduled CI on a throwaway instance (`scripts/e2e.sh --upstream real`).
+6. Web target for the shared UI. Small follow-ups: a 404 "workspace not found" UI state, golden-image diffing for
    the simulator, Android host tests for :shared, Android `testTagsAsResourceId` for instrumented menu tests, a
    zstd dictionary for layout blobs; drop `CONSTRUCT_LLM_PROVIDER` from `deploy/fly/pod.toml` (a harmless no-op
    now).

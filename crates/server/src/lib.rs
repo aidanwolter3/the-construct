@@ -216,10 +216,17 @@ impl AppState {
         Self::try_new(store).unwrap_or_else(|e| panic!("{e}"))
     }
 
-    /// [`Self::new`], returning the layout sync error (a changed, missing,
-    /// out-of-order or invalid layout file) instead of panicking.
+    /// [`Self::new`], returning the layout sync error (a changed, out-of-order
+    /// or invalid layout file) instead of panicking.
     pub fn try_new(store: Store) -> Result<Self, String> {
-        for (path, version) in layouts::sync(&store)? {
+        let report = layouts::sync(&store)?;
+        for warning in &report.missing {
+            tracing::warn!("{warning}");
+        }
+        for path in &report.adopted {
+            tracing::info!(file = %path, "layout file hash recorded (deployed before migration v8)");
+        }
+        for (path, version) in &report.appended {
             tracing::info!(file = %path, version, "layout file deployed as a new version");
         }
         let pixelfed = PixelfedConfig::default();

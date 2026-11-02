@@ -22,11 +22,15 @@
 //!    on their next fetch.
 //!
 //! Files are append-only: once deployed, a file must never change (the pod
-//! refuses to start, naming the file, if its layout or note differs from what
-//! it recorded); add a new file instead. A gap in the numbering, a file that
-//! is not a valid layout (structure checked by
-//! [`crate::agent::validate_structure`]) or a root id that is not the app id
-//! also stop the start.
+//! refuses to start, naming the file and how to recover, if its content
+//! differs from what it recorded: [`file_hash`], the hash of the file's own
+//! note and layout JSON, independent of how the Rust types serialize it); add
+//! a new file instead. A gap in the numbering, a file that is not a valid
+//! layout (structure checked by [`crate::agent::validate_structure`]), an
+//! unknown action intent tag, a root id that is not the app id, or a new file
+//! numbered below a deployed one also stop the start. A deployed file missing
+//! from the build (a rollback deploy, an older branch) only logs a warning:
+//! the recorded history is served unchanged.
 //!
 //! `X-Construct-Layout-Version` on `GET /v1/workspaces/:id` and the SSE
 //! `version` carry the app's latest version number.
@@ -53,7 +57,7 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
 use crate::pixelfed::routes::{bearer, session_hash, unauthorized};
-use crate::store::{AppVersion, FileVersion, Store};
+use crate::store::{AppVersion, FileVersion, Store, SyncReport};
 use crate::{ApiError, AppState, blocking, json_error};
 
 /// Response header carrying the served app version (the client's one
@@ -150,6 +154,8 @@ pub struct LayoutFile {
     pub path: String,
     pub note: String,
     pub layout: UiNode,
+    /// [`file_hash`] of the file's note and layout.
+    pub file_hash: String,
 }
 
 impl LayoutFile {
@@ -160,7 +166,84 @@ impl LayoutFile {
             path: self.path.clone(),
             note: self.note.clone(),
             json: to_json(&self.layout),
+            file_hash: self.file_hash.clone(),
         }
+    }
+}
+
+/// The hash the append-only check compares: SHA-256 of the canonical JSON
+/// (sorted keys, no whitespace) of `{"layout": <the file's layout as
+/// written>, "note": <trimmed note>}`. Reformatting or reordering keys in the
+/// file does not change it, and neither does a change to the Rust types
+/// (field order, a new defaulted field), unlike a hash of the re-serialized
+/// `UiNode`.
+pub fn file_hash(note: &str, layout: &Value) -> String {
+    let doc = json!({ "layout": layout, "note": note });
+    let mut out = String::new();
+    write_canonical(&doc, &mut out);
+    crate::store::content_hash(&out)
+}
+
+fn write_canonical(v: &Value, out: &mut String) {
+    match v {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            out.push('{');
+            for (i, k) in keys.into_iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&Value::String(k.clone()).to_string());
+                out.push(':');
+                write_canonical(&map[k], out);
+            }
+            out.push('}');
+        }
+        Value::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_canonical(item, out);
+            }
+            out.push(']');
+        }
+        scalar => out.push_str(&scalar.to_string()),
+    }
+}
+
+/// Whether this build knows the intent tag (an unknown one deserializes as
+/// [`protocol::ActionIntent::Unknown`]; layout files must not use one).
+fn is_known_intent(tag: &str) -> bool {
+    !matches!(
+        serde_json::from_value::<protocol::ActionIntent>(json!({ "intent": tag })),
+        Ok(protocol::ActionIntent::Unknown)
+    ) && tag != "action.unknown"
+}
+
+/// `(JSON pointer, tag)` of each object in `v` whose `"intent"` tag is not
+/// known to this build.
+fn unknown_intent_tags(v: &Value, at: &str, out: &mut Vec<(String, String)>) {
+    match v {
+        Value::Object(map) => {
+            if let Some(Value::String(tag)) = map.get("intent")
+                && !is_known_intent(tag)
+            {
+                out.push((at.to_owned(), tag.clone()));
+            }
+            for (k, child) in map {
+                let k = k.replace('~', "~0").replace('/', "~1");
+                unknown_intent_tags(child, &format!("{at}/{k}"), out);
+            }
+        }
+        Value::Array(items) => {
+            for (i, child) in items.iter().enumerate() {
+                unknown_intent_tags(child, &format!("{at}/{i}"), out);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -199,14 +282,32 @@ pub fn parse_file(src: &LayoutSource) -> Result<LayoutFile, String> {
     let layout = obj
         .get("layout")
         .ok_or_else(|| fail("\"layout\" is missing".into()))?;
-    let layout = crate::agent::validate_structure(src.app_id, layout)
+    let parsed = crate::agent::validate_structure(src.app_id, layout)
         .map_err(|e| fail(format!("invalid layout: {e}")))?;
+    // An unknown intent tag would deserialize as `ActionIntent::Unknown` and
+    // ship as a dead action (lenient only for legacy stored versions).
+    if crate::agent::intents(&parsed)
+        .iter()
+        .any(|i| matches!(i, protocol::ActionIntent::Unknown))
+    {
+        let mut found = Vec::new();
+        unknown_intent_tags(layout, "/layout", &mut found);
+        let what = match found.first() {
+            Some((at, tag)) => format!("unknown action intent '{tag}' at {at}"),
+            None => "unknown action intent".to_owned(),
+        };
+        return Err(fail(format!(
+            "invalid layout: {what} (a typo? this build does not know it)"
+        )));
+    }
+    let file_hash = file_hash(&note, layout);
     Ok(LayoutFile {
         app_id: src.app_id.to_owned(),
         number,
         path,
         note,
-        layout,
+        layout: parsed,
+        file_hash,
     })
 }
 
@@ -234,28 +335,30 @@ pub fn parse_files(sources: &[LayoutSource]) -> Result<Vec<LayoutFile>, String> 
     Ok(files)
 }
 
-/// Append every new layout file (all apps) to the store; see the module
-/// docs. Blocking; idempotent. `Err` is the message to stop the start with.
-pub fn sync(store: &Store) -> Result<Vec<(String, i64)>, String> {
+/// Append every new layout file (all apps, one transaction) to the store;
+/// see the module docs. Blocking; idempotent. `Err` is the message to stop
+/// the start with.
+pub fn sync(store: &Store) -> Result<SyncReport, String> {
     sync_sources(store, FILES)
 }
 
 /// [`sync`] over any set of sources (tests).
-pub fn sync_sources(store: &Store, sources: &[LayoutSource]) -> Result<Vec<(String, i64)>, String> {
+pub fn sync_sources(store: &Store, sources: &[LayoutSource]) -> Result<SyncReport, String> {
     let files = parse_files(sources)?;
-    let mut appended = Vec::new();
-    for a in APPS {
-        let versions: Vec<FileVersion> = files
-            .iter()
-            .filter(|f| f.app_id == a.id)
-            .map(LayoutFile::to_version)
-            .collect();
-        let out = store
-            .sync_layout_files(a.id, &versions)
-            .map_err(|e| format!("syncing layouts/{}: {e}", a.id))??;
-        appended.extend(out);
-    }
-    Ok(appended)
+    let apps: Vec<(&str, Vec<FileVersion>)> = APPS
+        .iter()
+        .map(|a| {
+            let versions = files
+                .iter()
+                .filter(|f| f.app_id == a.id)
+                .map(LayoutFile::to_version)
+                .collect();
+            (a.id, versions)
+        })
+        .collect();
+    store
+        .sync_layout_files(&apps)
+        .map_err(|e| format!("syncing layouts/: {e}"))?
 }
 
 /// The original built-in default layout of an app (what each `0001.json`
@@ -555,16 +658,38 @@ async fn app_version(
             json!({ "error": "invalid_request", "expected": { "version": "integer >= 1" } }),
         );
     };
-    let found = blocking(&state, move |s| match s.app_version(app.id, n)? {
-        Some((v, json)) => Ok(Some((v, from_json(&json)?))),
-        None => Ok(None),
-    })
-    .await;
+    let found = blocking(&state, move |s| s.app_version(app.id, n)).await;
     match found {
-        Ok(Some((v, layout))) => {
+        Ok(Some((v, stored))) => {
             let mut body = version_json(&v);
             body["app_id"] = json!(app.id);
-            body["layout"] = node_value(&layout);
+            body["layout"] = match from_json(&stored) {
+                Ok(layout) => node_value(&layout),
+                // A legacy version this build cannot read as a UiNode: serve
+                // what was stored rather than fail (it is history to look at).
+                Err(e) => match serde_json::from_str::<Value>(&stored) {
+                    Ok(raw) => {
+                        tracing::warn!(
+                            app = app.id,
+                            version = n,
+                            "serving a stored layout that is not a valid UiNode as is: {e}"
+                        );
+                        raw
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            app = app.id,
+                            version = n,
+                            "stored layout is not JSON: {e}"
+                        );
+                        return json_error(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            json!({ "error": "corrupt_version", "app_id": app.id, "version": n,
+                                    "detail": "the stored layout of this version is not valid JSON" }),
+                        );
+                    }
+                },
+            };
             Json(body).into_response()
         }
         Ok(None) => json_error(
@@ -848,12 +973,99 @@ mod tests {
         parse_files(&[src("home", "0001", new_intent)]).unwrap();
     }
 
+    fn leak(s: String) -> &'static str {
+        Box::leak(s.into_boxed_str())
+    }
+
+    #[test]
+    fn unknown_intent_tags_are_refused_in_files() {
+        let ok = FILES
+            .iter()
+            .find(|f| f.app_id == "pixelfed_home")
+            .unwrap()
+            .text;
+        // A typo'd tag (would deserialize as ActionIntent::Unknown).
+        let typo = leak(ok.replacen(
+            "\"action.navigation.open\"",
+            "\"action.navigation.opne\"",
+            1,
+        ));
+        let err = parse_files(&[src("pixelfed_home", "0001", typo)]).unwrap_err();
+        assert!(
+            err.starts_with(
+                "layouts/pixelfed_home/0001.json: invalid layout: unknown action intent \
+                 'action.navigation.opne' at /layout/"
+            ),
+            "{err}"
+        );
+        // The pointer leads to the object holding the tag.
+        let at = err
+            .split(" at ")
+            .nth(1)
+            .and_then(|r| r.split(' ').next())
+            .unwrap();
+        let doc: Value = serde_json::from_str(typo).unwrap();
+        assert_eq!(doc.pointer(at).unwrap()["intent"], "action.navigation.opne");
+        // The removed agent intent and the fallback tag itself.
+        for tag in ["action.agent.prompt", "action.unknown"] {
+            let bad = leak(ok.replacen("\"action.mutation.optimistic\"", &format!("\"{tag}\""), 1));
+            let err = parse_files(&[src("pixelfed_home", "0001", bad)]).unwrap_err();
+            assert!(
+                err.contains(&format!("unknown action intent '{tag}'")),
+                "{err}"
+            );
+        }
+        // Every tag in the shipped files is known.
+        for f in FILES {
+            let mut found = Vec::new();
+            unknown_intent_tags(&serde_json::from_str(f.text).unwrap(), "", &mut found);
+            assert!(found.is_empty(), "{}/{}: {found:?}", f.app_id, f.name);
+        }
+    }
+
+    #[test]
+    fn file_hash_ignores_formatting_and_key_order_but_not_content() {
+        let one = FILES.iter().find(|f| f.app_id == "home").unwrap().text;
+        let parsed = parse_file(&src("home", "0001", one)).unwrap();
+        // Compact, keys sorted (serde_json's map), top-level keys reversed.
+        let v: Value = serde_json::from_str(one).unwrap();
+        let compact = leak(format!(
+            "{{\"layout\":{},\"note\":{}}}",
+            serde_json::to_string(&v["layout"]).unwrap(),
+            v["note"]
+        ));
+        let pretty = leak(serde_json::to_string_pretty(&v).unwrap());
+        for text in [compact, pretty] {
+            assert_eq!(
+                parse_file(&src("home", "0001", text)).unwrap().file_hash,
+                parsed.file_hash
+            );
+        }
+        // Note whitespace is trimmed before hashing (the served note is trimmed too).
+        let padded = leak(one.replacen("\"Counter\"", "\"  Counter \"", 1));
+        assert_eq!(
+            parse_file(&src("home", "0001", padded)).unwrap().file_hash,
+            parsed.file_hash
+        );
+        // Content changes change it: the note, a value, an added explicit default.
+        let renoted = leak(one.replacen("\"Counter\"", "\"Counter!\"", 1));
+        let retitled = leak(one.replace("The Construct Counter", "Counter v2"));
+        for text in [renoted, retitled] {
+            assert_ne!(
+                parse_file(&src("home", "0001", text)).unwrap().file_hash,
+                parsed.file_hash
+            );
+        }
+        assert_eq!(parsed.file_hash.len(), 64);
+    }
+
     #[test]
     fn sync_appends_new_files_once_and_refuses_changes() {
         let store = Store::open_in_memory().unwrap();
-        let appended = sync(&store).unwrap();
-        assert_eq!(appended.len(), FILES.len());
-        assert!(sync(&store).unwrap().is_empty(), "idempotent");
+        let report = sync(&store).unwrap();
+        assert_eq!(report.appended.len(), FILES.len());
+        assert!(report.adopted.is_empty() && report.missing.is_empty());
+        assert_eq!(sync(&store).unwrap(), SyncReport::default(), "idempotent");
         let (v, layout) = latest(&store, "pixelfed_home").unwrap().unwrap();
         assert_eq!((v, layout), (1, builtin("pixelfed_home").unwrap()));
         // A second home file.
@@ -864,7 +1076,7 @@ mod tests {
         let mut sources = FILES.to_vec();
         sources.push(two);
         assert_eq!(
-            sync_sources(&store, &sources).unwrap(),
+            sync_sources(&store, &sources).unwrap().appended,
             [("layouts/home/0002.json".to_owned(), 2)]
         );
         // Changing a deployed file stops the start, naming it.
@@ -872,8 +1084,9 @@ mod tests {
         changed.push(src("home", "0002", one.text));
         assert_eq!(
             sync_sources(&store, &changed).unwrap_err(),
-            "layouts/home/0002.json changed after it was deployed as version 2; \
-             layout files are append-only, add 0003.json instead"
+            "layouts/home/0002.json changed after it was deployed as version 2; layout files are \
+             append-only. To recover, restore the deployed content of layouts/home/0002.json \
+             (git log -p -- layouts/home/0002.json) and put the change in a new file, 0003.json"
         );
         // Reformatting a file (same layout and note) is not a change.
         let reformatted: Value = serde_json::from_str(two_text).unwrap();
@@ -884,7 +1097,18 @@ mod tests {
         );
         let mut same = FILES.to_vec();
         same.push(src("home", "0002", reformatted));
-        assert!(sync_sources(&store, &same).unwrap().is_empty());
+        assert_eq!(sync_sources(&store, &same).unwrap(), SyncReport::default());
+        // A rollback deploy without 0002.json starts, serving v2 unchanged.
+        let report = sync(&store).unwrap();
+        assert_eq!(
+            report.missing,
+            [
+                "layouts/home/0002.json was deployed as version 2 but is missing from this build; \
+              serving the recorded history unchanged"
+            ]
+        );
+        assert!(report.appended.is_empty());
+        assert_eq!(latest(&store, "home").unwrap().unwrap().0, 2);
     }
 
     #[test]

@@ -365,6 +365,139 @@ async fn restart_on_the_same_database_appends_nothing() {
     assert!(layouts::latest(state.store(), "nope").unwrap().is_none());
 }
 
+/// A legacy (migrated) AI-edited version still holding the removed
+/// `action.agent.prompt` intent serves as `action.unknown`, from both the
+/// versions API and the workspace GET.
+#[tokio::test]
+async fn agent_era_versions_serve_with_unknown_intents() {
+    let pod = pod().await;
+    let layout = serde_json::to_string(&layouts::builtin("home").unwrap()).unwrap();
+    assert!(layout.contains("\"action.mutation.optimistic\""));
+    let legacy = layout.replacen(
+        "\"action.mutation.optimistic\"",
+        "\"action.agent.prompt\",\"prompt\":\"make it bigger\"",
+        1,
+    );
+    let v = pod
+        .state
+        .store()
+        .append_app_version("home", &legacy, "agent", Some("make it bigger"))
+        .unwrap();
+    assert_eq!(v, 2);
+    let (status, _, body) = get(&pod, "/v1/apps/home/versions/2").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let text = body["layout"].to_string();
+    assert!(text.contains("\"intent\":\"action.unknown\""), "{text}");
+    assert!(!text.contains("action.agent.prompt"), "{text}");
+    assert_eq!(body["source"], "agent");
+    let (status, version, body) = get(&pod, "/v1/workspaces/home").await;
+    assert_eq!((status, version.as_deref()), (StatusCode::OK, Some("2")));
+    assert!(
+        body["workspace"]
+            .to_string()
+            .contains("\"intent\":\"action.unknown\""),
+        "{body}"
+    );
+}
+
+/// A legacy version whose stored text is not a UiNode this build reads is
+/// served as stored by `GET /v1/apps/{id}/versions/{n}` (history to look at),
+/// not a 500.
+#[tokio::test]
+async fn a_legacy_version_that_is_not_a_ui_node_is_served_as_stored() {
+    let pod = pod().await;
+    let store = pod.state.store();
+    store
+        .append_app_version("home", "{\"edited\":true}", "agent", Some("odd"))
+        .unwrap();
+    let (status, _, body) = get(&pod, "/v1/apps/home/versions/2").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["layout"], json!({ "edited": true }));
+    assert_eq!(body["note"], "odd");
+    // Not even JSON: a clear 500.
+    store
+        .append_app_version("home", "not json", "agent", None)
+        .unwrap();
+    let (status, _, body) = get(&pod, "/v1/apps/home/versions/3").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body["error"], "corrupt_version", "{body}");
+    assert_eq!(body["version"], 3);
+}
+
+/// A database where `home/0001` was recorded with other content.
+fn db_with_a_changed_home_file(dir: &std::path::Path) {
+    let store = server::store::Store::open(&dir.join("server.db")).unwrap();
+    let file = server::store::FileVersion {
+        key: "home/0001".into(),
+        number: 1,
+        path: "layouts/home/0001.json".into(),
+        note: "Counter".into(),
+        json: "{}".into(),
+        file_hash: "0".repeat(64),
+    };
+    store
+        .sync_layout_files(&[("home", vec![file])])
+        .unwrap()
+        .unwrap();
+}
+
+const CHANGED: &str = "layouts/home/0001.json changed after it was deployed as version 1";
+
+#[test]
+fn a_sync_error_stops_the_start() {
+    let dir = tempfile::tempdir().unwrap();
+    db_with_a_changed_home_file(dir.path());
+    let err = AppState::open_dir(dir.path()).err().unwrap().to_string();
+    assert!(err.contains(CHANGED), "{err}");
+    assert!(err.contains("To recover"), "{err}");
+    // Nothing was appended for any app.
+    let store = server::store::Store::open(&dir.path().join("server.db")).unwrap();
+    assert!(store.app_latest_meta("pixelfed_home").unwrap().is_none());
+}
+
+#[test]
+fn the_server_binary_exits_non_zero_on_a_sync_error() {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let dir = tempfile::tempdir().unwrap();
+    db_with_a_changed_home_file(dir.path());
+    let mut child = Command::new(env!("CARGO_BIN_EXE_server"))
+        .env("CONSTRUCT_DATA_DIR", dir.path())
+        .env("CONSTRUCT_ADDR", "127.0.0.1:0")
+        .env("RUST_LOG", "info")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() > deadline {
+            child.kill().unwrap();
+            panic!("the server started despite a changed layout file");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let mut out = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut out)
+        .unwrap();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut out)
+        .unwrap();
+    assert_eq!(status.code(), Some(1), "{out}");
+    assert!(out.contains("cannot start"), "{out}");
+    assert!(out.contains(CHANGED), "{out}");
+}
+
 // ---------- SSE ----------
 
 /// Reads SSE messages (blocks separated by a blank line) from a streaming response.

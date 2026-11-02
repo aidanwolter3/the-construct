@@ -22,7 +22,7 @@ const CATALOG_HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 /// `reason` of [`LayoutApiError::Offline`].
 pub const LAYOUTS_OFFLINE: &str = "Can't reach your pod. Check your connection and try again.";
 /// `reason` of a 401 (not expected: the app endpoints are public).
-pub const LAYOUTS_UNAUTHORIZED: &str = "The pod refused to list apps.";
+pub const LAYOUTS_UNAUTHORIZED: &str = "The pod refused this request.";
 
 /// Why a catalog call failed. `reason` is a short sentence for the UI; the
 /// URL, status and body go to the log.

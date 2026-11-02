@@ -385,6 +385,11 @@ impl Inner {
             return;
         }
         let current = lock(&self.state).layout_version;
+        // A version at or below the applied one is ignored (a duplicate or a
+        // stale event). Trade-off: after a pod database reset (versions
+        // restart at 1) pushes are ignored until the engine is recreated;
+        // versions are monotonic per pod by design (D32); see where lib.rs
+        // applies a fetched layout.
         if current.is_some_and(|c| version <= c) {
             return;
         }

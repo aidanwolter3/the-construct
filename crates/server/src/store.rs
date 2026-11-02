@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
 /// One schema upgrade: plain SQL, or Rust code for data conversions SQL
@@ -96,6 +96,12 @@ const MIGRATIONS: &[Migration] = &[
     // v7: layouts as code (one app = one linear, append-only history; D31+).
     // The v6 catalog tables stay but are inert after this.
     Migration::Rust(migrate_v7),
+    // v8: `file_hash`, the hash of a layout file's own content (canonical JSON
+    // of its note and layout, see `layouts::file_hash`), independent of how
+    // the current `UiNode` re-serializes it. The append-only check compares
+    // it; NULL on rows recorded before v8 until the next startup sync adopts
+    // it (`Store::sync_layout_files`).
+    Migration::Sql("ALTER TABLE app_versions ADD COLUMN file_hash TEXT;"),
 ];
 
 /// v6 schema. `layout_versions` (v5) is renamed, converted and dropped.
@@ -435,7 +441,8 @@ pub struct AppVersion {
 }
 
 /// A layout file to sync (see [`Store::sync_layout_files`]). `json` must be
-/// canonical (`serde_json::to_string(&UiNode)`), so equal layouts hash equal.
+/// canonical (`serde_json::to_string(&UiNode)`), so equal layouts hash equal;
+/// it is what the pod serves.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileVersion {
     /// `<app_id>/NNNN`.
@@ -446,6 +453,36 @@ pub struct FileVersion {
     pub path: String,
     pub note: String,
     pub json: String,
+    /// Hash of the file's own content (note and layout), independent of the
+    /// Rust types: what the append-only check compares.
+    pub file_hash: String,
+}
+
+/// What [`Store::sync_layout_files`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SyncReport {
+    /// `(path, version)` of each file appended as a new version.
+    pub appended: Vec<(String, i64)>,
+    /// Paths of recorded files whose `file_hash` was recorded now (rows from
+    /// before migration v8).
+    pub adopted: Vec<String>,
+    /// One warning per recorded file this build does not have (a rollback
+    /// deploy, an older branch): the recorded history is served unchanged.
+    pub missing: Vec<String>,
+}
+
+/// One recorded layout file of an app.
+struct RecordedFile {
+    key: String,
+    version: i64,
+    hash: String,
+    note: Option<String>,
+    file_hash: Option<String>,
+}
+
+/// NNNN of a file key `<app>/NNNN`.
+fn key_number(key: &str) -> Option<u32> {
+    key.rsplit_once('/').and_then(|(_, n)| n.parse().ok())
 }
 
 /// Outcome of [`Store::sign_in_pixelfed`].
@@ -534,24 +571,124 @@ fn latest_app_version_on(conn: &Connection, app_id: &str) -> rusqlite::Result<Op
     .optional()
 }
 
-/// Append `json` as version `MAX + 1` of the app (blob stored once by hash).
+/// A layout file's key and content hash (versions created from files).
+type FileRef<'a> = Option<(&'a str, &'a str)>;
+
+/// Append `json` as version `MAX + 1` of the app (blob stored once by hash);
+/// `file` = `(file_key, file_hash)`.
 fn append_app_version_on(
     conn: &Connection,
     app_id: &str,
     json: &str,
     source: &str,
     note: Option<&str>,
-    file_key: Option<&str>,
+    file: FileRef<'_>,
 ) -> rusqlite::Result<i64> {
     let hash = put_blob(conn, json)?;
     conn.query_row(
-        "INSERT INTO app_versions (app_id, version, hash, source, note, file_key, created_at)
-         SELECT ?1, COALESCE(MAX(version), 0) + 1, ?2, ?3, ?4, ?5, ?6
+        "INSERT INTO app_versions
+             (app_id, version, hash, source, note, file_key, file_hash, created_at)
+         SELECT ?1, COALESCE(MAX(version), 0) + 1, ?2, ?3, ?4, ?5, ?6, ?7
          FROM app_versions WHERE app_id = ?1
          RETURNING version",
-        params![app_id, hash, source, note, file_key, now_secs()],
+        params![
+            app_id,
+            hash,
+            source,
+            note,
+            file.map(|f| f.0),
+            file.map(|f| f.1),
+            now_secs()
+        ],
         |r| r.get(0),
     )
+}
+
+/// Sync one app's files inside `tx`; `Ok(Err(message))` refuses.
+fn sync_app_files_on(
+    tx: &Transaction<'_>,
+    app_id: &str,
+    files: &[FileVersion],
+    report: &mut SyncReport,
+) -> rusqlite::Result<Result<(), String>> {
+    let recorded: Vec<RecordedFile> = {
+        let mut stmt = tx.prepare(
+            "SELECT file_key, version, hash, note, file_hash FROM app_versions
+             WHERE app_id = ?1 AND file_key IS NOT NULL ORDER BY version",
+        )?;
+        stmt.query_map([app_id], |r| {
+            Ok(RecordedFile {
+                key: r.get(0)?,
+                version: r.get(1)?,
+                hash: r.get(2)?,
+                note: r.get(3)?,
+                file_hash: r.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?
+    };
+    // New files must be numbered after every recorded one (present or not).
+    let max_recorded = recorded.iter().filter_map(|r| key_number(&r.key)).max();
+    let max_file = files.iter().map(|f| f.number).max();
+    let next_name = format!("{:04}.json", max_recorded.max(max_file).unwrap_or(0) + 1);
+    for r in &recorded {
+        if !files.iter().any(|f| f.key == r.key) {
+            report.missing.push(format!(
+                "layouts/{}.json was deployed as version {} but is missing from this build; \
+                 serving the recorded history unchanged",
+                r.key, r.version
+            ));
+        }
+    }
+    for file in files {
+        if let Some(r) = recorded.iter().find(|r| r.key == file.key) {
+            let unchanged = match &r.file_hash {
+                Some(h) => *h == file.file_hash,
+                // Recorded before v8: adopt the file's hash if its layout
+                // (as this build serializes it) and note are what was
+                // recorded.
+                None => {
+                    r.hash == content_hash(&file.json)
+                        && r.note.as_deref() == Some(file.note.as_str())
+                }
+            };
+            if !unchanged {
+                return Ok(Err(format!(
+                    "{path} changed after it was deployed as version {version}; layout files are \
+                     append-only. To recover, restore the deployed content of {path} (git log -p \
+                     -- {path}) and put the change in a new file, {next_name}",
+                    path = file.path,
+                    version = r.version,
+                )));
+            }
+            if r.file_hash.is_none() {
+                tx.execute(
+                    "UPDATE app_versions SET file_hash = ?1 WHERE app_id = ?2 AND version = ?3",
+                    params![file.file_hash, app_id, r.version],
+                )?;
+                report.adopted.push(file.path.clone());
+            }
+            continue;
+        }
+        if let Some(max) = max_recorded.filter(|m| *m > file.number) {
+            return Ok(Err(format!(
+                "{} is new but numbered below layouts/{app_id}/{max:04}.json, which is already \
+                 deployed; layout files are append-only. To recover, move its content to a new \
+                 file numbered after the newest deployed one, {next_name}",
+                file.path
+            )));
+        }
+        let version = append_app_version_on(
+            tx,
+            app_id,
+            &file.json,
+            SOURCE_FILE,
+            Some(&file.note),
+            Some((&file.key, &file.file_hash)),
+        )?;
+        report.appended.push((file.path.clone(), version));
+    }
+    Ok(Ok(()))
 }
 
 /// A plain SQLite error carrying `msg` (migrations that refuse to continue).
@@ -559,7 +696,10 @@ fn refuse(msg: String) -> rusqlite::Error {
     rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(msg))
 }
 
-/// Run migrations up to `user_version = target`.
+/// Run migrations up to `user_version = target`. Each step runs in an
+/// IMMEDIATE transaction (the write lock is taken up front) that re-reads
+/// `user_version`, so two processes starting on the same database never both
+/// run a step.
 fn migrate(conn: &mut Connection, target: usize) -> rusqlite::Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     for (i, step) in MIGRATIONS
@@ -568,7 +708,12 @@ fn migrate(conn: &mut Connection, target: usize) -> rusqlite::Result<()> {
         .take(target)
         .skip(version.max(0) as usize)
     {
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if now > i as i64 {
+            // Another process ran this step meanwhile.
+            continue;
+        }
         match step {
             Migration::Sql(sql) => tx.execute_batch(sql)?,
             Migration::Rust(f) => f(&tx)?,
@@ -594,8 +739,9 @@ impl Store {
     /// Open (creating if needed) the database file and run migrations.
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
         let conn = Connection::open(path)?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        // Before WAL: switching the journal mode can meet a concurrent starter.
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
         Self::init(conn)
     }
 
@@ -961,77 +1107,29 @@ impl Store {
         append_app_version_on(&self.conn(), app_id, json, source, note, None)
     }
 
-    /// Sync one app's layout files (in number order) into its history, in one
-    /// transaction: a file already recorded (by key) must be unchanged (same
-    /// layout hash and note); a new file is appended as version `MAX + 1`
-    /// (source [`SOURCE_FILE`]). Refuses (`Ok(Err(message))`, nothing written)
-    /// when a recorded file changed or is missing, or a new file is numbered
-    /// below an already recorded one. Returns the appended `(path, version)`s.
-    #[allow(clippy::type_complexity)]
+    /// Sync every app's layout files (`(app_id, files in number order)`)
+    /// into the histories, in ONE transaction. A file already recorded (by
+    /// key) must be unchanged: same `file_hash` (rows from before v8, whose
+    /// `file_hash` is NULL, adopt it if the layout blob hash and note match);
+    /// a new file is appended as version `MAX + 1` (source [`SOURCE_FILE`]).
+    /// A recorded file missing from `files` is only reported
+    /// ([`SyncReport::missing`]). Refuses (`Ok(Err(message))`, nothing
+    /// written, for any app) when a recorded file changed or a new file is
+    /// numbered below a recorded one.
     pub fn sync_layout_files(
         &self,
-        app_id: &str,
-        files: &[FileVersion],
-    ) -> rusqlite::Result<Result<Vec<(String, i64)>, String>> {
+        apps: &[(&str, Vec<FileVersion>)],
+    ) -> rusqlite::Result<Result<SyncReport, String>> {
         let mut conn = self.conn();
-        let tx = conn.transaction()?;
-        // (key, version, hash, note) of files already deployed.
-        let recorded: Vec<(String, i64, String, Option<String>)> = {
-            let mut stmt = tx.prepare(
-                "SELECT file_key, version, hash, note FROM app_versions
-                 WHERE app_id = ?1 AND file_key IS NOT NULL ORDER BY version",
-            )?;
-            stmt.query_map([app_id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-            })?
-            .collect::<rusqlite::Result<_>>()?
-        };
-        let next_name = format!("{:04}.json", files.last().map_or(1, |f| f.number + 1));
-        for (key, version, _, _) in &recorded {
-            if !files.iter().any(|f| &f.key == key) {
-                return Ok(Err(format!(
-                    "layouts/{key}.json was deployed as version {version} but is missing; \
-                     layout files are append-only, restore it (and add {next_name} for a change)"
-                )));
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut report = SyncReport::default();
+        for (app_id, files) in apps {
+            if let Err(msg) = sync_app_files_on(&tx, app_id, files, &mut report)? {
+                return Ok(Err(msg)); // dropping `tx` rolls back
             }
-        }
-        // The highest-numbered recorded file: new files must come after it.
-        let newest_recorded = files
-            .iter()
-            .filter(|f| recorded.iter().any(|(k, ..)| k == &f.key))
-            .max_by_key(|f| f.number);
-        let mut appended = Vec::new();
-        for file in files {
-            if let Some((_, version, hash, note)) = recorded.iter().find(|(k, ..)| k == &file.key) {
-                if *hash != content_hash(&file.json) || note.as_deref() != Some(file.note.as_str())
-                {
-                    return Ok(Err(format!(
-                        "{} changed after it was deployed as version {version}; \
-                         layout files are append-only, add {next_name} instead",
-                        file.path
-                    )));
-                }
-                continue;
-            }
-            if let Some(newer) = newest_recorded.filter(|n| n.number > file.number) {
-                return Ok(Err(format!(
-                    "{} is new but numbered below {}, which is already deployed; \
-                     layout files are append-only, number new files after the newest one",
-                    file.path, newer.path
-                )));
-            }
-            let version = append_app_version_on(
-                &tx,
-                app_id,
-                &file.json,
-                SOURCE_FILE,
-                Some(&file.note),
-                Some(&file.key),
-            )?;
-            appended.push((file.path.clone(), version));
         }
         tx.commit()?;
-        Ok(Ok(appended))
+        Ok(Ok(report))
     }
 
     /// Storage accounting: `(blobs, blob bytes stored, app versions)`.
@@ -1167,7 +1265,26 @@ mod tests {
             path: format!("layouts/{app}/{n:04}.json"),
             note: note.into(),
             json: json.into(),
+            // Stands in for `layouts::file_hash` (the file's own content).
+            file_hash: content_hash(&format!("{note}\n{json}")),
         }
+    }
+
+    /// Sync one app; the appended `(path, version)`s or the refusal.
+    fn sync1(s: &Store, app: &str, files: &[FileVersion]) -> Result<Vec<(String, i64)>, String> {
+        s.sync_layout_files(&[(app, files.to_vec())])
+            .unwrap()
+            .map(|r| r.appended)
+    }
+
+    fn file_hash_of(s: &Store, app: &str, version: i64) -> Option<String> {
+        s.conn()
+            .query_row(
+                "SELECT file_hash FROM app_versions WHERE app_id = ?1 AND version = ?2",
+                params![app, version],
+                |r| r.get(0),
+            )
+            .unwrap()
     }
 
     fn history(s: &Store, app: &str) -> Vec<(i64, String, Option<String>)> {
@@ -1188,38 +1305,34 @@ mod tests {
         let s = Store::open_in_memory().unwrap();
         let one = file("a", 1, "{\"v\":1}", "First");
         assert_eq!(
-            s.sync_layout_files("a", std::slice::from_ref(&one))
-                .unwrap()
-                .unwrap(),
+            sync1(&s, "a", std::slice::from_ref(&one)).unwrap(),
             [("layouts/a/0001.json".to_owned(), 1)]
         );
+        assert_eq!(file_hash_of(&s, "a", 1), Some(one.file_hash.clone()));
         // Idempotent.
         assert!(
-            s.sync_layout_files("a", std::slice::from_ref(&one))
-                .unwrap()
+            sync1(&s, "a", std::slice::from_ref(&one))
                 .unwrap()
                 .is_empty()
         );
-        // A changed layout or note is refused, naming the file.
+        // A changed layout or note is refused, naming the file and how to recover.
         let changed = file("a", 1, "{\"v\":2}", "First");
         assert_eq!(
-            s.sync_layout_files("a", &[changed]).unwrap().unwrap_err(),
-            "layouts/a/0001.json changed after it was deployed as version 1; \
-             layout files are append-only, add 0002.json instead"
+            sync1(&s, "a", &[changed]).unwrap_err(),
+            "layouts/a/0001.json changed after it was deployed as version 1; layout files are \
+             append-only. To recover, restore the deployed content of layouts/a/0001.json \
+             (git log -p -- layouts/a/0001.json) and put the change in a new file, 0002.json"
         );
         let renoted = file("a", 1, "{\"v\":1}", "Other");
         assert!(
-            s.sync_layout_files("a", &[renoted])
-                .unwrap()
+            sync1(&s, "a", &[renoted])
                 .unwrap_err()
                 .contains("changed after it was deployed")
         );
         // A new file appends; the history is per app.
         let two = file("a", 2, "{\"v\":1}", "Same layout again");
         assert_eq!(
-            s.sync_layout_files("a", &[one.clone(), two.clone()])
-                .unwrap()
-                .unwrap(),
+            sync1(&s, "a", &[one.clone(), two.clone()]).unwrap(),
             [("layouts/a/0002.json".to_owned(), 2)]
         );
         assert_eq!(
@@ -1237,25 +1350,20 @@ mod tests {
         assert_eq!(s.app_version("a", 1).unwrap().unwrap().1, "{\"v\":1}");
         assert_eq!(s.app_version("a", 3).unwrap(), None);
         assert_eq!(s.layout_storage().unwrap().0, 1, "one blob for both");
-        // A deployed file that disappeared is refused.
-        assert!(
-            s.sync_layout_files("a", std::slice::from_ref(&one))
-                .unwrap()
-                .unwrap_err()
-                .starts_with("layouts/a/0002.json was deployed as version 2 but is missing")
-        );
         // A new file numbered below a deployed one is refused, and nothing is written.
         let b = Store::open_in_memory().unwrap();
-        b.sync_layout_files("b", &[file("b", 2, "{}", "two")])
-            .unwrap()
-            .unwrap();
-        let err = b
-            .sync_layout_files("b", &[file("b", 1, "{}", "one"), file("b", 2, "{}", "two")])
-            .unwrap()
-            .unwrap_err();
-        assert!(
-            err.starts_with("layouts/b/0001.json is new but numbered below layouts/b/0002.json"),
-            "{err}"
+        sync1(&b, "b", &[file("b", 2, "{}", "two")]).unwrap();
+        let err = sync1(
+            &b,
+            "b",
+            &[file("b", 1, "{}", "one"), file("b", 2, "{}", "two")],
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "layouts/b/0001.json is new but numbered below layouts/b/0002.json, which is \
+             already deployed; layout files are append-only. To recover, move its content to a \
+             new file numbered after the newest deployed one, 0003.json"
         );
         assert_eq!(history(&b, "b").len(), 1);
         // Paging.
@@ -1266,6 +1374,150 @@ mod tests {
             .map(|v| v.version)
             .collect();
         assert_eq!(page, [1]);
+    }
+
+    #[test]
+    fn a_missing_recorded_file_is_a_warning_and_later_files_still_append() {
+        let s = Store::open_in_memory().unwrap();
+        let (one, two, three) = (
+            file("a", 1, "{\"v\":1}", "One"),
+            file("a", 2, "{\"v\":2}", "Two"),
+            file("a", 3, "{\"v\":3}", "Three"),
+        );
+        sync1(&s, "a", &[one.clone(), two.clone()]).unwrap();
+        // A rollback deploy without 0002.json: warned, history unchanged.
+        let report = s
+            .sync_layout_files(&[("a", vec![one.clone()])])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            report.missing,
+            [
+                "layouts/a/0002.json was deployed as version 2 but is missing from this build; \
+              serving the recorded history unchanged"
+            ]
+        );
+        assert!(report.appended.is_empty());
+        assert_eq!(s.app_latest("a").unwrap().unwrap().0.version, 2);
+        // The same number with other content is still a change.
+        let other_two = file("a", 2, "{\"v\":22}", "Two'");
+        assert!(
+            sync1(&s, "a", &[one.clone(), other_two])
+                .unwrap_err()
+                .contains("0002.json changed after it was deployed as version 2")
+        );
+        // A build whose numbering continues after the newest recorded file appends.
+        assert_eq!(
+            sync1(&s, "a", &[one.clone(), two.clone(), three.clone()]).unwrap(),
+            [("layouts/a/0003.json".to_owned(), 3)]
+        );
+        // Missing 0002 and 0003, with a new file numbered below them: refused.
+        let s2 = Store::open_in_memory().unwrap();
+        sync1(&s2, "a", &[one.clone(), two.clone(), three.clone()]).unwrap();
+        s2.conn()
+            .execute("DELETE FROM app_versions WHERE version = 2", [])
+            .unwrap();
+        let err = sync1(&s2, "a", &[one, two]).unwrap_err();
+        assert!(
+            err.starts_with("layouts/a/0002.json is new but numbered below layouts/a/0003.json"),
+            "{err}"
+        );
+        assert!(err.ends_with("0004.json"), "{err}");
+    }
+
+    #[test]
+    fn file_hash_decides_changes_and_is_adopted_for_pre_v8_rows() {
+        let s = Store::open_in_memory().unwrap();
+        let one = file("a", 1, "{\"v\":1}", "One");
+        sync1(&s, "a", std::slice::from_ref(&one)).unwrap();
+        // This build serializes the same file differently (a protocol
+        // refactor: field order, a new defaulted field): not a change, and
+        // the recorded blob is still what is served.
+        let reserialized = FileVersion {
+            json: "{\"v\":1,\"new_default\":null}".into(),
+            ..one.clone()
+        };
+        assert!(
+            sync1(&s, "a", std::slice::from_ref(&reserialized))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(s.app_latest("a").unwrap().unwrap().1, "{\"v\":1}");
+        // A real content change (another file hash) is refused even with the
+        // same serialized layout.
+        let edited = FileVersion {
+            file_hash: content_hash("edited"),
+            ..one.clone()
+        };
+        assert!(
+            sync1(&s, "a", &[edited])
+                .unwrap_err()
+                .contains("changed after")
+        );
+
+        // Rows recorded before v8 (file_hash NULL) adopt the hash when the
+        // layout and note still match, then compare it.
+        s.conn()
+            .execute("UPDATE app_versions SET file_hash = NULL", [])
+            .unwrap();
+        let mismatched = FileVersion {
+            json: "{\"v\":2}".into(),
+            ..one.clone()
+        };
+        assert!(
+            sync1(&s, "a", &[mismatched])
+                .unwrap_err()
+                .contains("changed after")
+        );
+        assert_eq!(file_hash_of(&s, "a", 1), None, "nothing written");
+        let report = s
+            .sync_layout_files(&[("a", vec![one.clone()])])
+            .unwrap()
+            .unwrap();
+        assert_eq!(report.adopted, ["layouts/a/0001.json"]);
+        assert_eq!(file_hash_of(&s, "a", 1), Some(one.file_hash.clone()));
+        let again = s
+            .sync_layout_files(&[("a", vec![one.clone()])])
+            .unwrap()
+            .unwrap();
+        assert_eq!(again, SyncReport::default(), "idempotent");
+        assert!(
+            sync1(&s, "a", std::slice::from_ref(&reserialized))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_refusal_in_one_app_writes_nothing_for_any_app() {
+        let s = Store::open_in_memory().unwrap();
+        sync1(&s, "b", &[file("b", 1, "{}", "one")]).unwrap();
+        let err = s
+            .sync_layout_files(&[
+                ("a", vec![file("a", 1, "{}", "a1")]),
+                ("b", vec![file("b", 1, "{}", "changed")]),
+            ])
+            .unwrap()
+            .unwrap_err();
+        assert!(err.starts_with("layouts/b/0001.json changed"), "{err}");
+        assert!(history(&s, "a").is_empty(), "app a rolled back too");
+    }
+
+    #[test]
+    fn concurrent_starters_run_each_migration_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.db");
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || Store::open(&path).map(|_| ()))
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap().unwrap();
+        }
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(user_version(&conn), MIGRATIONS.len() as i64);
     }
 
     #[test]
@@ -1480,15 +1732,11 @@ mod tests {
         }
         // Layout files continue after the migrated history.
         assert_eq!(
-            s.sync_layout_files("home", &[file("home", 1, C1, "Counter")])
-                .unwrap()
-                .unwrap(),
+            sync1(&s, "home", &[file("home", 1, C1, "Counter")]).unwrap(),
             [("layouts/home/0001.json".to_owned(), 7)]
         );
         assert_eq!(
-            s.sync_layout_files("pixelfed_demo", &[file("pixelfed_demo", 1, "{}", "x")])
-                .unwrap()
-                .unwrap(),
+            sync1(&s, "pixelfed_demo", &[file("pixelfed_demo", 1, "{}", "x")]).unwrap(),
             [("layouts/pixelfed_demo/0001.json".to_owned(), 1)]
         );
         drop(s);

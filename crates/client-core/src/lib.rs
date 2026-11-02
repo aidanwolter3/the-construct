@@ -1319,6 +1319,14 @@ impl Inner {
                             // A fetch that started before a newer layout was
                             // applied (by a later fetch): keep the newer
                             // layout, take the entities.
+                            //
+                            // Trade-off: a pod whose database was reset (its
+                            // versions restart at 1) also lands here, and this
+                            // engine keeps showing its old layout until it is
+                            // recreated (app restart, switching apps/servers).
+                            // Version numbers are monotonic per pod by design
+                            // (D32), so we favour ignoring stale responses over
+                            // detecting resets.
                             println!(
                                 "[ConstructEngine] fetched layout v{v} is older than the applied \
                                  v{have}; layout kept"
