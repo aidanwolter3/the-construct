@@ -136,8 +136,18 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 - Deferred: idempotency keys (a POST applied server-side but timed out client-side is re-sent); toggle payload
   "$value" is not rewritten on re-apply; Android emulator latency 1-6 ms (desktop well under).
 
+## Milestone 6: Pixelfed + OAuth PKCE (in progress)
+
+- Done (wip commits): protocol `queries`/`also`/ternary (D4, D7, D15); fake upstream crates/fake-pixelfed (D16);
+  pod adapter + auth + media proxy (D17); client-core queries + multi-field outbox + PKCE sign-in (D19); Coil feed
+  UI with carousel (D18); platform glue: Keychain, Android Keystore + canvas://oauth, sim browsers (D21); real
+  local Pixelfed 0.15.2 via Colima in dev/pixelfed + scripts/pixelfed_dev.sh, recorded fixtures, pod adapted to
+  it (D20); desktop sim e2e against the real instance passed (sign in, feed, carousel, like reached Pixelfed).
+
 ## Next steps
 
-1. M6 (Pixelfed + OAuth PKCE against a local fake upstream), contract in the session's M6 spec; then M7.
-2. Small follow-ups: 404 "workspace not found" UI state; HTTPS enforcement for release; golden-image diffing for
-   the simulator (Roborazzi or a pixel diff on sim PNGs); Android host tests for :shared; outbox idempotency keys.
+1. M6 remaining: independent review (Rust, Kotlin) and QA (desktop sim vs fake + real Pixelfed incl. offline
+   like -> flush -> favourited upstream; Android emulator with adb reverse 8090 + pod, real browser login).
+2. M7 AI layout engine (rules provider + Anthropic provider, versions/rollback, SSE push, prompt UI).
+3. Small follow-ups: 404 "workspace not found" UI state; HTTPS enforcement for release; golden-image diffing for
+   the simulator; Android host tests for :shared; outbox idempotency keys.

@@ -18,7 +18,7 @@ serde_json.workspace = true
 rusqlite.workspace = true
 # `http2` enables h2c (prior knowledge) alongside HTTP/1.1 per DESIGN.md M2.
 axum = { version = "0.8", features = ["http2"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde.workspace = true

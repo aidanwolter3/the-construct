@@ -24,6 +24,8 @@ const TEXT_ONLY: &str = "781220014433221633";
 struct Server {
     url: String,
     handle: JoinHandle<()>,
+    /// The fake upstream's state (test hooks); None for the pod.
+    fake: Option<Arc<fake_pixelfed::AppState>>,
 }
 
 impl Drop for Server {
@@ -38,7 +40,11 @@ async fn serve(router: axum::Router) -> Server {
     let handle = tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
-    Server { url, handle }
+    Server {
+        url,
+        handle,
+        fake: None,
+    }
 }
 
 async fn spawn_fake() -> Server {
@@ -51,11 +57,16 @@ async fn spawn_fake() -> Server {
         seed_token: Some(SEED.to_owned()),
     })
     .unwrap();
-    let router = fake_pixelfed::app(Arc::new(state));
+    let state = Arc::new(state);
+    let router = fake_pixelfed::app(state.clone());
     let handle = tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
-    Server { url, handle }
+    Server {
+        url,
+        handle,
+        fake: Some(state),
+    }
 }
 
 async fn spawn_pod(state: AppState) -> Server {
@@ -192,7 +203,10 @@ async fn sign_in(env: &Env) -> String {
 /// The fake's view of a status (via the pre-seeded token).
 async fn upstream_status(env: &Env, id: &str) -> Value {
     let list: Vec<Value> = client()
-        .get(format!("{}/api/v1/timelines/home", env.fake.url))
+        .get(format!(
+            "{}/api/v1/timelines/home?include_reblogs=true",
+            env.fake.url
+        ))
         .bearer_auth(SEED)
         .send()
         .await
@@ -354,7 +368,11 @@ async fn pixelfed_home_signed_out_without_valid_session() {
     // client learns its session is stale; the body is the same signed-out bundle either way.
     for (bearer, want_status, want_header) in [
         (None, StatusCode::OK, None),
-        (Some("not-a-session"), StatusCode::UNAUTHORIZED, Some("invalid")),
+        (
+            Some("not-a-session"),
+            StatusCode::UNAUTHORIZED,
+            Some("invalid"),
+        ),
     ] {
         let (status, header, body) = get_home_full(&env.pod.url, bearer).await;
         assert_eq!(status, want_status);
@@ -525,6 +543,7 @@ fn seeded_state(instance: &str, upstream_token: &str) -> AppState {
                 access_token: upstream_token.into(),
                 account_id: "1".into(),
                 username: "x".into(),
+                ..Default::default()
             },
         )
         .unwrap();
@@ -754,4 +773,79 @@ async fn demo_ack_accepts_pixelfed_demo_likes() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["ok"], true);
+}
+
+#[tokio::test]
+async fn home_feed_asks_upstream_for_reblogs() {
+    // Like real Pixelfed, the fake hides boosts unless include_reblogs=true.
+    let env = env().await;
+    let plain: Vec<Value> = client()
+        .get(format!("{}/api/v1/timelines/home", env.fake.url))
+        .bearer_auth(SEED)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(plain.iter().all(|s| s["reblog"].is_null()));
+    assert!(plain.iter().all(|s| s["id"] != REBLOG_OUTER));
+    // The pod sends include_reblogs=true, so its feed has the boost (as the inner post).
+    let session = sign_in(&env).await;
+    let (status, home) = get_home(&env.pod.url, Some(&session)).await;
+    assert_eq!(status, StatusCode::OK);
+    let order = home["queries"]["timeline:home"].as_array().unwrap();
+    assert_eq!(order.len(), 5);
+    assert_eq!(order[1], format!("pixelfed://posts/{REBLOG_INNER}"));
+    assert_eq!(
+        home["entities"][format!("pixelfed://posts/{REBLOG_INNER}")]["reblogged_by_uri"],
+        "pixelfed://users/699112233445566778"
+    );
+}
+
+#[tokio::test]
+async fn expired_upstream_token_is_refreshed() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = env_with(AppState::open_dir(dir.path()).unwrap()).await;
+    let session = sign_in(&env).await;
+    let stored = |dir: &std::path::Path| -> (String, Option<String>, Option<i64>, Option<String>) {
+        let conn = rusqlite::Connection::open(dir.join("server.db")).unwrap();
+        conn.query_row(
+            "SELECT access_token, refresh_token, expires_at, redirect_uri FROM pixelfed_account",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap()
+    };
+    let (token1, refresh1, expires, redirect) = stored(dir.path());
+    assert!(refresh1.is_some(), "the refresh token is stored");
+    assert!(expires.unwrap() > 1_700_000_000 + 31_000_000);
+    assert_eq!(redirect.as_deref(), Some(REDIRECT));
+
+    // Every upstream access token expires; two concurrent feed fetches both
+    // succeed through ONE refresh (a second refresh with the rotated refresh
+    // token would fail and sign the user out).
+    let fake = env.fake.fake.as_ref().unwrap();
+    assert!(fake.expire_access_tokens() >= 1);
+    let (a, b) = tokio::join!(
+        get_home(&env.pod.url, Some(&session)),
+        get_home(&env.pod.url, Some(&session))
+    );
+    assert_eq!(a.0, StatusCode::OK, "{}", a.1);
+    assert_eq!(b.0, StatusCode::OK, "{}", b.1);
+    let (token2, refresh2, _, _) = stored(dir.path());
+    assert_ne!(token2, token1);
+    assert_ne!(refresh2, refresh1);
+
+    // Actions refresh too.
+    fake.expire_access_tokens();
+    let (status, body) = post_json(
+        &format!("{}/v1/pixelfed/posts/like", env.pod.url),
+        Some(&session),
+        json!({ "id": CAROUSEL, "liked": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["is_liked"], true);
+    assert_ne!(stored(dir.path()).0, token2);
 }

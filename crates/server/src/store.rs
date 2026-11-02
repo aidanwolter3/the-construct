@@ -41,6 +41,12 @@ const MIGRATIONS: &[&str] = &[
          key TEXT PRIMARY KEY NOT NULL,
          url TEXT NOT NULL
      );",
+    // v3 (M6, real Pixelfed): the refresh token Passport issues with the access
+    // token, its expiry, and the redirect_uri whose app (client credentials)
+    // issued it, so the pod can refresh on an upstream 401.
+    "ALTER TABLE pixelfed_account ADD COLUMN refresh_token TEXT;
+     ALTER TABLE pixelfed_account ADD COLUMN expires_at INTEGER;
+     ALTER TABLE pixelfed_account ADD COLUMN redirect_uri TEXT;",
 ];
 
 /// A registered OAuth app on the upstream instance.
@@ -51,11 +57,17 @@ pub struct PixelfedApp {
 }
 
 /// The stored upstream account (and its access token).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PixelfedAccount {
     pub access_token: String,
     pub account_id: String,
     pub username: String,
+    /// Upstream refresh token (Pixelfed issues one; the fake too).
+    pub refresh_token: Option<String>,
+    /// Unix seconds when the access token expires, if the upstream said.
+    pub expires_at: Option<i64>,
+    /// The redirect_uri of the app (pixelfed_apps row) that issued the token.
+    pub redirect_uri: Option<String>,
 }
 
 fn now_secs() -> i64 {
@@ -211,14 +223,17 @@ impl Store {
     pub fn pixelfed_account(&self, instance: &str) -> rusqlite::Result<Option<PixelfedAccount>> {
         self.conn()
             .query_row(
-                "SELECT access_token, account_id, username FROM pixelfed_account
-                 WHERE instance = ?1",
+                "SELECT access_token, account_id, username, refresh_token, expires_at, redirect_uri
+                 FROM pixelfed_account WHERE instance = ?1",
                 [instance],
                 |r| {
                     Ok(PixelfedAccount {
                         access_token: r.get(0)?,
                         account_id: r.get(1)?,
                         username: r.get(2)?,
+                        refresh_token: r.get(3)?,
+                        expires_at: r.get(4)?,
+                        redirect_uri: r.get(5)?,
                     })
                 },
             )
@@ -233,14 +248,18 @@ impl Store {
     ) -> rusqlite::Result<()> {
         self.conn().execute(
             "INSERT OR REPLACE INTO pixelfed_account
-                 (instance, access_token, account_id, username, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+                 (instance, access_token, account_id, username, created_at,
+                  refresh_token, expires_at, redirect_uri)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 instance,
                 account.access_token,
                 account.account_id,
                 account.username,
-                now_secs()
+                now_secs(),
+                account.refresh_token,
+                account.expires_at,
+                account.redirect_uri,
             ],
         )?;
         Ok(())

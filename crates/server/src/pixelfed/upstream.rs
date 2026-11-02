@@ -37,9 +37,34 @@ pub struct RegisteredApp {
     pub client_secret: String,
 }
 
+/// `POST /oauth/token` response. Parsed leniently: only `access_token` is
+/// required. Pixelfed (Laravel Passport) answers `{token_type, expires_in,
+/// access_token, refresh_token, created_at}` with `created_at` as an ISO 8601
+/// string (Mastodon: unix seconds) and no `scope`; `created_at` is not used.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TokenResponse {
     pub access_token: String,
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub refresh_token: Option<String>,
+    /// Lifetime in seconds (Pixelfed: 31536000, one year).
+    #[serde(default, deserialize_with = "lenient_secs")]
+    pub expires_in: Option<i64>,
+}
+
+fn lenient_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(match Option::<Value>::deserialize(d)? {
+        Some(Value::String(s)) if !s.trim().is_empty() => Some(s),
+        _ => None,
+    })
+}
+
+fn lenient_secs<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error> {
+    let secs = match Option::<Value>::deserialize(d)? {
+        Some(Value::Number(n)) => n.as_i64(),
+        Some(Value::String(s)) => s.trim().parse().ok(),
+        _ => None,
+    };
+    Ok(secs.filter(|s| *s > 0))
 }
 
 /// Upstream client: API calls go to `instance_url` (server-side reachable).
@@ -119,6 +144,24 @@ impl Upstream {
         .await
     }
 
+    /// `POST /oauth/token` (refresh_token grant). Passport rotates both
+    /// tokens: the old access and refresh tokens stop working.
+    pub async fn refresh_token(
+        &self,
+        client_id: &str,
+        client_secret: &str,
+        refresh_token: &str,
+    ) -> Result<TokenResponse, UpstreamError> {
+        Self::send_json(self.http.post(self.url("/oauth/token")).form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("scope", SCOPES),
+        ]))
+        .await
+    }
+
     pub async fn verify_credentials(&self, token: &str) -> Result<Value, UpstreamError> {
         Self::send_json(
             self.http
@@ -136,7 +179,14 @@ impl Upstream {
         Self::send_json(
             self.http
                 .get(self.url("/api/v1/timelines/home"))
-                .query(&[("limit", limit)])
+                // Pixelfed hides boosts from the home timeline unless asked
+                // (Mastodon includes them by default). The pod fetches one
+                // page; a client following the Link header would have to
+                // re-add this, as Pixelfed's Link URLs drop it.
+                .query(&[
+                    ("limit", limit.to_string().as_str()),
+                    ("include_reblogs", "true"),
+                ])
                 .bearer_auth(token),
         )
         .await
@@ -172,5 +222,36 @@ impl Upstream {
             return Err(UpstreamError::Status(resp.status(), String::new()));
         }
         Ok(resp)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_response_parsing_is_lenient() {
+        // Real Pixelfed 0.15.2 (Laravel Passport): ISO created_at, no scope.
+        let t: TokenResponse = serde_json::from_str(
+            r#"{"token_type":"Bearer","expires_in":31536000,"access_token":"eyJ0","refresh_token":"def5",
+                "created_at":"2026-11-02T03:24:18+00:00"}"#,
+        )
+        .unwrap();
+        assert_eq!(t.access_token, "eyJ0");
+        assert_eq!(t.refresh_token.as_deref(), Some("def5"));
+        assert_eq!(t.expires_in, Some(31_536_000));
+        // Mastodon: integer created_at, scope, no refresh token / expiry.
+        let t: TokenResponse = serde_json::from_str(
+            r#"{"access_token":"a","token_type":"Bearer","scope":"read write","created_at":1793472130}"#,
+        )
+        .unwrap();
+        assert_eq!((t.refresh_token, t.expires_in), (None, None));
+        // Odd types for optional fields are ignored, not fatal.
+        let t: TokenResponse = serde_json::from_str(
+            r#"{"access_token":"a","refresh_token":null,"expires_in":"3600","created_at":null}"#,
+        )
+        .unwrap();
+        assert_eq!((t.refresh_token, t.expires_in), (None, Some(3600)));
+        assert!(serde_json::from_str::<TokenResponse>(r#"{"token_type":"Bearer"}"#).is_err());
     }
 }

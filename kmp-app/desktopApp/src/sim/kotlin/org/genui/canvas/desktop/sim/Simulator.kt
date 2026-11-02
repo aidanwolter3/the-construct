@@ -14,7 +14,9 @@ import kotlin.system.exitProcess
  *
  * Options: workspace (home), screen (phone), script / scriptFile (default "shot initial"),
  * mode (fixture|live), fixture, baseUrl, out, density, timeoutMs (live load wait, 10000),
- * storage (live only: persistent engine storage dir; default a fresh temp dir deleted on exit).
+ * storage (live only: persistent engine storage dir; default a fresh temp dir deleted on exit),
+ * pixelfedLogin (live only: `<email or seed username>:<password>` signs in to a real Pixelfed's web UI and
+ * approves the consent page, see [PixelfedLoginBrowser]; default: [AutoApproveBrowser] for the fake upstream).
  * Relative paths resolve against the working directory (the repo root under Gradle).
  * Exit codes: 0 all steps ok, 1 a step failed, 2 bad arguments or script.
  */
@@ -42,7 +44,7 @@ class UsageException(message: String) : Exception(message)
 
 private val KNOWN_OPTIONS = setOf(
     "workspace", "screen", "script", "scriptFile", "mode", "fixture", "baseUrl", "out", "density", "timeoutMs",
-    "storage",
+    "storage", "pixelfedLogin",
 )
 
 // Kept reachable for the whole run: the bridge owns the engine handle and the JNA callback observers.
@@ -91,6 +93,13 @@ private fun runCli(args: Array<String>): Int {
     if (mode == "live" && opts["fixture"] != null) throw UsageException("fixture cannot be combined with live mode")
     if (mode == "fixture" && opts["baseUrl"] != null) throw UsageException("baseUrl cannot be combined with fixture mode")
     if (mode == "fixture" && opts["storage"] != null) throw UsageException("storage cannot be combined with fixture mode")
+    if (mode == "fixture" && opts["pixelfedLogin"] != null) throw UsageException("pixelfedLogin cannot be combined with fixture mode")
+    val pixelfedLogin = opts["pixelfedLogin"]?.let {
+        val user = it.substringBefore(':')
+        val pass = it.substringAfter(':', "")
+        if (user.isBlank() || pass.isEmpty()) throw UsageException("pixelfedLogin must be <email or username>:<password>")
+        user to pass
+    }
     try {
         validateStepsForMode(steps, mode)
     } catch (e: ScriptParseException) {
@@ -124,12 +133,17 @@ private fun runCli(args: Array<String>): Int {
             path(dir).absoluteFile.also { requireWritableDir(it, "storage directory") }
         } ?: Files.createTempDirectory("canvas-sim").toFile().also { liveStorage = it }
         println("[sim] mode=live workspace=$workspace baseUrl=$baseUrl storage=$storage")
-        // Sign-in: in-memory session store and a browser that auto-approves (works with the fake upstream);
-        // loopback redirect. A script signs in with e.g. `click Sign in with Pixelfed; wait-text 20000 @canvasdemo`.
+        // Sign-in: in-memory session store and a browser that auto-approves (works with the fake upstream), or,
+        // with pixelfedLogin, one that logs in to a real Pixelfed and approves; loopback redirect. A script signs
+        // in with e.g. `click Sign in with Pixelfed; wait-text 20000 @canvasdemo`.
+        val opener = pixelfedLogin?.let { (user, pass) ->
+            println("[sim] sign-in: scripted Pixelfed web login as $user")
+            PixelfedLoginBrowser(user, pass)
+        } ?: AutoApproveBrowser()
         val bridge = UniffiEngineBridge.create(
             storage.absolutePath, baseUrl, workspace,
             secureStore = InMemorySecureStore(),
-            urlOpener = AutoApproveBrowser(),
+            urlOpener = opener,
         )
         liveBridge = bridge
         controller = CanvasController(bridge)

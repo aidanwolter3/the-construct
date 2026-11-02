@@ -71,6 +71,8 @@ struct Inner {
     codes: HashMap<String, AuthCode>,
     /// access token -> client_id
     tokens: HashMap<String, String>,
+    /// refresh token -> (client_id, scope)
+    refresh_tokens: HashMap<String, (String, String)>,
     /// Every status by id (timeline entries and the statuses they reblog), with `reblog` set to null.
     statuses: HashMap<String, Value>,
     /// Outer status id -> reblogged status id.
@@ -156,6 +158,68 @@ impl AppState {
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
+
+    /// Test hook: every access token stops working (as if expired); refresh
+    /// tokens stay valid. Returns how many were dropped.
+    pub fn expire_access_tokens(&self) -> usize {
+        let mut inner = self.lock();
+        let n = inner.tokens.len();
+        inner.tokens.clear();
+        tracing::info!(count = n, "all access tokens expired (test hook)");
+        n
+    }
+}
+
+/// Access token lifetime the fake advertises (Pixelfed's default: one year).
+const TOKEN_EXPIRES_IN: u64 = 31_536_000;
+
+/// Unix seconds -> `2026-11-02T03:24:18+00:00` (the format Pixelfed's token
+/// endpoint uses for `created_at`).
+fn iso8601(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    // H. Hinnant's civil_from_days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}+00:00",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
+}
+
+/// Issue an access + refresh token pair, shaped like Pixelfed's (Laravel
+/// Passport) response: no `scope`, `created_at` as an ISO 8601 string.
+fn issue_tokens(inner: &mut Inner, client_id: &str, scope: &str) -> Response {
+    let access_token = random_token(32);
+    let refresh_token = random_token(32);
+    inner
+        .tokens
+        .insert(access_token.clone(), client_id.to_owned());
+    inner.refresh_tokens.insert(
+        refresh_token.clone(),
+        (client_id.to_owned(), scope.to_owned()),
+    );
+    tracing::info!(client_id, scope, "access token issued");
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    Json(json!({
+        "token_type": "Bearer",
+        "expires_in": TOKEN_EXPIRES_IN,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "created_at": iso8601(now),
+    }))
+    .into_response()
 }
 
 fn status_id(status: &Value) -> std::io::Result<String> {
@@ -537,11 +601,12 @@ async fn token(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Byt
         tracing::info!(reason = desc, "token request rejected");
         error_json(StatusCode::BAD_REQUEST, "invalid_grant", desc)
     };
-    if param(&params, "grant_type") != "authorization_code" {
+    let grant_type = param(&params, "grant_type");
+    if !matches!(grant_type, "authorization_code" | "refresh_token") {
         return error_json(
             StatusCode::BAD_REQUEST,
             "unsupported_grant_type",
-            "only authorization_code is supported",
+            "only authorization_code and refresh_token are supported",
         );
     }
     let client_id = param(&params, "client_id");
@@ -556,6 +621,20 @@ async fn token(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Byt
                 "Client authentication failed",
             );
         }
+    }
+    if grant_type == "refresh_token" {
+        // Passport semantics: the refresh token is single use and rotating;
+        // the access tokens it replaces are revoked.
+        let Some((owner, scope)) = inner.refresh_tokens.remove(param(&params, "refresh_token"))
+        else {
+            return invalid_grant("The refresh token is invalid.");
+        };
+        if owner != client_id {
+            return invalid_grant("refresh token was issued to another client");
+        }
+        inner.tokens.retain(|_, c| c != client_id);
+        tracing::info!(client_id, "refresh token redeemed");
+        return issue_tokens(&mut inner, client_id, &scope);
     }
     // Single use: the code is consumed by any exchange attempt, successful or not.
     let Some(code) = inner.codes.remove(param(&params, "code")) else {
@@ -577,21 +656,7 @@ async fn token(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Byt
     if s256_challenge(verifier) != code.challenge {
         return invalid_grant("code_verifier does not match the code_challenge");
     }
-    let access_token = random_token(32);
-    inner
-        .tokens
-        .insert(access_token.clone(), client_id.to_owned());
-    tracing::info!(client_id, scope = %code.scope, "access token issued");
-    let created_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    Json(json!({
-        "access_token": access_token,
-        "token_type": "Bearer",
-        "scope": code.scope,
-        "created_at": created_at,
-    }))
-    .into_response()
+    issue_tokens(&mut inner, client_id, &code.scope)
 }
 
 // ---------- API ----------
@@ -617,10 +682,15 @@ async fn home_timeline(
         .unwrap_or(20)
         .clamp(1, 40);
     let max_id = params.get("max_id").and_then(|m| m.parse::<u128>().ok());
+    // Pixelfed (unlike Mastodon) hides boosts unless `include_reblogs` is true.
+    let include_reblogs = params
+        .get("include_reblogs")
+        .is_some_and(|v| matches!(v.as_str(), "true" | "1"));
     let inner = state.lock();
     let ids: Vec<&String> = inner
         .timeline
         .iter()
+        .filter(|id| include_reblogs || !inner.reblog_of.contains_key(*id))
         .filter(|id| max_id.is_none_or(|max| id.parse::<u128>().is_ok_and(|n| n < max)))
         .take(limit)
         .collect();
@@ -708,4 +778,14 @@ async fn media(State(state): State<Arc<AppState>>, UrlPath(path): UrlPath<String
         Body::from(bytes),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn iso8601_formats_like_pixelfed() {
+        assert_eq!(super::iso8601(0), "1970-01-01T00:00:00+00:00");
+        assert_eq!(super::iso8601(1_793_589_858), "2026-11-02T03:24:18+00:00");
+        assert_eq!(super::iso8601(951_782_400), "2000-02-29T00:00:00+00:00");
+    }
 }

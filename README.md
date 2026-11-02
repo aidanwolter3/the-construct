@@ -154,7 +154,8 @@ client only holds a pod session token and sends `Authorization: Bearer <session>
 Environment:
 
 - `PIXELFED_INSTANCE_URL` (default `http://127.0.0.1:8081`, the fake): base for pod->upstream calls. The only
-  instance accepted in auth calls.
+  instance accepted in auth calls. For the local real Pixelfed use `http://localhost:8090` (see "Local Pixelfed
+  instance").
 - `PIXELFED_PUBLIC_URL` (default = instance URL): base for browser-facing links (the `authorize_endpoint`),
   e.g. `http://10.0.2.2:8081` for the Android emulator while the pod calls `127.0.0.1:8081`.
 
@@ -169,7 +170,11 @@ Endpoints:
   posts/users/media entities, PostCard layout with like/bookmark optimistic mutations). Without a bearer: 200 with a
   signed-out bundle (a "Sign in with Pixelfed" `action.auth.login` button). With a bearer that no longer works
   (unknown session, or the upstream rejected the stored token): 401 with the same signed-out bundle as the body and
-  `X-Canvas-Session: invalid`, so the client drops its stale session. Upstream unreachable -> 502.
+  `X-Canvas-Session: invalid`, so the client drops its stale session. Upstream unreachable -> 502. The upstream
+  request is `GET /api/v1/timelines/home?limit=20&include_reblogs=true` (Pixelfed hides boosts without it).
+- Upstream tokens: the pod stores the access token and, when the upstream issues them (Pixelfed does), the refresh
+  token and expiry. On an upstream 401 (feed or action) it refreshes once (`grant_type=refresh_token`, serialized
+  so concurrent requests share one refresh) and retries; if that fails, the feed signs out as above.
 - `POST /v1/pixelfed/posts/like {id, liked}` and `POST /v1/pixelfed/posts/bookmark {id, bookmarked}` -> `{ok, id,
   is_liked, like_count, is_bookmarked}`. No session 401; upstream 4xx passed through; upstream 5xx/unreachable 502.
 - `GET /v1/pixelfed/media/{key}`: unauthenticated media/avatar proxy. Every image URL in a bundle is rewritten to
@@ -224,7 +229,8 @@ Per platform (DECISIONS D21):
   `FAKE_PIXELFED_PUBLIC_URL=http://10.0.2.2:8081`) so the browser can reach the authorize page. If the browser is not
   usable (e.g. Chrome's first-run screen), deliver the redirect by hand:
   `adb shell am start -a android.intent.action.VIEW -d '"canvas://oauth?code=...&state=..."'`.
-- **Simulator** (live mode): in-memory store and an auto-approving "browser" (see Simulation mode).
+- **Simulator** (live mode): in-memory store and an auto-approving "browser" for the fake, or a scripted Pixelfed
+  web login for a real instance with `-PpixelfedLogin=<user>:<password>` (see Simulation mode).
 
 ## Local Pixelfed instance (real, dev only)
 
@@ -257,6 +263,28 @@ below). Things the real instance does differently from the fake:
 - The home timeline hides boosts unless `include_reblogs=true`, hides text-only posts, and emits absolute `Link`
   headers built from `APP_URL` that drop `include_reblogs`.
 - Media/avatar URLs are absolute `http://localhost:8090/storage/...`.
+- JSON differences the normalizer tolerates (covered by `test_pixelfed_recorded_timeline_normalization` over
+  `fixtures/pixelfed/recorded/`): `content` without a `<p>` wrapper, empty alt text `""` (-> null), small integer
+  media ids, integer `meta.original.aspect` (`1`), no `meta.small`, millisecond `created_at`; a boost's inner status
+  is Pixelfed's extended entity (`pf_type`, `liked_by`, `reply_count`, media `mime`), and `_pe` accounts lack
+  `avatar_static`. The token response has `created_at` as an ISO string, plus `expires_in` (one year) and
+  `refresh_token` (rotated on refresh), and no `scope`.
+- An unfavourite answer's `favourites_count` can lag (the count is updated by a queue job). The client ignores
+  action response bodies (D14), so the optimistic count stays right; a refetch within a second or two may show the
+  old count.
+- The authorize page needs a logged-in Pixelfed web session (login is by **e-mail**:
+  `canvasadmin@example.test`, `alice@example.test`, `bob@example.test`). A client the user already approved is
+  redirected straight back without the consent page.
+
+End to end with the desktop simulator (pod on 8480 so it does not clash with a dev pod on 8080):
+
+```bash
+CANVAS_ADDR=127.0.0.1:8480 CANVAS_DATA_DIR=/tmp/canvas-pf PIXELFED_INSTANCE_URL=http://localhost:8090 \
+  cargo run -p server &
+cd kmp-app && ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_home \
+  -PbaseUrl=http://127.0.0.1:8480 -PpixelfedLogin=canvasadmin:canvas-dev-pass \
+  -Pscript="shot signed-out; click Sign in with Pixelfed; wait-text 30000 @canvasadmin; wait-text 20000 Alice Example boosted; wait-images 30000; shot feed"
+```
 
 Upstream quirks handled by the script: the image ships without `storage/app/public` (default avatar/header are
 installed from `fixtures/pixelfed/images/`); OAuth client ids start at 1000 because Passport 13 rejects a token
@@ -334,6 +362,7 @@ Flags (all optional):
 | `-PbaseUrl` | `http://127.0.0.1:8080` | Server for live mode. |
 | `-PtimeoutMs` | `10000` | Live mode only: how long to wait for the workspace to load before the first step. |
 | `-Pout` | `kmp-app/desktopApp/build/sim/<yyyyMMdd-HHmmss>` | Output directory. |
+| `-PpixelfedLogin` | | Live mode only: `<e-mail or seed username>:<password>` for a real Pixelfed (below). |
 | `-Pstorage` | fresh temp dir | Live mode only: engine storage dir (holds `cache.db`). It is kept after the run, so a second run with the same dir exercises restart persistence. The temp default is deleted on exit. |
 
 Relative paths (`-Pfixture`, `-PscriptFile`, `-Pout`, `-Pstorage`) resolve against the **repo root**, the task's working
@@ -355,7 +384,14 @@ Keychain is never touched) and a "browser" that GETs the authorize URL with `aut
 the engine's loopback `redirect_uri` (the fake upstream does that, with or without `FAKE_PIXELFED_AUTO_APPROVE`), it
 follows it, so `click Sign in with Pixelfed; wait-text 20000 @canvasdemo` signs in. A real Pixelfed answers with its
 login page instead: the simulator prints the authorize URL and the status line shows "no browser available"
-(opening the URL in a real browser and logging in still completes the sign-in while the script waits).
+(opening the URL in a real browser and logging in still completes the sign-in while the script waits). For a real
+instance pass `-PpixelfedLogin=<login>:<password>`: the "browser" then does what a person would (`PixelfedLoginBrowser`,
+own cookie jar): `GET /login` for the CSRF `_token`, `POST /login` (Pixelfed logs in by e-mail; a login without `@` is
+sent as `<login>@example.test`, the dev seed's domain), `GET` the authorize URL, `POST` the consent page's approve
+form (`_token`, `state`, `client_id`, `auth_token`; the deny form is the one with `_method=DELETE`) and follows the
+302 to the loopback listener. Failures (wrong password, 429 throttling) are logged with the URL. After the user
+appears (`wait-text 30000 @canvasadmin`), wait for feed text too (e.g. `wait-text 20000 Alice Example boosted`): the
+status line updates before the refetched feed arrives.
 
 **Images** (Coil, DECISIONS D18) are deterministic. In fixture mode the network is never used: any image URL whose
 path ends in `/storage/<file>` or `/v1/pixelfed/media/<file>` is served from `fixtures/pixelfed/media/<file>` (the

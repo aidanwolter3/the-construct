@@ -167,6 +167,102 @@ fn bad_gateway(e: &UpstreamError) -> Response {
     json_error(StatusCode::BAD_GATEWAY, body)
 }
 
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
+/// The upstream rejected `stale.access_token` with 401: refresh it with the
+/// stored refresh token (serialized; a concurrent caller that already
+/// refreshed it gets the new token without a second upstream call).
+/// `Ok(None)`: no usable refresh path (no refresh token, app gone, or the
+/// upstream rejected the refresh), so the caller signs out. `Err`: the
+/// upstream was unreachable / 5xx during the refresh (or the store failed).
+async fn refresh_account(
+    state: &Arc<AppState>,
+    stale: &PixelfedAccount,
+) -> Result<Option<PixelfedAccount>, UpstreamError> {
+    let _guard = state.pixelfed_refresh.lock().await;
+    let instance = state.pixelfed.instance_url.clone();
+    let store_err = |e: ApiError| UpstreamError::Unreachable(format!("pod store: {e:?}"));
+    let current = {
+        let i = instance.clone();
+        blocking(state, move |s| s.pixelfed_account(&i))
+            .await
+            .map_err(store_err)?
+    };
+    let Some(current) = current else {
+        return Ok(None);
+    };
+    if current.access_token != stale.access_token {
+        return Ok(Some(current)); // refreshed (or re-signed-in) meanwhile
+    }
+    let (Some(refresh), Some(redirect)) =
+        (current.refresh_token.clone(), current.redirect_uri.clone())
+    else {
+        return Ok(None);
+    };
+    let app = {
+        let i = instance.clone();
+        blocking(state, move |s| s.pixelfed_app(&i, &redirect))
+            .await
+            .map_err(store_err)?
+    };
+    let Some(app) = app else {
+        return Ok(None);
+    };
+    match state
+        .upstream
+        .refresh_token(&app.client_id, &app.client_secret, &refresh)
+        .await
+    {
+        Ok(t) => {
+            let fresh = PixelfedAccount {
+                access_token: t.access_token,
+                // Passport rotates it; keep the old one if none came back.
+                refresh_token: t.refresh_token.or(Some(refresh)),
+                expires_at: t.expires_in.map(|s| now_secs().saturating_add(s)),
+                ..current
+            };
+            let (i, a) = (instance, fresh.clone());
+            blocking(state, move |s| s.save_pixelfed_account(&i, &a))
+                .await
+                .map_err(store_err)?;
+            tracing::info!(username = %fresh.username, "upstream access token refreshed");
+            Ok(Some(fresh))
+        }
+        Err(UpstreamError::Status(status, detail)) if status.is_client_error() => {
+            tracing::warn!(status = status.as_u16(), %detail, "upstream token refresh rejected");
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Run an upstream call with the stored token; on a 401, refresh the token
+/// once and retry. A 401 that survives (no refresh possible, or the fresh
+/// token is rejected too) is returned as `Status(401)`.
+async fn with_token<T, F, Fut>(
+    state: &Arc<AppState>,
+    account: PixelfedAccount,
+    call: F,
+) -> Result<T, UpstreamError>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<T, UpstreamError>>,
+{
+    match call(account.access_token.clone()).await {
+        Err(UpstreamError::Status(StatusCode::UNAUTHORIZED, detail)) => {
+            match refresh_account(state, &account).await? {
+                Some(fresh) => call(fresh.access_token).await,
+                None => Err(UpstreamError::Status(StatusCode::UNAUTHORIZED, detail)),
+            }
+        }
+        other => other,
+    }
+}
+
 // ---------- auth ----------
 
 /// `POST /v1/auth/pixelfed/app {instance_url, redirect_uri}`.
@@ -288,7 +384,7 @@ async fn exchange_token(
         )
         .await
     {
-        Ok(t) => t.access_token,
+        Ok(t) => t,
         Err(UpstreamError::Status(status, detail)) if status.is_client_error() => {
             if status == StatusCode::UNAUTHORIZED {
                 // invalid_client: the upstream forgot our app (e.g. it was reset);
@@ -300,7 +396,7 @@ async fn exchange_token(
         }
         Err(e) => return bad_gateway(&e),
     };
-    let account: Account = match state.upstream.verify_credentials(&token).await {
+    let account: Account = match state.upstream.verify_credentials(&token.access_token).await {
         Ok(v) => match Account::deserialize(&v) {
             Ok(a) => a,
             Err(e) => {
@@ -317,9 +413,12 @@ async fn exchange_token(
     let mut media = MediaUrls::new(&proxy_base(&headers));
     let user = normalize_account(&account, &mut media);
     let stored = PixelfedAccount {
-        access_token: token,
+        access_token: token.access_token,
         account_id: account.id.clone(),
         username: user.get_str("username").unwrap_or_default().to_owned(),
+        refresh_token: token.refresh_token,
+        expires_at: token.expires_in.map(|s| now_secs().saturating_add(s)),
+        redirect_uri: Some(redirect_uri.to_owned()),
     };
     let session = new_session_token();
     let hash = session_hash(&session);
@@ -401,15 +500,17 @@ pub async fn home_workspace(state: &Arc<AppState>, headers: &HeaderMap) -> Respo
         Ok(None) => return signed_out(),
         Err(e) => return e.into_response(),
     };
-    let statuses = match state
-        .upstream
-        .home_timeline(&account.access_token, TIMELINE_LIMIT)
-        .await
+    let username = account.username.clone();
+    let statuses = match with_token(state, account, |token| async move {
+        state.upstream.home_timeline(&token, TIMELINE_LIMIT).await
+    })
+    .await
     {
         Ok(s) => s,
         Err(UpstreamError::Status(StatusCode::UNAUTHORIZED, _)) => {
-            // The upstream token was revoked or expired: forget it.
-            tracing::warn!(username = %account.username, "upstream rejected the stored token; signed out");
+            // The upstream token was revoked or expired and could not be
+            // refreshed: forget it.
+            tracing::warn!(%username, "upstream rejected the stored token; signed out");
             let instance = state.pixelfed.instance_url.clone();
             let _ = blocking(state, move |s| s.delete_pixelfed_account(&instance)).await;
             return signed_out();
@@ -485,11 +586,12 @@ async fn toggle(state: Arc<AppState>, headers: HeaderMap, body: Bytes, kind: Tog
         (Toggle::Bookmark, true) => "bookmark",
         (Toggle::Bookmark, false) => "unbookmark",
     };
-    match state
-        .upstream
-        .status_action(&account.access_token, &id, action)
-        .await
-    {
+    let result = with_token(&state, account, |token| {
+        let (state, id) = (&state, &id);
+        async move { state.upstream.status_action(&token, id, action).await }
+    })
+    .await;
+    match result {
         Ok(v) => match Status::deserialize(&v) {
             Ok(status) => {
                 let target = status.target();

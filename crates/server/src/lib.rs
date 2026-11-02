@@ -121,6 +121,9 @@ pub struct AppState {
     fault: Mutex<Option<Fault>>,
     pixelfed: PixelfedConfig,
     upstream: Upstream,
+    /// Serializes upstream token refreshes (Passport rotates the refresh
+    /// token, so two concurrent refreshes would revoke each other).
+    pixelfed_refresh: tokio::sync::Mutex<()>,
 }
 
 impl AppState {
@@ -132,6 +135,7 @@ impl AppState {
             fault: Mutex::new(None),
             upstream: Upstream::new(&pixelfed.instance_url),
             pixelfed,
+            pixelfed_refresh: tokio::sync::Mutex::new(()),
         }
     }
 

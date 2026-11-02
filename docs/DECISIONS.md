@@ -350,6 +350,18 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   restart. `GET` streams the upstream bytes with the upstream content type and no auth (keys are opaque and the
   media are public upstream). URLs under `PIXELFED_PUBLIC_URL` are fetched via `PIXELFED_INSTANCE_URL`.
 - **Demo:** the static `pixelfed_demo` like intent posts to `POST /v1/demo/ack` (stateless 200).
+- **Real Pixelfed (M6-RA):** the timeline request adds `include_reblogs=true` (Pixelfed hides boosts otherwise; the
+  pod reads one page, so Pixelfed's Link headers, which drop the flag, are not followed). Every optional field is
+  type-lenient (counts as numbers or numeric strings, flags as bools/0/1/strings, `aspect` integer or float,
+  malformed `meta`/`reblog`/attachments dropped rather than the whole status); `reply_count` (Pixelfed's `_pe`
+  name, used for a boost's inner status) backs `replies_count`. The token response is parsed leniently (only
+  `access_token` required; Pixelfed's ISO `created_at` is ignored). **Refresh:** migration v3 adds
+  `refresh_token`, `expires_at`, `redirect_uri` to `pixelfed_account`; an upstream 401 on the feed or an action
+  triggers one refresh with the issuing app's credentials (looked up by redirect_uri), under a tokio mutex that
+  re-reads the stored token first, because Passport rotates the refresh token and a second concurrent refresh would
+  fail and sign the user out. Refresh rejected / impossible -> the old 401 behaviour. Pixelfed tokens last a year,
+  so this mostly covers expiry, not revocation. The fake mirrors all of this (hides boosts without the flag,
+  Passport-shaped token response, rotating `refresh_token` grant, `expire_access_tokens()` test hook).
 
 ## D18: Pixelfed widgets: Coil, carousel aspect rule, simulator images
 
@@ -427,6 +439,10 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
   `.dockerignore` drops `storage/app/public`), media upload retried on `200 []` (first write of a fresh user).
 - **Tokens for seeding/tests** are personal access tokens minted via tinker (scopes read write follow push); the
   real PKCE flow was verified separately with curl (see `fixtures/pixelfed/recorded/` and the M6 report).
+- **Pod against it:** `PIXELFED_INSTANCE_URL=http://localhost:8090` (not 127.0.0.1: domain routing), and
+  `PIXELFED_PUBLIC_URL` left at its default (= instance URL), so the authorize link is `localhost` too. Verified end
+  to end with the desktop simulator's scripted login (D21): sign-in, feed with the boost, real JPEGs through the
+  media proxy, carousel swipe, like reaching the instance (`favourited: true`).
 
 ## D21: Platform sign-in glue (desktop, Android, simulator)
 
@@ -447,4 +463,8 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
 - **Simulator:** `InMemorySecureStore`; `AutoApproveBrowser` GETs `<authorize>&auto=1` without following redirects;
   only a 3xx whose `Location` starts with the URL's `redirect_uri` is followed (on a daemon thread, with
   `Redirect.NORMAL`, because the engine serves the loopback listener only after `open` returns). Anything else (a
-  real instance's login page) prints the URL and returns false.
+  real instance's login page) prints the URL and returns false. **Real instances:** opt-in
+  `-PpixelfedLogin=<login>:<password>` selects `PixelfedLoginBrowser`, which scripts Pixelfed's web login (by
+  e-mail; a bare login gets `@example.test`, the seed domain) and the Passport consent form (the form without
+  `_method=DELETE`) with its own cookie jar and no auto-redirects, then follows the final redirect to the loopback
+  listener on a daemon thread. Credentials are a dev convenience for the local seeded instance only.

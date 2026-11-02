@@ -43,66 +43,130 @@ fn de_id<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     }
 }
 
-/// `null` -> default (serde's `default` only covers an absent field).
-fn de_null_default<'de, D, T>(d: D) -> Result<T, D::Error>
+/// A list whose unparseable items are skipped (logged); null/absent/non-array -> empty.
+fn de_lenient_vec<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
 where
     D: Deserializer<'de>,
-    T: Deserialize<'de> + Default,
+    T: serde::de::DeserializeOwned,
 {
-    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+    let Some(Value::Array(items)) = Option::<Value>::deserialize(d)? else {
+        return Ok(Vec::new());
+    };
+    Ok(items
+        .into_iter()
+        .filter_map(|v| match T::deserialize(&v) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                tracing::warn!(error = %e, id = %v["id"], "skipping unparseable Pixelfed list item");
+                None
+            }
+        })
+        .collect())
+}
+
+/// A count that may be a number, a numeric string or null/absent.
+fn de_lenient_i64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error> {
+    Ok(match Option::<Value>::deserialize(d)? {
+        Some(Value::Number(n)) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)),
+        Some(Value::String(s)) => s.trim().parse().ok(),
+        _ => None,
+    })
+}
+
+/// A flag that may be a bool, 0/1, "true"/"false"/"0"/"1" or null/absent.
+fn de_lenient_bool<'de, D: Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
+    Ok(match Option::<Value>::deserialize(d)? {
+        Some(Value::Bool(b)) => Some(b),
+        Some(Value::Number(n)) => n.as_f64().map(|f| f != 0.0),
+        Some(Value::String(s)) => match s.trim() {
+            "true" | "1" => Some(true),
+            "false" | "0" | "" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+/// A dimension that may be a number (integer or float), a numeric string or null.
+fn de_lenient_f64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
+    Ok(match Option::<Value>::deserialize(d)? {
+        Some(Value::Number(n)) => n.as_f64(),
+        Some(Value::String(s)) => s.trim().parse().ok(),
+        _ => None,
+    })
+}
+
+/// A string field that some servers send as another JSON type: non-strings
+/// (numbers, objects, ...) read as absent rather than failing the status.
+fn de_lenient_str<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(match Option::<Value>::deserialize(d)? {
+        Some(Value::String(s)) => Some(s),
+        _ => None,
+    })
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Account {
     #[serde(deserialize_with = "de_id")]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_str")]
     pub username: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_str")]
     pub acct: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_str")]
     pub display_name: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_str")]
     pub avatar: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_str")]
     pub avatar_static: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct MediaSize {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_f64")]
     pub width: Option<f64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_f64")]
     pub height: Option<f64>,
-    #[serde(default)]
+    /// Pixelfed sends an integer (`1`) for square images.
+    #[serde(default, deserialize_with = "de_lenient_f64")]
     pub aspect: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct MediaMeta {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_obj")]
     pub original: Option<MediaSize>,
-    #[serde(default)]
+    /// Absent on Pixelfed.
+    #[serde(default, deserialize_with = "de_lenient_obj")]
     pub small: Option<MediaSize>,
+}
+
+/// An object field that may be null, absent or of the wrong shape (-> None).
+fn de_lenient_obj<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    Ok(Option::<Value>::deserialize(d)?.and_then(|v| T::deserialize(v).ok()))
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MediaAttachment {
     #[serde(deserialize_with = "de_id")]
     pub id: String,
-    #[serde(default, rename = "type")]
+    #[serde(default, rename = "type", deserialize_with = "de_lenient_str")]
     pub kind: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_str")]
     pub url: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_str")]
     pub preview_url: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_str")]
     pub remote_url: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_str")]
     pub description: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_str")]
     pub blurhash: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_obj")]
     pub meta: Option<MediaMeta>,
 }
 
@@ -110,33 +174,41 @@ pub struct MediaAttachment {
 pub struct Status {
     #[serde(deserialize_with = "de_id")]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_str")]
     pub uri: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_str")]
     pub url: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_str")]
     pub created_at: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_str")]
     pub content: Option<String>,
     /// Pixelfed sometimes carries a plain-text rendition.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_str")]
     pub content_text: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_str")]
     pub spoiler_text: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_bool")]
     pub sensitive: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_i64")]
     pub replies_count: Option<i64>,
-    #[serde(default)]
+    /// Pixelfed's `_pe` entity (also used for a reblog's inner status, even in
+    /// Mastodon mode) names it `reply_count`. Not a serde alias: some objects
+    /// carry both, which an alias would reject as a duplicate field.
+    #[serde(default, deserialize_with = "de_lenient_i64")]
+    pub reply_count: Option<i64>,
+    #[serde(default, deserialize_with = "de_lenient_i64")]
     pub favourites_count: Option<i64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_bool")]
     pub favourited: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_bool")]
     pub bookmarked: Option<bool>,
     pub account: Account,
-    #[serde(default, deserialize_with = "de_null_default")]
+    /// An attachment that does not parse is dropped (logged), not the status.
+    #[serde(default, deserialize_with = "de_lenient_vec")]
     pub media_attachments: Vec<MediaAttachment>,
-    #[serde(default)]
+    /// A malformed reblog object reads as no reblog (the wrapper is then
+    /// shown as a plain status) rather than dropping the entry.
+    #[serde(default, deserialize_with = "de_lenient_obj")]
     pub reblog: Option<Box<Status>>,
 }
 
@@ -274,7 +346,10 @@ pub fn normalize_post(
     post.set("caption", caption);
     post.set("content_warning", json!(content_warning));
     post.set("sensitive", s.sensitive.unwrap_or(false));
-    post.set("reply_count", s.replies_count.unwrap_or(0));
+    post.set(
+        "reply_count",
+        s.replies_count.or(s.reply_count).unwrap_or(0).max(0),
+    );
     post.set(
         "created_at",
         json!(s.created_at.as_deref().and_then(parse_rfc3339)),
@@ -692,6 +767,180 @@ mod tests {
         assert_eq!(media_count, 6);
         // 6 urls + 6 previews + 3 avatars (deduped by URL).
         assert_eq!(media.keys.len(), 15);
+    }
+
+    /// Real Pixelfed 0.15.2 responses recorded from the local instance
+    /// (`scripts/pixelfed_dev.sh record`; D20).
+    const RECORDED_REBLOGS: &str =
+        include_str!("../../../../fixtures/pixelfed/recorded/timeline_home_reblogs.json");
+    const RECORDED_PLAIN: &str =
+        include_str!("../../../../fixtures/pixelfed/recorded/timeline_home.json");
+    const RECORDED_PE: &str =
+        include_str!("../../../../fixtures/pixelfed/recorded/timeline_home_pe.json");
+    const REAL_BASE: &str = "http://localhost:8090";
+
+    fn normalize_recorded(json: &str) -> (Timeline, MediaUrls) {
+        let raw: Vec<Value> = serde_json::from_str(json).unwrap();
+        let mut media = MediaUrls::new(PROXY);
+        let tl = normalize_timeline(&raw, &mut media);
+        assert_eq!(tl.order.len(), raw.len(), "no recorded status was skipped");
+        (tl, media)
+    }
+
+    #[test]
+    fn test_pixelfed_recorded_timeline_normalization() {
+        let (tl, media) = normalize_recorded(RECORDED_REBLOGS);
+        let e = &tl.entities;
+        let alice = "pixelfed://users/1022706462152876034";
+        let bob = "pixelfed://users/1022706465058381827";
+
+        // include_reblogs=true: alice's boost of bob's post comes first, as bob's post.
+        assert_eq!(
+            tl.order,
+            [
+                "pixelfed://posts/1022706474904072196",
+                "pixelfed://posts/1022706476640768008",
+                "pixelfed://posts/1022706476322123783",
+                "pixelfed://posts/1022706476008685574",
+                "pixelfed://posts/1022706475674484741",
+            ]
+        );
+        assert!(!e.contains_key("pixelfed://posts/1022706489856569353"));
+        // The inner object is Pixelfed's `_pe` entity (pf_type, liked_by, reply_count, mime).
+        let boosted = &e["pixelfed://posts/1022706474904072196"];
+        assert_eq!(boosted.get_str("author_uri"), Some(bob));
+        assert_eq!(boosted.get_str("reblogged_by_uri"), Some(alice));
+        assert_eq!(
+            boosted.get_str("caption"),
+            Some("Bob's post, boosted by alice")
+        );
+        assert_eq!(boosted.get_i64("reply_count"), Some(0));
+        assert_eq!(boosted.get_i64("like_count"), Some(0));
+        assert_eq!(boosted.get_i64("created_at"), Some(1_793_589_024)); // ...T03:10:24.000Z
+        let teal = &e["pixelfed://media/1"];
+        assert_eq!(teal.get_f64("aspect_ratio"), Some(1.0));
+        assert_eq!(
+            teal.get_str("alt_text"),
+            Some("Teal square with the number 7")
+        );
+        assert_eq!(e[bob].get_str("display_name"), Some("Bob Example"));
+
+        // Carousel: media 2, 3, 4 in order; integer aspect `1` -> 1.0; the
+        // content has no <p> wrapper and a hashtag link whose text is kept.
+        let carousel = &e["pixelfed://posts/1022706475674484741"];
+        assert_eq!(
+            carousel.get_str_list("media_uris").unwrap(),
+            [
+                "pixelfed://media/2",
+                "pixelfed://media/3",
+                "pixelfed://media/4"
+            ]
+        );
+        for (uri, alt) in [
+            ("pixelfed://media/2", "Red square with the number 1"),
+            ("pixelfed://media/3", "Blue square with the number 2"),
+            ("pixelfed://media/4", "Green square with the number 3"),
+        ] {
+            assert_eq!(e[uri].get_str("alt_text"), Some(alt));
+            assert_eq!(e[uri].get_f64("aspect_ratio"), Some(1.0));
+            assert_eq!(e[uri].get_str("type"), Some("image"));
+        }
+        assert_eq!(
+            carousel.get_str("caption"),
+            Some("Carousel: one, two, three #canvas")
+        );
+        assert_eq!(carousel.get_str("author_uri"), Some(alice));
+        assert!(carousel.get("reblogged_by_uri").is_none());
+
+        // Portrait: empty alt "" -> null; aspect 0.8.
+        let portrait = &e["pixelfed://media/5"];
+        assert_eq!(portrait.get("alt_text"), Some(&Value::Null));
+        assert_eq!(portrait.get_f64("aspect_ratio"), Some(0.8));
+        assert_eq!(e["pixelfed://media/6"].get_f64("aspect_ratio"), Some(1.5));
+
+        // CW post.
+        let cw = &e["pixelfed://posts/1022706476640768008"];
+        assert_eq!(cw.get_str("content_warning"), Some("CW: orange"));
+        assert_eq!(cw.get_bool("sensitive"), Some(true));
+        assert_eq!(
+            cw.get_str("url"),
+            Some("http://localhost:8090/p/alice/1022706476640768008")
+        );
+
+        // Every image URL is proxied and maps back to the instance.
+        let m = &e["pixelfed://media/2"];
+        let key = m
+            .get_str("url")
+            .unwrap()
+            .strip_prefix(&format!("{PROXY}/"))
+            .unwrap();
+        assert!(media.keys[key].starts_with(&format!("{REAL_BASE}/storage/m/_v2/")));
+        let key = e[alice]
+            .get_str("avatar_url")
+            .unwrap()
+            .strip_prefix(&format!("{PROXY}/"))
+            .unwrap();
+        assert_eq!(
+            media.keys[key],
+            format!("{REAL_BASE}/storage/avatars/default.jpg")
+        );
+
+        // Without include_reblogs the boost is absent; the `_pe` variant (no
+        // avatar_static, reply_count instead of replies_count, media mime)
+        // normalizes to the same entities.
+        let (plain, _) = normalize_recorded(RECORDED_PLAIN);
+        assert_eq!(plain.order, tl.order[1..]);
+        let (pe, _) = normalize_recorded(RECORDED_PE);
+        assert_eq!(pe.order, plain.order);
+        assert_eq!(pe.entities, plain.entities);
+        for (uri, rec) in &plain.entities {
+            assert_eq!(Some(rec), e.get(uri), "{uri}");
+        }
+    }
+
+    #[test]
+    fn lenient_field_types() {
+        let raw = vec![json!({
+            "id": "1", "account": {"id": 2, "avatar": 5, "display_name": null},
+            "sensitive": 0, "favourited": "1", "bookmarked": null,
+            "favourites_count": "12", "reply_count": 3, "content": 42,
+            "reblog": "garbage",
+            "media_attachments": [
+                {"id": 9, "description": "", "meta": {"original": {"width": "1080", "height": 1350}, "small": null}},
+                {"no_id": true},
+                {"id": "10", "meta": "bad"}
+            ]
+        })];
+        let mut media = MediaUrls::new(PROXY);
+        let tl = normalize_timeline(&raw, &mut media);
+        let p = &tl.entities["pixelfed://posts/1"];
+        assert_eq!(p.get_bool("sensitive"), Some(false));
+        assert_eq!(p.get_bool("is_liked"), Some(true));
+        assert_eq!(p.get_bool("is_bookmarked"), Some(false));
+        assert_eq!(p.get_i64("like_count"), Some(12));
+        assert_eq!(p.get_i64("reply_count"), Some(3));
+        assert_eq!(p.get_str("caption"), Some(""));
+        assert!(p.get("reblogged_by_uri").is_none());
+        assert_eq!(
+            p.get_str_list("media_uris").unwrap(),
+            ["pixelfed://media/9", "pixelfed://media/10"]
+        );
+        assert_eq!(
+            tl.entities["pixelfed://media/9"].get_f64("aspect_ratio"),
+            Some(0.8)
+        );
+        assert_eq!(
+            tl.entities["pixelfed://media/9"].get("alt_text"),
+            Some(&Value::Null)
+        );
+        assert_eq!(
+            tl.entities["pixelfed://media/10"].get_f64("aspect_ratio"),
+            Some(1.0)
+        );
+        assert_eq!(
+            tl.entities["pixelfed://users/2"].get("avatar_url"),
+            Some(&Value::Null)
+        );
     }
 
     #[test]

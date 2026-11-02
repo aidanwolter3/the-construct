@@ -196,14 +196,45 @@ async fn full_oauth_flow_issues_a_working_token() {
         String::from_utf8_lossy(&r.body)
     );
     let j = r.json();
+    // Shaped like Pixelfed's (Laravel Passport) response: ISO created_at, a
+    // refresh token, a one-year expiry, no scope.
     assert_eq!(j["token_type"], "Bearer");
-    assert_eq!(j["scope"], "read write");
-    assert!(j["created_at"].as_u64().unwrap() > 1_700_000_000);
+    assert_eq!(j["expires_in"], 31_536_000);
+    assert!(j.get("scope").is_none());
+    let created = j["created_at"].as_str().unwrap();
+    assert!(
+        created.ends_with("+00:00") && created.starts_with("20"),
+        "{created}"
+    );
+    assert_eq!(created.len(), "2026-11-02T03:24:18+00:00".len());
     let token = j["access_token"].as_str().unwrap();
+    let refresh = j["refresh_token"].as_str().unwrap();
 
     let me = get(&router, "/api/v1/accounts/verify_credentials", Some(token)).await;
     assert_eq!(me.status, StatusCode::OK);
     assert_eq!(me.json()["username"], "canvasdemo");
+
+    // Refresh: rotates both tokens, revoking the old ones (Passport).
+    let pairs = [
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh),
+        ("client_id", client_id.as_str()),
+        ("client_secret", secret.as_str()),
+    ];
+    let r = post_form(&router, "/oauth/token", &pairs).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let j2 = r.json();
+    let token2 = j2["access_token"].as_str().unwrap();
+    assert_ne!(token2, token);
+    assert_ne!(j2["refresh_token"].as_str().unwrap(), refresh);
+    let me = get(&router, "/api/v1/accounts/verify_credentials", Some(token)).await;
+    assert_eq!(me.status, StatusCode::UNAUTHORIZED);
+    let me = get(&router, "/api/v1/accounts/verify_credentials", Some(token2)).await;
+    assert_eq!(me.status, StatusCode::OK);
+    // The old refresh token is single use.
+    let r = post_form(&router, "/oauth/token", &pairs).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json()["error"], "invalid_grant");
 }
 
 #[tokio::test]
@@ -475,9 +506,13 @@ async fn favouriting_a_reblog_targets_the_reblogged_status() {
     .json();
     assert_eq!(r["id"], REBLOG_INNER);
     assert_eq!(r["favourites_count"], 319);
-    let tl = get(&router, "/api/v1/timelines/home", Some(SEED))
-        .await
-        .json();
+    let tl = get(
+        &router,
+        "/api/v1/timelines/home?include_reblogs=true",
+        Some(SEED),
+    )
+    .await
+    .json();
     let outer = tl
         .as_array()
         .unwrap()
@@ -506,7 +541,40 @@ async fn unknown_status_is_404() {
 #[tokio::test]
 async fn timeline_has_the_expected_shapes() {
     let router = router();
-    let r = get(&router, "/api/v1/timelines/home", Some(SEED)).await;
+    // Like Pixelfed, boosts are hidden unless include_reblogs is true.
+    let plain = get(&router, "/api/v1/timelines/home", Some(SEED))
+        .await
+        .json();
+    let ids: Vec<&str> = plain
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [CAROUSEL, SINGLE, TEXT_ONLY, CW]);
+    for flag in ["false", "0"] {
+        let r = get(
+            &router,
+            &format!("/api/v1/timelines/home?include_reblogs={flag}"),
+            Some(SEED),
+        )
+        .await;
+        assert_eq!(r.json().as_array().unwrap().len(), 4, "{flag}");
+    }
+    let r = get(
+        &router,
+        "/api/v1/timelines/home?include_reblogs=1",
+        Some(SEED),
+    )
+    .await;
+    assert_eq!(r.json().as_array().unwrap().len(), 5);
+
+    let r = get(
+        &router,
+        "/api/v1/timelines/home?include_reblogs=true",
+        Some(SEED),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::OK);
     assert!(!String::from_utf8_lossy(&r.body).contains("{{BASE}}"));
     let tl = r.json();
@@ -579,7 +647,12 @@ async fn timeline_has_the_expected_shapes() {
 #[tokio::test]
 async fn timeline_paginates_with_limit_and_max_id() {
     let router = router();
-    let r = get(&router, "/api/v1/timelines/home?limit=2", Some(SEED)).await;
+    let r = get(
+        &router,
+        "/api/v1/timelines/home?limit=2&include_reblogs=true",
+        Some(SEED),
+    )
+    .await;
     let ids: Vec<String> = r
         .json()
         .as_array()
@@ -592,7 +665,7 @@ async fn timeline_paginates_with_limit_and_max_id() {
     assert!(link.contains(&format!("max_id={REBLOG_OUTER}")), "{link}");
     let next = get(
         &router,
-        &format!("/api/v1/timelines/home?max_id={REBLOG_OUTER}"),
+        &format!("/api/v1/timelines/home?max_id={REBLOG_OUTER}&include_reblogs=true"),
         Some(SEED),
     )
     .await;

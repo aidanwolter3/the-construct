@@ -6,7 +6,8 @@
 //!   created if missing).
 //! - `CANVAS_TEST_HOOKS=1`: enables `POST /v1/test/fault`.
 //! - `PIXELFED_INSTANCE_URL`: Pixelfed instance for pod->upstream calls
-//!   (default `http://127.0.0.1:8081`, the local fake).
+//!   (default `http://127.0.0.1:8081`, the local fake; `http://localhost:8090` for the
+//!   local real Pixelfed, whose web/OAuth routes only answer on Host `localhost`).
 //! - `PIXELFED_PUBLIC_URL`: base for browser-facing links such as the authorize
 //!   endpoint (default = instance URL; e.g. `http://10.0.2.2:8081` for the emulator).
 
