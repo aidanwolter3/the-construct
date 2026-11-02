@@ -2,6 +2,7 @@ package org.theconstruct.desktop.sim
 
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.theconstruct.ConstructJson
@@ -55,6 +56,15 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
     @Synchronized
     fun latestLayout(id: String): UiNode? = apps[id]?.versions?.lastOrNull()?.layout
 
+    /** The newest version this build can draw (what a pod serves it), 1-based; null if none. */
+    @Synchronized
+    fun latestCompatibleVersion(id: String): Long? =
+        apps[id]?.versions?.indexOfLast { it.incompatible == null }?.takeIf { it >= 0 }?.let { it + 1L }
+
+    /** The layout of [latestCompatibleVersion]. */
+    @Synchronized
+    fun latestCompatibleLayout(id: String): UiNode? = apps[id]?.versions?.lastOrNull { it.incompatible == null }?.layout
+
     @Synchronized
     fun ids(): List<String> = apps.keys.toList()
 
@@ -75,6 +85,7 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
                     "title" to JsonPrimitive(a.title),
                     "icon" to JsonPrimitive(a.icon),
                     "latest_version" to JsonPrimitive(a.versions.size),
+                    "latest_compatible_version" to (latestCompatibleVersion(a.id)?.let { JsonPrimitive(it) } ?: JsonNull),
                     "updated_at" to JsonPrimitive(rfc3339(a.versions.last().createdAt)),
                 )
             },
@@ -104,6 +115,7 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
         val m = linkedMapOf<String, JsonElement>(
             "app_id" to JsonPrimitive(id),
             "latest_version" to JsonPrimitive(a.versions.size),
+            "latest_compatible_version" to (latestCompatibleVersion(id)?.let { JsonPrimitive(it) } ?: JsonNull),
             "versions" to JsonArray(page.map { JsonObject(versionObject(it.index + 1, it.value)) }),
         )
         if (newestFirst.size > page.size) m["next_before"] = JsonPrimitive(page.last().index + 1)

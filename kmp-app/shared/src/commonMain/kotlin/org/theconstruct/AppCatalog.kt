@@ -56,14 +56,29 @@ class LayoutApiException(
     enum class Kind { Offline, Unauthorized, NotFound, Server }
 }
 
-/** One entry of `GET /v1/apps`. [updatedAt] is in epoch seconds (0 = unknown). */
+/**
+ * One entry of `GET /v1/apps`. [updatedAt] is in epoch seconds (0 = unknown). [latestVersion] is the app's newest
+ * version; [latestCompatibleVersion] the newest one this build can draw, i.e. what opening the app shows (null when
+ * none fits; equal to [latestVersion] from a pod too old to say).
+ */
 data class AppSummary(
     val id: String,
     val title: String,
     val icon: String = "",
     val latestVersion: Long? = null,
     val updatedAt: Long = 0,
-)
+    val latestCompatibleVersion: Long? = latestVersion,
+) {
+    /** The app's newest version when this build can't draw it ("Update the app to see vN"), else null. */
+    val updateRequiredFor: Long? get() = updateRequiredFor(latestVersion, latestCompatibleVersion)
+}
+
+/** [latest] when it is newer than [compatible] (the newest version this build can draw), else null. */
+fun updateRequiredFor(latest: Long?, compatible: Long?): Long? =
+    latest?.takeIf { compatible == null || it > compatible }
+
+/** The hint for a version only a newer build can draw. */
+fun updateHint(version: Long): String = "Update the app to see v$version"
 
 /**
  * One history row. [createdAt] is in epoch seconds (0 = unknown). [schema] is the client schema the version was
@@ -88,11 +103,15 @@ fun incompatibleLabel(reason: String): String = when (reason) {
     else -> "This version of the app can't show it"
 }
 
-/** A page of history, newest first; pass [nextBefore] as `before` for the next (older) page. */
+/**
+ * A page of history, newest first; pass [nextBefore] as `before` for the next (older) page. [latestCompatibleVersion]
+ * as in [AppSummary].
+ */
 data class AppVersionPage(
     val versions: List<AppVersionInfo>,
     val nextBefore: Long? = null,
     val latestVersion: Long? = null,
+    val latestCompatibleVersion: Long? = latestVersion,
 )
 
 /** An app's history as loaded so far (newest first) in the version picker. */
@@ -134,6 +153,7 @@ object AppCatalogJson {
                 icon = o.jStr("icon").orEmpty(),
                 latestVersion = o.jLong("latest_version"),
                 updatedAt = parseTimestamp(o["updated_at"]),
+                latestCompatibleVersion = o.latestCompatible(),
             )
         }
 
@@ -143,8 +163,12 @@ object AppCatalogJson {
             val v = e as? JsonObject ?: return@mapNotNull null
             parseVersionInfo(v)
         }
-        return AppVersionPage(versions, o.jLong("next_before"), o.jLong("latest_version"))
+        return AppVersionPage(versions, o.jLong("next_before"), o.jLong("latest_version"), o.latestCompatible())
     }
+
+    /** `latest_compatible_version` (null = none fits); `latest_version` from a pod that doesn't send it. */
+    private fun JsonObject.latestCompatible(): Long? =
+        if (containsKey("latest_compatible_version")) jLong("latest_compatible_version") else jLong("latest_version")
 
     private fun parseVersionInfo(v: JsonObject): AppVersionInfo? = AppVersionInfo(
         version = v.jLong("version") ?: return null,
@@ -338,7 +362,11 @@ fun pinApplies(state: ConstructState, pin: PinnedVersion?): Boolean {
 fun displayedWorkspace(state: ConstructState, pin: PinnedVersion?): UiNode? =
     if (pinApplies(state, pin)) pin!!.layout else state.workspace
 
-/** The pinned version is behind the app's latest version ("Newer version available"). */
+/**
+ * The pinned version is behind the version the engine shows when following the latest ("Newer version available").
+ * That version is what the pod serves this build (the newest it can draw), so a version only a newer build can draw
+ * never counts.
+ */
 fun newerVersionAvailable(state: ConstructState, pin: PinnedVersion?): Boolean {
     if (!pinApplies(state, pin)) return false
     val latest = state.activeLayout.version ?: return false
@@ -351,6 +379,32 @@ fun newerVersionAvailable(state: ConstructState, pin: PinnedVersion?): Boolean {
  */
 fun showMenuBadge(state: ConstructState, pin: PinnedVersion?): Boolean =
     state.isOnline == false || state.pendingActions > 0 || newerVersionAvailable(state, pin)
+
+/**
+ * The line under an app in the menu's Apps section. [shown] is the version following the latest shows: the engine's
+ * for the app on screen ([isCurrent]), else [AppSummary.latestCompatibleVersion]. [pinned] is the pinned version shown
+ * instead. Adds [updateHint] when the app's newest version needs a newer build.
+ */
+fun appRowSubtitle(app: AppSummary, isCurrent: Boolean, shown: Long?, pinned: Long?): String {
+    val base = when {
+        pinned != null -> "Showing v$pinned" + (shown?.let { " · latest v$it" } ?: "")
+        isCurrent -> "Latest" + (shown?.let { " · v$it" } ?: "")
+        else -> shown?.let { "v$it" } ?: ""
+    }
+    val hint = updateRequiredFor(app.latestVersion, maxOf(shown ?: 0, app.latestCompatibleVersion ?: 0).takeIf { it > 0 })
+        ?.let { updateHint(it) } ?: return base
+    return if (base.isEmpty()) hint else "$base · $hint"
+}
+
+/**
+ * The version picker's "Latest" detail; [latest] is the version following the latest shows. Adds [updateHint] when the
+ * newest loaded version needs a newer build of the app.
+ */
+fun latestRowDetail(history: VersionHistory, latest: Long?): String {
+    val base = "Follows new versions as they're published"
+    val newest = history.versions.firstOrNull()?.takeIf { it.incompatible == "update_required" } ?: return base
+    return updateRequiredFor(newest.version, latest)?.let { "$base. ${updateHint(it)}" } ?: base
+}
 
 /**
  * The pin of [appId] the version picker checks: [pin] when that app is on screen ([isCurrent]) and the pin applies

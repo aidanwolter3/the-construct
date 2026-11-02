@@ -1243,6 +1243,7 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   `X-Construct-Schema` on workspace fetches and data loads; the pod serves `active_for(app, schema)`, the newest
   version whose layout the client can draw (no header = 1). SSE still announces the latest version, so an old client
   that refetches gets the older version again (harmless; its menu may keep saying a newer version exists).
+  *(SSE and the menu fixed in D37.)*
 - **Pod side of comments:** `GET /v1/pixelfed/screens/comments?post_id=` (the earlier JSON-only
   `/v1/pixelfed/posts/{id}/comments` is gone) and `POST /v1/pixelfed/posts/comment`. Comment entities carry a
   ready-made `meta` line (`@bob · 3 h`, relative to the request) because layouts have no date formatting.
@@ -1285,3 +1286,26 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   `pixelfed_home/0001` the comment button opens nothing: that version has no comments screen.)
 - **Not yet:** the SSE event and "Newer version available" still use the latest version even when the client can't
   draw it (D35's note). Pins are in memory only, so an app update cannot carry over a pin it can't draw.
+  *(The SSE event and the menu are fixed in D37.)*
+
+## D37: "Latest" means the newest version this client can draw (SSE and the menu)
+
+- **Problem (issue #5, D35/D36 "not yet"):** the pod serves each client the newest version it can draw, but the SSE
+  `layout` event and `latest_version` in the apps API used the app's absolute latest. An old client was told about a
+  version it can't draw, refetched for nothing, and its menu could name a version it can't open as the latest.
+- **SSE is per client:** the engine sends `X-Construct-Schema` on the events stream too. With the header, the pod
+  announces `newest_compatible(app, schema)` (the version `active_for` would serve, metadata only), and after a
+  broadcast re-reads it and sends an event only when it changed (always after a lag). A version only newer clients
+  can draw sends nothing, so nothing is refetched.
+  - **No header = the app's latest**, as before, not schema 1 like the other endpoints: engines built between D35 and
+    this change draw schema 2 but send no header on this stream, and announcing schema-1 versions to them would hide
+    new versions until their next fetch. Older engines (before D35) keep the old harmless refetch.
+- **Apps API:** `GET /v1/apps` and `GET /v1/apps/{id}/versions` add `latest_compatible_version` for the client's
+  schema (null if none fits); `latest_version` keeps its meaning (the app's newest), so the client can tell "you are
+  up to date" from "a newer app would show more". A pod that doesn't send the field means `latest_version`.
+- **Clients:** "Newer version available" and the badge already compared the pin with the engine's version, which is
+  what the pod served (newest drawable); kept, and documented as such. What changed: app rows for apps not on screen
+  show `latest_compatible_version`, the picker's "Latest" row names the newest compatible row, and both add "Update
+  the app to see vN" when the newest version needs a newer build (a hint, never a badge). The simulator's fake
+  catalog and engine follow the same rules (the fake engine starts on the newest compatible version).
+- **Not yet:** pins are still in memory only (D36).
