@@ -1,7 +1,8 @@
 name: CI
 
 # Every PR and push: Rust checks, JVM/shared-UI tests and headless simulator screenshots (artifact).
-# Push to main: if Rust checks pass, deploy the fake Pixelfed and the pod to Fly.io staging.
+# Push to main: if Rust checks pass, deploy the pod (and the fake Pixelfed when its files changed) to Fly.io
+# staging. A manual run (workflow_dispatch) on main deploys both.
 #   https://the-construct-pod.fly.dev   (deploy/fly/pod.toml)
 #   https://the-construct-fake-pixelfed.fly.dev   (deploy/fly/fake-pixelfed.toml)
 # Deploys need repo secrets FLY_API_TOKEN_POD and FLY_API_TOKEN_FAKE (app-scoped Fly deploy tokens);
@@ -75,7 +76,7 @@ jobs:
 
   deploy:
     name: Deploy to Fly.io staging
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     needs: rust
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -87,9 +88,26 @@ jobs:
       FLY_TOKEN_FAKE: ${{ secrets.FLY_API_TOKEN_FAKE }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the diff below needs the push's previous head
       - uses: superfly/flyctl-actions/setup-flyctl@1.5
+      - name: Did the fake Pixelfed change?
+        id: fake
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          paths="crates/fake-pixelfed fixtures/pixelfed Cargo.toml Cargo.lock deploy/fly/fake-pixelfed.toml"
+          if [ "$GITHUB_EVENT_NAME" != push ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            changed=true # manual run, or a previous head we can't compare with: deploy
+          elif git diff --quiet "$BEFORE" "$GITHUB_SHA" -- $paths; then
+            changed=false
+          else
+            changed=true
+          fi
+          echo "fake Pixelfed changed: $changed"
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
       - name: Deploy fake Pixelfed
-        if: env.FLY_TOKEN_FAKE != ''
+        if: env.FLY_TOKEN_FAKE != '' && steps.fake.outputs.changed == 'true'
         env:
           FLY_API_TOKEN: ${{ env.FLY_TOKEN_FAKE }}
         run: flyctl deploy . --config deploy/fly/fake-pixelfed.toml --dockerfile crates/fake-pixelfed/Dockerfile --remote-only --ha=false

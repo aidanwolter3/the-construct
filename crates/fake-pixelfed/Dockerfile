@@ -11,16 +11,27 @@
 ARG RUST_IMAGE=rust:1-slim-bookworm
 ARG RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot
 
-FROM ${RUST_IMAGE} AS build
+# Dependencies are compiled in their own layer (cargo-chef), rebuilt only when Cargo.toml / Cargo.lock change.
+FROM ${RUST_IMAGE} AS chef
+RUN cargo install cargo-chef --locked --version 0.1.78
 WORKDIR /src
-# The whole workspace manifest set is needed to resolve the workspace; only
-# fake-pixelfed (and its dependencies) is compiled.
-COPY Cargo.toml Cargo.lock ./
-COPY crates ./crates
-COPY fixtures/pixelfed ./fixtures/pixelfed
 ENV CARGO_PROFILE_RELEASE_STRIP=true \
     CARGO_PROFILE_RELEASE_LTO=thin \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+
+# The whole workspace manifest set is needed to resolve the workspace; only
+# fake-pixelfed (and its dependencies) is compiled.
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS build
+COPY --from=planner /src/recipe.json recipe.json
+RUN cargo chef cook --release --locked -p fake-pixelfed --recipe-path recipe.json
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY fixtures/pixelfed ./fixtures/pixelfed
 RUN cargo build --release --locked -p fake-pixelfed \
     && cp target/release/fake-pixelfed /fake-pixelfed
 
