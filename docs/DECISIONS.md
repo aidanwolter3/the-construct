@@ -1187,3 +1187,69 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 
   Each command waits for idle and for the apps calls, and fails with a hint when its control is missing. The D30
   browser commands and the agent controls are gone. `-Pworkspace` defaults to `pixelfed_home`.
+
+## D34: App changes ship from the pod; the engine and clients stay app-agnostic
+
+- **Principle:** changing an app (a new screen such as Pixelfed comments, a new action) must not need a new client
+  build. The engine (client-core) and the shared UI know no app: no `pixelfed://` routes, no app-specific calls.
+  Only new generic vocabulary (node types, intent kinds) ships in clients. The existing `pixelfed://` widgets
+  (PostCard, ActionBar, AuthorHeader, MediaCarousel, FeedList) predate this and are legacy, to be replaced by
+  generic nodes over time.
+- **Comments, first attempt (backed out):** a Rust `post_comments` call, a client-side route for
+  `pixelfed://posts/<id>/comments` and a native comments sheet. It worked, but every change to comments would have
+  needed an app update. Kept: the pod's `GET /v1/pixelfed/posts/{id}/comments` and `POST
+  /v1/pixelfed/posts/comment` (README "Pixelfed (pod adapter)") and the fake upstream's comment support.
+- **Screen layouts are layout files** (like the feed's): each screen an app can open is a versioned file under
+  `layouts/<app>/`, published the same way; the pod fills it with data.
+- **Generic pieces to add (in order):**
+  1. Screens and a back stack: an `action.navigation.open` target is resolved by the pod into a screen bundle (layout
+     + entities + queries), which the client pushes; Back pops it. The engine fetches and caches screens by URI
+     without knowing what the URI means.
+  2. Generic nodes: `core://List` (FeedList without the namespace), `core://Image`, `core://TextField`, and
+     data-driven indentation/styling.
+  3. Form values (`$form.<field>` in intent payloads), an engine-made `$nonce` per dispatch (outbox idempotency for
+     every app), and an optimistic "create" action that adds a placeholder item to a query, sends it through the
+     outbox, then reconciles with the pod's answer or refetches.
+  4. A client schema version header, so the pod only serves layouts a client can draw.
+  Then comments become a pod-only change: a layout file for the comments screen plus the existing endpoints.
+
+## D35: Screens, generic nodes, data loads and creates (implements D34)
+
+- **Screens live in the layout file**, as `Workspace.screens` (protocol `Screen {id, route, title, data?, content,
+  footer?}`), not as separate files: a version is the whole app (root and screens), so append-only files, the
+  version history, pinning and the cache cover screens unchanged, and clients from before screens ignore the field.
+- **Routing is client-side and generic:** the client matches an `action.navigation.open` target against the
+  displayed layout's routes (`{name}` = one whole segment of `[A-Za-z0-9_-]{1,64}`), binds `$route.<name>` in the
+  screen (one pass over its JSON), and keeps the back stack in `ConstructController.navigation` (survives rotation;
+  cleared when another app opens). Only the top screen is composed, as an in-tree overlay. An unmatched target goes
+  to the engine as before. The pod validates screens in layout files: unique ids, well-formed routes, every
+  `$route.<name>` a route parameter, `data` and every endpoint a `/v1/` path.
+- **Forms and `$nonce` are bound by the client at dispatch** (`bindForm`): one pass over the intent's strings except
+  `intent` and `value_expr`, so typed text is never re-scanned for tokens. One nonce per dispatch (24 hex). An intent
+  referencing a blank `$form` field is not dispatched. Form values live per open screen (and one root form).
+- **Data loads are engine-generic:** `action.data.load {path}` (a pod path, same origin) runs on its own thread
+  under the `net` lock. The answer (`DataBundle {entities, queries}`) is merged like a workspace fetch (pending rows
+  re-applied) and cached (store v3 `data_loads`, so a screen's data shows offline). Its queries overlay the
+  workspace's in the snapshot. Progress is `loads_json` `{path: {state, error?}}` (this run only; cleared on
+  sign-out). A 401 signs out like a fetch 401. Sign-out drops cached loads that hold private entities.
+- **Creates are outbox rows** (`action_outbox.create_json = {query_key, refresh_workspace}`, `field` NULL): the
+  temporary entity is stored and listed in its query (appended in the snapshot, so loads never drop it while
+  pending). On 2xx the row is deleted, the entity stays listed ("settling") until a reload of a path that answers its
+  query, and the sync worker reloads those paths (and the workspace with `refresh_workspace`, or when no loaded path
+  lists the query but the workspace does). On 4xx it is removed. Comments use `refresh_workspace` so the feed's
+  `reply_count` updates from the pod (no optimistic count: a create changes one query only, keeping rollback
+  simple).
+- **Schema versions:** `protocol::SCHEMA_VERSION` (2) and `required_schema(node)`. The engine sends
+  `X-Construct-Schema` on workspace fetches and data loads; the pod serves `active_for(app, schema)`, the newest
+  version whose layout the client can draw (no header = 1). SSE still announces the latest version, so an old client
+  that refetches gets the older version again (harmless; its menu may keep saying a newer version exists).
+- **Pod side of comments:** `GET /v1/pixelfed/screens/comments?post_id=` (the earlier JSON-only
+  `/v1/pixelfed/posts/{id}/comments` is gone) and `POST /v1/pixelfed/posts/comment`. Comment entities carry a
+  ready-made `meta` line (`@bob · 3 h`, relative to the request) because layouts have no date formatting.
+- **Simulator:** `FakeEngineBridge` answers data paths from `fixtures/pixelfed_screen_data.json` and runs creates
+  through its fake outbox; `crates/server/tests/fixtures.rs` generates that file and the feed fixture's layout from
+  the pod's own code (fixed clock), and fails when they are stale.
+- **Not yet:** replying to a specific comment (needs a way to set a form value from a list item), liking or deleting
+  comments, pagination, per-item failure states for creates, date formatting in layouts, a non-wrapping row
+  (`core://Container` Horizontal is a FlowRow).
+

@@ -129,6 +129,14 @@ fun bindIntent(intent: ActionIntent, item: JsonObject?): ActionIntent {
             payload = bindJson(intent.payload, item),
         )
         is ActionIntent.AuthLogin -> intent.copy(instanceUrl = bindItemTokens(intent.instanceUrl, item))
+        is ActionIntent.LoadData -> intent.copy(path = bindItemTokens(intent.path, item))
+        is ActionIntent.Create -> intent.copy(
+            queryKey = bindItemTokens(intent.queryKey, item),
+            entityUri = bindItemTokens(intent.entityUri, item),
+            entity = bindJson(intent.entity, item),
+            endpoint = bindItemTokens(intent.endpoint, item),
+            payload = bindJson(intent.payload, item),
+        )
         ActionIntent.NavigateBack -> intent
         is ActionIntent.Unknown -> intent.copy(
             raw = JsonObject(intent.raw.mapValues { (k, v) -> if (k == "intent") v else bindJson(v, item) })

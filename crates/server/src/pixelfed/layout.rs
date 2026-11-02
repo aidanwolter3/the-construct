@@ -70,6 +70,7 @@ pub fn home_feed(entities: BTreeMap<String, EntityRecord>, order: Vec<String>) -
         workspace: UiNode::Workspace {
             id: WORKSPACE_ID.into(),
             title: "Pixelfed".into(),
+            screens: Vec::new(),
             slots: vec![SlotSpec {
                 slot_id: "feed".into(),
                 provider_uri: "pixelfed://home_timeline".into(),
@@ -91,6 +92,7 @@ pub fn signed_out(instance_url: &str) -> WorkspaceSpec {
         workspace: UiNode::Workspace {
             id: WORKSPACE_ID.into(),
             title: "Pixelfed".into(),
+            screens: Vec::new(),
             slots: vec![SlotSpec {
                 slot_id: "auth".into(),
                 provider_uri: "pixelfed://auth".into(),

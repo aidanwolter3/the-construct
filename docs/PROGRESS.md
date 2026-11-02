@@ -369,6 +369,31 @@ from a client (D32, D33).
   - Tests: cargo 281, :shared 63, :desktopApp 63 (all passing).
 - Status: DONE.
 
+## Fake Pixelfed comments
+- `fixtures/pixelfed/comments.json`: threaded comments (34, nested replies included) matching each post's
+  `replies_count`; embedded in the binary like the other fixtures.
+- Mastodon endpoints on the fake: `GET /api/v1/statuses/:id/context`, `POST /api/v1/statuses` (replies only,
+  `Idempotency-Key` honoured), `GET` / `DELETE /api/v1/statuses/:id` (delete: own only). Counts stay consistent;
+  reset restores the threads. `_admin/state` gains `counts.comments` and `created`. README "Fake Pixelfed upstream".
+- Not yet wired into the pod or clients: the comment button still navigates to `pixelfed://posts/:id/comments`.
+- Tests: `crates/fake-pixelfed/tests/comments.rs` (13).
+
+## Comments: pod endpoints; client approach backed out (D34)
+- Pod: `GET /v1/pixelfed/posts/{id}/comments` (thread order, depth, `is_own`) and `POST /v1/pixelfed/posts/comment`
+  (`client_id` -> upstream `Idempotency-Key`), with integration tests against the fake.
+- A client-side comments sheet was built and then backed out: it put Pixelfed logic into the engine and the app.
+  Next: the generic screens / nodes / form / create-action work listed in D34, then comments as layout files.
+
+## Generic screens; comments from the pod (D35)
+- Protocol: `Workspace.screens`, `core://List`, `core://Image`, `core://TextField`, `action.data.load`,
+  `action.mutation.create`, `DataBundle`, schema versions (`X-Construct-Schema`).
+- Pod: schema-aware serving; comments screen data path; `layouts/pixelfed_home/0002.json` (comments screen).
+- Engine: cached data loads (`loads_json`, store v3), create rows in the outbox, schema header.
+- Clients: route matching and back stack, generic nodes, `$route` / `$form` / `$nonce` binding; simulator fake data
+  paths and creates; fixtures generated from the pod.
+- Tests: cargo (pod, engine end to end against the fake), :shared + :desktopApp (137, incl. simulator screens).
+- Needs a device check on the Mac: Android Back and keyboard on the comments screen, the desktop window.
+
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
   bookmarks are idempotent upstream, counters are not).

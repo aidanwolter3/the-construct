@@ -24,6 +24,8 @@ data class EngineSnapshot(
      * Parse with [ActiveLayout.parse].
      */
     val layoutJson: String = "{}",
+    /** Data path loads (DECISIONS D34): `{path: {"state":"loading"|"ready"|"error","error"?}}`; `"{}"` when none. */
+    val loadsJson: String = "{}",
 )
 
 /**

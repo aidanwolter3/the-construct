@@ -51,6 +51,32 @@ enum class TextStyle { Headline, Title, Body, Caption }
 @Serializable
 enum class PresentationMode { Push, Modal, Replace }
 
+@Serializable
+enum class ImageShape { Square, Rounded, Circle }
+
+/**
+ * A screen an app can open (DECISIONS D34; protocol `ast::Screen`). [route] is a URI pattern with `{name}` segments;
+ * `$route.<name>` in the other fields is replaced by the captured value. [data] is a pod path loaded when the screen
+ * opens; [footer] stays at the bottom while [content] scrolls.
+ */
+@Serializable
+data class Screen(
+    val id: String,
+    val route: String,
+    val title: String,
+    val data: String? = null,
+    val content: UiNode,
+    val footer: UiNode? = null,
+)
+
+/** `core://List` indentation: `item[field] * stepDp`, at most [max] steps (default 4). */
+@Serializable
+data class Indent(
+    val field: String,
+    @SerialName("step_dp") val stepDp: Int,
+    val max: Int? = null,
+)
+
 // ---------------------------------------------------------------------------
 // UI AST, discriminated by "type"
 // ---------------------------------------------------------------------------
@@ -62,6 +88,8 @@ sealed class UiNode {
         val id: String,
         val title: String,
         val slots: List<SlotSpec>,
+        /** Screens this app can open (D34); omitted when empty. */
+        val screens: List<Screen> = emptyList(),
     ) : UiNode()
 
     @Serializable
@@ -118,6 +146,34 @@ sealed class UiNode {
         @SerialName("item_template") val itemTemplate: UiNode,
     ) : UiNode()
 
+    /** `core://List` (D34): the entities of `queries[queryKey]`, each rendered with [itemTemplate]. */
+    @Serializable
+    data class ItemList(
+        @SerialName("query_key") val queryKey: String,
+        @SerialName("item_template") val itemTemplate: UiNode,
+        val indent: Indent? = null,
+        @SerialName("empty_text") val emptyText: String? = null,
+    ) : UiNode()
+
+    /** `core://Image` (D34): [url] is a literal or a binding such as `$item.avatar_url`. */
+    @Serializable
+    data class Image(
+        val url: String,
+        val shape: ImageShape = ImageShape.Square,
+        @SerialName("size_dp") val sizeDp: Int? = null,
+        @SerialName("aspect_ratio") val aspectRatio: Float? = null,
+        @SerialName("content_description") val contentDescription: String? = null,
+    ) : UiNode()
+
+    /** `core://TextField` (D34): edits the form value `$form.<field>`; [onSubmit] is sent with it, then it clears. */
+    @Serializable
+    data class TextField(
+        val field: String,
+        val placeholder: String = "",
+        @SerialName("max_length") val maxLength: Int? = null,
+        @SerialName("on_submit") val onSubmit: ActionIntent? = null,
+    ) : UiNode()
+
     /** A node whose `type` this client does not know. [raw] is the full original object. */
     data class Unknown(val type: String, val raw: JsonObject) : UiNode()
 }
@@ -155,6 +211,24 @@ sealed class ActionIntent {
     @Serializable
     data class AuthLogin(
         @SerialName("instance_url") val instanceUrl: String,
+    ) : ActionIntent()
+
+    /** `action.data.load` (D34): the engine loads a pod path (a screen's `data`) and caches its answer. */
+    @Serializable
+    data class LoadData(val path: String) : ActionIntent()
+
+    /**
+     * `action.mutation.create` (D34): the engine lists [entity] at [entityUri] in `queries[queryKey]` at once and sends
+     * [payload] to [endpoint] through the outbox.
+     */
+    @Serializable
+    data class Create(
+        @SerialName("query_key") val queryKey: String,
+        @SerialName("entity_uri") val entityUri: String,
+        val entity: JsonElement,
+        val endpoint: String,
+        val payload: JsonElement,
+        @SerialName("refresh_workspace") val refreshWorkspace: Boolean = false,
     ) : ActionIntent()
 
     /**
@@ -260,6 +334,9 @@ object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode
         Variant("pixelfed://AuthorHeader", UiNode.AuthorHeader::class, UiNode.AuthorHeader.serializer()),
         Variant("pixelfed://ActionBar", UiNode.ActionBar::class, UiNode.ActionBar.serializer()),
         Variant("pixelfed://FeedList", UiNode.FeedList::class, UiNode.FeedList.serializer()),
+        Variant("core://List", UiNode.ItemList::class, UiNode.ItemList.serializer()),
+        Variant("core://Image", UiNode.Image::class, UiNode.Image.serializer()),
+        Variant("core://TextField", UiNode.TextField::class, UiNode.TextField.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): UiNode = UiNode.Unknown(tag, raw)
@@ -272,6 +349,8 @@ object ActionIntentSerializer : TaggedUnionSerializer<ActionIntent>("org.thecons
         Variant("action.navigation.back", ActionIntent.NavigateBack::class, ActionIntent.NavigateBack.serializer()),
         Variant("action.mutation.optimistic", ActionIntent.OptimisticMutate::class, ActionIntent.OptimisticMutate.serializer()),
         Variant("action.auth.login", ActionIntent.AuthLogin::class, ActionIntent.AuthLogin.serializer()),
+        Variant("action.data.load", ActionIntent.LoadData::class, ActionIntent.LoadData.serializer()),
+        Variant("action.mutation.create", ActionIntent.Create::class, ActionIntent.Create.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): ActionIntent = ActionIntent.Unknown(tag, raw)

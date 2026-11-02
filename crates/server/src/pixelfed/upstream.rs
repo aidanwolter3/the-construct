@@ -249,6 +249,38 @@ impl Upstream {
         .await
     }
 
+    /// `GET /api/v1/statuses/{id}/context` (`{ancestors, descendants}`). `id`
+    /// must already be validated as path-safe.
+    pub async fn status_context(&self, token: &str, id: &str) -> Result<Value, UpstreamError> {
+        Self::send_json(
+            self.http
+                .get(self.url(&format!("/api/v1/statuses/{id}/context")))
+                .bearer_auth(token),
+        )
+        .await
+    }
+
+    /// `POST /api/v1/statuses` as a reply (a comment) to `in_reply_to_id`.
+    /// `idempotency_key`, when given, is sent as `Idempotency-Key` so a
+    /// retried request does not post twice (Mastodon semantics).
+    pub async fn create_reply(
+        &self,
+        token: &str,
+        in_reply_to_id: &str,
+        text: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<Value, UpstreamError> {
+        let mut req = self
+            .http
+            .post(self.url("/api/v1/statuses"))
+            .bearer_auth(token)
+            .form(&[("status", text), ("in_reply_to_id", in_reply_to_id)]);
+        if let Some(key) = idempotency_key {
+            req = req.header("Idempotency-Key", key);
+        }
+        Self::send_json(req).await
+    }
+
     /// GET a media URL (no credentials are sent: media are public and the URL
     /// may be on another allowlisted host). A redirect to a host outside the
     /// allowlist is not followed (the 3xx comes back as a `Status` error).

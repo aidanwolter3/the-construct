@@ -1946,7 +1946,11 @@ data class FfiStateSnapshot (
     var `pendingActions`: kotlin.UInt, 
     var `queriesJson`: kotlin.String, 
     var `authJson`: kotlin.String, 
-    var `layoutJson`: kotlin.String
+    var `layoutJson`: kotlin.String, 
+    /**
+     * Data path loads: `{path: {"state", "error"?}}` (docs/DECISIONS.md D34).
+     */
+    var `loadsJson`: kotlin.String
 ) {
     
     companion object
@@ -1966,6 +1970,7 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
@@ -1977,7 +1982,8 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterUInt.allocationSize(value.`pendingActions`) +
             FfiConverterString.allocationSize(value.`queriesJson`) +
             FfiConverterString.allocationSize(value.`authJson`) +
-            FfiConverterString.allocationSize(value.`layoutJson`)
+            FfiConverterString.allocationSize(value.`layoutJson`) +
+            FfiConverterString.allocationSize(value.`loadsJson`)
     )
 
     override fun write(value: FfiStateSnapshot, buf: ByteBuffer) {
@@ -1989,6 +1995,7 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterString.write(value.`queriesJson`, buf)
             FfiConverterString.write(value.`authJson`, buf)
             FfiConverterString.write(value.`layoutJson`, buf)
+            FfiConverterString.write(value.`loadsJson`, buf)
     }
 }
 

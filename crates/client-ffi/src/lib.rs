@@ -33,6 +33,8 @@ pub struct FfiStateSnapshot {
     pub queries_json: String,
     pub auth_json: String,
     pub layout_json: String,
+    /// Data path loads: `{path: {"state", "error"?}}` (docs/DECISIONS.md D34).
+    pub loads_json: String,
 }
 
 impl From<StateSnapshot> for FfiStateSnapshot {
@@ -46,6 +48,7 @@ impl From<StateSnapshot> for FfiStateSnapshot {
             queries_json: s.queries_json,
             auth_json: s.auth_json,
             layout_json: s.layout_json,
+            loads_json: s.loads_json,
         }
     }
 }
@@ -417,12 +420,15 @@ mod tests {
             queries_json: r#"{"timeline:home":["pixelfed://posts/1"]}"#.into(),
             auth_json: r#"{"state":"signed_in","username":"a"}"#.into(),
             layout_json: r#"{"app_id":"home","version":5}"#.into(),
+            loads_json: r#"{"/v1/x":{"state":"ready"}}"#.into(),
         };
         let ffi: FfiStateSnapshot = core.clone().into();
         assert_eq!(ffi.queries_json, core.queries_json);
         assert_eq!(ffi.auth_json, core.auth_json);
         assert_eq!(ffi.layout_json, core.layout_json);
+        assert_eq!(ffi.loads_json, core.loads_json);
         assert_eq!(snap.layout_json, "{}");
+        assert_eq!(snap.loads_json, "{}");
         assert_eq!((ffi.seq, ffi.pending_actions), (7, 2));
     }
 }

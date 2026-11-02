@@ -141,6 +141,7 @@ macro_rules! layout_file {
 /// module docs).
 pub const FILES: &[LayoutSource] = &[
     layout_file!("pixelfed_home", "0001"),
+    layout_file!("pixelfed_home", "0002"),
     layout_file!("pixelfed_demo", "0001"),
     layout_file!("home", "0001"),
 ];
@@ -428,6 +429,60 @@ pub fn active(store: &Store, workspace_id: &str) -> rusqlite::Result<Option<Serv
         })),
         None => Ok(None),
     }
+}
+
+/// The client's schema version from [`protocol::SCHEMA_HEADER`] (1 when
+/// absent or unreadable: clients from before screens send none).
+pub fn client_schema(headers: &HeaderMap) -> u32 {
+    headers
+        .get(protocol::SCHEMA_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|v: &u32| *v >= 1)
+        .unwrap_or(1)
+}
+
+/// The newest version of an app a client of schema `schema` can draw
+/// ([`protocol::required_schema`]); `None` if the workspace is not an app or
+/// no version fits (version 1 of every app is schema 1). Blocking.
+pub fn active_for(
+    store: &Store,
+    workspace_id: &str,
+    schema: u32,
+) -> rusqlite::Result<Option<Served>> {
+    let Some(latest) = active(store, workspace_id)? else {
+        return Ok(None);
+    };
+    if protocol::required_schema(&latest.layout) <= schema {
+        return Ok(Some(latest));
+    }
+    for version in (1..latest.version).rev() {
+        if let Some((_, json)) = store.app_version(workspace_id, version)? {
+            let layout = from_json(&json)?;
+            if protocol::required_schema(&layout) <= schema {
+                tracing::info!(
+                    app = workspace_id,
+                    latest = latest.version,
+                    served = version,
+                    schema,
+                    "served an older layout version the client can draw"
+                );
+                return Ok(Some(Served { version, layout }));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Async [`active_for`] with the schema read from the request headers.
+pub async fn active_for_client(
+    state: &Arc<AppState>,
+    workspace_id: &str,
+    headers: &HeaderMap,
+) -> Result<Option<Served>, ApiError> {
+    let ws = workspace_id.to_owned();
+    let schema = client_schema(headers);
+    blocking(state, move |s| active_for(s, &ws, schema)).await
 }
 
 /// `(version, layout)`; see [`active`]. Blocking.
@@ -1079,7 +1134,22 @@ mod tests {
         assert!(report.adopted.is_empty() && report.missing.is_empty());
         assert_eq!(sync(&store).unwrap(), SyncReport::default(), "idempotent");
         let (v, layout) = latest(&store, "pixelfed_home").unwrap().unwrap();
-        assert_eq!((v, layout), (1, builtin("pixelfed_home").unwrap()));
+        assert_eq!(v, 2, "0002 adds the comments screen");
+        let mut feed = layout.clone();
+        if let UiNode::Workspace { screens, .. } = &mut feed {
+            assert_eq!(screens.len(), 1);
+            screens.clear();
+        }
+        assert_eq!(feed, builtin("pixelfed_home").unwrap(), "same feed as 0001");
+        // A client from before screens (schema 1) still gets version 1.
+        let old = active_for(&store, "pixelfed_home", 1).unwrap().unwrap();
+        assert_eq!(old.version, 1);
+        assert_eq!(protocol::required_schema(&old.layout), 1);
+        let new = active_for(&store, "pixelfed_home", protocol::SCHEMA_VERSION)
+            .unwrap()
+            .unwrap();
+        assert_eq!(new.version, 2);
+        assert_eq!(protocol::required_schema(&new.layout), 2);
         // A second home file.
         let one = FILES.iter().find(|f| f.app_id == "home").copied().unwrap();
         let two_text = one.text.replace("The Construct Counter", "Counter v2");

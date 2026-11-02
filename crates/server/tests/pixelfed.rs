@@ -227,7 +227,10 @@ async fn upstream_status(env: &Env, id: &str) -> Value {
 }
 
 fn signed_out_button(spec: &WorkspaceSpec) -> (String, ActionIntent) {
-    let UiNode::Workspace { id, title, slots } = &spec.workspace else {
+    let UiNode::Workspace {
+        id, title, slots, ..
+    } = &spec.workspace
+    else {
         panic!("not a workspace");
     };
     assert_eq!(id, "pixelfed_home");
@@ -624,7 +627,22 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     let url = format!("{}/v1/workspaces/pixelfed_home", pod.url);
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    // No schema header: a client from before screens gets the newest version it can
+    // draw (0001; 0002 adds the comments screen).
     assert_eq!(version(&resp).as_deref(), Some("1"));
+    let resp = client()
+        .get(&url)
+        .bearer_auth("tok")
+        .header(
+            protocol::SCHEMA_HEADER,
+            protocol::SCHEMA_VERSION.to_string(),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(version(&resp).as_deref(), Some("2"));
+    let spec: WorkspaceSpec = resp.json().await.unwrap();
+    assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 1));
     // A newer version replaces the feed layout; entities still come upstream.
     let mut node = server::layouts::builtin("pixelfed_home").unwrap();
     if let UiNode::Workspace { title, .. } = &mut node {
@@ -632,7 +650,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     }
     server::layouts::append_version(state.store(), "pixelfed_home", &node, None).unwrap();
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("2"));
+    assert_eq!(version(&resp).as_deref(), Some("3"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert_eq!(spec.workspace, node);
     assert_eq!(spec.queries["timeline:home"].len(), 5);
@@ -1350,4 +1368,184 @@ async fn surviving_401_does_not_delete_a_replaced_account() {
     assert_eq!(mock.2.load(Ordering::SeqCst), 2);
     let stored = state.store().pixelfed_account(&upstream_url).unwrap();
     assert_eq!(stored.map(|a| a.access_token).as_deref(), Some("tok-2"));
+}
+
+async fn get_comments_screen(pod: &str, bearer: Option<&str>, id: &str) -> (StatusCode, Value) {
+    let mut req = client().get(format!("{pod}/v1/pixelfed/screens/comments?post_id={id}"));
+    if let Some(t) = bearer {
+        req = req.bearer_auth(t);
+    }
+    let resp = req.send().await.unwrap();
+    let status = resp.status();
+    (status, resp.json().await.unwrap_or(Value::Null))
+}
+
+#[tokio::test]
+async fn comments_screen_data_is_a_bundle_in_thread_order() {
+    let env = env().await;
+    let session = sign_in(&env).await;
+    let (status, body) = get_comments_screen(&env.pod.url, Some(&session), CAROUSEL).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let bundle: protocol::DataBundle = serde_json::from_value(body).unwrap();
+    let order = &bundle.queries[&format!("comments:{CAROUSEL}")];
+    let shape: Vec<(String, i64)> = order
+        .iter()
+        .map(|u| (u.clone(), bundle.entities[u].get_i64("depth").unwrap()))
+        .collect();
+    let want = [
+        ("101", 0),
+        ("102", 1),
+        ("103", 2),
+        ("104", 0),
+        ("105", 1),
+        ("106", 0),
+        ("107", 0),
+    ]
+    .map(|(id, d)| (format!("pixelfed://comments/781300000000000{id}"), d));
+    assert_eq!(shape, want);
+    assert_eq!(bundle.entities.len(), 7);
+    let first = &bundle.entities[&order[0]];
+    assert_eq!(
+        first.get_str("text"),
+        Some("That second frame is unreal 😍")
+    );
+    assert_eq!(first.get_str("post_id"), Some(CAROUSEL));
+    assert_eq!(first.get_str("in_reply_to_id"), Some(CAROUSEL));
+    assert_eq!(first.get_str("author_name"), Some("Bob 🚲"));
+    assert_eq!(first.get_str("author_handle"), Some("@bob"));
+    assert!(first.get_str("meta").unwrap().starts_with("@bob · "));
+    assert_eq!(first.get_i64("like_count"), Some(3));
+    assert_eq!(first.get_bool("is_own"), Some(false));
+    assert!(
+        first
+            .get_str("avatar_url")
+            .unwrap()
+            .starts_with(&format!("{}/v1/pixelfed/media/", env.pod.url))
+    );
+    assert_eq!(bundle.entities[&order[5]].get_bool("is_own"), Some(true));
+    assert_eq!(
+        bundle.entities[&order[6]].get_str("text"),
+        Some("Number 3 for me.\nThat blue!")
+    );
+    // A boost's id gives the boosted post's thread.
+    let (_, boosted) = get_comments_screen(&env.pod.url, Some(&session), REBLOG_OUTER).await;
+    assert_eq!(
+        boosted["queries"][format!("comments:{REBLOG_OUTER}")]
+            .as_array()
+            .unwrap()
+            .len(),
+        13
+    );
+    // Unknown post: 404; bad or missing id: 400; no session: 401.
+    let (status, body) = get_comments_screen(&env.pod.url, Some(&session), "999").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "post_not_found");
+    for bad in ["a.b", ""] {
+        let (status, _) = get_comments_screen(&env.pod.url, Some(&session), bad).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    for bearer in [None, Some("bogus")] {
+        let (status, _) = get_comments_screen(&env.pod.url, bearer, CAROUSEL).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+}
+
+#[tokio::test]
+async fn posting_a_comment_reaches_the_upstream() {
+    let env = env().await;
+    let session = sign_in(&env).await;
+    let fake = env.fake.fake.as_ref().unwrap();
+    let url = format!("{}/v1/pixelfed/posts/comment", env.pod.url);
+    let (status, body) = post_json(
+        &url,
+        Some(&session),
+        json!({ "id": CAROUSEL, "text": "  Lovely <light>  ", "client_id": "nonce-0001" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["id"], CAROUSEL);
+    assert_eq!(body["comment"]["text"], "Lovely <light>");
+    assert_eq!(body["comment"]["is_own"], true);
+    assert_eq!(body["comment"]["author_handle"], "@constructdemo");
+    let new_id = body["comment"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(fake.created_ids(), std::slice::from_ref(&new_id));
+    assert_eq!(upstream_status(&env, CAROUSEL).await["replies_count"], 5);
+
+    // A retry with the same client_id does not post twice.
+    let (status, again) = post_json(
+        &url,
+        Some(&session),
+        json!({ "id": CAROUSEL, "text": "Lovely <light>", "client_id": "nonce-0001" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(again["comment"]["id"], new_id.as_str());
+    assert_eq!(fake.created_ids().len(), 1);
+
+    // It is in the screen data; the feed's reply_count follows.
+    let (_, data) = get_comments_screen(&env.pod.url, Some(&session), CAROUSEL).await;
+    let order = data["queries"][format!("comments:{CAROUSEL}")]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        order.last().unwrap(),
+        &json!(format!("pixelfed://comments/{new_id}"))
+    );
+    let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+    assert_eq!(
+        home["entities"][format!("pixelfed://posts/{CAROUSEL}")]["reply_count"],
+        5
+    );
+
+    // A reply to a comment, without a client_id.
+    let (status, reply) = post_json(
+        &url,
+        Some(&session),
+        json!({ "id": "781300000000000104", "text": "Same question" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(reply["comment"]["in_reply_to_id"], "781300000000000104");
+
+    // Rejections: unknown post 404 (the client rolls back), bad input 400, no session 401.
+    let (status, body) = post_json(
+        &url,
+        Some(&session),
+        json!({ "id": "999", "text": "hello" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "post_not_found");
+    for bad in [
+        json!({ "id": CAROUSEL, "text": "   " }),
+        json!({ "id": CAROUSEL, "text": "x".repeat(501) }),
+        json!({ "id": CAROUSEL }),
+        json!({ "text": "hi" }),
+        json!({ "id": "../x", "text": "hi" }),
+        json!({ "id": CAROUSEL, "text": "hi", "client_id": "short" }),
+        json!({ "id": CAROUSEL, "text": "hi", "client_id": "bad key with spaces" }),
+    ] {
+        let (status, _) = post_json(&url, Some(&session), bad.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let (status, _) = post_json(&url, None, json!({ "id": CAROUSEL, "text": "hi" })).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(fake.created_ids().len(), 2);
+}
+
+#[tokio::test]
+async fn comments_with_the_upstream_down_are_502() {
+    let dead = dead_url().await;
+    let pod = spawn_pod(seeded_state(&dead, SEED)).await;
+    let (status, _) = get_comments_screen(&pod.url, Some("tok"), CAROUSEL).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    let (status, _) = post_json(
+        &format!("{}/v1/pixelfed/posts/comment", pod.url),
+        Some("tok"),
+        json!({ "id": CAROUSEL, "text": "hi" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
 }

@@ -9,7 +9,9 @@
 pub mod ast;
 pub mod bundle;
 pub mod intent;
+pub mod schema;
 
-pub use ast::{ListBinding, Orientation, SlotSpec, TextStyle, UiNode};
-pub use bundle::{EntityRecord, WorkspaceSpec};
+pub use ast::{ImageShape, Indent, ListBinding, Orientation, Screen, SlotSpec, TextStyle, UiNode};
+pub use bundle::{DataBundle, EntityRecord, WorkspaceSpec};
 pub use intent::{ActionIntent, FieldUpdate, PresentationMode};
+pub use schema::{SCHEMA_HEADER, SCHEMA_VERSION, required_schema};

@@ -1,4 +1,4 @@
-//! Embeds `fixtures/pixelfed/` (the two JSON fixtures and `media/`) into the
+//! Embeds `fixtures/pixelfed/` (the JSON fixtures and `media/`) into the
 //! binary, so `fake-pixelfed` runs anywhere as a single file. Generates
 //! `$OUT_DIR/embedded_fixtures.rs`: `static EMBEDDED: &[(&str, &[u8])]`,
 //! paths relative to the fixture directory with `/` separators.
@@ -12,18 +12,15 @@ fn main() {
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("embedded_fixtures.rs");
 
     let mut files: Vec<(String, PathBuf)> = Vec::new();
-    for name in ["timeline_home.json", "account_verify_credentials.json"] {
+    for name in [
+        "timeline_home.json",
+        "account_verify_credentials.json",
+        "comments.json",
+    ] {
+        println!("cargo:rerun-if-changed={}", dir.join(name).display());
         files.push((name.to_owned(), dir.join(name)));
     }
     let media = dir.join("media");
-    println!(
-        "cargo:rerun-if-changed={}",
-        dir.join("timeline_home.json").display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        dir.join("account_verify_credentials.json").display()
-    );
     println!("cargo:rerun-if-changed={}", media.display());
     let mut media_files: Vec<PathBuf> = std::fs::read_dir(&media)
         .unwrap_or_else(|e| panic!("{}: {e}", media.display()))

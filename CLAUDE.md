@@ -52,6 +52,10 @@ Add `layouts/<app>/NNNN.json` (`{"note": "...", "layout": {...}}`, next number, 
 push. Never edit or renumber a deployed file — the server refuses to start. Clients are read-only for layout state.
 
 ## Conventions
+- The engine (client-core) and the shared UI must not know any app (D34/D35): app changes ship as layout files
+  (screens go in `Workspace.screens`) plus pod code. Only new generic vocabulary (node types, intents) needs a
+  client build, and it bumps `protocol::SCHEMA_VERSION`. After changing a pixelfed_home layout or the comments
+  data, regenerate the simulator fixtures: `UPDATE_FIXTURES=1 cargo test -p server --test fixtures`.
 - Names: product "The Construct"; Kotlin package `org.theconstruct`; env vars `CONSTRUCT_*`; data dirs
   `~/.construct*`; OAuth redirect `construct://oauth`. Server env vars: README "Server runtime configuration".
 - Clients default to staging; override with `CONSTRUCT_BASE_URL` / `-Dconstruct.baseUrl` (desktop),

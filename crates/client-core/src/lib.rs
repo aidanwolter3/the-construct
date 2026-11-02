@@ -58,13 +58,13 @@ use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use protocol::{ActionIntent, EntityRecord, FieldUpdate, UiNode, WorkspaceSpec};
+use protocol::{ActionIntent, DataBundle, EntityRecord, FieldUpdate, UiNode, WorkspaceSpec};
 use serde_json::{Value, json};
 
 use auth::{LoopbackListener, PendingAuth, Pkce, Redirect, guarded};
 pub use auth::{MemoryStore, RedirectMode, SecureStore, UrlOpener};
 pub use catalog::LayoutApiError;
-use store::{AlsoUpdate, NewOutboxRow, OutboxRow, Store, StoreOps};
+use store::{AlsoUpdate, CreateInfo, DataLoad, NewOutboxRow, OutboxRow, Store, StoreOps};
 
 const DEFAULT_WORKSPACE_ID: &str = "home";
 /// SQLite file name inside `storage_path`.
@@ -76,6 +76,14 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// While the initial fetch keeps failing with the same error, log every
 /// this many attempts (once a minute at the default 2 s interval).
 const FETCH_FAILURE_LOG_EVERY: u32 = 30;
+/// Timeout for one data path load (`action.data.load`).
+const DATA_LOAD_TIMEOUT: Duration = Duration::from_secs(15);
+/// Load error shown when the pod could not be reached.
+pub const LOAD_OFFLINE: &str = "Can't reach your pod. Check your connection and try again.";
+/// Load error after the pod rejected the session.
+pub const LOAD_SIGNED_OUT: &str = "Sign in to see this.";
+/// Load error for a 404.
+pub const LOAD_NOT_FOUND: &str = "This isn't available anymore.";
 /// Timeout for a single outbox POST.
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 /// `auth_json` until a sign-in flow sets it.
@@ -288,6 +296,11 @@ enum FetchOutcome {
 ///   "version": n}` (the app version from `X-Construct-Layout-Version` of the
 ///   applied fetch); `"{}"` while unknown or when the screen is not versioned
 ///   (e.g. the signed-out `pixelfed_home` screen).
+/// - `loads_json`: data path loads (`action.data.load`, docs/DECISIONS.md
+///   D34): `{path: {"state": "loading"|"ready"|"error", "error"?}}` (`error`
+///   is a short sentence for the UI). The queries of loaded paths are part
+///   of `queries_json` (cached, so also shown offline), as are the temporary
+///   entities of pending `action.mutation.create` rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateSnapshot {
     pub workspace_json: String,
@@ -298,6 +311,67 @@ pub struct StateSnapshot {
     pub queries_json: String,
     pub auth_json: String,
     pub layout_json: String,
+    pub loads_json: String,
+}
+
+/// A pending `action.mutation.create` row: its temporary entity is listed in
+/// `queries[query_key]`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingCreate {
+    row_id: i64,
+    query_key: String,
+    entity_uri: String,
+}
+
+impl PendingCreate {
+    fn from_rows(rows: &[OutboxRow]) -> Vec<Self> {
+        rows.iter()
+            .filter_map(|r| {
+                r.create.as_ref().map(|c| PendingCreate {
+                    row_id: r.id,
+                    query_key: c.query_key.clone(),
+                    entity_uri: r.entity_uri.clone(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// One data path's load state (see [`StateSnapshot::loads_json`]).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+struct LoadStatus {
+    state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl LoadStatus {
+    fn loading() -> Self {
+        Self {
+            state: "loading",
+            error: None,
+        }
+    }
+    fn ready() -> Self {
+        Self {
+            state: "ready",
+            error: None,
+        }
+    }
+    fn error(message: &str) -> Self {
+        Self {
+            state: "error",
+            error: Some(message.to_owned()),
+        }
+    }
+}
+
+/// Work the sync worker does after an accepted create row (outside the
+/// `net` lock): reload the data paths that list its query, or the workspace.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Followup {
+    Load(String),
+    Refresh,
 }
 
 struct Observer {
@@ -356,6 +430,17 @@ struct State {
     /// Write-through persistence. `None` only if even an in-memory DB could
     /// not be opened; mutations are then rejected.
     store: Option<Store>,
+    /// The last answer of each loaded data path (cached in `data_loads`).
+    data: BTreeMap<String, DataLoad>,
+    /// Load state per data path (this run only).
+    loads: BTreeMap<String, LoadStatus>,
+    /// Pending create rows (their temporary entities are listed).
+    creates: Vec<PendingCreate>,
+    /// Accepted creates still listed until a reload of their query
+    /// (`(query_key, entity_uri)`), so the item does not blink out.
+    settling: Vec<(String, String)>,
+    /// Queued by the flush of an accepted create.
+    followups: Vec<Followup>,
 }
 
 impl State {
@@ -365,7 +450,9 @@ impl State {
             None => "null".into(),
         };
         let entities_json = serde_json::to_string(&self.entities).unwrap_or_else(|_| "{}".into());
-        let queries_json = serde_json::to_string(&self.queries).unwrap_or_else(|_| "{}".into());
+        let queries_json =
+            serde_json::to_string(&self.effective_queries()).unwrap_or_else(|_| "{}".into());
+        let loads_json = serde_json::to_string(&self.loads).unwrap_or_else(|_| "{}".into());
         let auth_json = if self.auth_json.is_empty() {
             SIGNED_OUT_AUTH_JSON.to_string()
         } else {
@@ -380,7 +467,43 @@ impl State {
             queries_json,
             auth_json,
             layout_json: self.layout_json(),
+            loads_json,
         }
+    }
+
+    /// The workspace's queries, overlaid with every loaded data path's
+    /// queries, plus the temporary entities of settling and pending creates
+    /// appended to their query.
+    fn effective_queries(&self) -> BTreeMap<String, Vec<String>> {
+        let mut out = self.queries.clone();
+        for load in self.data.values() {
+            for (k, v) in &load.queries {
+                out.insert(k.clone(), v.clone());
+            }
+        }
+        let temps = self
+            .settling
+            .iter()
+            .map(|(k, u)| (k, u))
+            .chain(self.creates.iter().map(|c| (&c.query_key, &c.entity_uri)));
+        for (key, uri) in temps {
+            let list = out.entry(key.clone()).or_default();
+            if !list.contains(uri) {
+                list.push(uri.clone());
+            }
+        }
+        out
+    }
+
+    /// URIs the data loads and settling creates reference (kept by a
+    /// workspace merge).
+    fn data_uris(&self) -> Vec<String> {
+        self.data
+            .values()
+            .flat_map(|d| d.entity_uris.iter().chain(d.queries.values().flatten()))
+            .chain(self.settling.iter().map(|(_, u)| u))
+            .cloned()
+            .collect()
     }
 
     /// See [`StateSnapshot::layout_json`].
@@ -399,6 +522,7 @@ impl State {
         let loaded = (|| {
             let ws = store.load_workspace(workspace_id)?;
             let pending = store.pending_outbox()?;
+            let data = store.load_data_loads()?;
             let mut uris: Vec<String> = ws
                 .as_ref()
                 .map(|w| w.entity_uris.clone())
@@ -406,14 +530,21 @@ impl State {
             if let Some(w) = &ws {
                 uris.extend(w.queries.values().flatten().cloned());
             }
+            for d in data.values() {
+                uris.extend(d.entity_uris.iter().cloned());
+                uris.extend(d.queries.values().flatten().cloned());
+            }
             uris.extend(pending.iter().map(|r| r.entity_uri.clone()));
             uris.sort();
             uris.dedup();
             let entities = store.load_entities(&uris)?;
-            Ok::<_, store::StoreError>((ws, entities, pending.len()))
+            let creates = PendingCreate::from_rows(&pending);
+            Ok::<_, store::StoreError>((ws, entities, pending.len(), data, creates))
         })();
         match loaded {
-            Ok((ws, entities, pending)) => {
+            Ok((ws, entities, pending, data, creates)) => {
+                self.data = data;
+                self.creates = creates;
                 if ws.is_some() || !entities.is_empty() || pending > 0 {
                     println!(
                         "[ConstructEngine] loaded cached workspace '{workspace_id}' (layout: {}, {} \
@@ -474,7 +605,9 @@ impl State {
                 merged.insert(row.entity_uri.clone(), local.clone());
             }
         }
-        for uri in queries.values().flatten() {
+        // Settling creates of a workspace query are replaced by this answer.
+        self.settling.retain(|(k, _)| !queries.contains_key(k));
+        for uri in queries.values().flatten().chain(self.data_uris().iter()) {
             if !merged.contains_key(uri)
                 && let Some(local) = self.entities.get(uri)
             {
@@ -507,6 +640,83 @@ impl State {
         self.workspace = Some(workspace);
         self.entities = merged;
         self.queries = queries;
+    }
+
+    /// Merge the answer of data path `path` (docs/DECISIONS.md D34): its
+    /// entities replace the local ones (pending outbox rows re-applied on
+    /// top, like a workspace fetch), its queries become this path's queries,
+    /// and settling creates of those queries are dropped (the answer now
+    /// lists the real items). Persisted in one transaction (a failure is
+    /// logged; memory is still updated).
+    fn apply_data(&mut self, path: &str, bundle: DataBundle) {
+        let DataBundle {
+            entities: mut fetched,
+            queries,
+        } = bundle;
+        let pending = match self.store.as_ref().map(|s| s.pending_outbox()) {
+            Some(Ok(rows)) => rows,
+            Some(Err(e)) => {
+                eprintln!("[ConstructEngine] failed to read the outbox for the data merge: {e}");
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
+        let mut prev_updates = Vec::new();
+        for row in &pending {
+            if let Some(entity) = fetched.get_mut(&row.entity_uri)
+                && let Some(prevs) = reapply_row(entity, row)
+            {
+                prev_updates.push((row.id, prevs));
+            }
+        }
+        let (settled, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.settling)
+            .into_iter()
+            .partition(|(k, _)| queries.contains_key(k));
+        self.settling = keep;
+        let settled: Vec<String> = settled
+            .into_iter()
+            .map(|(_, u)| u)
+            .filter(|u| !fetched.contains_key(u))
+            .collect();
+        let load = DataLoad {
+            entity_uris: fetched.keys().cloned().collect(),
+            queries,
+        };
+        if let Some(store) = self.store.as_mut() {
+            let now = unix_now();
+            let result = store.transaction(|tx| {
+                tx.save_data_load(path, &load, now)?;
+                for (uri, e) in &fetched {
+                    tx.upsert_entity(uri, e, now)?;
+                }
+                for (id, (prev, also)) in &prev_updates {
+                    tx.set_outbox_prevs(*id, prev, also)?;
+                }
+                for uri in &settled {
+                    tx.delete_entity(uri)?;
+                }
+                Ok(())
+            });
+            if let Err(e) = result {
+                eprintln!("[ConstructEngine] failed to persist data '{path}': {e}");
+            }
+        }
+        for uri in &settled {
+            self.entities.remove(uri);
+        }
+        println!(
+            "[ConstructEngine] loaded {path} ({} entities, {} queries{})",
+            fetched.len(),
+            load.queries.len(),
+            if prev_updates.is_empty() {
+                String::new()
+            } else {
+                format!(", {} pending action(s) re-applied", prev_updates.len())
+            }
+        );
+        self.entities.extend(fetched);
+        self.data.insert(path.to_owned(), load);
+        self.loads.insert(path.to_owned(), LoadStatus::ready());
     }
 
     /// Sign-out: forget the cached private (signed-in) data, in memory and in
@@ -578,7 +788,57 @@ impl State {
         self.entities.retain(|u, _| !private(u) || keep.contains(u));
         self.queries
             .retain(|_, uris| !uris.iter().any(|u| private(u)));
+        // Data loads that hold private entities, and creates that are gone.
+        let private_paths: Vec<String> = self
+            .data
+            .iter()
+            .filter(|(_, d)| {
+                d.entity_uris
+                    .iter()
+                    .chain(d.queries.values().flatten())
+                    .any(|u| private(u))
+            })
+            .map(|(p, _)| p.clone())
+            .collect();
+        if let Some(store) = self.store.as_mut() {
+            let result = store.transaction(|tx| {
+                for p in &private_paths {
+                    tx.delete_data_load(p)?;
+                }
+                Ok(())
+            });
+            if let Err(e) = result {
+                eprintln!("[ConstructEngine] ERROR: failed to purge private data loads: {e}");
+            }
+        }
+        for p in &private_paths {
+            self.data.remove(p);
+        }
+        self.loads.clear();
+        self.settling.retain(|(_, u)| !private(u));
+        if let Some(store) = &self.store {
+            match store.pending_outbox() {
+                Ok(rows) => self.creates = PendingCreate::from_rows(&rows),
+                Err(e) => eprintln!("[ConstructEngine] failed to read the outbox: {e}"),
+            }
+        }
         self.sync_pending_count();
+    }
+
+    /// The pod rejected a create row: delete it and its temporary entity.
+    fn reject_create(&mut self, row: &OutboxRow) -> store::StoreResult<()> {
+        let Some(store) = self.store.as_mut() else {
+            return Err(store::StoreError::InvalidQuery);
+        };
+        store.transaction(|tx| {
+            tx.delete_outbox(row.id)?;
+            tx.delete_entity(&row.entity_uri)?;
+            Ok(())
+        })?;
+        self.entities.remove(&row.entity_uri);
+        self.creates.retain(|c| c.row_id != row.id);
+        self.sync_pending_count();
+        Ok(())
     }
 
     /// Re-read the PENDING count from the store (after a delete).
@@ -1474,6 +1734,7 @@ impl Inner {
             if let Some(snap) = snap {
                 self.notify(snap);
             }
+            self.run_followups();
             if failed {
                 // Next pass re-reads the row and waits for its
                 // next_attempt_at (or for going online again).
@@ -1547,8 +1808,46 @@ impl Inner {
                     "[ConstructEngine] outbox #{id} POST {url} -> {code}, deleted ({} pending)",
                     st.pending_actions
                 );
+                if let Some(c) = &row.create {
+                    // Keep listing it until its query is reloaded.
+                    st.creates.retain(|x| x.row_id != id);
+                    st.settling
+                        .push((c.query_key.clone(), row.entity_uri.clone()));
+                    let paths: Vec<String> = st
+                        .data
+                        .iter()
+                        .filter(|(_, d)| d.queries.contains_key(&c.query_key))
+                        .map(|(p, _)| p.clone())
+                        .collect();
+                    let refresh = c.refresh_workspace
+                        || (paths.is_empty() && st.queries.contains_key(&c.query_key));
+                    st.followups.extend(paths.into_iter().map(Followup::Load));
+                    if refresh {
+                        st.followups.push(Followup::Refresh);
+                    }
+                }
                 st.seq += 1;
                 return (Some(st.snapshot()), false);
+            }
+            FlushResult::Rejected(code, body) if row.create.is_some() => {
+                match st.reject_create(row) {
+                    Ok(()) => {
+                        println!(
+                            "[ConstructEngine] outbox #{id} POST {url} -> {code}, rejected: {body}; \
+                             removed {} ({} pending)",
+                            row.entity_uri, st.pending_actions
+                        );
+                        st.seq += 1;
+                        return (Some(st.snapshot()), false);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[ConstructEngine] outbox #{id} POST {url} -> {code}, rejected: {body}; \
+                             removing it failed ({e}); will retry"
+                        );
+                        (format!("HTTP {code}: {body}; removal failed: {e}"), false)
+                    }
+                }
             }
             FlushResult::Rejected(code, body) => {
                 let field = row.field.as_deref().unwrap_or("?");
@@ -1634,6 +1933,33 @@ impl Inner {
                 also,
             ),
             ActionIntent::AuthLogin { instance_url } => self.start_login(instance_url),
+            ActionIntent::LoadData { path } => {
+                if self.begin_load(&path) {
+                    let inner = Arc::clone(self);
+                    let spawned = thread::Builder::new()
+                        .name("construct-load".into())
+                        .spawn(move || inner.load_data(&path));
+                    if let Err(e) = spawned {
+                        eprintln!("[ConstructEngine] cannot start a load thread: {e}");
+                    }
+                }
+            }
+            ActionIntent::Create {
+                query_key,
+                entity_uri,
+                entity,
+                endpoint,
+                payload,
+                refresh_workspace,
+            } => self.create(
+                started,
+                query_key,
+                entity_uri,
+                entity,
+                endpoint,
+                payload,
+                refresh_workspace,
+            ),
             other => {
                 eprintln!(
                     "[ConstructEngine] dispatch: intent not handled by client-core yet: {other:?}"
@@ -1708,6 +2034,7 @@ impl Inner {
                 prev_value_json: prev.to_string(),
                 rollback_value_json: rollback_value.to_string(),
                 also: also_rows,
+                create: None,
             };
             let persisted = store.transaction(|tx| {
                 tx.upsert_entity(&entity_uri, &entity, now)?;
@@ -1748,6 +2075,217 @@ impl Inner {
              {pending} pending); dispatch->notify {} us",
             started.elapsed().as_micros()
         );
+    }
+
+    /// `action.mutation.create`: store the temporary entity and an outbox row
+    /// in one transaction, list the entity in its query, notify. Invalid
+    /// input (an entity that is not an object, empty URIs, an endpoint that
+    /// is not a pod path) or a URI already in use is a logged no-op.
+    #[allow(clippy::too_many_arguments)]
+    fn create(
+        &self,
+        started: Instant,
+        query_key: String,
+        entity_uri: String,
+        entity: Value,
+        endpoint: String,
+        payload: Value,
+        refresh_workspace: bool,
+    ) {
+        let entity = match EntityRecord::try_from(entity) {
+            Ok(e) => e,
+            Err(_) => {
+                eprintln!(
+                    "[ConstructEngine] create {entity_uri}: entity is not an object; ignored"
+                );
+                return;
+            }
+        };
+        if query_key.is_empty() || entity_uri.is_empty() || !endpoint.starts_with('/') {
+            eprintln!(
+                "[ConstructEngine] create: query_key, entity_uri and a pod endpoint are required; \
+                 ignored"
+            );
+            return;
+        }
+        let (snap, id) = {
+            let mut guard = lock(&self.state);
+            let st = &mut *guard;
+            if st.entities.contains_key(&entity_uri) {
+                eprintln!("[ConstructEngine] create {entity_uri}: already exists; ignored");
+                return;
+            }
+            let Some(store) = st.store.as_mut() else {
+                eprintln!("[ConstructEngine] create {entity_uri}: no store; ignored");
+                return;
+            };
+            let now = unix_now();
+            let row = NewOutboxRow {
+                entity_uri: entity_uri.clone(),
+                endpoint,
+                payload_json: payload.to_string(),
+                created_at: now,
+                field: String::new(),
+                value_expr: String::new(),
+                prev_value_json: "null".into(),
+                rollback_value_json: "null".into(),
+                also: Vec::new(),
+                create: Some(CreateInfo {
+                    query_key: query_key.clone(),
+                    refresh_workspace,
+                }),
+            };
+            let persisted = store.transaction(|tx| {
+                tx.upsert_entity(&entity_uri, &entity, now)?;
+                tx.insert_outbox(&row)
+            });
+            let id = match persisted {
+                Ok(id) => id,
+                Err(e) => {
+                    eprintln!(
+                        "[ConstructEngine] ERROR: create {entity_uri}: failed to persist ({e}); no \
+                         change"
+                    );
+                    return;
+                }
+            };
+            st.entities.insert(entity_uri.clone(), entity);
+            st.creates.push(PendingCreate {
+                row_id: id,
+                query_key: query_key.clone(),
+                entity_uri: entity_uri.clone(),
+            });
+            st.pending_actions = st.pending_actions.saturating_add(1);
+            st.seq += 1;
+            (st.snapshot(), id)
+        };
+        let pending = snap.pending_actions;
+        self.notify(snap);
+        self.signal.wake();
+        println!(
+            "[ConstructEngine] create {entity_uri} in '{query_key}' (outbox #{id}, {pending} \
+             pending); dispatch->notify {} us",
+            started.elapsed().as_micros()
+        );
+    }
+
+    /// Mark `path` loading (and notify). False if it is already loading or
+    /// is not a pod path.
+    fn begin_load(&self, path: &str) -> bool {
+        let valid = path.starts_with('/')
+            && !path.starts_with("//")
+            && path.len() <= 2048
+            && !path.chars().any(char::is_whitespace)
+            && same_origin(&self.base_url, &format!("{}{path}", self.base_url));
+        let snap = {
+            let mut st = lock(&self.state);
+            if !valid {
+                eprintln!("[ConstructEngine] load {path:?}: not a pod path; ignored");
+                st.loads.insert(
+                    path.to_owned(),
+                    LoadStatus::error("That isn't a valid address."),
+                );
+            } else if st.loads.get(path).is_some_and(|l| l.state == "loading") {
+                return false;
+            } else {
+                st.loads.insert(path.to_owned(), LoadStatus::loading());
+            }
+            st.seq += 1;
+            st.snapshot()
+        };
+        self.notify(snap);
+        valid
+    }
+
+    /// Load a data path (after [`Inner::begin_load`]): GET it with the
+    /// session and the schema header, merge the [`DataBundle`]
+    /// ([`State::apply_data`]) or record the error, notify. Serialized with
+    /// fetches and flushes (`net`). A 401 for the current session signs out
+    /// like a fetch 401 (and refetches).
+    fn load_data(&self, path: &str) {
+        let net = lock(&self.net);
+        let token = self.session_token();
+        let url = format!("{}{path}", self.base_url);
+        let result = fetch_data(&url, token.as_deref());
+        if self.signal.is_shut_down() {
+            return;
+        }
+        let mut expired = None;
+        let snap = {
+            let mut st = lock(&self.state);
+            match result {
+                Ok(_)
+                    if token.is_some()
+                        && st.session.as_ref().map(|s| &s.token) != token.as_ref() =>
+                {
+                    println!(
+                        "[ConstructEngine] discarded {path} loaded with a session that has since changed"
+                    );
+                    st.loads.remove(path);
+                }
+                Ok(bundle) => {
+                    st.apply_data(path, bundle);
+                    st.is_online = true;
+                }
+                Err(FetchError::Status(401)) => {
+                    st.loads
+                        .insert(path.to_owned(), LoadStatus::error(LOAD_SIGNED_OUT));
+                    drop(st);
+                    if let Some(t) = &token {
+                        expired = self.expire_session(t, "data load");
+                    }
+                    st = lock(&self.state);
+                }
+                Err(FetchError::Status(code)) => {
+                    eprintln!("[ConstructEngine] load {url} failed: HTTP {code}");
+                    let message = match code {
+                        404 => LOAD_NOT_FOUND.to_owned(),
+                        502 | 504 => "The service behind your pod didn't answer. Please try again."
+                            .to_owned(),
+                        c if c >= 500 => {
+                            format!("Your pod had a problem (HTTP {c}). Please try again.")
+                        }
+                        c => format!("Your pod answered HTTP {c}."),
+                    };
+                    st.loads
+                        .insert(path.to_owned(), LoadStatus::error(&message));
+                }
+                Err(FetchError::Other(e)) => {
+                    eprintln!("[ConstructEngine] load {url} failed: {e}");
+                    st.loads
+                        .insert(path.to_owned(), LoadStatus::error(LOAD_OFFLINE));
+                }
+            }
+            st.seq += 1;
+            st.snapshot()
+        };
+        drop(net);
+        let signed_out = expired.is_some();
+        self.notify(snap);
+        if signed_out && !self.signal.is_shut_down() {
+            self.refresh();
+        }
+    }
+
+    /// Run the work queued by accepted create rows (sync worker, no locks
+    /// held).
+    fn run_followups(&self) {
+        let followups = std::mem::take(&mut lock(&self.state).followups);
+        for f in followups {
+            if self.signal.is_shut_down() {
+                return;
+            }
+            match f {
+                Followup::Load(path) => {
+                    if self.begin_load(&path) {
+                        self.load_data(&path);
+                    }
+                }
+                Followup::Refresh => {
+                    self.refresh();
+                }
+            }
+        }
     }
 
     /// Set `auth_json` (bump seq) and notify.
@@ -2151,7 +2689,10 @@ fn fetch(url: &str, token: Option<&str>) -> Result<(WorkspaceSpec, Option<u64>),
         .timeout(Duration::from_secs(5))
         .build()
         .map_err(|e| FetchError::Other(format!("client build: {e}")))?;
-    let mut req = client.get(url);
+    let mut req = client.get(url).header(
+        protocol::SCHEMA_HEADER,
+        protocol::SCHEMA_VERSION.to_string(),
+    );
     if let Some(t) = token {
         req = req.bearer_auth(t);
     }
@@ -2169,6 +2710,29 @@ fn fetch(url: &str, token: Option<&str>) -> Result<(WorkspaceSpec, Option<u64>),
     let spec =
         serde_json::from_str(&raw).map_err(|e| FetchError::Other(format!("bad bundle: {e}")))?;
     Ok((spec, version))
+}
+
+/// `GET url` for a data path, with the session and the schema header.
+fn fetch_data(url: &str, token: Option<&str>) -> Result<DataBundle, FetchError> {
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(DATA_LOAD_TIMEOUT)
+        .build()
+        .map_err(|e| FetchError::Other(format!("client build: {e}")))?;
+    let mut req = client.get(url).header(
+        protocol::SCHEMA_HEADER,
+        protocol::SCHEMA_VERSION.to_string(),
+    );
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let resp = req.send().map_err(|e| FetchError::Other(e.to_string()))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(FetchError::Status(status.as_u16()));
+    }
+    let raw = resp.text().map_err(|e| FetchError::Other(e.to_string()))?;
+    serde_json::from_str(&raw).map_err(|e| FetchError::Other(format!("bad data bundle: {e}")))
 }
 
 fn auth_client() -> Result<reqwest::blocking::Client, String> {
@@ -2663,6 +3227,7 @@ mod tests {
             next_attempt_at: 0,
             last_error: None,
             also: Vec::new(),
+            create: None,
         }
     }
 

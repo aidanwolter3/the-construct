@@ -97,6 +97,15 @@ fn de_lenient_f64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Err
     })
 }
 
+/// An optional id: a string or a number; anything else (null, absent, ...) is None.
+fn de_opt_id<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(match Option::<Value>::deserialize(d)? {
+        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_owned()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        _ => None,
+    })
+}
+
 /// A string field that some servers send as another JSON type: non-strings
 /// (numbers, objects, ...) read as absent rather than failing the status.
 fn de_lenient_str<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
@@ -181,6 +190,9 @@ pub struct Status {
     pub url: Option<String>,
     #[serde(default, deserialize_with = "de_lenient_str")]
     pub created_at: Option<String>,
+    /// Set on a reply (a comment).
+    #[serde(default, deserialize_with = "de_opt_id")]
+    pub in_reply_to_id: Option<String>,
     #[serde(default, deserialize_with = "de_lenient_str")]
     pub content: Option<String>,
     /// Pixelfed sometimes carries a plain-text rendition.
@@ -454,6 +466,172 @@ pub fn normalize_post(
     );
     post.set("url", json!(s.url.as_deref().or(s.uri.as_deref())));
     post
+}
+
+/// Deepest nesting level reported for a comment; deeper replies are shown at this level.
+pub const MAX_COMMENT_DEPTH: usize = 4;
+
+pub const COMMENT_PREFIX: &str = "pixelfed://comments/";
+
+pub fn comment_uri(id: &str) -> String {
+    format!("{COMMENT_PREFIX}{id}")
+}
+
+/// The query key of a post's comments (the comments screen lists it).
+pub fn comments_query(post_id: &str) -> String {
+    format!("comments:{post_id}")
+}
+
+/// "just now", "5 min", "3 h", "2 d", else the date (`2026-10-31`).
+pub fn relative_time(created: i64, now: i64) -> String {
+    let d = (now - created).max(0);
+    match d {
+        0..60 => "just now".to_owned(),
+        60..3_600 => format!("{} min", d / 60),
+        3_600..86_400 => format!("{} h", d / 3_600),
+        86_400..604_800 => format!("{} d", d / 86_400),
+        _ => {
+            let days = created.div_euclid(86_400);
+            let (y, m, dd) = civil_from_days(days);
+            format!("{y:04}-{m:02}-{dd:02}")
+        }
+    }
+}
+
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (yoe + era * 400 + i64::from(m <= 2), m, d)
+}
+
+/// One comment (a reply status) as an entity (`pixelfed://comments/<id>`):
+/// `id, post_id, in_reply_to_id, depth, author_name, author_handle (@acct),
+/// avatar_url, text, created_at (unix s), meta ("@acct · 3 h"), like_count,
+/// is_liked, is_own`.
+pub fn normalize_comment(
+    s: &Status,
+    post_id: &str,
+    depth: usize,
+    own_account_id: &str,
+    now: i64,
+    media: &mut MediaUrls,
+) -> EntityRecord {
+    let text = match s.content.as_deref().filter(|c| !c.trim().is_empty()) {
+        Some(html) => html_to_text(html),
+        None => s.content_text.clone().unwrap_or_default().trim().to_owned(),
+    };
+    let author = normalize_account(&s.account, media);
+    let handle = format!("@{}", author.get_str("username").unwrap_or_default());
+    let created = s.created_at.as_deref().and_then(parse_rfc3339);
+    let meta = match created {
+        Some(c) => format!("{handle} · {}", relative_time(c, now)),
+        None => handle.clone(),
+    };
+    let mut c = EntityRecord::new();
+    c.set("id", s.id.as_str());
+    c.set("post_id", post_id);
+    c.set("in_reply_to_id", json!(s.in_reply_to_id));
+    c.set("depth", depth);
+    c.set(
+        "author_name",
+        author.get("display_name").cloned().unwrap_or(Value::Null),
+    );
+    c.set("author_handle", handle);
+    c.set(
+        "avatar_url",
+        author.get("avatar_url").cloned().unwrap_or(Value::Null),
+    );
+    c.set("text", text);
+    c.set("created_at", json!(created));
+    c.set("meta", meta);
+    c.set("like_count", s.favourites_count.unwrap_or(0).max(0));
+    c.set("is_liked", s.favourited.unwrap_or(false));
+    c.set("is_own", s.account.id == own_account_id);
+    c
+}
+
+/// The comments under `post_id` from a `GET /api/v1/statuses/{id}/context` response, in
+/// thread order: each comment followed by its replies (depth first), siblings in the
+/// upstream's order. Works whether the upstream returns the whole tree (Mastodon) or only
+/// direct replies; a reply whose parent is missing is shown at the top level, after the rest.
+/// Unparseable entries are skipped (logged).
+pub fn normalize_comments(
+    post_id: &str,
+    context: &Value,
+    own_account_id: &str,
+    now: i64,
+    media: &mut MediaUrls,
+) -> Vec<EntityRecord> {
+    let statuses: Vec<Status> = context["descendants"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|raw| match Status::deserialize(raw) {
+                    Ok(s) => Some(s),
+                    Err(e) => {
+                        tracing::warn!(error = %e, id = %raw["id"], "skipping unparseable Pixelfed comment");
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut seen = HashSet::new();
+    let statuses: Vec<&Status> = statuses
+        .iter()
+        .filter(|s| s.id != post_id && seen.insert(s.id.as_str()))
+        .collect();
+    let ids: HashSet<&str> = statuses.iter().map(|s| s.id.as_str()).collect();
+    // Parent id -> children, in upstream order. Orphans hang off the post.
+    let mut children: BTreeMap<&str, Vec<&Status>> = BTreeMap::new();
+    let mut orphans = Vec::new();
+    for s in &statuses {
+        match s.in_reply_to_id.as_deref() {
+            Some(p) if p == post_id || ids.contains(p) => children.entry(p).or_default().push(s),
+            _ => orphans.push(*s),
+        }
+    }
+    let mut out = Vec::with_capacity(statuses.len());
+    let mut emitted = HashSet::new();
+    let mut stack: Vec<(&Status, usize)> = orphans.iter().rev().map(|s| (*s, 0)).collect();
+    stack.extend(
+        children
+            .get(post_id)
+            .into_iter()
+            .flatten()
+            .rev()
+            .map(|s| (*s, 0)),
+    );
+    while let Some((s, depth)) = stack.pop() {
+        if !emitted.insert(s.id.as_str()) {
+            continue; // a cycle in malformed data
+        }
+        out.push(normalize_comment(
+            s,
+            post_id,
+            depth,
+            own_account_id,
+            now,
+            media,
+        ));
+        let next = (depth + 1).min(MAX_COMMENT_DEPTH);
+        stack.extend(
+            children
+                .get(s.id.as_str())
+                .into_iter()
+                .flatten()
+                .rev()
+                .map(|c| (*c, next)),
+        );
+    }
+    out
 }
 
 /// The mutable interaction state of a post: id, is_liked, like_count, is_bookmarked.
@@ -1168,5 +1346,21 @@ mod tests {
         assert_eq!(parse_rfc3339("yesterday"), None);
         assert_eq!(media_key("x"), media_key("x"));
         assert_eq!(media_key("x").len(), 32);
+    }
+}
+
+#[cfg(test)]
+mod comment_tests {
+    use super::relative_time;
+
+    #[test]
+    fn relative_time_labels() {
+        let now = 1_793_589_858;
+        assert_eq!(relative_time(now - 5, now), "just now");
+        assert_eq!(relative_time(now + 30, now), "just now");
+        assert_eq!(relative_time(now - 300, now), "5 min");
+        assert_eq!(relative_time(now - 3 * 3_600, now), "3 h");
+        assert_eq!(relative_time(now - 2 * 86_400, now), "2 d");
+        assert_eq!(relative_time(951_782_400, now), "2000-02-29");
     }
 }

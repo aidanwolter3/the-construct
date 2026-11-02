@@ -127,8 +127,10 @@ private fun runCli(args: Array<String>): Int {
         println("[sim] mode=fixture workspace=$workspace fixture=$fixture")
         // A custom fixture without -Pworkspace belongs to the app its bundle names.
         val appId = if (opts["fixture"] != null && opts["workspace"] == null) null else workspace
+        // The fake pod's data path answers (screens, D34), generated from the pod by crates/server/tests/fixtures.rs.
+        val screenData = findFixture("pixelfed_screen_data.json", cwd)?.readText()
         var current = try {
-            FakeEngineBridge(fixture.readText(), appId = appId)
+            FakeEngineBridge(fixture.readText(), appId = appId, screenData = screenData)
         } catch (e: Exception) {
             throw UsageException("bad fixture $fixture: ${e.message}")
         }
@@ -136,7 +138,10 @@ private fun runCli(args: Array<String>): Int {
         publishVersion = { current.publishVersion(it) }
         // open-app: a new fake engine on the app's default fixture, sharing the apps catalog and the connectivity.
         val openBridge = { id: String ->
-            FakeEngineBridge(defaultFixture(id, cwd).readText(), online = current.online, appId = id, apps = current.apps)
+            FakeEngineBridge(
+                defaultFixture(id, cwd).readText(), online = current.online, appId = id, apps = current.apps,
+                screenData = screenData,
+            )
                 .also { current = it }
         }
         controller = ConstructController(current, current.appId, openBridge)

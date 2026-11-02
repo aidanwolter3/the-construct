@@ -37,6 +37,29 @@ pub enum ActionIntent {
     #[serde(rename = "action.auth.login")]
     AuthLogin { instance_url: String },
 
+    /// Load a pod path (a screen's `data`) whose answer is a
+    /// [`crate::DataBundle`]: its entities are merged and its queries
+    /// replace the same keys. The engine caches the result (shown offline)
+    /// and reports progress in the snapshot's `loads_json`.
+    #[serde(rename = "action.data.load")]
+    LoadData { path: String },
+
+    /// Optimistically add a new entity to a list and send it through the
+    /// outbox: `entity` is stored at `entity_uri` (a temporary URI, e.g. with
+    /// a `$nonce`) and appended to `queries[query_key]` until the pod answers;
+    /// then every loaded path that produced `query_key` is reloaded (and the
+    /// workspace too with `refresh_workspace`). A 4xx removes it again.
+    #[serde(rename = "action.mutation.create")]
+    Create {
+        query_key: String,
+        entity_uri: String,
+        entity: Value,
+        endpoint: String,
+        payload: Value,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        refresh_workspace: bool,
+    },
+
     /// Any intent tag this build does not know, e.g. the removed
     /// `action.agent.prompt` (D32), which AI edits could put into layouts
     /// that legacy app versions still hold. Deserializing one drops its
