@@ -402,7 +402,7 @@ async fn get_workspace(
             json!({ "error": "workspace_not_found", "id": id }),
         );
     };
-    let served = match layouts::active_async(&state, &id).await {
+    let served = match layouts::active_for_client(&state, &id, &headers).await {
         Ok(Some(v)) => v,
         Ok(None) => return Json(spec).into_response(),
         Err(e) => return e.into_response(),

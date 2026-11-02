@@ -1173,3 +1173,242 @@ fn sign_in_errors_are_short_human_messages() {
     );
     assert_eq!(error(&engine), SIGN_IN_POD_UNREACHABLE);
 }
+
+// ---------- data loads and creates (docs/DECISIONS.md D34) ----------
+
+const CAROUSEL_ID: &str = "781254316723458049";
+
+fn comments_path(id: &str) -> String {
+    format!("/v1/pixelfed/screens/comments?post_id={id}")
+}
+
+fn load_intent(path: &str) -> String {
+    json!({ "intent": "action.data.load", "path": path }).to_string()
+}
+
+fn loads(snap: &StateSnapshot) -> Value {
+    serde_json::from_str(&snap.loads_json).unwrap()
+}
+
+/// The create intent the comments screen dispatches (as the client binds it).
+fn create_comment_intent(post: &str, text: &str, nonce: &str) -> String {
+    json!({
+        "intent": "action.mutation.create",
+        "query_key": format!("comments:{post}"),
+        "entity_uri": format!("pixelfed://comments/pending-{nonce}"),
+        "entity": { "author_name": "You", "text": text, "meta": "Sending…", "depth": 0 },
+        "endpoint": "/v1/pixelfed/posts/comment",
+        "payload": { "id": post, "text": text, "client_id": nonce },
+        "refresh_workspace": true,
+    })
+    .to_string()
+}
+
+fn comment_texts(snap: &StateSnapshot, post: &str) -> Vec<String> {
+    let ents = entities(snap);
+    queries(snap)[format!("comments:{post}")]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|u| {
+                    ents[u.as_str().unwrap()]["text"]
+                        .as_str()
+                        .unwrap_or("?")
+                        .to_owned()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn the_engine_fetches_the_newest_layout_its_schema_draws() {
+    let env = Env::start();
+    let store = Arc::new(MemoryStore::new());
+    let engine = loopback_engine(&env, &store);
+    engine.dispatch(&env.login_intent());
+    wait_signed_in(&engine);
+    let snap = engine.snapshot();
+    let layout: Value = serde_json::from_str(&snap.layout_json).unwrap();
+    assert_eq!(layout["version"], 2);
+    let ws: Value = serde_json::from_str(&snap.workspace_json).unwrap();
+    assert_eq!(ws["screens"][0]["route"], "pixelfed://posts/{id}/comments");
+}
+
+#[test]
+fn a_data_load_merges_its_entities_and_queries_and_is_cached() {
+    let env = Env::start();
+    let dir = std::env::temp_dir().join(format!(
+        "construct-data-load-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let storage = dir.to_str().unwrap().to_owned();
+    let store = Arc::new(MemoryStore::new());
+    let path = comments_path(CAROUSEL_ID);
+    {
+        let engine = engine_in(
+            &storage,
+            &env.pod,
+            Arc::clone(&store) as Arc<dyn SecureStore>,
+            Some(Arc::new(AutoApproveBrowser::default())),
+            RedirectMode::Loopback,
+        );
+        engine.dispatch(&env.login_intent());
+        wait_signed_in(&engine);
+        engine.dispatch(&load_intent(&path));
+        wait_until("comments loaded", || {
+            loads(&engine.snapshot())[&path]["state"] == "ready"
+        });
+        let snap = engine.snapshot();
+        let texts = comment_texts(&snap, CAROUSEL_ID);
+        assert_eq!(texts.len(), 7);
+        assert_eq!(texts[0], "That second frame is unreal 😍");
+        // The feed's own query is still there.
+        assert_eq!(home_query_len(&snap), 5);
+        // A workspace refetch keeps the loaded data.
+        engine.refresh();
+        assert_eq!(comment_texts(&engine.snapshot(), CAROUSEL_ID).len(), 7);
+    }
+    // Cached: a new engine on the same storage shows it before any network.
+    let engine = engine_in(
+        &storage,
+        "http://127.0.0.1:9",
+        Arc::clone(&store) as Arc<dyn SecureStore>,
+        None,
+        RedirectMode::Loopback,
+    );
+    assert_eq!(comment_texts(&engine.snapshot(), CAROUSEL_ID).len(), 7);
+    // Loading offline reports the error and keeps the cached list.
+    engine.dispatch(&load_intent(&path));
+    wait_until("load error", || {
+        loads(&engine.snapshot())[&path]["state"] == "error"
+    });
+    let snap = engine.snapshot();
+    assert_eq!(loads(&snap)[&path]["error"], client_core::LOAD_OFFLINE);
+    assert_eq!(comment_texts(&snap, CAROUSEL_ID).len(), 7);
+}
+
+#[test]
+fn a_create_is_listed_at_once_then_replaced_by_the_pods_answer() {
+    let env = Env::start();
+    let store = Arc::new(MemoryStore::new());
+    let engine = loopback_engine(&env, &store);
+    engine.dispatch(&env.login_intent());
+    wait_signed_in(&engine);
+    let path = comments_path(CAROUSEL_ID);
+    engine.dispatch(&load_intent(&path));
+    wait_until("comments loaded", || {
+        loads(&engine.snapshot())[&path]["state"] == "ready"
+    });
+
+    engine.dispatch(&create_comment_intent(
+        CAROUSEL_ID,
+        "Golden light!",
+        "nonce00000001",
+    ));
+    // Listed right away (from the dispatch's own snapshot).
+    let texts = comment_texts(&engine.snapshot(), CAROUSEL_ID);
+    assert_eq!(texts.last().map(String::as_str), Some("Golden light!"));
+    assert_eq!(texts.len(), 8);
+    wait_until("flushed and reloaded", || {
+        let s = engine.snapshot();
+        s.pending_actions == 0
+            && queries(&s)[format!("comments:{CAROUSEL_ID}")]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|u| !u.as_str().unwrap().contains("pending-"))
+            && comment_texts(&s, CAROUSEL_ID).len() == 8
+    });
+    let snap = engine.snapshot();
+    let ents = entities(&snap);
+    let last = queries(&snap)[format!("comments:{CAROUSEL_ID}")]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(ents[&last]["text"], "Golden light!");
+    assert_eq!(ents[&last]["is_own"], true);
+    assert!(
+        ents.get("pixelfed://comments/pending-nonce00000001")
+            .is_none()
+    );
+    // refresh_workspace: the feed's count comes from the pod.
+    wait_until("reply_count refreshed", || {
+        entities(&engine.snapshot())[format!("pixelfed://posts/{CAROUSEL_ID}")]["reply_count"] == 5
+    });
+    assert_eq!(env.upstream_status(CAROUSEL_ID)["replies_count"], 5);
+}
+
+#[test]
+fn a_rejected_create_disappears() {
+    let env = Env::start();
+    let store = Arc::new(MemoryStore::new());
+    let engine = loopback_engine(&env, &store);
+    engine.dispatch(&env.login_intent());
+    wait_signed_in(&engine);
+    engine.dispatch(&create_comment_intent(
+        "999",
+        "nobody home",
+        "nonce00000002",
+    ));
+    assert_eq!(comment_texts(&engine.snapshot(), "999"), ["nobody home"]);
+    wait_until("rejected", || engine.snapshot().pending_actions == 0);
+    let snap = engine.snapshot();
+    assert!(comment_texts(&snap, "999").is_empty());
+    assert!(
+        entities(&snap)
+            .get("pixelfed://comments/pending-nonce00000002")
+            .is_none()
+    );
+    // An entity that is not an object, or a reused URI, is ignored.
+    engine.dispatch(
+        &json!({ "intent": "action.mutation.create", "query_key": "q", "entity_uri": "x://a",
+                 "entity": 5, "endpoint": "/v1/x", "payload": {} })
+        .to_string(),
+    );
+    assert_eq!(engine.snapshot().pending_actions, 0);
+}
+
+#[test]
+fn a_data_load_401_signs_out() {
+    let env = Env::start();
+    let store = Arc::new(MemoryStore::new());
+    let engine = loopback_engine(&env, &store);
+    engine.dispatch(&env.login_intent());
+    wait_signed_in(&engine);
+    let token = stored_token(&env, &store);
+    let revoked = reqwest::blocking::Client::new()
+        .post(format!("{}/v1/auth/logout", env.pod))
+        .bearer_auth(&token)
+        .send()
+        .unwrap();
+    assert_eq!(revoked.status().as_u16(), 200);
+    let path = comments_path(CAROUSEL_ID);
+    engine.dispatch(&load_intent(&path));
+    wait_until("signed out", || {
+        auth(&engine.snapshot())["state"] == "signed_out"
+    });
+    wait_signed_out_bundle(&engine);
+    // Sign-out forgets load states.
+    assert_eq!(loads(&engine.snapshot()), json!({}));
+}
+
+#[test]
+fn bad_data_paths_are_refused_without_a_request() {
+    let env = Env::start();
+    let store = Arc::new(MemoryStore::new());
+    let engine = loopback_engine(&env, &store);
+    for bad in ["https://evil.example/x", "//evil.example/x", "/v1/x y"] {
+        engine.dispatch(&load_intent(bad));
+        assert_eq!(loads(&engine.snapshot())[bad]["state"], "error", "{bad}");
+    }
+}

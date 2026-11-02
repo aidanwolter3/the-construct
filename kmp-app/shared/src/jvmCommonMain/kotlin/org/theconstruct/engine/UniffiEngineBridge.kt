@@ -141,6 +141,7 @@ internal fun FfiStateSnapshot.toEngineSnapshot(): EngineSnapshot = EngineSnapsho
     queriesJson = queriesJson,
     authJson = authJson,
     layoutJson = layoutJson,
+    loadsJson = loadsJson,
 )
 
 /** A negative limit can't be meant; 0 makes the pod answer 400 with a readable error. */

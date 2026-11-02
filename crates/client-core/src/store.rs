@@ -33,7 +33,7 @@ pub use rusqlite::Error as StoreError;
 pub type StoreResult<T> = Result<T, StoreError>;
 
 /// Current schema version (`PRAGMA user_version`).
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Outbox row status for rows not yet accepted or rejected by the server.
 pub const STATUS_PENDING: &str = "PENDING";
@@ -79,8 +79,22 @@ ALTER TABLE active_workspace ADD COLUMN queries_json TEXT NOT NULL DEFAULT '{}';
 ALTER TABLE action_outbox ADD COLUMN also_json TEXT;
 ";
 
+/// Schema v3 (D34): the cached answers of data paths (`action.data.load`, a
+/// screen's `data`): the entity URIs and queries each path last returned; and
+/// the create info of an `action.mutation.create` outbox row
+/// (`{"query_key","refresh_workspace"}`, NULL for other rows).
+const MIGRATION_V3: &str = "
+CREATE TABLE IF NOT EXISTS data_loads (
+    path TEXT PRIMARY KEY NOT NULL,
+    entity_uris_json TEXT NOT NULL,
+    queries_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+ALTER TABLE action_outbox ADD COLUMN create_json TEXT;
+";
+
 /// `MIGRATIONS[i]` upgrades schema v`i` to v`i+1`, each in one transaction.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [MIGRATION_V1, MIGRATION_V2];
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [MIGRATION_V1, MIGRATION_V2, MIGRATION_V3];
 
 /// `(domain, entity_type)` from a `<domain>://<type>/<id...>` URI, e.g.
 /// `pixelfed://posts/101` -> `("pixelfed", "posts")`. Missing parts are `""`.
@@ -120,6 +134,22 @@ fn also_to_json(also: &[AlsoUpdate]) -> StoreResult<Option<String>> {
     serde_json::to_string(also).map(Some).map_err(json_err)
 }
 
+/// What an `action.mutation.create` row adds: its temporary entity
+/// (the row's `entity_uri`) is listed in `queries[query_key]` while pending.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateInfo {
+    pub query_key: String,
+    #[serde(default)]
+    pub refresh_workspace: bool,
+}
+
+/// One cached data path answer (`data_loads`).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DataLoad {
+    pub entity_uris: Vec<String>,
+    pub queries: BTreeMap<String, Vec<String>>,
+}
+
 /// A new outbox row; `retry_count`, `status`, `next_attempt_at` and
 /// `last_error` take their defaults (0, PENDING, 0, NULL).
 #[derive(Debug, Clone, PartialEq)]
@@ -134,6 +164,8 @@ pub struct NewOutboxRow {
     pub rollback_value_json: String,
     /// Extra fields updated with `field` (empty for single-field rows).
     pub also: Vec<AlsoUpdate>,
+    /// Set for a create row (then `field`/`value_expr` are stored as NULL).
+    pub create: Option<CreateInfo>,
 }
 
 /// A full `action_outbox` row.
@@ -155,11 +187,13 @@ pub struct OutboxRow {
     /// Extra fields updated with `field`; empty if none (or if the stored
     /// JSON is corrupt, logged).
     pub also: Vec<AlsoUpdate>,
+    /// Set for an `action.mutation.create` row.
+    pub create: Option<CreateInfo>,
 }
 
 const OUTBOX_COLUMNS: &str = "id, entity_uri, endpoint, payload_json, created_at, \
     COALESCE(retry_count, 0), COALESCE(status, 'PENDING'), field, value_expr, prev_value_json, \
-    rollback_value_json, COALESCE(next_attempt_at, 0), last_error, also_json";
+    rollback_value_json, COALESCE(next_attempt_at, 0), last_error, also_json, create_json";
 
 fn outbox_row(r: &Row<'_>) -> rusqlite::Result<OutboxRow> {
     let id: i64 = r.get(0)?;
@@ -171,6 +205,19 @@ fn outbox_row(r: &Row<'_>) -> rusqlite::Result<OutboxRow> {
             Vec::new()
         }),
     };
+    let create_json: Option<String> = r.get(14)?;
+    let create = create_json
+        .as_deref()
+        .filter(|raw| !raw.is_empty())
+        .and_then(|raw| match serde_json::from_str(raw) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                eprintln!(
+                    "[ConstructEngine] store: outbox #{id}: ignoring corrupt create_json: {e}"
+                );
+                None
+            }
+        });
     Ok(OutboxRow {
         id,
         entity_uri: r.get(1)?,
@@ -186,6 +233,7 @@ fn outbox_row(r: &Row<'_>) -> rusqlite::Result<OutboxRow> {
         next_attempt_at: r.get(11)?,
         last_error: r.get(12)?,
         also,
+        create,
     })
 }
 
@@ -330,6 +378,63 @@ pub trait StoreOps {
         }
     }
 
+    // ---- data_loads ----
+
+    /// Insert or replace the cached answer of a data path.
+    fn save_data_load(&self, path: &str, load: &DataLoad, updated_at: i64) -> StoreResult<()> {
+        let uris = serde_json::to_string(&load.entity_uris).map_err(json_err)?;
+        let queries = serde_json::to_string(&load.queries).map_err(json_err)?;
+        self.conn()
+            .prepare_cached(
+                "INSERT INTO data_loads (path, entity_uris_json, queries_json, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(path) DO UPDATE SET entity_uris_json = excluded.entity_uris_json,
+                     queries_json = excluded.queries_json, updated_at = excluded.updated_at",
+            )?
+            .execute(params![path, uris, queries, updated_at])?;
+        Ok(())
+    }
+
+    /// Every cached data path answer (corrupt rows are skipped, logged).
+    fn load_data_loads(&self) -> StoreResult<BTreeMap<String, DataLoad>> {
+        let mut stmt = self
+            .conn()
+            .prepare_cached("SELECT path, entity_uris_json, queries_json FROM data_loads")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut out = BTreeMap::new();
+        for row in rows {
+            let (path, uris, queries) = row?;
+            match (serde_json::from_str(&uris), serde_json::from_str(&queries)) {
+                (Ok(entity_uris), Ok(queries)) => {
+                    out.insert(
+                        path,
+                        DataLoad {
+                            entity_uris,
+                            queries,
+                        },
+                    );
+                }
+                (Err(e), _) | (_, Err(e)) => {
+                    eprintln!("[ConstructEngine] store: ignoring corrupt data load '{path}': {e}")
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn delete_data_load(&self, path: &str) -> StoreResult<()> {
+        self.conn()
+            .prepare_cached("DELETE FROM data_loads WHERE path = ?1")?
+            .execute([path])?;
+        Ok(())
+    }
+
     // ---- action_outbox ----
 
     /// Insert a PENDING row; returns its id.
@@ -337,19 +442,24 @@ pub trait StoreOps {
         self.conn()
             .prepare_cached(
                 "INSERT INTO action_outbox (entity_uri, endpoint, payload_json, created_at,
-                     field, value_expr, prev_value_json, rollback_value_json, also_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                     field, value_expr, prev_value_json, rollback_value_json, also_json, create_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             )?
             .execute(params![
                 row.entity_uri,
                 row.endpoint,
                 row.payload_json,
                 row.created_at,
-                row.field,
-                row.value_expr,
+                row.create.is_none().then_some(&row.field),
+                row.create.is_none().then_some(&row.value_expr),
                 row.prev_value_json,
                 row.rollback_value_json,
                 also_to_json(&row.also)?,
+                row.create
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .map_err(json_err)?,
             ])?;
         Ok(self.conn().last_insert_rowid())
     }
@@ -704,6 +814,7 @@ mod tests {
             prev_value_json: "0".into(),
             rollback_value_json: "0".into(),
             also: Vec::new(),
+            create: None,
         }
     }
 
@@ -954,11 +1065,13 @@ mod tests {
     }
 
     #[test]
-    fn v1_db_migrates_to_v2() {
+    fn v1_db_migrates_to_v2_and_v3() {
         let path = temp_db("v1");
         write_v1_db(&path);
         let s = Store::open(&path).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 2);
+        assert_eq!(s.schema_version().unwrap(), SCHEMA_VERSION);
+        assert!(s.load_data_loads().unwrap().is_empty());
+        assert_eq!(s.first_pending().unwrap().unwrap().create, None);
         let ws = s.load_workspace("home").unwrap().unwrap();
         assert_eq!(ws.entity_uris, vec!["core://counters/home".to_string()]);
         assert!(ws.queries.is_empty());
@@ -990,8 +1103,11 @@ mod tests {
             (Some("true"), rebased)
         );
         drop(s);
-        // Re-opening a v2 DB is a no-op.
-        assert_eq!(Store::open(&path).unwrap().schema_version().unwrap(), 2);
+        // Re-opening a migrated DB is a no-op.
+        assert_eq!(
+            Store::open(&path).unwrap().schema_version().unwrap(),
+            SCHEMA_VERSION
+        );
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -1030,5 +1146,34 @@ mod tests {
         assert_eq!(ws.queries, queries);
         assert_eq!(ws.updated_at, 3);
         assert_eq!(s.load_workspace("other").unwrap(), None);
+    }
+
+    #[test]
+    fn data_loads_and_create_rows_roundtrip() {
+        let s = Store::open_in_memory().unwrap();
+        let load = DataLoad {
+            entity_uris: vec!["x://c/1".into()],
+            queries: BTreeMap::from([("q".to_owned(), vec!["x://c/1".to_owned()])]),
+        };
+        s.save_data_load("/v1/x?id=1", &load, 1).unwrap();
+        s.save_data_load("/v1/x?id=1", &load, 2).unwrap();
+        assert_eq!(s.load_data_loads().unwrap()["/v1/x?id=1"], load);
+        s.delete_data_load("/v1/x?id=1").unwrap();
+        assert!(s.load_data_loads().unwrap().is_empty());
+
+        let create = CreateInfo {
+            query_key: "q".into(),
+            refresh_workspace: true,
+        };
+        let id = s
+            .insert_outbox(&NewOutboxRow {
+                create: Some(create.clone()),
+                ..new_row("x://c/tmp-1")
+            })
+            .unwrap();
+        let row = s.get_outbox(id).unwrap().unwrap();
+        assert_eq!(row.create, Some(create));
+        // A create row has no field to roll back.
+        assert_eq!((row.field, row.value_expr), (None, None));
     }
 }

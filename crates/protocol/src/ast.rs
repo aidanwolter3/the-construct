@@ -23,6 +23,12 @@ pub enum UiNode {
         id: String,
         title: String,
         slots: Vec<SlotSpec>,
+        /// Screens this app can open (docs/DECISIONS.md D34): an
+        /// `action.navigation.open` whose `target_uri` matches a screen's
+        /// `route` pushes that screen. Omitted when empty; clients that predate
+        /// screens ignore it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        screens: Vec<Screen>,
     },
     #[serde(rename = "core://Container")]
     Container {
@@ -40,6 +46,49 @@ pub enum UiNode {
     Button {
         label: String,
         on_click: ActionIntent,
+    },
+
+    /// A list of the entities of `queries[query_key]`, each rendered with
+    /// `item_template` (`$item.<field>` binds the entity). `indent` shifts an
+    /// item right by `item[indent.field] * step_dp` (capped at `max` steps).
+    /// `empty_text` shows when the query is present but empty.
+    #[serde(rename = "core://List")]
+    List {
+        query_key: String,
+        item_template: Box<UiNode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        indent: Option<Indent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        empty_text: Option<String>,
+    },
+    /// An image from a URL (a literal or a binding such as
+    /// `"$item.avatar_url"`). `size_dp` makes it a square of that size;
+    /// otherwise it fills the width at `aspect_ratio` (default 1).
+    #[serde(rename = "core://Image")]
+    Image {
+        url: String,
+        #[serde(default)]
+        shape: ImageShape,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size_dp: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        aspect_ratio: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_description: Option<String>,
+    },
+    /// A text input whose value is the form value `$form.<field>` for the
+    /// intents of its screen. `on_submit` (a send button, and the keyboard's
+    /// submit) is dispatched with the value bound, then the field is cleared;
+    /// it is not dispatched while the field is blank.
+    #[serde(rename = "core://TextField")]
+    TextField {
+        field: String,
+        #[serde(default)]
+        placeholder: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_length: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_submit: Option<ActionIntent>,
     },
 
     // Pixelfed coarse components
@@ -76,6 +125,46 @@ pub enum UiNode {
         query_key: String,
         item_template: Box<UiNode>,
     },
+}
+
+/// A screen an app can open (docs/DECISIONS.md D34). `route` is a URI
+/// pattern whose `{name}` segments capture route parameters (each
+/// `[A-Za-z0-9_-]{1,64}`), e.g. `pixelfed://posts/{id}/comments`. Every
+/// `$route.<name>` in `title`, `data`, `content` and `footer` is replaced by
+/// the captured value. `data`, when set, is a pod path loaded when the screen
+/// opens (`action.data.load`); its answer is a [`crate::DataBundle`].
+/// `footer` stays at the bottom while `content` scrolls.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Screen {
+    pub id: String,
+    pub route: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+    pub content: UiNode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footer: Option<UiNode>,
+}
+
+/// `core://List` indentation: `item[field]` (a number) times `step_dp`,
+/// capped at `max` steps (default 4).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct Indent {
+    pub field: String,
+    pub step_dp: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<u16>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ImageShape {
+    #[default]
+    Square,
+    Rounded,
+    Circle,
 }
 
 /// A named region of a workspace, filled by a content provider.

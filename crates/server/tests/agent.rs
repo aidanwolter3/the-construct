@@ -297,6 +297,9 @@ fn registry_contains_every_ui_node_variant() {
             UiNode::AuthorHeader { .. } => "pixelfed://AuthorHeader",
             UiNode::ActionBar { .. } => "pixelfed://ActionBar",
             UiNode::FeedList { .. } => "pixelfed://FeedList",
+            UiNode::List { .. } => "core://List",
+            UiNode::Image { .. } => "core://Image",
+            UiNode::TextField { .. } => "core://TextField",
         }
     }
     let _ = tag;
@@ -310,6 +313,9 @@ fn registry_contains_every_ui_node_variant() {
         "pixelfed://AuthorHeader",
         "pixelfed://ActionBar",
         "pixelfed://FeedList",
+        "core://List",
+        "core://Image",
+        "core://TextField",
     ];
     let registry = agent::registry();
     let text = registry.to_string();
@@ -770,4 +776,66 @@ async fn anthropic_total_timeout_bounds_retries() {
         other => panic!("{other:?}"),
     }
     assert!(started.elapsed() < Duration::from_secs(3));
+}
+
+#[test]
+fn screen_routes_and_paths_are_validated() {
+    assert_eq!(
+        agent::route_params("pixelfed://posts/{id}/comments").unwrap(),
+        ["id"]
+    );
+    assert_eq!(
+        agent::route_params("x://a/{one}/{two_b}").unwrap(),
+        ["one", "two_b"]
+    );
+    for bad in [
+        "nope",
+        "x://",
+        "x://a//b",
+        "x://{Id}",
+        "x://a{id}",
+        "x://{id}/{id}",
+        "x://{}",
+    ] {
+        assert!(agent::route_params(bad).is_err(), "{bad}");
+    }
+    let base = |screen: serde_json::Value| {
+        serde_json::json!({"type": "core://Workspace", "id": "a", "title": "A", "slots": [
+            {"slot_id": "s", "provider_uri": "p",
+             "content": {"type": "core://Text", "value_expr": "hi", "style": "Body"}}],
+            "screens": [screen]})
+    };
+    let ok = base(
+        serde_json::json!({"id": "c", "route": "x://p/{id}", "title": "C",
+        "data": "/v1/x?id=$route.id",
+        "content": {"type": "core://Text", "value_expr": "$route.id", "style": "Body"}}),
+    );
+    assert!(agent::validate_structure("a", &ok).is_ok());
+    for (screen, why) in [
+        (
+            serde_json::json!({"id": "c", "route": "x://p/{id}", "title": "C", "data": "https://evil/x",
+            "content": {"type": "core://Text", "value_expr": "x", "style": "Body"}}),
+            "pod path",
+        ),
+        (
+            serde_json::json!({"id": "c", "route": "x://p/{id}", "title": "$route.other",
+            "content": {"type": "core://Text", "value_expr": "x", "style": "Body"}}),
+            "not a parameter",
+        ),
+        (
+            serde_json::json!({"id": "c", "route": "bad", "title": "C",
+            "content": {"type": "core://Text", "value_expr": "x", "style": "Body"}}),
+            "scheme://",
+        ),
+        (
+            serde_json::json!({"id": "c", "route": "x://p", "title": "C",
+            "content": {"type": "core://Button", "label": "Go", "on_click": {
+                "intent": "action.mutation.create", "query_key": "q", "entity_uri": "x://t",
+                "entity": {}, "endpoint": "https://evil/x", "payload": {}}}}),
+            "pod path",
+        ),
+    ] {
+        let err = agent::validate_structure("a", &base(screen)).unwrap_err();
+        assert!(err.contains(why), "{err}");
+    }
 }

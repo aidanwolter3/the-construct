@@ -271,18 +271,95 @@ pub fn validate_structure(expected_id: &str, doc: &Value) -> Result<UiNode, Stri
         return Err(format!("duplicate slot_id '{}'", dup.slot_id));
     }
     check_values(&node)?;
+    check_screens(&node)?;
     let mut intents = Vec::new();
     collect_intents(&node, &mut intents);
     for intent in intents {
-        if let ActionIntent::OptimisticMutate { endpoint, .. } = intent
-            && !endpoint.starts_with("/v1/")
-        {
+        let path = match intent {
+            ActionIntent::OptimisticMutate { endpoint, .. }
+            | ActionIntent::Create { endpoint, .. } => endpoint,
+            ActionIntent::LoadData { path } => path,
+            _ => continue,
+        };
+        if !path.starts_with("/v1/") {
             return Err(format!(
-                "mutation endpoint '{endpoint}' must be a pod path starting with /v1/"
+                "endpoint '{path}' must be a pod path starting with /v1/"
             ));
         }
     }
     Ok(node)
+}
+
+/// Screens (docs/DECISIONS.md D34): unique ids, a route like
+/// `scheme://a/{param}/b` (each `{param}` a whole segment, named
+/// `[a-z_]+`, used once), `data` a pod path, and every `$route.<name>` used
+/// by the screen naming one of its route's parameters.
+fn check_screens(node: &UiNode) -> Result<(), String> {
+    let UiNode::Workspace { screens, .. } = node else {
+        return Ok(());
+    };
+    let mut ids = std::collections::HashSet::new();
+    for screen in screens {
+        let fail = |e: String| Err(format!("screen '{}': {e}", screen.id));
+        if screen.id.is_empty() || !ids.insert(screen.id.as_str()) {
+            return fail("ids must be unique and non-empty".into());
+        }
+        let params = match route_params(&screen.route) {
+            Ok(p) => p,
+            Err(e) => return fail(e),
+        };
+        if let Some(data) = &screen.data
+            && !data.starts_with("/v1/")
+        {
+            return fail(format!(
+                "data '{data}' must be a pod path starting with /v1/"
+            ));
+        }
+        let text = serde_json::to_string(screen).map_err(|e| e.to_string())?;
+        for used in text.split("$route.").skip(1) {
+            let name: String = used
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if !params.contains(&name) {
+                return fail(format!(
+                    "'$route.{name}' is not a parameter of route '{}'",
+                    screen.route
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The `{param}` names of a screen route; `Err` if the route is malformed.
+pub fn route_params(route: &str) -> Result<Vec<String>, String> {
+    let Some((scheme, rest)) = route.split_once("://") else {
+        return Err(format!("route '{route}' must look like scheme://path"));
+    };
+    if scheme.is_empty() || rest.is_empty() {
+        return Err(format!("route '{route}' must look like scheme://path"));
+    }
+    let mut params = Vec::new();
+    for seg in rest.split('/') {
+        if seg.is_empty() {
+            return Err(format!("route '{route}' has an empty segment"));
+        }
+        if let Some(name) = seg.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+            if name.is_empty() || !name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
+                return Err(format!(
+                    "route parameter '{{{name}}}' must be named [a-z_]+"
+                ));
+            }
+            if params.iter().any(|p| p == name) {
+                return Err(format!("route parameter '{{{name}}}' is used twice"));
+            }
+            params.push(name.to_owned());
+        } else if seg.contains('{') || seg.contains('}') {
+            return Err(format!("route segment '{seg}' mixes text and a parameter"));
+        }
+    }
+    Ok(params)
 }
 
 /// Numeric fields the renderers cannot draw sensibly (or at all: a
@@ -290,7 +367,43 @@ pub fn validate_structure(expected_id: &str, doc: &Value) -> Result<UiNode, Stri
 /// layout unreadable).
 fn check_values(node: &UiNode) -> Result<(), String> {
     match node {
-        UiNode::Workspace { slots, .. } => slots.iter().try_for_each(|s| check_values(&s.content)),
+        UiNode::Workspace { slots, screens, .. } => {
+            slots.iter().try_for_each(|s| check_values(&s.content))?;
+            screens.iter().try_for_each(|s| {
+                check_values(&s.content)?;
+                s.footer.as_ref().map_or(Ok(()), check_values)
+            })
+        }
+        UiNode::List {
+            item_template,
+            indent,
+            ..
+        } => {
+            if let Some(i) = indent
+                && (i.step_dp > MAX_PADDING_DP || i.max.unwrap_or(4) > 8)
+            {
+                return Err(format!(
+                    "indent step_dp {} / max {:?} too large (max {MAX_PADDING_DP} dp, 8 steps)",
+                    i.step_dp, i.max
+                ));
+            }
+            check_values(item_template)
+        }
+        UiNode::Image {
+            size_dp,
+            aspect_ratio,
+            ..
+        } => {
+            if let Some(a) = aspect_ratio
+                && !ASPECT_RATIO_RANGE.contains(a)
+            {
+                return Err(format!("image aspect_ratio {a} out of range"));
+            }
+            if size_dp.is_some_and(|s| s == 0 || s > 512) {
+                return Err(format!("image size_dp {size_dp:?} (1..=512)"));
+            }
+            Ok(())
+        }
         UiNode::Container {
             padding_dp,
             children,
@@ -323,6 +436,7 @@ fn check_values(node: &UiNode) -> Result<(), String> {
         UiNode::FeedList { item_template, .. } => check_values(item_template),
         UiNode::Text { .. }
         | UiNode::Button { .. }
+        | UiNode::TextField { .. }
         | UiNode::AuthorHeader { .. }
         | UiNode::ActionBar { .. } => Ok(()),
     }
@@ -337,11 +451,20 @@ pub fn intents(node: &UiNode) -> Vec<&ActionIntent> {
 
 fn collect_intents<'a>(node: &'a UiNode, out: &mut Vec<&'a ActionIntent>) {
     match node {
-        UiNode::Workspace { slots, .. } => {
+        UiNode::Workspace { slots, screens, .. } => {
             for s in slots {
                 collect_intents(&s.content, out);
             }
+            for s in screens {
+                collect_intents(&s.content, out);
+                if let Some(f) = &s.footer {
+                    collect_intents(f, out);
+                }
+            }
         }
+        UiNode::List { item_template, .. } => collect_intents(item_template, out),
+        UiNode::Image { .. } => {}
+        UiNode::TextField { on_submit, .. } => out.extend(on_submit.as_ref()),
         UiNode::Container { children, .. } => {
             for c in children {
                 collect_intents(c, out);

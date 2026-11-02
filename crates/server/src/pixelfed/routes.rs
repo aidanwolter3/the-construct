@@ -43,7 +43,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/v1/pixelfed/posts/like", post(like))
         .route("/v1/pixelfed/posts/bookmark", post(bookmark))
         .route("/v1/pixelfed/posts/comment", post(comment))
-        .route("/v1/pixelfed/posts/{id}/comments", get(comments))
+        .route("/v1/pixelfed/screens/comments", get(comments_screen))
         .route("/v1/pixelfed/media/{key}", get(media))
 }
 
@@ -638,7 +638,8 @@ pub async fn home_workspace(state: &Arc<AppState>, headers: &HeaderMap) -> Respo
         entities = timeline.entities.len(),
         "pixelfed_home served"
     );
-    let served = match crate::layouts::active_async(state, layout::WORKSPACE_ID).await {
+    let served = match crate::layouts::active_for_client(state, layout::WORKSPACE_ID, headers).await
+    {
         Ok(Some(v)) => v,
         Ok(None) => unreachable!("pixelfed_home has versions after the layout sync"),
         Err(e) => return e.into_response(),
@@ -763,22 +764,27 @@ fn comment_rejected(id: &str, status: StatusCode, detail: &str) -> Response {
     .into_response()
 }
 
-/// `GET /v1/pixelfed/posts/{id}/comments` -> 200 `{post_id, comments: [...]}` in thread
-/// order (see [`normalize_comments`]). Not cached by the client; read on demand. No session:
-/// 401; upstream 4xx: same status (404 `post_not_found`); 5xx / unreachable: 502.
-async fn comments(
+/// `GET /v1/pixelfed/screens/comments?post_id=<id>`: the data of the comments screen
+/// (docs/DECISIONS.md D34), a `DataBundle`: one `pixelfed://comments/<id>` entity per
+/// comment ([`normalize_comment`]) and `queries["comments:<post_id>"]` in thread order
+/// ([`normalize_comments`]). No session: 401; upstream 4xx: same status (404
+/// `post_not_found`); 5xx / unreachable: 502.
+async fn comments_screen(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Path(id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Response {
     let account = match signed_in_account(&state, &headers).await {
         Ok(Some(a)) => a,
         Ok(None) => return unauthorized(),
         Err(e) => return e.into_response(),
     };
-    let id = id.trim().to_owned();
+    let id = params
+        .get("post_id")
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_default();
     if !valid_status_id(&id) {
-        return invalid_request(json!({ "id": "status id" }));
+        return invalid_request(json!({ "post_id": "status id" }));
     }
     let own = account.account_id.clone();
     let (result, _) = with_token(&state, account, |token| {
@@ -794,12 +800,20 @@ async fn comments(
         Err(e) => return bad_gateway(&e),
     };
     let mut media = MediaUrls::new(&proxy_base(&headers), &state.media_allow);
-    let list = normalize_comments(&id, &context, &own, &mut media);
+    let list = normalize_comments(&id, &context, &own, now_secs(), &mut media);
     if let Err(e) = save_media_keys(&state, media).await {
         return e.into_response();
     }
     tracing::info!(%id, comments = list.len(), "Pixelfed comments served");
-    Json(json!({ "post_id": id, "comments": list })).into_response()
+    let mut bundle = protocol::DataBundle::default();
+    let mut order = Vec::with_capacity(list.len());
+    for c in list {
+        let uri = super::comment_uri(c.get_str("id").unwrap_or_default());
+        order.push(uri.clone());
+        bundle.entities.insert(uri, c);
+    }
+    bundle.queries.insert(super::comments_query(&id), order);
+    Json(bundle).into_response()
 }
 
 /// `POST /v1/pixelfed/posts/comment {id, text, client_id?}` -> 200 `{ok, id, comment}`:
@@ -871,7 +885,7 @@ async fn comment(State(state): State<Arc<AppState>>, headers: HeaderMap, body: B
         }
     };
     let mut media = MediaUrls::new(&proxy_base(&headers), &state.media_allow);
-    let comment = normalize_comment(&status, 0, &own, &mut media);
+    let comment = normalize_comment(&status, &id, 0, &own, now_secs(), &mut media);
     if let Err(e) = save_media_keys(&state, media).await {
         return e.into_response();
     }

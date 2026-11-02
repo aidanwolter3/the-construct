@@ -25,6 +25,16 @@ pub struct WorkspaceSpec {
     pub queries: BTreeMap<String, Vec<String>>,
 }
 
+/// The answer of a data path (`action.data.load`, a screen's `data`):
+/// entities to merge and queries to set (docs/DECISIONS.md D34).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct DataBundle {
+    #[serde(default)]
+    pub entities: BTreeMap<String, EntityRecord>,
+    #[serde(default)]
+    pub queries: BTreeMap<String, Vec<String>>,
+}
+
 /// A schemaless entity: an arbitrary JSON object whose fields round-trip
 /// untouched. Domain-specific typed views can be layered on later.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]

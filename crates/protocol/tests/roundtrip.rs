@@ -52,6 +52,7 @@ fn full_workspace() -> UiNode {
     UiNode::Workspace {
         id: "home".into(),
         title: "Home".into(),
+        screens: Vec::new(),
         slots: vec![
             SlotSpec {
                 slot_id: "header".into(),
@@ -155,7 +156,10 @@ fn pixelfed_fixture_parses() {
     let bundle: WorkspaceSpec = serde_json::from_str(PIXELFED_FIXTURE).unwrap();
     assert_eq!(bundle.version, "1.0.0");
 
-    let UiNode::Workspace { id, title, slots } = &bundle.workspace else {
+    let UiNode::Workspace {
+        id, title, slots, ..
+    } = &bundle.workspace
+    else {
         panic!("root is not a Workspace: {:?}", bundle.workspace);
     };
     assert_eq!(id, "home_stream");
