@@ -116,7 +116,14 @@ val AGENT_SUGGESTIONS = listOf("Hide captions", "Media at the very top", "Add a 
  * posts one prompt: Send is blocked from the tap until a newer snapshot ([seq]) arrives, then while running.
  */
 @Composable
-internal fun AgentPromptOverlay(agent: AgentInfo, seq: Long, onSend: (String) -> Unit, modifier: Modifier = Modifier) {
+internal fun AgentPromptOverlay(
+    agent: AgentInfo,
+    seq: Long,
+    onSend: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    /** Drawn above the FAB and hidden with it while the panel is open (the layouts button, D30). */
+    secondaryFab: @Composable () -> Unit = {},
+) {
     var open by rememberSaveable { mutableStateOf(false) }
     var text by rememberSaveable { mutableStateOf("") }
     // This panel's last send while its result is awaited: the agent status before the send and the text sent.
@@ -157,12 +164,15 @@ internal fun AgentPromptOverlay(agent: AgentInfo, seq: Long, onSend: (String) ->
             exit = fadeOut() + scaleOut(),
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
         ) {
-            FloatingActionButton(
-                onClick = { open = true },
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                modifier = Modifier.testTag("agent-fab"),
-            ) {
-                Icon(CanvasIcons.AutoAwesome, contentDescription = "Edit layout with AI")
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                secondaryFab()
+                FloatingActionButton(
+                    onClick = { open = true },
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.testTag("agent-fab"),
+                ) {
+                    Icon(CanvasIcons.AutoAwesome, contentDescription = "Edit layout with AI")
+                }
             }
         }
         AnimatedVisibility(

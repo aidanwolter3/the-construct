@@ -33,9 +33,14 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.test.hasAnyAncestor
+import org.genui.canvas.BackPresses
 import org.genui.canvas.CanvasApp
 import org.genui.canvas.CanvasController
 import org.genui.canvas.ImageLoads
+import org.genui.canvas.LayoutCalls
+import org.genui.canvas.LocalBackPresses
 import org.jetbrains.skia.EncodedImageFormat
 import org.jetbrains.skia.Image
 import java.io.File
@@ -92,6 +97,8 @@ class SimRunner(
     /** Installs the simulator's Coil ImageLoader for [modeName] ([SimImages]) at the start of [run]. */
     private val installImageLoader: Boolean = true,
 ) {
+    private var backPresses: BackPresses? = null
+
     fun run(steps: List<SimStep>): SimResult {
         outDir.mkdirs()
         if (installImageLoader) SimImages.install(modeName)
@@ -111,7 +118,10 @@ class SimRunner(
                     density = Density(d),
                     testTimeout = 30.minutes,
                 ) {
-                    setContent { CanvasApp(controller) }
+                    // A stand-in for the system Back (the `back` command and the layout browser's levels).
+                    val backPresses = BackPresses()
+                    this@SimRunner.backPresses = backPresses
+                    setContent { CompositionLocalProvider(LocalBackPresses provides backPresses) { CanvasApp(controller) } }
                     waitForIdle()
                     while (i < steps.size) {
                         val step = steps[i]
@@ -165,7 +175,9 @@ class SimRunner(
     private fun SkikoComposeUiTest.execute(step: SimStep, index: Int): Pair<String, File?> {
         when (step) {
             is SimStep.Shot -> {
-                // Images still loading after SHOT_IMAGE_WAIT_MS are captured as placeholders (not a failure).
+                // Catalog loads (thumbnails) first; then images still loading after SHOT_IMAGE_WAIT_MS are captured as
+                // placeholders (not a failure).
+                awaitLayoutCalls()
                 val settled = awaitImages(SHOT_IMAGE_WAIT_MS)
                 val image = onRoot().captureToImage()
                 val file = File(outDir, "%02d-%s.png".format(index, sanitize(step.name)))
@@ -204,35 +216,7 @@ class SimRunner(
             is SimStep.Click -> {
                 waitForIdle()
                 val (node, found) = findTarget(step.text)
-                // The click lands at the node's center: it must be on screen, or the event hits nothing (or
-                // another node) and the step would "pass" without effect. Scroll it into view if possible.
-                var how = found
-                if (!centerOnScreen(node)) {
-                    val scrolled = try {
-                        node.performScrollTo()
-                        waitForIdle()
-                        true
-                    } catch (e: AssertionError) {
-                        false
-                    }
-                    if (!centerOnScreen(node)) {
-                        throw StepFailure(
-                            "'${step.text}' matched a node ($found) that is not on screen" +
-                                (if (scrolled) " even after scrolling to it" else " and has no scrollable parent") +
-                                "; bounds ${describeBounds(node)}",
-                        )
-                    }
-                    how = "$found, scrolled into view"
-                }
-                // A mouse click, then move the pointer off the node: performClick() injects touch
-                // events that leave the button in a hovered state, so later shots show a tint.
-                node.performMouseInput {
-                    moveTo(center)
-                    click(center)
-                    moveTo(Offset(-1f, -1f))
-                }
-                waitForIdle()
-                return how to null
+                return clickNode(node, found, step.text) to null
             }
             is SimStep.Wait -> {
                 Thread.sleep(step.ms)
@@ -262,7 +246,208 @@ class SimRunner(
                 waitForIdle()
                 return "" to null
             }
+            SimStep.Back -> {
+                waitForIdle()
+                val presses = backPresses ?: throw StepFailure("Back is not available")
+                if (!presses.press()) throw StepFailure("nothing on screen handles Back (no open panel or browser)")
+                waitForIdle()
+                return "" to null
+            }
+            SimStep.OpenLayouts -> {
+                if (!hasTag("layouts-browser")) {
+                    clickTag("layouts-button", "the layouts button is not on screen (workspace not loaded, or the agent panel is open)")
+                }
+                awaitTag("layouts-browser", "the layouts browser did not open")
+                awaitLayoutCalls()
+                if (hasTag("layouts-error")) return "error shown: ${textUnder("layouts-error")}" to null
+                val n = tagsStartingWith("layout-item-").size
+                return "$n layout(s)" to null
+            }
+            is SimStep.SelectLayout -> {
+                requireTag("layouts-browser", "the layouts browser is not open (use open-layouts first)")
+                awaitLayoutCalls()
+                val tag = awaitLayoutItem(step.id)
+                clickTag(tag, "")
+                awaitTag("layout-details", "the details of '${step.id}' did not open")
+                awaitLayoutCalls()
+                return tag.removePrefix("layout-item-") to null
+            }
+            is SimStep.SelectVersion -> {
+                requireTag("layout-details", "no layout details on screen (use select-layout first)")
+                awaitLayoutCalls()
+                val tag = "version-item-${step.version}"
+                // Older versions are paged: press "Load older" until the row appears or there is no more history.
+                while (!hasTag(tag) && hasTag("versions-more")) {
+                    clickTag("versions-more", "")
+                    awaitLayoutCalls()
+                }
+                if (!hasTag(tag)) {
+                    throw StepFailure("no version ${step.version} in the history; listed: ${tagsStartingWith("version-item-").map { "v" + it.removePrefix("version-item-") }}")
+                }
+                clickTag(tag, "")
+                awaitTag("version-preview", "the preview of v${step.version} did not open")
+                awaitLayoutCalls()
+                return "" to null
+            }
+            SimStep.UseLayout -> {
+                awaitLayoutCalls()
+                val tag = listOf("layout-use", "version-use").firstOrNull { hasTag(it) }
+                    ?: throw StepFailure(
+                        "no 'Use this layout' / 'Use this version' button on screen (it is shown in the details or preview of " +
+                            "a layout that is not active; for the active layout use restore-version)",
+                    )
+                clickTag(tag, "")
+                awaitTag("confirm-dialog", "the confirmation did not open")
+                return tag to null
+            }
+            SimStep.RestoreVersion -> {
+                awaitLayoutCalls()
+                if (!hasTag("version-restore")) {
+                    throw StepFailure(
+                        "no 'Restore this version' button on screen (it is shown in the preview of an older version of the " +
+                            "active layout; for another layout use use-layout)",
+                    )
+                }
+                clickTag("version-restore", "")
+                awaitTag("confirm-dialog", "the confirmation did not open")
+                return "" to null
+            }
+            SimStep.Confirm, SimStep.CancelConfirm -> {
+                val tag = if (step == SimStep.Confirm) "confirm-ok" else "confirm-cancel"
+                requireTag(tag, "no confirmation dialog on screen (use use-layout or restore-version first)")
+                clickTag(tag, "")
+                awaitLayoutCalls()
+                if (hasTag("confirm-error")) return "error shown: ${textUnder("confirm-error", self = true)}" to null
+                return (if (hasTag("layouts-snackbar")) "snackbar: ${textUnder("layouts-snackbar")}" else "") to null
+            }
+            SimStep.Undo -> {
+                requireTag("snackbar-undo", "no Undo on screen (the snackbar shows for 8 s after a change)")
+                clickTag("snackbar-undo", "")
+                awaitLayoutCalls()
+                return (if (hasTag("layouts-snackbar")) "snackbar: ${textUnder("layouts-snackbar")}" else "") to null
+            }
+            SimStep.CloseLayouts -> {
+                requireTag("layouts-close", "the layouts browser is not open")
+                clickTag("layouts-close", "")
+                awaitCondition("the layouts browser to close") { !hasTag("layouts-browser") }
+                return "" to null
+            }
             is SimStep.Screen -> error("handled by run()")
+        }
+    }
+
+    /** Clicks [node] at its center (scrolled into view first if needed); returns the step message. */
+    private fun SkikoComposeUiTest.clickNode(node: SemanticsNodeInteraction, found: String, target: String): String {
+        // The click lands at the node's center: it must be on screen, or the event hits nothing (or
+        // another node) and the step would "pass" without effect. Scroll it into view if possible.
+        var how = found
+        if (!centerOnScreen(node)) {
+            val scrolled = try {
+                node.performScrollTo()
+                waitForIdle()
+                true
+            } catch (e: AssertionError) {
+                false
+            }
+            if (!centerOnScreen(node)) {
+                throw StepFailure(
+                    "'$target' matched a node ($found) that is not on screen" +
+                        (if (scrolled) " even after scrolling to it" else " and has no scrollable parent") +
+                        "; bounds ${describeBounds(node)}",
+                )
+            }
+            how = "$found, scrolled into view"
+        }
+        // A mouse click, then move the pointer off the node: performClick() injects touch
+        // events that leave the button in a hovered state, so later shots show a tint.
+        node.performMouseInput {
+            moveTo(center)
+            click(center)
+            moveTo(Offset(-1f, -1f))
+        }
+        waitForIdle()
+        // The click may have opened a screen (the layouts browser) whose node under the old pointer position got a
+        // hover enter on its first layout; a second exit clears that tint from later shots.
+        onRoot().performMouseInput { moveTo(Offset(1f, 1f)); moveTo(Offset(-1f, -1f)) }
+        waitForIdle()
+        return how
+    }
+
+    private fun SkikoComposeUiTest.hasTag(tag: String): Boolean =
+        onAllNodes(hasTestTag(tag), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+
+    private fun SkikoComposeUiTest.tagsStartingWith(prefix: String): List<String> =
+        onAllNodes(SemanticsMatcher("testTag starts with '$prefix'") {
+            it.config.getOrNull(SemanticsProperties.TestTag)?.startsWith(prefix) == true
+        }, useUnmergedTree = true).fetchSemanticsNodes().mapNotNull { it.config.getOrNull(SemanticsProperties.TestTag) }
+
+    /** Fails with [hint] unless a node tagged [tag] is on screen (after idle and the catalog calls). */
+    private fun SkikoComposeUiTest.requireTag(tag: String, hint: String) {
+        awaitLayoutCalls()
+        if (!hasTag(tag)) throw StepFailure("$hint; visible text: ${visibleText()}")
+    }
+
+    /** Waits up to [timeoutMs] for a node tagged [tag], else fails with [hint]. */
+    private fun SkikoComposeUiTest.awaitTag(tag: String, hint: String, timeoutMs: Long = LAYOUT_TIMEOUT_MS) {
+        waitForIdle()
+        if (hasTag(tag)) return
+        try {
+            waitUntil("tag $tag", timeoutMs) { hasTag(tag) }
+        } catch (e: ComposeTimeoutException) {
+            throw StepFailure("$hint (no '$tag' after $timeoutMs ms); visible text: ${visibleText()}")
+        }
+    }
+
+    private fun SkikoComposeUiTest.clickTag(tag: String, hint: String) {
+        waitForIdle()
+        val all = onAllNodes(hasTestTag(tag), useUnmergedTree = false)
+        if (all.fetchSemanticsNodes().isEmpty()) throw StepFailure("${hint.ifEmpty { "no '$tag' on screen" }}; visible text: ${visibleText()}")
+        clickNode(all[0], "test tag", "tag:$tag")
+    }
+
+    /** The tag of the list item for [id] (full id or its last segment), waiting for the list to load. */
+    private fun SkikoComposeUiTest.awaitLayoutItem(id: String): String {
+        fun match(): String? {
+            val tags = tagsStartingWith("layout-item-")
+            return tags.firstOrNull { it == "layout-item-$id" } ?: tags.firstOrNull { it.endsWith(".$id") }
+        }
+        match()?.let { return it }
+        try {
+            waitUntil("layout item $id", LAYOUT_TIMEOUT_MS) { match() != null }
+        } catch (e: ComposeTimeoutException) {
+            val listed = tagsStartingWith("layout-item-").map { it.removePrefix("layout-item-") }
+            val err = if (hasTag("layouts-error")) "; error shown: ${textUnder("layouts-error")}" else ""
+            throw StepFailure("no layout '$id' in the browser; listed: $listed$err")
+        }
+        return match()!!
+    }
+
+    /** Text of the node tagged [tag] and its descendants. */
+    private fun SkikoComposeUiTest.textUnder(tag: String, self: Boolean = false): String {
+        val m = if (self) hasTestTag(tag) else (hasTestTag(tag) or hasAnyAncestor(hasTestTag(tag)))
+        return onAllNodes(m, useUnmergedTree = true).fetchSemanticsNodes()
+            .flatMap { it.config.getOrNull(SemanticsProperties.Text).orEmpty().map { t -> t.text } }
+            .distinct().joinToString(" ")
+    }
+
+    /**
+     * Waits for idle and for every layout catalog call to finish ([LayoutCalls]: they run on Dispatchers.IO, which
+     * the test clock does not see), twice in a row, since a finished load can start the next (thumbnails).
+     */
+    private fun SkikoComposeUiTest.awaitLayoutCalls(timeoutMs: Long = LAYOUT_TIMEOUT_MS) {
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000
+        var quiet = 0
+        while (quiet < 2) {
+            waitForIdle()
+            if (LayoutCalls.inFlight.value == 0) {
+                quiet++
+            } else {
+                quiet = 0
+                if (System.nanoTime() > deadline) {
+                    throw StepFailure("timed out after $timeoutMs ms with ${LayoutCalls.inFlight.value} layout call(s) in flight")
+                }
+                Thread.sleep(10)
+            }
         }
     }
 
@@ -402,6 +587,9 @@ class SimRunner(
 
     companion object {
         private val PRETTY_JSON = Json { prettyPrint = true }
+
+        /** How long the layout commands wait for their screen or for the catalog calls (live pod calls time out at 15 s). */
+        const val LAYOUT_TIMEOUT_MS = 20_000L
 
         /** How long a `shot` waits for loading images before capturing anyway. */
         const val SHOT_IMAGE_WAIT_MS = 5_000L

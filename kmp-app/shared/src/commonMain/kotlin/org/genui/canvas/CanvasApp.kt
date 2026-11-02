@@ -21,6 +21,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -65,6 +70,9 @@ data class CanvasState(
 class CanvasController(private val bridge: CanvasEngineBridge) {
     private val _state = MutableStateFlow(CanvasState())
     val state: StateFlow<CanvasState> = _state.asStateFlow()
+
+    /** The layout catalog (D26/D27) for the layout browser; its spec cache lives as long as this controller. */
+    val layouts: LayoutRepository = LayoutRepository(bridge)
 
     init {
         bridge.subscribe(::onSnapshot)
@@ -132,6 +140,11 @@ class CanvasController(private val bridge: CanvasEngineBridge) {
 @Composable
 fun CanvasApp(controller: CanvasController, modifier: Modifier = Modifier) {
     val state by controller.state.collectAsState()
+    // The layout browser (D30): navigation saved across rotation; writes run in this scope.
+    val navState = rememberSaveable(stateSaver = LayoutNavSaver) { mutableStateOf(LayoutNav()) }
+    val activeLayout = rememberUpdatedState(state.activeLayout)
+    val scope = rememberCoroutineScope()
+    val layouts = remember(controller) { LayoutBrowserState(controller.layouts, navState, scope, activeLayout) }
     // Material3 light scheme on a white background and surface (feed photos sit on white, as on Pixelfed/Instagram).
     MaterialTheme(colorScheme = lightColorScheme(background = Color.White, surface = Color.White)) {
         Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -166,7 +179,10 @@ fun CanvasApp(controller: CanvasController, modifier: Modifier = Modifier) {
                         state.seq,
                         onSend = { controller.dispatch(ActionIntent.PromptAgent(it)) },
                         modifier = Modifier.fillMaxSize(),
+                        secondaryFab = { LayoutsButton(onClick = layouts::open) },
                     )
+                    // Above the agent overlay; also outside the server-driven tree, so a switch keeps its state.
+                    LayoutBrowserHost(layouts, state, Modifier.fillMaxSize())
                 }
             }
         }

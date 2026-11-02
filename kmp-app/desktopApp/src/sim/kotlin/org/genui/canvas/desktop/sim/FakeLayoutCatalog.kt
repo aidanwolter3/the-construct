@@ -10,18 +10,28 @@ import org.genui.canvas.LayoutApiException
 import org.genui.canvas.UiNode
 
 /**
- * In-memory layout catalog for [FakeEngineBridge] (DECISIONS D26/D27): the same JSON shapes as the pod's
+ * In-memory layout catalog for [FakeEngineBridge] (DECISIONS D26/D27/D30): the same JSON shapes as the pod's
  * `/v1/layouts` endpoints, append-only per-layout histories, one active layout. Not thread-safe: the bridge calls it
  * under its lock. The revision (the bridge's `layoutVersion`) is passed in by the caller.
  *
- * Fixture catalog (the active layout's newest version is always the bundle's layout, so the screen starts unchanged):
- * `home` -> `home.counter` (v1 retitled "Counter", v2 the bundle's layout; active) and `home.big_counter`;
- * `pixelfed_demo` (any bundle with `pixelfed://` entities) -> `pixelfed_demo.classic` (v1 the bundle's layout, v2
- * captions hidden, v3 a restore of v1; active), `pixelfed_demo.editorial` (media at the top) and
- * `pixelfed_demo.compact` (captions hidden). Variants come from [FakeLayoutRules] or a retitle, so they render.
+ * Fixture catalog: the pod's built-ins with the pod's titles, descriptions and preview hints, loaded from the repo's
+ * `fixtures/layouts/<workspace>.<name>.json` (the files the server `include_str!`s; found by walking up from the
+ * working directory like the bundles); if a file is missing, a [FakeLayoutRules] variant stands in so it still
+ * renders. The active layout's newest version is always the bundle's layout, so the screen starts unchanged.
+ * - `home`: `home.counter` (v1 seed, v2 an AI prompt adding a weather widget, v3 a rollback to v1; active) and
+ *   `home.big_counter`.
+ * - `pixelfed_demo` (a bundle with `pixelfed://` entities; `pixelfed_home` when the bundle's root id is
+ *   `pixelfed_home`): `<ws>.classic` (v1 seed, v2 AI "Hide post captions", v3 AI "Add a weather widget", v4 a
+ *   rollback to v1; active), `<ws>.editorial`, `<ws>.compact`, `<ws>.minimal`.
  */
 class FakeLayoutCatalog private constructor(val workspaceId: String) {
-    class Version(val layout: UiNode, val source: String, val prompt: String?, val createdAt: Long)
+    class Version(
+        val layout: UiNode,
+        val source: String,
+        val prompt: String?,
+        val createdAt: Long,
+        val provider: String? = null,
+    )
 
     private class Entry(val id: String, val title: String, val description: String, val previewHint: String) {
         val versions = mutableListOf<Version>()
@@ -76,7 +86,10 @@ class FakeLayoutCatalog private constructor(val workspaceId: String) {
         "source" to JsonPrimitive(v.source),
         "hash" to JsonPrimitive(CanvasJson.encodeNode(v.layout).hashCode().toUInt().toString(16)),
         "bytes" to JsonPrimitive(CanvasJson.encodeNode(v.layout).length),
-    ).also { m -> v.prompt?.let { m["prompt"] = JsonPrimitive(it) } }
+    ).also { m ->
+        v.prompt?.let { m["prompt"] = JsonPrimitive(it) }
+        v.provider?.let { m["provider"] = JsonPrimitive(it) }
+    }
 
     fun listJson(revision: Int): String = obj(
         "layouts" to JsonArray(layouts.values.map(::layoutObject)),
@@ -127,7 +140,8 @@ class FakeLayoutCatalog private constructor(val workspaceId: String) {
 
     /** An agent change to the active layout (the bridge already bumped the revision). */
     fun appendActive(layout: UiNode, prompt: String) {
-        append(layouts.getValue(activeId), layout, "agent", prompt)
+        val e = layouts.getValue(activeId)
+        if (e.versions.last().layout != layout) e.versions += Version(layout, "agent", prompt, now(), FakeLayoutRules.PROVIDER)
     }
 
     /** Result of a write: the response body and whether the screen (active layout) changed. */
@@ -172,52 +186,70 @@ class FakeLayoutCatalog private constructor(val workspaceId: String) {
     }
 
     companion object {
-        private var clock = 1_760_000_000L
+        private fun now(): Long = System.currentTimeMillis() / 1000
 
-        private fun now(): Long = ++clock
+        private const val HOUR = 3_600L
+        private const val DAY = 86_400L
 
         private fun obj(vararg pairs: Pair<String, JsonElement>) = JsonObject(linkedMapOf(*pairs))
-
-        private fun retitle(node: UiNode, title: String): UiNode {
-            val o = CanvasJson.json.parseToJsonElement(CanvasJson.encodeNode(node)).jsonObject
-            return CanvasJson.decodeNode(JsonObject(o + ("title" to JsonPrimitive(title))).toString())
-        }
 
         private fun rule(prompt: String, node: UiNode): UiNode =
             (FakeLayoutRules.run(prompt, node) as? FakeLayoutRules.Outcome.Applied)?.layout ?: node
 
-        /** The fixture catalog for a bundle whose layout is [base]: `pixelfed_demo` if [pixelfed], else `home`. */
-        fun fixture(base: UiNode, pixelfed: Boolean): FakeLayoutCatalog = if (pixelfed) {
-            FakeLayoutCatalog("pixelfed_demo").apply {
-                val hidden = rule("hide captions", base)
-                add(
-                    "pixelfed_demo.classic", "Classic", "The built-in feed: author, media, actions, caption.", "feed",
-                    Version(base, "seed", null, now()),
-                    Version(hidden, "agent", "hide captions", now()),
-                    Version(base, "restore", "restore v1", now()),
-                )
-                add(
-                    "pixelfed_demo.editorial", "Editorial", "Media first, then the author and the caption.", "media",
-                    Version(rule("media at the top", base), "seed", null, now()),
-                )
-                add(
-                    "pixelfed_demo.compact", "Compact", "Media and author only; captions hidden.", "compact",
-                    Version(hidden, "seed", null, now()),
-                )
-                activeId = "pixelfed_demo.classic"
+        /** `fixtures/layouts/<id>.json` (the pod's built-in), or null when the repo's fixtures are not reachable. */
+        private fun builtin(id: String): UiNode? = findFixture("layouts/$id.json")?.let {
+            try {
+                CanvasJson.decodeNode(it.readText())
+            } catch (e: Exception) {
+                println("[sim] layouts: cannot read ${it.path}: $e")
+                null
             }
-        } else {
-            FakeLayoutCatalog("home").apply {
-                add(
-                    "home.counter", "Counter", "Title, count and buttons.", "counter",
-                    Version(retitle(base, "Counter"), "seed", null, now()),
-                    Version(base, "manual", "rename to the bundle's title", now()),
-                )
-                add(
-                    "home.big_counter", "Big counter", "The count first, then the buttons.", "counter",
-                    Version(retitle(base, "Big counter"), "seed", null, now()),
-                )
-                activeId = "home.counter"
+        }
+
+        /** The fixture catalog for a bundle whose layout is [base]: a Pixelfed workspace if [pixelfed], else `home`. */
+        fun fixture(base: UiNode, pixelfed: Boolean): FakeLayoutCatalog {
+            val t = now()
+            return if (pixelfed) {
+                val ws = if ((base as? UiNode.Workspace)?.id == "pixelfed_home") "pixelfed_home" else "pixelfed_demo"
+                FakeLayoutCatalog(ws).apply {
+                    val hidden = rule("hide captions", base)
+                    add(
+                        "$ws.classic", "Classic feed", "Author, square photo, like/bookmark/comment bar, caption.", "feed-classic",
+                        Version(base, "seed", null, t - 6 * DAY),
+                        Version(hidden, "agent", "Hide post captions", t - 3 * DAY, "rules"),
+                        Version(rule("add a weather widget", hidden), "agent", "Add a weather widget", t - 26 * HOUR, "rules"),
+                        Version(base, "rollback", "rollback to v1", t - 2 * HOUR, "rollback"),
+                    )
+                    add(
+                        "$ws.editorial", "Editorial journal",
+                        "Large portrait photo first, then a byline and the caption; no action bar.", "feed-editorial",
+                        Version(builtin("$ws.editorial") ?: rule("media at the top", base), "seed", null, t - 6 * DAY),
+                    )
+                    add(
+                        "$ws.compact", "Compact", "Smaller inset wide photos and small captions for a denser list.", "feed-compact",
+                        Version(builtin("$ws.compact") ?: hidden, "seed", null, t - 6 * DAY),
+                    )
+                    add(
+                        "$ws.minimal", "Minimal", "Author, photo and caption only; no action bar.", "feed-minimal",
+                        Version(builtin("$ws.minimal") ?: hidden, "seed", null, t - 6 * DAY),
+                    )
+                    activeId = "$ws.classic"
+                }
+            } else {
+                FakeLayoutCatalog("home").apply {
+                    add(
+                        "home.counter", "Counter", "Title, count and the increment / decrement / reset buttons.", "counter",
+                        Version(base, "seed", null, t - 5 * DAY),
+                        Version(rule("add a weather widget", base), "agent", "Add a weather widget", t - 4 * HOUR, "rules"),
+                        Version(base, "rollback", "rollback to v1", t - 40 * 60, "rollback"),
+                    )
+                    add(
+                        "home.big_counter", "Big counter",
+                        "The count first, the buttons below it and a small title at the bottom.", "counter-big",
+                        Version(builtin("home.big_counter") ?: base, "seed", null, t - 5 * DAY),
+                    )
+                    activeId = "home.counter"
+                }
             }
         }
     }

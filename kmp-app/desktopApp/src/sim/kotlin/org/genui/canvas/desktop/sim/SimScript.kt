@@ -18,6 +18,21 @@ sealed class SimStep(val command: String, val arg: String = "") {
     class ScrollTo(val target: String) : SimStep("scroll-to", target)
     /** Replaces the text of the text field [target] selects with [text]. */
     class Type(val target: String, val text: String) : SimStep("type", "$target $text")
+    /** A system Back press (Android's Back; the desktop stand-in [org.genui.canvas.BackPresses]). */
+    object Back : SimStep("back")
+
+    // Layout browser (DECISIONS D30): each waits for idle and for the catalog calls, and fails with a hint when its
+    // control is not on screen.
+    object OpenLayouts : SimStep("open-layouts")
+    /** [id]: a full layout id (`pixelfed_demo.editorial`) or its last segment (`editorial`). */
+    class SelectLayout(val id: String) : SimStep("select-layout", id)
+    class SelectVersion(val version: Int) : SimStep("select-version", version.toString())
+    object UseLayout : SimStep("use-layout")
+    object RestoreVersion : SimStep("restore-version")
+    object Confirm : SimStep("confirm")
+    object CancelConfirm : SimStep("cancel")
+    object Undo : SimStep("undo")
+    object CloseLayouts : SimStep("close-layouts")
 
     override fun toString(): String = if (arg.isEmpty()) command else "$command $arg"
 }
@@ -92,6 +107,23 @@ fun parseScript(script: String): List<SimStep> {
                     )
                 SimStep.Type(target, text)
             }
+            "back" -> { noArg(); SimStep.Back }
+            "open-layouts" -> { noArg(); SimStep.OpenLayouts }
+            "select-layout" -> SimStep.SelectLayout(
+                requireArg("a layout id (e.g. pixelfed_demo.editorial or editorial)").also {
+                    if (it.contains(' ')) throw ScriptParseException("${where()}: a layout id has no spaces")
+                },
+            )
+            "select-version" -> SimStep.SelectVersion(
+                requireArg("a version number").removePrefix("v").toIntOrNull()?.takeIf { it >= 1 }
+                    ?: throw ScriptParseException("${where()}: 'select-version' needs a version number >= 1 (e.g. 2 or v2)"),
+            )
+            "use-layout" -> { noArg(); SimStep.UseLayout }
+            "restore-version" -> { noArg(); SimStep.RestoreVersion }
+            "confirm" -> { noArg(); SimStep.Confirm }
+            "cancel" -> { noArg(); SimStep.CancelConfirm }
+            "undo" -> { noArg(); SimStep.Undo }
+            "close-layouts" -> { noArg(); SimStep.CloseLayouts }
             "offline" -> { noArg(); SimStep.Offline }
             "online" -> { noArg(); SimStep.Online }
             "screen" -> SimStep.Screen(
@@ -104,7 +136,8 @@ fun parseScript(script: String): List<SimStep> {
             else -> throw ScriptParseException(
                 "${where()}: unknown command '$command' (expected one of: " +
                     "shot, click, wait, idle, assert-text, assert-no-text, wait-text, wait-images, swipe-left, swipe-right, " +
-                    "scroll-to, type, offline, online, screen)",
+                    "scroll-to, type, back, open-layouts, select-layout, select-version, use-layout, restore-version, " +
+                    "confirm, cancel, undo, close-layouts, offline, online, screen)",
             )
         }
     }
