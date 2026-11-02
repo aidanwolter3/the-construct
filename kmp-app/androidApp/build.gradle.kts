@@ -8,12 +8,12 @@ plugins {
 // Configuration-time properties (configuration-cache friendly, like :shared's buildRustFfi):
 //   -PconstructBaseUrl=http://...   default server for BuildConfig.CONSTRUCT_BASE_URL (default: the staging pod;
 //                                local: http://10.0.2.2:8080 on the emulator, http://127.0.0.1:8080 with adb reverse)
-//   -PconstructWorkspace=<id>       default workspace for BuildConfig.CONSTRUCT_WORKSPACE
+//   -PconstructWorkspace=<id>       default workspace for BuildConfig.CONSTRUCT_WORKSPACE (default: pixelfed_home)
 //   -PandroidAbis=arm64-v8a,x86_64   ABIs to build with cargo-ndk and package
 //   -PskipRustBuild              don't run scripts/build_android.sh (use the existing jniLibs)
 val stagingBaseUrl = "https://the-construct-pod.fly.dev"
 val constructBaseUrl = providers.gradleProperty("constructBaseUrl").getOrElse(stagingBaseUrl)
-val constructWorkspace = providers.gradleProperty("constructWorkspace").getOrElse("home")
+val constructWorkspace = providers.gradleProperty("constructWorkspace").getOrElse("pixelfed_home")
 val androidAbis: List<String> = providers.gradleProperty("androidAbis").getOrElse("arm64-v8a,x86_64")
     .split(',', ' ').map { it.trim() }.filter { it.isNotEmpty() }
 val skipRustBuild = providers.gradleProperty("skipRustBuild").isPresent

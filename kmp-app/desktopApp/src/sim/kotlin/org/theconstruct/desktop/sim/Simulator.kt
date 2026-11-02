@@ -156,14 +156,15 @@ private fun runCli(args: Array<String>): Int {
             println("[sim] sign-in: scripted Pixelfed web login as $user")
             PixelfedLoginBrowser(user, pass)
         } ?: AutoApproveBrowser()
-        val bridge = UniffiEngineBridge.create(
-            storage.absolutePath, baseUrl, workspace,
-            secureStore = InMemorySecureStore(),
+        // One session store and browser for every engine of the run, so a sign-in carries over to apps opened later.
+        val secureStore = InMemorySecureStore()
+        fun open(appId: String): UniffiEngineBridge = UniffiEngineBridge.create(
+            storage.absolutePath, baseUrl, appId,
+            secureStore = secureStore,
             urlOpener = opener,
-        )
-        liveBridge = bridge
-        // No engine factory yet: open-app in live mode reports that other apps can't be opened.
-        controller = ConstructController(bridge, workspace)
+        ).also { liveBridge = it }
+        // open-app: a new engine for that app on the same server and storage (the controller closes the old one).
+        controller = ConstructController(open(workspace), workspace, ::open)
         val deadline = System.nanoTime() + timeoutMs * 1_000_000
         while (controller.state.value.workspace == null && System.nanoTime() < deadline) Thread.sleep(50)
         val s = controller.state.value

@@ -3,9 +3,10 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Cleartext HTTP to the dev server (10.0.2.2 / localhost / 127.0.0.1) is allowed only in debug
-         builds, via src/debug/AndroidManifest.xml + res/xml/network_security_config.xml (DECISIONS D11). -->
+    <!-- Cleartext HTTP only to the dev server (10.0.2.2 / localhost / 127.0.0.1), in all builds since the menu's
+         server picker ships in release too: res/xml/network_security_config.xml (DECISIONS D11, D29). -->
     <application
+        android:networkSecurityConfig="@xml/network_security_config"
         android:label="The Construct"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -13,7 +14,7 @@
         <!-- singleTask: the OAuth redirect (construct://oauth, opened by the browser in its own task) must reach
              this same activity instance and engine via onNewIntent (DECISIONS D19).
              adjustResize: the window is not panned for the keyboard; Compose gets the IME insets instead and the
-             root's safeDrawingPadding lifts the agent panel above the keyboard (DECISIONS D23). -->
+             root's safeDrawingPadding lifts the menu's custom server URL field above the keyboard. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"

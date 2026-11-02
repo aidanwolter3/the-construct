@@ -15,19 +15,20 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import org.theconstruct.ConstructApp
 import org.theconstruct.ConstructController
+import org.theconstruct.ConstructEngineBridge
+import org.theconstruct.ServerChoice
+import org.theconstruct.ServerOption
+import org.theconstruct.ServerUrls
 import org.theconstruct.engine.UniffiEngineBridge
 import uniffi.client_ffi.UrlOpener
 import java.io.File
@@ -67,8 +68,7 @@ class MainActivity : ComponentActivity() {
             this,
             viewModelFactory {
                 initializer {
-                    val saved = if (BuildConfig.DEBUG) DebugServer.saved(appContext) else null
-                    ConstructViewModel(EngineConfig.from(intent, storageDir, saved), appContext)
+                    ConstructViewModel(EngineConfig.from(intent, storageDir, ServerPrefs.saved(appContext)), appContext)
                 }
             },
         )[ConstructViewModel::class.java]
@@ -77,30 +77,29 @@ class MainActivity : ComponentActivity() {
         // was already handled.
         if (savedInstanceState == null) handleAuthRedirect(intent)
 
+        val server = ServerChoice(vm.baseUrl, ServerPrefs.options(), ::switchServer)
         setContent {
+            // The shared UI's menu button sits at the top-left of this padded box, clear of the system bars.
             Box(Modifier.fillMaxSize().background(Color.White).safeDrawingPadding()) {
-                ConstructApp(vm.controller)
-                if (BuildConfig.DEBUG) {
-                    DebugServerChip(
-                        current = vm.baseUrl,
-                        onPick = ::switchServer,
-                        // Above the layout browser's snackbar (bottom start, up to ~84 dp tall), so it never hides it.
-                        modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 96.dp),
-                    )
-                }
+                ConstructApp(vm.controller, server = server)
             }
         }
     }
 
     /**
-     * Debug server picker: saves the choice and restarts the activity without the launch extras, so a new
-     * ViewModel (and engine) is created for the new server; finishing this one closes the old engine.
+     * The menu's server picker (all builds): saves the choice and restarts the activity without the launch extras, so
+     * a new ViewModel (and engine, with that server's own storage) is created; finishing this one closes the old engine.
      */
-    private fun switchServer(url: String?) {
-        DebugServer.save(applicationContext, url)
-        Log.i(TAG, "debug server picker: ${url ?: "build default"}; restarting")
+    private fun switchServer(url: String) {
+        if (url.trimEnd('/') == vm.baseUrl) {
+            vm.controller.menu.closeMenu()
+            return
+        }
+        ServerPrefs.save(applicationContext, url)
+        Log.i(TAG, "server picker: $url; restarting")
         val restart = Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        restart.putExtra(EXTRA_WORKSPACE, vm.workspace)  // keep the current workspace (the launch intent may be gone)
+        // Keep the app on screen (debug builds read it; release builds start on the build default app).
+        vm.controller.currentAppId()?.let { restart.putExtra(EXTRA_WORKSPACE, it) }
         finish()
         startActivity(restart)
     }
@@ -156,16 +155,17 @@ internal class AndroidUrlOpener(private val context: Context) : UrlOpener {
 internal data class EngineConfig(val storageDir: File, val baseUrl: String, val workspace: String) {
     companion object {
         /**
-         * Intent extra, else (debug) the server saved by the in-app picker, else the BuildConfig default
-         * (-PconstructBaseUrl / -PconstructWorkspace at build time; the base URL defaults to the staging pod).
-         * Extras are honored only in debug builds: the activity is exported (launcher), so in a release build
-         * any other app could otherwise point the engine at an arbitrary server.
+         * Base URL: intent extra (debug builds only), else the server saved by the menu's picker ([ServerPrefs]), else
+         * the BuildConfig default (-PconstructBaseUrl at build time; default the staging pod). Workspace: intent extra
+         * (debug only), else BuildConfig (-PconstructWorkspace; default `pixelfed_home`). Extras are honored only in
+         * debug builds: the activity is exported (launcher), so in a release build any other app could otherwise point
+         * the engine at an arbitrary server.
          */
         fun from(intent: Intent?, storageDir: File, savedBaseUrl: String? = null): EngineConfig {
             val extras = if (BuildConfig.DEBUG) intent else null
             val baseUrl = (
                 extras?.getStringExtra(EXTRA_BASE_URL)?.takeIf { it.isNotBlank() }
-                    ?: savedBaseUrl?.takeIf { BuildConfig.DEBUG }
+                    ?: savedBaseUrl
                     ?: BuildConfig.CONSTRUCT_BASE_URL
                 ).trimEnd('/')
             return EngineConfig(
@@ -176,10 +176,10 @@ internal data class EngineConfig(val storageDir: File, val baseUrl: String, val 
         }
 
         /**
-         * The build-default server keeps `filesDir`; any other server (debug overrides only) gets its own
-         * `filesDir/servers/<sanitized url>` so one server's cached entities and PENDING outbox rows are never shown
-         * for, or flushed to, another. It also means a picker switch never opens the old engine's `cache.db`
-         * while that engine is still closing.
+         * The build-default server keeps `filesDir`; any other server gets its own `filesDir/servers/<sanitized url>`
+         * so one server's cached entities and PENDING outbox rows are never shown for, or flushed to, another (D29).
+         * It also means a picker switch never opens the old engine's `cache.db` while that engine is still closing.
+         * All apps of one server share its directory (cache.db keys workspaces by id).
          */
         internal fun storageDirFor(filesDir: File, baseUrl: String): File {
             if (baseUrl == BuildConfig.CONSTRUCT_BASE_URL.trimEnd('/')) return filesDir
@@ -190,39 +190,76 @@ internal data class EngineConfig(val storageDir: File, val baseUrl: String, val 
 }
 
 /**
- * Owns the engine for the life of the activity *task entry* (DECISIONS D11): a ViewModel survives
- * configuration changes such as rotation, so the engine is created once per launch, not once per
- * onCreate. The config is read from the intent that created it. When the activity finishes for good
- * (back / task removed), [onCleared] closes the [uniffi.client_ffi.EngineHandle]; dropping the Rust
- * engine also ends its background fetch thread. Holding the bridge here keeps it (and its JNA callback
- * observers) strongly reachable while the UI is alive.
+ * The server chosen in the menu (all builds), kept in SharedPreferences `server` / key `baseUrl`. Choosing the build
+ * default clears it. Precedence: see [EngineConfig.from]. The pre-menu debug picker's choice (`debug_server`) is
+ * still read once nothing newer is saved.
  */
-internal class ConstructViewModel(config: EngineConfig, appContext: Context) : ViewModel() {
-    private val bridge: UniffiEngineBridge
+internal object ServerPrefs {
+    private const val PREFS = "server"
+    private const val LEGACY_PREFS = "debug_server"
+    private const val KEY = "baseUrl"
+
+    fun options(): List<ServerOption> {
+        val presets = listOf(
+            ServerOption("staging", "Staging", BuildConfig.STAGING_BASE_URL),
+            ServerOption("emulator", "Local emulator", "http://10.0.2.2:8080"),
+            ServerOption("usb", "Local USB", "http://127.0.0.1:8080"),
+        )
+        val default = BuildConfig.CONSTRUCT_BASE_URL.trimEnd('/')
+        return if (presets.any { it.url == default }) presets else presets + ServerOption("default", "Build default", default)
+    }
+
+    /** The saved choice if it is still a valid `http(s)://host[:port]` URL. */
+    fun saved(context: Context): String? = sequenceOf(PREFS, LEGACY_PREFS)
+        .firstNotNullOfOrNull { context.getSharedPreferences(it, Context.MODE_PRIVATE).getString(KEY, null) }
+        ?.let(ServerUrls::parse)
+
+    fun save(context: Context, url: String) {
+        val default = url.trimEnd('/') == BuildConfig.CONSTRUCT_BASE_URL.trimEnd('/')
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().apply {
+            if (default) remove(KEY) else putString(KEY, url.trimEnd('/'))
+        }.commit()
+        context.getSharedPreferences(LEGACY_PREFS, Context.MODE_PRIVATE).edit().clear().commit()
+    }
+}
+
+/**
+ * Owns the engines for the life of the activity *task entry* (DECISIONS D11): a ViewModel survives configuration
+ * changes such as rotation, so the engine is created once per launch, not once per onCreate. The config is read from
+ * the intent that created it. The controller gets an engine factory, so picking another app in the menu creates that
+ * app's engine (same server and storage) and closes the previous one. When the activity finishes for good (back / task
+ * removed, or a server switch), [onCleared] closes the current engine; dropping the Rust engine also ends its
+ * background fetch thread. The controller holds the current bridge (and its JNA callback observers) strongly while
+ * the UI is alive.
+ */
+internal class ConstructViewModel(private val config: EngineConfig, private val appContext: Context) : ViewModel() {
     val controller: ConstructController
     val baseUrl: String = config.baseUrl
-    val workspace: String = config.workspace
 
     init {
         Log.i(TAG, "starting base_url=${config.baseUrl} workspace=${config.workspace} storage=${config.storageDir}")
         config.storageDir.mkdirs()
-        // Sign-in (DECISIONS D19): Keystore-backed session store, the system browser, `construct://oauth` redirect.
-        bridge = UniffiEngineBridge.create(
+        controller = ConstructController(openEngine(config.workspace), config.workspace, ::openEngine)
+    }
+
+    /** Sign-in (DECISIONS D19): Keystore-backed session store, the system browser, `construct://oauth` redirect. */
+    private fun openEngine(workspace: String): ConstructEngineBridge {
+        Log.i(TAG, "opening engine for workspace=$workspace")
+        return UniffiEngineBridge.create(
             config.storageDir.absolutePath,
             config.baseUrl,
-            config.workspace,
+            workspace,
             secureStore = KeystoreSecureStore(appContext),
             urlOpener = AndroidUrlOpener(appContext),
             redirectUri = AUTH_REDIRECT_URI,
         )
-        controller = ConstructController(bridge)
     }
 
-    /** Forwards a `construct://oauth?...` redirect to the engine's pending sign-in. */
-    fun handleAuthRedirect(url: String): Boolean = bridge.handleAuthRedirect(url)
+    /** Forwards a `construct://oauth?...` redirect to the current engine's pending sign-in. */
+    fun handleAuthRedirect(url: String): Boolean = controller.handleAuthRedirect(url)
 
     override fun onCleared() {
         Log.i(TAG, "closing engine")
-        bridge.handle.close()
+        controller.close()
     }
 }

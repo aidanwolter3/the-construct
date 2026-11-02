@@ -9,8 +9,9 @@
 #                       and shut it down at the end
 #   --server            start the server (cargo build -p server, then target/debug/server) if nothing is
 #                       listening on 127.0.0.1:8080, and stop it at the end
-#   --pixelfed          also launch workspace pixelfed_demo (same as --workspaces home,pixelfed_demo)
-#   --workspaces a,b    workspaces to launch, in order (default: home). Known: home, pixelfed_demo
+#   --pixelfed          also launch the dev apps (same as --workspaces pixelfed_home,pixelfed_demo,home)
+#   --workspaces a,b    workspaces to launch, in order (default: pixelfed_home, the app's default).
+#                       Known: pixelfed_home, pixelfed_demo, home
 #   --out DIR           output dir for screenshots, UI dumps and logcat
 #                       (default: kmp-app/androidApp/build/smoke)
 #   --base-url URL      server the app uses, passed as the debug `--es baseUrl` extra (the app itself defaults to
@@ -27,9 +28,10 @@
 # Checks per workspace (any failure -> non-zero exit):
 #   - logcat (main, system, crash buffers) has no "FATAL EXCEPTION" after the launch
 #   - the app process is alive (adb shell pidof org.theconstruct.android)
-#   - `uiautomator dump` contains the expected text:
-#       home:          "Count: <n>" and "Online"
+#   - `uiautomator dump` contains the menu button (content-desc "Menu") and the expected text:
+#       pixelfed_home: "Sign in with Pixelfed" (a fresh install is signed out) or a "Like" button (signed in)
 #       pixelfed_demo: "Sunrise over Boulder"
+#       home:          "Count: <n>"
 # Saves <ws>.png (screencap), <ws>.xml (UI dump) and <ws>.logcat.txt to the output dir.
 set -euo pipefail
 
@@ -44,7 +46,7 @@ BOOT=0
 SERVER=0
 INSTALL=1
 SKIP_RUST=0
-WORKSPACES="home"
+WORKSPACES="pixelfed_home"
 OUT_DIR="$REPO_ROOT/kmp-app/androidApp/build/smoke"
 WAIT=5
 TIMEOUT=20
@@ -55,7 +57,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --boot) BOOT=1 ;;
     --server) SERVER=1 ;;
-    --pixelfed) WORKSPACES="home,pixelfed_demo" ;;
+    --pixelfed) WORKSPACES="pixelfed_home,pixelfed_demo,home" ;;
     --workspaces) WORKSPACES="${2:?--workspaces needs a value}"; shift ;;
     --out) OUT_DIR="${2:?--out needs a value}"; shift ;;
     --base-url) APP_BASE_URL="${2:?--base-url needs a value}"; shift ;;
@@ -166,12 +168,20 @@ if [[ "$INSTALL" == 1 ]]; then
 fi
 
 # --- launch + checks ---------------------------------------------------------------------------------
+# Each pattern is an ERE matched against the dump's `text="..."` and `content-desc="..."` attributes.
 expected_patterns() {
+  printf '%s\n' '^Menu$'  # the shared UI's hamburger button, on every app
   case "$1" in
-    home) printf '%s\n' 'Count: [0-9]+' 'Online' ;;
+    pixelfed_home) printf '%s\n' '(Sign in with Pixelfed|Like)' ;;
     pixelfed_demo) printf '%s\n' 'Sunrise over Boulder' ;;
-    *) ;;  # unknown workspace: only the crash/alive checks apply
+    home) printf '%s\n' 'Count: [0-9]+' ;;
+    *) ;;  # unknown workspace: only the menu/crash/alive checks apply
   esac
+}
+
+# No grep -q: exiting early would SIGPIPE sed and fail the pipeline under pipefail.
+attr_matches() {  # $1 = ERE, $2 = UI dump: true if some text or content-desc value matches
+  grep -Eo '(text|content-desc)="[^"]*"' "$2" | sed -E 's/^[a-z-]+="(.*)"$/\1/' | grep -E -- "$1" >/dev/null
 }
 
 ui_dump() {  # $1 = local output file
@@ -201,7 +211,7 @@ for ws in "${WS_LIST[@]}"; do
     if ui_dump "$OUT_DIR/$ws.xml"; then
       missing=()
       for p in "${patterns[@]+"${patterns[@]}"}"; do
-        grep -Eq "text=\"[^\"]*$p" "$OUT_DIR/$ws.xml" || missing+=("$p")
+        attr_matches "$p" "$OUT_DIR/$ws.xml" || missing+=("$p")
       done
       [[ ${#missing[@]} -eq 0 ]] && break
     fi

@@ -329,7 +329,9 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 ## Next steps
 
 0. One-app/menu change in progress: server done (apps API, layouts as code, migration v7); next client-core/FFI, then the shared UI.
-   Shared drawer UI (hamburger menu, version picker, AI client and layout browser removed) done in fixture mode; FFI + platform wiring next.
+   Shared drawer UI (hamburger menu, version picker, AI client and layout browser removed) done in fixture mode; FFI next.
+   Platform wiring done: default app pixelfed_home everywhere; Android/desktop/live simulator open apps through an
+   engine factory; the drawer's Server picker ships in all Android builds (saved, per-server storage) and on desktop.
 1. Layout browser follow-ups (A3 done): user-created layouts (copy a layout), a diff view between versions, a zstd
    dictionary for blobs (measured ~6x smaller edits), a retention policy; Android `testTagsAsResourceId` for
    instrumented UI tests of the browser.

@@ -1,5 +1,9 @@
 package org.theconstruct.desktop
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.unit.dp
@@ -8,6 +12,8 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import org.theconstruct.ConstructApp
 import org.theconstruct.ConstructController
+import org.theconstruct.ConstructEngineBridge
+import org.theconstruct.ServerChoice
 import org.theconstruct.engine.UniffiEngineBridge
 import uniffi.client_ffi.UrlOpener
 import java.awt.Desktop
@@ -17,30 +23,40 @@ import java.io.File
 import java.net.URI
 import javax.imageio.ImageIO
 
-/** The staging pod (deploy/, Fly.io). Local server: -Dconstruct.baseUrl / CONSTRUCT_BASE_URL=http://127.0.0.1:8080. */
-private const val DEFAULT_BASE_URL = "https://the-construct-pod.fly.dev"
-private const val DEFAULT_WORKSPACE = "home"
+/** One server's engines: [controller] shows the current app and opens others (same server and storage). */
+private class Session(val baseUrl: String, val controller: ConstructController)
 
-/** System property wins over env var, which wins over the default. */
-private fun config(property: String, env: String, default: String): String =
-    System.getProperty(property)?.takeIf { it.isNotBlank() }
-        ?: System.getenv(env)?.takeIf { it.isNotBlank() }
-        ?: default
+// Top-level state: the session's controller holds the current bridge (which owns the engine handle and the JNA
+// callback observers), so it stays strongly reachable for the whole life of the JVM process.
+private var session: Session? by mutableStateOf(null)
 
-// Top-level so the bridge (which owns the engine handle and the JNA callback observers) stays
-// strongly reachable for the whole life of the JVM process.
-private lateinit var bridge: UniffiEngineBridge
+/**
+ * A controller for [workspace] on [baseUrl], with an engine factory so the menu can open the server's other apps.
+ * Sign-in (DECISIONS D19): no secure store (the engine uses the macOS Keychain), the system browser, and a loopback
+ * redirect (null redirect URI) that the engine listens for itself.
+ */
+private fun openSession(root: File, baseUrl: String, workspace: String): Session {
+    val storage = storageDirFor(root, baseUrl).apply { mkdirs() }
+    println("[desktop] starting base_url=$baseUrl workspace=$workspace storage=$storage")
+    fun open(appId: String): ConstructEngineBridge {
+        println("[desktop] opening engine for workspace=$appId")
+        return UniffiEngineBridge.create(storage.absolutePath, baseUrl, appId, urlOpener = BrowserOpener)
+    }
+    return Session(baseUrl, ConstructController(open(workspace), workspace, ::open))
+}
 
+/**
+ * Server precedence: -Dconstruct.baseUrl / CONSTRUCT_BASE_URL, else the menu's saved choice ([DesktopServerPrefs]),
+ * else the staging pod. An override only decides the launch server: picking a server in the menu still switches this
+ * run (and is saved), but the next launch with the override set starts on the override again.
+ */
 fun main() {
-    val baseUrl = config("construct.baseUrl", "CONSTRUCT_BASE_URL", DEFAULT_BASE_URL)
-    val workspace = config("construct.workspace", "CONSTRUCT_WORKSPACE", DEFAULT_WORKSPACE)
-    val storageDir = File(System.getProperty("user.home"), ".construct").apply { mkdirs() }
-
-    println("[desktop] starting base_url=$baseUrl workspace=$workspace storage=$storageDir")
-    // Sign-in (DECISIONS D19): no secure store (the engine uses the macOS Keychain), the system browser, and a
-    // loopback redirect (null redirect URI) that the engine listens for itself.
-    bridge = UniffiEngineBridge.create(storageDir.absolutePath, baseUrl, workspace, urlOpener = BrowserOpener)
-    val controller = ConstructController(bridge)
+    val baseUrlOverride = override("construct.baseUrl", "CONSTRUCT_BASE_URL")
+    val baseUrl = resolveBaseUrl(baseUrlOverride, DesktopServerPrefs.saved())
+    val workspace = override("construct.workspace", "CONSTRUCT_WORKSPACE") ?: DEFAULT_WORKSPACE
+    if (baseUrlOverride != null) println("[desktop] server from construct.baseUrl / CONSTRUCT_BASE_URL (wins over the menu's saved choice at launch)")
+    val root = File(System.getProperty("user.home"), ".construct").apply { mkdirs() }
+    session = openSession(root, baseUrl, workspace)
 
     // App icon "the construct" (assets/icon, scripts/gen_icons.sh): window icon from the full-bleed tile, dock icon
     // from the macOS-shaped variant (margin + shadow, like other dock icons).
@@ -49,13 +65,39 @@ fun main() {
 
     application {
         Window(
-            onCloseRequest = ::exitApplication,
+            onCloseRequest = {
+                session?.controller?.close()
+                exitApplication()
+            },
             title = "The Construct",
             icon = windowIcon?.let { BitmapPainter(it.toComposeImageBitmap()) },
             state = rememberWindowState(width = 480.dp, height = 720.dp),
         ) {
-            ConstructApp(controller)
+            val current = session ?: return@Window
+            val server = ServerChoice(current.baseUrl, DESKTOP_SERVERS) { url -> switchServer(root, current, url, workspace) }
+            key(current) { ConstructApp(current.controller, server = server) }
         }
+    }
+}
+
+/** The menu's server picker: saves [url] and replaces [current] with a session on it (same app), closing the old engine. */
+private fun switchServer(root: File, current: Session, url: String, defaultWorkspace: String) {
+    if (url.trimEnd('/') == current.baseUrl) {
+        current.controller.menu.closeMenu()
+        return
+    }
+    DesktopServerPrefs.save(url)
+    val next = try {
+        openSession(root, url.trimEnd('/'), current.controller.currentAppId() ?: defaultWorkspace)
+    } catch (t: Throwable) {
+        println("[desktop] cannot start an engine for $url: $t")
+        return
+    }
+    session = next
+    try {
+        current.controller.close()
+    } catch (t: Throwable) {
+        println("[desktop] closing the previous engine failed: $t")
     }
 }
 
