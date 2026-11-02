@@ -1,5 +1,6 @@
 {
   "note": "The demo feed from generic building blocks",
+  "schema": 3,
   "layout": {
     "type": "core://Workspace",
     "id": "pixelfed_demo",

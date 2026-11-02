@@ -25,7 +25,15 @@ import java.time.Instant
  * [publish] appends a visibly changed copy of the newest version (the developer's "deploy").
  */
 class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis() / 1000 }) {
-    class Version(val layout: UiNode, val note: String?, val createdAt: Long, val source: String = "file")
+    /** [schema] and [incompatible] are what the pod says for this client (D36); null = not said / compatible. */
+    class Version(
+        val layout: UiNode,
+        val note: String?,
+        val createdAt: Long,
+        val source: String = "file",
+        val schema: Int? = null,
+        val incompatible: String? = null,
+    )
 
     private class App(val id: String, val title: String, val icon: String) {
         val versions = mutableListOf<Version>()
@@ -77,7 +85,12 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
         "version" to JsonPrimitive(n),
         "created_at" to JsonPrimitive(rfc3339(v.createdAt)),
         "source" to JsonPrimitive(v.source),
-    ).also { m -> v.note?.let { m["note"] = JsonPrimitive(it) } }
+    ).also { m ->
+        v.note?.let { m["note"] = JsonPrimitive(it) }
+        v.schema?.let { m["schema"] = JsonPrimitive(it) }
+        m["compatible"] = JsonPrimitive(v.incompatible == null)
+        v.incompatible?.let { m["incompatible"] = JsonPrimitive(it) }
+    }
 
     @Synchronized
     fun versionsJson(id: String, before: Long?, limit: Int?): String {

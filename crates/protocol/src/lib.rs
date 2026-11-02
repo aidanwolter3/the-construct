@@ -17,4 +17,7 @@ pub use ast::{
 };
 pub use bundle::{DataBundle, EntityRecord, WorkspaceSpec};
 pub use intent::{ActionIntent, FieldUpdate, PresentationMode};
-pub use schema::{SCHEMA_HEADER, SCHEMA_VERSION, required_schema};
+pub use schema::{
+    Compatibility, RETIRED, SCHEMA_HEADER, SCHEMA_VERSION, compatibility, oldest_layout_schema,
+    required_schema,
+};

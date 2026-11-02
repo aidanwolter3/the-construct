@@ -330,6 +330,10 @@ class SimRunner(
                     val err = if (hasTag("versions-error")) "; error shown: ${textUnder("versions-error")}" else ""
                     throw StepFailure("no version ${step.version} in the history; listed: $listed$err")
                 }
+                val row = onAllNodes(hasTestTag(tag), useUnmergedTree = false).fetchSemanticsNodes().first()
+                if (SemanticsProperties.Disabled in row.config) {
+                    throw StepFailure("v${step.version} can't be shown by this build: ${textUnder(tag)}")
+                }
                 clickTag(tag, "")
                 awaitLayoutCalls()
                 if (hasTag("version-error")) throw StepFailure("error shown: ${textUnder("version-error")}")

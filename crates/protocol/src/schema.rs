@@ -1,14 +1,27 @@
-//! Client schema versions (docs/DECISIONS.md D34-D36). A client sends the
-//! newest layout vocabulary it can draw in [`SCHEMA_HEADER`]; the pod serves an
-//! app's newest layout version whose [`required_schema`] is not above it.
+//! Client schema versions (docs/DECISIONS.md D34, D36, D37). A client sends
+//! the newest layout vocabulary it can draw in [`SCHEMA_HEADER`]. Every layout
+//! version declares the schema it was written for (`"schema"` in its layout
+//! file); the pod serves an app's newest version the client can draw
+//! ([`compatibility`]).
 //!
 //! - 1: everything before screens (no header means 1), including the removed
 //!   `pixelfed://` widgets, which this build reads as [`UiNode::Unknown`].
 //! - 2: `Workspace.screens`, `core://List`, `core://Image`,
 //!   `core://TextField`, `action.data.load`, `action.mutation.create`.
+//!   Additive: schema 2 clients still draw schema 1 layouts.
 //! - 3: `core://Row`, `Column`, `Spacer`, `Divider`, `Conditional`,
 //!   `Carousel`, `IconButton`, `Chip`, `Badge`, and the `Label` / `Secondary`
-//!   text styles.
+//!   text styles. Breaking (D37): the `pixelfed://` widgets are gone, so
+//!   schema 3 clients draw only layouts written for schema 3.
+//!
+//! # A breaking schema change
+//!
+//! Bump [`SCHEMA_VERSION`], then add `(new version, oldest layout schema it
+//! still draws)` to [`RETIRED`]. That marks every older layout version
+//! incompatible for clients of the new schema (greyed out in their version
+//! picker, never served to them) without touching the layout files. Apps whose
+//! old layouts would still draw need a new version file declaring the new
+//! schema.
 
 use crate::{ActionIntent, TextStyle, UiNode};
 
@@ -16,6 +29,60 @@ use crate::{ActionIntent, TextStyle, UiNode};
 pub const SCHEMA_HEADER: &str = "x-construct-schema";
 /// The schema version this build draws.
 pub const SCHEMA_VERSION: u32 = 3;
+
+/// Breaking changes, oldest first: `(client schema, oldest layout schema it
+/// draws)`. A client of schema `c` draws layouts written for schemas
+/// `oldest_layout_schema(c)..=c`. Schema 3 removed the `pixelfed://` widgets
+/// (D37).
+pub const RETIRED: &[(u32, u32)] = &[(3, 3)];
+
+/// The oldest layout schema a client of schema `client` still draws (1 unless
+/// a [`RETIRED`] entry at or below `client` raised it).
+pub const fn oldest_layout_schema(client: u32) -> u32 {
+    let mut oldest = 1;
+    let mut i = 0;
+    while i < RETIRED.len() {
+        if RETIRED[i].0 <= client && RETIRED[i].1 > oldest {
+            oldest = RETIRED[i].1;
+        }
+        i += 1;
+    }
+    oldest
+}
+
+/// Whether a client can draw a layout version, and why not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Compatibility {
+    Compatible,
+    /// Written for a newer schema than the client's: the app needs an update.
+    UpdateRequired,
+    /// Written for a schema the client no longer draws ([`RETIRED`]).
+    Retired,
+}
+
+impl Compatibility {
+    /// The wire name (`"incompatible"` in the apps API), `None` when
+    /// compatible.
+    pub fn reason(self) -> Option<&'static str> {
+        match self {
+            Compatibility::Compatible => None,
+            Compatibility::UpdateRequired => Some("update_required"),
+            Compatibility::Retired => Some("retired"),
+        }
+    }
+}
+
+/// Whether a client of schema `client` can draw a layout written for schema
+/// `layout`.
+pub fn compatibility(layout: u32, client: u32) -> Compatibility {
+    if layout > client {
+        Compatibility::UpdateRequired
+    } else if layout < oldest_layout_schema(client) {
+        Compatibility::Retired
+    } else {
+        Compatibility::Compatible
+    }
+}
 
 fn intent_schema(i: &ActionIntent) -> u32 {
     match i {
@@ -164,5 +231,36 @@ mod tests {
             assert!(!matches!(n, UiNode::Unknown(_)), "{t}");
             assert_eq!(n.type_tag(), t);
         }
+    }
+
+    #[test]
+    fn retired_table_is_ordered_and_sane() {
+        let mut last = (0, 1);
+        for &(client, oldest) in RETIRED {
+            assert!(client > last.0, "RETIRED is ordered by client schema");
+            assert!(oldest > last.1, "each entry retires more than the last");
+            assert!(oldest <= client, "a client draws its own schema");
+            assert!(client <= SCHEMA_VERSION);
+            last = (client, oldest);
+        }
+        assert!(oldest_layout_schema(SCHEMA_VERSION) <= SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn compatibility_rules() {
+        use Compatibility::*;
+        assert_eq!(compatibility(1, 2), Compatible);
+        assert_eq!(compatibility(2, 2), Compatible);
+        assert_eq!(compatibility(2, 1), UpdateRequired);
+        assert_eq!(compatibility(3, 2), UpdateRequired);
+        assert_eq!(UpdateRequired.reason(), Some("update_required"));
+        assert_eq!(Compatible.reason(), None);
+        // Schema 3 (D37) retired everything older: the pixelfed:// widgets are gone.
+        assert_eq!(oldest_layout_schema(2), 1);
+        assert_eq!(oldest_layout_schema(3), 3);
+        assert_eq!(compatibility(2, 3), Retired);
+        assert_eq!(compatibility(1, 3), Retired);
+        assert_eq!(compatibility(3, 3), Compatible);
+        assert_eq!(Retired.reason(), Some("retired"));
     }
 }

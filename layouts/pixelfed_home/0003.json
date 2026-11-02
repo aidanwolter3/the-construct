@@ -1,5 +1,6 @@
 {
   "note": "Same feed, built from generic building blocks (no Pixelfed-specific widgets)",
+  "schema": 3,
   "layout": {
     "type": "core://Workspace",
     "id": "pixelfed_home",

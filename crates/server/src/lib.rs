@@ -225,6 +225,9 @@ impl AppState {
         for path in &report.adopted {
             tracing::info!(file = %path, "layout file hash recorded (deployed before migration v8)");
         }
+        for path in &report.adopted_schema {
+            tracing::info!(file = %path, "layout file schema recorded (deployed before migration v9)");
+        }
         for (path, version) in &report.appended {
             tracing::info!(file = %path, version, "layout file deployed as a new version");
         }

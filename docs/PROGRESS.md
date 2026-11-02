@@ -394,6 +394,13 @@ from a client (D32, D33).
 - Tests: cargo (pod, engine end to end against the fake), :shared + :desktopApp (137, incl. simulator screens).
 - Needs a device check on the Mac: Android Back and keyboard on the comments screen, the desktop window.
 
+## Layout schema compatibility (D36)
+- Layout files declare `"schema"` (added to the four existing files: 1, 1, 1 and 2 for `pixelfed_home/0002`);
+  the pod records it (store v9), serves the newest compatible version and reports `schema` / `compatible` /
+  `incompatible` per version. `protocol::RETIRED` retires old layout schemas after a breaking change (empty today).
+- Clients grey out versions they can't draw and won't pin them.
+- Needs a device check on the Mac: the greyed-out rows on Android and the desktop window.
+
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
   bookmarks are idempotent upstream, counters are not).

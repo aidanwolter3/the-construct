@@ -44,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -678,7 +679,10 @@ private fun ServerSection(menu: MenuState, server: ServerChoice) {
     }
 }
 
-/** A selectable row with a check mark when [checked] (server presets, versions). */
+/** Content alpha of a greyed-out row (Material's disabled emphasis). */
+private const val DISABLED_ALPHA = 0.38f
+
+/** A selectable row with a check mark when [checked] (server presets, versions); greyed out unless [enabled]. */
 @Composable
 private fun ChoiceRow(
     title: String,
@@ -689,9 +693,12 @@ private fun ChoiceRow(
     detail: String? = null,
     busy: Boolean = false,
     bold: Boolean = false,
+    enabled: Boolean = true,
 ) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).testTag(tag).padding(start = 20.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+        Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick).testTag(tag)
+            .alpha(if (enabled) 1f else DISABLED_ALPHA)
+            .padding(start = 20.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -786,6 +793,8 @@ private fun VersionPicker(controller: ConstructController, state: ConstructState
                 busy = menu.selecting == v.version,
                 tag = "version-${v.version}",
                 onClick = { menu.selectVersion(appId, v.version, scope) },
+                // Greyed out: written for a schema this build can't draw (D36).
+                enabled = v.compatible,
             )
         }
         when {

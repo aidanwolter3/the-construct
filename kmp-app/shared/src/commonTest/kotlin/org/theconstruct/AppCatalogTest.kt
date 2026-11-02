@@ -60,6 +60,36 @@ class AppCatalogTest {
     }
 
     @Test
+    fun versionsTheBuildCantDrawAreMarked() {
+        val page = AppCatalogJson.parseVersions(
+            """{"versions":[
+                 {"version":3,"schema":3,"compatible":false,"incompatible":"update_required","note":"Stories"},
+                 {"version":2,"schema":2,"compatible":true},
+                 {"version":1,"schema":1,"compatible":false,"incompatible":"retired"}]}""",
+        )
+        assertEquals(
+            listOf(
+                AppVersionInfo(3, note = "Stories", schema = 3, incompatible = "update_required"),
+                AppVersionInfo(2, schema = 2),
+                AppVersionInfo(1, schema = 1, incompatible = "retired"),
+            ),
+            page.versions,
+        )
+        assertEquals(listOf(false, true, false), page.versions.map { it.compatible })
+        assertEquals("Needs a newer version of the app · Stories", versionDetail(page.versions[0]))
+        assertEquals("Made for an older version of the app", versionDetail(page.versions[2]))
+        // An older pod says nothing: compatible.
+        assertTrue(AppCatalogJson.parseVersions("""{"versions":[{"version":1}]}""").versions.single().compatible)
+        // A spec the build can't draw is refused with the reason.
+        val e = assertFailsWith<LayoutApiException> {
+            AppCatalogJson.parseVersionLayout(
+                """{"version":1,"compatible":false,"incompatible":"retired","layout":${ConstructJson.encodeNode(older)}}""",
+            )
+        }
+        assertEquals("Made for an older version of the app.", e.message)
+    }
+
+    @Test
     fun timestamps() {
         assertEquals(0L, parseTimestamp(JsonPrimitive("yesterday")))
         assertEquals(0L, parseTimestamp(null))
