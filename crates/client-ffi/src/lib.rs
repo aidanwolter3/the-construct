@@ -21,10 +21,8 @@ fn platform_init() {
 /// the last applied one); `pending_actions` counts unsent outbox rows.
 /// `queries_json` is the bundle's `{query_key: [entity uri, ...]}` (`"{}"`
 /// when none); `auth_json` is `{"state":"signed_out"|"pending"|"signed_in"|
-/// "error","username"?,"error"?}`; `agent_json` is the last layout prompt's
-/// `{"state":"idle"|"running"|"done"|"error","message"?,"provider"?,
-/// "layout_version"?}`; `layout_json` is the layout on display,
-/// `{"layout_id"?,"layout_version"?,"revision"?}` (`"{}"` while unknown).
+/// "error","username"?,"error"?}`; `layout_json` is the layout on display,
+/// `{"app_id","version"}` (`"{}"` while unknown or unversioned).
 #[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
 pub struct FfiStateSnapshot {
     pub workspace_json: String,
@@ -34,7 +32,6 @@ pub struct FfiStateSnapshot {
     pub pending_actions: u32,
     pub queries_json: String,
     pub auth_json: String,
-    pub agent_json: String,
     pub layout_json: String,
 }
 
@@ -48,21 +45,20 @@ impl From<StateSnapshot> for FfiStateSnapshot {
             pending_actions: s.pending_actions,
             queries_json: s.queries_json,
             auth_json: s.auth_json,
-            agent_json: s.agent_json,
             layout_json: s.layout_json,
         }
     }
 }
 
-/// A layout catalog call failed (docs/DECISIONS.md D27). `reason` is a short
-/// sentence for the UI (e.g. "Sign in to change layouts.").
+/// An app catalog call failed (docs/DECISIONS.md D27, D32). `reason` is a
+/// short sentence for the UI (e.g. "That version doesn't exist.").
 #[derive(uniffi::Error, Debug, Clone, PartialEq, Eq)]
 pub enum LayoutApiError {
     /// The pod could not be reached.
     Offline { reason: String },
-    /// HTTP 401 (no or a stale session; a stale one is signed out).
+    /// HTTP 401 (not expected: the app endpoints are public).
     Unauthorized { reason: String },
-    /// HTTP 404 (unknown layout, version or workspace).
+    /// HTTP 404 (unknown app or version).
     NotFound { reason: String },
     /// Any other failure; `status` 0 when there was no HTTP status.
     Server { status: u16, reason: String },
@@ -245,51 +241,28 @@ impl EngineHandle {
         self.inner.refresh();
     }
 
-    // Layout catalog (D26/D27). All blocking (call off the UI thread); each
-    // returns the pod's JSON body.
+    // App catalog (D27, D32). All blocking (call off the UI thread) and
+    // read-only; each returns the pod's JSON body.
 
-    /// The engine workspace's layouts (`GET /v1/layouts?workspace_id=`).
-    pub fn list_layouts(&self) -> Result<String, LayoutApiError> {
-        Ok(self.inner.list_layouts()?)
+    /// The pod's apps (`GET /v1/apps`).
+    pub fn list_apps(&self) -> Result<String, LayoutApiError> {
+        Ok(self.inner.list_apps()?)
     }
 
-    /// One page of a layout's history, newest first (`next_before` pages on).
-    pub fn layout_versions(
+    /// One page of an app's version history, newest first (`next_before`
+    /// pages on; `limit` 1..=100, default 20).
+    pub fn app_versions(
         &self,
-        layout_id: String,
-        before: Option<u32>,
+        app_id: String,
+        before: Option<i64>,
         limit: Option<u32>,
     ) -> Result<String, LayoutApiError> {
-        Ok(self.inner.layout_versions(&layout_id, before, limit)?)
+        Ok(self.inner.app_versions(&app_id, before, limit)?)
     }
 
     /// One version's metadata plus its full `layout`.
-    pub fn layout_version(
-        &self,
-        layout_id: String,
-        version: u32,
-    ) -> Result<String, LayoutApiError> {
-        Ok(self.inner.layout_version(&layout_id, version)?)
-    }
-
-    /// Make the layout active (with `version`: restore it first); the
-    /// workspace is refetched before this returns when it changed.
-    pub fn activate_layout(
-        &self,
-        layout_id: String,
-        version: Option<u32>,
-    ) -> Result<String, LayoutApiError> {
-        Ok(self.inner.activate_layout(&layout_id, version)?)
-    }
-
-    /// Append a copy of `version` as the layout's newest version (refetches
-    /// when the layout is the active one).
-    pub fn restore_layout_version(
-        &self,
-        layout_id: String,
-        version: u32,
-    ) -> Result<String, LayoutApiError> {
-        Ok(self.inner.restore_layout_version(&layout_id, version)?)
+    pub fn app_version(&self, app_id: String, version: i64) -> Result<String, LayoutApiError> {
+        Ok(self.inner.app_version(&app_id, version)?)
     }
 }
 
@@ -337,11 +310,15 @@ mod tests {
 
         // Catalog calls against an unreachable pod report Offline.
         assert!(matches!(
-            handle.list_layouts(),
+            handle.list_apps(),
             Err(LayoutApiError::Offline { .. })
         ));
         assert!(matches!(
-            handle.activate_layout("home.counter".into(), None),
+            handle.app_versions("home".into(), Some(3), Some(2)),
+            Err(LayoutApiError::Offline { .. })
+        ));
+        assert!(matches!(
+            handle.app_version("home".into(), 1),
             Err(LayoutApiError::Offline { .. })
         ));
 
@@ -430,7 +407,6 @@ mod tests {
         let snap = handle.snapshot();
         assert_eq!(snap.queries_json, "{}");
         assert_eq!(snap.auth_json, r#"{"state":"signed_out"}"#);
-        assert_eq!(snap.agent_json, r#"{"state":"idle"}"#);
 
         let core = StateSnapshot {
             workspace_json: "null".into(),
@@ -440,13 +416,11 @@ mod tests {
             pending_actions: 2,
             queries_json: r#"{"timeline:home":["pixelfed://posts/1"]}"#.into(),
             auth_json: r#"{"state":"signed_in","username":"a"}"#.into(),
-            agent_json: r#"{"state":"done","provider":"rules","layout_version":3}"#.into(),
-            layout_json: r#"{"layout_id":"home.counter","layout_version":2,"revision":5}"#.into(),
+            layout_json: r#"{"app_id":"home","version":5}"#.into(),
         };
         let ffi: FfiStateSnapshot = core.clone().into();
         assert_eq!(ffi.queries_json, core.queries_json);
         assert_eq!(ffi.auth_json, core.auth_json);
-        assert_eq!(ffi.agent_json, core.agent_json);
         assert_eq!(ffi.layout_json, core.layout_json);
         assert_eq!(snap.layout_json, "{}");
         assert_eq!((ffi.seq, ffi.pending_actions), (7, 2));

@@ -394,12 +394,7 @@ fn every_action_intent_round_trips() {
             },
             json!({ "intent": "action.auth.login", "instance_url": "https://pixelfed.social" }),
         ),
-        (
-            ActionIntent::PromptAgent {
-                prompt_text: "Make the feed a grid".into(),
-            },
-            json!({ "intent": "action.agent.prompt", "prompt_text": "Make the feed a grid" }),
-        ),
+        (ActionIntent::Unknown, json!({ "intent": "action.unknown" })),
     ];
 
     for (intent, wire) in cases {
@@ -440,10 +435,37 @@ fn unknown_node_type_is_rejected() {
     assert!(serde_json::from_value::<UiNode>(missing_tag).is_err());
 }
 
+// Intents are the exception (D32): an unknown tag, e.g. the removed
+// `action.agent.prompt` still held by legacy app versions, becomes
+// `ActionIntent::Unknown` so the layout around it keeps working.
 #[test]
-fn unknown_intent_is_rejected() {
-    let bad = json!({ "intent": "action.teleport", "target_uri": "x" });
+fn unknown_intent_degrades_to_unknown() {
+    let removed = json!({ "intent": "action.agent.prompt", "prompt_text": "hide captions" });
+    assert_eq!(
+        serde_json::from_value::<ActionIntent>(removed).unwrap(),
+        ActionIntent::Unknown
+    );
+    let other = json!({ "intent": "action.teleport", "target_uri": "x" });
+    assert_eq!(
+        serde_json::from_value::<ActionIntent>(other).unwrap(),
+        ActionIntent::Unknown
+    );
+    // A node holding one still parses.
+    let button = json!({
+        "type": "core://Button",
+        "label": "Ask",
+        "on_click": { "intent": "action.agent.prompt", "prompt_text": "x" }
+    });
+    let node: UiNode = serde_json::from_value(button).unwrap();
+    assert_eq!(
+        serde_json::to_value(&node).unwrap()["on_click"],
+        json!({ "intent": "action.unknown" })
+    );
+    // Known tags with bad fields are still errors.
+    let bad = json!({ "intent": "action.auth.login" });
     assert!(serde_json::from_value::<ActionIntent>(bad).is_err());
+    // No tag at all is still an error.
+    assert!(serde_json::from_value::<ActionIntent>(json!({ "x": 1 })).is_err());
 }
 
 #[test]

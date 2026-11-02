@@ -325,7 +325,8 @@ fn registry_contains_every_ui_node_variant() {
     for i in [
         "action.navigation.open",
         "action.mutation.optimistic",
-        "action.agent.prompt",
+        "action.auth.login",
+        "action.navigation.back",
     ] {
         assert!(text.contains(i), "{i}");
     }
@@ -733,10 +734,10 @@ fn validation_rejects_invented_intents_but_allows_copies() {
     )
     .unwrap_err();
     assert!(err.contains("copies of intents"), "{err}");
-    // Moving or copying existing intents is fine, and PromptAgent buttons are allowed.
+    // Moving or copying existing intents is fine, and back buttons are allowed.
     assert!(ok(json!([{ "op": "copy", "from": action, "path": caption }])).is_ok());
-    let ask = json!({ "type": "core://Button", "label": "Hide captions",
-        "on_click": { "intent": "action.agent.prompt", "prompt_text": "hide captions" } });
+    let ask = json!({ "type": "core://Button", "label": "Back",
+        "on_click": { "intent": "action.navigation.back" } });
     assert!(ok(json!([{ "op": "replace", "path": caption, "value": ask }])).is_ok());
 }
 

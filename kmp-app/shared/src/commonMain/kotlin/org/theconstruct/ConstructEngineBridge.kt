@@ -6,7 +6,7 @@ package org.theconstruct
  * ([ConstructJson.decodeEntities]). [seq] strictly increases per engine; consumers drop snapshots whose
  * seq is not above the last applied one. [pendingActions] counts outbox rows not yet sent.
  * [queriesJson] and [authJson] are M6 additions and [layoutJson] a D27 one, with defaults so older call sites keep
- * compiling. [agentJson] is ignored (the AI client UI is gone; the field goes with the FFI's agent status).
+ * compiling.
  */
 data class EngineSnapshot(
     val workspaceJson: String,
@@ -18,8 +18,6 @@ data class EngineSnapshot(
     val queriesJson: String = "{}",
     /** Auth status: `{"state":"signed_out"|"pending"|"signed_in"|"error","username"?,"error"?}`. */
     val authJson: String = "{\"state\":\"signed_out\"}",
-    /** Former layout agent status (M7); ignored. */
-    val agentJson: String = "{\"state\":\"idle\"}",
     /**
      * The layout on display: `{"app_id","version"?}` (`version` = the app's latest version, as applied from
      * `X-Construct-Layout-Version`; omitted on an unversioned screen such as the signed-out one); `"{}"` while unknown.
@@ -71,31 +69,6 @@ interface ConstructEngineBridge {
 
     /** `GET /v1/apps/{appId}/versions/{version}`: the version's metadata plus its full `layout` (a workspace [UiNode]). */
     fun appVersion(appId: String, version: Long): String = throw appsUnavailable()
-
-    // Old per-layout catalog (D26/D27). No longer used by the UI; kept until the FFI drops it.
-
-    /** This workspace's layouts: `{"layouts":[{id,title,description,current_version,active,active_version?,...}],...}`. */
-    fun listLayouts(): String = throw catalogUnavailable()
-
-    /**
-     * One page of [layoutId]'s history, newest first: `{"versions":[{version,created_at,source,prompt?,...}],
-     * "next_before"?}`; pass `next_before` as [before] for the next page. [limit] null = the pod's default (100).
-     */
-    fun layoutVersions(layoutId: String, before: Int? = null, limit: Int? = null): String = throw catalogUnavailable()
-
-    /** One version's metadata plus its full `layout` (a workspace [UiNode] JSON). */
-    fun layoutVersion(layoutId: String, version: Int): String = throw catalogUnavailable()
-
-    /**
-     * Makes [layoutId] the workspace's active layout ([version] non-null: restore that version first). When it changed
-     * the screen, the engine has already applied the new layout when this returns.
-     */
-    fun activateLayout(layoutId: String, version: Int? = null): String = throw catalogUnavailable()
-
-    /** Appends a copy of [version] as [layoutId]'s newest version (applied at once when it is the active layout). */
-    fun restoreLayoutVersion(layoutId: String, version: Int): String = throw catalogUnavailable()
 }
-
-private fun catalogUnavailable() = LayoutApiException("Layouts aren't available here.")
 
 private fun appsUnavailable() = LayoutApiException("Apps aren't available here.")

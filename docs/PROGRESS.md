@@ -328,8 +328,9 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 
 ## Next steps
 
-0. One-app/menu change in progress: server done (apps API, layouts as code, migration v7); next client-core/FFI, then the shared UI.
-   Shared drawer UI (hamburger menu, version picker, AI client and layout browser removed) done in fixture mode; FFI next.
+0. One-app/menu change in progress: server done (apps API, layouts as code, migration v7); client-core/FFI done (list_apps/app_versions/app_version,
+   layout_json {"app_id","version"}, PromptAgent/agent_json/catalog writes removed, unknown intents -> ActionIntent::Unknown).
+   Shared drawer UI (hamburger menu, version picker, AI client and layout browser removed) done; live mode checked against a local pod.
    Platform wiring done: default app pixelfed_home everywhere; Android/desktop/live simulator open apps through an
    engine factory; the drawer's Server picker ships in all Android builds (saved, per-server storage) and on desktop.
 1. Layout browser follow-ups (A3 done): user-created layouts (copy a layout), a diff view between versions, a zstd

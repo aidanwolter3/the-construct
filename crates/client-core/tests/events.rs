@@ -1,9 +1,9 @@
-//! M7 client: `PromptAgent` dispatch, layout version tracking and the SSE
-//! push channel, against a small hand-rolled stub of the pod (workspace
+//! M7 client: layout version tracking (the snapshot's `layout_json`) and the
+//! SSE push channel, against a small hand-rolled stub of the pod (workspace
 //! bundle with `X-Construct-Layout-Version`, `/events` SSE stream that stays
-//! open, `/v1/agent/modify_layout`).
+//! open).
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -13,18 +13,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use client_core::store::{STATUS_PENDING, Store, StoreOps};
 use client_core::{
-    AGENT_OFFLINE, ConstructEngine, EngineConfig, EngineOptions, MemoryStore, SecureStore,
-    StateSnapshot,
+    ConstructEngine, EngineConfig, EngineOptions, MemoryStore, SecureStore, StateSnapshot,
 };
 use serde_json::{Value, json};
 
 const FIXTURE: &str = include_str!("../../../fixtures/counter_home_bundle.json");
 const TIMEOUT: Duration = Duration::from_secs(10);
 const INCREMENT: &str = r#"{"intent":"action.mutation.optimistic","entity_uri":"core://counters/home","field":"count","value_expr":"entity.count + 1","rollback_value":0,"endpoint":"/v1/counters/home/increment","payload":{}}"#;
-
-fn prompt(text: &str) -> String {
-    json!({ "intent": "action.agent.prompt", "prompt_text": text }).to_string()
-}
 
 /// The fixture's layout for `version`: the title says which one it is.
 fn layout(version: u64) -> Value {
@@ -45,10 +40,8 @@ struct StubState {
     event_conns: AtomicUsize,
     closed_streams: AtomicUsize,
     streams: Mutex<Vec<mpsc::Sender<StreamCmd>>>,
-    /// `None`: success (bumps the version, no broadcast).
-    agent_reply: Mutex<Option<(u16, String)>>,
-    /// (authorization header, body) per agent request.
-    agent_requests: Mutex<Vec<(String, String)>>,
+    /// POST requests received (all answered 503, so outbox rows stay).
+    posts: AtomicUsize,
     /// Authorization header per events connection.
     event_auth: Mutex<Vec<String>>,
     /// Workspace fetches answer an unversioned "Signed out" screen (no
@@ -128,7 +121,6 @@ fn handle(mut stream: TcpStream, st: &StubState) {
     if reader.read_line(&mut request_line).is_err() {
         return;
     }
-    let mut content_length = 0usize;
     let mut auth = String::new();
     loop {
         let mut line = String::new();
@@ -136,19 +128,14 @@ fn handle(mut stream: TcpStream, st: &StubState) {
             Ok(0) | Err(_) => break,
             Ok(_) if line == "\r\n" || line == "\n" => break,
             Ok(_) => {
-                if let Some((k, v)) = line.split_once(':') {
-                    if k.eq_ignore_ascii_case("content-length") {
-                        content_length = v.trim().parse().unwrap_or(0);
-                    } else if k.eq_ignore_ascii_case("authorization") {
-                        auth = v.trim().to_owned();
-                    }
+                if let Some((k, v)) = line.split_once(':')
+                    && k.eq_ignore_ascii_case("authorization")
+                {
+                    auth = v.trim().to_owned();
                 }
             }
         }
     }
-    let mut body = vec![0u8; content_length];
-    let _ = reader.read_exact(&mut body);
-    let body = String::from_utf8_lossy(&body).into_owned();
     let path = request_line
         .split_whitespace()
         .nth(1)
@@ -176,29 +163,11 @@ fn handle(mut stream: TcpStream, st: &StubState) {
             );
         }
         (true, "/v1/workspaces/home/events") => serve_events(stream, st, auth),
-        (false, "/v1/agent/modify_layout") => {
-            st.agent_requests.lock().unwrap().push((auth, body));
-            let reply = st.agent_reply.lock().unwrap().clone();
-            match reply {
-                Some((200, body)) => respond(&mut stream, "200 OK", "", &body),
-                Some((code, body)) => respond(&mut stream, &format!("{code} Error"), "", &body),
-                None => {
-                    let v = {
-                        let mut v = st.version.lock().unwrap();
-                        *v += 1;
-                        *v
-                    };
-                    let resp = json!({
-                        "version": "1.0.0", "workspace": layout(v), "entities": {},
-                        "layout_version": v, "provider": "rules", "model": null,
-                        "patch": [{"op": "replace", "path": "/title", "value": format!("Home v{v}")}],
-                    });
-                    respond(&mut stream, "200 OK", "", &resp.to_string());
-                }
-            }
-        }
         // Outbox POSTs stay PENDING.
-        (false, _) => respond(&mut stream, "503 Service Unavailable", "", "{}"),
+        (false, _) => {
+            st.posts.fetch_add(1, Ordering::SeqCst);
+            respond(&mut stream, "503 Service Unavailable", "", "{}")
+        }
         _ => respond(&mut stream, "404 Not Found", "", "not found"),
     }
 }
@@ -251,7 +220,7 @@ fn temp_dir(tag: &str) -> PathBuf {
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "client-core-agent-{tag}-{}-{nanos}",
+        "client-core-events-{tag}-{}-{nanos}",
         std::process::id()
     ))
 }
@@ -273,8 +242,8 @@ fn title(s: &StateSnapshot) -> String {
     ws["title"].as_str().unwrap_or_default().to_owned()
 }
 
-fn agent(s: &StateSnapshot) -> Value {
-    serde_json::from_str(&s.agent_json).unwrap()
+fn layout_json(s: &StateSnapshot) -> Value {
+    serde_json::from_str(&s.layout_json).unwrap()
 }
 
 fn count(s: &StateSnapshot) -> i64 {
@@ -289,13 +258,12 @@ fn ready(stub: &Stub, engine: &ConstructEngine) {
 }
 
 #[test]
-fn prompt_success_applies_layout_and_reports_done() {
+fn snapshot_layout_json_names_the_app_and_its_version() {
     let stub = Stub::start();
-    let dir = temp_dir("prompt");
     let store = Arc::new(MemoryStore::new());
     store.set(&client_core::auth::session_key(&stub.base), "tok-1");
     let engine = ConstructEngine::init_with_options(
-        dir.to_str().unwrap(),
+        "",
         &stub.base,
         "home",
         EngineOptions {
@@ -304,207 +272,51 @@ fn prompt_success_applies_layout_and_reports_done() {
             ..EngineOptions::default()
         },
     );
+    assert_eq!(engine.snapshot().layout_json, "{}", "nothing known yet");
     ready(&stub, &engine);
-    assert_eq!(agent(&engine.snapshot()), json!({"state": "idle"}));
-    let fetches = stub.fetches();
-
-    engine.dispatch(&prompt("  Hide post captions "));
-    wait_until("agent done", || {
-        agent(&engine.snapshot())["state"] == "done"
-    });
-    let snap = engine.snapshot();
     assert_eq!(
-        title(&snap),
-        "Home v2",
-        "returned layout applied immediately"
+        layout_json(&engine.snapshot()),
+        json!({"app_id": "home", "version": 1})
     );
-    let a = agent(&snap);
-    assert_eq!(a["provider"], "rules");
-    assert_eq!(a["layout_version"], 2);
-    assert_eq!(a["message"], "Layout updated (v2, rules)");
-    assert_eq!(count(&snap), 0, "entities kept");
-    assert_eq!(stub.fetches(), fetches, "applied without a refetch");
-
-    let (auth, body) = stub.st.agent_requests.lock().unwrap()[0].clone();
-    assert_eq!(auth, "Bearer tok-1");
-    let body: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(
-        body,
-        json!({"prompt": "Hide post captions", "workspace_id": "home"})
-    );
+    // The events stream carries the session's bearer.
     assert_eq!(stub.st.event_auth.lock().unwrap()[0], "Bearer tok-1");
-
-    // Persisted with the cached entity URIs and queries intact.
-    drop(engine);
-    let cached = Store::open(&dir.join("cache.db"))
-        .unwrap()
-        .load_workspace("home")
-        .unwrap()
-        .unwrap();
+    stub.set_version(2);
+    stub.push_layout(2);
+    wait_until("layout v2", || title(&engine.snapshot()) == "Home v2");
     assert_eq!(
-        serde_json::to_value(&cached.layout).unwrap()["title"],
-        "Home v2"
+        layout_json(&engine.snapshot()),
+        json!({"app_id": "home", "version": 2})
     );
-    assert_eq!(cached.entity_uris, vec!["core://counters/home".to_string()]);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn prompt_response_is_not_painted_over_an_unversioned_screen() {
-    // An open agent endpoint answers a signed-out client with the feed
-    // layout; the signed-out screen (no version header) must stay.
+fn unversioned_screen_has_an_empty_layout_json() {
     let stub = Stub::start();
     stub.st.unversioned.store(true, Ordering::SeqCst);
     let engine = engine(&stub, "");
     wait_until("signed-out screen", || {
         title(&engine.snapshot()) == "Signed out"
     });
+    assert_eq!(engine.snapshot().layout_json, "{}");
+}
+
+#[test]
+fn removed_prompt_intent_does_nothing() {
+    let stub = Stub::start();
+    let engine = engine(&stub, "");
+    ready(&stub, &engine);
+    let before = engine.snapshot();
     let fetches = stub.fetches();
-    engine.dispatch(&prompt("Hide post captions"));
-    wait_until("agent done", || {
-        agent(&engine.snapshot())["state"] == "done"
-    });
-    wait_until("refetch", || stub.fetches() > fetches);
-    assert_eq!(
-        title(&engine.snapshot()),
-        "Signed out",
-        "response layout not applied"
+    engine.dispatch(
+        &json!({ "intent": "action.agent.prompt", "prompt_text": "Hide post captions" })
+            .to_string(),
     );
-}
-
-#[test]
-fn prompt_errors_show_the_pods_message_and_keep_the_layout() {
-    let stub = Stub::start();
-    let engine = engine(&stub, "");
-    ready(&stub, &engine);
-
-    *stub.st.agent_reply.lock().unwrap() = Some((
-        422,
-        json!({"error": "invalid_patch", "detail": "missing field `action_slot`", "patch": [],
-               "provider": "rules"})
-        .to_string(),
-    ));
-    engine.dispatch(&prompt("remove the action bar"));
-    wait_until("agent error", || {
-        agent(&engine.snapshot())["state"] == "error"
-    });
-    let snap = engine.snapshot();
-    let a = agent(&snap);
-    assert_eq!(
-        a["message"],
-        "That change would break the layout: missing field `action_slot`"
-    );
-    assert_eq!(a["provider"], "rules");
-    assert_eq!(title(&snap), "Home v1", "layout unchanged");
-
-    let expect = |code: u16, body: Value, want: &str| {
-        *stub.st.agent_reply.lock().unwrap() = Some((code, body.to_string()));
-        engine.dispatch(&prompt("make it pop"));
-        wait_until(want, || agent(&engine.snapshot())["message"] == want);
-        assert_eq!(agent(&engine.snapshot())["state"], "error");
-    };
-    expect(
-        422,
-        json!({"error": "unsupported_prompt", "detail": "the rules provider does not understand this prompt",
-               "supported": ["Hide post captions", "Photos first", "Show captions", "Reset layout"]}),
-        "I can't do that yet. Try: Hide post captions; Photos first; Show captions",
-    );
-    expect(
-        409,
-        json!({"error": "conflict", "detail": "the layout kept changing; try again"}),
-        "The layout changed meanwhile; please try again.",
-    );
-    expect(
-        503,
-        json!({"error": "provider_not_configured", "provider": "anthropic", "detail": "ANTHROPIC_API_KEY is not set"}),
-        "The AI layout provider isn't configured on this pod.",
-    );
-    expect(
-        502,
-        json!({"error": "provider_error", "provider": "anthropic", "detail": "HTTP 500"}),
-        "The AI provider failed; please try again.",
-    );
-    expect(
-        401,
-        json!({"error": "unauthorized", "detail": "a valid pod session is required"}),
-        "Sign in to change the layout.",
-    );
-
-    *stub.st.agent_reply.lock().unwrap() = Some((503, "upstream down".into()));
-    engine.dispatch(&prompt("Hide post captions"));
-    wait_until("agent error", || {
-        agent(&engine.snapshot())["message"] == "HTTP 503: upstream down"
-    });
-
-    engine.dispatch(&prompt("   "));
-    assert_eq!(agent(&engine.snapshot())["state"], "error");
-    assert_eq!(title(&engine.snapshot()), "Home v1");
-
-    // The pod cannot be reached at all.
-    let offline =
-        ConstructEngine::init_with_config("", "http://127.0.0.1:1", "home", fast_config());
-    offline.dispatch(&prompt("Hide post captions"));
-    assert_eq!(agent(&offline.snapshot())["state"], "running");
-    wait_until("offline error", || {
-        agent(&offline.snapshot())["state"] == "error"
-    });
-    assert_eq!(agent(&offline.snapshot())["message"], AGENT_OFFLINE);
-}
-
-#[test]
-fn unchanged_response_reports_no_change_needed() {
-    let stub = Stub::start();
-    let engine = engine(&stub, "");
-    ready(&stub, &engine);
-    let resp = json!({
-        "version": "1.0.0", "workspace": layout(1), "entities": {},
-        "layout_version": 1, "provider": "rules", "model": null, "patch": [], "unchanged": true,
-    });
-    *stub.st.agent_reply.lock().unwrap() = Some((200, resp.to_string()));
-    engine.dispatch(&prompt("add a weather widget"));
-    wait_until("agent done", || {
-        agent(&engine.snapshot())["state"] == "done"
-    });
-    let a = agent(&engine.snapshot());
-    assert_eq!(a["message"], "No change needed (v1)");
-    assert_eq!(a["unchanged"], true);
-    assert_eq!(a["layout_version"], 1);
-    assert_eq!(title(&engine.snapshot()), "Home v1");
-}
-
-#[test]
-fn outside_layout_change_resets_a_finished_prompt_status_to_idle() {
-    let stub = Stub::start();
-    let engine = engine(&stub, "");
-    ready(&stub, &engine);
-    engine.dispatch(&prompt("Hide post captions"));
-    wait_until("agent done", || {
-        agent(&engine.snapshot())["state"] == "done"
-    });
-    assert_eq!(agent(&engine.snapshot())["layout_version"], 2);
-    // The SSE echo of the prompt's own version keeps the status.
-    stub.push_layout(2);
     thread::sleep(Duration::from_millis(300));
-    assert_eq!(agent(&engine.snapshot())["state"], "done");
-    // A rollback elsewhere (v3) makes "Layout updated (v2)" stale.
-    stub.set_version(3);
-    stub.push_layout(3);
-    wait_until("layout v3", || title(&engine.snapshot()) == "Home v3");
-    assert_eq!(agent(&engine.snapshot()), json!({"state": "idle"}));
-
-    // An error status goes stale the same way.
-    *stub.st.agent_reply.lock().unwrap() = Some((
-        422,
-        json!({"error": "unsupported_prompt", "supported": ["Photos first"]}).to_string(),
-    ));
-    engine.dispatch(&prompt("make it pop"));
-    wait_until("agent error", || {
-        agent(&engine.snapshot())["state"] == "error"
-    });
-    stub.set_version(4);
-    stub.push_layout(4);
-    wait_until("layout v4", || title(&engine.snapshot()) == "Home v4");
-    assert_eq!(agent(&engine.snapshot()), json!({"state": "idle"}));
+    let after = engine.snapshot();
+    assert_eq!(after.seq, before.seq, "no state change");
+    assert_eq!(after.workspace_json, before.workspace_json);
+    assert_eq!(stub.fetches(), fetches);
+    assert_eq!(stub.st.posts.load(Ordering::SeqCst), 0, "nothing posted");
 }
 
 #[test]
@@ -542,16 +354,6 @@ fn sse_layout_event_triggers_refetch_and_stale_or_equal_versions_are_ignored() {
 
     // Repeating the applied version does nothing.
     stub.push_layout(3);
-    thread::sleep(Duration::from_millis(400));
-    assert_eq!(stub.fetches(), fetches + 1);
-
-    // After a prompt applied v4, the SSE echo of v4 is ignored too.
-    engine.dispatch(&prompt("Photos first"));
-    wait_until("agent done", || {
-        agent(&engine.snapshot())["state"] == "done"
-    });
-    assert_eq!(title(&engine.snapshot()), "Home v4");
-    stub.push_layout(4);
     thread::sleep(Duration::from_millis(400));
     assert_eq!(stub.fetches(), fetches + 1);
 }

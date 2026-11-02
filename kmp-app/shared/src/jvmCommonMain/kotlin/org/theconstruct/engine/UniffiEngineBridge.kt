@@ -33,11 +33,16 @@ class UniffiEngineBridge(val handle: EngineHandle) : ConstructEngineBridge {
     }
 
     override fun dispatch(intentJson: String) {
+        if (closed) {
+            engineLog("dispatch ignored (engine closed): $intentJson")
+            return
+        }
         engineLog("dispatch: $intentJson")
         handle.dispatch(intentJson)
     }
 
     override fun handleAuthRedirect(url: String): Boolean {
+        if (closed) return false
         val accepted = handle.handleAuthRedirect(url)
         // Log only the scheme/host part: the query carries the one-time code.
         engineLog("auth redirect ${url.substringBefore('?')} accepted=$accepted")
@@ -45,36 +50,57 @@ class UniffiEngineBridge(val handle: EngineHandle) : ConstructEngineBridge {
     }
 
     override fun logout() {
+        if (closed) return
         engineLog("logout")
         handle.logout()
     }
 
-    override fun listLayouts(): String = catalog("list layouts") { handle.listLayouts() }
+    override fun listApps(): String = catalog("list apps") { handle.listApps() }
 
-    override fun layoutVersions(layoutId: String, before: Int?, limit: Int?): String =
-        catalog("versions of $layoutId") { handle.layoutVersions(layoutId, before?.toUIntArg(), limit?.toUIntArg()) }
+    override fun appVersions(appId: String, before: Long?, limit: Int?): String =
+        catalog("versions of $appId") { handle.appVersions(appId, before, limit?.toUIntArg()) }
 
-    override fun layoutVersion(layoutId: String, version: Int): String =
-        catalog("$layoutId v$version") { handle.layoutVersion(layoutId, version.toUIntArg()) }
+    override fun appVersion(appId: String, version: Long): String =
+        catalog("$appId v$version") { handle.appVersion(appId, version) }
 
-    override fun activateLayout(layoutId: String, version: Int?): String =
-        catalog("activate $layoutId${version?.let { " v$it" } ?: ""}") {
-            handle.activateLayout(layoutId, version?.toUIntArg())
+    /**
+     * Frees the Rust engine now (its fetch, sync and events threads stop; no more snapshots), instead of waiting for
+     * the cleaner. Idempotent. Calls already running finish first (UniFFI counts them); later calls do nothing
+     * (dispatch, logout), return false (handleAuthRedirect) or throw an Offline [LayoutApiException] (catalog).
+     */
+    override fun close() {
+        if (closed) return
+        closed = true
+        engineLog("engine closed")
+        synchronized(observers) { observers.clear() }
+        handle.close()
+    }
+
+    @Volatile
+    private var closed = false
+
+    /**
+     * Runs a blocking catalog call, mapping the UniFFI error to a [LayoutApiException] with the engine's sentence
+     * (and a call on a closed engine to an Offline one).
+     */
+    private inline fun catalog(what: String, call: () -> String): String {
+        if (closed) throw LayoutApiException(CLOSED, LayoutApiException.Kind.Offline)
+        return try {
+            call()
+        } catch (e: uniffi.client_ffi.LayoutApiException) {
+            val mapped = e.toLayoutApiException()
+            engineLog("apps: $what failed: ${mapped.kind} ${mapped.message}")
+            throw mapped
+        } catch (e: IllegalStateException) {
+            // Closed by another thread meanwhile (UniFFI: "... object has already been destroyed").
+            if (!closed) throw e
+            throw LayoutApiException(CLOSED, LayoutApiException.Kind.Offline)
         }
-
-    override fun restoreLayoutVersion(layoutId: String, version: Int): String =
-        catalog("restore $layoutId v$version") { handle.restoreLayoutVersion(layoutId, version.toUIntArg()) }
-
-    /** Runs a blocking catalog call, mapping the UniFFI error to a [LayoutApiException] with the engine's sentence. */
-    private inline fun catalog(what: String, call: () -> String): String = try {
-        call()
-    } catch (e: uniffi.client_ffi.LayoutApiException) {
-        val mapped = e.toLayoutApiException()
-        engineLog("layouts: $what failed: ${mapped.kind} ${mapped.message}")
-        throw mapped
     }
 
     companion object {
+        private const val CLOSED = "This app was closed."
+
         /**
          * Creates the engine (which starts loading [workspace] from [baseUrl] in the background,
          * caching under [storageDir]) and wraps it. [storageDir] must exist and be writable.
@@ -114,11 +140,10 @@ internal fun FfiStateSnapshot.toEngineSnapshot(): EngineSnapshot = EngineSnapsho
     pendingActions = if (pendingActions > Int.MAX_VALUE.toUInt()) Int.MAX_VALUE else pendingActions.toInt(),
     queriesJson = queriesJson,
     authJson = authJson,
-    agentJson = agentJson,
     layoutJson = layoutJson,
 )
 
-/** A negative version / limit can't be meant; 0 makes the pod answer 400 or 404 with a readable error. */
+/** A negative limit can't be meant; 0 makes the pod answer 400 with a readable error. */
 private fun Int.toUIntArg(): UInt = if (this < 0) 0u else toUInt()
 
 internal fun uniffi.client_ffi.LayoutApiException.toLayoutApiException(): LayoutApiException = when (this) {

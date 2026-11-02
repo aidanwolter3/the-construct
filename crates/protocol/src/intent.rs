@@ -37,8 +37,14 @@ pub enum ActionIntent {
     #[serde(rename = "action.auth.login")]
     AuthLogin { instance_url: String },
 
-    #[serde(rename = "action.agent.prompt")]
-    PromptAgent { prompt_text: String },
+    /// Any intent tag this build does not know, e.g. the removed
+    /// `action.agent.prompt` (D32), which AI edits could put into layouts
+    /// that legacy app versions still hold. Deserializing one drops its
+    /// fields instead of failing the whole layout (so such a version still
+    /// serves and renders; the action does nothing). Serializes as
+    /// `{"intent": "action.unknown"}`. Never author it.
+    #[serde(rename = "action.unknown", other)]
+    Unknown,
 }
 
 /// One extra field update carried by `ActionIntent::OptimisticMutate.also`.

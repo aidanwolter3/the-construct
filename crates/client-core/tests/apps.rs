@@ -1,0 +1,251 @@
+//! App catalog calls (`list_apps`, `app_versions`, `app_version`; D27, D32)
+//! and the snapshot's `layout_json` against the real pod (`server::app`,
+//! in-process on a local port).
+
+use std::net::TcpListener;
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
+
+use client_core::catalog::LAYOUTS_OFFLINE;
+use client_core::{ConstructEngine, EngineConfig, LayoutApiError};
+use protocol::UiNode;
+use serde_json::{Value, json};
+use server::{AppState, layouts};
+
+const TIMEOUT: Duration = Duration::from_secs(10);
+
+struct Pod {
+    state: Arc<AppState>,
+    base: String,
+    _rt: tokio::runtime::Runtime,
+}
+
+fn pod(state: AppState) -> Pod {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let state = Arc::new(state);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let app = server::app(Arc::clone(&state));
+    rt.spawn(async move {
+        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        axum::serve(listener, app).await.unwrap();
+    });
+    Pod {
+        state,
+        base,
+        _rt: rt,
+    }
+}
+
+fn fast_config() -> EngineConfig {
+    EngineConfig {
+        poll_interval: Duration::from_millis(100),
+        backoff_base: Duration::from_millis(20),
+        backoff_cap: Duration::from_millis(200),
+    }
+}
+
+fn engine(base: &str, ws: &str) -> ConstructEngine {
+    ConstructEngine::init_with_config("", base, ws, fast_config())
+}
+
+fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
+    let deadline = Instant::now() + TIMEOUT;
+    while !cond() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn parse(s: &str) -> Value {
+    serde_json::from_str(s).unwrap()
+}
+
+/// The built-in `home` layout with another title.
+fn retitled(title: &str) -> UiNode {
+    let mut v = serde_json::to_value(layouts::builtin("home").unwrap()).unwrap();
+    v["title"] = json!(title);
+    serde_json::from_value(v).unwrap()
+}
+
+fn latest(pod: &Pod, app: &str) -> i64 {
+    layouts::latest(pod.state.store(), app).unwrap().unwrap().0
+}
+
+fn versions(page: &Value) -> Vec<i64> {
+    page["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["version"].as_i64().unwrap())
+        .collect()
+}
+
+#[test]
+fn list_apps_shows_the_app_and_dev_apps_on_request() {
+    let p = pod(AppState::in_memory());
+    let e = engine(&p.base, "pixelfed_home");
+    let apps = parse(&e.list_apps().unwrap());
+    let ids: Vec<&str> = apps["apps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["pixelfed_home"]);
+    let app = &apps["apps"][0];
+    assert_eq!(app["title"], "Pixelfed");
+    assert_eq!(app["latest_version"], latest(&p, "pixelfed_home"));
+    assert!(app["updated_at"].as_str().unwrap().ends_with('Z'));
+
+    let dev = pod(AppState::in_memory().with_dev_apps(true));
+    let e = engine(&dev.base, "home");
+    let apps = parse(&e.list_apps().unwrap());
+    let ids: Vec<&str> = apps["apps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["pixelfed_home", "pixelfed_demo", "home"]);
+}
+
+#[test]
+fn app_versions_pages_newest_first() {
+    let p = pod(AppState::in_memory());
+    let first = latest(&p, "home");
+    for i in 0..4 {
+        layouts::append_version(
+            p.state.store(),
+            "home",
+            &retitled(&format!("T{i}")),
+            Some(&format!("edit {i}")),
+        )
+        .unwrap();
+    }
+    let top = first + 4;
+    // A hidden app's endpoints still work.
+    let e = engine(&p.base, "pixelfed_home");
+
+    let page = parse(&e.app_versions("home", None, Some(2)).unwrap());
+    assert_eq!(page["app_id"], "home");
+    assert_eq!(page["latest_version"], top);
+    assert_eq!(versions(&page), [top, top - 1]);
+    assert_eq!(page["versions"][0]["note"], "edit 3");
+    assert_eq!(page["next_before"], top - 1);
+
+    let page = parse(
+        &e.app_versions("home", page["next_before"].as_i64(), Some(2))
+            .unwrap(),
+    );
+    assert_eq!(versions(&page), [top - 2, top - 3]);
+
+    // Default limit: everything here fits one page, and no next_before.
+    let all = parse(&e.app_versions("home", None, None).unwrap());
+    assert_eq!(versions(&all), (1..=top).rev().collect::<Vec<_>>());
+    assert!(all.get("next_before").is_none());
+    assert_eq!(
+        all["versions"].as_array().unwrap().last().unwrap()["version"],
+        1
+    );
+
+    // Out-of-range limit: the pod's 400, as a readable error.
+    let err = e.app_versions("home", None, Some(0)).unwrap_err();
+    assert!(
+        matches!(err, LayoutApiError::Server { status: 400, .. }),
+        "{err:?}"
+    );
+    assert_eq!(err.reason(), "The pod rejected the request.");
+}
+
+#[test]
+fn app_version_returns_the_layout_and_errors_are_sentences() {
+    let p = pod(AppState::in_memory());
+    layouts::append_version(p.state.store(), "home", &retitled("Two"), Some("two")).unwrap();
+    let n = latest(&p, "home");
+    let e = engine(&p.base, "home");
+
+    let v = parse(&e.app_version("home", n).unwrap());
+    assert_eq!(v["app_id"], "home");
+    assert_eq!(v["version"], n);
+    assert_eq!(v["note"], "two");
+    assert_eq!(v["layout"]["type"], "core://Workspace");
+    assert_eq!(v["layout"]["title"], "Two");
+    let one = parse(&e.app_version("home", 1).unwrap());
+    assert_eq!(one["layout"]["id"], "home");
+
+    let err = e.app_version("home", n + 10).unwrap_err();
+    assert_eq!(
+        err,
+        LayoutApiError::NotFound {
+            reason: "That version doesn't exist.".into()
+        }
+    );
+    let err = e.app_versions("nope", None, None).unwrap_err();
+    assert_eq!(err.reason(), "That app doesn't exist.");
+    assert!(matches!(err, LayoutApiError::NotFound { .. }));
+    let err = e.app_version("nope", 1).unwrap_err();
+    assert_eq!(err.reason(), "That app doesn't exist.");
+    let err = e.app_versions("bad id!", None, None).unwrap_err();
+    assert_eq!(
+        err,
+        LayoutApiError::Server {
+            status: 400,
+            reason: "That isn't a valid app id.".into()
+        }
+    );
+}
+
+#[test]
+fn unreachable_pod_is_offline() {
+    let e = engine("http://127.0.0.1:1", "home");
+    for result in [
+        e.list_apps(),
+        e.app_versions("home", None, None),
+        e.app_version("home", 1),
+    ] {
+        assert_eq!(
+            result.unwrap_err(),
+            LayoutApiError::Offline {
+                reason: LAYOUTS_OFFLINE.into()
+            }
+        );
+    }
+}
+
+#[test]
+fn snapshot_layout_json_follows_the_pods_version() {
+    let p = pod(AppState::in_memory());
+    let e = engine(&p.base, "home");
+    let n = latest(&p, "home");
+    wait_until("first fetch", || e.snapshot().layout_json != "{}");
+    assert_eq!(
+        parse(&e.snapshot().layout_json),
+        json!({"app_id": "home", "version": n})
+    );
+
+    let v = layouts::append_version(p.state.store(), "home", &retitled("Pushed"), None).unwrap();
+    p.state.publish_layout("home", v);
+    wait_until("pushed version", || {
+        parse(&e.snapshot().layout_json)["version"] == v
+    });
+    assert_eq!(
+        parse(&e.snapshot().layout_json),
+        json!({"app_id": "home", "version": v})
+    );
+    let ws = parse(&e.snapshot().workspace_json);
+    assert_eq!(ws["title"], "Pushed");
+
+    // The signed-out pixelfed_home screen is not versioned.
+    let signed_out = engine(&p.base, "pixelfed_home");
+    wait_until("signed-out screen", || {
+        signed_out.snapshot().workspace_json != "null"
+    });
+    assert_eq!(signed_out.snapshot().layout_json, "{}");
+}
