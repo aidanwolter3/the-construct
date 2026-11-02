@@ -4,28 +4,39 @@ A server-driven UI shell: a Rust protocol, server and client core, rendered by a
 Multiplatform desktop app through UniFFI. The design is in [DESIGN.md](DESIGN.md), decisions
 are in [docs/DECISIONS.md](docs/DECISIONS.md), and status is in [docs/PROGRESS.md](docs/PROGRESS.md).
 
-Milestones 1–4 are implemented: the protocol crate, the Axum server, the macOS desktop app and the Android
-app (see [Android](#android)). A headless simulation mode renders the shared UI to PNGs (see Simulation mode).
+Milestones 1-7 are implemented: the protocol crate, the Axum server, the macOS desktop app, the Android app
+(see [Android](#android)), the SQLite cache + outbox (M5), the Pixelfed feed with OAuth2 PKCE sign-in (M6), and
+the AI layout agent with versioned layouts, rollback and SSE push (M7). A fake Pixelfed is the primary end-to-end
+upstream, and a headless simulation mode renders the shared UI to PNGs (see Simulation mode).
+
+Quick links: [Server runtime configuration](#server-runtime-configuration),
+[Try it on your phone with a real Pixelfed instance](#try-it-on-your-phone-with-a-real-pixelfed-instance),
+[Try the AI layout agent](#try-the-ai-layout-agent), [Milestone check recipes](#milestone-check-recipes).
 
 ## Layout
 
 ```
-crates/protocol      UiNode / ActionIntent / WorkspaceSpec (hydration bundle) / EntityRecord
-crates/server        Axum server: GET /v1/workspaces/{home,pixelfed_demo,pixelfed_home}, persistent counters
-                     (SQLite), Pixelfed adapter (auth, feed normalization, actions, media proxy),
-                     versioned layouts + SSE push channel
-crates/client-core   CanvasEngine: fetches the workspace, holds state, applies optimistic mutations (SQLite cache + outbox),
-                     OAuth2 PKCE sign-in (pod session in a secure store)
+crates/protocol      UiNode / ActionIntent / WorkspaceSpec (hydration bundle) / EntityRecord (+ JSON Schema
+                     registry behind the `schema` feature)
+crates/server        Axum server ("the pod"): GET /v1/workspaces/{home,pixelfed_demo,pixelfed_home}, persistent
+                     counters (SQLite), Pixelfed adapter (auth, feed normalization, actions, media proxy),
+                     versioned layouts + rollback + SSE push, layout agent (rules / Anthropic providers)
+crates/client-core   CanvasEngine: fetches the workspace, holds state, applies optimistic mutations (SQLite cache +
+                     outbox sync worker), OAuth2 PKCE sign-in (pod session in a secure store), agent prompts,
+                     SSE layout subscriber
 crates/client-ffi    UniFFI bridge (EngineHandle, FfiStateSnapshot, StateObserver) + uniffi-bindgen bin
 crates/fake-pixelfed fake Pixelfed (Mastodon API + OAuth PKCE, admin/fault controls), the primary e2e upstream;
                      single binary with embedded fixtures, Dockerfile for a sidecar image
 crates/e2e           end-to-end suite: pod + engine in-process against the fake (default) or a real Pixelfed
-fixtures/            counter_home_bundle.json, pixelfed_home_bundle.json (DESIGN.md §2.2C);
-                     pixelfed/ (Mastodon API JSON + media served by fake-pixelfed)
+fixtures/            counter_home_bundle.json, pixelfed_home_bundle.json (DESIGN.md §2.2C),
+                     pixelfed_home_feed_bundle.json (simulator); pixelfed/ (Mastodon API JSON + media served by
+                     fake-pixelfed, recorded/ real-instance responses, images/ seed JPEGs)
+dev/pixelfed/        docker compose stack for the optional local real Pixelfed (dev-only secrets)
 scripts/build_ffi.sh builds libclient_ffi.dylib and regenerates the Kotlin bindings
 scripts/build_android.sh  cross-compiles libclient_ffi.so for Android (cargo-ndk)
 scripts/e2e.sh       end-to-end suite against the fake binary or a real Pixelfed (End-to-end tests)
 scripts/android_smoke.sh  installs and launches the Android app on an emulator, checks it renders (Tests)
+scripts/pixelfed_dev.sh   up/seed/record/status/down/reset for the local real Pixelfed (Local Pixelfed instance)
 kmp-app/             Gradle project: :shared (model + Compose renderer), :desktopApp (JVM, JNA),
                      :androidApp (Android, JNA aar)
 ```
@@ -177,6 +188,141 @@ re-fetched workspace has the still-pending clicks re-applied, so they never visi
 each attempt, e.g. `[CanvasEngine] outbox #3 POST http://127.0.0.1:8080/v1/counters/home/increment -> 200,
 deleted (0 pending)`.
 
+## Server runtime configuration
+
+Everything the pod (`cargo run -p server`) reads from the environment. Empty values count as unset. The chosen
+Pixelfed instance, database path and layout agent provider are logged at startup. `GET /healthz` answers 200 `ok`
+(no auth; the engine's 2 s reconnect probe uses it).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CANVAS_ADDR` | `127.0.0.1:8080` | Listen address. Use `0.0.0.0:8080` to accept LAN connections. |
+| `CANVAS_DATA_DIR` | `~/.canvas-server` | Directory of `server.db` (counters, Pixelfed app/account/sessions, media keys, layout versions); created if missing. |
+| `CANVAS_TEST_HOOKS` | unset | `1` enables `POST /v1/test/fault` (fault injection; otherwise 404). |
+| `PIXELFED_INSTANCE_URL` | `http://127.0.0.1:8081` (the fake) | Pixelfed instance for pod->upstream calls, and the only instance accepted in auth calls. `http://localhost:8090` for the local real Pixelfed, `https://<instance>` for a public one. |
+| `PIXELFED_PUBLIC_URL` | = instance URL | Base for browser-facing links (the authorize page), e.g. `http://10.0.2.2:8081` for the emulator while the pod calls `127.0.0.1:8081`. Also accepted in auth calls. |
+| `PIXELFED_MEDIA_HOSTS` | unset | Comma-separated `host`, `host:port` or `scheme://host[:port]`: extra origins the media proxy may fetch (CDN/S3) besides the instance and public URLs. Media elsewhere become placeholders. |
+| `PIXELFED_EXTRA_REDIRECTS` | unset | Comma-separated exact redirect URIs accepted by `/v1/auth/pixelfed/app`, besides `http://127.0.0.1:<port>/callback`, `http://localhost:<port>/callback` and `canvas://oauth`. |
+| `PIXELFED_OWNER_ACCOUNT_ID` | unset | The only upstream account id allowed to sign in (replaces a pinned owner). Unset: the first account to sign in is pinned; others get 403 `account_not_owner`. |
+| `PIXELFED_ALLOW_ACCOUNT_CHANGE` | unset | `1`/`true`: any account may sign in and replace the stored one (no pinning). |
+| `CANVAS_SESSION_TTL_DAYS` | `90` | Pod session lifetime in days (1..=36500; other values warn and use 90). |
+| `CANVAS_AGENT_OPEN` | unset | `1`: layout versions, rollback and the agent endpoint need no pod session. Local demos only (warned at startup). |
+| `CANVAS_LLM_PROVIDER` | `auto` | Layout agent provider: `auto` (`anthropic` if `ANTHROPIC_API_KEY` is set, else `rules`), `anthropic`, `rules`. `anthropic` without a key: the server starts and prompts answer 503. |
+| `ANTHROPIC_API_KEY` | unset | Enables the Anthropic provider (never logged). |
+| `CANVAS_LLM_MODEL` | `claude-opus-5-5` | Model id for the Anthropic provider (`agent::anthropic::DEFAULT_MODEL`). |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Messages API base URL (proxy/gateway). |
+| `CANVAS_LLM_FALLBACKS` | on | `0`/`false` turns off the server-side refusal fallback of the Anthropic request. |
+| `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
+
+<a id="fake-pixelfed-environment"></a>`cargo run -p fake-pixelfed`:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `FAKE_PIXELFED_ADDR` | `127.0.0.1:8081` | Listen address. If unset and `PORT` is set (most PaaS), `0.0.0.0:$PORT`. |
+| `FAKE_PIXELFED_PUBLIC_URL` | `http://<bound addr>` (`0.0.0.0` shown as `127.0.0.1`) | Replaces every `{{BASE}}` in the fixture JSON, so emitted media/profile/status URLs point at it. `http://10.0.2.2:8081` when the emulator must load them directly. |
+| `FAKE_PIXELFED_AUTO_APPROVE` | unset | `1`: `GET /oauth/authorize` redirects straight back with a code (same as `auto=1` in the query); otherwise an HTML page with an **Authorize** button. |
+| `FAKE_PIXELFED_TOKEN` | unset | A pre-seeded valid access token, to skip OAuth in QA (survives resets). |
+| `FAKE_PIXELFED_FIXTURES` | embedded | Fixture directory to load instead of the embedded copies (e.g. `fixtures/pixelfed` while editing). |
+| `FAKE_PIXELFED_ADMIN` | loopback only | `1` serves `/_admin` on any address, `0` never; unset, only when bound to loopback. |
+| `RUST_LOG` | `info` | `tracing` filter. |
+
+## Try it on your phone with a real Pixelfed instance
+
+Nothing has to be registered by hand: the pod registers its own OAuth app on the instance (`POST /api/v1/apps`,
+redirect `canvas://oauth`) on the first sign-in. The pod keeps the upstream token; the phone only gets a pod
+session (DECISIONS D17, D19).
+
+1. Start the pod for the instance (any account on it; the first one to sign in becomes the pod's owner):
+
+   ```bash
+   PIXELFED_INSTANCE_URL=https://<instance> CANVAS_DATA_DIR=~/.canvas-pixelfed cargo run -p server
+   # add PIXELFED_MEDIA_HOSTS=<cdn host> if the instance serves media from a CDN/S3 host (else placeholders)
+   ```
+
+2. Make the pod reachable from the phone. Simplest is USB: `adb reverse tcp:8080 tcp:8080` and base URL
+   `http://localhost:8080`. A LAN address (`CANVAS_ADDR=0.0.0.0:8080`, `http://<mac-ip>:8080`) or an HTTPS URL also
+   works for the engine, which talks through Rust and is not restricted by Android's network security config; but
+   debug builds allow cleartext to `localhost`, `127.0.0.1` and `10.0.2.2` only for Java/Kotlin traffic, and images
+   load through Coil/OkHttp from the pod's media proxy, so over plain-HTTP LAN the feed images fail. Use `adb
+   reverse` or HTTPS. The authorize page itself is the instance's own `https://` URL, opened in the phone's browser.
+
+3. Build and install the debug APK, then launch it on the feed workspace (extras are honoured by debug builds
+   only):
+
+   ```bash
+   cd kmp-app && export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+   ./gradlew :androidApp:installDebug
+   adb shell am start -S -n org.genui.canvas.android/.MainActivity --es baseUrl http://localhost:8080 --es workspace pixelfed_home
+   ```
+
+4. Tap **Sign in with Pixelfed**: the browser opens the instance's authorize page; log in and approve; the
+   `canvas://oauth` redirect returns to the app, which shows "Loading your feed…" and then `@you` and your home
+   timeline. Like and bookmark are applied at once and go through the outbox to the instance (queued while
+   offline, flushed on reconnect). **Sign out** deletes the session and the cached private feed.
+
+Notes:
+
+- Pixelfed throttles `/oauth/*` to 10 requests/minute per IP, and each sign-in uses two `/oauth/token` requests;
+  repeated attempts can get 429 for a minute.
+- A different account than the pinned owner gets "This pod belongs to a different Pixelfed account." Delete
+  `server.db` (or set `PIXELFED_OWNER_ACCOUNT_ID` / `PIXELFED_ALLOW_ACCOUNT_CHANGE=1`) to change owners.
+- Passport quirk (D20): Passport 13 rejects a token whose user id equals the (first-party, confidential) OAuth
+  client's id. Instances with few clients and users can hit this; the local dev stack works around it by starting
+  client ids at 1000. A public instance normally has far more clients than the colliding user ids.
+- Verified against the local real Pixelfed 0.15.2 (`PIXELFED_INSTANCE_URL=http://localhost:8090` plus
+  `adb reverse tcp:8090 tcp:8090`, see "Local Pixelfed instance") on the emulator; not yet against a public
+  instance.
+
+## Try the AI layout agent
+
+The agent turns a prompt into a JSON Patch of the current layout, validates it, stores it as a new layout version
+and pushes it to every connected client over SSE (D22, D25).
+
+- **Offline, no key:** the default `rules` provider understands fixed phrases (combinable): "hide post captions",
+  "show captions", "put media at the very top" / "photos first", "move the action bar above the photo", "add a
+  weather widget"; "remove the action bar" is rejected on purpose to show validation.
+- **With the Anthropic provider:** set `ANTHROPIC_API_KEY` (optionally `CANVAS_LLM_MODEL`, default `claude-opus-5-5`) and restart
+  the pod; the startup log names the provider and model. Free-form prompts then work. (Not yet run against the live
+  API: no key was available during development.)
+- **In the app:** tap the sparkle button (bottom right, "Edit layout with AI"), type a prompt or pick a chip, and
+  tap **Send**. The panel shows "Layout updated (vN, <provider>)" and the feed changes in place; other clients on the
+  same pod update through the push channel. The prompt needs a signed-in session (or `CANVAS_AGENT_OPEN=1`).
+- **Versions and rollback** (`CANVAS_AGENT_OPEN=1` is for local demos only; otherwise add
+  `-H "Authorization: Bearer <session>"`):
+
+  ```bash
+  CANVAS_AGENT_OPEN=1 cargo run -p server
+  curl -s -X POST http://127.0.0.1:8080/v1/agent/modify_layout -H 'content-type: application/json' \
+    -d '{"prompt": "Add a weather widget at the top"}' | jq '{layout_version, provider, patch}'
+  curl -s http://127.0.0.1:8080/v1/workspaces/pixelfed_home/versions | jq .
+  curl -s -X POST -H 'content-type: application/json' -d '{"version":1}' \
+    http://127.0.0.1:8080/v1/workspaces/pixelfed_home/rollback | jq '{version, rolled_back_to}'
+  ```
+
+## Milestone check recipes
+
+DESIGN.md M5 (offline click lands in the outbox, flushed on reconnect), with the counter workspace:
+
+```bash
+cargo run -p server                                                  # terminal 1
+cd kmp-app && ./gradlew :desktopApp:run                              # terminal 2: Count: N, Online
+# stop the server with Ctrl-C in terminal 1: the status line goes Offline
+# click Increment 3 times: the count updates at once and the status line shows "3 pending"
+sqlite3 ~/.canvas/cache.db "SELECT id, endpoint, status, retry_count FROM action_outbox;"   # 3 PENDING rows
+cargo run -p server                                                  # terminal 1 again: within ~2 s flushed, rows deleted
+sqlite3 ~/.canvas/cache.db "SELECT count(*) FROM action_outbox;"     # 0
+curl -s http://127.0.0.1:8080/v1/workspaces/home | jq '.entities["core://counters/home"].count'
+```
+
+DESIGN.md M7 (prompt -> valid patched `WorkspaceSpec`; the open app recomposes without a restart):
+
+```bash
+CANVAS_AGENT_OPEN=1 cargo run -p server
+curl -s -X POST http://127.0.0.1:8080/v1/agent/modify_layout -H "Content-Type: application/json" \
+  -d '{"prompt": "Hide post captions and put media at the very top"}' | jq '{layout_version, provider, patch}'
+# a desktop app or simulator showing pixelfed_home on this pod switches to the new layout within a second
+```
+
 ## Fake Pixelfed upstream
 
 `crates/fake-pixelfed` is a Mastodon-compatible stand-in for a Pixelfed instance and the **primary end-to-end
@@ -190,19 +336,7 @@ curl -s -H 'Authorization: Bearer dev' http://127.0.0.1:8081/api/v1/timelines/ho
                                                  # (started with FAKE_PIXELFED_TOKEN=dev)
 ```
 
-Environment:
-
-- `FAKE_PIXELFED_ADDR` (default `127.0.0.1:8081`; if unset and `PORT` is set, as on most PaaS, `0.0.0.0:$PORT`).
-- `FAKE_PIXELFED_PUBLIC_URL` (default `http://<bound addr>`, with `0.0.0.0` shown as `127.0.0.1`): every `{{BASE}}`
-  in the fixture JSON is replaced with it, so emitted media/profile/status URLs point at it. Use
-  `http://10.0.2.2:8081` when the Android emulator must load them directly.
-- `FAKE_PIXELFED_AUTO_APPROVE=1`: `GET /oauth/authorize` redirects straight back with a code (same as adding
-  `auto=1` to the query); otherwise it shows an HTML page with an **Authorize** button.
-- `FAKE_PIXELFED_TOKEN=<tok>`: a pre-seeded valid access token, to skip OAuth in QA (survives resets).
-- `FAKE_PIXELFED_FIXTURES`: fixture directory to load instead of the embedded copies (e.g. `fixtures/pixelfed`
-  while editing fixtures without rebuilding).
-- `FAKE_PIXELFED_ADMIN`: `1` serves the `/_admin` routes on any address, `0` never; unset, only when bound to a
-  loopback address.
+Its environment variables are listed in [Server runtime configuration](#fake-pixelfed-environment).
 
 **Sidecar / Docker.** One self-contained binary (release: 3.4 MB, 2.1 MB stripped with thin LTO; ~3.5 MB RSS
 idle, ~5 MB after a few hundred requests; the Docker container ~1 MB). Image: `rust:1-slim-bookworm` builder ->
@@ -294,20 +428,8 @@ The server (`server::pixelfed`, docs/DECISIONS.md D17) adapts one Pixelfed insta
 access token, normalizes the home timeline into Canvas entities and serves the `pixelfed_home` workspace. The
 client only holds a pod session token and sends `Authorization: Bearer <session>`.
 
-Environment:
-
-- `PIXELFED_INSTANCE_URL` (default `http://127.0.0.1:8081`, the fake): base for pod->upstream calls. The only
-  instance accepted in auth calls. For the local real Pixelfed use `http://localhost:8090` (see "Local Pixelfed
-  instance").
-- `PIXELFED_PUBLIC_URL` (default = instance URL): base for browser-facing links (the `authorize_endpoint`),
-  e.g. `http://10.0.2.2:8081` for the Android emulator while the pod calls `127.0.0.1:8081`.
-- `PIXELFED_OWNER_ACCOUNT_ID` (default unset): the only upstream account id allowed to sign in. Unset, the first
-  account that signs in is pinned as the owner and any other account gets 403 `account_not_owner`.
-- `PIXELFED_ALLOW_ACCOUNT_CHANGE=1`: let any account sign in and replace the stored one (no pinning).
-- `PIXELFED_MEDIA_HOSTS` (comma-separated `host`, `host:port` or `https://host[:port]`): extra origins the media
-  proxy may fetch (CDN/S3) besides the instance and public URLs. Media on other hosts are shown as placeholders.
-- `PIXELFED_EXTRA_REDIRECTS` (comma-separated exact URIs): extra redirect URIs accepted by `/v1/auth/pixelfed/app`.
-- `CANVAS_SESSION_TTL_DAYS` (default 90): pod sessions older than this are rejected (sign in again).
+Configuration (`PIXELFED_*`, `CANVAS_SESSION_TTL_DAYS`): see
+[Server runtime configuration](#server-runtime-configuration).
 
 Endpoints:
 

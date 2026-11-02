@@ -1,6 +1,6 @@
 # Progress Log
 
-Running log of implementation work for the first demo (Milestones 1-4 of DESIGN.md, plus a headless simulation mode).
+Running log of implementation work for Milestones 1-7 of DESIGN.md, plus a headless simulation mode.
 Process: orchestrator coordinates separate implementation, code-review and QA passes.
 Note: the environment restarted twice mid-work; work is now committed in small wip commits.
 
@@ -136,25 +136,86 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 - Deferred: idempotency keys (a POST applied server-side but timed out client-side is re-sent); toggle payload
   "$value" is not rewritten on re-apply; Android emulator latency 1-6 ms (desktop well under).
 
-## Milestone 6: Pixelfed + OAuth PKCE (in progress)
+## Milestone 6: Pixelfed + OAuth PKCE
 
-- Done (wip commits): protocol `queries`/`also`/ternary (D4, D7, D15); fake upstream crates/fake-pixelfed (D16);
-  pod adapter + auth + media proxy (D17); client-core queries + multi-field outbox + PKCE sign-in (D19); Coil feed
-  UI with carousel (D18); platform glue: Keychain, Android Keystore + canvas://oauth, sim browsers (D21); real
-  local Pixelfed 0.15.2 via Colima in dev/pixelfed + scripts/pixelfed_dev.sh, recorded fixtures, pod adapted to
-  it (D20); desktop sim e2e against the real instance passed (sign in, feed, carousel, like reached Pixelfed).
-- QA fixes (client): restart-safe custom-scheme sign-in (`pending_auth:` record, "Sign-in was interrupted"),
-  private cache purge on sign-out, secure-store I/O moved off the UI thread and out of the flow lock (D19); CW
-  label no longer doubles "CW:", carousel images without alt text read "Photo n of N".
-- M6-X: the fake is the primary e2e target (D16 amended, D20 now optional): embedded fixtures (single 2-3 MB
-  binary, Dockerfile), `/_admin/{reset,state,faults}` + `X-Fake-Fault`, `crates/e2e` (pod + engine in-process:
-  shared suite for fake or `E2E_UPSTREAM=real`, fault tests: 503/429/expired token/latency/reset),
-  `scripts/e2e.sh`. Real-upstream run against the local Pixelfed (alice) passed, state restored.
+- Protocol: `queries`, `OptimisticMutate.also` (multi-field like + count), ternary expressions (D4, D7, D15).
+- Fake upstream `crates/fake-pixelfed` (D16): Mastodon API + real S256 PKCE, `{{BASE}}` fixtures, generated media.
+- Pod adapter `server::pixelfed` (D17): pod owns the upstream token, client holds only a pod session; feed
+  normalization (reblogs, HTML captions, lenient types); like/bookmark actions; token refresh; media proxy with an
+  origin allowlist; migrations v2-v4.
+- client-core (D19): `queries` + multi-field outbox rows, PKCE sign-in on a background thread (loopback port 47823
+  or `canvas://oauth`), session in a secure store, 401 policy (pause, never roll back a like).
+- UI (D18): Coil 3.4 images, PostCard, carousel with a fixed clamped aspect, page dots, CW handling.
+- Platform glue (D21): macOS Keychain + browser, Android Keystore store + `canvas://oauth` (`singleTask`), simulator
+  auto-approve and scripted Pixelfed login browsers.
+- Real local Pixelfed 0.15.2 (D20): Colima stack in `dev/pixelfed`, `scripts/pixelfed_dev.sh`, recorded fixtures,
+  pod adapted to its differences (`include_reblogs`, `localhost`-only web routes, Passport token shape).
+- M6-X: the fake is the primary e2e target (D16 amended, D20 optional): embedded fixtures (single binary,
+  Dockerfile), `/_admin/{reset,state,faults}` + `X-Fake-Fault`, `crates/e2e` (pod + engine in-process, one suite for
+  the fake or a real instance, upstream fault tests), `scripts/e2e.sh`.
+- Review/QA fixes: owner pinning (`account_not_owner`), session TTL, media SSRF allowlist + redirect allowlist +
+  25 MB cap, redirect-URI allowlist, stale upstream app recovery (`client_credentials` check), compare-and-delete on
+  upstream 401, restart-safe custom-scheme sign-in (`pending_auth:`), private cache purge on sign-out with
+  `secure_delete`, secure-store I/O off the UI thread, readable sign-in errors, "Loading your feed…" until the feed
+  lands, CW label and "Photo n of N" alt fallback.
+- QA evidence: desktop simulator vs the fake and vs the real local Pixelfed (sign-in, feed with boost, carousel
+  swipe, like and offline like -> flush -> `favourited` upstream); Android emulator against the real instance
+  (`adb reverse tcp:8090`, real browser login, `canvas://oauth` return, like reaching Pixelfed); e2e suite against
+  the real instance (alice) passed with upstream state restored.
+- Status: DONE.
+
+## Milestone 7: AI layout engine
+
+- Versioned layouts (D22): migration v5 `layout_versions`, append-only (v1 = built-in layout, rollback appends a
+  copy), `X-Canvas-Layout-Version`, `GET .../versions`, `POST .../rollback`, SSE `GET .../events` (broadcast,
+  keepalive 15 s, lag -> current version, shutdown on Ctrl-C).
+- Agent endpoint (D25): `POST /v1/agent/modify_layout` -> RFC 6902 patch -> `json-patch` applied op by op ->
+  validation (deserializes as `UiNode`, same root, 1..=50 unique slots, depth/size/op bounds, no invented intents)
+  -> compare-and-append commit (re-applied on a concurrent commit, else 409) -> SSE push. Providers: offline `rules`
+  (composable, idempotent phrases) and Anthropic (structured outputs with a schema registry derived from the
+  protocol types, prompt caching, retries, 170 s total bound). Unchanged results commit nothing.
+- client-core (D24): `action.agent.prompt`, `agent_json` status, layout applied from the response without a
+  refetch, layout version tracking, SSE subscriber thread (async reqwest on a private runtime, backoff, 45 s
+  silence reconnect, 64 KB event cap) that refetches on newer versions with pending outbox rows re-applied.
+- UI (D23): FAB + in-tree bottom panel with chips, status line, Back closes it, `adjustResize`/IME insets;
+  slot-keyed recomposition so the carousel keeps its page; simulator `type` command and fake rules.
+- Review/QA fixes: patch validation bounds (depth, size, op count, aspect/padding ranges), no invented
+  endpoints/targets, compare-and-append commits, prompt panel not painted over sign-in, total provider timeout,
+  double-submit guard, readable agent errors and "No change needed (vN)", stale status reset on a pushed version,
+  padded weather slot, workspace id limits, SSE line/event size cap.
+- QA evidence: curl runs of prompt -> version -> rollback with the SSE stream receiving each version; desktop
+  simulator prompts (weather added, no change needed, unsupported prompt, panel closed); Android emulator against
+  the pod + fake: sign-in, prompt with the IME (portrait/landscape), layout updated in place, queued like flushed
+  after the change, rollback pushed to the device. The Anthropic provider is covered by tests against a mock
+  server only (no API key in this environment).
+- Tests: cargo 257 (includes the e2e suite against the in-process fake), shared 49, desktopApp 54, Android
+  instrumented 6. e2e: the suite runs against the fake (in-process in `cargo test`, or the binary/Docker image via
+  `scripts/e2e.sh [--faults]`) and optionally against a real Pixelfed (`scripts/e2e.sh --upstream real`, passed
+  against the local instance in M6-X).
+- Status: DONE.
+
+### Deferred / known issues (M6/M7)
+- No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
+  bookmarks are idempotent upstream, counters are not).
+- Toggle payloads (`"$value"`) are not rewritten on re-apply (D14); local and server state can differ until the
+  next fetch.
+- The client's layout version is in memory only (refetched at startup, D24).
+- Anonymous SSE subscriptions are allowed and the number of open streams is not capped (events carry only a
+  version number, D22).
+- The media proxy is unauthenticated by design (opaque keys over public upstream media, D17).
+- The feed is a plain scrolling `Column` (every post composed), not a `LazyColumn`; fine for a 20-post page.
+- The stored session is read from the secure store (Keychain) synchronously while constructing the engine, i.e. on
+  the caller's thread; writes are already off the UI thread (D19).
+- Single tenant: one pinned Pixelfed account per pod; one timeline page (no pagination).
+- Engine traffic is not HTTPS-enforced on Android release builds (D11).
+- Not yet exercised: the Anthropic provider against the live API, and sign-in against a public Pixelfed instance.
 
 ## Next steps
 
-1. M6 remaining: independent review (Rust, Kotlin) and QA (desktop sim vs fake + real Pixelfed incl. offline
-   like -> flush -> favourited upstream; Android emulator with adb reverse 8090 + pod, real browser login).
-2. M7 AI layout engine (rules provider + Anthropic provider, versions/rollback, SSE push, prompt UI).
-3. Small follow-ups: 404 "workspace not found" UI state; HTTPS enforcement for release; golden-image diffing for
-   the simulator; Android host tests for :shared; outbox idempotency keys.
+1. Feed as a `LazyColumn` with pagination (`max_id` / `Link: next`).
+2. Outbox idempotency keys (client-generated, honoured by the pod).
+3. Live test of the Anthropic provider once a key exists (prompt quality, latency, refusals).
+4. Real-Pixelfed contract test in scheduled CI on a throwaway instance (`scripts/e2e.sh --upstream real`).
+5. HTTPS enforcement in the engine for release builds; a cap on SSE subscribers.
+6. Web target for the shared UI; small follow-ups: 404 "workspace not found" UI state, golden-image diffing for
+   the simulator, Android host tests for :shared.
