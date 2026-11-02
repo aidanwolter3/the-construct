@@ -1,4 +1,4 @@
-//! Project Canvas backend: serves fixture hydration bundles, persists
+//! The Construct backend: serves fixture hydration bundles, persists
 //! counter mutations in SQLite (M5, see [`store`]) and adapts a Pixelfed
 //! instance (M6, see [`pixelfed`]; the pod owns the upstream token).
 //! Workspace layouts are versioned and pushed over SSE (M7, see [`layouts`]);
@@ -69,7 +69,7 @@ struct Fault {
 /// Default Pixelfed instance: the local fake (`crates/fake-pixelfed`).
 pub const DEFAULT_PIXELFED_URL: &str = "http://127.0.0.1:8081";
 
-/// Default pod session lifetime (`CANVAS_SESSION_TTL_DAYS`).
+/// Default pod session lifetime (`CONSTRUCT_SESSION_TTL_DAYS`).
 pub const DEFAULT_SESSION_TTL_DAYS: i64 = 90;
 
 /// Which Pixelfed instance the pod talks to (single tenant), and who may own it.
@@ -92,7 +92,7 @@ pub struct PixelfedConfig {
     /// Extra exact redirect URIs accepted by `/v1/auth/pixelfed/app`
     /// (`PIXELFED_EXTRA_REDIRECTS`, comma-separated).
     pub extra_redirects: Vec<String>,
-    /// Pod sessions older than this are invalid (`CANVAS_SESSION_TTL_DAYS`).
+    /// Pod sessions older than this are invalid (`CONSTRUCT_SESSION_TTL_DAYS`).
     pub session_ttl_secs: i64,
 }
 
@@ -122,7 +122,7 @@ impl PixelfedConfig {
 
     /// From `PIXELFED_INSTANCE_URL`, `PIXELFED_PUBLIC_URL`,
     /// `PIXELFED_OWNER_ACCOUNT_ID`, `PIXELFED_ALLOW_ACCOUNT_CHANGE`,
-    /// `PIXELFED_MEDIA_HOSTS`, `PIXELFED_EXTRA_REDIRECTS`, `CANVAS_SESSION_TTL_DAYS`.
+    /// `PIXELFED_MEDIA_HOSTS`, `PIXELFED_EXTRA_REDIRECTS`, `CONSTRUCT_SESSION_TTL_DAYS`.
     pub fn from_env() -> Self {
         let var = |k: &str| {
             std::env::var(k)
@@ -143,12 +143,12 @@ impl PixelfedConfig {
         };
         let instance =
             var("PIXELFED_INSTANCE_URL").unwrap_or_else(|| DEFAULT_PIXELFED_URL.to_owned());
-        let ttl_days = match var("CANVAS_SESSION_TTL_DAYS").map(|v| v.parse::<i64>()) {
+        let ttl_days = match var("CONSTRUCT_SESSION_TTL_DAYS").map(|v| v.parse::<i64>()) {
             None => DEFAULT_SESSION_TTL_DAYS,
             Some(Ok(d)) if (1..=36_500).contains(&d) => d,
             Some(_) => {
                 tracing::warn!(
-                    "CANVAS_SESSION_TTL_DAYS is not a number of days in 1..=36500; using {DEFAULT_SESSION_TTL_DAYS}"
+                    "CONSTRUCT_SESSION_TTL_DAYS is not a number of days in 1..=36500; using {DEFAULT_SESSION_TTL_DAYS}"
                 );
                 DEFAULT_SESSION_TTL_DAYS
             }
@@ -197,7 +197,7 @@ pub struct AppState {
     /// Serializes upstream token refreshes (Passport rotates the refresh
     /// token, so two concurrent refreshes would revoke each other).
     pixelfed_refresh: tokio::sync::Mutex<()>,
-    /// `CANVAS_AGENT_OPEN=1`: versions/rollback/agent need no session (dev only).
+    /// `CONSTRUCT_AGENT_OPEN=1`: versions/rollback/agent need no session (dev only).
     agent_open: bool,
     /// New workspace revisions, fanned out to SSE subscribers.
     layout_tx: tokio::sync::broadcast::Sender<layouts::LayoutEvent>,
@@ -229,7 +229,7 @@ impl AppState {
         }
     }
 
-    /// `CANVAS_AGENT_OPEN=1`: layout history / rollback / agent endpoints
+    /// `CONSTRUCT_AGENT_OPEN=1`: layout history / rollback / agent endpoints
     /// accept requests without a pod session (dev and demo only).
     pub fn with_agent_open(mut self, open: bool) -> Self {
         self.agent_open = open;
@@ -302,7 +302,7 @@ impl AppState {
         Self::new(Store::open_in_memory().expect("in-memory SQLite"))
     }
 
-    /// Enable `POST /v1/test/fault` (`CANVAS_TEST_HOOKS=1`).
+    /// Enable `POST /v1/test/fault` (`CONSTRUCT_TEST_HOOKS=1`).
     pub fn with_test_hooks(mut self, enabled: bool) -> Self {
         self.test_hooks = enabled;
         self

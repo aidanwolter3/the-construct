@@ -1,4 +1,4 @@
-//! Server persistence: one SQLite database (`$CANVAS_DATA_DIR/server.db`).
+//! Server persistence: one SQLite database (`$CONSTRUCT_DATA_DIR/server.db`).
 //!
 //! The schema is versioned with `PRAGMA user_version`. To add tables in a later
 //! milestone, append a step to [`MIGRATIONS`]; each step runs once, in order,

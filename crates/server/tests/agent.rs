@@ -387,7 +387,7 @@ async fn auth_and_request_validation() {
         assert_eq!(b["error"], "unauthorized");
         assert_eq!(
             b["detail"],
-            "a valid pod session is required (or CANVAS_AGENT_OPEN=1 for local demos)"
+            "a valid pod session is required (or CONSTRUCT_AGENT_OPEN=1 for local demos)"
         );
     }
     // Same body on the history routes.
@@ -399,7 +399,10 @@ async fn auth_and_request_validation() {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     let b: Value = resp.json().await.unwrap();
     assert!(
-        b["detail"].as_str().unwrap().contains("CANVAS_AGENT_OPEN"),
+        b["detail"]
+            .as_str()
+            .unwrap()
+            .contains("CONSTRUCT_AGENT_OPEN"),
         "{b}"
     );
     assert_eq!(version_count(&pod, "pixelfed_home"), 0);
@@ -483,7 +486,10 @@ fn provider_selection_from_env() {
     let d = |vars: &[(&str, &str)]| Selection::from_lookup(lookup(vars)).describe();
     assert_eq!(d(&[]), ("rules".into(), None));
     assert_eq!(
-        d(&[("CANVAS_LLM_PROVIDER", "rules"), ("ANTHROPIC_API_KEY", "k")]),
+        d(&[
+            ("CONSTRUCT_LLM_PROVIDER", "rules"),
+            ("ANTHROPIC_API_KEY", "k")
+        ]),
         ("rules".into(), None)
     );
     assert_eq!(
@@ -495,25 +501,25 @@ fn provider_selection_from_env() {
     );
     assert_eq!(
         d(&[
-            ("CANVAS_LLM_PROVIDER", "Anthropic"),
+            ("CONSTRUCT_LLM_PROVIDER", "Anthropic"),
             ("ANTHROPIC_API_KEY", "k"),
-            ("CANVAS_LLM_MODEL", "m-1")
+            ("CONSTRUCT_LLM_MODEL", "m-1")
         ]),
         ("anthropic".into(), Some("m-1".into()))
     );
     assert!(matches!(
-        Selection::from_lookup(lookup(&[("CANVAS_LLM_PROVIDER", "anthropic"), ("ANTHROPIC_API_KEY", " ")])),
+        Selection::from_lookup(lookup(&[("CONSTRUCT_LLM_PROVIDER", "anthropic"), ("ANTHROPIC_API_KEY", " ")])),
         Selection::NotConfigured { detail, .. } if detail == "ANTHROPIC_API_KEY is not set"
     ));
     assert!(matches!(
-        Selection::from_lookup(lookup(&[("CANVAS_LLM_PROVIDER", "gpt")])),
+        Selection::from_lookup(lookup(&[("CONSTRUCT_LLM_PROVIDER", "gpt")])),
         Selection::NotConfigured { detail, .. } if detail.contains("unknown")
     ));
 }
 
 #[tokio::test]
 async fn anthropic_selected_without_key_is_503() {
-    let sel = Selection::from_lookup(lookup(&[("CANVAS_LLM_PROVIDER", "anthropic")]));
+    let sel = Selection::from_lookup(lookup(&[("CONSTRUCT_LLM_PROVIDER", "anthropic")]));
     let pod = spawn(AppState::in_memory().with_agent_open(true).with_agent(sel)).await;
     let (s, b) = prompt(&pod, DESIGN_PROMPT).await;
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);

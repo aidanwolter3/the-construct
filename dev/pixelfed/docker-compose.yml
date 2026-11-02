@@ -3,7 +3,7 @@
 # Federation is disabled in pixelfed.env. The scheduler container from upstream's compose is left out on
 # purpose (cron-style maintenance only; not needed for tests, saves ~150 MB RAM), and Horizon is replaced by one
 # queue worker (see `worker`).
-name: canvas-pixelfed
+name: construct-pixelfed
 
 x-pixelfed: &pixelfed
   # v0.15.2 (2026-10-21), multi-arch (arm64 + amd64). Digest pinned for reproducibility.

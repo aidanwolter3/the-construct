@@ -1,4 +1,4 @@
-//! Server push channel (M7, docs/DECISIONS.md D24): a `canvas-engine-events`
+//! Server push channel (M7, docs/DECISIONS.md D24): a `construct-engine-events`
 //! thread keeps `GET /v1/workspaces/<id>/events` (Server-Sent Events) open
 //! while the engine is online and refetches the workspace when a
 //! `layout` event names a version newer than the last applied one.
@@ -104,7 +104,11 @@ impl SseParser {
                 return Ok(None);
             }
             return Ok(Some(SseEvent {
-                event: if event.is_empty() { "message".into() } else { event },
+                event: if event.is_empty() {
+                    "message".into()
+                } else {
+                    event
+                },
                 data,
             }));
         }
@@ -141,7 +145,10 @@ pub fn parse_layout_event(ev: &SseEvent) -> Option<(Option<String>, u64)> {
     }
     let v: Value = serde_json::from_str(&ev.data).ok()?;
     let version = v.get("version")?.as_u64()?;
-    let ws = v.get("workspace_id").and_then(Value::as_str).map(str::to_owned);
+    let ws = v
+        .get("workspace_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     Some((ws, version))
 }
 
@@ -166,18 +173,33 @@ enum ConnectError {
 }
 
 /// The events thread. Exits once the engine is dropped.
-pub(crate) fn events_thread(weak: Weak<Inner>, signal: Arc<WorkerSignal>, url: String, poll: Duration) {
-    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+pub(crate) fn events_thread(
+    weak: Weak<Inner>,
+    signal: Arc<WorkerSignal>,
+    url: String,
+    poll: Duration,
+) {
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("[CanvasEngine] events: cannot start a runtime: {e}; push channel disabled");
+            eprintln!(
+                "[ConstructEngine] events: cannot start a runtime: {e}; push channel disabled"
+            );
             return;
         }
     };
-    let client = match reqwest::Client::builder().connect_timeout(CONNECT_TIMEOUT).build() {
+    let client = match reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .build()
+    {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[CanvasEngine] events: cannot build an HTTP client: {e}; push channel disabled");
+            eprintln!(
+                "[ConstructEngine] events: cannot build an HTTP client: {e}; push channel disabled"
+            );
             return;
         }
     };
@@ -209,7 +231,9 @@ pub(crate) fn events_thread(weak: Weak<Inner>, signal: Arc<WorkerSignal>, url: S
                 req = req.bearer_auth(t);
             }
             match tokio::time::timeout(HEADERS_TIMEOUT, req.send()).await {
-                Err(_) => Err(ConnectError::Other("timed out waiting for the response".into())),
+                Err(_) => Err(ConnectError::Other(
+                    "timed out waiting for the response".into(),
+                )),
                 Ok(Err(e)) => Err(ConnectError::Other(e.to_string())),
                 Ok(Ok(r)) if r.status().is_success() => Ok(r),
                 Ok(Ok(r)) => Err(ConnectError::Status(r.status().as_u16())),
@@ -218,14 +242,21 @@ pub(crate) fn events_thread(weak: Weak<Inner>, signal: Arc<WorkerSignal>, url: S
         let error = match connected {
             Ok(mut resp) => {
                 if last_error.take().is_some() {
-                    println!("[CanvasEngine] events: subscribed to {url}");
+                    println!("[ConstructEngine] events: subscribed to {url}");
                 } else {
-                    println!("[CanvasEngine] events: connected to {url}");
+                    println!("[ConstructEngine] events: connected to {url}");
                 }
-                match read_stream(&rt, &mut resp, &weak, &signal, token.as_deref(), &mut backoff) {
+                match read_stream(
+                    &rt,
+                    &mut resp,
+                    &weak,
+                    &signal,
+                    token.as_deref(),
+                    &mut backoff,
+                ) {
                     StreamEnd::ShutDown => return,
                     StreamEnd::SessionChanged => {
-                        println!("[CanvasEngine] events: session changed; reconnecting");
+                        println!("[ConstructEngine] events: session changed; reconnecting");
                         continue;
                     }
                     StreamEnd::Closed(why) => why,
@@ -249,7 +280,7 @@ pub(crate) fn events_thread(weak: Weak<Inner>, signal: Arc<WorkerSignal>, url: S
         };
         if last_error.as_deref() != Some(error.as_str()) {
             eprintln!(
-                "[CanvasEngine] events: {url}: {error}; reconnecting in {} s (repeats are not logged)",
+                "[ConstructEngine] events: {url}: {error}; reconnecting in {} s (repeats are not logged)",
                 backoff.as_secs_f32()
             );
         }
@@ -288,10 +319,7 @@ fn read_stream(
         match step {
             Err(_) => {
                 if last_data.elapsed() >= READ_TIMEOUT {
-                    return StreamEnd::Closed(format!(
-                        "no data for {} s",
-                        READ_TIMEOUT.as_secs()
-                    ));
+                    return StreamEnd::Closed(format!("no data for {} s", READ_TIMEOUT.as_secs()));
                 }
                 let Some(inner) = weak.upgrade() else {
                     return StreamEnd::ShutDown;
@@ -329,7 +357,10 @@ impl Inner {
     fn on_push_event(&self, ev: &SseEvent) {
         let Some((ws, version)) = parse_layout_event(ev) else {
             if ev.event == "layout" {
-                eprintln!("[CanvasEngine] events: unusable layout event ignored: {}", ev.data);
+                eprintln!(
+                    "[ConstructEngine] events: unusable layout event ignored: {}",
+                    ev.data
+                );
             }
             return;
         };
@@ -341,7 +372,7 @@ impl Inner {
             return;
         }
         println!(
-            "[CanvasEngine] events: layout v{version} pushed (have {}); refetching",
+            "[ConstructEngine] events: layout v{version} pushed (have {}); refetching",
             current.map_or("none".into(), |c| format!("v{c}"))
         );
         if !self.signal.is_shut_down() {
@@ -370,7 +401,10 @@ mod tests {
                   data: a\ndata:b\ndata\nid: 7\nretry: 10\n\n",
             )
             .unwrap();
-        assert_eq!(out, vec![ev("layout", "{\"version\":2}"), ev("message", "a\nb\n")]);
+        assert_eq!(
+            out,
+            vec![ev("layout", "{\"version\":2}"), ev("message", "a\nb\n")]
+        );
     }
 
     #[test]
@@ -431,7 +465,10 @@ mod tests {
             parse_layout_event(&ev("layout", r#"{"workspace_id":"home","version":5}"#)),
             Some((Some("home".into()), 5))
         );
-        assert_eq!(parse_layout_event(&ev("layout", r#"{"version":1}"#)), Some((None, 1)));
+        assert_eq!(
+            parse_layout_event(&ev("layout", r#"{"version":1}"#)),
+            Some((None, 1))
+        );
         assert_eq!(parse_layout_event(&ev("message", r#"{"version":1}"#)), None);
         assert_eq!(parse_layout_event(&ev("layout", "garbage")), None);
         assert_eq!(parse_layout_event(&ev("layout", r#"{"version":-1}"#)), None);

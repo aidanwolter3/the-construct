@@ -14,7 +14,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use axum::extract::Request;
 use axum::middleware::{self, Next};
 use client_core::store::{OutboxRow, Store, StoreOps};
-use client_core::{CanvasEngine, EngineConfig, StateSnapshot};
+use client_core::{ConstructEngine, EngineConfig, StateSnapshot};
 use protocol::WorkspaceSpec;
 use serde_json::Value;
 use server::AppState;
@@ -236,8 +236,8 @@ fn count(snap: &StateSnapshot) -> i64 {
     entities[URI]["count"].as_i64().unwrap()
 }
 
-fn engine(dir: &Path, base: &str, config: EngineConfig) -> CanvasEngine {
-    CanvasEngine::init_with_config(dir.to_str().unwrap(), base, "home", config)
+fn engine(dir: &Path, base: &str, config: EngineConfig) -> ConstructEngine {
+    ConstructEngine::init_with_config(dir.to_str().unwrap(), base, "home", config)
 }
 
 /// Poll `cond` every 10 ms until it holds; panic with `what` after TIMEOUT.
@@ -249,7 +249,7 @@ fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
     }
 }
 
-fn wait_online(engine: &CanvasEngine) {
+fn wait_online(engine: &ConstructEngine) {
     wait_until("online with a workspace", || {
         let s = engine.snapshot();
         s.is_online && s.workspace_json != "null"
@@ -257,7 +257,7 @@ fn wait_online(engine: &CanvasEngine) {
 }
 
 /// Wait until the engine has no pending rows and the server count is `n`.
-fn wait_flushed(engine: &CanvasEngine, server: &TestServer, n: i64) {
+fn wait_flushed(engine: &ConstructEngine, server: &TestServer, n: i64) {
     wait_until(&format!("outbox flushed, server count {n}"), || {
         engine.snapshot().pending_actions == 0 && server.count() == n
     });
@@ -348,7 +348,10 @@ fn rejected_decrement_rolls_back() {
     assert_eq!(server.count(), 0);
     assert_eq!(count(&engine.snapshot()), 0, "rolled back to prev_value");
     let seen: Vec<i64> = rx.try_iter().map(|s| count(&s)).collect();
-    assert!(seen.contains(&-1), "optimistic -1 was shown first: {seen:?}");
+    assert!(
+        seen.contains(&-1),
+        "optimistic -1 was shown first: {seen:?}"
+    );
     assert_eq!(*seen.last().unwrap(), 0);
     assert!(rows(&dir).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
@@ -406,7 +409,12 @@ fn server_errors_retry_with_capped_backoff_then_flush() {
             .as_millis() as i64;
         match first.as_ref() {
             Some(r) => {
-                observed.push((r.retry_count, r.next_attempt_at, now_ms, r.last_error.clone()));
+                observed.push((
+                    r.retry_count,
+                    r.next_attempt_at,
+                    now_ms,
+                    r.last_error.clone(),
+                ));
                 false
             }
             None => true,
@@ -423,11 +431,20 @@ fn server_errors_retry_with_capped_backoff_then_flush() {
     // is never further out than the cap.
     let counts: Vec<i64> = observed.iter().map(|o| o.0).collect();
     assert!(counts.windows(2).all(|w| w[0] <= w[1]), "{counts:?}");
-    assert!(counts.iter().any(|&c| c >= 1), "a retry was recorded: {counts:?}");
+    assert!(
+        counts.iter().any(|&c| c >= 1),
+        "a retry was recorded: {counts:?}"
+    );
     for (retry_count, next, now_ms, last_error) in &observed {
         if *retry_count > 0 {
-            assert!(last_error.as_deref().unwrap_or("").contains("503"), "{last_error:?}");
-            assert!(next - now_ms <= cap_ms, "next_attempt_at beyond the cap: {next} vs {now_ms}");
+            assert!(
+                last_error.as_deref().unwrap_or("").contains("503"),
+                "{last_error:?}"
+            );
+            assert!(
+                next - now_ms <= cap_ms,
+                "next_attempt_at beyond the cap: {next} vs {now_ms}"
+            );
         }
     }
 
@@ -441,7 +458,10 @@ fn server_errors_retry_with_capped_backoff_then_flush() {
             gap + Duration::from_millis(5) >= expected,
             "attempt gap {i}: {gap:?} < backoff {expected:?}"
         );
-        assert!(gap < expected + Duration::from_secs(2), "gap {i} too long: {gap:?}");
+        assert!(
+            gap < expected + Duration::from_secs(2),
+            "gap {i} too long: {gap:?}"
+        );
     }
     assert_eq!(count(&engine.snapshot()), 1);
     let _ = std::fs::remove_dir_all(&dir);
@@ -507,9 +527,15 @@ fn network_error_on_flush_marks_offline_and_keeps_row() {
     let engine = engine(&dir, &base, config);
     wait_online(&engine);
     engine.dispatch(INCREMENT);
-    wait_until("offline after the failed POST", || !engine.snapshot().is_online);
+    wait_until("offline after the failed POST", || {
+        !engine.snapshot().is_online
+    });
     let s = engine.snapshot();
-    assert_eq!((count(&s), s.pending_actions), (1, 1), "optimistic value and row kept");
+    assert_eq!(
+        (count(&s), s.pending_actions),
+        (1, 1),
+        "optimistic value and row kept"
+    );
     let r = &rows(&dir)[0];
     assert_eq!(r.retry_count, 1);
     assert!(r.next_attempt_at > 0);
@@ -533,7 +559,10 @@ fn rows_queued_before_restart_flush_on_next_launch() {
     let server = TestServer::start_on(addr);
     let b = engine(&dir, &server.url(), fast_config());
     wait_flushed(&b, &server, 2);
-    assert_eq!(server.hit_list(), vec![(INC.into(), 200), (INC.into(), 200)]);
+    assert_eq!(
+        server.hit_list(),
+        vec![(INC.into(), 200), (INC.into(), 200)]
+    );
     assert_eq!(count(&b.snapshot()), 2);
     assert!(rows(&dir).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
@@ -576,7 +605,11 @@ fn refetch_reapplies_pending_rows_over_fetched_entity() {
         .iter()
         .map(|r| r.prev_value_json.as_deref().unwrap())
         .collect();
-    assert_eq!(prevs, vec!["5", "6", "7"], "prev_value_json rebased on the fetch");
+    assert_eq!(
+        prevs,
+        vec!["5", "6", "7"],
+        "prev_value_json rebased on the fetch"
+    );
     assert_eq!(count(&engine.snapshot()), 8);
 
     wait_flushed(&engine, &server, 8);
@@ -698,7 +731,9 @@ fn dropping_the_engine_stops_the_worker() {
     let token = Arc::new(());
     {
         let e = engine(&dir, &base, fast_config());
-        fetching.recv_timeout(TIMEOUT).expect("first fetch in flight");
+        fetching
+            .recv_timeout(TIMEOUT)
+            .expect("first fetch in flight");
         let held = Arc::clone(&token);
         e.subscribe(move |_| {
             let _ = &held;
@@ -709,8 +744,16 @@ fn dropping_the_engine_stops_the_worker() {
     } // dropped with the fetch still in flight
     release.send(()).unwrap();
     wait_until("engine state freed", || Arc::strong_count(&token) == 1);
-    assert!(posts.lock().unwrap().is_empty(), "POST after drop: {:?}", posts.lock().unwrap());
-    assert_eq!(rows(&dir).len(), 1, "the row stays queued for the next launch");
+    assert!(
+        posts.lock().unwrap().is_empty(),
+        "POST after drop: {:?}",
+        posts.lock().unwrap()
+    );
+    assert_eq!(
+        rows(&dir).len(),
+        1,
+        "the row stays queued for the next launch"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

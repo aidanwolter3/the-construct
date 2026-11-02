@@ -29,8 +29,8 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 
 ## Milestone 3: macOS desktop shell
 
-- client-core CanvasEngine: background fetch thread (reqwest blocking + rustls), observers called without locks,
-  D4 expression evaluator (expr.rs), per-workspace offline JSON cache at ~/.canvas/workspace_<id>.json,
+- client-core ConstructEngine: background fetch thread (reqwest blocking + rustls), observers called without locks,
+  D4 expression evaluator (expr.rs), per-workspace offline JSON cache at ~/.construct/workspace_<id>.json,
   retry every 5s while the server is unreachable, HTTP errors keep the engine online. Snapshot
   workspace_json = layout node only; entities_json = URI-keyed map.
 - client-ffi: UniFFI proc-macro EngineHandle {new, new_with_workspace, subscribe, dispatch, snapshot, refresh},
@@ -41,7 +41,7 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 - kmp-app: Gradle 9.3.1, Kotlin 2.3.20, Compose MP 1.11.0-beta01, material3 1.11.0-alpha05, kotlinx-serialization
   1.10.0, JNA 5.17.0. :shared (jvm("desktop") target only; ready for androidTarget later) contains Model.kt
   (hand-written tagged-union serializers with Unknown fallback), Interpolate.kt, DynamicRenderer.kt (all 9 node
-  types plus an Unknown placeholder), CanvasApp.kt (CanvasController + StateFlow). :desktopApp contains Main.kt and
+  types plus an Unknown placeholder), ConstructApp.kt (ConstructController + StateFlow). :desktopApp contains Main.kt and
   EngineBridge.kt (JNA/UniFFI).
 - Review (independent agents): client-core reviewed. FFI/Kotlin review fixed embedded `$item` tokens in refs,
   added keyed FeedList items, and corrected the README JDK note. Deferred items are listed below.
@@ -65,7 +65,7 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 
 ## Phase A: Simulation mode (headless screenshots)
 
-- `:desktopApp:simulate` (JavaExec, `sim` source set) renders the real shared `CanvasApp` with
+- `:desktopApp:simulate` (JavaExec, `sim` source set) renders the real shared `ConstructApp` with
   `runSkikoComposeUiTest` from a plain main, headless, and writes PNGs plus steps.log/steps.json. It has a
   fixture mode (in-memory FakeEngineBridge) and a live mode (the real JNA engine). See README "Simulation mode"
   and D8.
@@ -82,12 +82,12 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 
 - Rust: client-ffi `bindgen` feature now opt-in (no CLI deps by default); scripts/build_android.sh (cargo-ndk,
   arm64-v8a + x86_64 into kmp-app/androidApp/src/main/jniLibs; deps only liblog/libdl/libc); Rust stdout/stderr
-  forwarded to logcat tag CanvasEngine on Android (client-ffi/src/android_log.rs). D9.
+  forwarded to logcat tag ConstructEngine on Android (client-ffi/src/android_log.rs). D9.
 - Gradle: AGP 9.1.1 `com.android.kotlin.multiplatform.library` on :shared; new `jvmCommonMain` source set holds
   the UniFFI bindings and `UniffiEngineBridge` (JNA jar on desktop, aar on Android); :shared owns buildRustFfi.
   D5 amended, D10. Tests: cargo 42, shared 26, desktopApp 12.
 
-- :androidApp (AGP 9.1.1 application, activity-compose 1.12.4): MainActivity + CanvasViewModel (engine survives
+- :androidApp (AGP 9.1.1 application, activity-compose 1.12.4): MainActivity + ConstructViewModel (engine survives
   rotation, closed in onCleared), BuildConfig/intent-extra baseUrl (default http://10.0.2.2:8080) and workspace,
   filesDir storage, debug-only cleartext config, `buildRustAndroid` task before preBuild. assembleDebug builds an
   APK with libclient_ffi.so + libjnidispatch.so for arm64-v8a and x86_64. D11.
@@ -98,7 +98,7 @@ Note: the environment restarted twice mid-work; work is now committed in small w
   With the fix, QA steps 5-11 passed (counter, offline/online, pixelfed Like, rotation, cache, ripple).
 
 - QA round 2 on the committed build (emulator Medium_Phone_API_36, arm64): all checks pass. Fetch over 10.0.2.2
-  is visible in `logcat -s CanvasEngine:V` (Rust and Kotlin lines), with no FATAL. Count 0->2->0. Offline shows within
+  is visible in `logcat -s ConstructEngine:V` (Rust and Kotlin lines), with no FATAL. Count 0->2->0. Offline shows within
   2s of stopping the server and Online returns within 5s of restarting it. pixelfed_demo renders and Like toggles.
   Rotation keeps one engine. A fresh install with the server down recovers. android_smoke.sh passes for both
   workspaces, connectedDebugAndroidTest passes 3/3, and the desktop simulator still works.
@@ -109,7 +109,7 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 ### Deferred / known issues (M4)
 - Enforce HTTPS in the engine for release builds; the network security config doesn't apply to Rust traffic.
 - An unknown workspace (404) shows "Online" + "Loading..." forever with no on-screen error (desktop and Android).
-- The CanvasEngine logcat tag also carries other native stderr from the process (e.g. GL lines); the fd redirect is
+- The ConstructEngine logcat tag also carries other native stderr from the process (e.g. GL lines); the fd redirect is
   process-wide. Log lines over ~4 KB are truncated by logcat.
 - Android builds use the committed UniFFI bindings; if the Rust API changes without regenerating them, the
   checksum check fails at load.
@@ -118,8 +118,8 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 
 ## Milestone 5: SQLite cache + outbox
 
-- Server counters persist in SQLite (`CANVAS_DATA_DIR`, default ~/.canvas-server); decrement below zero is a 422;
-  test fault hook with `CANVAS_TEST_HOOKS=1` (D12). client-core stores entities/workspace/outbox in
+- Server counters persist in SQLite (`CONSTRUCT_DATA_DIR`, default ~/.construct-server); decrement below zero is a 422;
+  test fault hook with `CONSTRUCT_TEST_HOOKS=1` (D12). client-core stores entities/workspace/outbox in
   `<storage>/cache.db` (rusqlite bundled, user_version migrations, D13); optimistic mutate updates the entity and
   inserts the outbox row in one transaction; `seq`/`pending_actions` in snapshots; "N pending" in the UI.
 - Sync worker thread (D14): FIFO flush while online, 2xx delete, 4xx rollback to prev value + re-apply later rows,
@@ -129,7 +129,7 @@ Note: the environment restarted twice mid-work; work is now committed in small w
   "Reset" squeezed on phone (horizontal containers now FlowRow). QA fixes: read-only cache.db falls back to an
   in-memory copy, busy timeout 250 ms (locked DB no longer freezes the UI 5 s), 408/429 retried, flaky drop test
   made deterministic, fetch-failure log throttled.
-- QA desktop: real app + real ~/.canvas/cache.db: 3 offline clicks -> 3 PENDING rows + "3 pending", server
+- QA desktop: real app + real ~/.construct/cache.db: 3 offline clicks -> 3 PENDING rows + "3 pending", server
   restart flushes in order, counts match; rollback, 503 retry 2/4/8 s, relaunch merge; latency median 0.5 ms.
   QA Android (emulator): offline rows, force-stop persistence, flush, rollback, rotation, instrumented 3/3.
 - Tests: cargo 80, shared 29, desktopApp 17, android instrumented 3.
@@ -144,9 +144,9 @@ Note: the environment restarted twice mid-work; work is now committed in small w
   normalization (reblogs, HTML captions, lenient types); like/bookmark actions; token refresh; media proxy with an
   origin allowlist; migrations v2-v4.
 - client-core (D19): `queries` + multi-field outbox rows, PKCE sign-in on a background thread (loopback port 47823
-  or `canvas://oauth`), session in a secure store, 401 policy (pause, never roll back a like).
+  or `construct://oauth`), session in a secure store, 401 policy (pause, never roll back a like).
 - UI (D18): Coil 3.4 images, PostCard, carousel with a fixed clamped aspect, page dots, CW handling.
-- Platform glue (D21): macOS Keychain + browser, Android Keystore store + `canvas://oauth` (`singleTask`), simulator
+- Platform glue (D21): macOS Keychain + browser, Android Keystore store + `construct://oauth` (`singleTask`), simulator
   auto-approve and scripted Pixelfed login browsers.
 - Real local Pixelfed 0.15.2 (D20): Colima stack in `dev/pixelfed`, `scripts/pixelfed_dev.sh`, recorded fixtures,
   pod adapted to its differences (`include_reblogs`, `localhost`-only web routes, Passport token shape).
@@ -160,14 +160,14 @@ Note: the environment restarted twice mid-work; work is now committed in small w
   lands, CW label and "Photo n of N" alt fallback.
 - QA evidence: desktop simulator vs the fake and vs the real local Pixelfed (sign-in, feed with boost, carousel
   swipe, like and offline like -> flush -> `favourited` upstream); Android emulator against the real instance
-  (`adb reverse tcp:8090`, real browser login, `canvas://oauth` return, like reaching Pixelfed); e2e suite against
+  (`adb reverse tcp:8090`, real browser login, `construct://oauth` return, like reaching Pixelfed); e2e suite against
   the real instance (alice) passed with upstream state restored.
 - Status: DONE.
 
 ## Milestone 7: AI layout engine
 
 - Versioned layouts (D22): migration v5 `layout_versions`, append-only (v1 = built-in layout, rollback appends a
-  copy), `X-Canvas-Layout-Version`, `GET .../versions`, `POST .../rollback`, SSE `GET .../events` (broadcast,
+  copy), `X-Construct-Layout-Version`, `GET .../versions`, `POST .../rollback`, SSE `GET .../events` (broadcast,
   keepalive 15 s, lag -> current version, shutdown on Ctrl-C).
 - Agent endpoint (D25): `POST /v1/agent/modify_layout` -> RFC 6902 patch -> `json-patch` applied op by op ->
   validation (deserializes as `UiNode`, same root, 1..=50 unique slots, depth/size/op bounds, no invented intents)
@@ -203,14 +203,14 @@ Note: the environment restarted twice mid-work; work is now committed in small w
     built-ins reach existing databases without touching history or the active layout. Every seed validates against
     its workspace's default layout with the agent validator (tested).
   - Workspace revision log (`workspace_revisions`): one monotonic number per workspace, bumped by agent commits,
-    restores of the active layout and switches. `X-Canvas-Layout-Version` and SSE `version` carry it, so client-core
-    is unchanged; new `X-Canvas-Layout-Id` / `X-Canvas-Layout-Id-Version` headers and `layout_id` /
+    restores of the active layout and switches. `X-Construct-Layout-Version` and SSE `version` carry it, so client-core
+    is unchanged; new `X-Construct-Layout-Id` / `X-Construct-Layout-Id-Version` headers and `layout_id` /
     `layout_version` fields in the SSE event and `layout_id` / `layout_id_version` in the agent response.
   - Endpoints: `GET /v1/layouts[?workspace_id=]`, `GET /v1/layouts/:id`, `GET /v1/layouts/:id/versions[?limit,
     before]`, `GET /v1/layouts/:id/versions/:n`, `POST /v1/layouts/:id/activate {version?}`, `POST
     /v1/layouts/:id/restore {version}` (append-only copy; equal content -> `unchanged`). Reads follow the workspace
     GET's auth (pixelfed_home needs a session; the unfiltered list hides it from anonymous callers), writes need a
-    session unless `CANVAS_AGENT_OPEN=1`. `/v1/workspaces/:id/versions` and `/rollback` act on the active layout.
+    session unless `CONSTRUCT_AGENT_OPEN=1`. `/v1/workspaces/:id/versions` and `/rollback` act on the active layout.
   - Agent commits to the active layout; compare-and-append also detects a switch (re-applies the patch on the new
     active layout, else 409).
   - Storage (migration v6): specs are content-addressed zstd-19 blobs (`layout_blobs`), so restores, rollbacks and
@@ -225,7 +225,7 @@ Note: the environment restarted twice mid-work; work is now committed in small w
   - Measurement tool: `cargo run -p server --release --example layout_storage [N]`.
 - Status: A1 DONE (server); the surfaces' layout browser UI is the client half.
 - A2 (client-core + FFI, D27): catalog API for the browser UI.
-  - `CanvasEngine::{list_layouts, layout_versions(id, before, limit), layout_version(id, n), activate_layout(id,
+  - `ConstructEngine::{list_layouts, layout_versions(id, before, limit), layout_version(id, n), activate_layout(id,
     version?), restore_layout_version(id, n)}`: blocking (callers use a background thread), engine base URL + pod
     session, 15 s timeout, the pod's JSON passed through. Errors: `LayoutApiError::{Offline, Unauthorized, NotFound,
     Server{status}}` with a readable `reason` ("Sign in to change layouts.", "That version doesn't exist.", ...); a
@@ -235,9 +235,9 @@ Note: the environment restarted twice mid-work; work is now committed in small w
   - Snapshot: `layout_json` = `{"layout_id","layout_version","revision"}` from the new headers (and the agent
     response), `"{}"` when unknown / unversioned. FFI: `EngineHandle` methods returning `Result<String,
     LayoutApiError>` (Kotlin `uniffi.client_ffi.LayoutApiException`), `FfiStateSnapshot.layout_json`.
-  - Kotlin: `CanvasEngineBridge.{listLayouts, layoutVersions, layoutVersion, activateLayout, restoreLayoutVersion}`
+  - Kotlin: `ConstructEngineBridge.{listLayouts, layoutVersions, layoutVersion, activateLayout, restoreLayoutVersion}`
     (blocking; default implementations throw), `LayoutApiException(message, kind, status)`,
-    `EngineSnapshot.layoutJson` -> `CanvasState.activeLayout` (`ActiveLayout`). `UniffiEngineBridge` maps the UniFFI
+    `EngineSnapshot.layoutJson` -> `ConstructState.activeLayout` (`ActiveLayout`). `UniffiEngineBridge` maps the UniFFI
     error; `FakeEngineBridge` serves an in-memory `FakeLayoutCatalog` (home: counter/big_counter; pixelfed_demo:
     classic with 3 versions, editorial, compact) with the pod's JSON shapes.
   - Tests: `client-core/tests/layouts.rs` against the in-process pod (list + snapshot layout_json, version paging
@@ -272,7 +272,7 @@ Note: the environment restarted twice mid-work; work is now committed in small w
     append-only, previews never dispatch and the browser blocks the feed, Back per level, offline error + retry,
     401 write keeps the dialog, the agent prompt survives a switch, the open level and Undo survive a new composition,
     command failures, command parsing). :shared 59, :desktopApp 66.
-  - Review/QA pass: the browser state moved into `CanvasController` (rotation keeps a running write and the Undo
+  - Review/QA pass: the browser state moved into `ConstructController` (rotation keeps a running write and the Undo
     snackbar; nav still saved for process death), writes run `NonCancellable`, Back is ignored while a change runs,
     Undo hides once the screen moved on elsewhere (`undoStillApplies`), "Load older" can't stay spinning or append a
     stale page, previews render at most 3 feed items per query (no N x timeline image loads), `select-layout` of a
@@ -290,8 +290,24 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 - Staging default (D29): all surfaces default to `https://the-construct-pod.fly.dev`, with local overrides and a
   debug-only Android server picker (per-server storage). `android_smoke.sh --base-url` passes the local URL
   explicitly. Verified on the emulator with no override: sign-in on staging (fake Pixelfed) and the feed with
-  images. Review fixed: shared cache/outbox across servers, `-Dcanvas.baseUrl` not reaching the app JVM, custom URL
+  images. Review fixed: shared cache/outbox across servers, `-Dconstruct.baseUrl` not reaching the app JVM, custom URL
   validation, picker state on rotation.
+- Status: DONE.
+
+## Rename to The Construct
+
+- Product renamed from Project Canvas to The Construct everywhere, identifiers included (D31): Kotlin packages
+  `org.theconstruct.*` (Android `org.theconstruct.android`, desktop bundle `org.theconstruct.desktop`, package name
+  "The Construct"), `Construct*` types in Rust/UniFFI/Kotlin (bindings regenerated), logcat tag `ConstructEngine`,
+  threads `construct-engine-*`, env vars `CONSTRUCT_*` (incl. Fly `pod.toml` and the pod Dockerfile), system/Gradle
+  properties `construct.*` / `-PconstructBaseUrl`, headers `X-Construct-*`, redirect `construct://oauth`, paths
+  `~/.construct` / `~/.construct-server`, Keychain/keystore/prefs names, the pod's Pixelfed client name and user
+  agent, fixtures (`The Construct Counter`, `constructdemo`, `#construct`).
+- No migration (old caches, sessions and the old Android package are not read); staging's `server.db` opens
+  unchanged (no schema identifier contained "canvas") and the first `construct://oauth` sign-in registers a new app.
+- Verified: cargo clippy + tests, `:shared:allTests`, `:desktopApp:test`, `assembleDebug`, simulator (counter title,
+  layout browser script), desktop window title, Android smoke, launcher label, and emulator sign-in via
+  `construct://oauth` against a local pod + fake Pixelfed and against staging.
 - Status: DONE.
 
 ### Deferred / known issues (M6/M7)

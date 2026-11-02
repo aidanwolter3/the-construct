@@ -13,7 +13,7 @@ use tower::ServiceExt;
 
 const BASE: &str = "http://fake.test:9999";
 const SEED: &str = "seed-token";
-const REDIRECT: &str = "canvas://oauth";
+const REDIRECT: &str = "construct://oauth";
 const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk_extra-chars~.";
 
 const CAROUSEL: &str = "781254316723458049";
@@ -117,7 +117,7 @@ async fn register(router: &Router) -> (String, String) {
         router,
         "/api/v1/apps",
         &[
-            ("client_name", "Canvas"),
+            ("client_name", "The Construct"),
             ("redirect_uris", REDIRECT),
             ("scopes", "read write"),
         ],
@@ -147,7 +147,7 @@ async fn authorize(router: &Router, client_id: &str, verifier: &str) -> String {
     let r = get(router, &format!("/oauth/authorize?{q}"), None).await;
     assert_eq!(r.status, StatusCode::FOUND);
     let loc = r.location();
-    assert!(loc.starts_with("canvas://oauth?"), "{loc}");
+    assert!(loc.starts_with("construct://oauth?"), "{loc}");
     let params = query_of(&loc);
     assert_eq!(params["state"], "xyz 123");
     params["code"].clone()
@@ -212,7 +212,7 @@ async fn full_oauth_flow_issues_a_working_token() {
 
     let me = get(&router, "/api/v1/accounts/verify_credentials", Some(token)).await;
     assert_eq!(me.status, StatusCode::OK);
-    assert_eq!(me.json()["username"], "canvasdemo");
+    assert_eq!(me.json()["username"], "constructdemo");
 
     // Refresh: rotates both tokens, revoking the old ones (Passport).
     let pairs = [
@@ -243,7 +243,7 @@ async fn json_bodies_are_accepted_for_apps_and_token() {
     let r = post_json(
         &router,
         "/api/v1/apps",
-        json!({"client_name": "Canvas", "redirect_uris": [REDIRECT, "http://127.0.0.1:1/cb"], "scopes": "read write", "website": "https://example.com"}),
+        json!({"client_name": "The Construct", "redirect_uris": [REDIRECT, "http://127.0.0.1:1/cb"], "scopes": "read write", "website": "https://example.com"}),
     )
     .await;
     assert_eq!(r.status, StatusCode::OK);
@@ -338,7 +338,7 @@ async fn authorize_rejects_unregistered_redirect_and_missing_pkce() {
         StatusCode::BAD_REQUEST
     );
     let no_pkce = format!(
-        "/oauth/authorize?response_type=code&client_id={client_id}&redirect_uri=canvas%3A%2F%2Foauth&auto=1"
+        "/oauth/authorize?response_type=code&client_id={client_id}&redirect_uri=construct%3A%2F%2Foauth&auto=1"
     );
     assert_eq!(
         get(&router, &no_pkce, None).await.status,

@@ -311,8 +311,8 @@
         "in_reply_to_id": null,
         "in_reply_to_account_id": null,
         "reblog": null,
-        "content": "Carousel: one, two, three <a href=\"http://localhost:8090/discover/tags/canvas?src=hash\" title=\"#canvas\" class=\"u-url hashtag\" rel=\"external nofollow noopener\">#canvas</a>",
-        "content_text": "Carousel: one, two, three #canvas",
+        "content": "Carousel: one, two, three <a href=\"http://localhost:8090/discover/tags/construct?src=hash\" title=\"#construct\" class=\"u-url hashtag\" rel=\"external nofollow noopener\">#construct</a>",
+        "content_text": "Carousel: one, two, three #construct",
         "created_at": "2026-11-02T03:10:24.000Z",
         "emojis": [],
         "reblogs_count": 0,
@@ -433,8 +433,8 @@
         ],
         "tags": [
             {
-                "name": "canvas",
-                "url": "http://localhost:8090/discover/tags/canvas"
+                "name": "construct",
+                "url": "http://localhost:8090/discover/tags/construct"
             }
         ],
         "poll": null,

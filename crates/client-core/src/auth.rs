@@ -42,7 +42,8 @@ const UNRESERVED: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 /// status, the pod's error body) goes to the log only.
 pub const SIGN_IN_NOT_OWNER: &str = "This pod belongs to a different Pixelfed account.";
 pub const SIGN_IN_REJECTED: &str = "Pixelfed rejected the sign-in. Please try again.";
-pub const SIGN_IN_INSTANCE_NOT_ALLOWED: &str = "This pod isn't configured for that Pixelfed instance.";
+pub const SIGN_IN_INSTANCE_NOT_ALLOWED: &str =
+    "This pod isn't configured for that Pixelfed instance.";
 pub const SIGN_IN_REDIRECT_NOT_ALLOWED: &str = "This pod doesn't accept sign-ins from this app.";
 pub const SIGN_IN_UPSTREAM_DOWN: &str = "Can't reach Pixelfed right now.";
 pub const SIGN_IN_POD_UNREACHABLE: &str = "Can't reach your pod.";
@@ -91,7 +92,7 @@ pub enum RedirectMode {
     /// redirect URI `http://127.0.0.1:<port>/callback`.
     #[default]
     Loopback,
-    /// A registered custom-scheme URI (Android: `canvas://oauth`); the app
+    /// A registered custom-scheme URI (Android: `construct://oauth`); the app
     /// passes the redirect to `handle_auth_redirect`.
     Custom(String),
 }
@@ -176,11 +177,11 @@ pub struct KeychainStore;
 
 #[cfg(target_os = "macos")]
 impl KeychainStore {
-    pub const SERVICE: &'static str = "dev.canvas.client";
+    pub const SERVICE: &'static str = "org.theconstruct.client";
 
     fn entry(key: &str) -> Option<keyring::Entry> {
         keyring::Entry::new(Self::SERVICE, key)
-            .map_err(|e| eprintln!("[CanvasEngine] keychain: bad entry {key}: {e}"))
+            .map_err(|e| eprintln!("[ConstructEngine] keychain: bad entry {key}: {e}"))
             .ok()
     }
 }
@@ -192,7 +193,7 @@ impl SecureStore for KeychainStore {
             Ok(v) => Some(v),
             Err(keyring::Error::NoEntry) => None,
             Err(e) => {
-                eprintln!("[CanvasEngine] keychain: read {key} failed: {e}");
+                eprintln!("[ConstructEngine] keychain: read {key} failed: {e}");
                 None
             }
         }
@@ -201,14 +202,14 @@ impl SecureStore for KeychainStore {
         if let Some(entry) = Self::entry(key)
             && let Err(e) = entry.set_password(value)
         {
-            eprintln!("[CanvasEngine] keychain: write {key} failed: {e}");
+            eprintln!("[ConstructEngine] keychain: write {key} failed: {e}");
         }
     }
     fn delete(&self, key: &str) {
         if let Some(entry) = Self::entry(key) {
             match entry.delete_credential() {
                 Ok(()) | Err(keyring::Error::NoEntry) => {}
-                Err(e) => eprintln!("[CanvasEngine] keychain: delete {key} failed: {e}"),
+                Err(e) => eprintln!("[ConstructEngine] keychain: delete {key} failed: {e}"),
             }
         }
     }
@@ -233,7 +234,7 @@ pub(crate) fn guarded<T>(what: &str, f: impl FnOnce() -> T) -> Option<T> {
     match panic::catch_unwind(AssertUnwindSafe(f)) {
         Ok(v) => Some(v),
         Err(_) => {
-            eprintln!("[CanvasEngine] {what} panicked; ignored");
+            eprintln!("[ConstructEngine] {what} panicked; ignored");
             None
         }
     }
@@ -353,7 +354,7 @@ impl Redirect {
     }
 }
 
-/// Parse a redirect: an absolute URL (`canvas://oauth?code=..&state=..`,
+/// Parse a redirect: an absolute URL (`construct://oauth?code=..&state=..`,
 /// `http://127.0.0.1:1234/callback?..`) or a request target
 /// (`/callback?..`). `None` if it carries neither `code` nor `error`.
 pub fn parse_redirect(url: &str) -> Option<Redirect> {
@@ -398,13 +399,13 @@ pub struct LoopbackListener {
     port: u16,
 }
 
-const PAGE_OK: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Canvas</title>\
+const PAGE_OK: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>The Construct</title>\
 </head><body style=\"font-family: sans-serif; margin: 3em\"><h1>Signed in</h1><p>You can close \
-this window and return to Canvas.</p></body></html>";
+this window and return to The Construct.</p></body></html>";
 
 fn page(title: &str, text: &str) -> String {
     format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Canvas</title></head><body \
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>The Construct</title></head><body \
          style=\"font-family: sans-serif; margin: 3em\"><h1>{title}</h1><p>{text}</p></body></html>"
     )
 }
@@ -434,7 +435,7 @@ impl LoopbackListener {
                     }
                     Err(e) => {
                         eprintln!(
-                            "[CanvasEngine] loopback port {preferred} unavailable ({e}); using a \
+                            "[ConstructEngine] loopback port {preferred} unavailable ({e}); using a \
                              random port"
                         );
                         break TcpListener::bind("127.0.0.1:0")?;
@@ -626,7 +627,7 @@ mod tests {
     #[test]
     fn redirects_parse() {
         assert_eq!(
-            parse_redirect("canvas://oauth?code=a%2Fb&state=xyz"),
+            parse_redirect("construct://oauth?code=a%2Fb&state=xyz"),
             Some(Redirect::Code {
                 code: "a/b".into(),
                 state: Some("xyz".into())
@@ -647,7 +648,7 @@ mod tests {
                 state: Some("s".into())
             })
         );
-        assert_eq!(parse_redirect("canvas://oauth?foo=1"), None);
+        assert_eq!(parse_redirect("construct://oauth?foo=1"), None);
         assert_eq!(parse_redirect("not a url"), None);
         assert_eq!(session_key("http://h:1/"), "pod_session:http://h:1");
     }
@@ -703,7 +704,9 @@ mod tests {
             assert_eq!(ok.status().as_u16(), 200);
         });
         let r = l
-            .wait(Duration::from_secs(10), &|| false, &|r| r.state() == Some("s"))
+            .wait(Duration::from_secs(10), &|| false, &|r| {
+                r.state() == Some("s")
+            })
             .unwrap();
         assert_eq!(r.state(), Some("s"));
         t.join().unwrap();
@@ -747,13 +750,22 @@ mod tests {
         let p = PendingAuth {
             state: "s".into(),
             code_verifier: "v".into(),
-            redirect_uri: "canvas://oauth".into(),
+            redirect_uri: "construct://oauth".into(),
             instance_url: "https://pix.example".into(),
             created_at: 1_000,
         };
         assert_eq!(PendingAuth::parse(&p.to_json()), Some(p.clone()));
         assert_eq!(PendingAuth::parse("garbage"), None);
-        assert_eq!(PendingAuth::parse(&PendingAuth { state: String::new(), ..p.clone() }.to_json()), None);
+        assert_eq!(
+            PendingAuth::parse(
+                &PendingAuth {
+                    state: String::new(),
+                    ..p.clone()
+                }
+                .to_json()
+            ),
+            None
+        );
         assert!(!p.is_expired(1_000));
         assert!(!p.is_expired(1_600));
         assert!(p.is_expired(1_601));
@@ -765,10 +777,22 @@ mod tests {
     fn pod_error_codes_map_to_short_messages() {
         let m = sign_in_error_message;
         assert_eq!(m(Some(403), Some("account_not_owner")), SIGN_IN_NOT_OWNER);
-        assert_eq!(m(Some(400), Some("oauth_exchange_failed")), SIGN_IN_REJECTED);
-        assert_eq!(m(Some(400), Some("instance_not_allowed")), SIGN_IN_INSTANCE_NOT_ALLOWED);
-        assert_eq!(m(Some(400), Some("redirect_uri_not_allowed")), SIGN_IN_REDIRECT_NOT_ALLOWED);
-        assert_eq!(m(Some(502), Some("upstream_unreachable")), SIGN_IN_UPSTREAM_DOWN);
+        assert_eq!(
+            m(Some(400), Some("oauth_exchange_failed")),
+            SIGN_IN_REJECTED
+        );
+        assert_eq!(
+            m(Some(400), Some("instance_not_allowed")),
+            SIGN_IN_INSTANCE_NOT_ALLOWED
+        );
+        assert_eq!(
+            m(Some(400), Some("redirect_uri_not_allowed")),
+            SIGN_IN_REDIRECT_NOT_ALLOWED
+        );
+        assert_eq!(
+            m(Some(502), Some("upstream_unreachable")),
+            SIGN_IN_UPSTREAM_DOWN
+        );
         assert_eq!(m(Some(502), Some("upstream_error")), SIGN_IN_UPSTREAM_DOWN);
         assert_eq!(m(Some(502), None), SIGN_IN_UPSTREAM_DOWN);
         assert_eq!(m(Some(504), Some("whatever")), SIGN_IN_UPSTREAM_DOWN);
@@ -776,11 +800,20 @@ mod tests {
         assert_eq!(m(Some(500), None), SIGN_IN_FAILED);
         assert_eq!(m(Some(400), Some("app_not_registered")), SIGN_IN_FAILED);
         for msg in [
-            SIGN_IN_NOT_OWNER, SIGN_IN_REJECTED, SIGN_IN_INSTANCE_NOT_ALLOWED,
-            SIGN_IN_REDIRECT_NOT_ALLOWED, SIGN_IN_UPSTREAM_DOWN, SIGN_IN_POD_UNREACHABLE,
-            SIGN_IN_DENIED, SIGN_IN_TIMED_OUT, SIGN_IN_FAILED,
+            SIGN_IN_NOT_OWNER,
+            SIGN_IN_REJECTED,
+            SIGN_IN_INSTANCE_NOT_ALLOWED,
+            SIGN_IN_REDIRECT_NOT_ALLOWED,
+            SIGN_IN_UPSTREAM_DOWN,
+            SIGN_IN_POD_UNREACHABLE,
+            SIGN_IN_DENIED,
+            SIGN_IN_TIMED_OUT,
+            SIGN_IN_FAILED,
         ] {
-            assert!(msg.len() <= 60 && !msg.contains("http") && !msg.contains("HTTP"), "{msg}");
+            assert!(
+                msg.len() <= 60 && !msg.contains("http") && !msg.contains("HTTP"),
+                "{msg}"
+            );
         }
     }
 

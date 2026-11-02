@@ -116,7 +116,7 @@ async fn get_home(pod: &str, bearer: Option<&str>) -> (StatusCode, Value) {
     (status, body)
 }
 
-/// Like [`get_home`], plus the `X-Canvas-Session` response header.
+/// Like [`get_home`], plus the `X-Construct-Session` response header.
 async fn get_home_full(pod: &str, bearer: Option<&str>) -> (StatusCode, Option<String>, Value) {
     let mut req = client().get(format!("{pod}/v1/workspaces/pixelfed_home"));
     if let Some(t) = bearer {
@@ -125,7 +125,7 @@ async fn get_home_full(pod: &str, bearer: Option<&str>) -> (StatusCode, Option<S
     let resp = req.send().await.unwrap();
     let session = resp
         .headers()
-        .get("x-canvas-session")
+        .get("x-construct-session")
         .map(|v| v.to_str().unwrap().to_owned());
     (resp.status(), session, resp.json().await.unwrap())
 }
@@ -189,8 +189,8 @@ async fn sign_in(env: &Env) -> String {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["account"]["id"], "703641122334455667");
-    assert_eq!(body["account"]["username"], "canvasdemo");
-    assert_eq!(body["account"]["display_name"], "Canvas Demo");
+    assert_eq!(body["account"]["username"], "constructdemo");
+    assert_eq!(body["account"]["display_name"], "Construct Demo");
     assert!(
         body["account"]["avatar_url"]
             .as_str()
@@ -371,7 +371,7 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
 #[tokio::test]
 async fn pixelfed_home_signed_out_without_valid_session() {
     let env = env().await;
-    // No bearer: 200. A bearer that is not a session: 401 + `X-Canvas-Session: invalid`, so the
+    // No bearer: 200. A bearer that is not a session: 401 + `X-Construct-Session: invalid`, so the
     // client learns its session is stale; the body is the same signed-out bundle either way.
     for (bearer, want_status, want_header) in [
         (None, StatusCode::OK, None),
@@ -618,7 +618,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     let pod = serve(server::app(state.clone())).await;
     let version = |resp: &reqwest::Response| {
         resp.headers()
-            .get("x-canvas-layout-version")
+            .get("x-construct-layout-version")
             .map(|v| v.to_str().unwrap().to_owned())
     };
     let url = format!("{}/v1/workspaces/pixelfed_home", pod.url);
@@ -781,7 +781,7 @@ async fn session_tokens_are_stored_hashed() {
         .unwrap();
     assert_eq!(
         (instance.as_str(), username.as_str()),
-        (env.fake.url.as_str(), "canvasdemo")
+        (env.fake.url.as_str(), "constructdemo")
     );
 }
 
@@ -1124,7 +1124,7 @@ async fn app_registration_only_for_allowed_redirect_uris() {
         "https://127.0.0.1:9/callback",
         "http://127.0.0.1.evil.example:9/callback",
         "http://localhost:9@evil.example/callback",
-        "canvas://oauth/x",
+        "construct://oauth/x",
         "myapp://signed-in/x",
     ] {
         let (status, body) = post_json(
@@ -1139,7 +1139,7 @@ async fn app_registration_only_for_allowed_redirect_uris() {
     for ok in [
         "http://127.0.0.1:47823/callback",
         "http://localhost:65535/callback",
-        "canvas://oauth",
+        "construct://oauth",
         "myapp://signed-in",
     ] {
         let (status, body) = post_json(

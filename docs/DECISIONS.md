@@ -60,11 +60,11 @@ UniFFI's Kotlin bindings load the library through JNA, so they run on the JVM an
 source set between `commonMain` and the `desktop` (JVM) and `android` targets, declared with
 `applyDefaultHierarchyTemplate { common { group("jvmCommon") { ... } } }`.
 
-- `org.genui.canvas.engine.UniffiEngineBridge` (also in `jvmCommonMain`) implements `CanvasEngineBridge` over
+- `org.theconstruct.engine.UniffiEngineBridge` (also in `jvmCommonMain`) implements `ConstructEngineBridge` over
   `EngineHandle`. `UniffiEngineBridge.create(storageDir, baseUrl, workspace)` builds the engine. The bridge
   holds the handle and observers, so callers only need to keep the bridge reachable.
 - Logging goes through `internal expect fun engineLog`: stdout `[desktop] ...` on desktop (Rust already
-  prints `[CanvasEngine] ...` there) and `android.util.Log` tag `CanvasEngine` on Android.
+  prints `[ConstructEngine] ...` there) and `android.util.Log` tag `ConstructEngine` on Android.
 - The storage directory, base URL and system properties stay in the apps (`desktopApp` `Main.kt`).
 - JNA is declared per platform: the plain `net.java.dev.jna:jna` jar in `desktopMain`, and
   `net.java.dev.jna:jna:<ver>@aar` (which bundles `libjnidispatch.so`) in `androidMain`. Both use `api`,
@@ -89,11 +89,11 @@ Resolved in M6 by `WorkspaceSpec.queries` (`query_key` -> ordered entity URIs; o
 older bundles are unchanged): a `FeedList` renders `queries[query_key]` in order and falls back to the behavior
 above when the key is absent. client-core persists the queries (`active_workspace.queries_json`, D13) and exposes
 them as the snapshot's `queries_json` (`EngineSnapshot.queriesJson` in Kotlin). The Kotlin renderer (`feedItems`, read through
-`LocalCanvasQueries`) skips listed URIs that have no entity and drops duplicates.
+`LocalConstructQueries`) skips listed URIs that have no entity and drops duplicates.
 
 ## D8: Simulation mode harness
 
-`:desktopApp:simulate` (README, "Simulation mode") renders `CanvasApp` headlessly for screenshot-driven
+`:desktopApp:simulate` (README, "Simulation mode") renders `ConstructApp` headlessly for screenshot-driven
 feedback.
 
 - **Harness:** the Compose UI test harness, `runSkikoComposeUiTest(size, density)` from
@@ -104,7 +104,7 @@ feedback.
   `onRoot().captureToImage()` and are encoded to PNG with Skia. `ImageComposeScene` was not needed.
 - **Source set:** the simulator and fake engine live in a separate `sim` source set of `:desktopApp`. It sees
   `main`, and tests see `sim`. The test harness stays off the shipping app's runtime classpath.
-- **Fake engine:** `FakeEngineBridge` implements `CanvasEngineBridge` in memory. It emits D6-shaped snapshots
+- **Fake engine:** `FakeEngineBridge` implements `ConstructEngineBridge` in memory. It emits D6-shaped snapshots
   from a bundle and applies `OptimisticMutate` with the D4 subset, mirroring `client-core/src/expr.rs`. That
   lets fixture runs exercise real interactions without Rust or a server. It also models the M5 outbox (D13):
   every mutation is applied locally and queued. While online the queue flushes at once to an in-memory fake
@@ -125,14 +125,14 @@ feedback.
   `cargo run -p client-ffi --release --features bindgen --bin uniffi-bindgen -- generate --library <lib> --language kotlin --out-dir <dir> --no-format`.
 - **Android build:** `scripts/build_android.sh` runs `cargo ndk` and writes
   `kmp-app/androidApp/src/main/jniLibs/<abi>/libclient_ffi.so`. The ABIs default to `arm64-v8a x86_64`
-  (`CANVAS_ANDROID_ABIS` overrides them), and the NDK defaults to the newest complete one (`ANDROID_NDK_HOME`
+  (`CONSTRUCT_ANDROID_ABIS` overrides them), and the NDK defaults to the newest complete one (`ANDROID_NDK_HOME`
   overrides it). The `.so` needs only `liblog`, `libdl` and `libc`, not `libc++_shared.so`. reqwest's rustls
   (ring) cross-compiles cleanly.
 - **Android logging:** client-core logs with `println!`/`eprintln!`, which Android discards. client-core is
   unchanged. Instead, `client-ffi/src/android_log.rs` (`cfg(target_os = "android")`, run once from the
   `EngineHandle` constructors) uses `pipe2` and `dup2` to point fds 1 and 2 at pipes. A thread per pipe
-  forwards each line to `__android_log_write` with tag `CanvasEngine`: stdout at INFO and stderr at WARN. View
-  them with `adb logcat -s CanvasEngine:V`. Desktop builds don't compile this module. The redirect applies
+  forwards each line to `__android_log_write` with tag `ConstructEngine`: stdout at INFO and stderr at WARN. View
+  them with `adb logcat -s ConstructEngine:V`. Desktop builds don't compile this module. The redirect applies
   to the whole process, so the tag also carries any other native stdout/stderr from it, such as GL/EGL driver
   lines, and not only engine output.
 
@@ -140,7 +140,7 @@ feedback.
 
 `:shared` gets its Android target from the KMP-native Android library plugin
 (`com.android.kotlin.multiplatform.library`, AGP 9.1.1), configured with
-`kotlin { android { namespace = "org.genui.canvas.shared"; compileSdk = 36; minSdk = 26 } }`. It does not
+`kotlin { android { namespace = "org.theconstruct.shared"; compileSdk = 36; minSdk = 26 } }`. It does not
 use the classic `androidTarget()` with `com.android.library`.
 
 - **Why this plugin:** it is Google's supported path for KMP libraries on AGP 9. Combining
@@ -164,14 +164,14 @@ use the classic `androidTarget()` with `com.android.library`.
 
 `kmp-app/androidApp` is a plain `com.android.application` module (AGP 9.1.1) with the Kotlin Compose
 compiler plugin. AGP 9 compiles Kotlin itself (built-in Kotlin), so `org.jetbrains.kotlin.android` is not
-applied. namespace/applicationId `org.genui.canvas.android`, compileSdk/targetSdk 36, minSdk 26, Java/Kotlin
+applied. namespace/applicationId `org.theconstruct.android`, compileSdk/targetSdk 36, minSdk 26, Java/Kotlin
 target 21 (same toolchain as `:shared`). Dependencies: `:shared`, `androidx.activity:activity-compose` 1.12.4,
 and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjnidispatch.so`) arrives through
 `:shared`'s `api` dependency; there is no duplicate-class conflict with the desktop jar (D5).
 
-- **Base URL / workspace:** an intent extra (`baseUrl`, `workspace`) wins over `BuildConfig.CANVAS_BASE_URL` /
-  `BuildConfig.CANVAS_WORKSPACE`, whose defaults are `http://10.0.2.2:8080` (the emulator's alias for the
-  host loopback) and `home`, overridable at build time with `-PcanvasBaseUrl=...` / `-PcanvasWorkspace=...`.
+- **Base URL / workspace:** an intent extra (`baseUrl`, `workspace`) wins over `BuildConfig.CONSTRUCT_BASE_URL` /
+  `BuildConfig.CONSTRUCT_WORKSPACE`, whose defaults are `http://10.0.2.2:8080` (the emulator's alias for the
+  host loopback) and `home`, overridable at build time with `-PconstructBaseUrl=...` / `-PconstructWorkspace=...`.
   Extras are read only from the intent that creates the engine (see lifetime), and only in debug builds
   (`BuildConfig.DEBUG`): the launcher activity is exported, so release builds ignore them rather than let
   another app redirect the engine to an arbitrary server.
@@ -183,10 +183,10 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
   makes its requests from Rust (`reqwest`), so the config does not restrict them: the engine will use cleartext
   to any base URL, in debug and release. The effective control is the base URL (BuildConfig, plus extras that only
   debug builds read). A follow-up is to make the engine reject `http://` outside debug builds.
-- **Storage:** `Context.filesDir` (app-private, `/data/data/org.genui.canvas.android/files`); the engine's
+- **Storage:** `Context.filesDir` (app-private, `/data/data/org.theconstruct.android/files`); the engine's
   workspace cache lands there as `workspace_<id>.json` (D6).
-- **Engine lifetime:** `CanvasViewModel` (an androidx `ViewModel`) creates the `UniffiEngineBridge` and
-  `CanvasController`. It survives configuration changes, so rotation reuses the engine instead of creating a
+- **Engine lifetime:** `ConstructViewModel` (an androidx `ViewModel`) creates the `UniffiEngineBridge` and
+  `ConstructController`. It survives configuration changes, so rotation reuses the engine instead of creating a
   second one. `onCleared()` (activity finished for good) calls `EngineHandle.close()`; dropping the Rust engine
   also stops its background fetch thread (it holds only a `Weak`). The ViewModel keeps the bridge and its JNA
   observers strongly reachable while the UI exists. A process kill simply ends everything.
@@ -197,14 +197,14 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
   PATH) runs before `preBuild`; inputs are the crates' sources/`Cargo.toml`/`build.rs`, the workspace
   `Cargo.toml`/`Cargo.lock` and the script; outputs are `src/main/jniLibs/<abi>/libclient_ffi.so` (gitignored).
   `-PskipRustBuild` skips it (read at configuration time; configuration-cache safe). `-PandroidAbis=a,b`
-  (default `arm64-v8a,x86_64`) is passed to the script as `CANVAS_ANDROID_ABIS` and also sets
+  (default `arm64-v8a,x86_64`) is passed to the script as `CONSTRUCT_ANDROID_ABIS` and also sets
   `ndk.abiFilters`, so the APK contains only ABIs that have `libclient_ffi.so` (the JNA aar ships more).
 - **Minify:** off for debug and release. `androidApp/proguard-rules.pro` already keeps `com.sun.jna.**` and
   `uniffi.**` (JNA uses reflection and native lookups) for when release minify is turned on.
 
 ## D12: Server persistence (SQLite counters, fault-injection hook)
 
-- **Store:** one SQLite file, `$CANVAS_DATA_DIR/server.db` (default `~/.canvas-server`), via `rusqlite`
+- **Store:** one SQLite file, `$CONSTRUCT_DATA_DIR/server.db` (default `~/.construct-server`), via `rusqlite`
   (`bundled`, workspace dependency shared with client-core), WAL mode. A single `Connection` behind a `Mutex`
   in `AppState` (an `Arc` passed to `server::app(state)`); handlers run store calls in `spawn_blocking`. Tests
   use `AppState::in_memory()` / `server::app_in_memory()` or `AppState::open_dir(tempdir)`.
@@ -213,13 +213,13 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
 - **Counters:** the fixture is still the layout source; `GET /v1/workspaces/home` overlays the stored count on
   `core://counters/home`. Decrement is a conditional `UPDATE ... WHERE count > 0`, so the floor check and write
   are atomic; at 0 it answers 422 `count_below_zero` with the unchanged count (the client rolls back on 4xx).
-- **Fault hook:** `CANVAS_TEST_HOOKS=1` registers `POST /v1/test/fault {status,count}`; otherwise the route
+- **Fault hook:** `CONSTRUCT_TEST_HOOKS=1` registers `POST /v1/test/fault {status,count}`; otherwise the route
   does not exist (404). A route layer answers the next `count` POSTs (except `/v1/test/*`) with `status`
   before they reach a handler, so nothing is applied. In-memory only; it does not survive a restart.
 
 ## D13: Client SQLite cache and outbox (schema extensions, write-through)
 
-- **File:** `<storage_path>/cache.db` (desktop `~/.canvas/cache.db`, Android `filesDir`); empty `storage_path`
+- **File:** `<storage_path>/cache.db` (desktop `~/.construct/cache.db`, Android `filesDir`); empty `storage_path`
   (simulation, tests) uses an in-memory DB, and so does a file that cannot be opened (logged). A file that opens
   but cannot be written (read-only open, or a rolled-back write probe at open fails with `SQLITE_READONLY`)
   falls back to an in-memory copy of its workspaces and entities, logged as `ERROR`; its outbox rows are not
@@ -253,21 +253,21 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
 - **Snapshot:** `StateSnapshot`/`FfiStateSnapshot` carry `seq` (strictly increasing per engine) and
   `pending_actions` (PENDING outbox rows), and since M6 `queries_json` (`"{}"` when none) and `auth_json`
   (`{"state":"signed_out"|"pending"|"signed_in"|"error","username"?,"error"?}`; always signed_out until the auth
-  unit). Kotlin receives them as `EngineSnapshot(seq: Long, pendingActions: Int, queriesJson, authJson)`. `CanvasController` drops a snapshot whose seq is <= the last applied one. The check and the write are one
+  unit). Kotlin receives them as `EngineSnapshot(seq: Long, pendingActions: Int, queriesJson, authJson)`. `ConstructController` drops a snapshot whose seq is <= the last applied one. The check and the write are one
   atomic `MutableStateFlow.update`, because observers fire from several engine threads. The status line shows
   "N pending" when N > 0.
 
 ## D14: Outbox sync worker and refetch merge
 
 - **Threads, not Tokio:** DESIGN suggests a Tokio worker; client-core keeps its blocking-reqwest + thread
-  pattern. A `canvas-engine-sync` thread waits on a `Condvar` (woken after every dispatch and whenever the engine
+  pattern. A `construct-engine-sync` thread waits on a `Condvar` (woken after every dispatch and whenever the engine
   goes online: successful fetch or probe) and holds only a `Weak` to the engine between passes; dropping the
   engine signals it to exit. HTTP never runs with the state mutex held. A separate `net` mutex serializes a
   workspace fetch+merge with an outbox POST+apply, so a bundle never races a flush (which could count a row
   twice or drop it). That lock is shared by every engine in the process on the same `cache.db`, and dropping
-  a `CanvasEngine` stops its worker before the next row, so a closing engine that is mid-POST and its
+  a `ConstructEngine` stops its worker before the next row, so a closing engine that is mid-POST and its
   successor (Android activity relaunch) never send the same row twice. The shutdown flag set in
-  `CanvasEngine::drop` is checked by the worker right before each POST and by the fetch thread after its HTTP
+  `ConstructEngine::drop` is checked by the worker right before each POST and by the fetch thread after its HTTP
   call (a fetch that completes after the drop is discarded and wakes no one), so no new POST starts once the
   handle is dropped; one already in flight may complete. A `next_attempt_at` further out than
   the backoff cap (wall clock moved backwards) is treated as due.
@@ -296,7 +296,7 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
   `{"liked": "$value"}`) a rollback or refetch can flip the local value while the queued payload still carries
   the old desired state; local and server state can then differ until the next fetch.
 - **Config:** `EngineConfig { poll_interval, backoff_base, backoff_cap }` via
-  `CanvasEngine::init_with_config` (Rust only; `init` uses the defaults; FFI unchanged). Tests shorten them.
+  `ConstructEngine::init_with_config` (Rust only; `init` uses the defaults; FFI unchanged). Tests shorten them.
 
 ## D15: `OptimisticMutate.also` (multi-field optimistic updates)
 
@@ -361,10 +361,10 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   `PIXELFED_OWNER_ACCOUNT_ID` (only that id may sign in; it replaces a pinned owner) or
   `PIXELFED_ALLOW_ACCOUNT_CHANGE=1` (any account replaces the stored one). Logout deletes only the session. Only
   the configured instance is accepted in auth calls (`PIXELFED_INSTANCE_URL` or `PIXELFED_PUBLIC_URL`, trailing
-  slash ignored), so the pod never calls a client-chosen host. **Sessions expire** after `CANVAS_SESSION_TTL_DAYS`
+  slash ignored), so the pod never calls a client-chosen host. **Sessions expire** after `CONSTRUCT_SESSION_TTL_DAYS`
   (default 90; an expired session is treated as unknown: 401); each sign-in prunes expired rows.
 - **Redirect URIs:** `/v1/auth/pixelfed/app` registers apps only for `http://127.0.0.1:<port>/callback`,
-  `http://localhost:<port>/callback`, `canvas://oauth` and exact `PIXELFED_EXTRA_REDIRECTS` entries (else 400
+  `http://localhost:<port>/callback`, `construct://oauth` and exact `PIXELFED_EXTRA_REDIRECTS` entries (else 400
   `redirect_uri_not_allowed`), so the pod cannot be used to mint upstream apps for arbitrary redirects.
 - **Stale app recovery:** a cached app is checked on every `/app` call with a `client_credentials` grant
   (`scope=read`; Pixelfed/Passport issues an app-only token for apps from `/api/v1/apps`, verified on 0.15.2; the
@@ -376,7 +376,7 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   still holds the access token that failed, so a concurrent sign-in or refresh is not wiped.
 - **Status mapping:** `GET /v1/workspaces/pixelfed_home` without a bearer -> 200 signed-out bundle (AuthLogin
   button). With a bearer that gets no feed (unknown session, no stored account, or upstream 401, which also deletes
-  the stored account) -> 401 + `WWW-Authenticate: Bearer` + `X-Canvas-Session: invalid`, body = the same signed-out
+  the stored account) -> 401 + `WWW-Authenticate: Bearer` + `X-Construct-Session: invalid`, body = the same signed-out
   bundle, so the client learns its session is stale (D19 fetch-401 path). Unreachable/5xx -> 502. Actions: no session 401, upstream 4xx passed through (client rolls back), 5xx/unreachable 502 (retry).
 - **Normalization** is pure (`server::pixelfed`): lenient serde types (absent/null optional fields default; an
   unparseable status is skipped and logged); a reblog becomes the inner post plus `reblogged_by_uri`, with the
@@ -417,10 +417,10 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 - **Coil 3.4.0** (`coil-compose` in `:shared` commonMain, `coil-network-okhttp` in jvmCommonMain, auto-registered
   via ServiceLoader on desktop and Android). 3.4.x is the newest line built against Kotlin 2.3 / Compose 1.9; 3.5+
   requires Kotlin 2.4 and Compose 1.11.1+, newer than this project's 1.11.0-beta01. OkHttp rather than Ktor: one
-  engine for both JVM targets, no extra client setup. `CanvasImage` wraps `AsyncImage` over a placeholder colour
+  engine for both JVM targets, no extra client setup. `ConstructImage` wraps `AsyncImage` over a placeholder colour
   (the BlurHash's average colour when known), crossfade on, `ContentScale.Crop`, an error state with the alt text.
 - **Icons:** the handful needed (heart, bookmark, comment, boost, broken image, warning) are inlined as Material
-  path data (`CanvasIcons`); Compose MP 1.11 has no current material-icons artifact and the extended set is large.
+  path data (`ConstructIcons`); Compose MP 1.11 has no current material-icons artifact and the extended set is large.
 - **Carousel aspect:** the first media entity's `aspect_ratio` clamped to [0.8, 1.91] (Instagram's 4:5 .. 1.91:1),
   else the node's `aspect_ratio` (unclamped, must be positive), else 1. Every page uses that one ratio (cropped), so
   swiping never changes the card height. No media renders nothing. Page dots sit below the image (overlay dots
@@ -437,9 +437,9 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 
 ## D19: Client sign-in (OAuth2 PKCE in client-core, session store, 401 policy)
 
-- **Flow** (`client_core::auth` + engine, on a `canvas-engine-auth` thread; dispatch never blocks):
+- **Flow** (`client_core::auth` + engine, on a `construct-engine-auth` thread; dispatch never blocks):
   `ActionIntent::AuthLogin{instance_url}` -> `auth_json` pending -> redirect URI (loopback: bind
-  `127.0.0.1:0`, `http://127.0.0.1:<port>/callback`; custom: e.g. `canvas://oauth`) -> `POST /v1/auth/pixelfed/app`
+  `127.0.0.1:0`, `http://127.0.0.1:<port>/callback`; custom: e.g. `construct://oauth`) -> `POST /v1/auth/pixelfed/app`
   -> 64-char verifier from the unreserved set (getrandom, rejection-sampled), S256 challenge, 32-char state ->
   authorize URL (RFC 3986 percent-encoding, `%20` not `+`) -> `UrlOpener.open` -> redirect (loopback listener, or
   `handle_auth_redirect(url)`) -> state check -> `POST /v1/auth/pixelfed/token` -> session stored -> signed_in ->
@@ -473,7 +473,7 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 - **Session store:** one key `pod_session:<base_url>` holding JSON `{token, username?, display_name?, avatar_url?}`
   (a bare non-JSON value is read as a token). Restored at construction (snapshot starts signed_in). Default store
   when the platform passes none: macOS login Keychain (`keyring` 3, apple-native only, service
-  `dev.canvas.client`; a `cfg(target_os = "macos")` dependency so Android never compiles it), in-memory
+  `org.theconstruct.client`; a `cfg(target_os = "macos")` dependency so Android never compiles it), in-memory
   elsewhere. `init`/`init_with_workspace` use the default; `init_with_config` (tests) uses in-memory. Platform
   callbacks (store, opener) run inside `catch_unwind`, so a foreign exception surfaced as a panic is contained.
   **Store I/O off the UI thread, never under the flow lock:** every session change (sign-in, logout, 401) updates
@@ -486,7 +486,7 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   `{state, code_verifier, redirect_uri, instance_url, created_at}` in the secure store under
   `pending_auth:<base_url>` (`auth::PendingAuth`, TTL 10 min = `PENDING_AUTH_TTL`); loopback flows do not (the
   listener dies with the process anyway). If the app process dies while the browser is in front (Android), the
-  `canvas://oauth` redirect cold-starts a new engine with no flow in memory: `handle_auth_redirect` installs a
+  `construct://oauth` redirect cold-starts a new engine with no flow in memory: `handle_auth_redirect` installs a
   placeholder flow (so AuthLogin/logout cancel it), returns true, and on the auth thread loads the record; if the
   state matches and it has not expired it is deleted and the code exchanged as usual (pending -> signed_in), else
   `auth_json` becomes error "Sign-in was interrupted; please try again" (`SIGN_IN_INTERRUPTED`; not shown if
@@ -549,17 +549,17 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 ## D21: Platform sign-in glue (desktop, Android, simulator)
 
 - **Bridge:** `UniffiEngineBridge.create(storageDir, baseUrl, workspace, secureStore?, urlOpener?, redirectUri?)`
-  wraps `EngineHandle.newWithOptions`. `CanvasEngineBridge` gained `handleAuthRedirect(url): Boolean` and `logout()`
-  with no-op defaults so fakes compile unchanged; `CanvasController.logout()` backs the status line's "Sign out"
+  wraps `EngineHandle.newWithOptions`. `ConstructEngineBridge` gained `handleAuthRedirect(url): Boolean` and `logout()`
+  with no-op defaults so fakes compile unchanged; `ConstructController.logout()` backs the status line's "Sign out"
   (a small clickable label, not a Material `TextButton`, whose 40 dp minimum height would bloat the status line).
 - **Desktop:** no store (Keychain), loopback, `java.awt.Desktop.browse` if `BROWSE` is supported, else
   `ProcessBuilder("open", url)`; false if both fail.
 - **Android:** `launchMode="singleTask"`, not singleTop: the browser is started with `FLAG_ACTIVITY_NEW_TASK` and runs
-  in its own task, so with singleTop the `canvas://oauth` VIEW intent would create a second `MainActivity` (and a
+  in its own task, so with singleTop the `construct://oauth` VIEW intent would create a second `MainActivity` (and a
   second engine without the pending flow) in the browser's task. `onNewIntent` (and `onCreate` on a fresh start)
-  forwards `canvas://oauth` VIEW intents to the ViewModel's bridge. `KeystoreSecureStore`: AES-256/GCM/NoPadding key
-  `canvas_session_key` in AndroidKeyStore (generated on first use), value stored as `base64(iv):base64(ciphertext)`
-  in private SharedPreferences `canvas_secure` (`commit()`, synchronized); undecryptable values read as absent.
+  forwards `construct://oauth` VIEW intents to the ViewModel's bridge. `KeystoreSecureStore`: AES-256/GCM/NoPadding key
+  `construct_session_key` in AndroidKeyStore (generated on first use), value stored as `base64(iv):base64(ciphertext)`
+  in private SharedPreferences `construct_secure` (`commit()`, synchronized); undecryptable values read as absent.
   `AndroidUrlOpener` posts `startActivity(ACTION_VIEW, NEW_TASK)` to the main thread and waits up to 5 s (calls it directly when already on the main thread); false on
   `ActivityNotFoundException`. Custom Tabs are not used (no extra dependency).
 - **Simulator:** `InMemorySecureStore`; `AutoApproveBrowser` GETs `<authorize>&auto=1` without following redirects;
@@ -585,7 +585,7 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 - **Internal API (for the agent endpoint):** `layouts::latest(store, ws) -> Option<(version, UiNode)>`,
   `layouts::commit(store, ws, &UiNode, prompt, provider, patch) -> version` (no validation, no broadcast),
   `layouts::commit_and_publish(&state, ...)` (async; commit + broadcast), `layouts::require_agent_auth`.
-- **Auth:** versions/rollback/agent require a valid pod session unless `CANVAS_AGENT_OPEN=1` (dev/demo, so QA can
+- **Auth:** versions/rollback/agent require a valid pod session unless `CONSTRUCT_AGENT_OPEN=1` (dev/demo, so QA can
   curl without signing in). The SSE endpoint follows the workspace GET: anonymous subscriptions are allowed because
   an event carries only `{workspace_id, version}` (no layout, no entities); a client must still fetch the workspace
   with its own credentials. A stale bearer on `pixelfed_home` gets 401 so the client notices.
@@ -602,14 +602,14 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   An in-tree panel renders in the headless harness's `onRoot().captureToImage()` and leaves the feed visible and
   interactive above it, so the layout change is seen as it happens. Insets come from the platform root (Android pads by
   `safeDrawing`, which includes the IME).
-- **State outside the server-driven tree:** `AgentPromptOverlay` is drawn by `CanvasApp` over the workspace;
+- **State outside the server-driven tree:** `AgentPromptOverlay` is drawn by `ConstructApp` over the workspace;
   `rememberSaveable` open flag and prompt text. The text is cleared only when the agent status, after this panel's
   send, changes to `done` and only if the field still holds the sent text (an edit made while running is kept); an
   error keeps it for editing. Send is disabled while blank or `running`, and from a tap until a newer snapshot seq
   arrives (two taps or IME action + button within one frame post once). Android: `adjustResize`, so the IME arrives
   as insets (no window pan) and the root's `safeDrawingPadding` lifts the panel; the status line is a polite live
   region.
-- **Status:** `EngineSnapshot.agentJson` (default `{"state":"idle"}`) -> `CanvasState.agent` (`AgentInfo`):
+- **Status:** `EngineSnapshot.agentJson` (default `{"state":"idle"}`) -> `ConstructState.agent` (`AgentInfo`):
   "Applying...", "Layout updated (v3, rules)", the engine's "No change needed (v3)" when `unchanged`, or the error
   message. A send whose result equals the status before it (the same "No change needed" twice) still completes:
   the pending send is re-based on `running`.
@@ -635,7 +635,7 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 ## D24: Client agent prompt, layout version and push subscriber (client-core)
 
 - **PromptAgent:** dispatch trims the prompt (blank -> `agent_json` error, no request), goes `running` and POSTs
-  `{"prompt","workspace_id": <engine's workspace>}` to `/v1/agent/modify_layout` on a `canvas-engine-agent` thread
+  `{"prompt","workspace_id": <engine's workspace>}` to `/v1/agent/modify_layout` on a `construct-engine-agent` thread
   (bearer when signed in, 180 s timeout: the pod's LLM call may take 120 s plus retries). A per-prompt generation
   counter lets only the latest prompt report status; an older one's layout is still applied if newer.
 - **200:** the response's `workspace` is applied at once (no refetch): layout only, `State::apply_layout` keeps
@@ -643,7 +643,7 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   queries (the response carries `entities: {}`, so the fetch merge must not be used). Skipped if an equal or newer
   version is already applied (the SSE refetch may win the race): both paths are idempotent. Not applied (a refetch
   instead) when no versioned layout is on display (`layout_version` is `None`, e.g. the signed-out `pixelfed_home`
-  screen with `CANVAS_AGENT_OPEN=1`) or the session changed since the request. `agent_json` =
+  screen with `CONSTRUCT_AGENT_OPEN=1`) or the session changed since the request. `agent_json` =
   `{"state":"done","message":"Layout updated (vN, <provider>)","provider","layout_version"}`; an `"unchanged": true`
   response -> `"message":"No change needed (vN)"` plus `"unchanged":true`.
 - **Errors:** non-2xx -> `error` with a sentence per known case: `unsupported_prompt` -> "I can't do that yet. Try:
@@ -654,11 +654,11 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   when online"`. A 401 for the current session signs out like a fetch 401 (D19) and refetches.
 - **Stale status:** a fetch whose layout version is newer than the applied one resets a `done`/`error` status to
   idle unless that status names this version (the prompt's own SSE echo); `running` is left alone.
-- **Layout version:** from `X-Canvas-Layout-Version` on every applied fetch (absent -> `None`, e.g. the signed-out
+- **Layout version:** from `X-Construct-Layout-Version` on every applied fetch (absent -> `None`, e.g. the signed-out
   `pixelfed_home` screen), or the prompt response's `layout_version`. In memory only (a restart refetches anyway). A
   fetch whose header is older than the applied version (it started before a prompt response was applied) keeps the
   newer layout and takes only the entities.
-- **Push subscriber (`client_core::events`):** a `canvas-engine-events` thread, connected only while `is_online`,
+- **Push subscriber (`client_core::events`):** a `construct-engine-events` thread, connected only while `is_online`,
   `GET /v1/workspaces/<id>/events` with `Accept: text/event-stream` and the bearer when signed in. Async reqwest on a
   private current-thread Tokio runtime (`tokio` with `rt,time,net`), read in 200 ms slices (`chunk()` is
   cancel-safe), so a dropped engine closes the connection within a slice and a session change reconnects with the
@@ -694,7 +694,7 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   same patch is re-applied and re-validated on the new latest (up to 3 more times, then 409 `conflict`), so a slow
   provider call never silently reverts a rollback.
 - **Provider trait:** `LayoutProvider { name, model, generate -> boxed future of Generated{ops, explanation} }`
-  (boxed so the selection is an `Arc<dyn>`). `Selection::from_env` resolves `CANVAS_LLM_PROVIDER`; an explicit
+  (boxed so the selection is an `Arc<dyn>`). `Selection::from_env` resolves `CONSTRUCT_LLM_PROVIDER`; an explicit
   `anthropic` without a key is `NotConfigured` (server starts; prompts get 503) rather than a silent fallback.
 - **Rules provider:** phrase matching on a normalized prompt (lowercase, punctuation -> spaces, word-bounded); the
   matched rules run in prompt order, each on the previous one's result, emitting `replace`/`add`/`remove` ops with
@@ -714,7 +714,7 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   `Debug` redacts the key.
 - **Request hygiene:** workspace ids are 1..=64 chars of `[A-Za-z0-9_-]` (`layouts::is_valid_workspace_id`); else
   400 `invalid_workspace_id` with a truncated echo, on agent, versions, rollback, events and the workspace GET. The
-  agent/history 401 carries `"detail":"a valid pod session is required (or CANVAS_AGENT_OPEN=1 for local demos)"`.
+  agent/history 401 carries `"detail":"a valid pod session is required (or CONSTRUCT_AGENT_OPEN=1 for local demos)"`.
 - **Registry:** `schemars::JsonSchema` derived on the protocol AST/intent types behind protocol's `schema` feature
   (the server enables it); `agent::registry()` = `schema_for!(UiNode)` (intents under `$defs`). A new variant must
   derive the schema to compile, and a test checks every variant tag is in the registry.
@@ -728,9 +728,9 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   latest row of `workspace_revisions(workspace_id, revision, layout_id, layout_version, reason, created_at)`. Every
   visible change appends a revision in the same transaction as its version: an agent commit to the active layout,
   a restore/rollback of the active layout, an activation. Nothing is updated or deleted.
-- **Client contract kept (D24):** `X-Canvas-Layout-Version` and the SSE `version` are the workspace REVISION, so
-  client-core still sees one monotonic number per workspace. Additive: headers `X-Canvas-Layout-Id` and
-  `X-Canvas-Layout-Id-Version` (the layout's own version) on the workspace GET, rollback and agent responses; SSE
+- **Client contract kept (D24):** `X-Construct-Layout-Version` and the SSE `version` are the workspace REVISION, so
+  client-core still sees one monotonic number per workspace. Additive: headers `X-Construct-Layout-Id` and
+  `X-Construct-Layout-Id-Version` (the layout's own version) on the workspace GET, rollback and agent responses; SSE
   data `{"workspace_id","version","layout_id","layout_version"}`; agent response `layout_id`, `layout_id_version`
   (its `layout_version` stays the revision). In the catalog endpoints `version` / `layout_version` always mean the
   per-layout version and `revision` the workspace revision.
@@ -766,7 +766,7 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   (1k/100k = half distinct edits, half restores; all-distinct edits: 1.1 MB / 110 MB.) zstd-19 costs ~0.17 ms per
   commit. A zstd dictionary built from the built-ins would shrink an edited layout blob from 616 to ~101 B, but it
   would freeze the dictionary into the storage format; deferred. Every version is kept: no
-  `CANVAS_LAYOUT_RETENTION` (deleting versions would break gapless numbering, restore targets and history, and the
+  `CONSTRUCT_LAYOUT_RETENTION` (deleting versions would break gapless numbering, restore targets and history, and the
   numbers above do not call for it).
 - **Endpoints:** `GET /v1/layouts[?workspace_id=]` -> `{"layouts":[{id, workspace_id, title, description,
   preview_hint, builtin, current_version, created_at, updated_at, active, active_version?}], "workspaces":
@@ -791,14 +791,14 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   then 409), so a switch during a slow provider call is not reverted and the edit lands on what the user now sees.
 - **Auth:** reads follow the workspace GET per layout's workspace: `home`/`pixelfed_demo` anonymous, `pixelfed_home`
   needs a valid session (no bearer -> 401 with the agent detail, stale bearer -> 401 like the GET) unless
-  `CANVAS_AGENT_OPEN=1`; the unfiltered list omits `pixelfed_home` for anonymous callers (stale bearer -> 401).
-  Writes (activate, restore) need a session unless `CANVAS_AGENT_OPEN=1` (D22).
+  `CONSTRUCT_AGENT_OPEN=1`; the unfiltered list omits `pixelfed_home` for anonymous callers (stale bearer -> 401).
+  Writes (activate, restore) need a session unless `CONSTRUCT_AGENT_OPEN=1` (D22).
 - **f32 in responses:** layouts are turned into JSON values through their text form (`layouts::node_value`), since
   `serde_json::to_value` widens `aspect_ratio` 0.8 to 0.800000011920929.
 
 ## D27: Client layout catalog API (client-core, FFI)
 
-- **Calls** (`client_core::catalog`, methods on `CanvasEngine`): `list_layouts()` (`GET
+- **Calls** (`client_core::catalog`, methods on `ConstructEngine`): `list_layouts()` (`GET
   /v1/layouts?workspace_id=<engine's workspace>`), `layout_versions(id, before?, limit?)`, `layout_version(id, n)`,
   `activate_layout(id, version?)` (`{}` | `{"version": n}`), `restore_layout_version(id, n)`. Each returns the pod's
   JSON body as a `String` (D26 shapes; the same pass-through style as the snapshot's `*_json` fields, so the FFI
@@ -822,16 +822,16 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   directly (as the agent path does) is not possible.
 - **Snapshot:** `StateSnapshot.layout_json` / `FfiStateSnapshot.layout_json` = `{"layout_id","layout_version",
   "revision"}` (the active catalog layout, its per-layout version, the workspace revision) from
-  `X-Canvas-Layout-Id`, `X-Canvas-Layout-Id-Version` and `X-Canvas-Layout-Version` of the applied fetch, or the agent
+  `X-Construct-Layout-Id`, `X-Construct-Layout-Id-Version` and `X-Construct-Layout-Version` of the applied fetch, or the agent
   response's `layout_id` / `layout_id_version` / `layout_version`; absent keys are omitted, `"{}"` when nothing is
   known (unversioned screen, before the first fetch). In memory only, like the revision.
-- **Kotlin:** `CanvasEngineBridge` gained `listLayouts()`, `layoutVersions(layoutId, before?, limit?)`,
+- **Kotlin:** `ConstructEngineBridge` gained `listLayouts()`, `layoutVersions(layoutId, before?, limit?)`,
   `layoutVersion(layoutId, version)`, `activateLayout(layoutId, version?)`, `restoreLayoutVersion(layoutId, version)`:
   plain blocking `String`-returning functions (call on `Dispatchers.IO`) that throw
-  `org.genui.canvas.LayoutApiException(message, kind, status)`; the interface defaults throw "Layouts aren't
+  `org.theconstruct.LayoutApiException(message, kind, status)`; the interface defaults throw "Layouts aren't
   available here." so other fakes compile. `UniffiEngineBridge` maps `uniffi.client_ffi.LayoutApiException` (Int
   args clamped to `UInt`, negatives -> 0, which the pod rejects readably). `EngineSnapshot.layoutJson` (default `{}`)
-  -> `CanvasState.activeLayout` (`ActiveLayout(layoutId?, layoutVersion?, revision?)`, lenient parse).
+  -> `ConstructState.activeLayout` (`ActiveLayout(layoutId?, layoutVersion?, revision?)`, lenient parse).
   `FakeEngineBridge` serves `FakeLayoutCatalog` (same JSON shapes; `pixelfed_demo` for a bundle with
   `pixelfed://` entities, else `home`; the active layout's newest version is the bundle's layout so the screen starts
   unchanged; activate/restore of the active layout swap the layout and bump the revision; an applied prompt appends
@@ -858,9 +858,9 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 
 ## D29: Default base URL = the staging pod
 
-- Every client defaults to the deployed staging pod `https://the-construct-pod.fly.dev`: desktop (`canvas.baseUrl`
-  / `CANVAS_BASE_URL`; `:desktopApp:run` forwards `-Dcanvas.baseUrl` / `-Dcanvas.workspace` to the app JVM),
-  Android (`-PcanvasBaseUrl` -> `BuildConfig`) and the live-mode simulator (`-PbaseUrl`).
+- Every client defaults to the deployed staging pod `https://the-construct-pod.fly.dev`: desktop (`construct.baseUrl`
+  / `CONSTRUCT_BASE_URL`; `:desktopApp:run` forwards `-Dconstruct.baseUrl` / `-Dconstruct.workspace` to the app JVM),
+  Android (`-PconstructBaseUrl` -> `BuildConfig`) and the live-mode simulator (`-PbaseUrl`).
 - A local server is always chosen explicitly: `http://127.0.0.1:8080` on desktop and the simulator,
   `http://10.0.2.2:8080` on the emulator (`scripts/android_smoke.sh --base-url`, default the emulator URL), or
   `127.0.0.1` with `adb reverse` on a phone.
@@ -883,16 +883,16 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   available here.") instead of the button disappearing.
 - **In-tree overlay, not navigation or Dialog windows:** like the agent panel (D23), the browser (`layouts-browser`),
   the confirmation (`confirm-dialog`, scrim + card) and the snackbar (`layouts-snackbar`) are composables drawn by
-  `CanvasApp` above the workspace, so the headless harness's `onRoot().captureToImage()` sees them (a Material
+  `ConstructApp` above the workspace, so the headless harness's `onRoot().captureToImage()` sees them (a Material
   `AlertDialog` opens a second root). The browser is a full-screen `Surface`, which also blocks touches to the feed.
 - **Navigation model:** `LayoutNav(open, layoutId?, version?, confirming)`, a pure value: list -> details -> preview,
   `back()` closes the innermost level (dialog, preview, details, list; ignored while the dialog's change runs, like its
   disabled Cancel). The whole browser state (`LayoutBrowserState`: nav, list, histories, the running write, the
-  snackbar) is owned by `CanvasController`, so on Android it lives in the ViewModel and a rotation keeps the level, an
-  open dialog, a write in flight and the snackbar's Undo; `CanvasApp` also saves the nav with `rememberSaveable`
+  snackbar) is owned by `ConstructController`, so on Android it lives in the ViewModel and a rotation keeps the level, an
+  open dialog, a write in flight and the snackbar's Undo; `ConstructApp` also saves the nav with `rememberSaveable`
   (`LayoutNavSaver`, a list of primitives) and restores it once into a fresh controller after process death.
   `PlatformBackHandler(enabled = open)` maps system Back to `back()` (registered after the agent panel's).
-- **Loading:** `LayoutRepository` (owned by `CanvasController`, so it survives rotation with the Android ViewModel)
+- **Loading:** `LayoutRepository` (owned by `ConstructController`, so it survives rotation with the Android ViewModel)
   runs the D27 calls with `withContext(layoutIoDispatcher)`, parses leniently (`LayoutCatalogJson`) and caches version
   specs per (id, version) (immutable on the pod). List and history loads run in `LaunchedEffect`s keyed on the open
   level, Retry tokens and `state.activeLayout`, so closing a level cancels its load and an AI edit or a switch made
@@ -939,3 +939,27 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   catalog calls (thumbnails). After every click the harness re-sends a pointer exit, so a screen that opens under the
   old pointer position is not captured with a hover tint.
 - **Android:** the debug server chip moved up (96 dp from the bottom) so it never covers the snackbar.
+
+## D31: Rename to The Construct
+
+- **What:** the product "Project Canvas" is now "The Construct", identifiers included: Kotlin packages
+  `org.genui.canvas.*` -> `org.theconstruct.*` (Android namespace/applicationId `org.theconstruct.android`, desktop
+  bundle ID `org.theconstruct.desktop`, `nativeDistributions` package name "The Construct"); types `Canvas*` ->
+  `Construct*` (`ConstructEngine`, `ConstructApp`, `ConstructController`, `ConstructState`, `ConstructEngineBridge`,
+  `ConstructViewModel`, `ConstructJson`, `ConstructIcons`, `ConstructImage`) in Rust, UniFFI and Kotlin; logcat tag and
+  log prefix `ConstructEngine`, threads `construct-engine-*`; env vars `CANVAS_*` -> `CONSTRUCT_*` (also in
+  `deploy/fly/pod.toml` and `deploy/pod.Dockerfile`, same commit), system properties `construct.*`, Gradle properties
+  `-PconstructBaseUrl` / `-PconstructWorkspace`; headers `X-Construct-Session`, `X-Construct-Layout-Version`,
+  `X-Construct-Layout-Id`, `X-Construct-Layout-Id-Version`; OAuth redirect `construct://oauth`; paths
+  `~/.construct`, `~/.construct-server`; Keychain service `org.theconstruct.client`, Android key alias
+  `construct_session_key` and prefs `construct_secure`; the pod's Pixelfed `client_name` "The Construct" and
+  user agent `construct-pod/<version>`; dev fixtures (`constructdemo`, `constructadmin`, `#construct`, images
+  `construct_0N.jpg`).
+- **No migration:** clients don't read the old paths, preferences or keychain entries; the Android app is a new
+  package (uninstall the old one). Old pod sessions are invalid for the new header names anyway; users sign in again.
+- **Staging DB keeps working:** no table or column name contained "canvas", so `/data/server.db` opens unchanged. The
+  stored Pixelfed apps are keyed by (instance, redirect URI): the first `construct://oauth` sign-in registers a new app
+  (the `canvas://oauth` row is simply unused); an existing account's token refresh still finds its own app row.
+- **Deliberately unchanged:** Fly app names and URLs (`the-construct-pod`, `the-construct-fake-pixelfed`), crate
+  names (none contained "canvas"), the `kmp-app` directory, git history, and earlier D-entries' narrative (their
+  identifiers were updated to match the code).

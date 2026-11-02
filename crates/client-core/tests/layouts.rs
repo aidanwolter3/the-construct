@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use client_core::catalog::{LAYOUTS_OFFLINE, LAYOUTS_SIGN_IN_TO_CHANGE};
 use client_core::{
-    CanvasEngine, EngineConfig, EngineOptions, LayoutApiError, MemoryStore, SecureStore,
+    ConstructEngine, EngineConfig, EngineOptions, LayoutApiError, MemoryStore, SecureStore,
     StateSnapshot,
 };
 use protocol::UiNode;
@@ -26,7 +26,7 @@ struct Pod {
 }
 
 impl Pod {
-    /// `open`: `CANVAS_AGENT_OPEN=1` (writes need no session).
+    /// `open`: `CONSTRUCT_AGENT_OPEN=1` (writes need no session).
     fn start(open: bool) -> Self {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -77,8 +77,8 @@ fn config() -> EngineConfig {
     }
 }
 
-fn engine(url: &str) -> CanvasEngine {
-    CanvasEngine::init_with_config("", url, "home", config())
+fn engine(url: &str) -> ConstructEngine {
+    ConstructEngine::init_with_config("", url, "home", config())
 }
 
 fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
@@ -104,7 +104,7 @@ fn title(s: &StateSnapshot) -> String {
         .to_owned()
 }
 
-fn ready(e: &CanvasEngine) {
+fn ready(e: &ConstructEngine) {
     wait_until("first fetch", || {
         layout(&e.snapshot())["layout_id"].is_string()
     });
@@ -264,7 +264,7 @@ fn writes_without_a_session_get_unauthorized_and_a_stale_session_is_signed_out()
     let store = Arc::new(MemoryStore::new());
     let key = client_core::auth::session_key(&pod.url);
     store.set(&key, r#"{"token":"stale-token","username":"alice"}"#);
-    let e = CanvasEngine::init_with_options(
+    let e = ConstructEngine::init_with_options(
         "",
         &pod.url,
         "home",

@@ -26,7 +26,7 @@
 #
 # Checks per workspace (any failure -> non-zero exit):
 #   - logcat (main, system, crash buffers) has no "FATAL EXCEPTION" after the launch
-#   - the app process is alive (adb shell pidof org.genui.canvas.android)
+#   - the app process is alive (adb shell pidof org.theconstruct.android)
 #   - `uiautomator dump` contains the expected text:
 #       home:          "Count: <n>" and "Online"
 #       pixelfed_demo: "Sunrise over Boulder"
@@ -34,7 +34,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PKG="org.genui.canvas.android"
+PKG="org.theconstruct.android"
 ACTIVITY="$PKG/.MainActivity"
 AVD="${SMOKE_AVD:-Medium_Phone_API_36}"
 SERVER_URL="http://127.0.0.1:8080"

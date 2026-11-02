@@ -1,4 +1,4 @@
-//! Project Canvas wire protocol: namespaced UI AST, action intents and the
+//! The Construct wire protocol: namespaced UI AST, action intents and the
 //! normalized hydration bundle. Pure data types; no I/O.
 //!
 //! Deserialization is strict: an unknown node `"type"` or `"intent"` is an

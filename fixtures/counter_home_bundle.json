@@ -13,7 +13,7 @@
           "orientation": "Vertical",
           "padding_dp": 24,
           "children": [
-            { "type": "core://Text", "value_expr": "Project Canvas Counter", "style": "Title" },
+            { "type": "core://Text", "value_expr": "The Construct Counter", "style": "Title" },
             { "type": "core://Text", "value_expr": "Count: ${core://counters/home#count}", "style": "Headline" },
             {
               "type": "core://Container",

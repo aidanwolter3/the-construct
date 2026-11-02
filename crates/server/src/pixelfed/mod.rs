@@ -1,4 +1,4 @@
-//! Pixelfed adapter (M6): Mastodon-API JSON -> normalized Canvas entities.
+//! Pixelfed adapter (M6): Mastodon-API JSON -> normalized Construct entities.
 //!
 //! Everything in this module (except [`upstream`] and [`routes`]) is pure: it
 //! turns upstream JSON into URI-keyed [`EntityRecord`]s and an ordered timeline.
@@ -1011,7 +1011,7 @@ mod tests {
         }
         assert_eq!(
             carousel.get_str("caption"),
-            Some("Carousel: one, two, three #canvas")
+            Some("Carousel: one, two, three #construct")
         );
         assert_eq!(carousel.get_str("author_uri"), Some(alice));
         assert!(carousel.get("reblogged_by_uri").is_none());

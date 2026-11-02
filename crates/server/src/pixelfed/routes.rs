@@ -277,9 +277,9 @@ where
 
 /// Redirect URIs the pod registers apps for: the client's loopback
 /// (`http://127.0.0.1:<port>/callback`, `http://localhost:<port>/callback`),
-/// `canvas://oauth`, and exact `PIXELFED_EXTRA_REDIRECTS` entries.
+/// `construct://oauth`, and exact `PIXELFED_EXTRA_REDIRECTS` entries.
 fn redirect_allowed(uri: &str, extra: &[String]) -> bool {
-    if uri == "canvas://oauth" || extra.iter().any(|e| e == uri) {
+    if uri == "construct://oauth" || extra.iter().any(|e| e == uri) {
         return true;
     }
     ["http://127.0.0.1:", "http://localhost:"]
@@ -332,7 +332,7 @@ async fn register_app(
                 "error": "redirect_uri_not_allowed",
                 "redirect_uri": redirect_uri,
                 "allowed": ["http://127.0.0.1:<port>/callback", "http://localhost:<port>/callback",
-                            "canvas://oauth", "PIXELFED_EXTRA_REDIRECTS entries"],
+                            "construct://oauth", "PIXELFED_EXTRA_REDIRECTS entries"],
             }),
         );
     }
@@ -571,15 +571,15 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
 // ---------- home feed ----------
 
 /// Response header on a 401 from `GET /v1/workspaces/pixelfed_home`.
-pub const SESSION_HEADER: &str = "x-canvas-session";
+pub const SESSION_HEADER: &str = "x-construct-session";
 
 /// `GET /v1/workspaces/pixelfed_home`. Without a bearer: 200 signed-out
 /// bundle. With a bearer that no longer gets a feed (unknown session, no
 /// stored account, or the upstream rejected the stored token): 401 with the
-/// signed-out bundle as the body and `X-Canvas-Session: invalid`, so the
+/// signed-out bundle as the body and `X-Construct-Session: invalid`, so the
 /// client learns its session is stale (it clears it and refetches without
 /// the bearer). The signed-in feed's layout is the latest layout version
-/// (`X-Canvas-Layout-Version`); the signed-out screen is not versioned.
+/// (`X-Construct-Layout-Version`); the signed-out screen is not versioned.
 pub async fn home_workspace(state: &Arc<AppState>, headers: &HeaderMap) -> Response {
     let had_bearer = bearer(headers).is_some();
     let signed_out = || {

@@ -17,13 +17,13 @@ kotlin {
 
     // Android library target via the KMP-native AGP plugin (DECISIONS D10).
     android {
-        namespace = "org.genui.canvas.shared"
+        namespace = "org.theconstruct.shared"
         compileSdk = 36
         minSdk = 26
     }
 
     // Source set layout (DECISIONS D5):
-    //   commonMain            models, renderer, CanvasApp, CanvasEngineBridge interface
+    //   commonMain            models, renderer, ConstructApp, ConstructEngineBridge interface
     //   └─ jvmCommonMain      UniFFI bindings (uniffi.client_ffi) + UniffiEngineBridge (JNA)
     //      ├─ desktopMain     JNA jar, stdout logging
     //      └─ androidMain     JNA aar (bundles libjnidispatch.so), logcat logging

@@ -1,6 +1,9 @@
 # Product Requirements Document & Technical Design Document
 
-**Project:** Project Canvas (Dynamic Intent Shell & Federated Server-Driven UI)
+> **Note:** the product was renamed from Project Canvas to The Construct (docs/DECISIONS.md D31).
+> Identifiers in this document were updated to match (`org.theconstruct`, `ConstructEngine`, `CONSTRUCT_*`).
+
+**Project:** The Construct (Dynamic Intent Shell & Federated Server-Driven UI)
 
 **Status:** Approved for Implementation
 
@@ -16,10 +19,10 @@
 
 Contemporary mobile and desktop operating systems trap users in application silos. Users constantly switch contexts, copy-paste across apps, and endure rigid, unchangeable screen layouts. Meanwhile, existing mobile web apps feel clunky, laggy, and unresponsive compared to native apps due to DOM overhead, event cancellation checks, and unaligned scrolling physics.
 
-**Project Canvas** flips this paradigm:
+**The Construct** flips this paradigm:
 
 1. **True Native Feel:** Interfaces are declared dynamically via structured, declarative schemas and rendered using platform-native Jetpack Compose / Skia primitives.
-2. **Dynamic Generative Shell:** The client acts as an intelligent, unified canvas. Instead of static screens, it synthesizes ad-hoc, ephemeral workspaces combining components from multiple domains (social, calendar, weather, utilities).
+2. **Dynamic Generative Shell:** The client acts as an intelligent, unified surface. Instead of static screens, it synthesizes ad-hoc, ephemeral workspaces combining components from multiple domains (social, calendar, weather, utilities).
 3. **Federated & Private by Default:** Architecture mirrors the Fediverse (Pixelfed/Mastodon). Users can host their own single-tenant backend (Data Pod) on Hetzner or use managed servers. Private data never leaves the user's pod; layouts are shareable, versioned, public/private dotfiles.
 4. **Offline First:** All data is hydrated through a local, normalized SQLite store with optimistic mutations and outbox synchronization. The app never freezes on flaky networks.
 
@@ -76,7 +79,7 @@ Contemporary mobile and desktop operating systems trap users in application silo
 
 #### Future Goals (The Ambient Shell)
 
-* **P1 (Android Launcher Mode):** Register the Android client as the primary OS launcher (`CATEGORY_HOME`), replacing the system desktop with the dynamic canvas.
+* **P1 (Android Launcher Mode):** Register the Android client as the primary OS launcher (`CATEGORY_HOME`), replacing the system desktop with the dynamic surface.
 * **P1 (Multi-App Journeys):** Context-aware workspace synthesis combining disparate domain providers (e.g., flight status + calendar event + transit directions) into a single screen.
 * **P2 (Federated Layout Discovery):** Decentralized discovery network for layout packs with cryptographic signatures, diff views, and user star ratings.
 
@@ -121,7 +124,7 @@ Contemporary mobile and desktop operating systems trap users in application silo
 The project is organized as a Cargo workspace alongside a Gradle Kotlin Multiplatform (KMP) project:
 
 ```text
-project-canvas/
+the_construct/
 ├── Cargo.toml                       # Top-level Rust workspace
 ├── crates/
 │   ├── protocol/                    # Pure Rust: AST, Serde, Entity types, Intent types
@@ -418,7 +421,7 @@ We use Mozilla's **UniFFI** to generate type-safe Kotlin bindings with zero manu
 ```rust
 // crates/client-ffi/src/lib.rs
 use std::sync::Arc;
-use client_core::CanvasEngine;
+use client_core::ConstructEngine;
 
 #[derive(uniffi::Record)]
 pub struct FfiStateSnapshot {
@@ -434,7 +437,7 @@ pub trait StateObserver: Send + Sync {
 
 #[derive(uniffi::Object)]
 pub struct EngineHandle {
-    inner: Arc<CanvasEngine>,
+    inner: Arc<ConstructEngine>,
 }
 
 #[uniffi::export]
@@ -442,7 +445,7 @@ impl EngineHandle {
     #[uniffi::constructor]
     pub fn new(storage_path: String, base_url: String) -> Self {
         Self {
-            inner: Arc::new(CanvasEngine::init(&storage_path, &base_url)),
+            inner: Arc::new(ConstructEngine::init(&storage_path, &base_url)),
         }
     }
 
@@ -472,8 +475,8 @@ uniffi::setup_scaffolding!();
 The UI engine is completely decoupled from business logic and platform code.
 
 ```kotlin
-// shared/src/commonMain/kotlin/org/genui/canvas/DynamicRenderer.kt
-package org.genui.canvas
+// shared/src/commonMain/kotlin/org/theconstruct/DynamicRenderer.kt
+package org.theconstruct
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -747,7 +750,7 @@ cargo ndk -t arm64-v8a -o kmp-app/androidApp/src/main/jniLibs build -p client-ff
 * **Testing Command:**
 ```bash
 ./gradlew :androidApp:installDebug
-adb logcat -s CanvasEngine:V
+adb logcat -s ConstructEngine:V
 
 ```
 
@@ -777,7 +780,7 @@ INSERT INTO action_outbox (entity_uri, endpoint, payload_json, created_at) VALUE
 # 2. Kill local Axum server (simulate offline network)
 # 3. Click "Like" button in desktop window
 # 4. Check local SQLite DB:
-sqlite3 ~/.canvas/cache.db "SELECT * FROM action_outbox;"
+sqlite3 ~/.construct/cache.db "SELECT * FROM action_outbox;"
 # 5. Restart server; verify outbox flushes and deletes pending rows
 
 ```

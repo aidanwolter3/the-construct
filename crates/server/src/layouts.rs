@@ -5,7 +5,7 @@
 //! append-only, gapless version history, and exactly one ACTIVE layout. The
 //! workspace REVISION (one monotonic number per workspace, bumped on every
 //! visible change: an edit or restore of the active layout, or a switch) is
-//! what `X-Canvas-Layout-Version` and SSE `version` carry, so clients keep
+//! what `X-Construct-Layout-Version` and SSE `version` carry, so clients keep
 //! one number per workspace. Only the workspace root [`UiNode`] is versioned;
 //! entities still come from fixtures / the upstream. Committing does not
 //! validate anything; the caller (agent endpoint) validates first.
@@ -41,11 +41,11 @@ use crate::{ApiError, AppState, blocking, json_error, parse_json_body};
 
 /// Response header carrying the served workspace REVISION (the client's
 /// one monotonic "layout version" per workspace, D24).
-pub const VERSION_HEADER: &str = "x-canvas-layout-version";
+pub const VERSION_HEADER: &str = "x-construct-layout-version";
 /// Response header naming the served (active) layout.
-pub const LAYOUT_ID_HEADER: &str = "x-canvas-layout-id";
+pub const LAYOUT_ID_HEADER: &str = "x-construct-layout-id";
 /// Response header carrying the served layout's own version number.
-pub const LAYOUT_ID_VERSION_HEADER: &str = "x-canvas-layout-id-version";
+pub const LAYOUT_ID_VERSION_HEADER: &str = "x-construct-layout-id-version";
 /// Default SSE keepalive interval.
 pub const DEFAULT_KEEPALIVE: Duration = Duration::from_secs(15);
 /// Capacity of the layout broadcast channel (a lagging subscriber is caught
@@ -459,8 +459,8 @@ pub async fn active_async(
     blocking(state, move |s| active(s, &ws)).await
 }
 
-/// `X-Canvas-Layout-Version: <revision>`, `X-Canvas-Layout-Id: <layout id>`,
-/// `X-Canvas-Layout-Id-Version: <that layout's version>`.
+/// `X-Construct-Layout-Version: <revision>`, `X-Construct-Layout-Id: <layout id>`,
+/// `X-Construct-Layout-Id-Version: <that layout's version>`.
 pub fn served_headers(active: &ActiveLayout) -> [(HeaderName, HeaderValue); 3] {
     [
         (
@@ -496,7 +496,7 @@ pub fn router() -> Router<Arc<AppState>> {
 
 /// Auth for layout-changing / history endpoints (versions, rollback, agent,
 /// activate, restore): a valid pod session (bearer), unless
-/// `CANVAS_AGENT_OPEN=1`. Returns the rejection to send (401, or 500 on a
+/// `CONSTRUCT_AGENT_OPEN=1`. Returns the rejection to send (401, or 500 on a
 /// store error), `None` when allowed.
 pub async fn require_agent_auth(state: &Arc<AppState>, headers: &HeaderMap) -> Option<Response> {
     if state.agent_open() {
@@ -515,7 +515,7 @@ fn agent_unauthorized() -> Response {
         StatusCode::UNAUTHORIZED,
         [(axum::http::header::WWW_AUTHENTICATE, "Bearer")],
         Json(json!({ "error": "unauthorized",
-                     "detail": "a valid pod session is required (or CANVAS_AGENT_OPEN=1 for local demos)" })),
+                     "detail": "a valid pod session is required (or CONSTRUCT_AGENT_OPEN=1 for local demos)" })),
     )
         .into_response()
 }

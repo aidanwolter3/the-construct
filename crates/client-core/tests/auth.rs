@@ -10,12 +10,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use client_core::auth::{
-    PendingAuth, SIGN_IN_DENIED, SIGN_IN_NOT_OWNER, SIGN_IN_POD_UNREACHABLE,
-    SIGN_IN_UPSTREAM_DOWN, pending_auth_key, session_key,
+    PendingAuth, SIGN_IN_DENIED, SIGN_IN_NOT_OWNER, SIGN_IN_POD_UNREACHABLE, SIGN_IN_UPSTREAM_DOWN,
+    pending_auth_key, session_key,
 };
 use client_core::store::{Store, StoreOps};
 use client_core::{
-    CanvasEngine, EngineConfig, EngineOptions, LOADING_FEED_MESSAGE, MemoryStore, RedirectMode,
+    ConstructEngine, EngineConfig, EngineOptions, LOADING_FEED_MESSAGE, MemoryStore, RedirectMode,
     SIGN_IN_INTERRUPTED, SecureStore, StateSnapshot, UrlOpener,
 };
 use serde_json::{Value, json};
@@ -24,7 +24,7 @@ use server::{AppState, PixelfedConfig};
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 const SEED: &str = "seed-token";
-const CUSTOM_REDIRECT: &str = "canvas://oauth";
+const CUSTOM_REDIRECT: &str = "construct://oauth";
 const WORKSPACE: &str = "pixelfed_home";
 const LIKE_COUNT_EXPR: &str = "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1";
 
@@ -169,8 +169,14 @@ fn engine(
     store: &Arc<MemoryStore>,
     opener: Option<Arc<dyn UrlOpener>>,
     redirect: RedirectMode,
-) -> CanvasEngine {
-    engine_in("", env_pod, Arc::clone(store) as Arc<dyn SecureStore>, opener, redirect)
+) -> ConstructEngine {
+    engine_in(
+        "",
+        env_pod,
+        Arc::clone(store) as Arc<dyn SecureStore>,
+        opener,
+        redirect,
+    )
 }
 
 fn engine_in(
@@ -179,8 +185,8 @@ fn engine_in(
     store: Arc<dyn SecureStore>,
     opener: Option<Arc<dyn UrlOpener>>,
     redirect: RedirectMode,
-) -> CanvasEngine {
-    CanvasEngine::init_with_options(
+) -> ConstructEngine {
+    ConstructEngine::init_with_options(
         storage,
         env_pod,
         WORKSPACE,
@@ -195,7 +201,7 @@ fn engine_in(
     )
 }
 
-fn loopback_engine(env: &Env, store: &Arc<MemoryStore>) -> CanvasEngine {
+fn loopback_engine(env: &Env, store: &Arc<MemoryStore>) -> ConstructEngine {
     engine(
         &env.pod,
         store,
@@ -230,14 +236,14 @@ fn entities(snap: &StateSnapshot) -> Value {
     serde_json::from_str(&snap.entities_json).unwrap()
 }
 
-fn wait_signed_in(engine: &CanvasEngine) {
+fn wait_signed_in(engine: &ConstructEngine) {
     wait_until("signed in with the home feed", || {
         let s = engine.snapshot();
         auth(&s)["state"] == "signed_in" && home_query_len(&s) > 0
     });
 }
 
-fn wait_signed_out_bundle(engine: &CanvasEngine) {
+fn wait_signed_out_bundle(engine: &ConstructEngine) {
     wait_until("the signed-out bundle", || {
         let s = engine.snapshot();
         s.workspace_json.contains("Sign in with Pixelfed") && home_query_len(&s) == 0
@@ -310,8 +316,8 @@ fn loopback_sign_in_stores_session_and_fetches_the_feed() {
 
     let snap = engine.snapshot();
     let a = auth(&snap);
-    assert_eq!(a["username"], "canvasdemo");
-    assert_eq!(a["display_name"], "Canvas Demo");
+    assert_eq!(a["username"], "constructdemo");
+    assert_eq!(a["display_name"], "Construct Demo");
     assert!(
         a["avatar_url"]
             .as_str()
@@ -348,7 +354,7 @@ fn custom_scheme_sign_in_rejects_a_wrong_state() {
         RedirectMode::Custom(CUSTOM_REDIRECT.into()),
     );
     // No sign-in at all (in memory or persisted): taken, then reported.
-    assert!(engine.handle_auth_redirect("canvas://oauth?code=x&state=y"));
+    assert!(engine.handle_auth_redirect("construct://oauth?code=x&state=y"));
     wait_until("interrupted error", || {
         auth(&engine.snapshot())["error"] == SIGN_IN_INTERRUPTED
     });
@@ -370,7 +376,7 @@ fn custom_scheme_sign_in_rejects_a_wrong_state() {
         .unwrap();
     assert_eq!(resp.status().as_u16(), 302);
     let location = resp.headers()["location"].to_str().unwrap().to_owned();
-    assert!(location.starts_with("canvas://oauth?"), "{location}");
+    assert!(location.starts_with("construct://oauth?"), "{location}");
 
     // A forged redirect (wrong state) is rejected and the flow keeps waiting.
     let (head, _) = location
@@ -379,7 +385,7 @@ fn custom_scheme_sign_in_rejects_a_wrong_state() {
     let forged = format!("{head}&state=forged");
     assert_ne!(forged, location);
     assert!(!engine.handle_auth_redirect(&forged));
-    assert!(!engine.handle_auth_redirect("canvas://oauth?nothing=1"));
+    assert!(!engine.handle_auth_redirect("construct://oauth?nothing=1"));
     thread::sleep(Duration::from_millis(200));
     assert_eq!(auth(&engine.snapshot())["state"], "pending");
 
@@ -390,7 +396,7 @@ fn custom_scheme_sign_in_rejects_a_wrong_state() {
     engine.handle_auth_redirect(&location);
     thread::sleep(Duration::from_millis(300));
     assert_eq!(auth(&engine.snapshot())["state"], "signed_in");
-    assert_eq!(auth(&engine.snapshot())["username"], "canvasdemo");
+    assert_eq!(auth(&engine.snapshot())["username"], "constructdemo");
 }
 
 #[test]
@@ -413,9 +419,9 @@ fn authorization_denied_is_an_error() {
         .unwrap()
         .1
         .into_owned();
-    assert!(
-        engine.handle_auth_redirect(&format!("canvas://oauth?error=access_denied&state={state}"))
-    );
+    assert!(engine.handle_auth_redirect(&format!(
+        "construct://oauth?error=access_denied&state={state}"
+    )));
     wait_until("auth error", || {
         auth(&engine.snapshot())["state"] == "error"
     });
@@ -453,7 +459,7 @@ fn restart_restores_the_session_from_the_store() {
     // Signed in before any network round trip...
     let first = auth(&engine.snapshot());
     assert_eq!(first["state"], "signed_in");
-    assert_eq!(first["username"], "canvasdemo");
+    assert_eq!(first["username"], "constructdemo");
     // ...and the bearer gets the signed-in feed.
     wait_signed_in(&engine);
 }
@@ -566,7 +572,7 @@ fn fetch_401_clears_the_session() {
     let store = Arc::new(MemoryStore::new());
     store.set(
         &session_key(&base),
-        r#"{"token":"stale","username":"canvasdemo"}"#,
+        r#"{"token":"stale","username":"constructdemo"}"#,
     );
     let engine = engine(&base, &store, None, RedirectMode::Loopback);
     assert_eq!(auth(&engine.snapshot())["state"], "signed_in");
@@ -580,7 +586,7 @@ fn fetch_401_clears_the_session() {
 #[test]
 fn stale_session_is_cleared_by_the_pods_401_on_fetch() {
     // The real pod answers a bearer it does not know with 401 (+ the signed-out bundle and
-    // `X-Canvas-Session: invalid`): the engine forgets the session and refetches without it.
+    // `X-Construct-Session: invalid`): the engine forgets the session and refetches without it.
     let env = Env::start();
     let store = Arc::new(MemoryStore::new());
     {
@@ -624,7 +630,7 @@ fn loopback_reuses_the_preferred_port_across_sign_ins() {
         .unwrap()
         .port();
     let browser = Arc::new(AutoApproveBrowser::default());
-    let engine = CanvasEngine::init_with_options(
+    let engine = ConstructEngine::init_with_options(
         "",
         &env.pod,
         WORKSPACE,
@@ -651,7 +657,7 @@ fn loopback_reuses_the_preferred_port_across_sign_ins() {
 }
 
 /// GET `<authorize url>&auto=1` without following redirects: the fake's
-/// approval redirect (`canvas://oauth?code=..&state=..`).
+/// approval redirect (`construct://oauth?code=..&state=..`).
 fn approve(url: &str) -> String {
     let resp = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -664,7 +670,7 @@ fn approve(url: &str) -> String {
     resp.headers()["location"].to_str().unwrap().to_owned()
 }
 
-fn custom_engine(env: &Env, store: &Arc<MemoryStore>) -> (CanvasEngine, mpsc::Receiver<String>) {
+fn custom_engine(env: &Env, store: &Arc<MemoryStore>) -> (ConstructEngine, mpsc::Receiver<String>) {
     let (tx, rx) = mpsc::channel();
     let engine = engine(
         &env.pod,
@@ -678,7 +684,7 @@ fn custom_engine(env: &Env, store: &Arc<MemoryStore>) -> (CanvasEngine, mpsc::Re
 #[test]
 fn custom_scheme_sign_in_survives_a_process_restart() {
     // Android: the process dies while the browser is in front; the
-    // canvas://oauth redirect cold-starts a new engine on the same store.
+    // construct://oauth redirect cold-starts a new engine on the same store.
     let env = Env::start();
     let store = Arc::new(MemoryStore::new());
     let location = {
@@ -693,15 +699,21 @@ fn custom_scheme_sign_in_survives_a_process_restart() {
         // `a` is dropped here, before the redirect arrives.
     };
     thread::sleep(Duration::from_millis(300));
-    assert!(store.get(&pending_auth_key(&env.pod)).is_some(), "kept across the drop");
+    assert!(
+        store.get(&pending_auth_key(&env.pod)).is_some(),
+        "kept across the drop"
+    );
 
     let (b, _rx) = custom_engine(&env, &store);
     assert_eq!(auth(&b.snapshot())["state"], "signed_out");
     assert!(b.handle_auth_redirect(&location));
     wait_signed_in(&b);
-    assert_eq!(auth(&b.snapshot())["username"], "canvasdemo");
+    assert_eq!(auth(&b.snapshot())["username"], "constructdemo");
     assert!(env.session_exists(&stored_token(&env, &store)));
-    assert!(store.get(&pending_auth_key(&env.pod)).is_none(), "deleted on success");
+    assert!(
+        store.get(&pending_auth_key(&env.pod)).is_none(),
+        "deleted on success"
+    );
     // A replay (the code is spent, the record gone) changes nothing.
     assert!(b.handle_auth_redirect(&location));
     thread::sleep(Duration::from_millis(300));
@@ -722,7 +734,7 @@ fn unmatched_or_expired_persisted_sign_in_reports_interrupted() {
     store.set(&pending_auth_key(&env.pod), &stale.to_json());
     let (engine, _rx) = custom_engine(&env, &store);
     // Matching state but expired: deleted, reported.
-    assert!(engine.handle_auth_redirect("canvas://oauth?code=c&state=old"));
+    assert!(engine.handle_auth_redirect("construct://oauth?code=c&state=old"));
     wait_until("interrupted error", || {
         auth(&engine.snapshot())["error"] == SIGN_IN_INTERRUPTED
     });
@@ -738,10 +750,13 @@ fn unmatched_or_expired_persisted_sign_in_reports_interrupted() {
         ..stale
     };
     store.set(&pending_auth_key(&env.pod), &fresh.to_json());
-    assert!(engine.handle_auth_redirect("canvas://oauth?code=c&state=nope"));
+    assert!(engine.handle_auth_redirect("construct://oauth?code=c&state=nope"));
     thread::sleep(Duration::from_millis(300));
     assert_eq!(auth(&engine.snapshot())["error"], SIGN_IN_INTERRUPTED);
-    assert!(store.get(&pending_auth_key(&env.pod)).is_some(), "another flow's record is kept");
+    assert!(
+        store.get(&pending_auth_key(&env.pod)).is_some(),
+        "another flow's record is kept"
+    );
     engine.logout();
     wait_until("logout deleted the pending sign-in", || {
         store.get(&pending_auth_key(&env.pod)).is_none()
@@ -778,7 +793,11 @@ fn temp_storage(tag: &str) -> std::path::PathBuf {
 /// (pixelfed entities, outbox rows, has the workspace row) in cache.db.
 fn cached(dir: &std::path::Path) -> (i64, i64, bool) {
     let db = Store::open(&dir.join(client_core::CACHE_DB_FILE)).unwrap();
-    let count = |sql: &str| db.conn().query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+    let count = |sql: &str| {
+        db.conn()
+            .query_row(sql, [], |r| r.get::<_, i64>(0))
+            .unwrap()
+    };
     (
         count("SELECT COUNT(*) FROM entities WHERE domain = 'pixelfed'"),
         count("SELECT COUNT(*) FROM action_outbox"),
@@ -903,7 +922,11 @@ fn secure_store_io_stays_off_the_ui_thread_and_logout_wins_the_race() {
     started.recv_timeout(TIMEOUT).unwrap();
     let t = Instant::now();
     engine.logout();
-    assert!(t.elapsed() < Duration::from_millis(300), "logout blocked {:?}", t.elapsed());
+    assert!(
+        t.elapsed() < Duration::from_millis(300),
+        "logout blocked {:?}",
+        t.elapsed()
+    );
     assert_eq!(auth(&engine.snapshot())["state"], "signed_out");
     // Logout came after the sign-in: the store must end up empty.
     thread::sleep(Duration::from_millis(1200));
@@ -912,7 +935,10 @@ fn secure_store_io_stays_off_the_ui_thread_and_logout_wins_the_race() {
     let threads = store.threads.lock().unwrap().clone();
     let me = thread::current().name().unwrap_or("?").to_owned();
     assert!(!threads.is_empty());
-    assert!(!threads.contains(&me), "store touched on the caller's thread: {threads:?}");
+    assert!(
+        !threads.contains(&me),
+        "store touched on the caller's thread: {threads:?}"
+    );
 }
 
 /// A stub pod for the sign-in UX tests: canned `/v1/auth/pixelfed/app` and
@@ -930,7 +956,11 @@ struct StubPod {
 fn stub_reply(r: &Mutex<Option<(u16, Value)>>, ok: Value) -> axum::response::Response {
     use axum::response::IntoResponse;
     let (code, body) = r.lock().unwrap().clone().unwrap_or((200, ok));
-    (axum::http::StatusCode::from_u16(code).unwrap(), axum::Json(body)).into_response()
+    (
+        axum::http::StatusCode::from_u16(code).unwrap(),
+        axum::Json(body),
+    )
+        .into_response()
 }
 
 fn stub_bundle(title: &str) -> Value {
@@ -994,9 +1024,9 @@ fn start_stub_pod(rt: &tokio::runtime::Runtime) -> (String, Arc<StubPod>) {
     (format!("http://{addr}"), pod)
 }
 
-fn stub_engine(base: &str) -> (CanvasEngine, mpsc::Receiver<String>) {
+fn stub_engine(base: &str) -> (ConstructEngine, mpsc::Receiver<String>) {
     let (tx, rx) = mpsc::channel();
-    let engine = CanvasEngine::init_with_options(
+    let engine = ConstructEngine::init_with_options(
         "",
         base,
         "home",
@@ -1023,10 +1053,15 @@ fn state_param(url: &str) -> String {
 
 /// Start a sign-in and deliver the approval redirect; returns once the
 /// redirect was accepted.
-fn stub_sign_in(engine: &CanvasEngine, rx: &mpsc::Receiver<String>) {
-    engine.dispatch(&json!({ "intent": "action.auth.login", "instance_url": "http://stub" }).to_string());
+fn stub_sign_in(engine: &ConstructEngine, rx: &mpsc::Receiver<String>) {
+    engine.dispatch(
+        &json!({ "intent": "action.auth.login", "instance_url": "http://stub" }).to_string(),
+    );
     let url = rx.recv_timeout(TIMEOUT).unwrap();
-    assert!(engine.handle_auth_redirect(&format!("canvas://oauth?code=c&state={}", state_param(&url))));
+    assert!(engine.handle_auth_redirect(&format!(
+        "construct://oauth?code=c&state={}",
+        state_param(&url)
+    )));
 }
 
 fn workspace_title(snap: &StateSnapshot) -> String {
@@ -1044,7 +1079,9 @@ fn auth_stays_pending_until_the_first_feed_and_ignores_a_second_tap() {
         .unwrap();
     let (base, pod) = start_stub_pod(&rt);
     let (engine, rx) = stub_engine(&base);
-    wait_until("signed-out screen", || workspace_title(&engine.snapshot()) == "Signed out");
+    wait_until("signed-out screen", || {
+        workspace_title(&engine.snapshot()) == "Signed out"
+    });
 
     stub_sign_in(&engine, &rx);
     // Session in place, feed fetch held: still pending, with the loading message.
@@ -1052,7 +1089,9 @@ fn auth_stays_pending_until_the_first_feed_and_ignores_a_second_tap() {
         auth(&engine.snapshot()) == json!({ "state": "pending", "message": LOADING_FEED_MESSAGE })
     });
     // A second tap on "Sign in" (the signed-out screen is still shown) is ignored.
-    engine.dispatch(&json!({ "intent": "action.auth.login", "instance_url": "http://stub" }).to_string());
+    engine.dispatch(
+        &json!({ "intent": "action.auth.login", "instance_url": "http://stub" }).to_string(),
+    );
     thread::sleep(Duration::from_millis(300));
     assert!(rx.try_recv().is_err(), "a second browser flow was started");
     assert_eq!(pod.app_calls.load(Ordering::SeqCst), 1);
@@ -1061,15 +1100,23 @@ fn auth_stays_pending_until_the_first_feed_and_ignores_a_second_tap() {
     assert_eq!(workspace_title(&snap), "Signed out");
 
     pod.gate_open.store(true, Ordering::SeqCst);
-    wait_until("signed in", || auth(&engine.snapshot())["state"] == "signed_in");
+    wait_until("signed in", || {
+        auth(&engine.snapshot())["state"] == "signed_in"
+    });
     let snap = engine.snapshot();
     assert_eq!(auth(&snap)["username"], "stubuser");
-    assert_eq!(workspace_title(&snap), "Feed", "signed_in only after the feed landed");
+    assert_eq!(
+        workspace_title(&snap),
+        "Feed",
+        "signed_in only after the feed landed"
+    );
 
     // The flow is over: sign-in works again (after a logout).
     engine.logout();
     stub_sign_in(&engine, &rx);
-    wait_until("signed in again", || auth(&engine.snapshot())["state"] == "signed_in");
+    wait_until("signed in again", || {
+        auth(&engine.snapshot())["state"] == "signed_in"
+    });
     assert_eq!(pod.app_calls.load(Ordering::SeqCst), 2);
     drop(engine);
     rt.shutdown_background();
@@ -1084,9 +1131,14 @@ fn sign_in_errors_are_short_human_messages() {
         .unwrap();
     let (base, pod) = start_stub_pod(&rt);
     let (engine, rx) = stub_engine(&base);
-    let error = |engine: &CanvasEngine| {
-        wait_until("auth error", || auth(&engine.snapshot())["state"] == "error");
-        auth(&engine.snapshot())["error"].as_str().unwrap().to_owned()
+    let error = |engine: &ConstructEngine| {
+        wait_until("auth error", || {
+            auth(&engine.snapshot())["state"] == "error"
+        });
+        auth(&engine.snapshot())["error"]
+            .as_str()
+            .unwrap()
+            .to_owned()
     };
 
     *pod.token_reply.lock().unwrap() = Some((
@@ -1096,10 +1148,16 @@ fn sign_in_errors_are_short_human_messages() {
     stub_sign_in(&engine, &rx);
     assert_eq!(error(&engine), SIGN_IN_NOT_OWNER);
 
-    *pod.app_reply.lock().unwrap() =
-        Some((502, json!({ "error": "upstream_unreachable", "detail": "connection refused" })));
-    engine.dispatch(&json!({ "intent": "action.auth.login", "instance_url": "http://stub" }).to_string());
-    wait_until("upstream error", || auth(&engine.snapshot())["error"] == SIGN_IN_UPSTREAM_DOWN);
+    *pod.app_reply.lock().unwrap() = Some((
+        502,
+        json!({ "error": "upstream_unreachable", "detail": "connection refused" }),
+    ));
+    engine.dispatch(
+        &json!({ "intent": "action.auth.login", "instance_url": "http://stub" }).to_string(),
+    );
+    wait_until("upstream error", || {
+        auth(&engine.snapshot())["error"] == SIGN_IN_UPSTREAM_DOWN
+    });
     drop(engine);
     rt.shutdown_background();
 
@@ -1110,6 +1168,8 @@ fn sign_in_errors_are_short_human_messages() {
         format!("http://{addr}")
     };
     let (engine, _rx) = stub_engine(&dead);
-    engine.dispatch(&json!({ "intent": "action.auth.login", "instance_url": "http://stub" }).to_string());
+    engine.dispatch(
+        &json!({ "intent": "action.auth.login", "instance_url": "http://stub" }).to_string(),
+    );
     assert_eq!(error(&engine), SIGN_IN_POD_UNREACHABLE);
 }

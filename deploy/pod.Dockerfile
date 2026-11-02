@@ -1,7 +1,7 @@
 # The pod (crates/server) as a small runtime image for Fly.io (deploy/fly/pod.toml).
 #
-#   docker build -f deploy/pod.Dockerfile -t canvas-pod .     # from the repo root
-#   docker run --rm -p 8080:8080 -v canvas-data:/data canvas-pod
+#   docker build -f deploy/pod.Dockerfile -t construct-pod .     # from the repo root
+#   docker run --rm -p 8080:8080 -v construct-data:/data construct-pod
 #
 # Runtime config is environment-only (README "Server runtime configuration").
 
@@ -22,8 +22,8 @@ RUN cargo build --release --locked -p server \
 
 FROM ${RUNTIME_IMAGE}
 COPY --from=build /server /server
-ENV CANVAS_ADDR=0.0.0.0:8080 \
-    CANVAS_DATA_DIR=/data \
+ENV CONSTRUCT_ADDR=0.0.0.0:8080 \
+    CONSTRUCT_DATA_DIR=/data \
     RUST_LOG=info
 EXPOSE 8080
 ENTRYPOINT ["/server"]

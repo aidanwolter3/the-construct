@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use crate::{CanvasEngine, Inner};
+use crate::{ConstructEngine, Inner};
 
 /// Timeout for one catalog request.
 const LAYOUT_HTTP_TIMEOUT: Duration = Duration::from_secs(15);
@@ -141,7 +141,7 @@ impl Inner {
         let (status, text) = match sent {
             Ok(x) => x,
             Err(e) => {
-                eprintln!("[CanvasEngine] layouts: {method} {url} failed: {e}");
+                eprintln!("[ConstructEngine] layouts: {method} {url} failed: {e}");
                 return Err(LayoutApiError::Offline {
                     reason: LAYOUTS_OFFLINE.to_owned(),
                 });
@@ -153,7 +153,7 @@ impl Inner {
         let err = error_for(status, &text, write);
         let start: String = text.trim().chars().take(200).collect();
         eprintln!(
-            "[CanvasEngine] layouts: {method} {url} -> HTTP {status}: {start} (shown: {})",
+            "[ConstructEngine] layouts: {method} {url} -> HTTP {status}: {start} (shown: {})",
             err.reason()
         );
         if status == 401
@@ -173,12 +173,12 @@ impl Inner {
         if self.signal.is_shut_down() {
             return;
         }
-        println!("[CanvasEngine] layouts: {what} changed the active layout; refetching");
+        println!("[ConstructEngine] layouts: {what} changed the active layout; refetching");
         self.refresh();
     }
 }
 
-impl CanvasEngine {
+impl ConstructEngine {
     /// `GET /v1/layouts?workspace_id=<engine's workspace>`: `{"layouts":
     /// [{id, workspace_id, title, description, preview_hint, builtin,
     /// current_version, created_at, updated_at, active, active_version?}],

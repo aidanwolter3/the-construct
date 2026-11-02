@@ -6,32 +6,32 @@ plugins {
 }
 
 // Configuration-time properties (configuration-cache friendly, like :shared's buildRustFfi):
-//   -PcanvasBaseUrl=http://...   default server for BuildConfig.CANVAS_BASE_URL (default: the staging pod;
+//   -PconstructBaseUrl=http://...   default server for BuildConfig.CONSTRUCT_BASE_URL (default: the staging pod;
 //                                local: http://10.0.2.2:8080 on the emulator, http://127.0.0.1:8080 with adb reverse)
-//   -PcanvasWorkspace=<id>       default workspace for BuildConfig.CANVAS_WORKSPACE
+//   -PconstructWorkspace=<id>       default workspace for BuildConfig.CONSTRUCT_WORKSPACE
 //   -PandroidAbis=arm64-v8a,x86_64   ABIs to build with cargo-ndk and package
 //   -PskipRustBuild              don't run scripts/build_android.sh (use the existing jniLibs)
 val stagingBaseUrl = "https://the-construct-pod.fly.dev"
-val canvasBaseUrl = providers.gradleProperty("canvasBaseUrl").getOrElse(stagingBaseUrl)
-val canvasWorkspace = providers.gradleProperty("canvasWorkspace").getOrElse("home")
+val constructBaseUrl = providers.gradleProperty("constructBaseUrl").getOrElse(stagingBaseUrl)
+val constructWorkspace = providers.gradleProperty("constructWorkspace").getOrElse("home")
 val androidAbis: List<String> = providers.gradleProperty("androidAbis").getOrElse("arm64-v8a,x86_64")
     .split(',', ' ').map { it.trim() }.filter { it.isNotEmpty() }
 val skipRustBuild = providers.gradleProperty("skipRustBuild").isPresent
 
 android {
-    namespace = "org.genui.canvas.android"
+    namespace = "org.theconstruct.android"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "org.genui.canvas.android"
+        applicationId = "org.theconstruct.android"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
 
-        buildConfigField("String", "CANVAS_BASE_URL", "\"$canvasBaseUrl\"")
+        buildConfigField("String", "CONSTRUCT_BASE_URL", "\"$constructBaseUrl\"")
         buildConfigField("String", "STAGING_BASE_URL", "\"$stagingBaseUrl\"")
-        buildConfigField("String", "CANVAS_WORKSPACE", "\"$canvasWorkspace\"")
+        buildConfigField("String", "CONSTRUCT_WORKSPACE", "\"$constructWorkspace\"")
 
         // Package only the ABIs libclient_ffi.so is built for. The JNA aar ships more (armeabi-v7a, x86,
         // ...); without this filter such a device would install the app and then fail to load the engine.
@@ -89,7 +89,7 @@ val buildRustAndroid by tasks.registering(Exec::class) {
     val cargoBin = "${System.getProperty("user.home")}/.cargo/bin"
     environment("PATH", "$cargoBin${File.pathSeparator}${System.getenv("PATH") ?: ""}")
     val abis = androidAbis.joinToString(" ")
-    environment("CANVAS_ANDROID_ABIS", abis)
+    environment("CONSTRUCT_ANDROID_ABIS", abis)
     inputs.property("abis", abis)
 
     inputs.files(

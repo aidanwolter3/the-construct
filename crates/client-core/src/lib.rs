@@ -1,6 +1,6 @@
 //! Client core engine (DESIGN.md §2.3).
 //!
-//! `CanvasEngine` owns workspace state, fetches the hydration bundle over
+//! `ConstructEngine` owns workspace state, fetches the hydration bundle over
 //! HTTP and applies optimistic mutations locally, pushing a `StateSnapshot`
 //! to subscribers on every change.
 //!
@@ -41,7 +41,7 @@
 //! M7 (docs/DECISIONS.md D24): `ActionIntent::PromptAgent` posts the prompt
 //! to `POST /v1/agent/modify_layout` on a background thread and applies the
 //! returned layout; progress is in `agent_json`. The engine tracks the
-//! layout version (`X-Canvas-Layout-Version`), and a third background thread
+//! layout version (`X-Construct-Layout-Version`), and a third background thread
 //! ([`events`]) listens on the workspace's SSE push channel and refetches
 //! when a newer version is announced.
 
@@ -63,9 +63,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use protocol::{ActionIntent, EntityRecord, FieldUpdate, UiNode, WorkspaceSpec};
 use serde_json::{Value, json};
 
+use auth::{LoopbackListener, PendingAuth, Pkce, Redirect, guarded};
 pub use auth::{MemoryStore, RedirectMode, SecureStore, UrlOpener};
 pub use catalog::LayoutApiError;
-use auth::{LoopbackListener, PendingAuth, Pkce, Redirect, guarded};
 use store::{AlsoUpdate, NewOutboxRow, OutboxRow, Store, StoreOps};
 
 const DEFAULT_WORKSPACE_ID: &str = "home";
@@ -96,11 +96,11 @@ pub const IDLE_AGENT_JSON: &str = r#"{"state":"idle"}"#;
 /// `agent_json` message when the prompt could not reach the pod.
 pub const AGENT_OFFLINE: &str = "offline: try again when online";
 /// Response header carrying the served layout version.
-pub const LAYOUT_VERSION_HEADER: &str = "X-Canvas-Layout-Version";
+pub const LAYOUT_VERSION_HEADER: &str = "X-Construct-Layout-Version";
 /// Response header naming the active layout of the workspace (D26).
-pub const LAYOUT_ID_HEADER: &str = "X-Canvas-Layout-Id";
+pub const LAYOUT_ID_HEADER: &str = "X-Construct-Layout-Id";
 /// Response header with that layout's own (per-layout) version (D26).
-pub const LAYOUT_ID_VERSION_HEADER: &str = "X-Canvas-Layout-Id-Version";
+pub const LAYOUT_ID_VERSION_HEADER: &str = "X-Construct-Layout-Id-Version";
 /// Timeout for `POST /v1/agent/modify_layout` (an LLM provider may take
 /// up to 120 s plus retries on the pod).
 const AGENT_HTTP_TIMEOUT: Duration = Duration::from_secs(180);
@@ -138,7 +138,7 @@ impl EngineConfig {
     }
 }
 
-/// Construction options for [`CanvasEngine::init_with_options`].
+/// Construction options for [`ConstructEngine::init_with_options`].
 pub struct EngineOptions {
     pub config: EngineConfig,
     /// Where the pod session is kept. `None`: the platform default
@@ -335,7 +335,7 @@ impl Observer {
     /// `dispatch`/`refresh` callers (which may sit behind an FFI boundary).
     fn call(&self, snap: StateSnapshot) {
         if panic::catch_unwind(AssertUnwindSafe(|| (self.f)(snap))).is_err() {
-            eprintln!("[CanvasEngine] observer panicked; ignored");
+            eprintln!("[ConstructEngine] observer panicked; ignored");
         }
     }
 }
@@ -357,12 +357,12 @@ struct State {
     /// Agent prompt status JSON (see [`StateSnapshot::agent_json`]); empty
     /// means idle.
     agent_json: String,
-    /// Version of the applied layout (`X-Canvas-Layout-Version` of the
+    /// Version of the applied layout (`X-Construct-Layout-Version` of the
     /// last fetch, or a prompt response's `layout_version`); `None` when
     /// unknown or the served layout is not versioned.
     layout_version: Option<u64>,
     /// The active catalog layout on display and its per-layout version
-    /// (`X-Canvas-Layout-Id` / `X-Canvas-Layout-Id-Version`, D26).
+    /// (`X-Construct-Layout-Id` / `X-Construct-Layout-Id-Version`, D26).
     layout_id: Option<String>,
     layout_id_version: Option<u64>,
     is_online: bool,
@@ -451,7 +451,7 @@ impl State {
             Ok((ws, entities, pending)) => {
                 if ws.is_some() || !entities.is_empty() || pending > 0 {
                     println!(
-                        "[CanvasEngine] loaded cached workspace '{workspace_id}' (layout: {}, {} \
+                        "[ConstructEngine] loaded cached workspace '{workspace_id}' (layout: {}, {} \
                          entities, {pending} pending actions) from {CACHE_DB_FILE}",
                         if ws.is_some() { "yes" } else { "no" },
                         entities.len(),
@@ -467,7 +467,7 @@ impl State {
                 self.entities = entities;
                 self.pending_actions = u32::try_from(pending).unwrap_or(u32::MAX);
             }
-            Err(e) => eprintln!("[CanvasEngine] failed to load cache: {e}"),
+            Err(e) => eprintln!("[ConstructEngine] failed to load cache: {e}"),
         }
     }
 
@@ -490,7 +490,7 @@ impl State {
         let pending = match self.store.as_ref().map(|s| s.pending_outbox()) {
             Some(Ok(rows)) => rows,
             Some(Err(e)) => {
-                eprintln!("[CanvasEngine] failed to read the outbox for the refetch merge: {e}");
+                eprintln!("[ConstructEngine] failed to read the outbox for the refetch merge: {e}");
                 Vec::new()
             }
             None => Vec::new(),
@@ -518,7 +518,7 @@ impl State {
         }
         if !prev_updates.is_empty() {
             println!(
-                "[CanvasEngine] re-applied {} pending action(s) onto the fetched workspace \
+                "[ConstructEngine] re-applied {} pending action(s) onto the fetched workspace \
                  '{workspace_id}'",
                 prev_updates.len()
             );
@@ -536,7 +536,7 @@ impl State {
                 Ok(())
             });
             if let Err(e) = result {
-                eprintln!("[CanvasEngine] failed to persist workspace '{workspace_id}': {e}");
+                eprintln!("[ConstructEngine] failed to persist workspace '{workspace_id}': {e}");
             }
         }
         self.workspace = Some(workspace);
@@ -570,7 +570,9 @@ impl State {
             if let Err(e) =
                 store.save_workspace(workspace_id, &layout, &uris, &self.queries, unix_now())
             {
-                eprintln!("[CanvasEngine] failed to persist the new layout of '{workspace_id}': {e}");
+                eprintln!(
+                    "[ConstructEngine] failed to persist the new layout of '{workspace_id}': {e}"
+                );
             }
         }
         self.workspace = Some(layout);
@@ -611,33 +613,40 @@ impl State {
             });
             match result {
                 Ok((dropped, entities, ws)) => println!(
-                    "[CanvasEngine] signed out: removed {entities} cached private entities{}{}",
-                    if ws { format!(", workspace '{workspace_id}'") } else { String::new() },
+                    "[ConstructEngine] signed out: removed {entities} cached private entities{}{}",
+                    if ws {
+                        format!(", workspace '{workspace_id}'")
+                    } else {
+                        String::new()
+                    },
                     if dropped > 0 {
                         format!(" and {dropped} pending action(s) that need the session")
                     } else {
                         String::new()
                     }
                 ),
-                Err(e) => eprintln!("[CanvasEngine] ERROR: failed to purge private cache: {e}"),
+                Err(e) => eprintln!("[ConstructEngine] ERROR: failed to purge private cache: {e}"),
             }
             // `secure_delete` zeroed the freed pages; flush them out of the
             // WAL too, so the purged rows are not left in old WAL frames.
             match store.checkpoint_truncate() {
                 Ok(true) => {}
                 Ok(false) => eprintln!(
-                    "[CanvasEngine] WAL checkpoint after the purge was blocked by a reader; the \
+                    "[ConstructEngine] WAL checkpoint after the purge was blocked by a reader; the \
                      WAL is truncated at a later checkpoint"
                 ),
-                Err(e) => eprintln!("[CanvasEngine] WAL checkpoint after the purge failed: {e}"),
+                Err(e) => eprintln!("[ConstructEngine] WAL checkpoint after the purge failed: {e}"),
             }
             match store.pending_outbox() {
                 Ok(rows) => keep.extend(rows.into_iter().map(|r| r.entity_uri)),
-                Err(e) => eprintln!("[CanvasEngine] failed to read the outbox after the purge: {e}"),
+                Err(e) => {
+                    eprintln!("[ConstructEngine] failed to read the outbox after the purge: {e}")
+                }
             }
         }
         self.entities.retain(|u, _| !private(u) || keep.contains(u));
-        self.queries.retain(|_, uris| !uris.iter().any(|u| private(u)));
+        self.queries
+            .retain(|_, uris| !uris.iter().any(|u| private(u)));
         self.sync_pending_count();
     }
 
@@ -646,7 +655,7 @@ impl State {
         if let Some(store) = &self.store {
             match store.pending_count() {
                 Ok(n) => self.pending_actions = n,
-                Err(e) => eprintln!("[CanvasEngine] failed to count pending actions: {e}"),
+                Err(e) => eprintln!("[ConstructEngine] failed to count pending actions: {e}"),
             }
         }
     }
@@ -756,7 +765,11 @@ fn reapply_row(entity: &mut EntityRecord, row: &OutboxRow) -> Option<(String, Ve
         return None;
     };
     let updates: Vec<(&str, &str)> = std::iter::once((field.as_str(), value_expr.as_str()))
-        .chain(row.also.iter().map(|a| (a.field.as_str(), a.value_expr.as_str())))
+        .chain(
+            row.also
+                .iter()
+                .map(|a| (a.field.as_str(), a.value_expr.as_str())),
+        )
         .collect();
     let results = eval_updates(entity, &updates);
     let mut prevs = Vec::with_capacity(results.len());
@@ -766,7 +779,7 @@ fn reapply_row(entity: &mut EntityRecord, row: &OutboxRow) -> Option<(String, Ve
                 entity.set(f.to_string(), v);
             }
             Err(e) => eprintln!(
-                "[CanvasEngine] re-apply outbox #{} {}#{f}: {e}; field unchanged",
+                "[ConstructEngine] re-apply outbox #{} {}#{f}: {e}; field unchanged",
                 row.id, row.entity_uri
             ),
         }
@@ -895,11 +908,11 @@ impl Drop for Inner {
 }
 
 /// The client-side state engine. Cheap to share behind an `Arc`.
-pub struct CanvasEngine {
+pub struct ConstructEngine {
     inner: Arc<Inner>,
 }
 
-impl Drop for CanvasEngine {
+impl Drop for ConstructEngine {
     /// Stop the sync worker now, not only once `Inner` is freed: a worker
     /// mid-pass holds a strong reference and would otherwise keep flushing
     /// rows after the engine was closed.
@@ -960,7 +973,9 @@ fn open_store(storage_path: &str) -> (Option<Store>, Arc<Mutex<()>>) {
     if !storage_path.is_empty() {
         let path = PathBuf::from(storage_path).join(CACHE_DB_FILE);
         let opened = match fs::create_dir_all(storage_path) {
-            Ok(()) => Store::open(&path).map_err(|e| (store::is_read_only_error(&e), e.to_string())),
+            Ok(()) => {
+                Store::open(&path).map_err(|e| (store::is_read_only_error(&e), e.to_string()))
+            }
             Err(e) => Err((false, e.to_string())),
         };
         match opened {
@@ -970,23 +985,23 @@ fn open_store(storage_path: &str) -> (Option<Store>, Arc<Mutex<()>>) {
                 // memory so the app still shows it, but every change is
                 // lost on exit.
                 eprintln!(
-                    "[CanvasEngine] ERROR: {} is read-only ({e}); using an in-memory copy. \
+                    "[ConstructEngine] ERROR: {} is read-only ({e}); using an in-memory copy. \
                      Changes and queued actions will NOT be saved across restarts.",
                     path.display()
                 );
                 match Store::open_in_memory_copy_of(&path) {
                     Ok((store, ws, ents)) => {
                         eprintln!(
-                            "[CanvasEngine] copied {ws} workspace(s) and {ents} entities from the \
+                            "[ConstructEngine] copied {ws} workspace(s) and {ents} entities from the \
                              read-only {CACHE_DB_FILE} (outbox rows are not copied)"
                         );
                         return (Some(store), net_lock_for(None));
                     }
-                    Err(e) => eprintln!("[CanvasEngine] in-memory copy failed: {e}"),
+                    Err(e) => eprintln!("[ConstructEngine] in-memory copy failed: {e}"),
                 }
             }
             Err((false, e)) => eprintln!(
-                "[CanvasEngine] cannot open {storage_path}/{CACHE_DB_FILE}: {e}; using an \
+                "[ConstructEngine] cannot open {storage_path}/{CACHE_DB_FILE}: {e}; using an \
                  in-memory store"
             ),
         }
@@ -994,7 +1009,7 @@ fn open_store(storage_path: &str) -> (Option<Store>, Arc<Mutex<()>>) {
     match Store::open_in_memory() {
         Ok(store) => (Some(store), net_lock_for(None)),
         Err(e) => {
-            eprintln!("[CanvasEngine] cannot open an in-memory store: {e}; mutations disabled");
+            eprintln!("[ConstructEngine] cannot open an in-memory store: {e}; mutations disabled");
             (None, net_lock_for(None))
         }
     }
@@ -1020,7 +1035,7 @@ fn substitute_value_token(payload: Value, value: &Value) -> Value {
     }
 }
 
-impl CanvasEngine {
+impl ConstructEngine {
     /// Create an engine for the `"home"` workspace. Returns immediately; the
     /// initial fetch runs on a background thread. Never panics if the server
     /// is unreachable.
@@ -1028,13 +1043,18 @@ impl CanvasEngine {
         Self::init_with_workspace(storage_path, base_url, DEFAULT_WORKSPACE_ID)
     }
 
-    /// Like [`CanvasEngine::init`], fetching `GET {base_url}/v1/workspaces/{workspace_id}`.
+    /// Like [`ConstructEngine::init`], fetching `GET {base_url}/v1/workspaces/{workspace_id}`.
     /// Default options: platform secure store, no URL opener, loopback redirect.
     pub fn init_with_workspace(storage_path: &str, base_url: &str, workspace_id: &str) -> Self {
-        Self::init_with_options(storage_path, base_url, workspace_id, EngineOptions::default())
+        Self::init_with_options(
+            storage_path,
+            base_url,
+            workspace_id,
+            EngineOptions::default(),
+        )
     }
 
-    /// Like [`CanvasEngine::init_with_workspace`] with custom timing. Uses
+    /// Like [`ConstructEngine::init_with_workspace`] with custom timing. Uses
     /// an in-memory [`SecureStore`] (tests: never touches the Keychain).
     pub fn init_with_config(
         storage_path: &str,
@@ -1084,7 +1104,7 @@ impl CanvasEngine {
         let stored = guarded("SecureStore.get", || secure_store.get(&session_key)).flatten();
         if let Some(session) = stored.as_deref().and_then(Session::parse) {
             println!(
-                "[CanvasEngine] restored pod session for {base} (user: {})",
+                "[ConstructEngine] restored pod session for {base} (user: {})",
                 session.username.as_deref().unwrap_or("?")
             );
             state.auth_json = session.auth_json();
@@ -1123,7 +1143,7 @@ impl CanvasEngine {
         // reachability.
         let bg: Weak<Inner> = Arc::downgrade(&inner);
         let spawned = thread::Builder::new()
-            .name("canvas-engine-fetch".into())
+            .name("construct-engine-fetch".into())
             .spawn(move || {
                 let mut answered = false;
                 loop {
@@ -1141,25 +1161,25 @@ impl CanvasEngine {
                 }
             });
         if let Err(e) = spawned {
-            eprintln!("[CanvasEngine] failed to spawn fetch thread: {e}");
+            eprintln!("[ConstructEngine] failed to spawn fetch thread: {e}");
         }
 
         let worker: Weak<Inner> = Arc::downgrade(&inner);
         let spawned = thread::Builder::new()
-            .name("canvas-engine-sync".into())
+            .name("construct-engine-sync".into())
             .spawn(move || sync_worker(worker, signal));
         if let Err(e) = spawned {
-            eprintln!("[CanvasEngine] failed to spawn sync worker: {e}");
+            eprintln!("[ConstructEngine] failed to spawn sync worker: {e}");
         }
 
         let events: Weak<Inner> = Arc::downgrade(&inner);
         let events_signal = Arc::clone(&inner.signal);
         let events_url = format!("{base}/v1/workspaces/{workspace_id}/events");
         let spawned = thread::Builder::new()
-            .name("canvas-engine-events".into())
+            .name("construct-engine-events".into())
             .spawn(move || events::events_thread(events, events_signal, events_url, poll_interval));
         if let Err(e) = spawned {
-            eprintln!("[CanvasEngine] failed to spawn the events thread: {e}");
+            eprintln!("[ConstructEngine] failed to spawn the events thread: {e}");
         }
 
         Self { inner }
@@ -1204,7 +1224,7 @@ impl CanvasEngine {
     }
 
     /// Deliver an OAuth redirect (custom-scheme mode, e.g.
-    /// `canvas://oauth?code=..&state=..`) to the pending sign-in. Returns
+    /// `construct://oauth?code=..&state=..`) to the pending sign-in. Returns
     /// true if it was taken: delivered to the in-memory flow, or (no flow in
     /// memory, e.g. the app process was restarted while the browser was in
     /// front) handed to a background thread that completes the sign-in
@@ -1241,9 +1261,12 @@ impl Inner {
             }
             st.is_online = reachable;
             if reachable {
-                println!("[CanvasEngine] server reachable again; online");
+                println!("[ConstructEngine] server reachable again; online");
             } else {
-                eprintln!("[CanvasEngine] server unreachable ({}); offline", self.health_url);
+                eprintln!(
+                    "[ConstructEngine] server unreachable ({}); offline",
+                    self.health_url
+                );
             }
             st.seq += 1;
             st.snapshot()
@@ -1267,7 +1290,9 @@ impl Inner {
             if st.session.as_ref().map(|s| s.token.as_str()) != Some(token) {
                 return None;
             }
-            eprintln!("[CanvasEngine] pod rejected the session on {what} (HTTP 401); signed out");
+            eprintln!(
+                "[ConstructEngine] pod rejected the session on {what} (HTTP 401); signed out"
+            );
             st.session = None;
             st.auth_json = SIGNED_OUT_AUTH_JSON.to_string();
             // Pending rows are kept (they resume after the next sign-in).
@@ -1294,10 +1319,14 @@ impl Inner {
             .map(|s| serde_json::to_string(s).unwrap_or_default());
         match raw {
             Some(raw) => {
-                if guarded("SecureStore.set", || self.secure_store.set(&self.session_key, &raw))
-                    .is_none()
+                if guarded("SecureStore.set", || {
+                    self.secure_store.set(&self.session_key, &raw)
+                })
+                .is_none()
                 {
-                    eprintln!("[CanvasEngine] the session could not be stored; it lasts until exit");
+                    eprintln!(
+                        "[ConstructEngine] the session could not be stored; it lasts until exit"
+                    );
                 }
             }
             None => {
@@ -1330,14 +1359,15 @@ impl Inner {
         let snap = {
             let mut st = lock(&self.state);
             match result {
-                Ok(_) if token.is_some()
-                    && st.session.as_ref().map(|s| &s.token) != token.as_ref() =>
+                Ok(_)
+                    if token.is_some()
+                        && st.session.as_ref().map(|s| &s.token) != token.as_ref() =>
                 {
                     // Fetched with a session that was signed out (or
                     // replaced) meanwhile: never cache that account's data
                     // again. Whoever changed the session refetches.
                     println!(
-                        "[CanvasEngine] discarded workspace '{}' fetched with a session that has \
+                        "[ConstructEngine] discarded workspace '{}' fetched with a session that has \
                          since changed",
                         self.workspace_id
                     );
@@ -1354,7 +1384,7 @@ impl Inner {
                         String::new()
                     };
                     println!(
-                        "[CanvasEngine] fetched workspace '{}' ({} entities) from {}{after}",
+                        "[ConstructEngine] fetched workspace '{}' ({} entities) from {}{after}",
                         self.workspace_id,
                         spec.entities.len(),
                         self.workspace_url
@@ -1365,7 +1395,7 @@ impl Inner {
                             // applied (agent response or a later fetch):
                             // keep the newer layout, take the entities.
                             println!(
-                                "[CanvasEngine] fetched layout v{v} is older than the applied \
+                                "[ConstructEngine] fetched layout v{v} is older than the applied \
                                  v{have}; layout kept"
                             );
                             spec.workspace = current.clone();
@@ -1390,12 +1420,12 @@ impl Inner {
                     // keep whatever workspace we already have.
                     if code == 404 {
                         eprintln!(
-                            "[CanvasEngine] workspace '{}' not found (HTTP 404)",
+                            "[ConstructEngine] workspace '{}' not found (HTTP 404)",
                             self.workspace_id
                         );
                     } else {
                         eprintln!(
-                            "[CanvasEngine] fetch {} failed: HTTP {code}",
+                            "[ConstructEngine] fetch {} failed: HTTP {code}",
                             self.workspace_url
                         );
                     }
@@ -1413,7 +1443,7 @@ impl Inner {
                         || n.is_multiple_of(FETCH_FAILURE_LOG_EVERY)
                     {
                         eprintln!(
-                            "[CanvasEngine] fetch {} failed: {e} (attempt {n}; retrying every \
+                            "[ConstructEngine] fetch {} failed: {e} (attempt {n}; retrying every \
                              {} ms, repeats are not logged)",
                             self.workspace_url,
                             self.config.poll_interval.as_millis()
@@ -1468,7 +1498,7 @@ impl Inner {
                         return None;
                     }
                     Err(e) => {
-                        eprintln!("[CanvasEngine] sync worker: cannot read the outbox: {e}");
+                        eprintln!("[ConstructEngine] sync worker: cannot read the outbox: {e}");
                         return Some(self.config.poll_interval);
                     }
                 }
@@ -1483,7 +1513,7 @@ impl Inner {
             }
 
             if self.signal.is_shut_down() {
-                // Checked again right before the POST: once `CanvasEngine`
+                // Checked again right before the POST: once `ConstructEngine`
                 // has been dropped no new POST starts (one already in flight
                 // may complete).
                 return None;
@@ -1492,11 +1522,12 @@ impl Inner {
             // The pod session is only ever sent to the pod itself: an
             // endpoint such as `@evil.example/x` or `.evil.example/x` would
             // otherwise move the request (and the bearer) to another host.
-            let sent = token.as_deref().filter(|_| same_origin(&self.base_url, &url));
+            let sent = token
+                .as_deref()
+                .filter(|_| same_origin(&self.base_url, &url));
             let result = post_json(client, &url, &row.payload_json, sent);
             if let FlushResult::Unauthorized = result {
-                let (snap, blocked) =
-                    self.outbox_unauthorized(&row, &url, sent, token.as_deref());
+                let (snap, blocked) = self.outbox_unauthorized(&row, &url, sent, token.as_deref());
                 drop(net);
                 let signed_out = snap.is_some();
                 if let Some(snap) = snap {
@@ -1546,14 +1577,14 @@ impl Inner {
         let mut st = lock(&self.state);
         if expired.is_none() && st.session.as_ref().map(|s| s.token.as_str()) != session {
             eprintln!(
-                "[CanvasEngine] outbox #{} POST {url} -> 401 with a session that has since \
+                "[ConstructEngine] outbox #{} POST {url} -> 401 with a session that has since \
                  changed; retrying",
                 row.id
             );
             return (None, false);
         }
         eprintln!(
-            "[CanvasEngine] outbox #{} POST {url} -> 401; kept PENDING, flushing paused until \
+            "[ConstructEngine] outbox #{} POST {url} -> 401; kept PENDING, flushing paused until \
              sign-in ({} pending)",
             row.id, st.pending_actions
         );
@@ -1582,14 +1613,14 @@ impl Inner {
                 if let Some(Err(e)) = deleted {
                     // The row stays and will be sent again.
                     eprintln!(
-                        "[CanvasEngine] outbox #{id} POST {url} -> {code}, but deleting the row \
+                        "[ConstructEngine] outbox #{id} POST {url} -> {code}, but deleting the row \
                          failed: {e}"
                     );
                     return (None, true);
                 }
                 st.sync_pending_count();
                 println!(
-                    "[CanvasEngine] outbox #{id} POST {url} -> {code}, deleted ({} pending)",
+                    "[ConstructEngine] outbox #{id} POST {url} -> {code}, deleted ({} pending)",
                     st.pending_actions
                 );
                 st.seq += 1;
@@ -1600,7 +1631,7 @@ impl Inner {
                 match st.reject_row(row) {
                     Ok((restored, now_value, reapplied)) => {
                         println!(
-                            "[CanvasEngine] outbox #{id} POST {url} -> {code}, rejected: {body}; \
+                            "[ConstructEngine] outbox #{id} POST {url} -> {code}, rejected: {body}; \
                              rolled back {}#{field} to {restored}, re-applied {reapplied} later \
                              row(s) -> {now_value} ({} pending)",
                             row.entity_uri, st.pending_actions
@@ -1611,7 +1642,7 @@ impl Inner {
                     Err(e) => {
                         // Keep the row; retry the rollback on a later pass.
                         eprintln!(
-                            "[CanvasEngine] outbox #{id} POST {url} -> {code}, rejected: {body}; \
+                            "[ConstructEngine] outbox #{id} POST {url} -> {code}, rejected: {body}; \
                              rollback failed to persist ({e}); will retry"
                         );
                         (format!("HTTP {code}: {body}; rollback failed: {e}"), false)
@@ -1628,16 +1659,16 @@ impl Inner {
         let delay = self.config.backoff(retry_count);
         let next = unix_now_ms() + delay.as_millis() as i64;
         if let Some(Err(e)) = st.store.as_ref().map(|s| s.mark_retry(id, next, &error)) {
-            eprintln!("[CanvasEngine] outbox #{id}: failed to record the retry: {e}");
+            eprintln!("[ConstructEngine] outbox #{id}: failed to record the retry: {e}");
         }
         eprintln!(
-            "[CanvasEngine] outbox #{id} POST {url} -> {error}; retry #{retry_count} in {} ms \
+            "[ConstructEngine] outbox #{id} POST {url} -> {error}; retry #{retry_count} in {} ms \
              ({} pending)",
             delay.as_millis(),
             st.pending_actions
         );
         if network && st.is_online {
-            eprintln!("[CanvasEngine] server unreachable ({url}); offline");
+            eprintln!("[ConstructEngine] server unreachable ({url}); offline");
             st.is_online = false;
             st.seq += 1;
             return (Some(st.snapshot()), true);
@@ -1650,11 +1681,11 @@ impl Inner {
         let compact = serde_json::from_str::<Value>(intent_json)
             .map(|v| v.to_string())
             .unwrap_or_else(|_| intent_json.to_string());
-        println!("[CanvasEngine] dispatch: {compact}");
+        println!("[ConstructEngine] dispatch: {compact}");
         let intent: ActionIntent = match serde_json::from_str(intent_json) {
             Ok(i) => i,
             Err(e) => {
-                eprintln!("[CanvasEngine] dispatch: invalid intent ({e}); ignored");
+                eprintln!("[ConstructEngine] dispatch: invalid intent ({e}); ignored");
                 return;
             }
         };
@@ -1682,7 +1713,7 @@ impl Inner {
             ActionIntent::PromptAgent { prompt_text } => self.start_prompt(prompt_text),
             other => {
                 eprintln!(
-                    "[CanvasEngine] dispatch: intent not handled by client-core yet: {other:?}"
+                    "[ConstructEngine] dispatch: intent not handled by client-core yet: {other:?}"
                 );
             }
         }
@@ -1710,14 +1741,17 @@ impl Inner {
             let st = &mut *guard;
             let mut entity = st.entities.get(&entity_uri).cloned().unwrap_or_default();
             let updates: Vec<(&str, &str)> = std::iter::once((field.as_str(), value_expr.as_str()))
-                .chain(also.iter().map(|a| (a.field.as_str(), a.value_expr.as_str())))
+                .chain(
+                    also.iter()
+                        .map(|a| (a.field.as_str(), a.value_expr.as_str())),
+                )
                 .collect();
             let mut evaluated = Vec::with_capacity(updates.len());
             for ((f, _), (prev, result)) in updates.iter().zip(eval_updates(&entity, &updates)) {
                 match result {
                     Ok(v) => evaluated.push((prev, v)),
                     Err(e) => {
-                        eprintln!("[CanvasEngine] mutate {entity_uri}#{f}: {e}; no change");
+                        eprintln!("[ConstructEngine] mutate {entity_uri}#{f}: {e}; no change");
                         return;
                     }
                 }
@@ -1737,7 +1771,7 @@ impl Inner {
                 })
                 .collect();
             let Some(store) = st.store.as_mut() else {
-                eprintln!("[CanvasEngine] mutate {entity_uri}#{field}: no store; no change");
+                eprintln!("[ConstructEngine] mutate {entity_uri}#{field}: no store; no change");
                 return;
             };
             let now = unix_now();
@@ -1761,7 +1795,7 @@ impl Inner {
                 Err(e) => {
                     // Atomic: memory is untouched, the click is a no-op.
                     eprintln!(
-                        "[CanvasEngine] ERROR: mutate {entity_uri}#{field}: failed to persist \
+                        "[ConstructEngine] ERROR: mutate {entity_uri}#{field}: failed to persist \
                          ({e}); no change"
                     );
                     return;
@@ -1770,7 +1804,13 @@ impl Inner {
             let also_desc: String = row
                 .also
                 .iter()
-                .map(|a| format!(", {}={}", a.field, entity.get(&a.field).unwrap_or(&Value::Null)))
+                .map(|a| {
+                    format!(
+                        ", {}={}",
+                        a.field,
+                        entity.get(&a.field).unwrap_or(&Value::Null)
+                    )
+                })
                 .collect();
             st.entities.insert(entity_uri.clone(), entity);
             st.pending_actions = st.pending_actions.saturating_add(1);
@@ -1781,7 +1821,7 @@ impl Inner {
         self.notify(snap);
         self.signal.wake();
         println!(
-            "[CanvasEngine] mutate {entity_uri}#{field} = {value} (outbox #{outbox_id}, \
+            "[ConstructEngine] mutate {entity_uri}#{field} = {value} (outbox #{outbox_id}, \
              {pending} pending); dispatch->notify {} us",
             started.elapsed().as_micros()
         );
@@ -1810,7 +1850,7 @@ impl Inner {
     }
 
     /// `ActionIntent::PromptAgent`: go `running` and post the prompt on a
-    /// `canvas-engine-agent` thread (the dispatching thread never blocks).
+    /// `construct-engine-agent` thread (the dispatching thread never blocks).
     /// A newer prompt supersedes an older one's status report (its layout,
     /// if it arrives, is still applied when newer).
     fn start_prompt(self: &Arc<Self>, prompt: String) {
@@ -1825,13 +1865,13 @@ impl Inner {
         let body = json!({ "prompt": prompt, "workspace_id": self.workspace_id });
         let url = self.agent_url.clone();
         let spawned = thread::Builder::new()
-            .name("canvas-engine-agent".into())
+            .name("construct-engine-agent".into())
             .spawn(move || {
                 let token = match weak.upgrade() {
                     Some(inner) => inner.session_token(),
                     None => return,
                 };
-                println!("[CanvasEngine] agent: POST {url} {body}");
+                println!("[ConstructEngine] agent: POST {url} {body}");
                 let result = post_prompt(&url, &body, token.as_deref());
                 let Some(inner) = weak.upgrade() else { return };
                 if inner.signal.is_shut_down() {
@@ -1840,8 +1880,13 @@ impl Inner {
                 inner.finish_prompt(generation, token.as_deref(), result);
             });
         if let Err(e) = spawned {
-            eprintln!("[CanvasEngine] failed to spawn the agent thread: {e}");
-            self.set_agent_json(agent_json("error", Some(&format!("cannot start: {e}")), None, None));
+            eprintln!("[ConstructEngine] failed to spawn the agent thread: {e}");
+            self.set_agent_json(agent_json(
+                "error",
+                Some(&format!("cannot start: {e}")),
+                None,
+                None,
+            ));
         }
     }
 
@@ -1849,12 +1894,17 @@ impl Inner {
     /// an equal or newer version is already applied, e.g. by the SSE
     /// refetch) and go `done`. Otherwise `error` with the pod's message;
     /// a 401 for the current session signs out like a fetch 401 (D19).
-    fn finish_prompt(&self, generation: u64, token: Option<&str>, result: Result<(u16, String), String>) {
+    fn finish_prompt(
+        &self,
+        generation: u64,
+        token: Option<&str>,
+        result: Result<(u16, String), String>,
+    ) {
         let current = || self.agent_gen.load(Ordering::SeqCst) == generation;
         let (code, body) = match result {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("[CanvasEngine] agent: request failed: {e}");
+                eprintln!("[ConstructEngine] agent: request failed: {e}");
                 if current() {
                     self.set_agent_json(agent_json("error", Some(AGENT_OFFLINE), None, None));
                 }
@@ -1866,9 +1916,14 @@ impl Inner {
             let provider = serde_json::from_str::<Value>(&body)
                 .ok()
                 .and_then(|v| json_str(&v, "provider"));
-            eprintln!("[CanvasEngine] agent: HTTP {code}: {message}");
+            eprintln!("[ConstructEngine] agent: HTTP {code}: {message}");
             if current() {
-                self.set_agent_json(agent_json("error", Some(&message), provider.as_deref(), None));
+                self.set_agent_json(agent_json(
+                    "error",
+                    Some(&message),
+                    provider.as_deref(),
+                    None,
+                ));
             }
             if code == 401
                 && let Some(snap) = token.and_then(|t| self.expire_session(t, "agent prompt"))
@@ -1897,7 +1952,7 @@ impl Inner {
         let (layout, version, provider, unchanged, (layout_id, layout_id_version)) = match parsed {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("[CanvasEngine] agent: unusable response ({e}): {body}");
+                eprintln!("[ConstructEngine] agent: unusable response ({e}): {body}");
                 if current() {
                     self.set_agent_json(agent_json(
                         "error",
@@ -1921,14 +1976,18 @@ impl Inner {
                 // never paint the response's layout over it. A refetch shows
                 // whatever this session should see now.
                 println!(
-                    "[CanvasEngine] agent: layout v{} not applied ({}); refetching",
+                    "[ConstructEngine] agent: layout v{} not applied ({}); refetching",
                     version.map_or("?".into(), |v| v.to_string()),
-                    if session_changed { "the session changed" } else { "no versioned layout on display" }
+                    if session_changed {
+                        "the session changed"
+                    } else {
+                        "no versioned layout on display"
+                    }
                 );
                 refetch = true;
             } else if version.is_some() && version <= applied {
                 println!(
-                    "[CanvasEngine] agent: layout v{} already applied (have v{})",
+                    "[ConstructEngine] agent: layout v{} already applied (have v{})",
                     version.unwrap_or_default(),
                     applied.unwrap_or_default()
                 );
@@ -1940,7 +1999,7 @@ impl Inner {
                     st.layout_id_version = layout_id_version;
                 }
                 println!(
-                    "[CanvasEngine] agent: applied layout v{} ({})",
+                    "[ConstructEngine] agent: applied layout v{} ({})",
                     version.map_or("?".into(), |v| v.to_string()),
                     provider.as_deref().unwrap_or("?")
                 );
@@ -1987,7 +2046,9 @@ impl Inner {
     fn is_current(&self, flow: &Arc<Flow>) -> bool {
         !flow.is_cancelled()
             && !self.signal.is_shut_down()
-            && lock(&self.flow).as_ref().is_some_and(|f| Arc::ptr_eq(f, flow))
+            && lock(&self.flow)
+                .as_ref()
+                .is_some_and(|f| Arc::ptr_eq(f, flow))
     }
 
     /// `ActionIntent::AuthLogin`: go `pending` and run the flow on a
@@ -1998,7 +2059,7 @@ impl Inner {
             .is_some_and(|f| f.exchanging.load(Ordering::SeqCst))
         {
             println!(
-                "[CanvasEngine] sign-in ignored: a sign-in is already being completed (code \
+                "[ConstructEngine] sign-in ignored: a sign-in is already being completed (code \
                  exchange or first feed fetch)"
             );
             return;
@@ -2018,13 +2079,13 @@ impl Inner {
         });
         self.replace_flow(Some(Arc::clone(&flow)));
         self.set_auth_json(pending_auth_json());
-        println!("[CanvasEngine] sign-in started for {instance_url}");
+        println!("[ConstructEngine] sign-in started for {instance_url}");
         self.spawn_auth_thread(flow, true, move |weak, flow| {
             login_flow(weak, flow, &instance_url, redirect_rx)
         });
     }
 
-    /// Run `body` (a sign-in) on a `canvas-engine-auth` thread and report
+    /// Run `body` (a sign-in) on a `construct-engine-auth` thread and report
     /// its failure in `auth_json` if `flow` is still current. `cleanup`:
     /// afterwards delete the persisted pending sign-in unless it belongs to
     /// the (then) current flow; skipped when the engine was dropped, so a
@@ -2039,7 +2100,7 @@ impl Inner {
         let weak = Arc::downgrade(self);
         let thread_flow = Arc::clone(&flow);
         let spawned = thread::Builder::new()
-            .name("canvas-engine-auth".into())
+            .name("construct-engine-auth".into())
             .spawn(move || {
                 let flow = thread_flow;
                 let result = body(&weak, &flow);
@@ -2047,11 +2108,13 @@ impl Inner {
                 match result {
                     Ok(()) => {}
                     Err(LoginError::Cancelled) => {
-                        println!("[CanvasEngine] sign-in cancelled");
+                        println!("[ConstructEngine] sign-in cancelled");
                     }
                     Err(LoginError::Failed { message, detail }) => {
                         if inner.is_current(&flow) {
-                            eprintln!("[CanvasEngine] sign-in failed: {detail} (shown: {message})");
+                            eprintln!(
+                                "[ConstructEngine] sign-in failed: {detail} (shown: {message})"
+                            );
                             inner.replace_flow(None);
                             inner.set_auth_json(error_auth_json(&message));
                         }
@@ -2062,12 +2125,12 @@ impl Inner {
                             if lock(&inner.state).session.is_some() {
                                 // E.g. a replayed redirect: nothing to report.
                                 eprintln!(
-                                    "[CanvasEngine] auth redirect matches no sign-in; ignored \
+                                    "[ConstructEngine] auth redirect matches no sign-in; ignored \
                                      (signed in)"
                                 );
                             } else {
                                 eprintln!(
-                                    "[CanvasEngine] auth redirect matches no pending sign-in \
+                                    "[ConstructEngine] auth redirect matches no pending sign-in \
                                      (interrupted or expired)"
                                 );
                                 inner.set_auth_json(error_auth_json(SIGN_IN_INTERRUPTED));
@@ -2080,7 +2143,7 @@ impl Inner {
                 }
             });
         if let Err(e) = spawned {
-            eprintln!("[CanvasEngine] failed to spawn the sign-in thread: {e}");
+            eprintln!("[ConstructEngine] failed to spawn the sign-in thread: {e}");
             self.replace_flow(None);
             self.set_auth_json(error_auth_json(auth::SIGN_IN_FAILED));
         }
@@ -2092,7 +2155,9 @@ impl Inner {
         let _io = lock(&self.pending_io);
         if self.is_current(flow) {
             let raw = pending.to_json();
-            guarded("SecureStore.set", || self.secure_store.set(&self.pending_key, &raw));
+            guarded("SecureStore.set", || {
+                self.secure_store.set(&self.pending_key, &raw)
+            });
         }
     }
 
@@ -2103,9 +2168,10 @@ impl Inner {
             return;
         }
         let _io = lock(&self.pending_io);
-        let Some(raw) = guarded("SecureStore.get", || self.secure_store.get(&self.pending_key))
-            .flatten()
-        else {
+        let Some(raw) = guarded("SecureStore.get", || {
+            self.secure_store.get(&self.pending_key)
+        })
+        .flatten() else {
             return;
         };
         let current = lock(&self.flow).as_ref().map(|f| f.state.clone());
@@ -2120,8 +2186,15 @@ impl Inner {
     /// Delete the persisted pending sign-in if it is the one for `state`.
     fn drop_stale_pending_of(&self, state: &str) {
         let _io = lock(&self.pending_io);
-        let raw = guarded("SecureStore.get", || self.secure_store.get(&self.pending_key)).flatten();
-        if raw.as_deref().and_then(PendingAuth::parse).is_some_and(|p| p.state == state) {
+        let raw = guarded("SecureStore.get", || {
+            self.secure_store.get(&self.pending_key)
+        })
+        .flatten();
+        if raw
+            .as_deref()
+            .and_then(PendingAuth::parse)
+            .is_some_and(|p| p.state == state)
+        {
             guarded("SecureStore.delete", || {
                 self.secure_store.delete(&self.pending_key)
             });
@@ -2132,7 +2205,10 @@ impl Inner {
     /// `state` and it has not expired (an expired one is deleted too).
     fn take_pending(&self, state: &str) -> Option<PendingAuth> {
         let _io = lock(&self.pending_io);
-        let raw = guarded("SecureStore.get", || self.secure_store.get(&self.pending_key)).flatten()?;
+        let raw = guarded("SecureStore.get", || {
+            self.secure_store.get(&self.pending_key)
+        })
+        .flatten()?;
         let delete = || {
             guarded("SecureStore.delete", || {
                 self.secure_store.delete(&self.pending_key)
@@ -2143,7 +2219,7 @@ impl Inner {
             return None;
         };
         if pending.is_expired(unix_now()) {
-            println!("[CanvasEngine] the persisted sign-in has expired; deleted");
+            println!("[ConstructEngine] the persisted sign-in has expired; deleted");
             delete();
             return None;
         }
@@ -2154,14 +2230,16 @@ impl Inner {
         Some(pending)
     }
 
-    /// See [`CanvasEngine::handle_auth_redirect`].
+    /// See [`ConstructEngine::handle_auth_redirect`].
     fn handle_auth_redirect(self: &Arc<Self>, url: &str) -> bool {
         let Some(redirect) = auth::parse_redirect(url) else {
-            eprintln!("[CanvasEngine] auth redirect without code/error ignored");
+            eprintln!("[ConstructEngine] auth redirect without code/error ignored");
             return false;
         };
         if !matches!(self.redirect, RedirectMode::Custom(_)) {
-            eprintln!("[CanvasEngine] auth redirect ignored: this engine uses a loopback redirect");
+            eprintln!(
+                "[ConstructEngine] auth redirect ignored: this engine uses a loopback redirect"
+            );
             return false;
         }
         let recovery = {
@@ -2170,12 +2248,14 @@ impl Inner {
                 Some(flow) => {
                     let Some(tx) = &flow.redirect_tx else {
                         eprintln!(
-                            "[CanvasEngine] auth redirect ignored: a sign-in is being completed"
+                            "[ConstructEngine] auth redirect ignored: a sign-in is being completed"
                         );
                         return false;
                     };
                     if redirect.state() != Some(flow.state.as_str()) {
-                        eprintln!("[CanvasEngine] auth redirect with a mismatched state ignored");
+                        eprintln!(
+                            "[ConstructEngine] auth redirect with a mismatched state ignored"
+                        );
                         return false;
                     }
                     return lock(tx).send(redirect).is_ok();
@@ -2196,7 +2276,9 @@ impl Inner {
                 }
             }
         };
-        println!("[CanvasEngine] auth redirect with no sign-in in memory; checking the persisted one");
+        println!(
+            "[ConstructEngine] auth redirect with no sign-in in memory; checking the persisted one"
+        );
         self.spawn_auth_thread(recovery, false, move |weak, flow| {
             recover_sign_in(weak, flow, redirect)
         });
@@ -2232,7 +2314,7 @@ impl Inner {
             st.snapshot()
         };
         println!(
-            "[CanvasEngine] signed in as {}; fetching the feed",
+            "[ConstructEngine] signed in as {}; fetching the feed",
             username.as_deref().unwrap_or("?")
         );
         self.notify(snap);
@@ -2263,7 +2345,7 @@ impl Inner {
         Ok(())
     }
 
-    /// See [`CanvasEngine::logout`].
+    /// See [`ConstructEngine::logout`].
     fn logout(self: &Arc<Self>) {
         self.replace_flow(None);
         let (snap, token) = {
@@ -2275,7 +2357,7 @@ impl Inner {
             st.seq += 1;
             (st.snapshot(), token)
         };
-        println!("[CanvasEngine] signed out");
+        println!("[ConstructEngine] signed out");
         self.notify(snap);
         let weak = Arc::downgrade(self);
         // Strong until the store is synced, so that dropping the engine
@@ -2283,7 +2365,7 @@ impl Inner {
         let strong = Arc::clone(self);
         let url = format!("{}/v1/auth/logout", self.base_url);
         let spawned = thread::Builder::new()
-            .name("canvas-engine-logout".into())
+            .name("construct-engine-logout".into())
             .spawn(move || {
                 // Secure-store I/O off the calling (UI) thread.
                 strong.sync_session_store();
@@ -2296,8 +2378,10 @@ impl Inner {
                             .send()
                             .map_err(|e| e.to_string())
                     }) {
-                        Ok(r) => println!("[CanvasEngine] POST {url} -> {}", r.status().as_u16()),
-                        Err(e) => eprintln!("[CanvasEngine] POST {url} failed (ignored): {e}"),
+                        Ok(r) => {
+                            println!("[ConstructEngine] POST {url} -> {}", r.status().as_u16())
+                        }
+                        Err(e) => eprintln!("[ConstructEngine] POST {url} failed (ignored): {e}"),
                     }
                 }
                 if let Some(inner) = weak.upgrade()
@@ -2307,7 +2391,7 @@ impl Inner {
                 }
             });
         if let Err(e) = spawned {
-            eprintln!("[CanvasEngine] failed to spawn the logout thread: {e}");
+            eprintln!("[ConstructEngine] failed to spawn the logout thread: {e}");
             // Keep the store consistent even then (blocking this once).
             self.sync_session_store();
             self.drop_stale_pending();
@@ -2352,9 +2436,7 @@ fn fetch(url: &str, token: Option<&str>) -> Result<(WorkspaceSpec, Served), Fetc
     if let Some(t) = token {
         req = req.bearer_auth(t);
     }
-    let resp = req
-        .send()
-        .map_err(|e| FetchError::Other(e.to_string()))?;
+    let resp = req.send().map_err(|e| FetchError::Other(e.to_string()))?;
     let status = resp.status();
     if !status.is_success() {
         return Err(FetchError::Status(status.as_u16()));
@@ -2399,7 +2481,10 @@ fn post_prompt(url: &str, body: &Value, token: Option<&str>) -> Result<(u16, Str
 /// and the start of the body.
 fn agent_error_message(code: u16, body: &str) -> String {
     let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
-    let error = v.get("error").and_then(Value::as_str).filter(|s| !s.is_empty());
+    let error = v
+        .get("error")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
     let detail = match v.get("detail") {
         Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
         Some(Value::Null) | None | Some(Value::String(_)) => None,
@@ -2417,7 +2502,9 @@ fn agent_error_message(code: u16, body: &str) -> String {
         return "The layout changed meanwhile; please try again.".to_owned();
     }
     match (error, detail) {
-        (Some("unsupported_prompt"), _) if supported.is_empty() => "I can't do that yet.".to_owned(),
+        (Some("unsupported_prompt"), _) if supported.is_empty() => {
+            "I can't do that yet.".to_owned()
+        }
         (Some("unsupported_prompt"), _) => {
             format!("I can't do that yet. Try: {}", supported.join("; "))
         }
@@ -2441,7 +2528,12 @@ fn agent_error_message(code: u16, body: &str) -> String {
     }
 }
 
-fn agent_json(state: &str, message: Option<&str>, provider: Option<&str>, version: Option<u64>) -> String {
+fn agent_json(
+    state: &str,
+    message: Option<&str>,
+    provider: Option<&str>,
+    version: Option<u64>,
+) -> String {
     let mut v = json!({ "state": state });
     if let Some(m) = message {
         v["message"] = json!(m);
@@ -2475,7 +2567,11 @@ fn failed(message: &str, detail: impl Into<String>) -> LoginError {
 /// failure whose message is mapped from the pod's `error` code
 /// ([`auth::sign_in_error_message`]) and whose detail (logged only) has the
 /// URL, status and error body.
-fn post_auth(client: &reqwest::blocking::Client, url: &str, body: &Value) -> Result<Value, LoginError> {
+fn post_auth(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    body: &Value,
+) -> Result<Value, LoginError> {
     let resp = client.post(url).json(body).send().map_err(|e| {
         failed(
             auth::sign_in_error_message(None, None),
@@ -2494,8 +2590,12 @@ fn post_auth(client: &reqwest::blocking::Client, url: &str, body: &Value) -> Res
             format!("POST {url} -> HTTP {}: {body}", status.as_u16()),
         ));
     }
-    serde_json::from_str(&text)
-        .map_err(|e| failed(auth::SIGN_IN_FAILED, format!("POST {url}: bad response: {e}")))
+    serde_json::from_str(&text).map_err(|e| {
+        failed(
+            auth::SIGN_IN_FAILED,
+            format!("POST {url}: bad response: {e}"),
+        )
+    })
 }
 
 fn json_str(v: &Value, key: &str) -> Option<String> {
@@ -2528,15 +2628,14 @@ fn login_flow(
     let cancelled = || flow.is_cancelled() || signal.is_shut_down();
 
     let listener = match redirect_mode {
-        RedirectMode::Loopback => Some(
-            LoopbackListener::bind_preferred(loopback_port)
-                .map_err(|e| {
-                    failed(
-                        auth::SIGN_IN_FAILED,
-                        format!("cannot open the loopback redirect listener: {e}"),
-                    )
-                })?,
-        ),
+        RedirectMode::Loopback => Some(LoopbackListener::bind_preferred(loopback_port).map_err(
+            |e| {
+                failed(
+                    auth::SIGN_IN_FAILED,
+                    format!("cannot open the loopback redirect listener: {e}"),
+                )
+            },
+        )?),
         RedirectMode::Custom(_) => None,
     };
     let redirect_uri = match (&listener, &redirect_mode) {
@@ -2551,9 +2650,10 @@ fn login_flow(
         &format!("{base_url}/v1/auth/pixelfed/app"),
         &json!({ "instance_url": instance_url, "redirect_uri": redirect_uri }),
     )?;
-    let (Some(client_id), Some(endpoint)) =
-        (json_str(&app, "client_id"), json_str(&app, "authorize_endpoint"))
-    else {
+    let (Some(client_id), Some(endpoint)) = (
+        json_str(&app, "client_id"),
+        json_str(&app, "authorize_endpoint"),
+    ) else {
         return Err(failed(
             auth::SIGN_IN_FAILED,
             format!("unexpected /v1/auth/pixelfed/app response: {app}"),
@@ -2593,11 +2693,13 @@ fn login_flow(
         .and_then(|o| guarded("UrlOpener.open", || o.open(&url)))
         .unwrap_or(false);
     if opened {
-        println!("[CanvasEngine] opened the authorize page; waiting for the redirect to {redirect_uri}");
+        println!(
+            "[ConstructEngine] opened the authorize page; waiting for the redirect to {redirect_uri}"
+        );
     } else {
         // Keep waiting: a human can open the logged URL by hand.
         eprintln!(
-            "[CanvasEngine] no browser available; to sign in, open this URL (waiting {} s for \
+            "[ConstructEngine] no browser available; to sign in, open this URL (waiting {} s for \
              the redirect to {redirect_uri}):\n{url}",
             auth::REDIRECT_TIMEOUT.as_secs()
         );
@@ -2613,7 +2715,9 @@ fn login_flow(
             .wait(auth::REDIRECT_TIMEOUT, &cancelled, &|r| {
                 let ok = r.state() == Some(flow.state.as_str());
                 if !ok {
-                    eprintln!("[CanvasEngine] loopback redirect with a mismatched state ignored");
+                    eprintln!(
+                        "[ConstructEngine] loopback redirect with a mismatched state ignored"
+                    );
                 }
                 ok
             })
@@ -2693,7 +2797,10 @@ fn finish_sign_in(
             } else {
                 auth::SIGN_IN_REJECTED
             };
-            return Err(failed(message, format!("authorization failed: {error}{more}")));
+            return Err(failed(
+                message,
+                format!("authorization failed: {error}{more}"),
+            ));
         }
     };
     flow.exchanging.store(true, Ordering::SeqCst);
@@ -2714,7 +2821,10 @@ fn finish_sign_in(
         }),
     )?;
     let Some(session_token) = json_str(&token, "session_token") else {
-        return Err(failed(auth::SIGN_IN_FAILED, "the pod returned no session_token"));
+        return Err(failed(
+            auth::SIGN_IN_FAILED,
+            "the pod returned no session_token",
+        ));
     };
     let account = token.get("account").cloned().unwrap_or(Value::Null);
     let session = Session {
@@ -2730,7 +2840,11 @@ fn finish_sign_in(
 /// Complete a custom-scheme sign-in whose redirect reached an engine with
 /// no flow in memory, from the copy persisted by `login_flow` (state must
 /// match, not expired; it is deleted either way).
-fn recover_sign_in(weak: &Weak<Inner>, flow: &Arc<Flow>, redirect: Redirect) -> Result<(), LoginError> {
+fn recover_sign_in(
+    weak: &Weak<Inner>,
+    flow: &Arc<Flow>,
+    redirect: Redirect,
+) -> Result<(), LoginError> {
     let (pending, base_url) = {
         let inner = weak.upgrade().ok_or(LoginError::Cancelled)?;
         let pending = redirect
@@ -2743,7 +2857,7 @@ fn recover_sign_in(weak: &Weak<Inner>, flow: &Arc<Flow>, redirect: Redirect) -> 
         return Err(LoginError::Cancelled);
     }
     println!(
-        "[CanvasEngine] completing the sign-in for {} started before a restart",
+        "[ConstructEngine] completing the sign-in for {} started before a restart",
         pending.instance_url
     );
     let client = auth_client().map_err(|e| failed(auth::SIGN_IN_FAILED, e))?;
@@ -2769,13 +2883,17 @@ fn sync_worker(engine: Weak<Inner>, signal: Arc<WorkerSignal>) {
     {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[CanvasEngine] sync worker: cannot build HTTP client: {e}; outbox disabled");
+            eprintln!(
+                "[ConstructEngine] sync worker: cannot build HTTP client: {e}; outbox disabled"
+            );
             return;
         }
     };
     loop {
         let wait = {
-            let Some(inner) = engine.upgrade() else { return };
+            let Some(inner) = engine.upgrade() else {
+                return;
+            };
             inner.flush_pass(&client)
         };
         if !signal.wait(wait) {
@@ -2889,7 +3007,10 @@ mod tests {
                 "{endpoint}"
             );
         }
-        assert!(!same_origin("http://pod.example", "http://pod.example.evil.example/x"));
+        assert!(!same_origin(
+            "http://pod.example",
+            "http://pod.example.evil.example/x"
+        ));
         assert!(!same_origin("not a url", "not a url/x"));
     }
 
@@ -2923,7 +3044,7 @@ mod tests {
 
     #[test]
     fn outbox_401_after_a_concurrent_sign_in_does_not_pause_flushing() {
-        let engine = CanvasEngine::init_with_config(
+        let engine = ConstructEngine::init_with_config(
             "",
             "http://127.0.0.1:1",
             "home",

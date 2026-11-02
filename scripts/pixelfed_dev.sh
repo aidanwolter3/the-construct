@@ -8,7 +8,7 @@
 #           (passport keys, instance actor, personal-access OAuth client). Idempotent.
 #   down    compose down (keeps volumes = keeps users/posts)
 #   reset   compose down -v (DELETES all Pixelfed data) and removes dev/pixelfed/.seed
-#   seed    up + create users canvasadmin (admin) and alice, mint access tokens, admin follows alice,
+#   seed    up + create users constructadmin (admin) and alice, mint access tokens, admin follows alice,
 #           alice posts a 3-image carousel, a single image, an alt-text post and a CW/sensitive post,
 #           bob posts one image and alice boosts it (so the admin home timeline contains a reblog).
 #           Users/posts are skipped if they already exist; fresh tokens are minted on every run.
@@ -28,8 +28,8 @@ REC_DIR="$ROOT/fixtures/pixelfed/recorded"
 URL="${PIXELFED_URL:-http://localhost:8090}"
 export PATH="$HOME/.local/bin:$PATH"
 
-ADMIN_USER=canvasadmin
-ADMIN_PASS=canvas-dev-pass
+ADMIN_USER=constructadmin
+ADMIN_PASS=construct-dev-pass
 ALICE_USER=alice
 ALICE_PASS=alice-dev-pass
 BOB_USER=bob
@@ -88,7 +88,7 @@ first_run_init() {
   if [ "$n" = 0 ]; then
     log "creating personal access OAuth client"
     tinker 'if (DB::table("oauth_clients")->max("id") < 1000) DB::statement("ALTER TABLE oauth_clients AUTO_INCREMENT = 1000");' >/dev/null
-    artisan passport:client --personal --name="Canvas Dev PAT" --provider=users --no-interaction >/dev/null
+    artisan passport:client --personal --name="Construct Dev PAT" --provider=users --no-interaction >/dev/null
   fi
 }
 
@@ -112,7 +112,7 @@ ensure_user() { # username name email password is_admin
 }
 
 mint_token() { # username -> token on stdout
-  tinker "echo App\\Models\\User::whereUsername('$1')->firstOrFail()->createToken('canvas-dev-seed', ['read','write','follow','push'])->accessToken;" | tail -1
+  tinker "echo App\\Models\\User::whereUsername('$1')->firstOrFail()->createToken('construct-dev-seed', ['read','write','follow','push'])->accessToken;" | tail -1
 }
 
 api() { # token method path [curl args...]
@@ -140,7 +140,7 @@ post() { # token status [extra curl args...] -> status id
 cmd_seed() {
   cmd_up
   mkdir -p "$SEED_DIR"
-  ensure_user "$ADMIN_USER" "Canvas Admin" canvasadmin@example.test "$ADMIN_PASS" true
+  ensure_user "$ADMIN_USER" "Construct Admin" constructadmin@example.test "$ADMIN_PASS" true
   ensure_user "$ALICE_USER" "Alice Example" alice@example.test "$ALICE_PASS" 0
   ensure_user "$BOB_USER" "Bob Example" bob@example.test "$BOB_PASS" 0
   local at lt bt alice_id count
@@ -150,25 +150,25 @@ cmd_seed() {
 
   alice_id="$(api "$lt" GET /api/v1/accounts/verify_credentials | json 'd["id"]')"
   api "$at" POST "/api/v1/accounts/$alice_id/follow" >/dev/null
-  log "canvasadmin follows alice ($alice_id)"
+  log "constructadmin follows alice ($alice_id)"
 
   count="$(api "$lt" GET "/api/v1/accounts/$alice_id/statuses?limit=1" | json 'len(d)')"
   if [ "$count" != 0 ]; then
     log "alice already has posts; skipping post creation"
   else
     local m1 m2 m3 m4 m5 m6 m7 bob_post
-    # bob (not followed by canvasadmin) posts once; alice boosts it so the admin's home has a reblog.
-    m7="$(upload "$bt" "$IMG_DIR/canvas_07.jpg" "Teal square with the number 7")"
+    # bob (not followed by constructadmin) posts once; alice boosts it so the admin's home has a reblog.
+    m7="$(upload "$bt" "$IMG_DIR/construct_07.jpg" "Teal square with the number 7")"
     bob_post="$(post "$bt" "Bob's post, boosted by alice" -d "media_ids[]=$m7")"
-    m1="$(upload "$lt" "$IMG_DIR/canvas_01.jpg" "Red square with the number 1")"
-    m2="$(upload "$lt" "$IMG_DIR/canvas_02.jpg" "Blue square with the number 2")"
-    m3="$(upload "$lt" "$IMG_DIR/canvas_03.jpg" "Green square with the number 3")"
-    post "$lt" "Carousel: one, two, three #canvas" -d "media_ids[]=$m1" -d "media_ids[]=$m2" -d "media_ids[]=$m3" >/dev/null
-    m4="$(upload "$lt" "$IMG_DIR/canvas_04.jpg" "")"
+    m1="$(upload "$lt" "$IMG_DIR/construct_01.jpg" "Red square with the number 1")"
+    m2="$(upload "$lt" "$IMG_DIR/construct_02.jpg" "Blue square with the number 2")"
+    m3="$(upload "$lt" "$IMG_DIR/construct_03.jpg" "Green square with the number 3")"
+    post "$lt" "Carousel: one, two, three #construct" -d "media_ids[]=$m1" -d "media_ids[]=$m2" -d "media_ids[]=$m3" >/dev/null
+    m4="$(upload "$lt" "$IMG_DIR/construct_04.jpg" "")"
     post "$lt" "A single portrait image (4:5)" -d "media_ids[]=$m4" >/dev/null
-    m5="$(upload "$lt" "$IMG_DIR/canvas_05.jpg" "Yellow landscape card showing a large white number 5 inside a white border")"
+    m5="$(upload "$lt" "$IMG_DIR/construct_05.jpg" "Yellow landscape card showing a large white number 5 inside a white border")"
     post "$lt" "Landscape image with alt text" -d "media_ids[]=$m5" >/dev/null
-    m6="$(upload "$lt" "$IMG_DIR/canvas_06.jpg" "Orange square with the number 6")"
+    m6="$(upload "$lt" "$IMG_DIR/construct_06.jpg" "Orange square with the number 6")"
     post "$lt" "Sensitive post behind a content warning" -d "media_ids[]=$m6" -d sensitive=true \
       --data-urlencode "spoiler_text=CW: orange" >/dev/null
     # Fan-out only inserts into home feeds that already exist in Redis, and a cold-boot rebuild picks up followed

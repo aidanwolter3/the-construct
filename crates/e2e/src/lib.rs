@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 use axum::extract::Request;
 use axum::middleware::{self, Next};
 use client_core::{
-    CanvasEngine, EngineConfig, EngineOptions, MemoryStore, RedirectMode, SecureStore,
+    ConstructEngine, EngineConfig, EngineOptions, MemoryStore, RedirectMode, SecureStore,
     StateSnapshot, UrlOpener,
 };
 use serde_json::{Value, json};
@@ -182,7 +182,7 @@ impl Upstream {
     /// The username the signed-in snapshot should show.
     pub fn expected_username(&self) -> String {
         match self {
-            Self::Fake { .. } => "canvasdemo".to_owned(),
+            Self::Fake { .. } => "constructdemo".to_owned(),
             Self::Real { login, .. } => login.split('@').next().unwrap_or(login).to_owned(),
         }
     }
@@ -332,7 +332,7 @@ impl Harness {
 
     /// An engine on the `pixelfed_home` workspace with an in-memory cache, this upstream's
     /// browser and a loopback redirect on a random port.
-    pub fn engine(&self, store: &Arc<MemoryStore>) -> CanvasEngine {
+    pub fn engine(&self, store: &Arc<MemoryStore>) -> ConstructEngine {
         self.engine_with(store, Some(self.upstream.browser()))
     }
 
@@ -340,8 +340,8 @@ impl Harness {
         &self,
         store: &Arc<MemoryStore>,
         opener: Option<Arc<dyn UrlOpener>>,
-    ) -> CanvasEngine {
-        CanvasEngine::init_with_options(
+    ) -> ConstructEngine {
+        ConstructEngine::init_with_options(
             "",
             &self.pod_url,
             WORKSPACE,
@@ -512,7 +512,7 @@ impl PixelfedLoginBrowser {
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(20))
             // Pixelfed records the login device and fails (500) without a User-Agent.
-            .user_agent("canvas-e2e/0.1 (scripted browser)")
+            .user_agent("construct-e2e/0.1 (scripted browser)")
             .build()
             .unwrap();
         let mut jar = CookieJar::default();
@@ -762,7 +762,7 @@ pub fn post(snap: &StateSnapshot, id: &str) -> Value {
     entities(snap)[format!("pixelfed://posts/{id}")].clone()
 }
 
-pub fn wait_signed_in(engine: &CanvasEngine) {
+pub fn wait_signed_in(engine: &ConstructEngine) {
     wait_until("signed in with the home feed", TIMEOUT, || {
         let s = engine.snapshot();
         auth(&s)["state"] == "signed_in" && !feed(&s).is_empty()
@@ -815,7 +815,7 @@ pub fn bookmark_intent(id: &str) -> String {
 }
 
 /// Wait until the outbox is empty.
-pub fn wait_flushed(engine: &CanvasEngine, timeout: Duration) {
+pub fn wait_flushed(engine: &ConstructEngine, timeout: Duration) {
     wait_until("the outbox to flush", timeout, || {
         engine.snapshot().pending_actions == 0
     });

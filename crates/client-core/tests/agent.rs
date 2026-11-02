@@ -1,6 +1,6 @@
 //! M7 client: `PromptAgent` dispatch, layout version tracking and the SSE
 //! push channel, against a small hand-rolled stub of the pod (workspace
-//! bundle with `X-Canvas-Layout-Version`, `/events` SSE stream that stays
+//! bundle with `X-Construct-Layout-Version`, `/events` SSE stream that stays
 //! open, `/v1/agent/modify_layout`).
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use client_core::store::{STATUS_PENDING, Store, StoreOps};
 use client_core::{
-    AGENT_OFFLINE, CanvasEngine, EngineConfig, EngineOptions, MemoryStore, SecureStore,
+    AGENT_OFFLINE, ConstructEngine, EngineConfig, EngineOptions, MemoryStore, SecureStore,
     StateSnapshot,
 };
 use serde_json::{Value, json};
@@ -149,7 +149,11 @@ fn handle(mut stream: TcpStream, st: &StubState) {
     let mut body = vec![0u8; content_length];
     let _ = reader.read_exact(&mut body);
     let body = String::from_utf8_lossy(&body).into_owned();
-    let path = request_line.split_whitespace().nth(1).unwrap_or("").to_owned();
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("")
+        .to_owned();
     let get = request_line.starts_with("GET ");
 
     match (get, path.as_str()) {
@@ -167,7 +171,7 @@ fn handle(mut stream: TcpStream, st: &StubState) {
             respond(
                 &mut stream,
                 "200 OK",
-                &format!("X-Canvas-Layout-Version: {v}\r\n"),
+                &format!("X-Construct-Layout-Version: {v}\r\n"),
                 &bundle.to_string(),
             );
         }
@@ -222,7 +226,11 @@ fn serve_events(mut stream: TcpStream, st: &StubState, auth: String) {
             Err(mpsc::RecvTimeoutError::Timeout) => ": keepalive\n\n".to_owned(),
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         };
-        if stream.write_all(text.as_bytes()).and_then(|_| stream.flush()).is_err() {
+        if stream
+            .write_all(text.as_bytes())
+            .and_then(|_| stream.flush())
+            .is_err()
+        {
             st.closed_streams.fetch_add(1, Ordering::SeqCst);
             return;
         }
@@ -238,12 +246,18 @@ fn fast_config() -> EngineConfig {
 }
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    std::env::temp_dir().join(format!("client-core-agent-{tag}-{}-{nanos}", std::process::id()))
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "client-core-agent-{tag}-{}-{nanos}",
+        std::process::id()
+    ))
 }
 
-fn engine(stub: &Stub, storage: &str) -> CanvasEngine {
-    CanvasEngine::init_with_config(storage, &stub.base, "home", fast_config())
+fn engine(stub: &Stub, storage: &str) -> ConstructEngine {
+    ConstructEngine::init_with_config(storage, &stub.base, "home", fast_config())
 }
 
 fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
@@ -269,7 +283,7 @@ fn count(s: &StateSnapshot) -> i64 {
 }
 
 /// Online with layout v1 and the events stream connected.
-fn ready(stub: &Stub, engine: &CanvasEngine) {
+fn ready(stub: &Stub, engine: &ConstructEngine) {
     wait_until("layout v1", || title(&engine.snapshot()) == "Home v1");
     wait_until("events connection", || stub.event_conns() >= 1);
 }
@@ -280,7 +294,7 @@ fn prompt_success_applies_layout_and_reports_done() {
     let dir = temp_dir("prompt");
     let store = Arc::new(MemoryStore::new());
     store.set(&client_core::auth::session_key(&stub.base), "tok-1");
-    let engine = CanvasEngine::init_with_options(
+    let engine = ConstructEngine::init_with_options(
         dir.to_str().unwrap(),
         &stub.base,
         "home",
@@ -295,9 +309,15 @@ fn prompt_success_applies_layout_and_reports_done() {
     let fetches = stub.fetches();
 
     engine.dispatch(&prompt("  Hide post captions "));
-    wait_until("agent done", || agent(&engine.snapshot())["state"] == "done");
+    wait_until("agent done", || {
+        agent(&engine.snapshot())["state"] == "done"
+    });
     let snap = engine.snapshot();
-    assert_eq!(title(&snap), "Home v2", "returned layout applied immediately");
+    assert_eq!(
+        title(&snap),
+        "Home v2",
+        "returned layout applied immediately"
+    );
     let a = agent(&snap);
     assert_eq!(a["provider"], "rules");
     assert_eq!(a["layout_version"], 2);
@@ -308,13 +328,23 @@ fn prompt_success_applies_layout_and_reports_done() {
     let (auth, body) = stub.st.agent_requests.lock().unwrap()[0].clone();
     assert_eq!(auth, "Bearer tok-1");
     let body: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(body, json!({"prompt": "Hide post captions", "workspace_id": "home"}));
+    assert_eq!(
+        body,
+        json!({"prompt": "Hide post captions", "workspace_id": "home"})
+    );
     assert_eq!(stub.st.event_auth.lock().unwrap()[0], "Bearer tok-1");
 
     // Persisted with the cached entity URIs and queries intact.
     drop(engine);
-    let cached = Store::open(&dir.join("cache.db")).unwrap().load_workspace("home").unwrap().unwrap();
-    assert_eq!(serde_json::to_value(&cached.layout).unwrap()["title"], "Home v2");
+    let cached = Store::open(&dir.join("cache.db"))
+        .unwrap()
+        .load_workspace("home")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&cached.layout).unwrap()["title"],
+        "Home v2"
+    );
     assert_eq!(cached.entity_uris, vec!["core://counters/home".to_string()]);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -326,12 +356,20 @@ fn prompt_response_is_not_painted_over_an_unversioned_screen() {
     let stub = Stub::start();
     stub.st.unversioned.store(true, Ordering::SeqCst);
     let engine = engine(&stub, "");
-    wait_until("signed-out screen", || title(&engine.snapshot()) == "Signed out");
+    wait_until("signed-out screen", || {
+        title(&engine.snapshot()) == "Signed out"
+    });
     let fetches = stub.fetches();
     engine.dispatch(&prompt("Hide post captions"));
-    wait_until("agent done", || agent(&engine.snapshot())["state"] == "done");
+    wait_until("agent done", || {
+        agent(&engine.snapshot())["state"] == "done"
+    });
     wait_until("refetch", || stub.fetches() > fetches);
-    assert_eq!(title(&engine.snapshot()), "Signed out", "response layout not applied");
+    assert_eq!(
+        title(&engine.snapshot()),
+        "Signed out",
+        "response layout not applied"
+    );
 }
 
 #[test]
@@ -347,10 +385,15 @@ fn prompt_errors_show_the_pods_message_and_keep_the_layout() {
         .to_string(),
     ));
     engine.dispatch(&prompt("remove the action bar"));
-    wait_until("agent error", || agent(&engine.snapshot())["state"] == "error");
+    wait_until("agent error", || {
+        agent(&engine.snapshot())["state"] == "error"
+    });
     let snap = engine.snapshot();
     let a = agent(&snap);
-    assert_eq!(a["message"], "That change would break the layout: missing field `action_slot`");
+    assert_eq!(
+        a["message"],
+        "That change would break the layout: missing field `action_slot`"
+    );
     assert_eq!(a["provider"], "rules");
     assert_eq!(title(&snap), "Home v1", "layout unchanged");
 
@@ -398,10 +441,13 @@ fn prompt_errors_show_the_pods_message_and_keep_the_layout() {
     assert_eq!(title(&engine.snapshot()), "Home v1");
 
     // The pod cannot be reached at all.
-    let offline = CanvasEngine::init_with_config("", "http://127.0.0.1:1", "home", fast_config());
+    let offline =
+        ConstructEngine::init_with_config("", "http://127.0.0.1:1", "home", fast_config());
     offline.dispatch(&prompt("Hide post captions"));
     assert_eq!(agent(&offline.snapshot())["state"], "running");
-    wait_until("offline error", || agent(&offline.snapshot())["state"] == "error");
+    wait_until("offline error", || {
+        agent(&offline.snapshot())["state"] == "error"
+    });
     assert_eq!(agent(&offline.snapshot())["message"], AGENT_OFFLINE);
 }
 
@@ -416,7 +462,9 @@ fn unchanged_response_reports_no_change_needed() {
     });
     *stub.st.agent_reply.lock().unwrap() = Some((200, resp.to_string()));
     engine.dispatch(&prompt("add a weather widget"));
-    wait_until("agent done", || agent(&engine.snapshot())["state"] == "done");
+    wait_until("agent done", || {
+        agent(&engine.snapshot())["state"] == "done"
+    });
     let a = agent(&engine.snapshot());
     assert_eq!(a["message"], "No change needed (v1)");
     assert_eq!(a["unchanged"], true);
@@ -430,7 +478,9 @@ fn outside_layout_change_resets_a_finished_prompt_status_to_idle() {
     let engine = engine(&stub, "");
     ready(&stub, &engine);
     engine.dispatch(&prompt("Hide post captions"));
-    wait_until("agent done", || agent(&engine.snapshot())["state"] == "done");
+    wait_until("agent done", || {
+        agent(&engine.snapshot())["state"] == "done"
+    });
     assert_eq!(agent(&engine.snapshot())["layout_version"], 2);
     // The SSE echo of the prompt's own version keeps the status.
     stub.push_layout(2);
@@ -443,10 +493,14 @@ fn outside_layout_change_resets_a_finished_prompt_status_to_idle() {
     assert_eq!(agent(&engine.snapshot()), json!({"state": "idle"}));
 
     // An error status goes stale the same way.
-    *stub.st.agent_reply.lock().unwrap() =
-        Some((422, json!({"error": "unsupported_prompt", "supported": ["Photos first"]}).to_string()));
+    *stub.st.agent_reply.lock().unwrap() = Some((
+        422,
+        json!({"error": "unsupported_prompt", "supported": ["Photos first"]}).to_string(),
+    ));
     engine.dispatch(&prompt("make it pop"));
-    wait_until("agent error", || agent(&engine.snapshot())["state"] == "error");
+    wait_until("agent error", || {
+        agent(&engine.snapshot())["state"] == "error"
+    });
     stub.set_version(4);
     stub.push_layout(4);
     wait_until("layout v4", || title(&engine.snapshot()) == "Home v4");
@@ -493,7 +547,9 @@ fn sse_layout_event_triggers_refetch_and_stale_or_equal_versions_are_ignored() {
 
     // After a prompt applied v4, the SSE echo of v4 is ignored too.
     engine.dispatch(&prompt("Photos first"));
-    wait_until("agent done", || agent(&engine.snapshot())["state"] == "done");
+    wait_until("agent done", || {
+        agent(&engine.snapshot())["state"] == "done"
+    });
     assert_eq!(title(&engine.snapshot()), "Home v4");
     stub.push_layout(4);
     thread::sleep(Duration::from_millis(400));
@@ -549,11 +605,18 @@ fn pending_outbox_row_survives_a_pushed_layout_change() {
     wait_until("layout v2", || title(&engine.snapshot()) == "Home v2");
     assert_eq!(stub.fetches(), fetches + 1);
     let snap = engine.snapshot();
-    assert_eq!(count(&snap), 1, "optimistic value re-applied on the pushed refetch");
+    assert_eq!(
+        count(&snap),
+        1,
+        "optimistic value re-applied on the pushed refetch"
+    );
     assert_eq!(snap.pending_actions, 1);
 
     drop(engine);
-    let rows = Store::open(&dir.join("cache.db")).unwrap().pending_outbox().unwrap();
+    let rows = Store::open(&dir.join("cache.db"))
+        .unwrap()
+        .pending_outbox()
+        .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].status, STATUS_PENDING);
     assert_eq!(rows[0].endpoint, "/v1/counters/home/increment");

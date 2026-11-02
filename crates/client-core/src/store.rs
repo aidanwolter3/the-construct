@@ -167,7 +167,7 @@ fn outbox_row(r: &Row<'_>) -> rusqlite::Result<OutboxRow> {
     let also = match also_json.as_deref() {
         None | Some("") => Vec::new(),
         Some(raw) => serde_json::from_str(raw).unwrap_or_else(|e| {
-            eprintln!("[CanvasEngine] store: outbox #{id}: ignoring corrupt also_json: {e}");
+            eprintln!("[ConstructEngine] store: outbox #{id}: ignoring corrupt also_json: {e}");
             Vec::new()
         }),
     };
@@ -197,7 +197,7 @@ fn parse_entity(uri: &str, raw: &str) -> Option<EntityRecord> {
     match serde_json::from_str(raw) {
         Ok(e) => Some(e),
         Err(e) => {
-            eprintln!("[CanvasEngine] store: ignoring corrupt entity {uri}: {e}");
+            eprintln!("[ConstructEngine] store: ignoring corrupt entity {uri}: {e}");
             None
         }
     }
@@ -313,7 +313,7 @@ pub trait StoreOps {
             return Ok(None);
         };
         let queries = serde_json::from_str(&queries).unwrap_or_else(|e| {
-            eprintln!("[CanvasEngine] store: ignoring corrupt queries of workspace '{id}': {e}");
+            eprintln!("[ConstructEngine] store: ignoring corrupt queries of workspace '{id}': {e}");
             BTreeMap::new()
         });
         match (serde_json::from_str(&layout), serde_json::from_str(&uris)) {
@@ -324,7 +324,7 @@ pub trait StoreOps {
                 updated_at,
             })),
             (Err(e), _) | (_, Err(e)) => {
-                eprintln!("[CanvasEngine] store: ignoring corrupt workspace '{id}': {e}");
+                eprintln!("[ConstructEngine] store: ignoring corrupt workspace '{id}': {e}");
                 Ok(None)
             }
         }
@@ -553,7 +553,7 @@ impl Store {
                 if matches!(f.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) =>
             {
                 eprintln!(
-                    "[CanvasEngine] store: cache.db is locked by another connection at open; \
+                    "[ConstructEngine] store: cache.db is locked by another connection at open; \
                      writes will wait up to {} ms",
                     BUSY_TIMEOUT.as_millis()
                 );
@@ -579,8 +579,14 @@ impl Store {
             // The read-only file cannot be migrated: a v1 file has no
             // queries_json (the copy then gets the '{}' default).
             let ro_version: u32 =
-                store.conn.pragma_query_value(Some("ro"), "user_version", |r| r.get(0))?;
-            let queries = if ro_version >= 2 { "queries_json" } else { "'{}'" };
+                store
+                    .conn
+                    .pragma_query_value(Some("ro"), "user_version", |r| r.get(0))?;
+            let queries = if ro_version >= 2 {
+                "queries_json"
+            } else {
+                "'{}'"
+            };
             let ws = store.conn.execute(
                 &format!(
                     "INSERT OR REPLACE INTO main.active_workspace
@@ -603,7 +609,7 @@ impl Store {
             Ok((ws, ents)) => Ok((store, ws, ents)),
             Err(e) => {
                 eprintln!(
-                    "[CanvasEngine] store: cannot copy the read-only {}: {e}",
+                    "[ConstructEngine] store: cannot copy the read-only {}: {e}",
                     path.display()
                 );
                 Ok((store, 0, 0))
@@ -626,7 +632,7 @@ impl Store {
         let version = self.schema_version()?;
         if version > SCHEMA_VERSION {
             eprintln!(
-                "[CanvasEngine] store: schema version {version} is newer than {SCHEMA_VERSION}; \
+                "[ConstructEngine] store: schema version {version} is newer than {SCHEMA_VERSION}; \
                  using it as is"
             );
             return Ok(());
@@ -637,7 +643,10 @@ impl Store {
             tx.pragma_update(None, "user_version", from as u32 + 1)?;
             tx.commit()?;
             if from > 0 {
-                eprintln!("[CanvasEngine] store: migrated schema v{from} -> v{}", from + 1);
+                eprintln!(
+                    "[ConstructEngine] store: migrated schema v{from} -> v{}",
+                    from + 1
+                );
             }
         }
         Ok(())
@@ -657,7 +666,8 @@ impl Store {
 
     /// `PRAGMA user_version`.
     pub fn schema_version(&self) -> StoreResult<u32> {
-        self.conn.pragma_query_value(None, "user_version", |r| r.get(0))
+        self.conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
     }
 
     /// Run `f` in one transaction: committed if it returns `Ok`, rolled back
@@ -717,7 +727,12 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
-        for t in ["action_outbox", "active_workspace", "entities", "idx_entities_domain"] {
+        for t in [
+            "action_outbox",
+            "active_workspace",
+            "entities",
+            "idx_entities_domain",
+        ] {
             assert!(tables.iter().any(|n| n == t), "missing {t}: {tables:?}");
         }
     }
@@ -773,7 +788,10 @@ mod tests {
         assert_eq!(first.last_error.as_deref(), Some("HTTP 503"));
 
         s.set_outbox_prev_value(b, "7").unwrap();
-        assert_eq!(s.get_outbox(b).unwrap().unwrap().prev_value_json.as_deref(), Some("7"));
+        assert_eq!(
+            s.get_outbox(b).unwrap().unwrap().prev_value_json.as_deref(),
+            Some("7")
+        );
 
         assert!(s.delete_outbox(a).unwrap());
         assert!(!s.delete_outbox(a).unwrap());
@@ -784,7 +802,11 @@ mod tests {
     #[test]
     fn private_purge_helpers() {
         let s = Store::open_in_memory().unwrap();
-        for uri in ["pixelfed://posts/1", "pixelfed://posts/2", "core://counters/home"] {
+        for uri in [
+            "pixelfed://posts/1",
+            "pixelfed://posts/2",
+            "core://counters/home",
+        ] {
             s.upsert_entity(uri, &entity("{}"), 1).unwrap();
         }
         let like = s
@@ -795,11 +817,18 @@ mod tests {
             .unwrap();
         s.insert_outbox(&new_row("core://counters/home")).unwrap();
         assert_eq!(s.delete_unreferenced_entities("pixelfed").unwrap(), 1);
-        assert!(s.get_entity("pixelfed://posts/1").unwrap().is_some(), "pending row keeps it");
+        assert!(
+            s.get_entity("pixelfed://posts/1").unwrap().is_some(),
+            "pending row keeps it"
+        );
         assert!(s.get_entity("pixelfed://posts/2").unwrap().is_none());
         assert!(s.get_entity("core://counters/home").unwrap().is_some());
 
-        assert_eq!(s.delete_pending_outbox_with_endpoint_prefix("/v1/pixelfed/").unwrap(), 1);
+        assert_eq!(
+            s.delete_pending_outbox_with_endpoint_prefix("/v1/pixelfed/")
+                .unwrap(),
+            1
+        );
         assert!(s.get_outbox(like).unwrap().is_none());
         assert_eq!(s.pending_count().unwrap(), 1);
         assert_eq!(s.delete_unreferenced_entities("pixelfed").unwrap(), 1);
@@ -808,7 +837,8 @@ mod tests {
             r#"{"type":"core://Workspace","id":"home","title":"Home","slots":[]}"#,
         )
         .unwrap();
-        s.save_workspace("w", &layout, &[], &BTreeMap::new(), 1).unwrap();
+        s.save_workspace("w", &layout, &[], &BTreeMap::new(), 1)
+            .unwrap();
         s.delete_workspace("w").unwrap();
         assert_eq!(s.load_workspace("w").unwrap(), None);
     }
@@ -878,7 +908,10 @@ mod tests {
         let path = temp_db("secure-delete");
         let wal = path.with_file_name("cache.db-wal");
         let mut s = Store::open(&path).unwrap();
-        let secure: i64 = s.conn.query_row("PRAGMA secure_delete", [], |r| r.get(0)).unwrap();
+        let secure: i64 = s
+            .conn
+            .query_row("PRAGMA secure_delete", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(secure, 1);
         s.transaction(|tx| {
             for i in 0..50 {
@@ -895,14 +928,27 @@ mod tests {
         assert!(s.checkpoint_truncate().unwrap());
         assert!(file_contains(&path, CAPTION.as_bytes()));
 
-        let n = s.transaction(|tx| tx.delete_unreferenced_entities("pixelfed")).unwrap();
+        let n = s
+            .transaction(|tx| tx.delete_unreferenced_entities("pixelfed"))
+            .unwrap();
         assert_eq!(n, 50);
         assert!(s.checkpoint_truncate().unwrap());
-        assert!(!file_contains(&path, CAPTION.as_bytes()), "caption left in cache.db");
-        assert!(!file_contains(&wal, CAPTION.as_bytes()), "caption left in cache.db-wal");
+        assert!(
+            !file_contains(&path, CAPTION.as_bytes()),
+            "caption left in cache.db"
+        );
+        assert!(
+            !file_contains(&wal, CAPTION.as_bytes()),
+            "caption left in cache.db-wal"
+        );
         assert_eq!(std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0), 0);
         // Other data is intact.
-        assert_eq!(s.load_entities(&["core://counters/home".into()]).unwrap().len(), 1);
+        assert_eq!(
+            s.load_entities(&["core://counters/home".into()])
+                .unwrap()
+                .len(),
+            1
+        );
         drop(s);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
@@ -939,7 +985,10 @@ mod tests {
         }];
         s.set_outbox_prevs(id, "true", &rebased).unwrap();
         let row = s.get_outbox(id).unwrap().unwrap();
-        assert_eq!((row.prev_value_json.as_deref(), row.also), (Some("true"), rebased));
+        assert_eq!(
+            (row.prev_value_json.as_deref(), row.also),
+            (Some("true"), rebased)
+        );
         drop(s);
         // Re-opening a v2 DB is a no-op.
         assert_eq!(Store::open(&path).unwrap().schema_version().unwrap(), 2);
@@ -952,7 +1001,13 @@ mod tests {
         write_v1_db(&path);
         let (s, ws, ents) = Store::open_in_memory_copy_of(&path).unwrap();
         assert_eq!((ws, ents), (1, 0));
-        assert!(s.load_workspace("home").unwrap().unwrap().queries.is_empty());
+        assert!(
+            s.load_workspace("home")
+                .unwrap()
+                .unwrap()
+                .queries
+                .is_empty()
+        );
         assert_eq!(s.pending_count().unwrap(), 0, "outbox rows are not copied");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
@@ -967,7 +1022,8 @@ mod tests {
         .unwrap();
         let uris = vec!["core://counters/home".to_string()];
         let queries = BTreeMap::from([("q".to_string(), uris.clone())]);
-        s.save_workspace("home", &layout, &uris, &queries, 3).unwrap();
+        s.save_workspace("home", &layout, &uris, &queries, 3)
+            .unwrap();
         let ws = s.load_workspace("home").unwrap().unwrap();
         assert_eq!(ws.layout, layout);
         assert_eq!(ws.entity_uris, uris);

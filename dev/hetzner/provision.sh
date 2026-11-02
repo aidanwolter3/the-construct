@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Provision a fresh Hetzner server (Ubuntu 24.04, arm64 or x86_64) as a Project Canvas
-# dev/e2e box: construct server, local Pixelfed (Docker), Rust + JDK toolchains,
+# Provision a fresh Hetzner server (Ubuntu 24.04, arm64 or x86_64) as a
+# The Construct dev/e2e box: construct server, local Pixelfed (Docker), Rust + JDK toolchains,
 # headless simulator deps, Claude Code, and optionally the Android SDK/emulator,
 # HTTPS via Caddy, and a GitHub Actions self-hosted runner.
 #
@@ -110,7 +110,7 @@ fi
 }
 
 log "SSH hardening (keys only, no root login)"
-cat > /etc/ssh/sshd_config.d/90-canvas.conf <<'EOF'
+cat > /etc/ssh/sshd_config.d/90-construct.conf <<'EOF'
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin no
@@ -148,10 +148,10 @@ log "Claude Code"
 as_dev 'command -v claude >/dev/null || curl -fsSL https://claude.ai/install.sh | bash'
 
 # Headless JVM rendering (simulator) needs no display; make that the default.
-cat > /etc/profile.d/canvas.sh <<EOF
+cat > /etc/profile.d/construct.sh <<EOF
 export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-$(dpkg --print-architecture)
 EOF
-cat >> /etc/profile.d/canvas.sh <<'EOF'
+cat >> /etc/profile.d/construct.sh <<'EOF'
 export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Djava.awt.headless=true"
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 EOF
@@ -174,7 +174,7 @@ if [[ $WANT_ANDROID -eq 1 ]]; then
     rustup target add aarch64-linux-android x86_64-linux-android
     command -v cargo-ndk >/dev/null || cargo install cargo-ndk
   "
-  cat >> /etc/profile.d/canvas.sh <<EOF
+  cat >> /etc/profile.d/construct.sh <<EOF
 export ANDROID_HOME=$SDK
 export ANDROID_SDK_ROOT=$SDK
 export ANDROID_NDK_HOME=$SDK/ndk/$ANDROID_NDK
@@ -188,10 +188,10 @@ EOF
     as_dev "
       set -e
       $SDK/cmdline-tools/latest/bin/sdkmanager --install 'emulator' 'system-images;$ANDROID_PLATFORM;google_apis;x86_64'
-      $SDK/cmdline-tools/latest/bin/avdmanager list avd | grep -q 'Name: canvas_api36' || \
-        echo no | $SDK/cmdline-tools/latest/bin/avdmanager create avd -n canvas_api36 -k 'system-images;$ANDROID_PLATFORM;google_apis;x86_64' -d pixel_7
+      $SDK/cmdline-tools/latest/bin/avdmanager list avd | grep -q 'Name: construct_api36' || \
+        echo no | $SDK/cmdline-tools/latest/bin/avdmanager create avd -n construct_api36 -k 'system-images;$ANDROID_PLATFORM;google_apis;x86_64' -d pixel_7
     "
-    echo "Emulator: emulator -avd canvas_api36 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect &"
+    echo "Emulator: emulator -avd construct_api36 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect &"
   else
     echo "NOTE: /dev/kvm not present (typical on Hetzner Cloud VPS). Skipping the emulator;"
     echo "      builds, cargo-ndk and installs to a USB/remote device still work."
@@ -224,7 +224,7 @@ if [[ -n "$DOMAIN" ]]; then
 fi
 
 # ---------------------------------------------------------------- repository
-as_dev 'test -f ~/.ssh/id_ed25519 || ssh-keygen -t ed25519 -N "" -C "canvas-dev@$(hostname)" -f ~/.ssh/id_ed25519 >/dev/null'
+as_dev 'test -f ~/.ssh/id_ed25519 || ssh-keygen -t ed25519 -N "" -C "construct-dev@$(hostname)" -f ~/.ssh/id_ed25519 >/dev/null'
 as_dev 'ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null; sort -u -o ~/.ssh/known_hosts ~/.ssh/known_hosts'
 if [[ -n "$REPO_URL" ]]; then
   log "Cloning $REPO_URL"
@@ -248,7 +248,7 @@ if [[ -n "$RUNNER_URL" ]]; then
     if [[ ! -f .runner ]]; then
       curl -fsSLo runner.tgz https://github.com/actions/runner/releases/download/v$GH_RUNNER_VERSION/actions-runner-linux-x64-$GH_RUNNER_VERSION.tar.gz
       tar xzf runner.tgz && rm runner.tgz
-      ./config.sh --unattended --url '$RUNNER_URL' --token '$RUNNER_TOKEN' --name \"\$(hostname)\" --labels canvas-e2e$( [[ -e /dev/kvm ]] && echo ',kvm' )
+      ./config.sh --unattended --url '$RUNNER_URL' --token '$RUNNER_TOKEN' --name \"\$(hostname)\" --labels construct-e2e$( [[ -e /dev/kvm ]] && echo ',kvm' )
     fi
   "
   (cd "/home/$DEV_USER/actions-runner" && ./svc.sh install "$DEV_USER" && ./svc.sh start) || true

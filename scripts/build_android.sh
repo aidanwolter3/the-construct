@@ -7,7 +7,7 @@
 #   ANDROID_NDK_HOME     NDK to use. Default: newest NDK under <sdk>/ndk, where <sdk> is
 #                        $ANDROID_HOME if set, else $ANDROID_SDK_ROOT if set, else
 #                        ~/Library/Android/sdk (the first one set is used; no fallback).
-#   CANVAS_ANDROID_ABIS  Space- or comma-separated ABIs. Default: "arm64-v8a x86_64".
+#   CONSTRUCT_ANDROID_ABIS  Space- or comma-separated ABIs. Default: "arm64-v8a x86_64".
 #
 # Outputs:
 #   kmp-app/androidApp/src/main/jniLibs/<abi>/libclient_ffi.so
@@ -21,7 +21,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 OUT_DIR="kmp-app/androidApp/src/main/jniLibs"
-ABIS="${CANVAS_ANDROID_ABIS:-arm64-v8a x86_64}"
+ABIS="${CONSTRUCT_ANDROID_ABIS:-arm64-v8a x86_64}"
 ABIS="${ABIS//,/ }"
 
 if ! cargo ndk --version >/dev/null 2>&1; then
@@ -55,11 +55,11 @@ TARGET_ARGS=()
 for abi in $ABIS; do
     case "$abi" in
         arm64-v8a|armeabi-v7a|x86_64|x86) TARGET_ARGS+=(-t "$abi") ;;
-        *) echo "error: unknown ABI '$abi' in CANVAS_ANDROID_ABIS" >&2; exit 1 ;;
+        *) echo "error: unknown ABI '$abi' in CONSTRUCT_ANDROID_ABIS" >&2; exit 1 ;;
     esac
 done
 if [[ ${#TARGET_ARGS[@]} -eq 0 ]]; then
-    echo "error: CANVAS_ANDROID_ABIS is empty" >&2
+    echo "error: CONSTRUCT_ANDROID_ABIS is empty" >&2
     exit 1
 fi
 

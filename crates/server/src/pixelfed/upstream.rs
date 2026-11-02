@@ -13,7 +13,7 @@ pub const API_TIMEOUT: Duration = Duration::from_secs(10);
 /// Media downloads may take longer than API calls.
 pub const MEDIA_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub const APP_NAME: &str = "Project Canvas";
+pub const APP_NAME: &str = "The Construct";
 pub const SCOPES: &str = "read write";
 
 #[derive(Debug)]
@@ -80,7 +80,7 @@ pub struct Upstream {
 
 impl Upstream {
     pub fn new(instance_url: &str, media_allow: MediaAllowlist) -> Self {
-        let user_agent = concat!("canvas-pod/", env!("CARGO_PKG_VERSION"));
+        let user_agent = concat!("construct-pod/", env!("CARGO_PKG_VERSION"));
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(API_TIMEOUT)

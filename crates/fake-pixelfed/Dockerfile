@@ -1,8 +1,8 @@
 # Fake Pixelfed upstream as a tiny sidecar image (README "Fake Pixelfed upstream").
 #
-#   docker build -f crates/fake-pixelfed/Dockerfile -t canvas-fake-pixelfed .   # from the repo root
+#   docker build -f crates/fake-pixelfed/Dockerfile -t construct-fake-pixelfed .   # from the repo root
 #   docker run --rm -p 8081:8081 -e FAKE_PIXELFED_ADMIN=1 \
-#     -e FAKE_PIXELFED_PUBLIC_URL=http://localhost:8081 canvas-fake-pixelfed
+#     -e FAKE_PIXELFED_PUBLIC_URL=http://localhost:8081 construct-fake-pixelfed
 #
 # The fixtures are compiled into the binary, so the runtime image holds one file.
 # The admin/fault endpoints are off by default inside the container (it binds 0.0.0.0,

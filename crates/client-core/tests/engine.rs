@@ -1,4 +1,4 @@
-//! End-to-end tests for `CanvasEngine` against a tiny hand-rolled HTTP server.
+//! End-to-end tests for `ConstructEngine` against a tiny hand-rolled HTTP server.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use client_core::store::{Store, StoreOps};
-use client_core::{CanvasEngine, StateSnapshot};
+use client_core::{ConstructEngine, StateSnapshot};
 use protocol::WorkspaceSpec;
 use serde_json::Value;
 
@@ -61,7 +61,10 @@ fn handle(mut stream: TcpStream) {
     let mut body_buf = vec![0u8; content_length];
     let _ = std::io::Read::read_exact(&mut reader, &mut body_buf);
     let (status, body) = if request_line.starts_with("POST ") {
-        ("503 Service Unavailable", "fixture server does not accept mutations")
+        (
+            "503 Service Unavailable",
+            "fixture server does not accept mutations",
+        )
     } else if request_line.starts_with("GET /v1/workspaces/home ") {
         ("200 OK", FIXTURE)
     } else if request_line.starts_with("GET /healthz ") {
@@ -100,7 +103,11 @@ impl StoppableServer {
             }
             // Listener dropped here: the port is closed.
         });
-        Self { addr, stop, thread: Some(thread) }
+        Self {
+            addr,
+            stop,
+            thread: Some(thread),
+        }
     }
 
     fn url(&self) -> String {
@@ -132,7 +139,7 @@ fn wait_for_online_state(rx: &mpsc::Receiver<StateSnapshot>, online: bool) -> St
 #[test]
 fn server_going_away_mid_session_reports_offline_then_online() {
     let server = StoppableServer::start("127.0.0.1:0");
-    let engine = CanvasEngine::init("", &server.url());
+    let engine = ConstructEngine::init("", &server.url());
     let rx = subscribe_channel(&engine);
     wait_online(&rx);
 
@@ -184,7 +191,7 @@ fn count(snap: &StateSnapshot) -> i64 {
     entities["core://counters/home"]["count"].as_i64().unwrap()
 }
 
-fn subscribe_channel(engine: &CanvasEngine) -> mpsc::Receiver<StateSnapshot> {
+fn subscribe_channel(engine: &ConstructEngine) -> mpsc::Receiver<StateSnapshot> {
     let (tx, rx) = mpsc::channel();
     engine.subscribe(move |s| {
         let _ = tx.send(s);
@@ -206,7 +213,7 @@ fn wait_online(rx: &mpsc::Receiver<StateSnapshot>) -> StateSnapshot {
 fn fetch_increment_reset() {
     let base = serve_fixture();
     let dir = temp_dir("counter");
-    let engine = CanvasEngine::init(dir.to_str().unwrap(), &base);
+    let engine = ConstructEngine::init(dir.to_str().unwrap(), &base);
     let rx = subscribe_channel(&engine);
 
     let first = wait_online(&rx);
@@ -229,19 +236,32 @@ fn fetch_increment_reset() {
     // The SQLite cache was written: layout, entity URI list, entity, and
     // one outbox row per mutation.
     let store = Store::open(&dir.join("cache.db")).unwrap();
-    let cached = store.load_workspace("home").unwrap().expect("workspace cached");
-    assert_eq!(serde_json::to_string(&cached.layout).unwrap(), first.workspace_json);
+    let cached = store
+        .load_workspace("home")
+        .unwrap()
+        .expect("workspace cached");
+    assert_eq!(
+        serde_json::to_string(&cached.layout).unwrap(),
+        first.workspace_json
+    );
     assert_eq!(cached.entity_uris, vec!["core://counters/home".to_string()]);
     assert_eq!(
-        store.get_entity("core://counters/home").unwrap().unwrap().get_i64("count"),
+        store
+            .get_entity("core://counters/home")
+            .unwrap()
+            .unwrap()
+            .get_i64("count"),
         Some(0)
     );
     assert_eq!(store.pending_count().unwrap(), 3);
-    assert!(!dir.join("workspace_home.json").exists(), "no JSON cache written");
+    assert!(
+        !dir.join("workspace_home.json").exists(),
+        "no JSON cache written"
+    );
 
     // A second engine on the same storage dir with the server unreachable
     // starts from the cached workspace, offline.
-    let offline = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let offline = ConstructEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
     let snap = offline.snapshot();
     assert_eq!(snap.workspace_json, first.workspace_json);
     assert_eq!(count(&snap), 0);
@@ -257,7 +277,7 @@ fn fetch_increment_reset() {
 #[test]
 fn bad_and_unsupported_intents_change_nothing() {
     let base = serve_fixture();
-    let engine = CanvasEngine::init("", &base);
+    let engine = ConstructEngine::init("", &base);
     let rx = subscribe_channel(&engine);
     wait_online(&rx);
 
@@ -273,7 +293,7 @@ fn bad_and_unsupported_intents_change_nothing() {
 
 #[test]
 fn mutate_creates_missing_entity() {
-    let engine = CanvasEngine::init("", "http://127.0.0.1:1");
+    let engine = ConstructEngine::init("", "http://127.0.0.1:1");
     engine.dispatch(&INCREMENT.replace("core://counters/home", "core://counters/new"));
     let entities: Value = serde_json::from_str(&engine.snapshot().entities_json).unwrap();
     assert_eq!(entities["core://counters/new"]["count"], 1);
@@ -283,7 +303,7 @@ fn mutate_creates_missing_entity() {
 fn snapshot_before_fetch_is_empty() {
     // Port 1 refuses fast, but the snapshot is taken synchronously before
     // the background fetch can finish or not; either way no workspace.
-    let engine = CanvasEngine::init("", "http://127.0.0.1:1");
+    let engine = ConstructEngine::init("", "http://127.0.0.1:1");
     let s = engine.snapshot();
     assert_eq!(s.workspace_json, "null");
     assert_eq!(s.entities_json, "{}");
@@ -293,12 +313,12 @@ fn snapshot_before_fetch_is_empty() {
 #[test]
 fn engine_is_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<CanvasEngine>();
+    assert_send_sync::<ConstructEngine>();
 }
 
 #[test]
 fn unreachable_server_reports_offline() {
-    let engine = CanvasEngine::init("", "http://127.0.0.1:1");
+    let engine = ConstructEngine::init("", "http://127.0.0.1:1");
     let rx = subscribe_channel(&engine);
     // Immediate snapshot on subscribe, then (possibly the same) after the
     // failed fetch; all are offline and empty.
@@ -316,7 +336,7 @@ fn offline_falls_back_to_cache() {
     let dir = temp_dir("cache");
     seed_cache(&dir, "home");
 
-    let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let engine = ConstructEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
     // Cached state is available synchronously.
     let snap = engine.snapshot();
     assert_ne!(snap.workspace_json, "null");
@@ -332,7 +352,7 @@ fn offline_falls_back_to_cache() {
 #[test]
 fn observer_may_dispatch_reentrantly() {
     use std::sync::{Arc, Mutex};
-    let engine = Arc::new(CanvasEngine::init("", "http://127.0.0.1:1"));
+    let engine = Arc::new(ConstructEngine::init("", "http://127.0.0.1:1"));
     // Weak ref avoids an Arc cycle (engine -> observer -> engine).
     let weak = Arc::downgrade(&engine);
     let fired = Arc::new(Mutex::new(false));
@@ -368,7 +388,7 @@ fn observer_may_dispatch_reentrantly() {
 
 #[test]
 fn panicking_observer_does_not_propagate() {
-    let engine = CanvasEngine::init("", "http://127.0.0.1:1");
+    let engine = ConstructEngine::init("", "http://127.0.0.1:1");
     engine.subscribe(|_| panic!("observer boom"));
     let rx = subscribe_channel(&engine);
     engine.dispatch(INCREMENT);
@@ -390,7 +410,7 @@ fn cache_is_keyed_by_workspace_id() {
     seed_cache(&dir, "home");
 
     // A different workspace must not pick up the "home" layout/entities.
-    let other = CanvasEngine::init_with_workspace(
+    let other = ConstructEngine::init_with_workspace(
         dir.to_str().unwrap(),
         "http://127.0.0.1:1",
         "pixelfed_demo",
@@ -402,15 +422,15 @@ fn cache_is_keyed_by_workspace_id() {
     // Ids are stored verbatim (no file-name sanitizing any more).
     seed_cache(&dir, "a/b..c");
     let odd =
-        CanvasEngine::init_with_workspace(dir.to_str().unwrap(), "http://127.0.0.1:1", "a/b..c");
+        ConstructEngine::init_with_workspace(dir.to_str().unwrap(), "http://127.0.0.1:1", "a/b..c");
     assert_ne!(odd.snapshot().workspace_json, "null");
     let near =
-        CanvasEngine::init_with_workspace(dir.to_str().unwrap(), "http://127.0.0.1:1", "a_b__c");
+        ConstructEngine::init_with_workspace(dir.to_str().unwrap(), "http://127.0.0.1:1", "a_b__c");
     assert_eq!(near.snapshot().workspace_json, "null");
 
     // "home" still finds its own cache.
     let home =
-        CanvasEngine::init_with_workspace(dir.to_str().unwrap(), "http://127.0.0.1:1", "home");
+        ConstructEngine::init_with_workspace(dir.to_str().unwrap(), "http://127.0.0.1:1", "home");
     assert_ne!(home.snapshot().workspace_json, "null");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -418,7 +438,7 @@ fn cache_is_keyed_by_workspace_id() {
 #[test]
 fn http_404_keeps_engine_online() {
     let base = serve_fixture();
-    let engine = CanvasEngine::init_with_workspace("", &base, "missing");
+    let engine = ConstructEngine::init_with_workspace("", &base, "missing");
     let rx = subscribe_channel(&engine);
     let deadline = std::time::Instant::now() + TIMEOUT;
     let s = loop {
@@ -449,9 +469,12 @@ fn json_cache_files_are_ignored() {
     std::fs::write(dir.join("workspace_home.json"), FIXTURE).unwrap();
     std::fs::write(dir.join("last_workspace.json"), FIXTURE).unwrap();
 
-    let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let engine = ConstructEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
     let snap = engine.snapshot();
-    assert_eq!(snap.workspace_json, "null", "old JSON cache must not be read");
+    assert_eq!(
+        snap.workspace_json, "null",
+        "old JSON cache must not be read"
+    );
     assert_eq!(snap.entities_json, "{}");
     assert!(dir.join("workspace_home.json").exists(), "not deleted");
     assert!(dir.join("last_workspace.json").exists(), "not deleted");
@@ -465,7 +488,7 @@ fn restart_persists_entities_workspace_and_outbox() {
     let dir = temp_dir("restart");
     let first_ws;
     {
-        let engine = CanvasEngine::init(dir.to_str().unwrap(), &base);
+        let engine = ConstructEngine::init(dir.to_str().unwrap(), &base);
         let rx = subscribe_channel(&engine);
         first_ws = wait_online(&rx).workspace_json;
         engine.dispatch(INCREMENT);
@@ -491,11 +514,14 @@ fn restart_persists_entities_workspace_and_outbox() {
     // The sync worker may already have tried once (the fixture answers 503).
     assert!(r.retry_count <= 1, "retry_count {}", r.retry_count);
     assert_eq!(r.next_attempt_at == 0, r.retry_count == 0);
-    assert_eq!(rows[1].retry_count, 0, "FIFO: the second row is never tried first");
+    assert_eq!(
+        rows[1].retry_count, 0,
+        "FIFO: the second row is never tried first"
+    );
     assert!(r.created_at > 1_600_000_000, "created_at is unix seconds");
 
     // "Restart": a fresh engine on the same dir, server unreachable.
-    let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let engine = ConstructEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
     let snap = engine.snapshot();
     assert_eq!(snap.workspace_json, first_ws);
     assert_eq!(count(&snap), 2);
@@ -513,10 +539,10 @@ fn pending_entity_outside_workspace_survives_restart() {
     seed_cache(&dir, "home");
     let new_uri = "core://counters/new";
     {
-        let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+        let engine = ConstructEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
         engine.dispatch(&INCREMENT.replace("core://counters/home", new_uri));
     }
-    let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let engine = ConstructEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
     let entities: Value = serde_json::from_str(&engine.snapshot().entities_json).unwrap();
     assert_eq!(entities[new_uri]["count"], 1);
     assert_eq!(entities["core://counters/home"]["count"], 0);
@@ -529,7 +555,7 @@ fn pending_entity_outside_workspace_survives_restart() {
 fn failed_mutate_transaction_changes_nothing() {
     let dir = temp_dir("atomic");
     seed_cache(&dir, "home");
-    let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let engine = ConstructEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
     let rx = subscribe_channel(&engine);
     let before = engine.snapshot();
     assert_eq!(count(&before), 0);
@@ -541,7 +567,10 @@ fn failed_mutate_transaction_changes_nothing() {
 
     engine.dispatch(INCREMENT);
     let after = engine.snapshot();
-    assert_eq!(after.entities_json, before.entities_json, "memory unchanged");
+    assert_eq!(
+        after.entities_json, before.entities_json,
+        "memory unchanged"
+    );
     assert_eq!(after.pending_actions, 0);
     let stored: String = raw
         .query_row(
@@ -553,7 +582,9 @@ fn failed_mutate_transaction_changes_nothing() {
     let stored: Value = serde_json::from_str(&stored).unwrap();
     assert_eq!(stored["count"], 0, "entity update rolled back");
     let rows: i64 = raw
-        .query_row("SELECT COUNT(*) FROM action_outbox_broken", [], |r| r.get(0))
+        .query_row("SELECT COUNT(*) FROM action_outbox_broken", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(rows, 0, "no outbox row");
     while let Ok(s) = rx.try_recv() {
@@ -584,20 +615,25 @@ fn read_only_cache_falls_back_to_an_in_memory_copy() {
     let db = dir.join("cache.db");
     std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o444)).unwrap();
 
-    let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let engine = ConstructEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
     let s = engine.snapshot();
-    assert_ne!(s.workspace_json, "null", "cached workspace copied into memory");
+    assert_ne!(
+        s.workspace_json, "null",
+        "cached workspace copied into memory"
+    );
     assert_eq!(count(&s), 0);
     engine.dispatch(INCREMENT);
     engine.dispatch(INCREMENT);
     let s = engine.snapshot();
-    assert_eq!((count(&s), s.pending_actions), (2, 2), "mutations are not no-ops");
+    assert_eq!(
+        (count(&s), s.pending_actions),
+        (2, 2),
+        "mutations are not no-ops"
+    );
 
-    let raw = rusqlite::Connection::open_with_flags(
-        &db,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .unwrap();
+    let raw =
+        rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
     let rows: i64 = raw
         .query_row("SELECT COUNT(*) FROM action_outbox", [], |r| r.get(0))
         .unwrap();
@@ -616,7 +652,7 @@ fn locked_cache_dispatch_returns_quickly_and_changes_nothing() {
 
     let dir = temp_dir("locked");
     seed_cache(&dir, "home");
-    let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let engine = ConstructEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
     let rx = subscribe_channel(&engine);
     let before = engine.snapshot();
 
@@ -625,7 +661,10 @@ fn locked_cache_dispatch_returns_quickly_and_changes_nothing() {
     let started = Instant::now();
     engine.dispatch(INCREMENT);
     let took = started.elapsed();
-    assert!(took < Duration::from_secs(1), "dispatch blocked for {took:?}");
+    assert!(
+        took < Duration::from_secs(1),
+        "dispatch blocked for {took:?}"
+    );
     assert!(
         took >= client_core::store::BUSY_TIMEOUT / 2,
         "the write did wait for the lock: {took:?}"
@@ -649,7 +688,7 @@ fn locked_cache_dispatch_returns_quickly_and_changes_nothing() {
 fn value_token_is_substituted_in_outbox_payload() {
     let dir = temp_dir("valuetoken");
     seed_cache(&dir, "home");
-    let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let engine = ConstructEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
     let intent = INCREMENT.replace(
         r#""payload":{}"#,
         r#""payload":{"count":"$value","nested":["$value","$values"]}"#,
@@ -660,14 +699,20 @@ fn value_token_is_substituted_in_outbox_payload() {
     assert_eq!(rows.len(), 2);
     let p0: Value = serde_json::from_str(&rows[0].payload_json).unwrap();
     let p1: Value = serde_json::from_str(&rows[1].payload_json).unwrap();
-    assert_eq!(p0, serde_json::json!({"count": 1, "nested": [1, "$values"]}));
-    assert_eq!(p1, serde_json::json!({"count": 2, "nested": [2, "$values"]}));
+    assert_eq!(
+        p0,
+        serde_json::json!({"count": 1, "nested": [1, "$values"]})
+    );
+    assert_eq!(
+        p1,
+        serde_json::json!({"count": 2, "nested": [2, "$values"]})
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn snapshot_reports_seq_and_pending_actions() {
-    let engine = CanvasEngine::init("", "http://127.0.0.1:1");
+    let engine = ConstructEngine::init("", "http://127.0.0.1:1");
     let rx = subscribe_channel(&engine);
     for expected in 1..=3u32 {
         engine.dispatch(INCREMENT);
@@ -701,7 +746,7 @@ fn mutate_dispatch_to_notify_latency() {
 
     let dir = temp_dir("latency");
     seed_cache(&dir, "home");
-    let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let engine = ConstructEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
     let seen: Arc<Mutex<Vec<(i64, Instant)>>> = Arc::default();
     let seen2 = Arc::clone(&seen);
     engine.subscribe(move |s| {

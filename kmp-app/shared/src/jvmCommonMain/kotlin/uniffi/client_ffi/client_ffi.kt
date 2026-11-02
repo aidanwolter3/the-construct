@@ -1124,7 +1124,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_client_ffi_checksum_constructor_enginehandle_new() != 42554.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_client_ffi_checksum_constructor_enginehandle_new_with_options() != 13204.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_constructor_enginehandle_new_with_options() != 54263.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_constructor_enginehandle_new_with_workspace() != 47149.toShort()) {
@@ -1908,7 +1908,7 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
      * default (macOS Keychain; in-memory elsewhere). `url_opener`: None =
      * sign-in reports "no browser available" and logs the URL.
      * `redirect_uri`: None = loopback (`http://127.0.0.1:<port>/callback`),
-     * else a custom-scheme URI (e.g. `canvas://oauth`) whose redirects the
+     * else a custom-scheme URI (e.g. `construct://oauth`) whose redirects the
      * app passes to [`EngineHandle::handle_auth_redirect`].
      */ fun `newWithOptions`(`storagePath`: kotlin.String, `baseUrl`: kotlin.String, `workspaceId`: kotlin.String, `secureStore`: SecureStore?, `urlOpener`: UrlOpener?, `redirectUri`: kotlin.String?): EngineHandle {
             return FfiConverterTypeEngineHandle.lift(

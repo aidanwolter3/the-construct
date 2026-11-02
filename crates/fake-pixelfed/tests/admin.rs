@@ -318,7 +318,7 @@ async fn reset_restores_fixtures_and_optionally_keeps_auth() {
         "/api/v1/apps",
         None,
         None,
-        Some(json!({ "client_name": "t", "redirect_uris": "canvas://oauth", "scopes": "read write" })),
+        Some(json!({ "client_name": "t", "redirect_uris": "construct://oauth", "scopes": "read write" })),
     )
     .await
     .json();
@@ -328,7 +328,7 @@ async fn reset_restores_fixtures_and_optionally_keeps_auth() {
     let q = serde_urlencoded::to_string([
         ("response_type", "code"),
         ("client_id", client_id.as_str()),
-        ("redirect_uri", "canvas://oauth"),
+        ("redirect_uri", "construct://oauth"),
         ("code_challenge", &fake_pixelfed::s256_challenge(&verifier)),
         ("code_challenge_method", "S256"),
     ])
@@ -352,7 +352,7 @@ async fn reset_restores_fixtures_and_optionally_keeps_auth() {
         None,
         Some(
             json!({ "grant_type": "authorization_code", "code": code, "client_id": client_id,
-            "client_secret": secret, "redirect_uri": "canvas://oauth", "code_verifier": verifier }),
+            "client_secret": secret, "redirect_uri": "construct://oauth", "code_verifier": verifier }),
         ),
     )
     .await

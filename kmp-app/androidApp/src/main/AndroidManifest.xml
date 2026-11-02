@@ -6,11 +6,11 @@
     <!-- Cleartext HTTP to the dev server (10.0.2.2 / localhost / 127.0.0.1) is allowed only in debug
          builds, via src/debug/AndroidManifest.xml + res/xml/network_security_config.xml (DECISIONS D11). -->
     <application
-        android:label="Project Canvas"
+        android:label="The Construct"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
-        <!-- singleTask: the OAuth redirect (canvas://oauth, opened by the browser in its own task) must reach
+        <!-- singleTask: the OAuth redirect (construct://oauth, opened by the browser in its own task) must reach
              this same activity instance and engine via onNewIntent (DECISIONS D19).
              adjustResize: the window is not panned for the keyboard; Compose gets the IME insets instead and the
              root's safeDrawingPadding lifts the agent panel above the keyboard (DECISIONS D23). -->
@@ -27,7 +27,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="canvas" android:host="oauth" />
+                <data android:scheme="construct" android:host="oauth" />
             </intent-filter>
         </activity>
     </application>

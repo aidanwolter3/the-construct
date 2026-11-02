@@ -6,14 +6,14 @@ app = "the-construct-pod"
 primary_region = "dfw"
 
 [env]
-  CANVAS_ADDR = "0.0.0.0:8080"
-  CANVAS_DATA_DIR = "/data"
+  CONSTRUCT_ADDR = "0.0.0.0:8080"
+  CONSTRUCT_DATA_DIR = "/data"
   RUST_LOG = "info"
   # Staging talks to the fake Pixelfed app (deploy/fly/fake-pixelfed.toml), never a real instance.
   PIXELFED_INSTANCE_URL = "https://the-construct-fake-pixelfed.fly.dev"
   # Test environment: any fake account may sign in and replace the stored one.
   PIXELFED_ALLOW_ACCOUNT_CHANGE = "1"
-  CANVAS_LLM_PROVIDER = "auto"
+  CONSTRUCT_LLM_PROVIDER = "auto"
 
 [mounts]
   source = "pod_data"

@@ -61,7 +61,7 @@ fn full_workspace() -> UiNode {
                     padding_dp: 16,
                     children: vec![
                         UiNode::Text {
-                            value_expr: "Project Canvas".into(),
+                            value_expr: "The Construct".into(),
                             style: TextStyle::Headline,
                         },
                         UiNode::Button {

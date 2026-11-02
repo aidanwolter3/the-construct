@@ -97,8 +97,8 @@ impl Selection {
         Self::Ready(Arc::new(p))
     }
 
-    /// From `CANVAS_LLM_PROVIDER`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`,
-    /// `CANVAS_LLM_MODEL`, `CANVAS_LLM_FALLBACKS`.
+    /// From `CONSTRUCT_LLM_PROVIDER`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`,
+    /// `CONSTRUCT_LLM_MODEL`, `CONSTRUCT_LLM_FALLBACKS`.
     pub fn from_env() -> Self {
         Self::from_lookup(|k| std::env::var(k).ok())
     }
@@ -110,7 +110,7 @@ impl Selection {
                 .map(|v| v.trim().to_owned())
                 .filter(|v| !v.is_empty())
         };
-        let choice = var("CANVAS_LLM_PROVIDER")
+        let choice = var("CONSTRUCT_LLM_PROVIDER")
             .unwrap_or_else(|| "auto".to_owned())
             .to_ascii_lowercase();
         let key = var("ANTHROPIC_API_KEY");
@@ -119,10 +119,10 @@ impl Selection {
             if let Some(url) = var("ANTHROPIC_BASE_URL") {
                 config.base_url = url;
             }
-            if let Some(model) = var("CANVAS_LLM_MODEL") {
+            if let Some(model) = var("CONSTRUCT_LLM_MODEL") {
                 config.model = model;
             }
-            config.fallbacks = !var("CANVAS_LLM_FALLBACKS")
+            config.fallbacks = !var("CONSTRUCT_LLM_FALLBACKS")
                 .is_some_and(|v| v == "0" || v.eq_ignore_ascii_case("false"));
             Self::provider(anthropic::AnthropicProvider::new(config))
         };
@@ -135,7 +135,7 @@ impl Selection {
             },
             (other, _) => Self::NotConfigured {
                 provider: other.to_owned(),
-                detail: format!("unknown CANVAS_LLM_PROVIDER '{other}' (auto|anthropic|rules)"),
+                detail: format!("unknown CONSTRUCT_LLM_PROVIDER '{other}' (auto|anthropic|rules)"),
             },
         }
     }

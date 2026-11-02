@@ -1,9 +1,9 @@
-//! Android only: forward the process's stdout/stderr to logcat (tag `CanvasEngine`).
+//! Android only: forward the process's stdout/stderr to logcat (tag `ConstructEngine`).
 //!
 //! client-core logs with `println!`/`eprintln!`. On Android, fds 1 and 2 go to
 //! `/dev/null`, so those lines are lost. [`init`] points each fd at a pipe and
 //! starts a thread that writes every line it reads to logcat: stdout at INFO and
-//! stderr at WARN. View them with `adb logcat -s CanvasEngine:V`.
+//! stderr at WARN. View them with `adb logcat -s ConstructEngine:V`.
 //! Runs once per process. On failure it leaves the fds unchanged.
 
 use std::ffi::{CString, c_char, c_int};
@@ -12,7 +12,7 @@ use std::io::{BufRead, BufReader};
 use std::os::fd::FromRawFd;
 use std::sync::Once;
 
-const TAG: &str = "CanvasEngine";
+const TAG: &str = "ConstructEngine";
 const ANDROID_LOG_INFO: c_int = 4;
 const ANDROID_LOG_WARN: c_int = 5;
 

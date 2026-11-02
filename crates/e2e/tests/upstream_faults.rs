@@ -5,7 +5,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use client_core::{CanvasEngine, MemoryStore};
+use client_core::{ConstructEngine, MemoryStore};
 use e2e::{
     Harness, LIKE_ENDPOINT, TIMEOUT, auth, feed, fresh_post, like_intent, post, wait_flushed,
     wait_signed_in, wait_until, wait_upstream,
@@ -15,7 +15,7 @@ use serde_json::Value;
 
 /// Signed in on a fresh harness; returns the engine, a fresh post id and every `is_liked`
 /// value that post had in a snapshot from now on.
-fn signed_in(h: &Harness) -> (CanvasEngine, String, Arc<Mutex<Vec<Value>>>) {
+fn signed_in(h: &Harness) -> (ConstructEngine, String, Arc<Mutex<Vec<Value>>>) {
     let store = Arc::new(MemoryStore::new());
     let engine = h.engine(&store);
     engine.dispatch(&h.login_intent());

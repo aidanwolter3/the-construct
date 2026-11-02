@@ -64,7 +64,7 @@
           },
           {
             "type": "core://Text",
-            "value_expr": "Project Canvas Counter",
+            "value_expr": "The Construct Counter",
             "style": "Caption"
           }
         ]

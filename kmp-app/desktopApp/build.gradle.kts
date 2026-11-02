@@ -44,19 +44,23 @@ val rustLibDir = "${rootDir}/../target/release"
 
 compose.desktop {
     application {
-        mainClass = "org.genui.canvas.desktop.MainKt"
+        mainClass = "org.theconstruct.desktop.MainKt"
         // Applies to `:desktopApp:run` and packaged distributions.
         jvmArgs += "-Djna.library.path=$rustLibDir"
-        // `./gradlew :desktopApp:run -Dcanvas.baseUrl=...` sets the property in Gradle's JVM, not the app's: forward it.
-        listOf("canvas.baseUrl", "canvas.workspace").forEach { key ->
+        // `./gradlew :desktopApp:run -Dconstruct.baseUrl=...` sets the property in Gradle's JVM, not the app's: forward it.
+        listOf("construct.baseUrl", "construct.workspace").forEach { key ->
             providers.systemProperty(key).orNull?.takeIf { it.isNotBlank() }?.let { jvmArgs += "-D$key=$it" }
         }
         nativeDistributions {
             targetFormats(TargetFormat.Dmg)
-            packageName = "ProjectCanvas"
+            packageName = "The Construct"
             packageVersion = "1.0.0"
             // App icon "the construct" (scripts/gen_icons.sh regenerates these from assets/icon).
-            macOS { iconFile.set(repoRoot.resolve("assets/icon/construct.icns")) }
+            macOS {
+                bundleID = "org.theconstruct.desktop"
+                dockName = "The Construct"
+                iconFile.set(repoRoot.resolve("assets/icon/construct.icns"))
+            }
             windows { iconFile.set(repoRoot.resolve("assets/icon/construct.ico")) }
             linux { iconFile.set(repoRoot.resolve("assets/icon/png/construct-512.png")) }
         }
@@ -73,7 +77,7 @@ tasks.withType<Test>().configureEach {
     testLogging { showStandardStreams = true }
 }
 
-// Headless simulator: renders CanvasApp offscreen and writes PNG screenshots driven by a script.
+// Headless simulator: renders ConstructApp offscreen and writes PNG screenshots driven by a script.
 // Relative paths (-Pfixture, -Pout, -PscriptFile, -Pstorage) resolve against the repo root (the working dir).
 //   ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=home -Pscreen=phone \
 //       -Pscript="shot start; click Increment; assert-text Count: 1; shot after"
@@ -81,10 +85,10 @@ val simulate by tasks.registering(JavaExec::class) {
     group = "verification"
     description = "Renders the shared Compose UI headlessly and writes screenshots (see README: Simulation mode)"
     classpath = sim.runtimeClasspath
-    mainClass = "org.genui.canvas.desktop.sim.SimulatorKt"
+    mainClass = "org.theconstruct.desktop.sim.SimulatorKt"
     workingDir = repoRoot
     jvmArgs("-Djava.awt.headless=true")
-    systemProperty("canvas.sim.defaultOutRoot", layout.buildDirectory.dir("sim").get().asFile.absolutePath)
+    systemProperty("construct.sim.defaultOutRoot", layout.buildDirectory.dir("sim").get().asFile.absolutePath)
     // Forward -P<name>=<value> as --<name>=<value>.
     val names = listOf("workspace", "screen", "script", "scriptFile", "fixture", "baseUrl", "mode", "out", "density", "timeoutMs", "storage", "pixelfedLogin")
     // providers.gradleProperty reads only -P / gradle.properties (project.findProperty("script")

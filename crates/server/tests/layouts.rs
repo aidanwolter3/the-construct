@@ -34,7 +34,7 @@ async fn spawn(state: AppState) -> Pod {
     Pod { url, state, handle }
 }
 
-/// A pod in open mode (`CANVAS_AGENT_OPEN=1`).
+/// A pod in open mode (`CONSTRUCT_AGENT_OPEN=1`).
 async fn open_pod() -> Pod {
     spawn(AppState::in_memory().with_agent_open(true)).await
 }

@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use client_core::store::{OutboxRow, Store, StoreOps};
-use client_core::{CanvasEngine, EngineConfig, StateSnapshot};
+use client_core::{ConstructEngine, EngineConfig, StateSnapshot};
 use protocol::WorkspaceSpec;
 use serde_json::{Value, json};
 
@@ -102,7 +102,11 @@ impl Script {
                     let (status, resp) = if method == "POST" {
                         let status = script.statuses.lock().unwrap().pop_front().unwrap_or(200);
                         let sent = serde_json::from_slice(&body).unwrap_or(Value::Null);
-                        script.posts.lock().unwrap().push((path.to_string(), sent, status));
+                        script
+                            .posts
+                            .lock()
+                            .unwrap()
+                            .push((path.to_string(), sent, status));
                         (status, r#"{"ok":true}"#.to_string())
                     } else if path == "/v1/workspaces/feed" {
                         (200, script.bundle.lock().unwrap().clone())
@@ -134,7 +138,10 @@ fn temp_dir(tag: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("client-core-also-{tag}-{}-{nanos}", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "client-core-also-{tag}-{}-{nanos}",
+        std::process::id()
+    ))
 }
 
 /// Store `bundle_json` in `<dir>/cache.db` as workspace "feed", the way a
@@ -155,8 +162,8 @@ fn seed_cache(dir: &Path, bundle_json: &str) {
         .unwrap();
 }
 
-fn engine(dir: &Path, base: &str, config: EngineConfig) -> CanvasEngine {
-    CanvasEngine::init_with_config(dir.to_str().unwrap(), base, "feed", config)
+fn engine(dir: &Path, base: &str, config: EngineConfig) -> ConstructEngine {
+    ConstructEngine::init_with_config(dir.to_str().unwrap(), base, "feed", config)
 }
 
 fn rows(dir: &Path) -> Vec<OutboxRow> {
@@ -170,7 +177,10 @@ fn rows(dir: &Path) -> Vec<OutboxRow> {
 fn post1(snap: &StateSnapshot) -> (bool, i64) {
     let entities: Value = serde_json::from_str(&snap.entities_json).unwrap();
     let p = &entities[POST1];
-    (p["is_liked"].as_bool().unwrap(), p["like_count"].as_i64().unwrap())
+    (
+        p["is_liked"].as_bool().unwrap(),
+        p["like_count"].as_i64().unwrap(),
+    )
 }
 
 /// Stored `(prev is_liked, [(also field, prev value)])` of a row.
@@ -205,7 +215,11 @@ fn like_with_also_updates_both_fields_and_stores_the_outbox_row() {
     assert_eq!(s.pending_actions, 1);
 
     engine.dispatch(LIKE);
-    assert_eq!(post1(&engine.snapshot()), (false, 5), "unlike evaluates against pre-mutation entity");
+    assert_eq!(
+        post1(&engine.snapshot()),
+        (false, 5),
+        "unlike evaluates against pre-mutation entity"
+    );
 
     let queued = rows(&dir);
     assert_eq!(queued.len(), 2);
@@ -217,12 +231,18 @@ fn like_with_also_updates_both_fields_and_stores_the_outbox_row() {
         json!({"id": "1", "liked": true}),
         "$value is the primary field's new value"
     );
-    assert_eq!(prevs(r), (json!(false), vec![("like_count".into(), json!(5))]));
+    assert_eq!(
+        prevs(r),
+        (json!(false), vec![("like_count".into(), json!(5))])
+    );
     assert_eq!(
         r.also[0].value_expr,
         "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1"
     );
-    assert_eq!(prevs(&queued[1]), (json!(true), vec![("like_count".into(), json!(6))]));
+    assert_eq!(
+        prevs(&queued[1]),
+        (json!(true), vec![("like_count".into(), json!(6))])
+    );
     assert_eq!(
         serde_json::from_str::<Value>(&queued[1].payload_json).unwrap(),
         json!({"id": "1", "liked": false})
@@ -230,7 +250,7 @@ fn like_with_also_updates_both_fields_and_stores_the_outbox_row() {
 
     // Persisted: a restarted engine shows the optimistic values.
     drop(engine);
-    let again = CanvasEngine::init_with_config(
+    let again = ConstructEngine::init_with_config(
         dir.to_str().unwrap(),
         &format!("http://{}", free_addr()),
         "feed",
@@ -270,7 +290,11 @@ fn rejected_like_restores_both_fields() {
     wait_until("rejected row removed", || {
         engine.snapshot().pending_actions == 0 && !script.posts().is_empty()
     });
-    assert_eq!(post1(&engine.snapshot()), (false, 5), "both fields rolled back");
+    assert_eq!(
+        post1(&engine.snapshot()),
+        (false, 5),
+        "both fields rolled back"
+    );
     assert_eq!(
         script.posts(),
         vec![(LIKE_EP.to_string(), json!({"id": "1", "liked": true}), 403)]
@@ -307,7 +331,10 @@ fn rejected_row_reapplies_later_rows_with_all_their_fields() {
     engine.dispatch(LIKE);
     engine.dispatch(LIKE);
     assert_eq!(post1(&engine.snapshot()), (false, 5));
-    assert_eq!(prevs(&rows(&dir)[1]), (json!(true), vec![("like_count".into(), json!(6))]));
+    assert_eq!(
+        prevs(&rows(&dir)[1]),
+        (json!(true), vec![("like_count".into(), json!(6))])
+    );
 
     let script = Script::new(bundle(false, 5), &[422, 503]);
     script.serve(addr);
@@ -316,7 +343,10 @@ fn rejected_row_reapplies_later_rows_with_all_their_fields() {
     });
     let held = rows(&dir);
     assert_eq!(held.len(), 1);
-    assert_eq!(prevs(&held[0]), (json!(false), vec![("like_count".into(), json!(5))]));
+    assert_eq!(
+        prevs(&held[0]),
+        (json!(false), vec![("like_count".into(), json!(5))])
+    );
     assert_eq!(post1(&engine.snapshot()), (true, 6));
 
     wait_until("flushed", || engine.snapshot().pending_actions == 0);
@@ -350,7 +380,9 @@ fn refetch_reapplies_all_fields_of_pending_rows() {
     script.serve(addr);
     wait_until("online", || engine.snapshot().is_online);
     wait_until("fetched", || {
-        rows(&dir).first().is_some_and(|r| prevs(r).1 == vec![("like_count".into(), json!(10))])
+        rows(&dir)
+            .first()
+            .is_some_and(|r| prevs(r).1 == vec![("like_count".into(), json!(10))])
     });
     assert_eq!(post1(&engine.snapshot()), (true, 11));
     assert_eq!(prevs(&rows(&dir)[0]).0, json!(false));
@@ -364,7 +396,10 @@ fn refetch_reapplies_all_fields_of_pending_rows() {
         .filter(|s| s.is_online)
         .map(post1)
         .collect();
-    assert!(online.iter().all(|&v| v == (true, 11)), "never clobbered: {online:?}");
+    assert!(
+        online.iter().all(|&v| v == (true, 11)),
+        "never clobbered: {online:?}"
+    );
     let cached = Store::open(&dir.join("cache.db"))
         .unwrap()
         .get_entity(POST1)
@@ -385,12 +420,15 @@ fn queries_are_persisted_and_exposed_in_the_snapshot() {
     wait_until("fetched", || engine.snapshot().workspace_json != "null");
     let expected = json!({"timeline:home": [POST2, POST1]});
     let s = engine.snapshot();
-    assert_eq!(serde_json::from_str::<Value>(&s.queries_json).unwrap(), expected);
+    assert_eq!(
+        serde_json::from_str::<Value>(&s.queries_json).unwrap(),
+        expected
+    );
     drop(engine);
 
     // Restart offline: queries and every entity they reference come from
     // the cache.
-    let offline = CanvasEngine::init_with_config(
+    let offline = ConstructEngine::init_with_config(
         dir.to_str().unwrap(),
         &format!("http://{}", free_addr()),
         "feed",
@@ -398,7 +436,10 @@ fn queries_are_persisted_and_exposed_in_the_snapshot() {
     );
     let s = offline.snapshot();
     assert!(!s.is_online);
-    assert_eq!(serde_json::from_str::<Value>(&s.queries_json).unwrap(), expected);
+    assert_eq!(
+        serde_json::from_str::<Value>(&s.queries_json).unwrap(),
+        expected
+    );
     let entities: Value = serde_json::from_str(&s.entities_json).unwrap();
     assert!(entities.get(POST1).is_some() && entities.get(POST2).is_some());
     let _ = std::fs::remove_dir_all(&dir);
@@ -414,7 +455,13 @@ fn query_uris_outside_the_entity_list_are_loaded_from_the_cache() {
     let mut store = Store::open(&dir.join("cache.db")).unwrap();
     store
         .transaction(|tx| {
-            tx.save_workspace("feed", &spec.workspace, &[POST1.to_string()], &spec.queries, 1)?;
+            tx.save_workspace(
+                "feed",
+                &spec.workspace,
+                &[POST1.to_string()],
+                &spec.queries,
+                1,
+            )?;
             for (uri, e) in &spec.entities {
                 tx.upsert_entity(uri, e, 1)?;
             }

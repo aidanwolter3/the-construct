@@ -1,16 +1,16 @@
-//! Project Canvas server binary.
+//! The Construct server binary.
 //!
 //! Environment:
-//! - `CANVAS_ADDR`: listen address (default `127.0.0.1:8080`).
-//! - `CANVAS_DATA_DIR`: directory for `server.db` (default `~/.canvas-server`,
+//! - `CONSTRUCT_ADDR`: listen address (default `127.0.0.1:8080`).
+//! - `CONSTRUCT_DATA_DIR`: directory for `server.db` (default `~/.construct-server`,
 //!   created if missing).
-//! - `CANVAS_TEST_HOOKS=1`: enables `POST /v1/test/fault`.
-//! - `CANVAS_AGENT_OPEN=1`: layout versions / rollback / agent endpoints accept
+//! - `CONSTRUCT_TEST_HOOKS=1`: enables `POST /v1/test/fault`.
+//! - `CONSTRUCT_AGENT_OPEN=1`: layout versions / rollback / agent endpoints accept
 //!   requests without a pod session (dev and demo only).
-//! - `CANVAS_LLM_PROVIDER`: layout agent provider, `auto` (default: `anthropic`
+//! - `CONSTRUCT_LLM_PROVIDER`: layout agent provider, `auto` (default: `anthropic`
 //!   if `ANTHROPIC_API_KEY` is set, else `rules`) | `anthropic` | `rules`.
 //! - `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` (default `https://api.anthropic.com`),
-//!   `CANVAS_LLM_MODEL` (model id), `CANVAS_LLM_FALLBACKS=0` (no server-side refusal fallback).
+//!   `CONSTRUCT_LLM_MODEL` (model id), `CONSTRUCT_LLM_FALLBACKS=0` (no server-side refusal fallback).
 //! - `PIXELFED_INSTANCE_URL`: Pixelfed instance for pod->upstream calls
 //!   (default `http://127.0.0.1:8081`, the local fake; `http://localhost:8090` for the
 //!   local real Pixelfed, whose web/OAuth routes only answer on Host `localhost`).
@@ -24,11 +24,11 @@ use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 fn data_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("CANVAS_DATA_DIR").filter(|d| !d.is_empty()) {
+    if let Some(dir) = std::env::var_os("CONSTRUCT_DATA_DIR").filter(|d| !d.is_empty()) {
         return PathBuf::from(dir);
     }
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
-    home.join(".canvas-server")
+    home.join(".construct-server")
 }
 
 #[tokio::main]
@@ -44,8 +44,8 @@ async fn main() -> std::io::Result<()> {
     server::validate_fixtures();
 
     let dir = data_dir();
-    let test_hooks = std::env::var("CANVAS_TEST_HOOKS").is_ok_and(|v| v == "1");
-    let agent_open = std::env::var("CANVAS_AGENT_OPEN").is_ok_and(|v| v == "1");
+    let test_hooks = std::env::var("CONSTRUCT_TEST_HOOKS").is_ok_and(|v| v == "1");
+    let agent_open = std::env::var("CONSTRUCT_AGENT_OPEN").is_ok_and(|v| v == "1");
     let state = server::AppState::open_dir(&dir)
         .map_err(|e| std::io::Error::other(format!("failed to open {}: {e}", dir.display())))?
         .with_test_hooks(test_hooks)
@@ -60,7 +60,7 @@ async fn main() -> std::io::Result<()> {
     );
     tracing::info!(db = %dir.join("server.db").display(), "server database opened");
     if test_hooks {
-        tracing::warn!("CANVAS_TEST_HOOKS=1: POST /v1/test/fault is enabled");
+        tracing::warn!("CONSTRUCT_TEST_HOOKS=1: POST /v1/test/fault is enabled");
     }
     match state.agent() {
         server::agent::Selection::Ready(p) => tracing::info!(
@@ -76,16 +76,16 @@ async fn main() -> std::io::Result<()> {
     }
     if agent_open {
         tracing::warn!(
-            "CANVAS_AGENT_OPEN=1: layout versions/rollback/agent endpoints need no session (dev only)"
+            "CONSTRUCT_AGENT_OPEN=1: layout versions/rollback/agent endpoints need no session (dev only)"
         );
     }
 
-    let addr = std::env::var("CANVAS_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_owned());
+    let addr = std::env::var("CONSTRUCT_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_owned());
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| std::io::Error::new(e.kind(), format!("failed to bind {addr}: {e}")))?;
     tracing::info!(
-        "canvas server listening on http://{}",
+        "construct server listening on http://{}",
         listener.local_addr()?
     );
 

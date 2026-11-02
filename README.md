@@ -1,8 +1,13 @@
-# Project Canvas
+# The Construct
 
 A server-driven UI shell: a Rust protocol, server and client core, rendered by a Compose
 Multiplatform desktop app through UniFFI. The design is in [DESIGN.md](DESIGN.md), decisions
 are in [docs/DECISIONS.md](docs/DECISIONS.md), and status is in [docs/PROGRESS.md](docs/PROGRESS.md).
+
+> Renamed from Project Canvas (D31). There is no migration: the desktop cache moved from `~/.canvas` to
+> `~/.construct`, the local server's data dir default from `~/.canvas-server` to `~/.construct-server`, env vars
+> from `CANVAS_*` to `CONSTRUCT_*`, and the Android app is a new package (`org.theconstruct.android`; uninstall
+> `org.genui.canvas.android`). Old sessions and caches are simply not read; sign in again.
 
 Milestones 1-7 are implemented: the protocol crate, the Axum server, the macOS desktop app, the Android app
 (see [Android](#android)), the SQLite cache + outbox (M5), the Pixelfed feed with OAuth2 PKCE sign-in (M6), and
@@ -21,7 +26,7 @@ crates/protocol      UiNode / ActionIntent / WorkspaceSpec (hydration bundle) / 
 crates/server        Axum server ("the pod"): GET /v1/workspaces/{home,pixelfed_demo,pixelfed_home}, persistent
                      counters (SQLite), Pixelfed adapter (auth, feed normalization, actions, media proxy),
                      versioned layouts + rollback + SSE push, layout agent (rules / Anthropic providers)
-crates/client-core   CanvasEngine: fetches the workspace, holds state, applies optimistic mutations (SQLite cache +
+crates/client-core   ConstructEngine: fetches the workspace, holds state, applies optimistic mutations (SQLite cache +
                      outbox sync worker), OAuth2 PKCE sign-in (pod session in a secure store), agent prompts,
                      SSE layout subscriber
 crates/client-ffi    UniFFI bridge (EngineHandle, FfiStateSnapshot, StateObserver) + uniffi-bindgen bin
@@ -54,7 +59,7 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 
 ## Run the demo
 
-Terminal 1: start the server on 127.0.0.1:8080 (set `CANVAS_ADDR` to use another address).
+Terminal 1: start the server on 127.0.0.1:8080 (set `CONSTRUCT_ADDR` to use another address).
 
 ```bash
 cargo run -p server
@@ -63,13 +68,13 @@ curl -s http://127.0.0.1:8080/v1/workspaces/home | jq .
 
 Server details:
 
-- State lives in SQLite at `$CANVAS_DATA_DIR/server.db`; `CANVAS_DATA_DIR` defaults to `~/.canvas-server`
+- State lives in SQLite at `$CONSTRUCT_DATA_DIR/server.db`; `CONSTRUCT_DATA_DIR` defaults to `~/.construct-server`
   (created if missing). The path is logged at startup. Delete the file to start from a zero count.
 - `GET /v1/workspaces/home` returns the counter fixture with `core://counters/home`.count set to the stored count.
 - `POST /v1/counters/home/{increment,decrement,reset}` (optional JSON body, ignored) returns
   `{"ok":true,"count":N}`. Decrementing at 0 is refused with 422 `{"error":"count_below_zero","count":0}` and
   changes nothing. Unknown counters/ops are 404. Every mutation is logged at info with the resulting count.
-- Test hook, only when started with `CANVAS_TEST_HOOKS=1` (otherwise 404): `POST /v1/test/fault` with
+- Test hook, only when started with `CONSTRUCT_TEST_HOOKS=1` (otherwise 404): `POST /v1/test/fault` with
   `{"status":503,"count":3}` makes the next 3 POSTs (other than `/v1/test/*`) return that status (400-599)
   without being applied; `"count":0` clears it. Each injected fault is logged.
 
@@ -78,7 +83,7 @@ Versioned layouts and push channel (M7, DECISIONS D22). The layouts of `home`, `
 are not versioned). The signed-out `pixelfed_home` screen is not versioned.
 
 - `GET /v1/workspaces/{id}` serves the workspace's ACTIVE layout (see the layout catalog below) and sets
-  `X-Canvas-Layout-Version: <workspace revision>` plus `X-Canvas-Layout-Id` / `X-Canvas-Layout-Id-Version` (absent
+  `X-Construct-Layout-Version: <workspace revision>` plus `X-Construct-Layout-Id` / `X-Construct-Layout-Id-Version` (absent
   on the signed-out `pixelfed_home` screen and on its 401). The revision bumps on every visible change (an edit, a
   restore, a switch to another layout), so clients track one number per workspace.
 - `GET /v1/workspaces/{id}/versions` -> `[{version, created_at, prompt, provider}]`, newest first (the active
@@ -87,7 +92,7 @@ are not versioned). The signed-out `pixelfed_home` screen is not versioned.
   version, pushes it, and returns `{version, rolled_back_to, workspace, revision, layout_id}`. Unknown version: 404
   `version_not_found`; unversioned workspace: 404 `workspace_not_found`; bad body: 400.
 - Versions and rollback (and the agent endpoint) need a valid pod session (`Authorization: Bearer <session>`,
-  else 401 with a `detail` saying so) unless the server runs with `CANVAS_AGENT_OPEN=1` (dev/demo only; logged as a
+  else 401 with a `detail` saying so) unless the server runs with `CONSTRUCT_AGENT_OPEN=1` (dev/demo only; logged as a
   warning at startup).
 - Workspace ids are 1..=64 characters of `[A-Za-z0-9_-]`; anything else gets 400 `invalid_workspace_id` (with the
   id truncated in the echo) on the workspace GET, versions, rollback, events and the agent endpoint.
@@ -98,7 +103,7 @@ are not versioned). The signed-out `pixelfed_home` screen is not versioned.
   authorized as usual); for `pixelfed_home` a bearer that is not a valid session gets 401 like the workspace GET.
 
 ```bash
-CANVAS_AGENT_OPEN=1 cargo run -p server
+CONSTRUCT_AGENT_OPEN=1 cargo run -p server
 curl -sN http://127.0.0.1:8080/v1/workspaces/home/events &                  # event: layout, version 1
 curl -s -X POST -H 'content-type: application/json' -d '{"version":1}' \
   http://127.0.0.1:8080/v1/workspaces/home/rollback | jq .version         # 2 (and the stream gets version 2)
@@ -122,11 +127,11 @@ per distinct content (SHA-256, zstd), so a restore costs a ~0.2 KB row and a dis
   equal to the newest -> `"unchanged": true`) -> `{layout_id, workspace_id, version, restored_from, unchanged,
   active, revision?}`; pushed when the layout is active.
 - Reads follow the workspace GET (`pixelfed_home` layouts need a session; the unfiltered list hides them from
-  anonymous callers); activate/restore need a session unless `CANVAS_AGENT_OPEN=1`. Errors: 400
+  anonymous callers); activate/restore need a session unless `CONSTRUCT_AGENT_OPEN=1`. Errors: 400
   `invalid_layout_id` / `invalid_request`, 404 `layout_not_found` / `version_not_found`.
 
 ```bash
-CANVAS_AGENT_OPEN=1 cargo run -p server
+CONSTRUCT_AGENT_OPEN=1 cargo run -p server
 curl -s 'http://127.0.0.1:8080/v1/layouts?workspace_id=pixelfed_demo' | jq '.layouts[] | {id, title, active}'
 curl -s -X POST -H 'content-type: application/json' -d '{}' \
   http://127.0.0.1:8080/v1/layouts/pixelfed_demo.editorial/activate
@@ -151,7 +156,7 @@ without a Pixelfed session.
   422 `unsupported_prompt` (`supported`: example prompts) from the rules provider; 422 `use_rollback` for "reset
   layout"; 502 `provider_error`; 503 `provider_not_configured`; 400 bad body; 404 unknown workspace. Nothing is
   committed on any error. Every prompt is logged with provider, model, op count and outcome.
-- Providers, chosen at startup (logged): `CANVAS_LLM_PROVIDER` = `auto` (default: `anthropic` if
+- Providers, chosen at startup (logged): `CONSTRUCT_LLM_PROVIDER` = `auto` (default: `anthropic` if
   `ANTHROPIC_API_KEY` is set, else `rules`) | `anthropic` | `rules`. `anthropic` without a key: every prompt
   answers 503 (the server still starts).
   - `rules`: deterministic and offline. Phrases (case-insensitive, composable in one prompt, applied in the order
@@ -160,12 +165,12 @@ without a Pixelfed session.
     `core://Container` with 16 dp padding; no weather component exists), "reset layout" (-> 422 pointing at rollback), and "remove the action bar", which is
     rejected on purpose (422 `invalid_patch`) to demonstrate validation.
   - `anthropic`: the Messages API with structured outputs. `ANTHROPIC_API_KEY`; `ANTHROPIC_BASE_URL` (default
-    `https://api.anthropic.com`); `CANVAS_LLM_MODEL` (model id; default in `agent::anthropic::DEFAULT_MODEL`);
-    `CANVAS_LLM_FALLBACKS=0` turns off the server-side refusal fallback. 120 s timeout, up to 2 retries on
+    `https://api.anthropic.com`); `CONSTRUCT_LLM_MODEL` (model id; default in `agent::anthropic::DEFAULT_MODEL`);
+    `CONSTRUCT_LLM_FALLBACKS=0` turns off the server-side refusal fallback. 120 s timeout, up to 2 retries on
     429/5xx/overloaded.
 
 ```bash
-CANVAS_AGENT_OPEN=1 CANVAS_ADDR=127.0.0.1:8681 cargo run -p server
+CONSTRUCT_AGENT_OPEN=1 CONSTRUCT_ADDR=127.0.0.1:8681 cargo run -p server
 curl -X POST http://127.0.0.1:8681/v1/agent/modify_layout -H "Content-Type: application/json" \
   -d '{"prompt": "Hide post captions and put media at the very top"}'
 # -> 200 {"layout_version":2,"provider":"rules","patch":[3 replace ops],"workspace":{...},...}
@@ -175,7 +180,7 @@ curl -s -X POST -H 'content-type: application/json' -d '{"version":1}' \
 ```
 
 ```bash
-CANVAS_TEST_HOOKS=1 cargo run -p server
+CONSTRUCT_TEST_HOOKS=1 cargo run -p server
 curl -s -X POST http://127.0.0.1:8080/v1/counters/home/increment          # {"count":1,"ok":true}
 curl -s -X POST -H 'content-type: application/json' \
   -d '{"status":503,"count":2}' http://127.0.0.1:8080/v1/test/fault       # next 2 mutations -> 503
@@ -189,33 +194,33 @@ scripts/build_ffi.sh            # optional: :shared:buildRustFfi runs it before 
 cd kmp-app
 export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ./gradlew :desktopApp:run                                              # the staging pod (default)
-./gradlew :desktopApp:run -Dcanvas.baseUrl=http://127.0.0.1:8080       # or: CANVAS_BASE_URL=... ./gradlew ...
+./gradlew :desktopApp:run -Dconstruct.baseUrl=http://127.0.0.1:8080       # or: CONSTRUCT_BASE_URL=... ./gradlew ...
 ```
 
 All clients default to the deployed staging pod, `https://the-construct-pod.fly.dev`; for the local server
-started above, pass its URL explicitly (`CANVAS_BASE_URL=http://127.0.0.1:8080`). A "Project Canvas" window opens with the counter layout served by the server. Clicking
+started above, pass its URL explicitly (`CONSTRUCT_BASE_URL=http://127.0.0.1:8080`). A "The Construct" window opens with the counter layout served by the server. Clicking
 **Increment** or **Reset** prints the intent to stdout and the count updates:
 
 ```
 [desktop] dispatch: {"intent":"action.mutation.optimistic",...}
-[CanvasEngine] dispatch: {...}
-[CanvasEngine] core://counters/home#count = 1
+[ConstructEngine] dispatch: {...}
+[ConstructEngine] core://counters/home#count = 1
 ```
 
 Options for the desktop app (set as `-D` JVM properties or environment variables):
 
-- `canvas.baseUrl` / `CANVAS_BASE_URL` (default `https://the-construct-pod.fly.dev`, the staging pod; local server:
+- `construct.baseUrl` / `CONSTRUCT_BASE_URL` (default `https://the-construct-pod.fly.dev`, the staging pod; local server:
   `http://127.0.0.1:8080`)
-- `canvas.workspace` / `CANVAS_WORKSPACE` (default `home`; `pixelfed_demo` shows the Pixelfed feed fixture)
+- `construct.workspace` / `CONSTRUCT_WORKSPACE` (default `home`; `pixelfed_demo` shows the Pixelfed feed fixture)
 
 Separately, `-PskipRustBuild` is a Gradle property (`./gradlew -PskipRustBuild :desktopApp:run`) that skips
 the cargo build step.
 
-The engine keeps a SQLite cache at `~/.canvas/cache.db` (tables `entities`, `active_workspace`,
+The engine keeps a SQLite cache at `~/.construct/cache.db` (tables `entities`, `active_workspace`,
 `action_outbox`; see docs/DECISIONS.md D13). Every fetched workspace (layout + entities) is written there and
 loaded on startup, so the last workspace shows when the server is unreachable; the fetch is retried every
 2 seconds until the server responds. Each click updates the entity and queues a PENDING `action_outbox` row in
-one transaction (`sqlite3 ~/.canvas/cache.db "SELECT * FROM action_outbox;"`). The old
+one transaction (`sqlite3 ~/.construct/cache.db "SELECT * FROM action_outbox;"`). The old
 `workspace_<id>.json` cache files are ignored.
 
 Queued rows are sent by a background sync worker (docs/DECISIONS.md D14), oldest first and one at a time,
@@ -225,7 +230,7 @@ including on the next launch. Each accepted row is deleted. A row the server rej
 decrementing below 0) is deleted and its field rolled back, with later queued clicks re-applied on top. A 5xx,
 408, 429 or network error keeps the row and retries it with exponential backoff (2 s, 4 s, ... capped at 60 s). A
 re-fetched workspace has the still-pending clicks re-applied, so they never visibly disappear. The engine logs
-each attempt, e.g. `[CanvasEngine] outbox #3 POST http://127.0.0.1:8080/v1/counters/home/increment -> 200,
+each attempt, e.g. `[ConstructEngine] outbox #3 POST http://127.0.0.1:8080/v1/counters/home/increment -> 200,
 deleted (0 pending)`.
 
 ## Server runtime configuration
@@ -236,22 +241,22 @@ Pixelfed instance, database path and layout agent provider are logged at startup
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CANVAS_ADDR` | `127.0.0.1:8080` | Listen address. Use `0.0.0.0:8080` to accept LAN connections. |
-| `CANVAS_DATA_DIR` | `~/.canvas-server` | Directory of `server.db` (counters, Pixelfed app/account/sessions, media keys, layout versions); created if missing. |
-| `CANVAS_TEST_HOOKS` | unset | `1` enables `POST /v1/test/fault` (fault injection; otherwise 404). |
+| `CONSTRUCT_ADDR` | `127.0.0.1:8080` | Listen address. Use `0.0.0.0:8080` to accept LAN connections. |
+| `CONSTRUCT_DATA_DIR` | `~/.construct-server` | Directory of `server.db` (counters, Pixelfed app/account/sessions, media keys, layout versions); created if missing. |
+| `CONSTRUCT_TEST_HOOKS` | unset | `1` enables `POST /v1/test/fault` (fault injection; otherwise 404). |
 | `PIXELFED_INSTANCE_URL` | `http://127.0.0.1:8081` (the fake) | Pixelfed instance for pod->upstream calls, and the only instance accepted in auth calls. `http://localhost:8090` for the local real Pixelfed, `https://<instance>` for a public one. |
 | `PIXELFED_PUBLIC_URL` | = instance URL | Base for browser-facing links (the authorize page), e.g. `http://10.0.2.2:8081` for the emulator while the pod calls `127.0.0.1:8081`. Also accepted in auth calls. |
 | `PIXELFED_MEDIA_HOSTS` | unset | Comma-separated `host`, `host:port` or `scheme://host[:port]`: extra origins the media proxy may fetch (CDN/S3) besides the instance and public URLs. Media elsewhere become placeholders. |
-| `PIXELFED_EXTRA_REDIRECTS` | unset | Comma-separated exact redirect URIs accepted by `/v1/auth/pixelfed/app`, besides `http://127.0.0.1:<port>/callback`, `http://localhost:<port>/callback` and `canvas://oauth`. |
+| `PIXELFED_EXTRA_REDIRECTS` | unset | Comma-separated exact redirect URIs accepted by `/v1/auth/pixelfed/app`, besides `http://127.0.0.1:<port>/callback`, `http://localhost:<port>/callback` and `construct://oauth`. |
 | `PIXELFED_OWNER_ACCOUNT_ID` | unset | The only upstream account id allowed to sign in (replaces a pinned owner). Unset: the first account to sign in is pinned; others get 403 `account_not_owner`. |
 | `PIXELFED_ALLOW_ACCOUNT_CHANGE` | unset | `1`/`true`: any account may sign in and replace the stored one (no pinning). |
-| `CANVAS_SESSION_TTL_DAYS` | `90` | Pod session lifetime in days (1..=36500; other values warn and use 90). |
-| `CANVAS_AGENT_OPEN` | unset | `1`: layout versions, rollback, the agent endpoint, layout activate/restore and `pixelfed_home` catalog reads need no pod session. Local demos only (warned at startup). |
-| `CANVAS_LLM_PROVIDER` | `auto` | Layout agent provider: `auto` (`anthropic` if `ANTHROPIC_API_KEY` is set, else `rules`), `anthropic`, `rules`. `anthropic` without a key: the server starts and prompts answer 503. |
+| `CONSTRUCT_SESSION_TTL_DAYS` | `90` | Pod session lifetime in days (1..=36500; other values warn and use 90). |
+| `CONSTRUCT_AGENT_OPEN` | unset | `1`: layout versions, rollback, the agent endpoint, layout activate/restore and `pixelfed_home` catalog reads need no pod session. Local demos only (warned at startup). |
+| `CONSTRUCT_LLM_PROVIDER` | `auto` | Layout agent provider: `auto` (`anthropic` if `ANTHROPIC_API_KEY` is set, else `rules`), `anthropic`, `rules`. `anthropic` without a key: the server starts and prompts answer 503. |
 | `ANTHROPIC_API_KEY` | unset | Enables the Anthropic provider (never logged). |
-| `CANVAS_LLM_MODEL` | `claude-opus-5-5` | Model id for the Anthropic provider (`agent::anthropic::DEFAULT_MODEL`). |
+| `CONSTRUCT_LLM_MODEL` | `claude-opus-5-5` | Model id for the Anthropic provider (`agent::anthropic::DEFAULT_MODEL`). |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Messages API base URL (proxy/gateway). |
-| `CANVAS_LLM_FALLBACKS` | on | `0`/`false` turns off the server-side refusal fallback of the Anthropic request. |
+| `CONSTRUCT_LLM_FALLBACKS` | on | `0`/`false` turns off the server-side refusal fallback of the Anthropic request. |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
 
 <a id="fake-pixelfed-environment"></a>`cargo run -p fake-pixelfed`:
@@ -269,18 +274,18 @@ Pixelfed instance, database path and layout agent provider are logged at startup
 ## Try it on your phone with a real Pixelfed instance
 
 Nothing has to be registered by hand: the pod registers its own OAuth app on the instance (`POST /api/v1/apps`,
-redirect `canvas://oauth`) on the first sign-in. The pod keeps the upstream token; the phone only gets a pod
+redirect `construct://oauth`) on the first sign-in. The pod keeps the upstream token; the phone only gets a pod
 session (DECISIONS D17, D19).
 
 1. Start the pod for the instance (any account on it; the first one to sign in becomes the pod's owner):
 
    ```bash
-   PIXELFED_INSTANCE_URL=https://<instance> CANVAS_DATA_DIR=~/.canvas-pixelfed cargo run -p server
+   PIXELFED_INSTANCE_URL=https://<instance> CONSTRUCT_DATA_DIR=~/.construct-pixelfed cargo run -p server
    # add PIXELFED_MEDIA_HOSTS=<cdn host> if the instance serves media from a CDN/S3 host (else placeholders)
    ```
 
 2. Make the pod reachable from the phone. Simplest is USB: `adb reverse tcp:8080 tcp:8080` and base URL
-   `http://localhost:8080`. A LAN address (`CANVAS_ADDR=0.0.0.0:8080`, `http://<mac-ip>:8080`) or an HTTPS URL also
+   `http://localhost:8080`. A LAN address (`CONSTRUCT_ADDR=0.0.0.0:8080`, `http://<mac-ip>:8080`) or an HTTPS URL also
    works for the engine, which talks through Rust and is not restricted by Android's network security config; but
    debug builds allow cleartext to `localhost`, `127.0.0.1` and `10.0.2.2` only for Java/Kotlin traffic, and images
    load through Coil/OkHttp from the pod's media proxy, so over plain-HTTP LAN the feed images fail. Use `adb
@@ -292,11 +297,11 @@ session (DECISIONS D17, D19).
    ```bash
    cd kmp-app && export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
    ./gradlew :androidApp:installDebug
-   adb shell am start -S -n org.genui.canvas.android/.MainActivity --es baseUrl http://localhost:8080 --es workspace pixelfed_home
+   adb shell am start -S -n org.theconstruct.android/.MainActivity --es baseUrl http://localhost:8080 --es workspace pixelfed_home
    ```
 
 4. Tap **Sign in with Pixelfed**: the browser opens the instance's authorize page; log in and approve; the
-   `canvas://oauth` redirect returns to the app, which shows "Loading your feed…" and then `@you` and your home
+   `construct://oauth` redirect returns to the app, which shows "Loading your feed…" and then `@you` and your home
    timeline. Like and bookmark are applied at once and go through the outbox to the instance (queued while
    offline, flushed on reconnect). **Sign out** deletes the session and the cached private feed.
 
@@ -321,17 +326,17 @@ and pushes it to every connected client over SSE (D22, D25).
 - **Offline, no key:** the default `rules` provider understands fixed phrases (combinable): "hide post captions",
   "show captions", "put media at the very top" / "photos first", "move the action bar above the photo", "add a
   weather widget"; "remove the action bar" is rejected on purpose to show validation.
-- **With the Anthropic provider:** set `ANTHROPIC_API_KEY` (optionally `CANVAS_LLM_MODEL`, default `claude-opus-5-5`) and restart
+- **With the Anthropic provider:** set `ANTHROPIC_API_KEY` (optionally `CONSTRUCT_LLM_MODEL`, default `claude-opus-5-5`) and restart
   the pod; the startup log names the provider and model. Free-form prompts then work. (Not yet run against the live
   API: no key was available during development.)
 - **In the app:** tap the sparkle button (bottom right, "Edit layout with AI"), type a prompt or pick a chip, and
   tap **Send**. The panel shows "Layout updated (vN, <provider>)" and the feed changes in place; other clients on the
-  same pod update through the push channel. The prompt needs a signed-in session (or `CANVAS_AGENT_OPEN=1`).
-- **Versions and rollback** (`CANVAS_AGENT_OPEN=1` is for local demos only; otherwise add
+  same pod update through the push channel. The prompt needs a signed-in session (or `CONSTRUCT_AGENT_OPEN=1`).
+- **Versions and rollback** (`CONSTRUCT_AGENT_OPEN=1` is for local demos only; otherwise add
   `-H "Authorization: Bearer <session>"`):
 
   ```bash
-  CANVAS_AGENT_OPEN=1 cargo run -p server
+  CONSTRUCT_AGENT_OPEN=1 cargo run -p server
   curl -s -X POST http://127.0.0.1:8080/v1/agent/modify_layout -H 'content-type: application/json' \
     -d '{"prompt": "Add a weather widget at the top"}' | jq '{layout_version, provider, patch}'
   curl -s http://127.0.0.1:8080/v1/workspaces/pixelfed_home/versions | jq .
@@ -356,19 +361,19 @@ DESIGN.md M5 (offline click lands in the outbox, flushed on reconnect), with the
 
 ```bash
 cargo run -p server                                                  # terminal 1
-cd kmp-app && CANVAS_BASE_URL=http://127.0.0.1:8080 ./gradlew :desktopApp:run   # terminal 2: Count: N, Online
+cd kmp-app && CONSTRUCT_BASE_URL=http://127.0.0.1:8080 ./gradlew :desktopApp:run   # terminal 2: Count: N, Online
 # stop the server with Ctrl-C in terminal 1: the status line goes Offline
 # click Increment 3 times: the count updates at once and the status line shows "3 pending"
-sqlite3 ~/.canvas/cache.db "SELECT id, endpoint, status, retry_count FROM action_outbox;"   # 3 PENDING rows
+sqlite3 ~/.construct/cache.db "SELECT id, endpoint, status, retry_count FROM action_outbox;"   # 3 PENDING rows
 cargo run -p server                                                  # terminal 1 again: within ~2 s flushed, rows deleted
-sqlite3 ~/.canvas/cache.db "SELECT count(*) FROM action_outbox;"     # 0
+sqlite3 ~/.construct/cache.db "SELECT count(*) FROM action_outbox;"     # 0
 curl -s http://127.0.0.1:8080/v1/workspaces/home | jq '.entities["core://counters/home"].count'
 ```
 
 DESIGN.md M7 (prompt -> valid patched `WorkspaceSpec`; the open app recomposes without a restart):
 
 ```bash
-CANVAS_AGENT_OPEN=1 cargo run -p server
+CONSTRUCT_AGENT_OPEN=1 cargo run -p server
 curl -s -X POST http://127.0.0.1:8080/v1/agent/modify_layout -H "Content-Type: application/json" \
   -d '{"prompt": "Hide post captions and put media at the very top"}' | jq '{layout_version, provider, patch}'
 # a desktop app or simulator showing pixelfed_home on this pod switches to the new layout within a second
@@ -394,9 +399,9 @@ idle, ~5 MB after a few hundred requests; the Docker container ~1 MB). Image: `r
 `gcr.io/distroless/cc-debian12:nonroot`, 51 MB.
 
 ```bash
-docker build -f crates/fake-pixelfed/Dockerfile -t canvas-fake-pixelfed .      # from the repo root
+docker build -f crates/fake-pixelfed/Dockerfile -t construct-fake-pixelfed .      # from the repo root
 docker run --rm -p 127.0.0.1:8081:8081 -e FAKE_PIXELFED_ADMIN=1 \
-  -e FAKE_PIXELFED_PUBLIC_URL=http://127.0.0.1:8081 canvas-fake-pixelfed
+  -e FAKE_PIXELFED_PUBLIC_URL=http://127.0.0.1:8081 construct-fake-pixelfed
 E2E_FAKE_URL=http://127.0.0.1:8081 cargo test -p e2e --test suite                # suite against it
 ```
 
@@ -476,10 +481,10 @@ scripts/e2e.sh --upstream real          # a real Pixelfed (default http://localh
 ## Pixelfed (pod adapter)
 
 The server (`server::pixelfed`, docs/DECISIONS.md D17) adapts one Pixelfed instance: it owns the upstream
-access token, normalizes the home timeline into Canvas entities and serves the `pixelfed_home` workspace. The
+access token, normalizes the home timeline into Construct entities and serves the `pixelfed_home` workspace. The
 client only holds a pod session token and sends `Authorization: Bearer <session>`.
 
-Configuration (`PIXELFED_*`, `CANVAS_SESSION_TTL_DAYS`): see
+Configuration (`PIXELFED_*`, `CONSTRUCT_SESSION_TTL_DAYS`): see
 [Server runtime configuration](#server-runtime-configuration).
 
 Endpoints:
@@ -487,7 +492,7 @@ Endpoints:
 - `POST /v1/auth/pixelfed/app {instance_url, redirect_uri}` -> `{client_id, scopes, authorize_endpoint}`
   (registers an app upstream once per redirect_uri; a cached app is re-checked with a `client_credentials` grant
   and re-registered if the instance no longer knows it). Another instance -> 400 `instance_not_allowed`.
-  `redirect_uri` must be `http://127.0.0.1:<port>/callback`, `http://localhost:<port>/callback`, `canvas://oauth`
+  `redirect_uri` must be `http://127.0.0.1:<port>/callback`, `http://localhost:<port>/callback`, `construct://oauth`
   or a `PIXELFED_EXTRA_REDIRECTS` entry, else 400 `redirect_uri_not_allowed`.
 - `POST /v1/auth/pixelfed/token {instance_url, code, code_verifier, redirect_uri}` -> `{session_token,
   account:{id, username, display_name, avatar_url}}`. Upstream rejection -> 400 `oauth_exchange_failed`. An
@@ -497,7 +502,7 @@ Endpoints:
   posts/users/media entities, PostCard layout with like/bookmark optimistic mutations). Without a bearer: 200 with a
   signed-out bundle (a "Sign in with Pixelfed" `action.auth.login` button). With a bearer that no longer works
   (unknown session, or the upstream rejected the stored token): 401 with the same signed-out bundle as the body and
-  `X-Canvas-Session: invalid`, so the client drops its stale session. Upstream unreachable -> 502. The upstream
+  `X-Construct-Session: invalid`, so the client drops its stale session. Upstream unreachable -> 502. The upstream
   request is `GET /api/v1/timelines/home?limit=20&include_reblogs=true` (Pixelfed hides boosts without it).
 - Upstream tokens: the pod stores the access token and, when the upstream issues them (Pixelfed does), the refresh
   token and expiry. On an upstream 401 (feed or action) it refreshes once (`grant_type=refresh_token`, serialized
@@ -535,38 +540,38 @@ thread; `auth_json` in every snapshot goes `pending` -> `signed_in` (username, d
   are Kotlin callback interfaces; exceptions in them are contained.
 - `redirectUri = null`: loopback (desktop). The engine listens once on `http://127.0.0.1:47823/callback` for 5
   minutes (a fixed port so the pod reuses one upstream OAuth app; if 47823 is busy, a random port, which registers
-  another app). A custom URI (Android: `canvas://oauth`): the app forwards the redirect to `handleAuthRedirect`.
+  another app). A custom URI (Android: `construct://oauth`): the app forwards the redirect to `handleAuthRedirect`.
   The custom-scheme flow is also kept in the secure store (`pending_auth:<baseUrl>`, 10 minutes), so a redirect
   that cold-starts the app after its process was killed still signs in; one that matches nothing shows "Sign-in
   was interrupted; please try again".
-- `secureStore = null`: macOS Keychain (service `dev.canvas.client`, key `pod_session:<baseUrl>`), in-memory
+- `secureStore = null`: macOS Keychain (service `org.theconstruct.client`, key `pod_session:<baseUrl>`), in-memory
   elsewhere. The session survives restarts; `logout()` deletes it on the pod and locally.
 - `urlOpener = null` (or `open` returns false): `auth_json` says "no browser available" and the authorize URL is
-  logged (`[CanvasEngine] no browser available; to sign in, open this URL ...`); opening it by hand still works.
+  logged (`[ConstructEngine] no browser available; to sign in, open this URL ...`); opening it by hand still works.
   With the fake, append `&auto=1` to approve without clicking.
 - A 401 from the pod signs the client out (a stale session on `pixelfed_home` gets one, see above). A like queued
   while the session was invalid stays pending (not rolled back) and is sent after the next sign-in.
 - Signing out (or a 401) removes the cached private feed (`pixelfed://` entities, the feed workspace row) from
   `cache.db`; `logout()` also drops queued Pixelfed actions, a 401 keeps them for the next sign-in. The DB runs
   with `secure_delete=ON` and the WAL is truncated after the purge, so the rows don't linger in the file's bytes.
-- UI: while signed in the status line shows `@username` and a **Sign out** button (`CanvasController.logout()`);
+- UI: while signed in the status line shows `@username` and a **Sign out** button (`ConstructController.logout()`);
   "Signing in…" while pending, then "Loading your feed…" from the code exchange until the first signed-in fetch
   lands (only then `@username`; a second "Sign in" tap meanwhile is ignored); "Sign-in failed: <message>" on
   error, wrapped to at most 2 lines. Messages are short and human ("This pod belongs to a different Pixelfed
-  account.", "Can't reach your pod.", ...); the URL/status/body detail is in the `[CanvasEngine]` log only.
+  account.", "Can't reach your pod.", ...); the URL/status/body detail is in the `[ConstructEngine]` log only.
 
 Per platform (DECISIONS D21):
 
 - **Desktop** (`desktopApp` Main.kt): no store (Keychain), loopback redirect, and the default browser via
   `java.awt.Desktop.browse` (else `open <url>`). Clicking "Sign in with Pixelfed" opens the browser; after approving,
   the browser lands on the "Signed in" page and the window shows the feed.
-- **Android**: `canvas://oauth` intent filter on `MainActivity` (`launchMode="singleTask"`, so the redirect returns to
+- **Android**: `construct://oauth` intent filter on `MainActivity` (`launchMode="singleTask"`, so the redirect returns to
   the same activity and engine through `onNewIntent`); the session is encrypted with an AndroidKeyStore AES/GCM key
-  (`canvas_session_key`) and kept in SharedPreferences `canvas_secure`; the authorize page opens with `ACTION_VIEW`.
+  (`construct_session_key`) and kept in SharedPreferences `construct_secure`; the authorize page opens with `ACTION_VIEW`.
   For the emulator, start the pod with `PIXELFED_PUBLIC_URL=http://10.0.2.2:8081` (and the fake with
   `FAKE_PIXELFED_PUBLIC_URL=http://10.0.2.2:8081`) so the browser can reach the authorize page. If the browser is not
   usable (e.g. Chrome's first-run screen), deliver the redirect by hand:
-  `adb shell am start -a android.intent.action.VIEW -d '"canvas://oauth?code=...&state=..."'`.
+  `adb shell am start -a android.intent.action.VIEW -d '"construct://oauth?code=...&state=..."'`.
 - **Simulator** (live mode): in-memory store and an auto-approving "browser" for the fake, or a scripted Pixelfed
   web login for a real instance with `-PpixelfedLogin=<user>:<password>` (see Simulation mode).
 
@@ -583,11 +588,11 @@ client-core side of M7 (docs/DECISIONS.md D24):
   again." (409), "The AI layout provider isn't configured on this pod.", "The AI provider failed; please try
   again.", "Sign in to change the layout." (401), or "offline: try again when online". A newer layout version
   arriving from elsewhere (SSE refetch) resets a finished status to idle, so the panel never shows a stale result.
-- The engine remembers the served layout version (`X-Canvas-Layout-Version`) and, while online, keeps
-  `GET /v1/workspaces/<id>/events` open on a `canvas-engine-events` thread. A `layout` event with a newer version
+- The engine remembers the served layout version (`X-Construct-Layout-Version`) and, while online, keeps
+  `GET /v1/workspaces/<id>/events` open on a `construct-engine-events` thread. A `layout` event with a newer version
   refetches the workspace (queued optimistic changes are re-applied on top); equal or older versions are ignored.
   The stream reconnects after errors with a 1 s -> 30 s backoff (and after 45 s of silence), and closes when the
-  engine is dropped; a line or event over 64 KB drops the connection and reconnects. Log lines: `[CanvasEngine] events: connected to ...`, `events: layout v3 pushed (have v2);
+  engine is dropped; a line or event over 64 KB drops the connection and reconnects. Log lines: `[ConstructEngine] events: connected to ...`, `events: layout v3 pushed (have v2);
   refetching`, `agent: applied layout v3 (rules)`.
 - FFI: `FfiStateSnapshot.agentJson` -> `EngineSnapshot.agentJson`.
 
@@ -596,7 +601,7 @@ client-core side of M7 (docs/DECISIONS.md D24):
 client-core / FFI / bridge API over the pod's `/v1/layouts` endpoints (docs/DECISIONS.md D26, D27), for a layout
 browser. All calls are blocking: on Kotlin call them on `Dispatchers.IO`, never the UI thread.
 
-| Kotlin (`CanvasEngineBridge`) | Rust (`CanvasEngine` / `EngineHandle`) | Pod |
+| Kotlin (`ConstructEngineBridge`) | Rust (`ConstructEngine` / `EngineHandle`) | Pod |
 |---|---|---|
 | `listLayouts()` | `list_layouts()` | `GET /v1/layouts?workspace_id=<engine's>` |
 | `layoutVersions(id, before?, limit?)` | `layout_versions(id, before, limit)` | `GET /v1/layouts/:id/versions` |
@@ -606,11 +611,11 @@ browser. All calls are blocking: on Kotlin call them on `Dispatchers.IO`, never 
 
 - Each returns the pod's JSON body. Failures throw `LayoutApiException` (Kotlin; `kind` Offline / Unauthorized /
   NotFound / Server) with a readable message, e.g. "Sign in to change layouts." (writes need a session unless the
-  pod runs with `CANVAS_AGENT_OPEN=1`) or "Can't reach your pod. Check your connection and try again.". A 401 with
+  pod runs with `CONSTRUCT_AGENT_OPEN=1`) or "Can't reach your pod. Check your connection and try again.". A 401 with
   a stale session signs out like any other request.
 - An activate / restore that changes the screen refetches the workspace before returning, so the UI shows the new
   layout immediately (the SSE echo is a no-op).
-- Every snapshot carries `layout_json` = `{"layout_id","layout_version","revision"}` (`CanvasState.activeLayout`
+- Every snapshot carries `layout_json` = `{"layout_id","layout_version","revision"}` (`ConstructState.activeLayout`
   in Kotlin) to mark the active layout and version; `{}` when unknown.
 - Simulation mode: `FakeEngineBridge` serves an in-memory catalog of the pod's built-ins (read from
   `fixtures/layouts/`; `home`: counter with seed / AI / rollback versions, big_counter; the Pixelfed workspaces:
@@ -633,7 +638,7 @@ Every surface (desktop, Android, simulator) has the same shared-Compose browser 
   (Undo disappears once the screen shows something else, e.g. another device switched layouts). Errors show inline
   with "Try again"
   (offline: "Can't reach your pod. ..."; writes without a session: "Sign in to change layouts.", unless the pod runs
-  with `CANVAS_AGENT_OPEN=1`).
+  with `CONSTRUCT_AGENT_OPEN=1`).
 - Test tags: `layouts-button`, `layouts-browser`, `layouts-close`, `layouts-back`, `layout-item-<id>`,
   `layout-details`, `layout-use`, `version-item-<n>`, `versions-more`, `version-preview`, `version-restore`,
   `version-use`, `confirm-dialog`, `confirm-ok`, `confirm-cancel`, `confirm-error`, `layouts-snackbar`,
@@ -657,9 +662,9 @@ scripts/pixelfed_dev.sh record   # re-record fixtures/pixelfed/recorded/*.json w
 scripts/pixelfed_dev.sh status   # | logs [svc] | down (keeps data) | reset (deletes all data)
 ```
 
-Seeded data (idempotent: existing users/posts are kept, a fresh token is minted per run): `canvasadmin` /
-`canvas-dev-pass` (admin), `alice` / `alice-dev-pass`, `bob` / `bob-dev-pass`; tokens in
-`dev/pixelfed/.seed/{admin,alice,bob}_token` (gitignored). canvasadmin follows alice; alice posts a 3-image
+Seeded data (idempotent: existing users/posts are kept, a fresh token is minted per run): `constructadmin` /
+`construct-dev-pass` (admin), `alice` / `alice-dev-pass`, `bob` / `bob-dev-pass`; tokens in
+`dev/pixelfed/.seed/{admin,alice,bob}_token` (gitignored). constructadmin follows alice; alice posts a 3-image
 carousel, a portrait single image without alt text, a landscape image with alt text and a sensitive post with a CW;
 bob posts one image that alice boosts. Images come from `fixtures/pixelfed/images/` (numbered, coloured JPEGs).
 
@@ -685,17 +690,17 @@ below). Things the real instance does differently from the fake:
   action response bodies (D14), so the optimistic count stays right; a refetch within a second or two may show the
   old count.
 - The authorize page needs a logged-in Pixelfed web session (login is by **e-mail**:
-  `canvasadmin@example.test`, `alice@example.test`, `bob@example.test`). A client the user already approved is
+  `constructadmin@example.test`, `alice@example.test`, `bob@example.test`). A client the user already approved is
   redirected straight back without the consent page.
 
 End to end with the desktop simulator (pod on 8480 so it does not clash with a dev pod on 8080):
 
 ```bash
-CANVAS_ADDR=127.0.0.1:8480 CANVAS_DATA_DIR=/tmp/canvas-pf PIXELFED_INSTANCE_URL=http://localhost:8090 \
+CONSTRUCT_ADDR=127.0.0.1:8480 CONSTRUCT_DATA_DIR=/tmp/construct-pf PIXELFED_INSTANCE_URL=http://localhost:8090 \
   cargo run -p server &
 cd kmp-app && ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_home \
-  -PbaseUrl=http://127.0.0.1:8480 -PpixelfedLogin=canvasadmin:canvas-dev-pass \
-  -Pscript="shot signed-out; click Sign in with Pixelfed; wait-text 30000 @canvasadmin; wait-text 20000 Alice Example boosted; wait-images 30000; shot feed"
+  -PbaseUrl=http://127.0.0.1:8480 -PpixelfedLogin=constructadmin:construct-dev-pass \
+  -Pscript="shot signed-out; click Sign in with Pixelfed; wait-text 30000 @constructadmin; wait-text 20000 Alice Example boosted; wait-images 30000; shot feed"
 ```
 
 Upstream quirks handled by the script: the image ships without `storage/app/public` (default avatar/header are
@@ -742,7 +747,7 @@ Uninstall: `scripts/pixelfed_dev.sh reset; colima stop; colima delete -f; rm -rf
 
 ## Simulation mode
 
-A headless feedback loop: `:desktopApp:simulate` renders the real shared `CanvasApp` to an offscreen
+A headless feedback loop: `:desktopApp:simulate` renders the real shared `ConstructApp` to an offscreen
 virtual screen (no window), runs a small script against it and writes PNG screenshots. A run takes about
 2 seconds. Run it from `kmp-app` with `JAVA_HOME` set as above:
 
@@ -760,7 +765,7 @@ virtual screen (no window), runs a small script against it and writes PNG screen
 ./gradlew -PskipRustBuild :desktopApp:simulate -PbaseUrl=http://127.0.0.1:8080 -Pscript="shot live"   # live mode
 # live sign-in against the pod + fake upstream (see "Sign in (client)")
 ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_home -PbaseUrl=http://127.0.0.1:8080 \
-  -Pscript="shot signed-out; click Sign in with Pixelfed; wait-text 20000 @canvasdemo; wait-images 20000; shot feed; click Like; shot liked"
+  -Pscript="shot signed-out; click Sign in with Pixelfed; wait-text 20000 @constructdemo; wait-images 20000; shot feed; click Like; shot liked"
 ```
 
 Flags (all optional):
@@ -795,14 +800,14 @@ widget", composable in one prompt; each success bumps the layout version and the
 "Layout updated (vN, fake-rules)" ("No change needed (vN)" when the layout is already in that state); anything
 else shows "I can't do that yet. Try: ...", and so does nothing while
 offline (error "offline: ..."). **Live mode** runs the real Rust engine through JNA against
-the server. By default it uses a fresh temp storage dir, so it neither reads nor writes `~/.canvas`; pass
+the server. By default it uses a fresh temp storage dir, so it neither reads nor writes `~/.construct`; pass
 `-Pstorage=<dir>` to keep a persistent one. If the workspace
 does not load within `timeoutMs`, it logs a warning and still runs the script (shots show Loading/Offline).
 `offline`/`online` are not supported in live mode; a live-mode script containing them is rejected before any
 step runs. **Sign-in in live mode:** the engine gets an in-memory session store (every run starts signed out; the
 Keychain is never touched) and a "browser" that GETs the authorize URL with `auto=1`; when the answer is a redirect to
 the engine's loopback `redirect_uri` (the fake upstream does that, with or without `FAKE_PIXELFED_AUTO_APPROVE`), it
-follows it, so `click Sign in with Pixelfed; wait-text 20000 @canvasdemo` signs in. A real Pixelfed answers with its
+follows it, so `click Sign in with Pixelfed; wait-text 20000 @constructdemo` signs in. A real Pixelfed answers with its
 login page instead: the simulator prints the authorize URL and the status line shows "no browser available"
 (opening the URL in a real browser and logging in still completes the sign-in while the script waits). For a real
 instance pass `-PpixelfedLogin=<login>:<password>`: the "browser" then does what a person would (`PixelfedLoginBrowser`,
@@ -810,7 +815,7 @@ own cookie jar): `GET /login` for the CSRF `_token`, `POST /login` (Pixelfed log
 sent as `<login>@example.test`, the dev seed's domain), `GET` the authorize URL, `POST` the consent page's approve
 form (`_token`, `state`, `client_id`, `auth_token`; the deny form is the one with `_method=DELETE`) and follows the
 302 to the loopback listener. Failures (wrong password, 429 throttling) are logged with the URL. After the user
-appears (`wait-text 30000 @canvasadmin`), wait for feed text too (e.g. `wait-text 20000 Alice Example boosted`): the
+appears (`wait-text 30000 @constructadmin`), wait for feed text too (e.g. `wait-text 20000 Alice Example boosted`): the
 status line updates before the refetched feed arrives.
 
 **Images** (Coil, DECISIONS D18) are deterministic. In fixture mode the network is never used: any image URL whose
@@ -868,7 +873,7 @@ undo; shot undone
 SCRIPT
 ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -PscriptFile=/tmp/layouts.txt
 ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -Pscreen=desktop -PscriptFile=/tmp/layouts.txt
-# live: a local pod (CANVAS_AGENT_OPEN=1 lets the anonymous simulator switch and restore)
+# live: a local pod (CONSTRUCT_AGENT_OPEN=1 lets the anonymous simulator switch and restore)
 ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -PbaseUrl=http://127.0.0.1:8080 -PscriptFile=/tmp/layouts.txt
 ```
 
@@ -899,7 +904,7 @@ message `Process ... finished with non-zero exit value N`. An unrecognized `-P` 
 
 ## Android
 
-`:androidApp` runs the same shared `CanvasApp` on Android, with the Rust engine cross-compiled to
+`:androidApp` runs the same shared `ConstructApp` on Android, with the Rust engine cross-compiled to
 `libclient_ffi.so` (DECISIONS D9, D11).
 
 Prerequisites (once): an Android SDK with an NDK (Android Studio SDK Manager; the SDK path comes from
@@ -921,10 +926,10 @@ Build (from `kmp-app`, `JAVA_HOME` set as above). `assembleDebug` runs `:android
 Gradle properties for `:androidApp`:
 
 - `-PskipRustBuild`: don't run cargo; package the `.so` files already in `jniLibs`.
-- `-PandroidAbis=arm64-v8a,x86_64` (default): ABIs to build and package (`CANVAS_ANDROID_ABIS` for the script,
+- `-PandroidAbis=arm64-v8a,x86_64` (default): ABIs to build and package (`CONSTRUCT_ANDROID_ABIS` for the script,
   and the APK's `abiFilters`).
-- `-PcanvasBaseUrl=https://the-construct-pod.fly.dev` (default, the staging pod) and `-PcanvasWorkspace=home`
-  (default): the built-in defaults (`BuildConfig`). `-PcanvasBaseUrl=http://10.0.2.2:8080` bakes in the local
+- `-PconstructBaseUrl=https://the-construct-pod.fly.dev` (default, the staging pod) and `-PconstructWorkspace=home`
+  (default): the built-in defaults (`BuildConfig`). `-PconstructBaseUrl=http://10.0.2.2:8080` bakes in the local
   server as seen from the emulator.
 
 Run on an emulator. The app talks to the staging pod unless told otherwise. For a local server, start it first
@@ -939,10 +944,10 @@ adb wait-for-device
 adb shell 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 1; done'
 
 ./gradlew :androidApp:installDebug
-adb shell am start -n org.genui.canvas.android/.MainActivity                                   # staging pod
-adb shell am start -S -n org.genui.canvas.android/.MainActivity --es workspace pixelfed_demo   # -S restarts it
-adb shell am start -S -n org.genui.canvas.android/.MainActivity --es baseUrl http://10.0.2.2:8080   # local server
-adb logcat -s CanvasEngine:V
+adb shell am start -n org.theconstruct.android/.MainActivity                                   # staging pod
+adb shell am start -S -n org.theconstruct.android/.MainActivity --es workspace pixelfed_demo   # -S restarts it
+adb shell am start -S -n org.theconstruct.android/.MainActivity --es baseUrl http://10.0.2.2:8080   # local server
+adb logcat -s ConstructEngine:V
 adb exec-out screencap -p > screen.png
 ```
 
@@ -953,7 +958,7 @@ The choice is saved (SharedPreferences) and the activity restarts with a new eng
 wins over it. A server other than the build default gets its own storage dir (`filesDir/servers/<url>`), so cached
 entities and pending outbox rows never cross servers. `scripts/android_smoke.sh` passes `--es baseUrl http://10.0.2.2:8080` (its `--base-url`). They are read when the engine is
 created, so use `am start -S` (force-stop first) to switch workspace on a running app. Rotation keeps the
-same engine. Logcat tag `CanvasEngine` carries both the Kotlin log lines (`starting base_url=...`,
+same engine. Logcat tag `ConstructEngine` carries both the Kotlin log lines (`starting base_url=...`,
 `dispatch: ...`) and the Rust engine's stdout/stderr. The stdout/stderr redirect is process-wide, so the tag also
 shows other native output from the app process (e.g. GL/EGL driver lines). The SQLite cache (`cache.db`) is in the app's
 `filesDir`.
