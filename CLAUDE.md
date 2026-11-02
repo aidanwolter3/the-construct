@@ -2,14 +2,14 @@
 
 Server-driven UI: a Rust "pod" serves app layouts (JSON `UiNode` trees) plus normalized entities; native clients
 (macOS desktop, Android, headless simulator) render them with shared Compose code and a shared Rust engine.
-Only app today: Pixelfed (`pixelfed_home`). Read `README.md` for details and `docs/DECISIONS.md` (D1–D36) before
+Only app today: Pixelfed (`pixelfed_home`). Read `README.md` for details and `docs/DECISIONS.md` (D1–D37) before
 changing architecture; `docs/PROGRESS.md` has history and next steps. `DESIGN.md` is the original design doc
 (product renamed from "Project Canvas"; AI layout editing was built, then shelved — see D32/D33).
 
 ## Repo map
 - `crates/protocol` — wire types (`UiNode`, `ActionIntent`, `WorkspaceSpec`, `EntityRecord`).
 - `crates/server` — the pod (Axum + SQLite): workspaces, read-only app versions + SSE, Pixelfed adapter
-  (OAuth, feed, likes, media proxy), counters. `agent/` is unrouted on purpose (D32).
+  (OAuth, feed, likes, media proxy), counters. `validate.rs` checks layout files.
 - `crates/client-core` — engine: SQLite cache, outbox sync, PKCE sign-in, SSE subscriber.
 - `crates/client-ffi` — UniFFI bridge (Kotlin bindings live in `kmp-app/shared/src/jvmCommonMain`).
 - `crates/fake-pixelfed` — fake upstream (primary test target); `crates/e2e` — end-to-end suite.
@@ -45,6 +45,8 @@ needs a device check.
 - **Push to `main` auto-deploys staging** (https://the-construct-pod.fly.dev + fake Pixelfed) when the Rust job
   passes. Keep `main` green; server schema changes need a migration that works on staging's existing DB.
 - Prefer branches + PRs for non-trivial work; check `gh run list` after pushing.
+- Keep sessions to one task: file follow-up work as a GitHub issue with the `/ticket` skill
+  (`.claude/skills/ticket`); each issue starts with a link that opens a new session on it.
 
 ## Layouts as code (only way to publish a new layout version)
 Add `layouts/<app>/NNNN.json` (`{"note": "...", "schema": N, "layout": {...}}`, next number, no gaps; `schema` =

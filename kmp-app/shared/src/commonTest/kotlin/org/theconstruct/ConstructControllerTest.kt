@@ -272,18 +272,6 @@ class ConstructControllerTest {
         assertEquals(ActiveLayout("pixelfed_home", 7), controller.state.value.activeLayout)
     }
 
-    @Test
-    fun postCardSlotKeysAreUniquePerKind() {
-        val text = UiNode.Text("x", TextStyle.Body)
-        val header = UiNode.AuthorHeader("\$item.author_uri")
-        assertEquals(
-            listOf("AuthorHeader#0", "Text#0", "Text#1"),
-            postCardSlotKeys(listOf(header, text, text)).map { it.first },
-        )
-        // The same node keeps its key when it moves to another slot.
-        assertEquals("AuthorHeader#0", postCardSlotKeys(listOf(text, header)).last().first)
-    }
-
     private companion object {
         const val COUNT_1 = """{"core://counters/home":{"count":1}}"""
         const val COUNT_3 = """{"core://counters/home":{"count":3}}"""

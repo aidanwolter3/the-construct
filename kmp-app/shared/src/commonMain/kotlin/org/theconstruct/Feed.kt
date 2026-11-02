@@ -9,39 +9,22 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
 
-// Pure helpers behind the Pixelfed widgets (unit-tested in commonTest).
+// Pure helpers behind the generic widgets (unit-tested in commonTest).
 
 /**
- * The items a `FeedList` renders, each the entity's fields plus a synthetic `uri` field.
- * With `queries[queryKey]` present (M6, DECISIONS D7): those URIs in order, de-duplicated, skipping URIs
- * that have no entity. Without it (older bundles): every entity whose URI contains `/posts/`, newest
- * `created_at` first (D7 fallback).
+ * Width/height ratio of a `core://Carousel`: the first item's [field] (a positive number), clamped to
+ * [min]..[max] when given, else the node's [fallback], else 1 (square) when that is not a positive finite number
+ * either.
  */
-fun feedItems(
-    queryKey: String,
-    queries: Map<String, List<String>>,
-    entities: Map<String, JsonObject>,
-): List<JsonObject> {
-    val uris = queries[queryKey]?.distinct()
-        ?: entities.entries
-            .filter { it.key.contains("/posts/") }
-            .sortedByDescending { (it.value["created_at"] as? JsonPrimitive)?.longOrNull ?: 0L }
-            .map { it.key }
-    return uris.mapNotNull { uri -> entities[uri]?.let { JsonObject(it + ("uri" to JsonPrimitive(uri))) } }
-}
-
-const val MIN_CAROUSEL_ASPECT = 0.8f
-const val MAX_CAROUSEL_ASPECT = 1.91f
-
-/**
- * Width/height ratio of a `MediaCarousel`: the first media entity's `aspect_ratio` clamped to
- * [MIN_CAROUSEL_ASPECT]..[MAX_CAROUSEL_ASPECT] (Instagram's 4:5 portrait to 1.91:1 landscape), else the node's
- * [nodeAspect], else 1 (square) when that is not a positive finite number either.
- */
-fun carouselAspectRatio(firstMedia: JsonObject?, nodeAspect: Float): Float {
-    val a = (firstMedia?.get("aspect_ratio") as? JsonPrimitive)?.takeIf { !it.isString }?.doubleOrNull?.toFloat()
-    if (a != null && a.isFinite() && a > 0f) return a.coerceIn(MIN_CAROUSEL_ASPECT, MAX_CAROUSEL_ASPECT)
-    return nodeAspect.takeIf { it.isFinite() && it > 0f } ?: 1f
+fun carouselAspectRatio(first: JsonObject?, field: String?, min: Double?, max: Double?, fallback: Double): Float {
+    val a = field?.let { (first?.get(it) as? JsonPrimitive)?.takeIf { p -> !p.isString }?.doubleOrNull }
+    if (a != null && a.isFinite() && a > 0.0) {
+        var r = a
+        if (min != null) r = maxOf(r, min)
+        if (max != null) r = minOf(r, max)
+        return r.toFloat()
+    }
+    return fallback.takeIf { it.isFinite() && it > 0.0 }?.toFloat() ?: 1f
 }
 
 private const val BASE83 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#\$%*+,-.:;=?@[]^_{|}~"

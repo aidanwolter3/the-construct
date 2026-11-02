@@ -49,28 +49,36 @@ class ModelTest {
     fun decodesPixelfedBundle() {
         val spec = ConstructJson.decodeBundle(PIXELFED_BUNDLE_JSON)
         val ws = assertIs<UiNode.Workspace>(spec.workspace)
-        val feed = assertIs<UiNode.FeedList>(ws.slots.single().content)
+        val feed = assertIs<UiNode.ItemList>(ws.slots.single().content)
         assertEquals("timeline:home", feed.queryKey)
+        assertEquals("No posts", feed.emptyText)
 
-        val card = assertIs<UiNode.PostCard>(feed.itemTemplate)
-        assertEquals("\$item.uri", card.postRef)
-        val author = assertIs<UiNode.AuthorHeader>(card.authorSlot)
-        assertEquals("\$item.author_uri", author.userRef)
-        assertNull(author.onClick)
-        val media = assertIs<UiNode.MediaCarousel>(card.mediaSlot)
-        assertEquals(MediaRefs.Expr("\$item.media_uris"), media.mediaRefs)
-        assertEquals(1.0f, media.aspectRatio)
+        val card = assertIs<UiNode.Column>(feed.itemTemplate)
+        val boosted = assertIs<UiNode.Conditional>(card.children[0])
+        assertEquals("\$item.reblogged_by_name", boosted.value)
+        assertEquals("repeat", assertIs<UiNode.Badge>(boosted.content).icon)
+        val header = assertIs<UiNode.Row>(card.children[1])
+        val avatar = assertIs<UiNode.Image>(header.children[0])
+        assertEquals(ImageShape.Circle, avatar.shape)
+        val media = assertIs<UiNode.Carousel>(card.children[2])
+        assertEquals(ListBinding.Expr("\$item.media_uris"), media.items)
+        assertEquals("aspect_ratio", media.aspectField)
+        assertEquals(0.8, media.minAspect)
+        assertEquals(1.91, media.maxAspect)
+        assertIs<UiNode.Image>(media.itemTemplate)
 
-        val bar = assertIs<UiNode.ActionBar>(card.actionSlot)
-        val like = assertIs<ActionIntent.OptimisticMutate>(bar.likeIntent)
-        assertEquals(JsonPrimitive(false), like.rollbackValue)
-        assertEquals(buildJsonObject { put("id", "\$item.id") }, like.payload)
-        assertEquals(
-            ActionIntent.Navigate("pixelfed://bookmarks", PresentationMode.Push),
-            bar.bookmarkIntent,
-        )
-        assertEquals(PresentationMode.Modal, assertIs<ActionIntent.Navigate>(bar.commentIntent).presentation)
-        assertEquals(TextStyle.Body, assertIs<UiNode.Text>(card.captionSlot).style)
+        val bar = assertIs<UiNode.Row>(card.children[3])
+        val like = assertIs<UiNode.IconButton>(bar.children[0])
+        assertEquals("favorite_border", like.icon)
+        assertEquals("favorite", like.activeIcon)
+        assertEquals("\$item.is_liked", like.active)
+        assertEquals("#ED4956", like.activeTint)
+        val likeIntent = assertIs<ActionIntent.OptimisticMutate>(like.onClick)
+        assertEquals(JsonPrimitive(false), likeIntent.rollbackValue)
+        val comment = bar.children.filterIsInstance<UiNode.IconButton>().single { it.icon == "chat_bubble" }
+        assertEquals(PresentationMode.Modal, assertIs<ActionIntent.Navigate>(comment.onClick).presentation)
+        assertIs<UiNode.Spacer>(bar.children.first { it is UiNode.Spacer && it.sizeDp == null })
+        assertEquals(UiNode.Divider, card.children.last())
 
         assertEquals(3, spec.entities.size)
         assertEquals("Sunrise over Boulder", spec.entities.getValue("pixelfed://posts/101")["caption"]?.jsonPrimitive?.content)
@@ -102,11 +110,36 @@ class ModelTest {
     }
 
     @Test
-    fun mediaRefsLiteralListRoundTrips() {
-        val node = ConstructJson.decodeNode("""{"type":"pixelfed://MediaCarousel","media_refs":["a","b"],"aspect_ratio":1.5}""")
-        val m = assertIs<UiNode.MediaCarousel>(node)
-        assertEquals(MediaRefs.Items(listOf("a", "b")), m.mediaRefs)
-        assertTrue(ConstructJson.encodeNode(m).contains("\"media_refs\":[\"a\",\"b\"]"))
+    fun carouselLiteralItemsRoundTrip() {
+        val node = ConstructJson.decodeNode(
+            """{"type":"core://Carousel","items":["a","b"],"item_template":{"type":"core://Text","value_expr":"x","style":"Body"},"aspect_ratio":1.5}"""
+        )
+        val m = assertIs<UiNode.Carousel>(node)
+        assertEquals(ListBinding.Items(listOf("a", "b")), m.items)
+        assertEquals(1.5, m.aspectRatio)
+        assertTrue(ConstructJson.encodeNode(m).contains("\"items\":[\"a\",\"b\"]"))
+        assertEquals(m, ConstructJson.decodeNode(ConstructJson.encodeNode(m)))
+    }
+
+    @Test
+    fun removedPixelfedNodesDegradeToUnknown() {
+        val raw = """{"type":"pixelfed://PostCard","post_ref":"x"}"""
+        val u = assertIs<UiNode.Unknown>(ConstructJson.decodeNode(raw))
+        assertEquals("pixelfed://PostCard", u.type)
+    }
+
+    @Test
+    fun genericNodesRoundTrip() {
+        val nodes = listOf(
+            UiNode.Row(listOf(UiNode.Spacer(), UiNode.Divider), spacingDp = 4, paddingHDp = 2),
+            UiNode.Column(listOf(UiNode.Spacer(8)), paddingVDp = 3),
+            UiNode.Conditional("\$item.x", UiNode.Chip("Hi", "warning", Tone.Warning)),
+            UiNode.Badge("b", "repeat"),
+            UiNode.IconButton("send", "Send", ActionIntent.NavigateBack, active = "\$item.on", activeTint = "#112233", tag = "t"),
+            UiNode.Image("u", blurhash = "LEHV6nWB2yk8"),
+        )
+        for (n in nodes) assertEquals(n, ConstructJson.decodeNode(ConstructJson.encodeNode(n)), n.toString())
+        assertTrue(ConstructJson.encodeNode(UiNode.Divider) == "{\"type\":\"core://Divider\"}", ConstructJson.encodeNode(UiNode.Divider))
     }
 
     @Test
@@ -114,8 +147,8 @@ class ModelTest {
         val spec = ConstructJson.decodeBundle(PIXELFED_BUNDLE_JSON)
         val encoded = ConstructJson.encodeBundle(spec)
         assertTrue(encoded.contains("\"type\":\"core://Workspace\""))
-        assertTrue(encoded.contains("\"media_refs\":\"\$item.media_uris\""))
-        assertTrue(!encoded.contains("\"on_click\""), "null on_click must be omitted (D3)")
+        assertTrue(encoded.contains("\"items\":\"\$item.media_uris\""))
+        assertTrue(!encoded.contains(":null"), "null optional fields must be omitted (D3)")
         assertEquals(spec, ConstructJson.decodeBundle(encoded))
     }
 
@@ -142,6 +175,7 @@ class ModelTest {
         for (i in listOf(
             ActionIntent.Navigate("pixelfed://bookmarks", PresentationMode.Replace),
             ActionIntent.AuthLogin("https://pixelfed.social"),
+            ActionIntent.AuthLogin("https://pixelfed.social", "/v1/auth/x/app", "/v1/auth/x/token"),
         )) {
             assertEquals(i, ConstructJson.decodeIntent(ConstructJson.encodeIntent(i)))
         }

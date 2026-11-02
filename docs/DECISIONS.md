@@ -1243,7 +1243,7 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   `X-Construct-Schema` on workspace fetches and data loads; the pod serves `active_for(app, schema)`, the newest
   version whose layout the client can draw (no header = 1). SSE still announces the latest version, so an old client
   that refetches gets the older version again (harmless; its menu may keep saying a newer version exists).
-  *(SSE and the menu fixed in D37.)*
+  *(SSE and the menu fixed in D38.)*
 - **Pod side of comments:** `GET /v1/pixelfed/screens/comments?post_id=` (the earlier JSON-only
   `/v1/pixelfed/posts/{id}/comments` is gone) and `POST /v1/pixelfed/posts/comment`. Comment entities carry a
   ready-made `meta` line (`@bob · 3 h`, relative to the request) because layouts have no date formatting.
@@ -1286,9 +1286,46 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   `pixelfed_home/0001` the comment button opens nothing: that version has no comments screen.)
 - **Not yet:** the SSE event and "Newer version available" still use the latest version even when the client can't
   draw it (D35's note). Pins are in memory only, so an app update cannot carry over a pin it can't draw.
-  *(The SSE event and the menu are fixed in D37.)*
+  *(The SSE event and the menu are fixed in D38.)*
 
-## D37: "Latest" means the newest version this client can draw (SSE and the menu)
+## D37: No app-specific nodes anywhere; the post card is a layout (schema 3)
+
+D34 said the engine and clients must not know any app, but the protocol still had `pixelfed://FeedList`,
+`PostCard`, `MediaCarousel`, `AuthorHeader` and `ActionBar`, drawn by Pixelfed widgets in the shared UI, and the
+engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
+
+- **Generic nodes (schema 3):** `core://Row`, `core://Column` (spacing and padding), `core://Spacer` (sized, or the
+  rest of a row), `core://Divider`, `core://Conditional` (content only when a binding is truthy), `core://Carousel`
+  (a pager over a list binding with an item template; aspect ratio fixed or read from the first item, clamped),
+  `core://IconButton` (a named icon from `protocol::ICONS`, with an `active` binding that switches icon, tint and
+  description), `core://Chip` (tone Neutral/Warning) and `core://Badge`. `core://Image` gains `blurhash`; text
+  styles gain `Label` and `Secondary`. `protocol::NODE_TYPES` lists every node type; `required_schema` gives 3 for
+  any of the new vocabulary.
+- **The post card is now layout:** `layouts/pixelfed_home/0003.json` and `layouts/pixelfed_demo/0002.json` build it
+  from those nodes inside a `core://List`. Everything a widget used to compute moved to the pod's entities:
+  `author_name`, `author_handle`, `author_avatar_url`, `reblogged_by_name` and `content_warning_label`. Text binds
+  embedded tokens (`$item.reblogged_by_name boosted`).
+- **Old versions stay servable:** a node type the protocol doesn't know decodes as an opaque `UiNode::Unknown` that
+  re-serialises unchanged, so the deployed `pixelfed://` versions (pixelfed_home 1–2, pixelfed_demo 1, listed in
+  `layouts::LEGACY_FILES`) are still served to old clients (schema 1–2). Any other file using an unknown node type
+  is refused at startup. Kotlin decodes unknown types as `UiNode.Unknown` (drawn as nothing).
+- **Schema 3 is a breaking change (D36):** `protocol::RETIRED = [(3, 3)]`, so schema-3 clients draw only versions
+  written for schema 3; the older versions show as retired in their version picker. `layouts/home/0002.json`
+  re-publishes the unchanged counter as schema 3, since its only version would otherwise be retired. Versions
+  appended outside the files (tests, tooling) are recorded as written for the current schema, or 1 when they hold
+  node types this build doesn't know.
+- **Validation moved to `server::validate`.** The parked agent module (D32) and its tests are deleted, with the
+  `json-patch` and `schemars` dependencies. It can come back from git history.
+- **Generic sign-in and sign-out:** `action.auth.login` carries the pod paths of the sign-in app and token calls
+  (`app_path`, `token_path`, both `/v1/`); a button without them shows "This sign-in button is out of date". Sign-out
+  removes every entity no query or workspace references, every cached data load and the workspace cache, and drops
+  outbox rows made while signed in (store v4 `session_bound`), instead of anything under `pixelfed://`.
+- **Demo fixture:** `fixtures/pixelfed_home_bundle.json` now carries a `timeline:home` query, because a
+  `core://List` shows only what its query lists (the old feed widget showed every post).
+- **Cost:** layouts are longer (the post card is about 150 lines of JSON). Not yet: a generic way to format dates
+  or counts in layouts, so the pod still sends ready-made strings.
+
+## D38: "Latest" means the newest version this client can draw (SSE and the menu)
 
 - **Problem (issue #5, D35/D36 "not yet"):** the pod serves each client the newest version it can draw, but the SSE
   `layout` event and `latest_version` in the apps API used the app's absolute latest. An old client was told about a
@@ -1298,7 +1335,7 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   broadcast re-reads it and sends an event only when it changed (always after a lag). A version only newer clients
   can draw sends nothing, so nothing is refetched.
   - **No header = the app's latest**, as before, not schema 1 like the other endpoints: engines built between D35 and
-    this change draw schema 2 but send no header on this stream, and announcing schema-1 versions to them would hide
+    this change draw schema 2 or 3 but send no header on this stream, and announcing schema-1 versions to them would hide
     new versions until their next fetch. Older engines (before D35) keep the old harmless refetch.
 - **Apps API:** `GET /v1/apps` and `GET /v1/apps/{id}/versions` add `latest_compatible_version` for the client's
   schema (null if none fits); `latest_version` keeps its meaning (the app's newest), so the client can tell "you are

@@ -216,20 +216,25 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
 
         private val EMPTY = UiNode.Container(Orientation.Vertical, 0, emptyList())
 
-        /** Every PostCard in [node] transformed by [f]. */
-        private fun mapPostCards(node: UiNode, f: (UiNode.PostCard) -> UiNode.PostCard): UiNode = when (node) {
-            is UiNode.Workspace -> node.copy(slots = node.slots.map { it.copy(content = mapPostCards(it.content, f)) })
-            is UiNode.Container -> node.copy(children = node.children.map { mapPostCards(it, f) })
-            is UiNode.FeedList -> node.copy(itemTemplate = mapPostCards(node.itemTemplate, f))
-            is UiNode.PostCard -> f(node)
+        /** Every list item template in [node] that is a [UiNode.Column] (a post card) transformed by [f]. */
+        private fun mapCards(node: UiNode, f: (UiNode.Column) -> UiNode.Column): UiNode = when (node) {
+            is UiNode.Workspace -> node.copy(slots = node.slots.map { it.copy(content = mapCards(it.content, f)) })
+            is UiNode.Container -> node.copy(children = node.children.map { mapCards(it, f) })
+            is UiNode.ItemList -> (node.itemTemplate as? UiNode.Column)?.let { node.copy(itemTemplate = f(it)) } ?: node
             else -> node
         }
 
-        fun withoutActionBar(base: UiNode): UiNode = mapPostCards(base) { it.copy(actionSlot = EMPTY) }
+        private fun isActionBar(n: UiNode) = n is UiNode.Row && n.children.any { it is UiNode.IconButton }
 
-        /** The caption where the photo was (rendered right under the author) and the photo last; no action bar. */
-        fun captionFirst(base: UiNode): UiNode = mapPostCards(base) {
-            it.copy(mediaSlot = UiNode.Container(Orientation.Vertical, 12, listOf(it.captionSlot)), captionSlot = it.mediaSlot, actionSlot = EMPTY)
+        fun withoutActionBar(base: UiNode): UiNode = mapCards(base) { c -> c.copy(children = c.children.filterNot(::isActionBar)) }
+
+        /** The caption where the photo was (right under the author) and the photo after it; no action bar. */
+        fun captionFirst(base: UiNode): UiNode = mapCards(base) { c ->
+            val kids = c.children.filterNot(::isActionBar).toMutableList()
+            val media = kids.indexOfFirst { it is UiNode.Carousel }
+            val caption = kids.indexOfFirst { it is UiNode.Conditional && it.value.endsWith(".caption") }
+            if (media >= 0 && caption >= 0) kids[media] = kids[caption].also { kids[caption] = kids[media] }
+            c.copy(children = kids)
         }
 
         /** The counter with only its first button. */

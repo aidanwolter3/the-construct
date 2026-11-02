@@ -90,11 +90,9 @@ const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 pub const SIGNED_OUT_AUTH_JSON: &str = r#"{"state":"signed_out"}"#;
 /// Timeout for the sign-in calls to the pod (`/v1/auth/...`).
 const AUTH_HTTP_TIMEOUT: Duration = Duration::from_secs(15);
-/// Entity domains whose data is private to the signed-in account; purged
-/// from the cache on sign-out (docs/DECISIONS.md D19).
-const PRIVATE_DOMAINS: &[&str] = &["pixelfed"];
-/// Outbox endpoints that only work with a session; dropped on logout.
-const AUTHED_ENDPOINT_PREFIX: &str = "/v1/pixelfed/";
+/// `auth_json` error for a sign-in button without the pod's sign-in paths.
+pub const SIGN_IN_BUTTON_OUTDATED: &str =
+    "This sign-in button is out of date. Restart the app and try again.";
 /// `auth_json` error when a custom-scheme redirect matches no sign-in.
 pub const SIGN_IN_INTERRUPTED: &str = "Sign-in was interrupted; please try again";
 /// Response header carrying the served layout version (the app's latest
@@ -719,54 +717,40 @@ impl State {
         self.loads.insert(path.to_owned(), LoadStatus::ready());
     }
 
-    /// Sign-out: forget the cached private (signed-in) data, in memory and in
-    /// the store (one transaction): every entity of a [`PRIVATE_DOMAINS`]
-    /// domain that no remaining PENDING row targets, the queries that list
-    /// such entities, and the cached `active_workspace` row of
-    /// `workspace_id` if it references any. `drop_authed_outbox` (explicit
-    /// logout) first deletes the PENDING rows under
-    /// [`AUTHED_ENDPOINT_PREFIX`]: nobody could send them any more. The
-    /// in-memory layout stays until the refetch replaces it.
-    fn purge_private(&mut self, workspace_id: &str, drop_authed_outbox: bool) {
-        let private = |uri: &str| PRIVATE_DOMAINS.contains(&store::split_uri(uri).0);
+    /// Sign-out: forget everything cached that may hold the account's data,
+    /// in memory and in the store (one transaction): every entity that no
+    /// remaining PENDING row targets, every cached data path answer, and the
+    /// cached `active_workspace` row of `workspace_id`. The engine knows no
+    /// app, so it cannot tell private from public data; the refetch that
+    /// follows a sign-out reloads what is public (docs/DECISIONS.md D36).
+    /// `drop_session_rows` (explicit logout) first deletes the PENDING rows
+    /// queued while signed in: nobody could send them any more. The in-memory
+    /// layout stays until the refetch replaces it.
+    fn purge_private(&mut self, workspace_id: &str, drop_session_rows: bool) {
         let mut keep: std::collections::HashSet<String> = Default::default();
         if let Some(store) = self.store.as_mut() {
             let result = store.transaction(|tx| {
-                let dropped = if drop_authed_outbox {
-                    tx.delete_pending_outbox_with_endpoint_prefix(AUTHED_ENDPOINT_PREFIX)?
+                let dropped = if drop_session_rows {
+                    tx.delete_pending_session_rows()?
                 } else {
                     0
                 };
-                let mut entities = 0;
-                for domain in PRIVATE_DOMAINS {
-                    entities += tx.delete_unreferenced_entities(domain)?;
-                }
-                let ws_private = tx.load_workspace(workspace_id)?.is_some_and(|w| {
-                    w.entity_uris
-                        .iter()
-                        .chain(w.queries.values().flatten())
-                        .any(|u| private(u))
-                });
-                if ws_private {
-                    tx.delete_workspace(workspace_id)?;
-                }
-                Ok((dropped, entities, ws_private))
+                let entities = tx.delete_unreferenced_entities()?;
+                tx.delete_all_data_loads()?;
+                tx.delete_workspace(workspace_id)?;
+                Ok((dropped, entities))
             });
             match result {
-                Ok((dropped, entities, ws)) => println!(
-                    "[ConstructEngine] signed out: removed {entities} cached private entities{}{}",
-                    if ws {
-                        format!(", workspace '{workspace_id}'")
-                    } else {
-                        String::new()
-                    },
+                Ok((dropped, entities)) => println!(
+                    "[ConstructEngine] signed out: removed {entities} cached entities, the cached \
+                     workspace '{workspace_id}' and data{}",
                     if dropped > 0 {
                         format!(" and {dropped} pending action(s) that need the session")
                     } else {
                         String::new()
                     }
                 ),
-                Err(e) => eprintln!("[ConstructEngine] ERROR: failed to purge private cache: {e}"),
+                Err(e) => eprintln!("[ConstructEngine] ERROR: failed to purge the cache: {e}"),
             }
             // `secure_delete` zeroed the freed pages; flush them out of the
             // WAL too, so the purged rows are not left in old WAL frames.
@@ -779,49 +763,20 @@ impl State {
                 Err(e) => eprintln!("[ConstructEngine] WAL checkpoint after the purge failed: {e}"),
             }
             match store.pending_outbox() {
-                Ok(rows) => keep.extend(rows.into_iter().map(|r| r.entity_uri)),
+                Ok(rows) => {
+                    keep.extend(rows.iter().map(|r| r.entity_uri.clone()));
+                    self.creates = PendingCreate::from_rows(&rows);
+                }
                 Err(e) => {
                     eprintln!("[ConstructEngine] failed to read the outbox after the purge: {e}")
                 }
             }
         }
-        self.entities.retain(|u, _| !private(u) || keep.contains(u));
-        self.queries
-            .retain(|_, uris| !uris.iter().any(|u| private(u)));
-        // Data loads that hold private entities, and creates that are gone.
-        let private_paths: Vec<String> = self
-            .data
-            .iter()
-            .filter(|(_, d)| {
-                d.entity_uris
-                    .iter()
-                    .chain(d.queries.values().flatten())
-                    .any(|u| private(u))
-            })
-            .map(|(p, _)| p.clone())
-            .collect();
-        if let Some(store) = self.store.as_mut() {
-            let result = store.transaction(|tx| {
-                for p in &private_paths {
-                    tx.delete_data_load(p)?;
-                }
-                Ok(())
-            });
-            if let Err(e) = result {
-                eprintln!("[ConstructEngine] ERROR: failed to purge private data loads: {e}");
-            }
-        }
-        for p in &private_paths {
-            self.data.remove(p);
-        }
+        self.entities.retain(|u, _| keep.contains(u));
+        self.queries.clear();
+        self.data.clear();
         self.loads.clear();
-        self.settling.retain(|(_, u)| !private(u));
-        if let Some(store) = &self.store {
-            match store.pending_outbox() {
-                Ok(rows) => self.creates = PendingCreate::from_rows(&rows),
-                Err(e) => eprintln!("[ConstructEngine] failed to read the outbox: {e}"),
-            }
-        }
+        self.settling.clear();
         self.sync_pending_count();
     }
 
@@ -1932,7 +1887,11 @@ impl Inner {
                 payload,
                 also,
             ),
-            ActionIntent::AuthLogin { instance_url } => self.start_login(instance_url),
+            ActionIntent::AuthLogin {
+                instance_url,
+                app_path,
+                token_path,
+            } => self.start_login(instance_url, app_path, token_path),
             ActionIntent::LoadData { path } => {
                 if self.begin_load(&path) {
                     let inner = Arc::clone(self);
@@ -2035,6 +1994,7 @@ impl Inner {
                 rollback_value_json: rollback_value.to_string(),
                 also: also_rows,
                 create: None,
+                session_bound: st.session.is_some(),
             };
             let persisted = store.transaction(|tx| {
                 tx.upsert_entity(&entity_uri, &entity, now)?;
@@ -2134,6 +2094,7 @@ impl Inner {
                     query_key: query_key.clone(),
                     refresh_workspace,
                 }),
+                session_bound: st.session.is_some(),
             };
             let persisted = store.transaction(|tx| {
                 tx.upsert_entity(&entity_uri, &entity, now)?;
@@ -2227,6 +2188,12 @@ impl Inner {
                     st.apply_data(path, bundle);
                     st.is_online = true;
                 }
+                Err(FetchError::Status(401))
+                    if st.session.as_ref().map(|s| &s.token) != token.as_ref() =>
+                {
+                    // Something else already signed out (or in again): that sign-out forgot load states.
+                    st.loads.remove(path);
+                }
                 Err(FetchError::Status(401)) => {
                     st.loads
                         .insert(path.to_owned(), LoadStatus::error(LOAD_SIGNED_OUT));
@@ -2317,8 +2284,23 @@ impl Inner {
     }
 
     /// `ActionIntent::AuthLogin`: go `pending` and run the flow on a
-    /// background thread (the dispatching thread never blocks).
-    fn start_login(self: &Arc<Self>, instance_url: String) {
+    /// background thread (the dispatching thread never blocks). The pod's
+    /// sign-in endpoints come from the intent (`app_path`, `token_path`), so
+    /// the engine knows no app (docs/DECISIONS.md D36).
+    fn start_login(self: &Arc<Self>, instance_url: String, app_path: String, token_path: String) {
+        let valid = |p: &str| {
+            p.starts_with('/')
+                && !p.starts_with("//")
+                && same_origin(&self.base_url, &format!("{}{p}", self.base_url))
+        };
+        if !valid(&app_path) || !valid(&token_path) {
+            eprintln!(
+                "[ConstructEngine] sign-in ignored: the button has no pod sign-in paths \
+                 (app_path {app_path:?}, token_path {token_path:?})"
+            );
+            self.set_auth_json(error_auth_json(SIGN_IN_BUTTON_OUTDATED));
+            return;
+        }
         if lock(&self.flow)
             .as_ref()
             .is_some_and(|f| f.exchanging.load(Ordering::SeqCst))
@@ -2345,8 +2327,13 @@ impl Inner {
         self.replace_flow(Some(Arc::clone(&flow)));
         self.set_auth_json(pending_auth_json());
         println!("[ConstructEngine] sign-in started for {instance_url}");
+        let target = SignInTarget {
+            instance_url,
+            app_path,
+            token_path,
+        };
         self.spawn_auth_thread(flow, true, move |weak, flow| {
-            login_flow(weak, flow, &instance_url, redirect_rx)
+            login_flow(weak, flow, &target, redirect_rx)
         });
     }
 
@@ -2797,12 +2784,20 @@ fn json_str(v: &Value, key: &str) -> Option<String> {
 /// between steps): register the app with the pod, build the PKCE authorize
 /// URL, open it, wait for the redirect, verify `state`, exchange the code
 /// through the pod and store the session.
+/// Where a sign-in goes: the instance and the pod's endpoints for it.
+struct SignInTarget {
+    instance_url: String,
+    app_path: String,
+    token_path: String,
+}
+
 fn login_flow(
     weak: &Weak<Inner>,
     flow: &Arc<Flow>,
-    instance_url: &str,
+    target: &SignInTarget,
     redirect_rx: Option<mpsc::Receiver<Redirect>>,
 ) -> Result<(), LoginError> {
+    let instance_url = target.instance_url.as_str();
     let (base_url, opener, redirect_mode, loopback_port, signal) = {
         let inner = weak.upgrade().ok_or(LoginError::Cancelled)?;
         (
@@ -2835,7 +2830,7 @@ fn login_flow(
     let client = auth_client().map_err(|e| failed(auth::SIGN_IN_FAILED, e))?;
     let app = post_auth(
         &client,
-        &format!("{base_url}/v1/auth/pixelfed/app"),
+        &format!("{base_url}{}", target.app_path),
         &json!({ "instance_url": instance_url, "redirect_uri": redirect_uri }),
     )?;
     let (Some(client_id), Some(endpoint)) = (
@@ -2844,7 +2839,7 @@ fn login_flow(
     ) else {
         return Err(failed(
             auth::SIGN_IN_FAILED,
-            format!("unexpected /v1/auth/pixelfed/app response: {app}"),
+            format!("unexpected {} response: {app}", target.app_path),
         ));
     };
     let scope = json_str(&app, "scopes").unwrap_or_else(|| "read write".to_owned());
@@ -2871,6 +2866,7 @@ fn login_flow(
                 code_verifier: pkce.verifier.clone(),
                 redirect_uri: redirect_uri.clone(),
                 instance_url: instance_url.to_owned(),
+                token_path: target.token_path.clone(),
                 created_at: unix_now(),
             },
         );
@@ -2955,6 +2951,7 @@ fn login_flow(
         &base_url,
         redirect,
         instance_url,
+        &target.token_path,
         &pkce.verifier,
         &redirect_uri,
     )
@@ -2971,6 +2968,7 @@ fn finish_sign_in(
     base_url: &str,
     redirect: Redirect,
     instance_url: &str,
+    token_path: &str,
     code_verifier: &str,
     redirect_uri: &str,
 ) -> Result<(), LoginError> {
@@ -3000,7 +2998,7 @@ fn finish_sign_in(
 
     let token = post_auth(
         client,
-        &format!("{base_url}/v1/auth/pixelfed/token"),
+        &format!("{base_url}{token_path}"),
         &json!({
             "instance_url": instance_url,
             "code": code,
@@ -3048,6 +3046,12 @@ fn recover_sign_in(
         "[ConstructEngine] completing the sign-in for {} started before a restart",
         pending.instance_url
     );
+    if !pending.token_path.starts_with('/') {
+        return Err(failed(
+            SIGN_IN_BUTTON_OUTDATED,
+            "the persisted sign-in has no token path (started by an older build)",
+        ));
+    }
     let client = auth_client().map_err(|e| failed(auth::SIGN_IN_FAILED, e))?;
     finish_sign_in(
         weak,
@@ -3056,6 +3060,7 @@ fn recover_sign_in(
         &base_url,
         redirect,
         &pending.instance_url,
+        &pending.token_path,
         &pending.code_verifier,
         &pending.redirect_uri,
     )

@@ -16,7 +16,8 @@ private val FIELD = Regex("""[A-Za-z_][A-Za-z0-9_]*""")
 /**
  * Renders a text `value_expr`:
  * - Inside an item template ([item] != null), an expression that is exactly `entity.<field>`
- *   or `$item.<field>` resolves to that item field ("" when missing).
+ *   or `$item.<field>` resolves to that item field ("" when missing), and `$item.<field>` tokens
+ *   embedded in text are replaced (`"$item.name boosted"`; a missing field is left as written).
  * - Every `${<entity_uri>#<field>}` is replaced by that entity field's value, or "" when the
  *   entity or field is missing.
  * - Anything else renders as-is.
@@ -29,8 +30,9 @@ fun interpolate(expr: String, entities: Map<String, JsonObject>, item: JsonObjec
             return item[field]?.let(::renderJsonValue) ?: ""
         }
     }
-    if (!expr.contains("\${")) return expr
-    return PLACEHOLDER.replace(expr) { m ->
+    val text = bindItemTokens(expr, item)
+    if (!text.contains("\${")) return text
+    return PLACEHOLDER.replace(text) { m ->
         val (uri, field) = m.destructured
         entities[uri]?.get(field)?.let(::renderJsonValue) ?: ""
     }
@@ -80,10 +82,28 @@ fun resolveRef(ref: String, item: JsonObject?): String? {
     return if (v is JsonPrimitive && v !is JsonNull) v.content else null
 }
 
-/** Resolves [MediaRefs] (DECISIONS D1) to a list of media entity URIs. */
-fun resolveMediaRefs(refs: MediaRefs, item: JsonObject?): List<String> = when (refs) {
-    is MediaRefs.Items -> refs.items
-    is MediaRefs.Expr -> {
+/**
+ * Truthiness of a `core://Conditional` value: `$item.<field>` (or `entity.<field>`) resolves against [item]; anything
+ * else is a literal. False for missing, null, false, 0, "", "0", "false" and an empty array; true otherwise.
+ */
+fun isTruthy(value: String, item: JsonObject?): Boolean {
+    val field = itemFieldName(value, allowEntityPrefix = true)
+    val v: JsonElement? = if (field != null) item?.get(field) else JsonPrimitive(value)
+    return when (v) {
+        null, JsonNull -> false
+        is JsonArray -> v.isNotEmpty()
+        is JsonObject -> true
+        is JsonPrimitive -> {
+            val c = v.content.trim()
+            !(c.isEmpty() || c == "0" || c == "false" || c.toDoubleOrNull() == 0.0)
+        }
+    }
+}
+
+/** Resolves a [ListBinding] (DECISIONS D1) to a list of entity URIs. */
+fun resolveList(refs: ListBinding, item: JsonObject?): List<String> = when (refs) {
+    is ListBinding.Items -> refs.items
+    is ListBinding.Expr -> {
         val field = itemFieldName(refs.expr, allowEntityPrefix = false)
         when (val v = field?.let { item?.get(it) }) {
             is JsonArray -> v.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p !is JsonNull }?.content }

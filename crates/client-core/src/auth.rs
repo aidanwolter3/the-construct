@@ -121,6 +121,9 @@ pub struct PendingAuth {
     pub code_verifier: String,
     pub redirect_uri: String,
     pub instance_url: String,
+    /// The pod's code exchange endpoint (from the sign-in intent).
+    #[serde(default)]
+    pub token_path: String,
     /// Unix seconds.
     pub created_at: i64,
 }
@@ -752,6 +755,7 @@ mod tests {
             code_verifier: "v".into(),
             redirect_uri: "construct://oauth".into(),
             instance_url: "https://pix.example".into(),
+            token_path: "/v1/auth/pixelfed/token".into(),
             created_at: 1_000,
         };
         assert_eq!(PendingAuth::parse(&p.to_json()), Some(p.clone()));
