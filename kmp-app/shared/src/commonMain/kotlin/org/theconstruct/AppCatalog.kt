@@ -252,9 +252,6 @@ class AppRepository(
     suspend fun versions(appId: String, before: Long? = null, limit: Int? = PAGE_SIZE): AppVersionPage =
         call { AppCatalogJson.parseVersions(bridge().appVersions(appId, before, limit)) }
 
-    /** A post's comments in thread order (DECISIONS D34; not cached: comments change). */
-    suspend fun comments(postId: String): List<Comment> = call { CommentsJson.parse(bridge().postComments(postId)) }
-
     suspend fun spec(appId: String, version: Long): UiNode {
         specs[appId to version]?.let { return it }
         val node = call { AppCatalogJson.parseVersionLayout(bridge().appVersion(appId, version)) }

@@ -508,10 +508,11 @@ Endpoints:
   username, display_name, avatar_url}, text, created_at, like_count, is_liked, is_own}]}`: the post's thread from
   upstream `GET /api/v1/statuses/{id}/context`, each comment followed by its replies (depth capped at 4). A boost's
   id gives the boosted post's thread. Unknown post 404 `post_not_found`; no session 401; upstream down 502.
+  Clients don't use it yet (D34).
 - `POST /v1/pixelfed/posts/comment {id, text, client_id?}` (bearer) -> `{ok, id, comment}`: posts `text` (1..500
   characters) as a reply to post or comment `id` (upstream `POST /api/v1/statuses` with `in_reply_to_id`).
-  `client_id` (`[A-Za-z0-9_-]{8,64}`, a client nonce) becomes the upstream `Idempotency-Key`, so an outbox retry
-  doesn't post twice. Bad input 400 (the client rolls back); otherwise as for likes. See D34.
+  `client_id` (`[A-Za-z0-9_-]{8,64}`, a client nonce) becomes the upstream `Idempotency-Key`. Bad input 400;
+  otherwise as for likes. Usable as an outbox endpoint.
 - `GET /v1/pixelfed/media/{key}`: unauthenticated media/avatar proxy. Every image URL in a bundle on an allowed
   origin (instance, public URL, `PIXELFED_MEDIA_HOSTS`) is rewritten to
   `http://<request Host>/v1/pixelfed/media/<key>`; other image URLs become `null`. Unknown keys are 404, a key for
@@ -851,19 +852,6 @@ first match wins. Pixelfed widgets carry content descriptions `Like`/`Unlike`, `
 `carousel:<post uri>`, `carousel-dots:<post uri>`, `like:<post uri>`, `bookmark:<post uri>`, `comment:<post uri>`,
 e.g. `click tag:like:pixelfed://posts/781254316723458049` or `swipe-left tag:carousel:` (the first carousel).
 The menu's test tags are listed in [The menu](#the-menu-all-surfaces).
-
-**Comments (D34).** The comment button opens the comments sheet (`back` or `click tag:comments-close` closes it).
-In fixture mode the threads come from `fixtures/pixelfed/comments.json` (the fake upstream's) and a sent comment
-goes through the fake outbox (so `offline` shows it as "Waiting to send (offline)" until `online`). Test tags:
-`comments-sheet`, `comments-close`, `comments-list`, `comment:<comment id>`, `comment-reply:<comment id>`,
-`comment-replying`, `comment-pending`, `comment-input`, `comment-send`, `comments-error`, `comments-retry`,
-`comments-empty`. Example:
-
-```bash
-./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate -Pscreen=phone -Pout=/tmp/sim \
-  -Pscript='click tag:comment:pixelfed://posts/781254316723458049; wait-text Which lens?; shot comments;
-    type tag:comment-input Golden light!; click tag:comment-send; wait-text Golden light!; shot sent'
-```
 
 The output directory holds the PNGs, `steps.log` (human-readable) and `steps.json` (one entry per step:
 `index`, `command`, `arg`, `status` (`ok`/`fail`), `message`, `file`, `elapsed_ms`). Its absolute path is

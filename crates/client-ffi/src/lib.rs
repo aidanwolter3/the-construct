@@ -264,13 +264,6 @@ impl EngineHandle {
     pub fn app_version(&self, app_id: String, version: i64) -> Result<String, LayoutApiError> {
         Ok(self.inner.app_version(&app_id, version)?)
     }
-
-    /// A Pixelfed post's comments in thread order (`{post_id, comments}`),
-    /// with the session. Blocking; errors carry a sentence for the UI. Posting
-    /// a comment is an ordinary `dispatch` (docs/DECISIONS.md D34).
-    pub fn post_comments(&self, post_id: String) -> Result<String, LayoutApiError> {
-        Ok(self.inner.post_comments(&post_id)?)
-    }
 }
 
 uniffi::setup_scaffolding!();
@@ -323,11 +316,6 @@ mod tests {
         assert!(matches!(
             handle.app_versions("home".into(), Some(3), Some(2)),
             Err(LayoutApiError::Offline { .. })
-        ));
-        // Comments need a session: signed out, no request is made.
-        assert!(matches!(
-            handle.post_comments("781254316723458049".into()),
-            Err(LayoutApiError::Unauthorized { .. })
         ));
         assert!(matches!(
             handle.app_version("home".into(), 1),
