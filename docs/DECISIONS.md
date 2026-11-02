@@ -837,6 +837,41 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   unchanged; activate/restore of the active layout swap the layout and bump the revision; an applied prompt appends
   to the active layout; offline -> `Kind.Offline`).
 
+## D28: App icon "the construct"
+
+- **Design:** an original geometric icon of a bright white space with a soft sky gradient and a grey perspective
+  grid floor fading into the horizon, with one white wireframe-edged cube standing on it: a light grid space where
+  things get built. No film imagery, text or trademarks. The cube is a flat projection matched to the grid's
+  viewing angle, because true perspective made it look distorted.
+- **One source:** every asset comes from one geometry definition in `scripts/gen_icons.py` (python3 + Pillow +
+  numpy, rendered at 4x and scaled down; `iconutil` for the .icns), run by `scripts/gen_icons.sh`. Generated files
+  (`assets/icon/*.svg`, `png/construct-{16..1024}.png`, `.icns`, `.ico`, Android layers and mipmaps, desktop
+  resources) are committed, reproducible byte for byte, and never edited by hand.
+- **Detail levels:** `full` (SVG and PNGs >= 64 px), `launcher` (heavier lines, bigger cube; the Android layers),
+  `small` (48 px: fewer, darker lines) and `tiny` (<= 32 px: darker tile frame, heavy cube outline, 2-3 grid
+  lines), so the grid still reads at small sizes.
+- **Android:** adaptive icon from vector layers (background = sky, grid, haze; foreground = the cube inside the
+  66 dp safe zone; monochrome = grid plus cube outline for Android 13+ themed icons) plus PNG legacy/round mipmaps.
+- **Desktop:** `.icns` / `.ico` / png in `nativeDistributions`; at runtime the window icon is the full-bleed tile
+  and the dock icon (`java.awt.Taskbar`, guarded by `isSupported` and try/catch, so headless runs are unaffected) is
+  the macOS-shaped variant with margin and shadow.
+
+## D29: Default base URL = the staging pod
+
+- Every client defaults to the deployed staging pod `https://the-construct-pod.fly.dev`: desktop (`canvas.baseUrl`
+  / `CANVAS_BASE_URL`; `:desktopApp:run` forwards `-Dcanvas.baseUrl` / `-Dcanvas.workspace` to the app JVM),
+  Android (`-PcanvasBaseUrl` -> `BuildConfig`) and the live-mode simulator (`-PbaseUrl`).
+- A local server is always chosen explicitly: `http://127.0.0.1:8080` on desktop and the simulator,
+  `http://10.0.2.2:8080` on the emulator (`scripts/android_smoke.sh --base-url`, default the emulator URL), or
+  `127.0.0.1` with `adb reverse` on a phone.
+- Debug Android builds have an in-app server picker chip (Staging / Local emulator / Local USB / Custom URL /
+  Build default; custom input must parse as `http(s)://host[:port]`), saved in SharedPreferences; a choice restarts
+  the activity with a new engine. The `baseUrl` intent extra wins over it; release builds ignore both.
+- Storage per server: any server other than the build default gets its own directory
+  (`filesDir/servers/<sanitized url>`), so a switch never mixes caches or flushes one server's outbox to another,
+  and a new engine never opens a cache.db the old one is still closing.
+- Debug cleartext stays limited to `10.0.2.2`, `localhost` and `127.0.0.1`; staging is HTTPS.
+
 ## D30: Layout browser UI (shared Compose) and simulator commands
 
 - **Where:** all in `:shared` commonMain (`LayoutBrowser.kt` UI, `LayoutBrowserModel.kt` model), so desktop, Android,
