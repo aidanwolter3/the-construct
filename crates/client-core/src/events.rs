@@ -224,9 +224,15 @@ pub(crate) fn events_thread(
         }
 
         let connected = rt.block_on(async {
+            // The schema header makes the pod announce the newest version this
+            // build can draw, so a version it can't draw causes no refetch.
             let mut req = client
                 .get(&url)
-                .header(reqwest::header::ACCEPT, "text/event-stream");
+                .header(reqwest::header::ACCEPT, "text/event-stream")
+                .header(
+                    protocol::SCHEMA_HEADER,
+                    protocol::SCHEMA_VERSION.to_string(),
+                );
             if let Some(t) = &token {
                 req = req.bearer_auth(t);
             }

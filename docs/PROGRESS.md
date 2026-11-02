@@ -401,6 +401,12 @@ from a client (D32, D33).
 - Clients grey out versions they can't draw and won't pin them.
 - Needs a device check on the Mac: the greyed-out rows on Android and the desktop window.
 
+## "Latest" is the newest drawable version (D38, issue #5)
+- The SSE stream announces the newest version the client can draw (engine sends `X-Construct-Schema` there too), so
+  versions for newer clients cause no refetch. The apps API adds `latest_compatible_version`.
+- The menu never calls an undrawable version the latest; it says "Update the app to see vN" instead.
+- Needs a device check on the Mac: the hint on Android and the desktop window.
+
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
   bookmarks are idempotent upstream, counters are not).

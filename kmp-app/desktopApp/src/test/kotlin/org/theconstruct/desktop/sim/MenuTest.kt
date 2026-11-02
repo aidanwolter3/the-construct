@@ -118,6 +118,8 @@ class MenuTest {
             FakeAppCatalog.Version(base, "Stories", 0, schema = 3, incompatible = "update_required"),
         )
         val fake = FakeEngineBridge(bundle("pixelfed_home_feed_bundle.json"), apps = catalog)
+        // Like a pod, the fake serves the newest version this build can draw.
+        assertEquals(2L, fake.layoutVersion)
         val controller = ConstructController(fake, fake.appId)
         compose(controller) {
             controller.menu.showHistory("pixelfed_home")
@@ -138,6 +140,17 @@ class MenuTest {
         assertNull(controller.pinned.value)
         runner(fake, controller).ok("open-history Pixelfed; select-version 2")
         assertEquals(2L, controller.pinned.value?.version)
+        // v3 needs a newer build: hinted, but never "Newer version available" and no badge.
+        runner(fake, controller).ok(
+            "open-menu; assert-no-text Newer version available; assert-text Showing v2 · latest v2 · Update the app to see v3",
+        )
+        compose(controller) {
+            assertFalse(has("menu-badge"), "a version this build can't draw does not badge the menu")
+            controller.menu.showHistory("pixelfed_home")
+            waitForIdle()
+            waitUntil(timeoutMillis = 5_000) { has("version-1") }
+            onNode(hasText("Follows new versions as they're published. Update the app to see v3")).assertExists()
+        }
     }
 
     @Test

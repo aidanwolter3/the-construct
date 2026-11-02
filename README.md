@@ -95,18 +95,22 @@ signed-out `pixelfed_home` screen is not versioned. Apps: `pixelfed_home` "Pixel
 
 - `GET /v1/workspaces/{id}` serves the app's latest layout with `X-Construct-Layout-Version: <n>`. The header is
   absent on the signed-out `pixelfed_home` screen and on its 401.
-- `GET /v1/apps` -> `{"apps":[{id, title, icon, latest_version, updated_at}]}`.
-- `GET /v1/apps/{id}/versions[?limit=1..100 (default 20)&before=N]` -> `{app_id, latest_version, versions:[{version,
-  created_at, source, note?}], next_before?}`, newest first. `next_before` is present iff older versions exist;
+- `GET /v1/apps` -> `{"apps":[{id, title, icon, latest_version, latest_compatible_version, updated_at}]}`.
+  `latest_compatible_version` is the newest version the asking client (`X-Construct-Schema`) can draw, i.e. what
+  opening the app serves it (null if none fits); see "Schema versions" below.
+- `GET /v1/apps/{id}/versions[?limit=1..100 (default 20)&before=N]` -> `{app_id, latest_version,
+  latest_compatible_version, versions:[{version, created_at, source, note?}], next_before?}`, newest first. `next_before` is present iff older versions exist;
   pass it as `before`. `source` is `file` for layout files. Versions migrated from the old catalog keep `seed`,
   `agent`, `rollback`, `restore`, `manual` or `switch`, with a note.
 - `GET /v1/apps/{id}/versions/{n}` -> `{app_id, version, created_at, source, note?, layout}`.
 - All public (no session needed). Errors: 400 `invalid_workspace_id` (ids are 1..=64 characters of
   `[A-Za-z0-9_-]`), 404 `app_not_found` / `version_not_found`, 400 `invalid_request` (bad `limit` / `before` /
   version).
-- `GET /v1/workspaces/{id}/events` (SSE): the first message is the current version, then one per new version of
-  that app (`event: layout` / `data: {"version":N,"workspace_id":"home"}`), plus a `: keepalive` comment every
-  15 s. New versions normally arrive with a deploy (the restart ends the stream, and the reconnect's first message
+- `GET /v1/workspaces/{id}/events` (SSE): the first message is the current version, then one each time a new
+  version of that app changes it (`event: layout` / `data: {"version":N,"workspace_id":"home"}`), plus a
+  `: keepalive` comment every 15 s. With `X-Construct-Schema` the version is the newest one that client can draw
+  (what a workspace GET serves it), so a version it can't draw sends nothing; without the header it is the app's
+  latest (D38). New versions normally arrive with a deploy (the restart ends the stream, and the reconnect's first message
   carries the new number). No session is needed; for `pixelfed_home`, a bearer that is not a valid session gets 401
   like the workspace GET.
 - Nothing changes a layout over HTTP. The agent, rollback, workspace versions and `/v1/layouts` routes are gone
@@ -326,12 +330,14 @@ client build. The engine and the clients know no app.
   `protocol::ICONS`, `on_click`, `active` binding with `active_icon`/`active_tint`/`active_content_description`,
   `tag`), `core://Chip` (`tone` Neutral/Warning) and `core://Badge`. There are no app-specific nodes: the Pixelfed
   post card is a `core://Column` in the layout file.
-- **Schema versions (D36):** the engine sends `X-Construct-Schema: 3` (workspace fetches, data loads and the apps
-  API). Every version records the schema it was written for (`"schema"` in its file). The pod serves each client
+- **Schema versions (D36, D38):** the engine sends `X-Construct-Schema: 3` (workspace fetches, data loads, the
+  apps API and the events stream). Every version records the schema it was written for (`"schema"` in its file). The pod serves each client
   the newest version it can draw, so an older app (no header = 1) keeps getting the last version without screens
   or the new nodes. Screens and List/Image/TextField need `"schema": 2`; the building blocks need 3. `GET /v1/apps/{id}/versions[/{n}]` adds `schema`,
   `compatible` and, when false, `incompatible` (`update_required`: written for a newer app; `retired`: written for
-  a schema this app no longer draws) per version; the menu greys those rows out and won't pin them.
+  a schema this app no longer draws) per version; the menu greys those rows out and won't pin them. "Latest" in the
+  menu is always a version this app can draw; when the newest needs a newer app, the menu adds "Update the app to
+  see vN" instead of "Newer version available".
 - **A breaking schema change:** bump `protocol::SCHEMA_VERSION` and add `(new schema, oldest layout schema it still
   draws)` to `protocol::RETIRED`. Older versions then show as incompatible to new clients and are never served to
   them; the old files are not edited. `RETIRED` is `[(3, 3)]`: schema 3 removed the `pixelfed://` widgets (D37),

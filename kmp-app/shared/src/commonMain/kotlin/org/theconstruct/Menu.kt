@@ -441,12 +441,9 @@ private fun AppsSection(controller: ConstructController, state: ConstructState, 
     apps.forEach { app ->
         val isCurrent = app.id == current
         val pinnedHere = pinnedInPicker(state, pin, app.id, isCurrent)
-        val latest = (if (isCurrent) state.activeLayout.version else null) ?: app.latestVersion
-        val subtitle = when {
-            pinnedHere != null -> "Showing v${pinnedHere.version}" + (latest?.let { " · latest v$it" } ?: "")
-            isCurrent -> "Latest" + (latest?.let { " · v$it" } ?: "")
-            else -> latest?.let { "v$it" } ?: ""
-        }
+        // What following the latest shows: never a version this build can't draw.
+        val shown = (if (isCurrent) state.activeLayout.version else null) ?: app.latestCompatibleVersion
+        val subtitle = appRowSubtitle(app, isCurrent, shown, pinnedHere?.version)
         AppRow(
             app, subtitle, isCurrent,
             enabled = isCurrent || controller.canOpenApps,
@@ -762,11 +759,11 @@ private fun VersionPicker(controller: ConstructController, state: ConstructState
             }
         }
         menu.selectError?.let { InlineError(it, tag = "version-error", onRetry = null) }
-        val latest = latestOnScreen ?: h.versions.firstOrNull()?.version
+        val latest = latestOnScreen ?: h.versions.firstOrNull { it.compatible }?.version
         ChoiceRow(
             title = "Latest",
             subtitle = latest?.let { "v$it" },
-            detail = "Follows new versions as they're published",
+            detail = latestRowDetail(h, latest),
             checked = isCurrent && pinnedHere == null,
             tag = "version-latest",
             onClick = { menu.selectLatest(appId) },

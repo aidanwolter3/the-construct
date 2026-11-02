@@ -123,6 +123,46 @@ class AppCatalogTest {
     }
 
     @Test
+    fun theNewestVersionThisBuildCanDrawIsTheLatestItOffers() {
+        val apps = AppCatalogJson.parseApps(
+            """{"apps":[{"id":"a","latest_version":3,"latest_compatible_version":2},
+               {"id":"b","latest_version":3,"latest_compatible_version":null},{"id":"c","latest_version":3}]}""",
+        )
+        assertEquals(listOf(2L, null, 3L), apps.map { it.latestCompatibleVersion })
+        assertEquals(listOf(3L, 3L, null), apps.map { it.updateRequiredFor })
+        val page = AppCatalogJson.parseVersions("""{"latest_version":3,"latest_compatible_version":2,"versions":[]}""")
+        assertEquals(2L, page.latestCompatibleVersion)
+
+        val a = apps[0]
+        assertEquals("v2 · Update the app to see v3", appRowSubtitle(a, isCurrent = false, shown = 2, pinned = null))
+        assertEquals("Latest · v2 · Update the app to see v3", appRowSubtitle(a, isCurrent = true, shown = 2, pinned = null))
+        assertEquals(
+            "Showing v1 · latest v2 · Update the app to see v3",
+            appRowSubtitle(a, isCurrent = true, shown = 2, pinned = 1),
+        )
+        assertEquals("Update the app to see v3", appRowSubtitle(apps[1], isCurrent = false, shown = null, pinned = null))
+        assertEquals("v3", appRowSubtitle(apps[2], isCurrent = false, shown = 3, pinned = null))
+        // The engine already shows a version newer than the list says: no hint for it.
+        assertEquals("Latest · v3", appRowSubtitle(a, isCurrent = true, shown = 3, pinned = null))
+
+        val history = VersionHistory(
+            listOf(AppVersionInfo(3, incompatible = "update_required"), AppVersionInfo(2), AppVersionInfo(1, incompatible = "retired")),
+            loaded = true,
+        )
+        assertEquals("Follows new versions as they're published. Update the app to see v3", latestRowDetail(history, 2))
+        assertEquals("Follows new versions as they're published", latestRowDetail(VersionHistory(listOf(AppVersionInfo(2)), loaded = true), 2))
+    }
+
+    @Test
+    fun aVersionOnlyANewerBuildCanDrawIsNeverNewer() {
+        // The engine shows what the pod serves this build (v2, the newest it can draw) though v3 exists: a pin on v2
+        // is not behind, and nothing badges.
+        val pin = PinnedVersion("pixelfed_home", 2, older)
+        assertFalse(newerVersionAvailable(state(2), pin))
+        assertFalse(showMenuBadge(state(2), pin))
+    }
+
+    @Test
     fun pinShowsThePinnedSpecOnlyOnAVersionedScreenOfItsApp() {
         val pin = PinnedVersion("pixelfed_home", 2, older)
         assertSame(feed, displayedWorkspace(state(3), null))

@@ -44,6 +44,8 @@ struct StubState {
     posts: AtomicUsize,
     /// Authorization header per events connection.
     event_auth: Mutex<Vec<String>>,
+    /// `X-Construct-Schema` header per events connection ("" if absent).
+    event_schema: Mutex<Vec<String>>,
     /// Workspace fetches answer an unversioned "Signed out" screen (no
     /// version header), like the signed-out `pixelfed_home`.
     unversioned: std::sync::atomic::AtomicBool,
@@ -122,6 +124,7 @@ fn handle(mut stream: TcpStream, st: &StubState) {
         return;
     }
     let mut auth = String::new();
+    let mut schema = String::new();
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
@@ -132,6 +135,10 @@ fn handle(mut stream: TcpStream, st: &StubState) {
                     && k.eq_ignore_ascii_case("authorization")
                 {
                     auth = v.trim().to_owned();
+                } else if let Some((k, v)) = line.split_once(':')
+                    && k.eq_ignore_ascii_case(protocol::SCHEMA_HEADER)
+                {
+                    schema = v.trim().to_owned();
                 }
             }
         }
@@ -162,7 +169,10 @@ fn handle(mut stream: TcpStream, st: &StubState) {
                 &bundle.to_string(),
             );
         }
-        (true, "/v1/workspaces/home/events") => serve_events(stream, st, auth),
+        (true, "/v1/workspaces/home/events") => {
+            st.event_schema.lock().unwrap().push(schema);
+            serve_events(stream, st, auth)
+        }
         // Outbox POSTs stay PENDING.
         (false, _) => {
             st.posts.fetch_add(1, Ordering::SeqCst);
@@ -280,6 +290,11 @@ fn snapshot_layout_json_names_the_app_and_its_version() {
     );
     // The events stream carries the session's bearer.
     assert_eq!(stub.st.event_auth.lock().unwrap()[0], "Bearer tok-1");
+    // And the schema, so the pod announces only versions this build can draw.
+    assert_eq!(
+        stub.st.event_schema.lock().unwrap()[0],
+        protocol::SCHEMA_VERSION.to_string()
+    );
     stub.set_version(2);
     stub.push_layout(2);
     wait_until("layout v2", || title(&engine.snapshot()) == "Home v2");

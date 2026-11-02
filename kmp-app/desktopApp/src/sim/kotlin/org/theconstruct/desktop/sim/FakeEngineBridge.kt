@@ -109,9 +109,10 @@ class FakeEngineBridge(
         server = LinkedHashMap(bundle.entities)
         this.appId = appId ?: FakeAppCatalog.appIdFor(workspace, pixelfed = entities.keys.any { it.startsWith("pixelfed://") })
         this.apps = apps ?: FakeAppCatalog.fixture(this.appId, workspace)
-        // Show the app's newest version (the bundle's layout in the fixture catalog).
-        this.apps.latestLayout(this.appId)?.let { workspace = it }
-        shownVersion = this.apps.latestVersion(this.appId) ?: 1
+        // Show the app's newest version this build can draw, as a pod serves it (the bundle's layout in the fixture
+        // catalog).
+        this.apps.latestCompatibleLayout(this.appId)?.let { workspace = it }
+        shownVersion = this.apps.latestCompatibleVersion(this.appId) ?: 1
     }
 
     override fun subscribe(onState: (EngineSnapshot) -> Unit) {

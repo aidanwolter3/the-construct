@@ -539,7 +539,15 @@ struct SseReader {
 
 impl SseReader {
     async fn connect(url: &str, bearer: Option<&str>) -> Self {
+        Self::connect_as(url, bearer, None).await
+    }
+
+    /// With `schema`, the request carries `X-Construct-Schema` like an engine.
+    async fn connect_as(url: &str, bearer: Option<&str>, schema: Option<u32>) -> Self {
         let mut req = client().get(url);
+        if let Some(s) = schema {
+            req = req.header(protocol::SCHEMA_HEADER, s.to_string());
+        }
         if let Some(t) = bearer {
             req = req.bearer_auth(t);
         }
@@ -612,6 +620,53 @@ async fn sse_sends_current_version_then_new_versions_of_its_workspace() {
     let mut again =
         SseReader::connect(&format!("{}/v1/workspaces/home/events", pod.url), None).await;
     assert_eq!(again.next_event().await, layout_msg("home", two + 1));
+}
+
+/// A subscriber that sends its schema hears only of versions it can draw: a
+/// version it can't draw (newer or retired) causes no event, so no refetch.
+#[tokio::test]
+async fn sse_announces_the_newest_version_the_client_can_draw() {
+    let pod = pod().await;
+    let app = "pixelfed_home";
+    let url = format!("{}/v1/workspaces/{app}/events", pod.url);
+    // Files: 0001 schema 1, 0002 schema 2, 0003 schema 3 (which retires the
+    // older ones for schema-3 clients).
+    let mut s1 = SseReader::connect_as(&url, None, Some(1)).await;
+    let mut s2 = SseReader::connect_as(&url, None, Some(2)).await;
+    let mut s3 = SseReader::connect_as(&url, None, Some(protocol::SCHEMA_VERSION)).await;
+    let mut legacy = SseReader::connect(&url, None).await;
+    assert_eq!(s1.next_event().await, layout_msg(app, 1));
+    assert_eq!(s2.next_event().await, layout_msg(app, 2));
+    assert_eq!(s3.next_event().await, layout_msg(app, 3));
+    // No header: the app's latest, as before (engines from before this
+    // change send no header on the events stream).
+    assert_eq!(legacy.next_event().await, layout_msg(app, 3));
+
+    // Publish a copy of the version a schema-`n` client is served.
+    let publish = |schema: u32| {
+        let mut layout = layouts::active_for(pod.state.store(), app, schema)
+            .unwrap()
+            .unwrap()
+            .layout;
+        if let UiNode::Workspace { title, .. } = &mut layout {
+            title.push_str(" (again)");
+        }
+        let v = layouts::append_version(pod.state.store(), app, &layout, None).unwrap();
+        pod.state.publish_layout(app, v);
+        v
+    };
+    assert_eq!(publish(protocol::SCHEMA_VERSION), 4);
+    assert_eq!(s3.next_event().await, layout_msg(app, 4));
+    assert_eq!(legacy.next_event().await, layout_msg(app, 4));
+    // A copy of 0001 (recorded as schema 1: it holds node types this build
+    // doesn't know): schema 1 and 2 clients, not schema 3 (retired).
+    assert_eq!(publish(1), 5);
+    assert_eq!(s1.next_event().await, layout_msg(app, 5));
+    assert_eq!(s2.next_event().await, layout_msg(app, 5));
+    assert_eq!(legacy.next_event().await, layout_msg(app, 5));
+    // The schema-3 client's next event is the next version it can draw.
+    assert_eq!(publish(protocol::SCHEMA_VERSION), 6);
+    assert_eq!(s3.next_event().await, layout_msg(app, 6));
 }
 
 #[tokio::test]
@@ -725,6 +780,15 @@ async fn versions_say_whether_the_client_can_draw_them() {
         rows(&body),
         [(3, 3, update.clone()), (2, 2, update), (1, 1, None)]
     );
+    // `latest_compatible_version`: what opening the app serves each client.
+    for (schema, want) in [(Some(protocol::SCHEMA_VERSION), 3), (Some(2), 2), (None, 1)] {
+        let body = page(schema).await;
+        assert_eq!(
+            (&body["latest_version"], &body["latest_compatible_version"]),
+            (&json!(3), &json!(want)),
+            "{schema:?}"
+        );
+    }
     let one = client()
         .get(format!("{}/v1/apps/pixelfed_home/versions/2", pod.url))
         .send()
@@ -738,4 +802,27 @@ async fn versions_say_whether_the_client_can_draw_them() {
         (&json!(2), &json!("update_required"))
     );
     assert!(one["layout"].is_object(), "still served to look at");
+}
+
+/// `GET /v1/apps` says which version opening each app serves this client, so
+/// the menu never offers a version the client can't draw as the latest.
+#[tokio::test]
+async fn apps_say_the_newest_version_the_client_can_draw() {
+    let pod = pod().await;
+    let apps = |schema: Option<u32>| {
+        let mut req = client().get(format!("{}/v1/apps", pod.url));
+        if let Some(s) = schema {
+            req = req.header(protocol::SCHEMA_HEADER, s.to_string());
+        }
+        async move { req.send().await.unwrap().json::<Value>().await.unwrap() }
+    };
+    for (schema, want) in [(Some(protocol::SCHEMA_VERSION), 3), (Some(2), 2), (None, 1)] {
+        let body = apps(schema).await;
+        let a = &body["apps"][0];
+        assert_eq!(
+            (&a["latest_version"], &a["latest_compatible_version"]),
+            (&json!(3), &json!(want)),
+            "{schema:?}"
+        );
+    }
 }
