@@ -93,8 +93,29 @@ async fn main() -> std::io::Result<()> {
     let app = server::app(state.clone());
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
+            shutdown_signal().await;
             state.shutdown(); // end SSE streams so shutdown can complete
         })
         .await
+}
+
+/// Ctrl-C / SIGINT (Fly's default kill signal) or SIGTERM (`kill`, `docker stop`):
+/// either one ends SSE streams cleanly, so clients see the stream end instead of a
+/// cut chunked body ("error decoding response body").
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = term.recv() => {}
+                }
+                return;
+            }
+            Err(e) => tracing::warn!("cannot listen for SIGTERM: {e}"),
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
 }

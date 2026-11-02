@@ -593,7 +593,9 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   reading the current version (no missed commit; a duplicate version is harmless), filters by workspace, and on
   `Lagged` re-sends the current version instead of the skipped ones. Keepalive is axum's `KeepAlive` comment
   (`: keepalive`, 15 s, configurable via `AppState::with_sse_keepalive` for tests). `AppState::shutdown()` ends
-  open streams; `main` calls it on Ctrl-C so graceful shutdown is not held open by subscribers.
+  open streams; `main` calls it on Ctrl-C/SIGINT or SIGTERM so graceful shutdown is not held open by subscribers
+  and clients see the stream end (a process killed without it cuts the chunked body, which reqwest reports as
+  "error decoding response body"; the client logs that as "connection lost mid-stream" and reconnects).
 
 ## D23: In-app layout agent UI (shared Compose) and the simulator's fake rules
 

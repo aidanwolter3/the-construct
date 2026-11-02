@@ -345,8 +345,25 @@ fn read_stream(
                 }
             }
             Ok(Ok(None)) => return StreamEnd::Closed("stream ended".into()),
-            Ok(Err(e)) => return StreamEnd::Closed(e.to_string()),
+            Ok(Err(e)) => return StreamEnd::Closed(body_error(&e)),
         }
+    }
+}
+
+/// A failed body read, for the log. reqwest calls every cut body "error decoding
+/// response body" (the pod stopped without ending the stream, or the network or
+/// `adb reverse` dropped); name that and its innermost cause instead.
+fn body_error(e: &reqwest::Error) -> String {
+    let mut root: &dyn std::error::Error = e;
+    while let Some(next) = root.source() {
+        root = next;
+    }
+    if e.is_body() || e.is_decode() {
+        format!("connection lost mid-stream ({root})")
+    } else if std::ptr::addr_eq(root, e) {
+        e.to_string()
+    } else {
+        format!("{e} ({root})")
     }
 }
 
@@ -472,5 +489,49 @@ mod tests {
         assert_eq!(parse_layout_event(&ev("message", r#"{"version":1}"#)), None);
         assert_eq!(parse_layout_event(&ev("layout", "garbage")), None);
         assert_eq!(parse_layout_event(&ev("layout", r#"{"version":-1}"#)), None);
+    }
+
+    /// The body error a client sees when the pod dies mid-stream (the
+    /// "error decoding response body" seen on the emulator) is logged as a
+    /// lost connection with its cause.
+    #[test]
+    fn cut_stream_is_reported_as_lost_connection() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let _ = s.read(&mut [0u8; 1024]);
+            // One keepalive chunk, then the connection drops without the final chunk.
+            s.write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+                  transfer-encoding: chunked\r\n\r\nd\r\n: keepalive\n\n\r\n",
+            )
+            .unwrap();
+        });
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let error = rt.block_on(async {
+            let mut resp = reqwest::Client::new()
+                .get(format!("http://127.0.0.1:{port}/"))
+                .send()
+                .await
+                .unwrap();
+            loop {
+                match resp.chunk().await {
+                    Ok(Some(_)) => {}
+                    Ok(None) => panic!("a cut body must not end cleanly"),
+                    Err(e) => break e,
+                }
+            }
+        });
+        server.join().unwrap();
+        let text = body_error(&error);
+        assert!(
+            text.starts_with("connection lost mid-stream (") && !text.contains("decoding"),
+            "{text}"
+        );
     }
 }
