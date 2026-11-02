@@ -6,11 +6,13 @@ plugins {
 }
 
 // Configuration-time properties (configuration-cache friendly, like :shared's buildRustFfi):
-//   -PcanvasBaseUrl=http://...   default server for BuildConfig.CANVAS_BASE_URL
+//   -PcanvasBaseUrl=http://...   default server for BuildConfig.CANVAS_BASE_URL (default: the staging pod;
+//                                local: http://10.0.2.2:8080 on the emulator, http://127.0.0.1:8080 with adb reverse)
 //   -PcanvasWorkspace=<id>       default workspace for BuildConfig.CANVAS_WORKSPACE
 //   -PandroidAbis=arm64-v8a,x86_64   ABIs to build with cargo-ndk and package
 //   -PskipRustBuild              don't run scripts/build_android.sh (use the existing jniLibs)
-val canvasBaseUrl = providers.gradleProperty("canvasBaseUrl").getOrElse("http://10.0.2.2:8080")
+val stagingBaseUrl = "https://the-construct-pod.fly.dev"
+val canvasBaseUrl = providers.gradleProperty("canvasBaseUrl").getOrElse(stagingBaseUrl)
 val canvasWorkspace = providers.gradleProperty("canvasWorkspace").getOrElse("home")
 val androidAbis: List<String> = providers.gradleProperty("androidAbis").getOrElse("arm64-v8a,x86_64")
     .split(',', ' ').map { it.trim() }.filter { it.isNotEmpty() }
@@ -28,6 +30,7 @@ android {
         versionName = "0.1.0"
 
         buildConfigField("String", "CANVAS_BASE_URL", "\"$canvasBaseUrl\"")
+        buildConfigField("String", "STAGING_BASE_URL", "\"$stagingBaseUrl\"")
         buildConfigField("String", "CANVAS_WORKSPACE", "\"$canvasWorkspace\"")
 
         // Package only the ABIs libclient_ffi.so is built for. The JNA aar ships more (armeabi-v7a, x86,

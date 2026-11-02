@@ -15,10 +15,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.initializer
@@ -62,7 +65,12 @@ class MainActivity : ComponentActivity() {
         val appContext = applicationContext
         vm = ViewModelProvider(
             this,
-            viewModelFactory { initializer { CanvasViewModel(EngineConfig.from(intent, storageDir), appContext) } },
+            viewModelFactory {
+                initializer {
+                    val saved = if (BuildConfig.DEBUG) DebugServer.saved(appContext) else null
+                    CanvasViewModel(EngineConfig.from(intent, storageDir, saved), appContext)
+                }
+            },
         )[CanvasViewModel::class.java]
         // Normally the redirect arrives through onNewIntent; this covers a cold start by the redirect (the
         // pending flow is gone then, so the engine just ignores it). Not on recreation (rotation): the intent
@@ -72,8 +80,28 @@ class MainActivity : ComponentActivity() {
         setContent {
             Box(Modifier.fillMaxSize().background(Color.White).safeDrawingPadding()) {
                 CanvasApp(vm.controller)
+                if (BuildConfig.DEBUG) {
+                    DebugServerChip(
+                        current = vm.baseUrl,
+                        onPick = ::switchServer,
+                        modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 8.dp),
+                    )
+                }
             }
         }
+    }
+
+    /**
+     * Debug server picker: saves the choice and restarts the activity without the launch extras, so a new
+     * ViewModel (and engine) is created for the new server; finishing this one closes the old engine.
+     */
+    private fun switchServer(url: String?) {
+        DebugServer.save(applicationContext, url)
+        Log.i(TAG, "debug server picker: ${url ?: "build default"}; restarting")
+        val restart = Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        restart.putExtra(EXTRA_WORKSPACE, vm.workspace)  // keep the current workspace (the launch intent may be gone)
+        finish()
+        startActivity(restart)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -127,15 +155,18 @@ internal class AndroidUrlOpener(private val context: Context) : UrlOpener {
 internal data class EngineConfig(val storageDir: File, val baseUrl: String, val workspace: String) {
     companion object {
         /**
-         * Intent extra, else the BuildConfig default (-PcanvasBaseUrl / -PcanvasWorkspace at build time).
+         * Intent extra, else (debug) the server saved by the in-app picker, else the BuildConfig default
+         * (-PcanvasBaseUrl / -PcanvasWorkspace at build time; the base URL defaults to the staging pod).
          * Extras are honored only in debug builds: the activity is exported (launcher), so in a release build
          * any other app could otherwise point the engine at an arbitrary server.
          */
-        fun from(intent: Intent?, storageDir: File): EngineConfig {
+        fun from(intent: Intent?, storageDir: File, savedBaseUrl: String? = null): EngineConfig {
             val extras = if (BuildConfig.DEBUG) intent else null
             return EngineConfig(
                 storageDir = storageDir,
-                baseUrl = extras?.getStringExtra(EXTRA_BASE_URL)?.takeIf { it.isNotBlank() } ?: BuildConfig.CANVAS_BASE_URL,
+                baseUrl = extras?.getStringExtra(EXTRA_BASE_URL)?.takeIf { it.isNotBlank() }
+                    ?: savedBaseUrl?.takeIf { BuildConfig.DEBUG }
+                    ?: BuildConfig.CANVAS_BASE_URL,
                 workspace = extras?.getStringExtra(EXTRA_WORKSPACE)?.takeIf { it.isNotBlank() } ?: BuildConfig.CANVAS_WORKSPACE,
             )
         }
@@ -153,6 +184,8 @@ internal data class EngineConfig(val storageDir: File, val baseUrl: String, val 
 internal class CanvasViewModel(config: EngineConfig, appContext: Context) : ViewModel() {
     private val bridge: UniffiEngineBridge
     val controller: CanvasController
+    val baseUrl: String = config.baseUrl
+    val workspace: String = config.workspace
 
     init {
         Log.i(TAG, "starting base_url=${config.baseUrl} workspace=${config.workspace} storage=${config.storageDir}")

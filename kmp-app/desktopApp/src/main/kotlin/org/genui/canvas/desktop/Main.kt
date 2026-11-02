@@ -17,7 +17,8 @@ import java.io.File
 import java.net.URI
 import javax.imageio.ImageIO
 
-private const val DEFAULT_BASE_URL = "http://127.0.0.1:8080"
+/** The staging pod (deploy/, Fly.io). Local server: -Dcanvas.baseUrl / CANVAS_BASE_URL=http://127.0.0.1:8080. */
+private const val DEFAULT_BASE_URL = "https://the-construct-pod.fly.dev"
 private const val DEFAULT_WORKSPACE = "home"
 
 /** System property wins over env var, which wins over the default. */

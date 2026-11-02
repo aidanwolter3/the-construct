@@ -13,6 +13,9 @@
 #   --workspaces a,b    workspaces to launch, in order (default: home). Known: home, pixelfed_demo
 #   --out DIR           output dir for screenshots, UI dumps and logcat
 #                       (default: kmp-app/androidApp/build/smoke)
+#   --base-url URL      server the app uses, passed as the debug `--es baseUrl` extra (the app itself defaults to
+#                       the staging pod; default here: http://10.0.2.2:8080, the local server seen from the emulator;
+#                       a physical phone needs `adb reverse tcp:8080 tcp:8080` and http://127.0.0.1:8080)
 #   --skip-install      don't run :androidApp:installDebug (use the installed app)
 #   --skip-rust         pass -PskipRustBuild to Gradle (package the existing jniLibs)
 #   --wait SECONDS      settle time after each launch before checking (default 5)
@@ -35,6 +38,7 @@ PKG="org.genui.canvas.android"
 ACTIVITY="$PKG/.MainActivity"
 AVD="${SMOKE_AVD:-Medium_Phone_API_36}"
 SERVER_URL="http://127.0.0.1:8080"
+APP_BASE_URL="http://10.0.2.2:8080"
 
 BOOT=0
 SERVER=0
@@ -54,6 +58,7 @@ while [[ $# -gt 0 ]]; do
     --pixelfed) WORKSPACES="home,pixelfed_demo" ;;
     --workspaces) WORKSPACES="${2:?--workspaces needs a value}"; shift ;;
     --out) OUT_DIR="${2:?--out needs a value}"; shift ;;
+    --base-url) APP_BASE_URL="${2:?--base-url needs a value}"; shift ;;
     --skip-install) INSTALL=0 ;;
     --skip-rust) SKIP_RUST=1 ;;
     --wait) WAIT="${2:?--wait needs a value}"; shift ;;
@@ -183,7 +188,7 @@ for ws in "${WS_LIST[@]}"; do
   log "--- workspace $ws"
   problems=()
   adb logcat -c -b main -b system -b crash || adb logcat -c
-  adb shell am start -S -W -n "$ACTIVITY" --es workspace "$ws" >/dev/null
+  adb shell am start -S -W -n "$ACTIVITY" --es baseUrl "$APP_BASE_URL" --es workspace "$ws" >/dev/null
   sleep "$WAIT"
 
   # Wait (bounded) for the expected text; stop early if the app dies.

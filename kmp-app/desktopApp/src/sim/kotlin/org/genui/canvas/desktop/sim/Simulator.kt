@@ -126,7 +126,8 @@ private fun runCli(args: Array<String>): Int {
         setOnline = fake::setOnline
         controller = CanvasController(fake)
     } else {
-        val baseUrl = opts["baseUrl"] ?: "http://127.0.0.1:8080"
+        // Same default as the desktop app (the staging pod); pass -PbaseUrl=http://127.0.0.1:8080 for a local server.
+        val baseUrl = opts["baseUrl"] ?: "https://the-construct-pod.fly.dev"
         // By default temp storage (deleted on exit) so live runs never read or write the app's ~/.canvas
         // cache; -Pstorage=<dir> keeps a persistent dir (restart-persistence QA, inspecting cache.db).
         val storage = opts["storage"]?.let { dir ->
