@@ -295,6 +295,37 @@ append-only, add 0003.json instead"). A gap in the numbering, an invalid layout 
 start. Reformatting a file without changing its layout or note is fine. To undo a change, add a new file with the
 old content.
 
+### Screens, generic nodes and actions (D34)
+
+App changes ship from the pod: a layout file can add screens, lists, text fields and new actions without a new
+client build. The engine and the clients know no app.
+
+- **Screens:** `core://Workspace` takes an optional `screens` list. Each screen is `{"id", "route", "title",
+  "data"?, "content", "footer"?}`. `route` is a URI pattern such as `pixelfed://posts/{id}/comments`; an
+  `action.navigation.open` whose `target_uri` matches it opens the screen (Push / Modal stack it, Replace swaps the
+  top one), and Back (the arrow, Android Back, `action.navigation.back`) closes it. Every `$route.<name>` in the
+  screen is replaced by the captured value. `data` is a pod path the client loads when the screen opens; it answers
+  `{"entities": {...}, "queries": {...}}`. `content` scrolls; `footer` stays at the bottom.
+- **Nodes:** `core://List` (`query_key`, `item_template`, optional `indent: {field, step_dp, max?}` and
+  `empty_text`; `$item.<field>` binds each entity), `core://Image` (`url` literal or `$item.<field>`, `shape`
+  Square/Rounded/Circle, `size_dp` or `aspect_ratio`, `content_description`) and `core://TextField` (`field`,
+  `placeholder`, `max_length`, `on_submit`). The text field's value is `$form.<field>` for intents on the same
+  screen. Submitting dispatches `on_submit` with it, then clears the field. Nothing is sent while a referenced
+  field is blank.
+- **Actions:** `action.data.load {path}` loads and caches a data path. `action.mutation.create {query_key,
+  entity_uri, entity, endpoint, payload, refresh_workspace?}` lists `entity` in the query at once, sends `payload`
+  through the offline outbox, then reloads the paths that list the query (and the workspace with
+  `refresh_workspace`); a 4xx removes the entity. `$nonce` is a fresh value per dispatch, for temporary URIs and
+  idempotency keys.
+- **Schema versions:** the engine sends `X-Construct-Schema: 2`. The pod serves each client the newest version of
+  an app whose vocabulary it can draw, so an older app (no header = 1) keeps getting the last version without
+  screens or the new nodes. Using any of the above makes a layout version need schema 2.
+
+`layouts/pixelfed_home/0002.json` uses all of this for comments: the feed's comment button (already
+`pixelfed://posts/$item.id/comments`) opens the `comments` screen, which loads
+`/v1/pixelfed/screens/comments?post_id=$route.id` into a `core://List` and posts new comments with a
+`core://TextField` and `action.mutation.create`.
+
 ## The menu (all surfaces)
 
 Desktop, Android and the simulator share one Compose UI (DECISIONS D33). The screen shows only the layout, with a
@@ -513,6 +544,16 @@ Endpoints:
   characters) as a reply to post or comment `id` (upstream `POST /api/v1/statuses` with `in_reply_to_id`).
   `client_id` (`[A-Za-z0-9_-]{8,64}`, a client nonce) becomes the upstream `Idempotency-Key`. Bad input 400;
   otherwise as for likes. Usable as an outbox endpoint.
+- `GET /v1/pixelfed/screens/comments?post_id=<id>` (bearer): the comments screen's data, `{"entities", "queries"}`:
+  one `pixelfed://comments/<id>` entity per comment (`id, post_id, in_reply_to_id, depth, author_name,
+  author_handle, avatar_url, text, created_at, meta ("@bob · 3 h"), like_count, is_liked, is_own`) and
+  `queries["comments:<post_id>"]` in thread order (each comment followed by its replies, depth capped at 4), from
+  upstream `GET /api/v1/statuses/{id}/context`. A boost's id gives the boosted post's thread. Unknown post 404
+  `post_not_found`; no session 401; upstream down 502.
+- `POST /v1/pixelfed/posts/comment {id, text, client_id?}` (bearer) -> `{ok, id, comment}`: posts `text` (1..500
+  characters) as a reply to post or comment `id` (upstream `POST /api/v1/statuses` with `in_reply_to_id`).
+  `client_id` (`[A-Za-z0-9_-]{8,64}`) becomes the upstream `Idempotency-Key`, so an outbox retry doesn't post
+  twice. Bad input 400 (the client drops the comment); otherwise as for likes.
 - `GET /v1/pixelfed/media/{key}`: unauthenticated media/avatar proxy. Every image URL in a bundle on an allowed
   origin (instance, public URL, `PIXELFED_MEDIA_HOSTS`) is rewritten to
   `http://<request Host>/v1/pixelfed/media/<key>`; other image URLs become `null`. Unknown keys are 404, a key for
@@ -852,6 +893,18 @@ first match wins. Pixelfed widgets carry content descriptions `Like`/`Unlike`, `
 `carousel:<post uri>`, `carousel-dots:<post uri>`, `like:<post uri>`, `bookmark:<post uri>`, `comment:<post uri>`,
 e.g. `click tag:like:pixelfed://posts/781254316723458049` or `swipe-left tag:carousel:` (the first carousel).
 The menu's test tags are listed in [The menu](#the-menu-all-surfaces).
+
+**Screens (D34).** Screens carry the tags `screen:<id>`, `screen-back`, `screen-loading`, `screen-error` and
+`screen-retry`; generic nodes carry `textfield:<field>`, `textfield-send:<field>` and `list-empty`. In fixture
+mode the fake engine answers data paths from `fixtures/pixelfed_screen_data.json`, and sends creates through its
+fake outbox (`offline` keeps them "Sending…" until `online`). That file and the feed fixture's layout are generated
+from the pod: `UPDATE_FIXTURES=1 cargo test -p server --test fixtures` (the test fails when they are stale).
+
+```bash
+./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate -Pscreen=phone -Pout=/tmp/sim \
+  -Pscript='click tag:comment:pixelfed://posts/781254316723458049; wait-text 3000 Which lens?; shot comments;
+    type tag:textfield:comment Golden light!; click tag:textfield-send:comment; wait-text 3000 just now; shot sent'
+```
 
 The output directory holds the PNGs, `steps.log` (human-readable) and `steps.json` (one entry per step:
 `index`, `command`, `arg`, `status` (`ok`/`fail`), `message`, `file`, `elapsed_ms`). Its absolute path is

@@ -43,6 +43,8 @@ data class ConstructState(
     val seq: Long = -1,
     val activeLayout: ActiveLayout = ActiveLayout(),
     val engine: Int = 0,
+    /** Data path loads (D34), from `loads_json`. */
+    val loads: Map<String, LoadState> = emptyMap(),
 )
 
 /**
@@ -89,6 +91,9 @@ class ConstructController(
     /** The hamburger menu's state: kept here so an open drawer or version picker survives rotation. */
     val menu: MenuState = MenuState(this)
 
+    /** The back stack of screens and their form values (D34). */
+    val navigation: Navigation = Navigation(this)
+
     private val switchLock = Any()
 
     /** Set by [close] (under [switchLock]): [openApp] and [pin] then do nothing, so no engine outlives the controller. */
@@ -123,6 +128,7 @@ class ConstructController(
                 workspace, entities, queries, AuthInfo.parse(snapshot.authJson),
                 snapshot.isOnline, snapshot.pendingActions, error = null, seq = snapshot.seq,
                 activeLayout = ActiveLayout.parse(snapshot.layoutJson), engine = engine,
+                loads = LoadState.parseAll(snapshot.loadsJson),
             )
         } catch (t: Throwable) {
             println("[Construct] snapshot decode failed: $t")
@@ -140,13 +146,25 @@ class ConstructController(
                     error = decodeError,
                     seq = snapshot.seq,
                     activeLayout = ActiveLayout.parse(snapshot.layoutJson),
+                    loads = LoadState.parseAll(snapshot.loadsJson),
                 )
             }
         }
     }
 
-    /** Encodes [intent] and forwards it to the engine. */
+    /**
+     * Binds the visible form's `$form.<field>` values and a fresh `$nonce` into [intent] (nothing is sent when a
+     * referenced field is blank), opens or closes screens for navigation intents that match the layout's screens
+     * (DECISIONS D34), and sends everything else to the engine.
+     */
     fun dispatch(intent: ActionIntent) {
+        val bound = bindForm(intent, navigation.activeForm()) ?: return
+        if (navigation.handle(bound)) return
+        send(bound)
+    }
+
+    /** Encodes [intent] and forwards it to the engine as is. */
+    internal fun send(intent: ActionIntent) {
         val json = ConstructJson.encodeIntent(intent)
         // Logging is the bridge's job (desktop prints "[desktop] dispatch: <json>").
         try {
@@ -229,6 +247,7 @@ class ConstructController(
             bridge = next
             _appId.value = id
             _pinned.value = null
+            navigation.clear()
             _state.value = ConstructState(isOnline = _state.value.isOnline, engine = engine)
             subscribe(next, engine)
             try {
@@ -272,6 +291,7 @@ fun ConstructApp(controller: ConstructController, modifier: Modifier = Modifier,
                         CompositionLocalProvider(
                             LocalConstructQueries provides state.queries,
                             LocalWorkspaceTitleInset provides MENU_BUTTON_INSET,
+                            LocalForm provides controller.navigation.rootForm,
                         ) {
                             RenderUiNode(workspace, state.entities, controller::dispatch, Modifier.fillMaxSize())
                         }
@@ -281,6 +301,8 @@ fun ConstructApp(controller: ConstructController, modifier: Modifier = Modifier,
                         onClick = controller.menu::openMenu,
                         modifier = Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 8.dp),
                     )
+                    // An open screen covers the layout and the menu button; the drawer still opens over it.
+                    ScreenHost(controller, state)
                 }
             }
         }

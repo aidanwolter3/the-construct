@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
 import org.theconstruct.ActionIntent
 import org.theconstruct.ConstructEngineBridge
@@ -41,6 +42,12 @@ import org.theconstruct.UiNode
  * `appVersion` with the pod's JSON shapes; this bridge shows [appId]'s newest version and reports it in `layout_json`
  * (`{"app_id","version"}`). [publishVersion] appends a new newest version (the developer's deploy) and shows it, like
  * the engine applying an SSE `layout` event. Offline, every apps call throws [LayoutApiException] (Offline).
+ *
+ * Screens (DECISIONS D34): [screenData] is the fake pod's answers for data paths (`{path: {entities, queries}}`, e.g.
+ * `fixtures/pixelfed_screen_data.json`). `action.data.load` answers from it at once (offline: an error, cached data
+ * kept); an unknown path is "not found". `action.mutation.create` lists its entity at once and queues it; when sent,
+ * the fake pod accepts it if some data path lists its query (the entity is added there, with a `meta` field, if it has
+ * one, set to "just now") and the client reloads those paths; otherwise it is rejected and removed.
  */
 class FakeEngineBridge(
     bundleJson: String,
@@ -48,6 +55,7 @@ class FakeEngineBridge(
     private var authJson: String = "{\"state\":\"signed_out\"}",
     appId: String? = null,
     apps: FakeAppCatalog? = null,
+    screenData: String? = null,
 ) : ConstructEngineBridge {
     /** [prevValues]: field -> value before this row was applied (null = absent). */
     private class Row(val intent: ActionIntent.OptimisticMutate, var prevValues: Map<String, JsonElement?>)
@@ -71,6 +79,27 @@ class FakeEngineBridge(
     private var isOnline = online
     private var seq = 0L
     private val lock = Any()
+
+    /** A queued `action.mutation.create`. */
+    private class CreateRow(val intent: ActionIntent.Create)
+
+    private val createRows = ArrayDeque<CreateRow>()
+
+    /** The fake pod's data path answers. */
+    private val serverData: MutableMap<String, JsonObject> = LinkedHashMap()
+
+    /** Queries of the data paths loaded so far (path -> query_key -> uris). */
+    private val loadedQueries: MutableMap<String, Map<String, List<String>>> = LinkedHashMap()
+    private val loads: MutableMap<String, JsonObject> = LinkedHashMap()
+    private var sentCount = 0
+
+    init {
+        screenData?.let { raw ->
+            ConstructJson.json.parseToJsonElement(raw).jsonObject.forEach { (path, v) ->
+                (v as? JsonObject)?.let { serverData[path] = it }
+            }
+        }
+    }
 
     init {
         val bundle = ConstructJson.decodeBundle(bundleJson)
@@ -105,6 +134,29 @@ class FakeEngineBridge(
     override fun dispatch(intentJson: String) {
         println("[sim] dispatch: $intentJson")
         val intent = ConstructJson.decodeIntent(intentJson)
+        if (intent is ActionIntent.LoadData) {
+            synchronized(lock) {
+                loadLocked(intent.path)
+                seq++
+            }
+            emit()
+            return
+        }
+        if (intent is ActionIntent.Create) {
+            synchronized(lock) {
+                if (entities.containsKey(intent.entityUri) || intent.entity !is JsonObject) {
+                    println("[sim] create ${intent.entityUri} ignored")
+                    return
+                }
+                entities[intent.entityUri] = intent.entity as JsonObject
+                createRows.addLast(CreateRow(intent))
+                println("[sim] create ${intent.entityUri} in ${intent.queryKey} (queued; $pendingCount pending)")
+                if (isOnline) flushLocked()
+                seq++
+            }
+            emit()
+            return
+        }
         if (intent !is ActionIntent.OptimisticMutate) {
             println("[sim] ignoring non-mutation intent")
             return
@@ -189,11 +241,73 @@ class FakeEngineBridge(
     /** Value of [field] on the fake server's copy of entity [uri], for tests. */
     fun serverField(uri: String, field: String): JsonElement? = synchronized(lock) { server[uri]?.get(field) }
 
-    /** Number of queued (unsent) mutations. */
-    val pendingActions: Int get() = synchronized(lock) { outbox.size }
+    /** Number of queued (unsent) mutations and creates. */
+    val pendingActions: Int get() = synchronized(lock) { pendingCount }
 
-    /** Sends queued rows FIFO to the fake server. */
+    private val pendingCount: Int get() = outbox.size + createRows.size
+
+    /** The fake pod's answer for [path], for tests. */
+    fun serverDataJson(path: String): String? = synchronized(lock) { serverData[path]?.toString() }
+
+    /** Answers a data load from [serverData] (see the class docs). */
+    private fun loadLocked(path: String) {
+        if (!isOnline) {
+            loads[path] = loadJson("error", "Can't reach your pod. Check your connection and try again.")
+            return
+        }
+        val bundle = serverData[path]
+        if (bundle == null) {
+            loads[path] = loadJson("error", "This isn't available anymore.")
+            return
+        }
+        (bundle["entities"] as? JsonObject)?.forEach { (uri, e) -> (e as? JsonObject)?.let { entities[uri] = it } }
+        loadedQueries[path] = (bundle["queries"] as? JsonObject).orEmpty().mapValues { (_, v) ->
+            (v as? kotlinx.serialization.json.JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }.orEmpty()
+        }
+        loads[path] = loadJson("ready", null)
+        println("[sim] loaded $path")
+    }
+
+    private fun loadJson(state: String, error: String?): JsonObject = JsonObject(
+        buildMap {
+            put("state", JsonPrimitive(state))
+            error?.let { put("error", JsonPrimitive(it)) }
+        },
+    )
+
+    /** The fake pod's `POST` for a create: accepted when a data path lists its query. */
+    private fun sendCreateLocked(row: CreateRow) {
+        val i = row.intent
+        val paths = serverData.filterValues { (it["queries"] as? JsonObject)?.containsKey(i.queryKey) == true }.keys
+        if (paths.isEmpty()) {
+            println("[sim] server rejected ${i.endpoint} (no data path lists ${i.queryKey}); removing ${i.entityUri}")
+            entities.remove(i.entityUri)
+            return
+        }
+        val entity = i.entity as JsonObject
+        val stored = if (entity.containsKey("meta")) JsonObject(entity + ("meta" to JsonPrimitive("just now"))) else entity
+        val uri = "${i.entityUri}-sent-${++sentCount}"
+        for (path in paths) {
+            val b = serverData.getValue(path)
+            val ents = (b["entities"] as? JsonObject).orEmpty() + (uri to stored)
+            val queries = (b["queries"] as? JsonObject).orEmpty().toMutableMap()
+            val list = (queries[i.queryKey] as? kotlinx.serialization.json.JsonArray).orEmpty() + JsonPrimitive(uri)
+            queries[i.queryKey] = kotlinx.serialization.json.JsonArray(list)
+            serverData[path] = JsonObject(mapOf("entities" to JsonObject(ents), "queries" to JsonObject(queries)))
+        }
+        println("[sim] sent ${i.endpoint}: ${i.entityUri} stored as $uri")
+        entities.remove(i.entityUri)
+        // The client reloads the paths it loaded that list the query.
+        for (path in paths.filter { it in loadedQueries }) loadLocked(path)
+    }
+
+    /** Sends queued rows FIFO to the fake server (mutations, then creates). */
     private fun flushLocked() {
+        flushMutationsLocked()
+        while (createRows.isNotEmpty()) sendCreateLocked(createRows.removeFirst())
+    }
+
+    private fun flushMutationsLocked() {
         while (outbox.isNotEmpty()) {
             val row = outbox.removeFirst()
             val i = row.intent
@@ -250,13 +364,27 @@ class FakeEngineBridge(
         return JsonObject(m)
     }
 
+    /** The bundle's queries, the loaded data paths' queries, and pending creates appended to theirs. */
+    private fun queriesLocked(): String {
+        val out = LinkedHashMap<String, List<String>>(
+            ConstructJson.json.decodeFromString(queriesSerializer, queriesJson),
+        )
+        loadedQueries.values.forEach { out.putAll(it) }
+        for (r in createRows) {
+            val list = out[r.intent.queryKey].orEmpty()
+            if (r.intent.entityUri !in list) out[r.intent.queryKey] = list + r.intent.entityUri
+        }
+        return ConstructJson.json.encodeToString(queriesSerializer, out)
+    }
+
     private fun snapshotLocked(): EngineSnapshot = EngineSnapshot(
         workspaceJson = ConstructJson.encodeNode(workspace),
         entitiesJson = ConstructJson.json.encodeToString(JsonObject.serializer(), JsonObject(entities)),
         isOnline = isOnline,
         seq = seq,
-        pendingActions = outbox.size,
-        queriesJson = queriesJson,
+        pendingActions = pendingCount,
+        queriesJson = queriesLocked(),
+        loadsJson = JsonObject(loads).toString(),
         authJson = authJson,
         layoutJson = JsonObject(mapOf("app_id" to JsonPrimitive(appId), "version" to JsonPrimitive(shownVersion))).toString(),
     )

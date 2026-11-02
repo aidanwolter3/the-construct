@@ -1,229 +1,157 @@
 {
-  "version": "1.0.0",
-  "workspace": {
-    "type": "core://Workspace",
-    "id": "pixelfed_home",
-    "title": "Home",
-    "slots": [
-      {
-        "slot_id": "feed",
-        "provider_uri": "pixelfed://home_timeline",
-        "content": {
-          "type": "pixelfed://FeedList",
-          "query_key": "timeline:home",
-          "item_template": {
-            "type": "pixelfed://PostCard",
-            "post_ref": "$item.uri",
-            "author_slot": {
-              "type": "pixelfed://AuthorHeader",
-              "user_ref": "$item.author_uri"
-            },
-            "media_slot": {
-              "type": "pixelfed://MediaCarousel",
-              "media_refs": "$item.media_uris",
-              "aspect_ratio": 1.0
-            },
-            "action_slot": {
-              "type": "pixelfed://ActionBar",
-              "like_intent": {
-                "intent": "action.mutation.optimistic",
-                "entity_uri": "$item.uri",
-                "field": "is_liked",
-                "value_expr": "!entity.is_liked",
-                "rollback_value": false,
-                "endpoint": "/v1/pixelfed/posts/like",
-                "payload": {
-                  "id": "$item.id",
-                  "liked": "$value"
-                },
-                "also": [
-                  {
-                    "field": "like_count",
-                    "value_expr": "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1"
-                  }
-                ]
-              },
-              "bookmark_intent": {
-                "intent": "action.mutation.optimistic",
-                "entity_uri": "$item.uri",
-                "field": "is_bookmarked",
-                "value_expr": "!entity.is_bookmarked",
-                "rollback_value": false,
-                "endpoint": "/v1/pixelfed/posts/bookmark",
-                "payload": {
-                  "id": "$item.id",
-                  "bookmarked": "$value"
-                }
-              },
-              "comment_intent": {
-                "intent": "action.navigation.open",
-                "target_uri": "pixelfed://posts/$item.id/comments",
-                "presentation": "Modal"
-              }
-            },
-            "caption_slot": {
-              "type": "core://Text",
-              "value_expr": "entity.caption",
-              "style": "Body"
-            }
-          }
-        }
-      }
-    ]
-  },
   "entities": {
-    "pixelfed://users/698765432100012345": {
-      "id": "698765432100012345",
-      "username": "alice",
-      "display_name": "Alice Lumen",
-      "avatar_url": "http://127.0.0.1:8081/storage/avatar-alice.png"
+    "pixelfed://media/781101134401234945": {
+      "alt_text": "A teal tram climbing a narrow street, number 6",
+      "aspect_ratio": 1.3333,
+      "blurhash": "002nL7",
+      "id": "781101134401234945",
+      "preview_url": "http://127.0.0.1:8081/storage/reblog-6_thumb.png",
+      "type": "image",
+      "url": "http://127.0.0.1:8081/storage/reblog-6.png"
+    },
+    "pixelfed://media/781198765301987329": {
+      "alt_text": "A coiled snake on a rock, number 5",
+      "aspect_ratio": 0.8,
+      "blurhash": "00GPYs",
+      "id": "781198765301987329",
+      "preview_url": "http://127.0.0.1:8081/storage/portrait-5_thumb.png",
+      "type": "image",
+      "url": "http://127.0.0.1:8081/storage/portrait-5.png"
+    },
+    "pixelfed://media/781233309701234689": {
+      "alt_text": null,
+      "aspect_ratio": 1.7778,
+      "blurhash": "00R]e.",
+      "id": "781233309701234689",
+      "preview_url": "http://127.0.0.1:8081/storage/landscape-4_thumb.png",
+      "type": "image",
+      "url": "http://127.0.0.1:8081/storage/landscape-4.png"
     },
     "pixelfed://media/781254316501123073": {
-      "id": "781254316501123073",
-      "type": "image",
-      "url": "http://127.0.0.1:8081/storage/carousel-1.png",
-      "preview_url": "http://127.0.0.1:8081/storage/carousel-1_thumb.png",
-      "aspect_ratio": 1.0,
       "alt_text": "Red sky over the Flatirons, number 1",
-      "blurhash": "00Ojn}"
+      "aspect_ratio": 1.0,
+      "blurhash": "00Ojn}",
+      "id": "781254316501123073",
+      "preview_url": "http://127.0.0.1:8081/storage/carousel-1_thumb.png",
+      "type": "image",
+      "url": "http://127.0.0.1:8081/storage/carousel-1.png"
     },
     "pixelfed://media/781254316501123074": {
-      "id": "781254316501123074",
-      "type": "image",
-      "url": "http://127.0.0.1:8081/storage/carousel-2.png",
-      "preview_url": "http://127.0.0.1:8081/storage/carousel-2_thumb.png",
-      "aspect_ratio": 1.0,
       "alt_text": "Green meadow at first light, number 2",
-      "blurhash": "004je;"
+      "aspect_ratio": 1.0,
+      "blurhash": "004je;",
+      "id": "781254316501123074",
+      "preview_url": "http://127.0.0.1:8081/storage/carousel-2_thumb.png",
+      "type": "image",
+      "url": "http://127.0.0.1:8081/storage/carousel-2.png"
     },
     "pixelfed://media/781254316501123075": {
-      "id": "781254316501123075",
-      "type": "image",
-      "url": "http://127.0.0.1:8081/storage/carousel-3.png",
-      "preview_url": "http://127.0.0.1:8081/storage/carousel-3_thumb.png",
-      "aspect_ratio": 1.0,
       "alt_text": "Blue hour above the reservoir, number 3",
-      "blurhash": "004zxj"
+      "aspect_ratio": 1.0,
+      "blurhash": "004zxj",
+      "id": "781254316501123075",
+      "preview_url": "http://127.0.0.1:8081/storage/carousel-3_thumb.png",
+      "type": "image",
+      "url": "http://127.0.0.1:8081/storage/carousel-3.png"
+    },
+    "pixelfed://posts/781101134560870401": {
+      "author_uri": "pixelfed://users/701234567890123456",
+      "caption": "Tram lines, Lisbon. #streetphotography",
+      "content_warning": null,
+      "created_at": 1793277000,
+      "id": "781101134560870401",
+      "is_bookmarked": false,
+      "is_liked": false,
+      "like_count": 318,
+      "media_uris": [
+        "pixelfed://media/781101134401234945"
+      ],
+      "reblogged_by_uri": "pixelfed://users/699112233445566778",
+      "reply_count": 12,
+      "sensitive": false,
+      "url": "http://127.0.0.1:8081/p/carol/781101134560870401"
+    },
+    "pixelfed://posts/781198765432109057": {
+      "author_uri": "pixelfed://users/698765432100012345",
+      "caption": "Rattlesnake on the trail this morning. Kept my distance!",
+      "content_warning": "Snake photo",
+      "created_at": 1793373619,
+      "id": "781198765432109057",
+      "is_bookmarked": false,
+      "is_liked": false,
+      "like_count": 19,
+      "media_uris": [
+        "pixelfed://media/781198765301987329"
+      ],
+      "reply_count": 6,
+      "sensitive": true,
+      "url": "http://127.0.0.1:8081/p/alice/781198765432109057"
+    },
+    "pixelfed://posts/781220014433221633": {
+      "author_uri": "pixelfed://users/701234567890123456",
+      "caption": "Thanks @alice for the tips on night shooting!\nNotes are up at https://example.com/night-notes\n\nSettings: f/1.8 & 1/60s, ISO 3200 <3 #nightphotography",
+      "content_warning": null,
+      "created_at": 1793400482,
+      "id": "781220014433221633",
+      "is_bookmarked": true,
+      "is_liked": false,
+      "like_count": 15,
+      "media_uris": [],
+      "reply_count": 3,
+      "sensitive": false,
+      "url": "http://127.0.0.1:8081/p/carol/781220014433221633"
+    },
+    "pixelfed://posts/781233309876543489": {
+      "author_uri": "pixelfed://users/699112233445566778",
+      "caption": "Golden hour ride.\nLegs are toast.",
+      "content_warning": null,
+      "created_at": 1793437967,
+      "id": "781233309876543489",
+      "is_bookmarked": false,
+      "is_liked": true,
+      "like_count": 8,
+      "media_uris": [
+        "pixelfed://media/781233309701234689"
+      ],
+      "reply_count": 1,
+      "sensitive": false,
+      "url": "http://127.0.0.1:8081/p/bob/781233309876543489"
     },
     "pixelfed://posts/781254316723458049": {
-      "id": "781254316723458049",
       "author_uri": "pixelfed://users/698765432100012345",
+      "caption": "Sunrise over Boulder, three ways & one coffee later #sunrise #colorado",
+      "content_warning": null,
+      "created_at": 1793472130,
+      "id": "781254316723458049",
+      "is_bookmarked": false,
+      "is_liked": false,
+      "like_count": 27,
       "media_uris": [
         "pixelfed://media/781254316501123073",
         "pixelfed://media/781254316501123074",
         "pixelfed://media/781254316501123075"
       ],
-      "caption": "Sunrise over Boulder, three ways & one coffee later #sunrise #colorado",
-      "content_warning": null,
-      "sensitive": false,
-      "like_count": 27,
-      "is_liked": false,
-      "is_bookmarked": false,
       "reply_count": 4,
-      "created_at": 1793472130,
+      "sensitive": false,
       "url": "http://127.0.0.1:8081/p/alice/781254316723458049"
     },
-    "pixelfed://users/701234567890123456": {
-      "id": "701234567890123456",
-      "username": "carol",
-      "display_name": "Carol Ortiz",
-      "avatar_url": "http://127.0.0.1:8081/storage/avatar-carol.png"
-    },
-    "pixelfed://media/781101134401234945": {
-      "id": "781101134401234945",
-      "type": "image",
-      "url": "http://127.0.0.1:8081/storage/reblog-6.png",
-      "preview_url": "http://127.0.0.1:8081/storage/reblog-6_thumb.png",
-      "aspect_ratio": 1.3333,
-      "alt_text": "A teal tram climbing a narrow street, number 6",
-      "blurhash": "002nL7"
+    "pixelfed://users/698765432100012345": {
+      "avatar_url": "http://127.0.0.1:8081/storage/avatar-alice.png",
+      "display_name": "Alice Lumen",
+      "id": "698765432100012345",
+      "username": "alice"
     },
     "pixelfed://users/699112233445566778": {
-      "id": "699112233445566778",
-      "username": "bob",
+      "avatar_url": "http://127.0.0.1:8081/storage/avatar-bob.png",
       "display_name": "Bob 🚲",
-      "avatar_url": "http://127.0.0.1:8081/storage/avatar-bob.png"
+      "id": "699112233445566778",
+      "username": "bob"
     },
-    "pixelfed://posts/781101134560870401": {
-      "id": "781101134560870401",
-      "author_uri": "pixelfed://users/701234567890123456",
-      "media_uris": [
-        "pixelfed://media/781101134401234945"
-      ],
-      "caption": "Tram lines, Lisbon. #streetphotography",
-      "content_warning": null,
-      "sensitive": false,
-      "like_count": 318,
-      "is_liked": false,
-      "is_bookmarked": false,
-      "reply_count": 12,
-      "created_at": 1793277000,
-      "url": "http://127.0.0.1:8081/p/carol/781101134560870401",
-      "reblogged_by_uri": "pixelfed://users/699112233445566778"
-    },
-    "pixelfed://media/781233309701234689": {
-      "id": "781233309701234689",
-      "type": "image",
-      "url": "http://127.0.0.1:8081/storage/landscape-4.png",
-      "preview_url": "http://127.0.0.1:8081/storage/landscape-4_thumb.png",
-      "aspect_ratio": 1.7778,
-      "alt_text": null,
-      "blurhash": "00R]e."
-    },
-    "pixelfed://posts/781233309876543489": {
-      "id": "781233309876543489",
-      "author_uri": "pixelfed://users/699112233445566778",
-      "media_uris": [
-        "pixelfed://media/781233309701234689"
-      ],
-      "caption": "Golden hour ride.\nLegs are toast.",
-      "content_warning": null,
-      "sensitive": false,
-      "like_count": 8,
-      "is_liked": true,
-      "is_bookmarked": false,
-      "reply_count": 1,
-      "created_at": 1793437967,
-      "url": "http://127.0.0.1:8081/p/bob/781233309876543489"
-    },
-    "pixelfed://posts/781220014433221633": {
-      "id": "781220014433221633",
-      "author_uri": "pixelfed://users/701234567890123456",
-      "media_uris": [],
-      "caption": "Thanks @alice for the tips on night shooting!\nNotes are up at https://example.com/night-notes\n\nSettings: f/1.8 & 1/60s, ISO 3200 <3 #nightphotography",
-      "content_warning": null,
-      "sensitive": false,
-      "like_count": 15,
-      "is_liked": false,
-      "is_bookmarked": true,
-      "reply_count": 3,
-      "created_at": 1793400482,
-      "url": "http://127.0.0.1:8081/p/carol/781220014433221633"
-    },
-    "pixelfed://media/781198765301987329": {
-      "id": "781198765301987329",
-      "type": "image",
-      "url": "http://127.0.0.1:8081/storage/portrait-5.png",
-      "preview_url": "http://127.0.0.1:8081/storage/portrait-5_thumb.png",
-      "aspect_ratio": 0.8,
-      "alt_text": "A coiled snake on a rock, number 5",
-      "blurhash": "00GPYs"
-    },
-    "pixelfed://posts/781198765432109057": {
-      "id": "781198765432109057",
-      "author_uri": "pixelfed://users/698765432100012345",
-      "media_uris": [
-        "pixelfed://media/781198765301987329"
-      ],
-      "caption": "Rattlesnake on the trail this morning. Kept my distance!",
-      "content_warning": "Snake photo",
-      "sensitive": true,
-      "like_count": 19,
-      "is_liked": false,
-      "is_bookmarked": false,
-      "reply_count": 6,
-      "created_at": 1793373619,
-      "url": "http://127.0.0.1:8081/p/alice/781198765432109057"
+    "pixelfed://users/701234567890123456": {
+      "avatar_url": "http://127.0.0.1:8081/storage/avatar-carol.png",
+      "display_name": "Carol Ortiz",
+      "id": "701234567890123456",
+      "username": "carol"
     }
   },
   "queries": {
@@ -234,5 +162,155 @@
       "pixelfed://posts/781220014433221633",
       "pixelfed://posts/781198765432109057"
     ]
+  },
+  "version": "1.0.0",
+  "workspace": {
+    "id": "pixelfed_home",
+    "screens": [
+      {
+        "content": {
+          "empty_text": "No comments yet. Be the first!",
+          "indent": {
+            "field": "depth",
+            "max": 4,
+            "step_dp": 24
+          },
+          "item_template": {
+            "children": [
+              {
+                "children": [
+                  {
+                    "content_description": "$item.author_name",
+                    "shape": "Circle",
+                    "size_dp": 28,
+                    "type": "core://Image",
+                    "url": "$item.avatar_url"
+                  },
+                  {
+                    "style": "Body",
+                    "type": "core://Text",
+                    "value_expr": "$item.author_name"
+                  }
+                ],
+                "orientation": "Horizontal",
+                "padding_dp": 0,
+                "type": "core://Container"
+              },
+              {
+                "style": "Body",
+                "type": "core://Text",
+                "value_expr": "$item.text"
+              },
+              {
+                "style": "Caption",
+                "type": "core://Text",
+                "value_expr": "$item.meta"
+              }
+            ],
+            "orientation": "Vertical",
+            "padding_dp": 8,
+            "type": "core://Container"
+          },
+          "query_key": "comments:$route.id",
+          "type": "core://List"
+        },
+        "data": "/v1/pixelfed/screens/comments?post_id=$route.id",
+        "footer": {
+          "field": "comment",
+          "max_length": 500,
+          "on_submit": {
+            "endpoint": "/v1/pixelfed/posts/comment",
+            "entity": {
+              "author_name": "You",
+              "depth": 0,
+              "meta": "Sending…",
+              "text": "$form.comment"
+            },
+            "entity_uri": "pixelfed://comments/pending-$nonce",
+            "intent": "action.mutation.create",
+            "payload": {
+              "client_id": "$nonce",
+              "id": "$route.id",
+              "text": "$form.comment"
+            },
+            "query_key": "comments:$route.id",
+            "refresh_workspace": true
+          },
+          "placeholder": "Add a comment…",
+          "type": "core://TextField"
+        },
+        "id": "comments",
+        "route": "pixelfed://posts/{id}/comments",
+        "title": "Comments"
+      }
+    ],
+    "slots": [
+      {
+        "content": {
+          "item_template": {
+            "action_slot": {
+              "bookmark_intent": {
+                "endpoint": "/v1/pixelfed/posts/bookmark",
+                "entity_uri": "$item.uri",
+                "field": "is_bookmarked",
+                "intent": "action.mutation.optimistic",
+                "payload": {
+                  "bookmarked": "$value",
+                  "id": "$item.id"
+                },
+                "rollback_value": false,
+                "value_expr": "!entity.is_bookmarked"
+              },
+              "comment_intent": {
+                "intent": "action.navigation.open",
+                "presentation": "Modal",
+                "target_uri": "pixelfed://posts/$item.id/comments"
+              },
+              "like_intent": {
+                "also": [
+                  {
+                    "field": "like_count",
+                    "value_expr": "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1"
+                  }
+                ],
+                "endpoint": "/v1/pixelfed/posts/like",
+                "entity_uri": "$item.uri",
+                "field": "is_liked",
+                "intent": "action.mutation.optimistic",
+                "payload": {
+                  "id": "$item.id",
+                  "liked": "$value"
+                },
+                "rollback_value": false,
+                "value_expr": "!entity.is_liked"
+              },
+              "type": "pixelfed://ActionBar"
+            },
+            "author_slot": {
+              "type": "pixelfed://AuthorHeader",
+              "user_ref": "$item.author_uri"
+            },
+            "caption_slot": {
+              "style": "Body",
+              "type": "core://Text",
+              "value_expr": "entity.caption"
+            },
+            "media_slot": {
+              "aspect_ratio": 1.0,
+              "media_refs": "$item.media_uris",
+              "type": "pixelfed://MediaCarousel"
+            },
+            "post_ref": "$item.uri",
+            "type": "pixelfed://PostCard"
+          },
+          "query_key": "timeline:home",
+          "type": "pixelfed://FeedList"
+        },
+        "provider_uri": "pixelfed://home_timeline",
+        "slot_id": "feed"
+      }
+    ],
+    "title": "Pixelfed",
+    "type": "core://Workspace"
   }
 }

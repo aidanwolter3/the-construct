@@ -384,6 +384,16 @@ from a client (D32, D33).
 - A client-side comments sheet was built and then backed out: it put Pixelfed logic into the engine and the app.
   Next: the generic screens / nodes / form / create-action work listed in D34, then comments as layout files.
 
+## Generic screens; comments from the pod (D35)
+- Protocol: `Workspace.screens`, `core://List`, `core://Image`, `core://TextField`, `action.data.load`,
+  `action.mutation.create`, `DataBundle`, schema versions (`X-Construct-Schema`).
+- Pod: schema-aware serving; comments screen data path; `layouts/pixelfed_home/0002.json` (comments screen).
+- Engine: cached data loads (`loads_json`, store v3), create rows in the outbox, schema header.
+- Clients: route matching and back stack, generic nodes, `$route` / `$form` / `$nonce` binding; simulator fake data
+  paths and creates; fixtures generated from the pod.
+- Tests: cargo (pod, engine end to end against the fake), :shared + :desktopApp (137, incl. simulator screens).
+- Needs a device check on the Mac: Android Back and keyboard on the comments screen, the desktop window.
+
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
   bookmarks are idempotent upstream, counters are not).
