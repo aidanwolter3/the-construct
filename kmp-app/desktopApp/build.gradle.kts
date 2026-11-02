@@ -37,6 +37,8 @@ dependencies {
     testImplementation(libs.compose.ui.test)
 }
 
+val repoRoot: File = rootDir.parentFile
+
 // Rust cdylib (libclient_ffi.dylib) built by :shared:buildRustFfi (scripts/build_ffi.sh).
 val rustLibDir = "${rootDir}/../target/release"
 
@@ -49,6 +51,10 @@ compose.desktop {
             targetFormats(TargetFormat.Dmg)
             packageName = "ProjectCanvas"
             packageVersion = "1.0.0"
+            // App icon "the construct" (scripts/gen_icons.sh regenerates these from assets/icon).
+            macOS { iconFile.set(repoRoot.resolve("assets/icon/construct.icns")) }
+            windows { iconFile.set(repoRoot.resolve("assets/icon/construct.ico")) }
+            linux { iconFile.set(repoRoot.resolve("assets/icon/png/construct-512.png")) }
         }
     }
 }
@@ -62,8 +68,6 @@ tasks.withType<Test>().configureEach {
     systemProperty("java.awt.headless", "true")
     testLogging { showStandardStreams = true }
 }
-
-val repoRoot = rootDir.parentFile
 
 // Headless simulator: renders CanvasApp offscreen and writes PNG screenshots driven by a script.
 // Relative paths (-Pfixture, -Pout, -PscriptFile, -Pstorage) resolve against the repo root (the working dir).

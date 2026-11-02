@@ -827,6 +827,16 @@ config does not cover, so the engine will talk plain HTTP to any `baseUrl` it is
 The real controls are the base URL itself (`BuildConfig`, and intent extras that only debug builds honour).
 Enforcing HTTPS in the engine for release builds is a follow-up.
 
+## App icon
+
+"The construct": a bright white space with a grey perspective grid floor and one cube standing on it. Every
+asset comes from one geometry definition in `scripts/gen_icons.py`; regenerate with `scripts/gen_icons.sh`
+(python3 with Pillow and numpy; `iconutil` on macOS for the `.icns`). Outputs: `assets/icon/` (SVG masters,
+`png/construct-{16..1024}.png`, `construct.icns`, `construct.ico`), the Android adaptive icon
+(`res/drawable/ic_launcher_{background,foreground,monochrome}.xml`, `mipmap-*`; the monochrome layer gives
+Android 13+ themed icons) and the desktop window/dock icon (`desktopApp/src/main/resources/icon/`). Don't
+edit the generated files by hand. Set `ICON_PREVIEW_DIR=<dir>` to also write previews of the adaptive layers.
+
 ## Tests
 
 ```bash

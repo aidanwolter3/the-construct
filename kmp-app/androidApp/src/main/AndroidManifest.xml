@@ -7,6 +7,8 @@
          builds, via src/debug/AndroidManifest.xml + res/xml/network_security_config.xml (DECISIONS D11). -->
     <application
         android:label="Project Canvas"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <!-- singleTask: the OAuth redirect (canvas://oauth, opened by the browser in its own task) must reach
              this same activity instance and engine via onNewIntent (DECISIONS D19).

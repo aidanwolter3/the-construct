@@ -1,5 +1,7 @@
 package org.genui.canvas.desktop
 
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
@@ -9,8 +11,11 @@ import org.genui.canvas.CanvasController
 import org.genui.canvas.engine.UniffiEngineBridge
 import uniffi.client_ffi.UrlOpener
 import java.awt.Desktop
+import java.awt.Taskbar
+import java.awt.image.BufferedImage
 import java.io.File
 import java.net.URI
+import javax.imageio.ImageIO
 
 private const val DEFAULT_BASE_URL = "http://127.0.0.1:8080"
 private const val DEFAULT_WORKSPACE = "home"
@@ -36,14 +41,38 @@ fun main() {
     bridge = UniffiEngineBridge.create(storageDir.absolutePath, baseUrl, workspace, urlOpener = BrowserOpener)
     val controller = CanvasController(bridge)
 
+    // App icon "the construct" (assets/icon, scripts/gen_icons.sh): window icon from the full-bleed tile, dock icon
+    // from the macOS-shaped variant (margin + shadow, like other dock icons).
+    val windowIcon = loadIcon("/icon/construct-512.png")
+    loadIcon("/icon/construct-macos-1024.png")?.let(::setDockIcon)
+
     application {
         Window(
             onCloseRequest = ::exitApplication,
             title = "Project Canvas",
+            icon = windowIcon?.let { BitmapPainter(it.toComposeImageBitmap()) },
             state = rememberWindowState(width = 480.dp, height = 720.dp),
         ) {
             CanvasApp(controller)
         }
+    }
+}
+
+private fun loadIcon(resource: String): BufferedImage? = try {
+    object {}.javaClass.getResourceAsStream(resource)?.use { ImageIO.read(it) }
+} catch (t: Throwable) {
+    println("[desktop] cannot load icon $resource: $t")
+    null
+}
+
+/** Sets the macOS dock (taskbar) icon when the platform supports it; a no-op elsewhere. */
+private fun setDockIcon(image: BufferedImage) {
+    try {
+        if (Taskbar.isTaskbarSupported() && Taskbar.getTaskbar().isSupported(Taskbar.Feature.ICON_IMAGE)) {
+            Taskbar.getTaskbar().iconImage = image
+        }
+    } catch (t: Throwable) {
+        println("[desktop] cannot set the dock icon: $t")
     }
 }
 
