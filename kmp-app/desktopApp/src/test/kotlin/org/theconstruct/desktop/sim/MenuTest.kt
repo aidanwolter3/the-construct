@@ -122,7 +122,7 @@ class MenuTest {
         compose(controller) {
             controller.menu.showHistory("pixelfed_home")
             waitForIdle()
-            waitUntil(5_000) { has("version-1") }
+            waitUntil(timeoutMillis = 5_000) { has("version-1") }
             onNode(hasTestTag("version-3")).assertIsNotEnabled()
             onNode(hasTestTag("version-1")).assertIsNotEnabled()
             onNode(hasTestTag("version-2")).assertIsEnabled()
