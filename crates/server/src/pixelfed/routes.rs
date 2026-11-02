@@ -22,7 +22,8 @@ use sha2::{Digest, Sha256};
 
 use super::upstream::{SCOPES, UpstreamError};
 use super::{
-    Account, MediaUrls, Status, hex, layout, normalize_account, normalize_timeline, post_state,
+    Account, MediaUrls, Status, hex, layout, normalize_account, normalize_comment,
+    normalize_comments, normalize_timeline, post_state,
 };
 use crate::store::{PixelfedAccount, PixelfedApp, SignIn};
 use crate::{ApiError, AppState, api_error, blocking, json_error, parse_json_body};
@@ -41,6 +42,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/v1/auth/logout", post(logout))
         .route("/v1/pixelfed/posts/like", post(like))
         .route("/v1/pixelfed/posts/bookmark", post(bookmark))
+        .route("/v1/pixelfed/posts/comment", post(comment))
+        .route("/v1/pixelfed/posts/{id}/comments", get(comments))
         .route("/v1/pixelfed/media/{key}", get(media))
 }
 
@@ -737,6 +740,143 @@ async fn toggle(state: Arc<AppState>, headers: HeaderMap, body: Bytes, kind: Tog
         }
         Err(e) => bad_gateway(&e),
     }
+}
+
+// ---------- comments ----------
+
+/// Longest comment the pod forwards (Pixelfed's default limit).
+pub const MAX_COMMENT_CHARS: usize = 500;
+
+/// An upstream 4xx on a comments call, passed through with the pod's error shape
+/// (`post_not_found` for 404).
+fn comment_rejected(id: &str, status: StatusCode, detail: &str) -> Response {
+    tracing::info!(%id, status = status.as_u16(), %detail, "Pixelfed comments call rejected upstream");
+    let error = if status == StatusCode::NOT_FOUND {
+        "post_not_found"
+    } else {
+        "upstream_rejected"
+    };
+    api_error(
+        status,
+        json!({ "error": error, "status": status.as_u16(), "detail": detail }),
+    )
+    .into_response()
+}
+
+/// `GET /v1/pixelfed/posts/{id}/comments` -> 200 `{post_id, comments: [...]}` in thread
+/// order (see [`normalize_comments`]). Not cached by the client; read on demand. No session:
+/// 401; upstream 4xx: same status (404 `post_not_found`); 5xx / unreachable: 502.
+async fn comments(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let account = match signed_in_account(&state, &headers).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return unauthorized(),
+        Err(e) => return e.into_response(),
+    };
+    let id = id.trim().to_owned();
+    if !valid_status_id(&id) {
+        return invalid_request(json!({ "id": "status id" }));
+    }
+    let own = account.account_id.clone();
+    let (result, _) = with_token(&state, account, |token| {
+        let (state, id) = (&state, &id);
+        async move { state.upstream.status_context(&token, id).await }
+    })
+    .await;
+    let context = match result {
+        Ok(v) => v,
+        Err(UpstreamError::Status(status, detail)) if status.is_client_error() => {
+            return comment_rejected(&id, status, &detail);
+        }
+        Err(e) => return bad_gateway(&e),
+    };
+    let mut media = MediaUrls::new(&proxy_base(&headers), &state.media_allow);
+    let list = normalize_comments(&id, &context, &own, &mut media);
+    if let Err(e) = save_media_keys(&state, media).await {
+        return e.into_response();
+    }
+    tracing::info!(%id, comments = list.len(), "Pixelfed comments served");
+    Json(json!({ "post_id": id, "comments": list })).into_response()
+}
+
+/// `POST /v1/pixelfed/posts/comment {id, text, client_id?}` -> 200 `{ok, id, comment}`:
+/// posts `text` as a reply to post `id`. This is an outbox endpoint (the client's
+/// optimistic `reply_count + 1` is rolled back on a 4xx): blank or too long text is 400,
+/// no session 401, upstream 4xx the same status, 5xx / unreachable 502 (retried).
+/// `client_id` (a client-made nonce, `[A-Za-z0-9_-]{8,64}`) becomes the upstream
+/// `Idempotency-Key`, so a retry after a lost response does not post twice where the
+/// upstream honours it.
+async fn comment(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {
+    let account = match signed_in_account(&state, &headers).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return unauthorized(),
+        Err(e) => return e.into_response(),
+    };
+    let payload = match parse_json_body(&headers, &body) {
+        Ok(v) => v,
+        Err(e) => return e.into_response(),
+    };
+    let expected = || {
+        invalid_request(json!({
+            "id": "status id", "text": format!("1..={MAX_COMMENT_CHARS} characters"),
+            "client_id": "optional nonce",
+        }))
+    };
+    let id = match &payload["id"] {
+        Value::String(s) => Some(s.trim().to_owned()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+    .filter(|id| valid_status_id(id));
+    let text = payload["text"].as_str().map(str::trim).unwrap_or("");
+    let (Some(id), false) = (
+        id,
+        text.is_empty() || text.chars().count() > MAX_COMMENT_CHARS,
+    ) else {
+        return expected();
+    };
+    let key = match &payload["client_id"] {
+        Value::Null => None,
+        Value::String(k)
+            if (8..=64).contains(&k.len())
+                && k.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')) =>
+        {
+            Some(format!("construct-{k}"))
+        }
+        _ => return expected(),
+    };
+    let own = account.account_id.clone();
+    let (result, _) = with_token(&state, account, |token| {
+        let (state, id, key) = (&state, &id, key.as_deref());
+        async move { state.upstream.create_reply(&token, id, text, key).await }
+    })
+    .await;
+    let created = match result {
+        Ok(v) => v,
+        Err(UpstreamError::Status(status, detail)) if status.is_client_error() => {
+            return comment_rejected(&id, status, &detail);
+        }
+        Err(e) => return bad_gateway(&e),
+    };
+    let status = match Status::deserialize(&created) {
+        Ok(s) => s,
+        Err(e) => {
+            return bad_gateway(&UpstreamError::Unreachable(format!(
+                "unexpected status response: {e}"
+            )));
+        }
+    };
+    let mut media = MediaUrls::new(&proxy_base(&headers), &state.media_allow);
+    let comment = normalize_comment(&status, 0, &own, &mut media);
+    if let Err(e) = save_media_keys(&state, media).await {
+        return e.into_response();
+    }
+    tracing::info!(post = %id, comment = %status.id, "Pixelfed comment posted");
+    Json(json!({ "ok": true, "id": id, "comment": comment })).into_response()
 }
 
 // ---------- media proxy ----------

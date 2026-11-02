@@ -45,6 +45,7 @@
 
 pub mod auth;
 pub mod catalog;
+pub mod comments;
 pub mod events;
 pub mod expr;
 pub mod store;

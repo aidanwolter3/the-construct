@@ -97,6 +97,15 @@ fn de_lenient_f64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Err
     })
 }
 
+/// An optional id: a string or a number; anything else (null, absent, ...) is None.
+fn de_opt_id<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(match Option::<Value>::deserialize(d)? {
+        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_owned()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        _ => None,
+    })
+}
+
 /// A string field that some servers send as another JSON type: non-strings
 /// (numbers, objects, ...) read as absent rather than failing the status.
 fn de_lenient_str<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
@@ -181,6 +190,9 @@ pub struct Status {
     pub url: Option<String>,
     #[serde(default, deserialize_with = "de_lenient_str")]
     pub created_at: Option<String>,
+    /// Set on a reply (a comment).
+    #[serde(default, deserialize_with = "de_opt_id")]
+    pub in_reply_to_id: Option<String>,
     #[serde(default, deserialize_with = "de_lenient_str")]
     pub content: Option<String>,
     /// Pixelfed sometimes carries a plain-text rendition.
@@ -454,6 +466,105 @@ pub fn normalize_post(
     );
     post.set("url", json!(s.url.as_deref().or(s.uri.as_deref())));
     post
+}
+
+/// Deepest nesting level reported for a comment; deeper replies are shown at this level.
+pub const MAX_COMMENT_DEPTH: usize = 4;
+
+/// One comment (a reply status) as the comments API returns it:
+/// `{id, in_reply_to_id, depth, author: {id, username, display_name, avatar_url}, text,
+/// created_at (unix s), like_count, is_liked, is_own}`.
+pub fn normalize_comment(
+    s: &Status,
+    depth: usize,
+    own_account_id: &str,
+    media: &mut MediaUrls,
+) -> Value {
+    let text = match s.content.as_deref().filter(|c| !c.trim().is_empty()) {
+        Some(html) => html_to_text(html),
+        None => s.content_text.clone().unwrap_or_default().trim().to_owned(),
+    };
+    json!({
+        "id": s.id,
+        "in_reply_to_id": s.in_reply_to_id,
+        "depth": depth,
+        "author": normalize_account(&s.account, media),
+        "text": text,
+        "created_at": s.created_at.as_deref().and_then(parse_rfc3339),
+        "like_count": s.favourites_count.unwrap_or(0).max(0),
+        "is_liked": s.favourited.unwrap_or(false),
+        "is_own": s.account.id == own_account_id,
+    })
+}
+
+/// The comments under `post_id` from a `GET /api/v1/statuses/{id}/context` response, in
+/// thread order: each comment followed by its replies (depth first), siblings in the
+/// upstream's order. Works whether the upstream returns the whole tree (Mastodon) or only
+/// direct replies; a reply whose parent is missing is shown at the top level, after the rest.
+/// Unparseable entries are skipped (logged).
+pub fn normalize_comments(
+    post_id: &str,
+    context: &Value,
+    own_account_id: &str,
+    media: &mut MediaUrls,
+) -> Vec<Value> {
+    let statuses: Vec<Status> = context["descendants"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|raw| match Status::deserialize(raw) {
+                    Ok(s) => Some(s),
+                    Err(e) => {
+                        tracing::warn!(error = %e, id = %raw["id"], "skipping unparseable Pixelfed comment");
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut seen = HashSet::new();
+    let statuses: Vec<&Status> = statuses
+        .iter()
+        .filter(|s| s.id != post_id && seen.insert(s.id.as_str()))
+        .collect();
+    let ids: HashSet<&str> = statuses.iter().map(|s| s.id.as_str()).collect();
+    // Parent id -> children, in upstream order. Orphans hang off the post.
+    let mut children: BTreeMap<&str, Vec<&Status>> = BTreeMap::new();
+    let mut orphans = Vec::new();
+    for s in &statuses {
+        match s.in_reply_to_id.as_deref() {
+            Some(p) if p == post_id || ids.contains(p) => children.entry(p).or_default().push(s),
+            _ => orphans.push(*s),
+        }
+    }
+    let mut out = Vec::with_capacity(statuses.len());
+    let mut emitted = HashSet::new();
+    let mut stack: Vec<(&Status, usize)> = orphans.iter().rev().map(|s| (*s, 0)).collect();
+    stack.extend(
+        children
+            .get(post_id)
+            .into_iter()
+            .flatten()
+            .rev()
+            .map(|s| (*s, 0)),
+    );
+    while let Some((s, depth)) = stack.pop() {
+        if !emitted.insert(s.id.as_str()) {
+            continue; // a cycle in malformed data
+        }
+        out.push(normalize_comment(s, depth, own_account_id, media));
+        let next = (depth + 1).min(MAX_COMMENT_DEPTH);
+        stack.extend(
+            children
+                .get(s.id.as_str())
+                .into_iter()
+                .flatten()
+                .rev()
+                .map(|c| (*c, next)),
+        );
+    }
+    out
 }
 
 /// The mutable interaction state of a post: id, is_liked, like_count, is_bookmarked.
