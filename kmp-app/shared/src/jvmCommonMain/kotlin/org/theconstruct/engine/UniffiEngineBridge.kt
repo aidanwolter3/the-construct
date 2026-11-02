@@ -63,6 +63,8 @@ class UniffiEngineBridge(val handle: EngineHandle) : ConstructEngineBridge {
     override fun appVersion(appId: String, version: Long): String =
         catalog("$appId v$version") { handle.appVersion(appId, version) }
 
+    override fun postComments(postId: String): String = catalog("comments of $postId") { handle.postComments(postId) }
+
     /**
      * Frees the Rust engine now (its fetch, sync and events threads stop; no more snapshots), instead of waiting for
      * the cleaner. Idempotent. Calls already running finish first (UniFFI counts them); later calls do nothing
@@ -89,7 +91,7 @@ class UniffiEngineBridge(val handle: EngineHandle) : ConstructEngineBridge {
             call()
         } catch (e: uniffi.client_ffi.LayoutApiException) {
             val mapped = e.toLayoutApiException()
-            engineLog("apps: $what failed: ${mapped.kind} ${mapped.message}")
+            engineLog("pod call: $what failed: ${mapped.kind} ${mapped.message}")
             throw mapped
         } catch (e: IllegalStateException) {
             // Closed by another thread meanwhile (UniFFI: "... object has already been destroyed").

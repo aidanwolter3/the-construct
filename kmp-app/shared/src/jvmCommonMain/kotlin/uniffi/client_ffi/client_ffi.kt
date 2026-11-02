@@ -815,6 +815,8 @@ internal open class UniffiVTableCallbackInterfaceUrlOpener(
 
 
 
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -841,6 +843,8 @@ fun uniffi_client_ffi_checksum_method_enginehandle_handle_auth_redirect(
 fun uniffi_client_ffi_checksum_method_enginehandle_list_apps(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_logout(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_post_comments(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_refresh(
 ): Short
@@ -938,6 +942,8 @@ fun uniffi_client_ffi_fn_method_enginehandle_list_apps(`ptr`: Pointer,uniffi_out
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_logout(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_client_ffi_fn_method_enginehandle_post_comments(`ptr`: Pointer,`postId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_refresh(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_snapshot(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -1092,6 +1098,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_logout() != 63659.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_post_comments() != 40873.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_refresh() != 33148.toShort()) {
@@ -1610,6 +1619,13 @@ public interface EngineHandleInterface {
     fun `logout`()
     
     /**
+     * A Pixelfed post's comments in thread order (`{post_id, comments}`),
+     * with the session. Blocking; errors carry a sentence for the UI. Posting
+     * a comment is an ordinary `dispatch` (docs/DECISIONS.md D34).
+     */
+    fun `postComments`(`postId`: kotlin.String): kotlin.String
+    
+    /**
      * Re-fetch the workspace on the calling thread (blocking), then notify.
      */
     fun `refresh`()
@@ -1814,6 +1830,24 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
 }
     }
     
+    
+
+    
+    /**
+     * A Pixelfed post's comments in thread order (`{post_id, comments}`),
+     * with the session. Blocking; errors carry a sentence for the UI. Posting
+     * a comment is an ordinary `dispatch` (docs/DECISIONS.md D34).
+     */
+    @Throws(LayoutApiException::class)override fun `postComments`(`postId`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_post_comments(
+        it, FfiConverterString.lower(`postId`),_status)
+}
+    }
+    )
+    }
     
 
     

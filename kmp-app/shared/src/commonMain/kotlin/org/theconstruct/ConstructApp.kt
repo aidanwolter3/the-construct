@@ -89,6 +89,9 @@ class ConstructController(
     /** The hamburger menu's state: kept here so an open drawer or version picker survives rotation. */
     val menu: MenuState = MenuState(this)
 
+    /** The comments sheet's state (DECISIONS D34): which post's comments are open, the draft, sent comments. */
+    val comments: CommentsState = CommentsState(this)
+
     private val switchLock = Any()
 
     /** Set by [close] (under [switchLock]): [openApp] and [pin] then do nothing, so no engine outlives the controller. */
@@ -145,8 +148,21 @@ class ConstructController(
         }
     }
 
-    /** Encodes [intent] and forwards it to the engine. */
+    /**
+     * Handles the navigation the client knows (DECISIONS D34: `pixelfed://posts/<id>/comments` opens the comments
+     * sheet; Back closes it); everything else is encoded and forwarded to the engine.
+     */
     fun dispatch(intent: ActionIntent) {
+        when {
+            intent is ActionIntent.Navigate && commentsTarget(intent.targetUri) != null -> {
+                comments.open(commentsTarget(intent.targetUri)!!)
+                return
+            }
+            intent is ActionIntent.NavigateBack && comments.postId != null -> {
+                comments.back()
+                return
+            }
+        }
         val json = ConstructJson.encodeIntent(intent)
         // Logging is the bridge's job (desktop prints "[desktop] dispatch: <json>").
         try {
@@ -229,6 +245,7 @@ class ConstructController(
             bridge = next
             _appId.value = id
             _pinned.value = null
+            comments.close()
             _state.value = ConstructState(isOnline = _state.value.isOnline, engine = engine)
             subscribe(next, engine)
             try {
@@ -281,6 +298,8 @@ fun ConstructApp(controller: ConstructController, modifier: Modifier = Modifier,
                         onClick = controller.menu::openMenu,
                         modifier = Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 8.dp),
                     )
+                    // Over the layout and the menu button; the drawer still opens over it.
+                    CommentsSheet(controller, state)
                 }
             }
         }

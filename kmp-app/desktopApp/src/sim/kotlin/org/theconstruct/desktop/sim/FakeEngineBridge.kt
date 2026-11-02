@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
 import org.theconstruct.ActionIntent
 import org.theconstruct.ConstructEngineBridge
@@ -41,6 +42,10 @@ import org.theconstruct.UiNode
  * `appVersion` with the pod's JSON shapes; this bridge shows [appId]'s newest version and reports it in `layout_json`
  * (`{"app_id","version"}`). [publishVersion] appends a new newest version (the developer's deploy) and shows it, like
  * the engine applying an SSE `layout` event. Offline, every apps call throws [LayoutApiException] (Offline).
+ *
+ * Comments (DECISIONS D34): [commentsJson] (the fake upstream's `fixtures/pixelfed/comments.json`) seeds
+ * [FakeComments]; `postComments` answers from it, and a flushed `/v1/pixelfed/posts/comment` row adds to it (an unknown
+ * parent is rejected and rolled back, like the pod's 404).
  */
 class FakeEngineBridge(
     bundleJson: String,
@@ -48,6 +53,7 @@ class FakeEngineBridge(
     private var authJson: String = "{\"state\":\"signed_out\"}",
     appId: String? = null,
     apps: FakeAppCatalog? = null,
+    commentsJson: String? = null,
 ) : ConstructEngineBridge {
     /** [prevValues]: field -> value before this row was applied (null = absent). */
     private class Row(val intent: ActionIntent.OptimisticMutate, var prevValues: Map<String, JsonElement?>)
@@ -71,6 +77,7 @@ class FakeEngineBridge(
     private var isOnline = online
     private var seq = 0L
     private val lock = Any()
+    private val comments: FakeComments
 
     init {
         val bundle = ConstructJson.decodeBundle(bundleJson)
@@ -83,6 +90,13 @@ class FakeEngineBridge(
         // Show the app's newest version (the bundle's layout in the fixture catalog).
         this.apps.latestLayout(this.appId)?.let { workspace = it }
         shownVersion = this.apps.latestVersion(this.appId) ?: 1
+        val users = entities.filterKeys { it.startsWith("pixelfed://users/") }.values
+            .mapNotNull { u -> (u["username"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { it to u } }
+            .toMap()
+        val self = runCatching {
+            (ConstructJson.json.parseToJsonElement(authJson).jsonObject["username"] as? JsonPrimitive)?.content
+        }.getOrNull() ?: "constructdemo"
+        comments = FakeComments(commentsJson, users, self)
     }
 
     override fun subscribe(onState: (EngineSnapshot) -> Unit) {
@@ -143,6 +157,18 @@ class FakeEngineBridge(
         appsCall { apps.versionsJson(appId, before, limit) }
 
     override fun appVersion(appId: String, version: Long): String = appsCall { apps.versionJson(appId, version) }
+
+    override fun postComments(postId: String): String = appsCall {
+        synchronized(lock) {
+            if (!entities.containsKey("pixelfed://posts/$postId")) {
+                throw LayoutApiException("This post isn't available anymore.", LayoutApiException.Kind.NotFound)
+            }
+            comments.threadJson(postId)
+        }
+    }
+
+    /** The comment thread of [postId] as the pod would answer it, for tests. */
+    fun commentsJson(postId: String): String = synchronized(lock) { comments.threadJson(postId) }
 
     private fun appsCall(read: () -> String): String {
         synchronized(lock) {
@@ -205,14 +231,32 @@ class FakeEngineBridge(
             }
             val belowZero = i.endpoint.endsWith("/decrement") &&
                 ((result?.get(i.field) as? JsonPrimitive)?.longOrNull ?: 0L) < 0
-            if (result != null && !belowZero) {
+            val commentRejected = result != null && i.endpoint == COMMENT_ENDPOINT && !postComment(i.payload)
+            if (result != null && !belowZero && !commentRejected) {
                 server[i.entityUri] = JsonObject(serverEntity + result)
                 println("[sim] sent ${i.endpoint}: server ${i.entityUri} = $result")
                 continue
             }
-            println("[sim] server rejected ${i.endpoint} (${if (belowZero) "count_below_zero" else "bad expression"}); rolling back")
+            val why = when {
+                belowZero -> "count_below_zero"
+                commentRejected -> "post_not_found"
+                else -> "bad expression"
+            }
+            println("[sim] server rejected ${i.endpoint} ($why); rolling back")
             rollbackLocked(row)
         }
+    }
+
+    /** The fake pod's `POST /v1/pixelfed/posts/comment`: false (rejected) for an unknown parent or bad payload. */
+    private fun postComment(payload: JsonElement): Boolean {
+        val p = payload as? JsonObject ?: return false
+        fun str(k: String) = (p[k] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.takeIf { it.isNotEmpty() }
+        val parent = str("id") ?: return false
+        val text = str("text") ?: return false
+        val known = server.containsKey("pixelfed://posts/$parent") || comments.isComment(parent)
+        if (!known || text.length > 500) return false
+        comments.add(parent, text, str("client_id"))
+        return true
     }
 
     /**
@@ -267,6 +311,7 @@ class FakeEngineBridge(
     }
 
     companion object {
+        const val COMMENT_ENDPOINT = "/v1/pixelfed/posts/comment"
         private val queriesSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
         private val FIELD = Regex("""entity\.([A-Za-z0-9_]+)""")
 

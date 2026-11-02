@@ -1187,3 +1187,49 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 
   Each command waits for idle and for the apps calls, and fails with a hint when its control is missing. The D30
   browser commands and the agent controls are gone. `-Pworkspace` defaults to `pixelfed_home`.
+
+## D34: Comments (pod endpoints, outbox posting, client-side sheet)
+
+- **Not a layout change alone.** Layouts already had `comment_intent: action.navigation.open
+  pixelfed://posts/$item.id/comments`, but no client handled navigation (the engine logged it as unhandled), the pod
+  had no comments API and the protocol has no list-of-comments or text-input nodes. Adding those as server-driven
+  nodes (a `pixelfed://CommentList`, a text field node, a new "post" intent) would touch the protocol, both model
+  copies, the layout validator and every layout version; deferred until a second screen needs them.
+- **Navigation is client-side:** `ConstructController.dispatch` handles a `Navigate` whose `target_uri` is exactly
+  `pixelfed://posts/<id>/comments` (id `[A-Za-z0-9_-]{1,64}`, after `$item` binding) by opening the comments sheet
+  (`CommentsState`, held by the controller like the menu, so it survives rotation), and `NavigateBack` closes it
+  (a pending reply first). Other navigation is forwarded to the engine as before. The layout still decides where
+  the button is and which post it opens; `presentation` is ignored (the sheet is always a full-height in-tree
+  overlay, centered at the feed's max width on wide screens, like the D30 overlays: headless captures see it).
+  Opening another app closes it.
+- **Reading is a blocking pod call, not cached:** `GET /v1/pixelfed/posts/{id}/comments` (bearer) normalizes the
+  upstream `GET /api/v1/statuses/{id}/context` `descendants` into thread order (each comment then its replies,
+  siblings in upstream order, depth capped at 4, orphans last), so it works whether the upstream returns the whole
+  tree (Mastodon, the fake) or only direct replies. Comment fields: `id, in_reply_to_id, depth, author{id, username,
+  display_name, avatar_url (media proxy)}, text (HTML -> text like captions), created_at, like_count, is_liked,
+  is_own`. Engine: `ConstructEngine::post_comments(id)` (module `comments`), FFI `EngineHandle.postComments`, Kotlin
+  `ConstructEngineBridge.postComments` / `AppRepository.comments` (on `layoutIoDispatcher`, counted in
+  `LayoutCalls` so the simulator waits for it). It reuses `LayoutApiError` / `LayoutApiException` (no new FFI error
+  type); sentences: "Sign in to see comments.", "This post isn't available anymore.", "Pixelfed didn't answer.
+  Please try again.", offline as for apps. A 401 for the current session signs out and refetches, like a fetch 401.
+  Comments are not entities: they are read on demand, so offline the sheet shows the error (the feed's
+  `reply_count` stays cached).
+- **Posting goes through the outbox** (D13/D14), so it is optimistic, queued offline and retried: the sheet
+  dispatches `OptimisticMutate{entity_uri: pixelfed://posts/<id>, field: reply_count, value_expr: "entity.reply_count
+  + 1", rollback_value: <current count>, endpoint: /v1/pixelfed/posts/comment, payload: {id, text, client_id}}`.
+  A reply to a comment sends the comment's id and `value_expr: "entity.reply_count"` (the post's count holds direct
+  comments, Mastodon's `replies_count`). The pod answers 400 for blank / over-500-character text and passes upstream
+  4xx through, so the engine drops the row and rolls the count back; 5xx / unreachable retries. `client_id` is a
+  24-hex nonce made per send; the pod forwards it as `Idempotency-Key: construct-<client_id>` so a retry after a
+  lost response does not post twice where the upstream honours the header (Mastodon and the fake do; Pixelfed's
+  behaviour is unverified). The text `$value` alone is refused client-side, because the engine substitutes a payload
+  string equal to `$value`.
+- **Sent comments in the sheet:** each send adds a local `PendingComment` row ("Sending…", or "Waiting to send
+  (offline)" while offline); when the snapshot's `pending_actions` reaches 0 the sheet reloads the thread and drops
+  the rows that were pending when the reload started. A rejected comment therefore just disappears (and the count
+  rolls back); there is no per-row error yet.
+- **Fakes:** the fake upstream serves `comments.json` threads and the Mastodon endpoints (README "Fake Pixelfed
+  upstream"); the simulator's `FakeEngineBridge` reads the same fixture (`FakeComments`) and handles the comment
+  outbox endpoint (unknown parent -> rejected and rolled back).
+- **Not yet:** liking a comment, deleting your own, pagination of long threads, a per-row failure state, and caching
+  threads for offline reading. Device checks (keyboard, Back on Android) need the developer's Mac.

@@ -69,6 +69,14 @@ interface ConstructEngineBridge {
 
     /** `GET /v1/apps/{appId}/versions/{version}`: the version's metadata plus its full `layout` (a workspace [UiNode]). */
     fun appVersion(appId: String, version: Long): String = throw appsUnavailable()
+
+    /**
+     * `GET /v1/pixelfed/posts/{postId}/comments` with the session (DECISIONS D34): `{"post_id","comments":[{"id",
+     * "in_reply_to_id","depth","author":{"id","username","display_name","avatar_url"},"text","created_at","like_count",
+     * "is_liked","is_own"}]}` in thread order. BLOCKING (call on Dispatchers.IO); throws [LayoutApiException] with a
+     * sentence for the UI (signed out, offline, post gone). Posting is an ordinary [dispatch] (see [commentIntent]).
+     */
+    fun postComments(postId: String): String = throw LayoutApiException("Comments aren't available here.")
 }
 
 private fun appsUnavailable() = LayoutApiException("Apps aren't available here.")
