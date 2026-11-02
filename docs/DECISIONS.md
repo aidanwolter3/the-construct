@@ -573,6 +573,8 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 
 ## D22: Versioned layouts and the SSE push channel (`server::layouts`)
 
+> Superseded by D32 in part: no rollback, versions or agent routes and no `CONSTRUCT_AGENT_OPEN`; versions now come only from layout files (`app_versions`). The SSE push channel below still holds.
+
 - **Storage:** migration v5 `layout_versions(id, workspace_id, version, json, prompt, provider, patch_json,
   created_at, UNIQUE(workspace_id, version))`. Replaced by the v6 catalog (D26); the rules below still hold per layout. Only the workspace root `UiNode` is versioned; entities still come
   from fixtures / the upstream. Versioned workspaces: `home`, `pixelfed_demo`, `pixelfed_home` (signed-in feed
@@ -598,6 +600,8 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   "error decoding response body"; the client logs that as "connection lost mid-stream" and reconnects).
 
 ## D23: In-app layout agent UI (shared Compose) and the simulator's fake rules
+
+> Superseded by D33: the AI FAB/panel, `AgentPromptOverlay` and `FakeLayoutRules` are removed. Still valid: slot-keyed recomposition, `PlatformBackHandler`, the simulator's `type` and must-hit `click`.
 
 - **Panel, not ModalBottomSheet:** a FAB (`agent-fab`, "Edit layout with AI") bottom-end opens an in-tree animated
   bottom panel (`agent-panel`: `agent-prompt` field, suggestion chips, `agent-send`, `agent-status`, `agent-close`).
@@ -635,6 +639,8 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   while dispatching nothing.
 
 ## D24: Client agent prompt, layout version and push subscriber (client-core)
+
+> Superseded by D32/D33 in part: `PromptAgent`, the agent thread and `agent_json` are removed. The layout version tracking and the SSE push subscriber below still hold.
 
 - **PromptAgent:** dispatch trims the prompt (blank -> `agent_json` error, no request), goes `running` and POSTs
   `{"prompt","workspace_id": <engine's workspace>}` to `/v1/agent/modify_layout` on a `construct-engine-agent` thread
@@ -681,6 +687,8 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 
 ## D25: Layout agent endpoint and providers (`server::agent`)
 
+> Superseded by D32: `POST /v1/agent/modify_layout` is no longer routed (the module stays in the library with its tests, and its structural validator checks layout files); `CONSTRUCT_LLM_*` / `ANTHROPIC_*` have no effect on a running pod.
+
 - **Flow:** `POST /v1/agent/modify_layout` loads the latest version, asks the provider for an RFC 6902 patch (paths
   relative to the `core://Workspace` root), applies it to a copy with `json-patch` one op at a time (<= 200 ops,
   patch <= 256 KB; depth and size are checked after every op, since `copy` can double the document), validates
@@ -722,6 +730,8 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   derive the schema to compile, and a test checks every variant tag is in the registry.
 
 ## D26: Layout catalog, per-layout history and the workspace revision (`server::layouts`, migration v6)
+
+> Superseded by D32: the catalog, built-in alternatives, all `/v1/layouts` and legacy versions/rollback endpoints, catalog writes and the `X-Construct-Layout-Id(-Version)` headers are gone; migration v7 turns the revision log into one linear history per app and leaves the v6 tables inert. Content-addressed `layout_blobs` stays.
 
 - **Model:** a workspace has several layouts (`layouts(id, workspace_id, title, description, preview_hint, builtin,
   created_at)`, ids `<workspace>.<name>`, 1..=128 chars of `[A-Za-z0-9_.-]`), each with its own append-only,
@@ -800,6 +810,8 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 
 ## D27: Client layout catalog API (client-core, FFI)
 
+> Superseded by D33: the catalog calls are replaced by read-only `list_apps` / `app_versions` / `app_version`, and `layout_json` is now `{"app_id","version"}`. The error type and blocking-call style below still hold.
+
 - **Calls** (`client_core::catalog`, methods on `ConstructEngine`): `list_layouts()` (`GET
   /v1/layouts?workspace_id=<engine's workspace>`), `layout_versions(id, before?, limit?)`, `layout_version(id, n)`,
   `activate_layout(id, version?)` (`{}` | `{"version": n}`), `restore_layout_version(id, n)`. Each returns the pod's
@@ -860,6 +872,8 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 
 ## D29: Default base URL = the staging pod
 
+> Superseded by D33 in part: the server picker is in the shared menu in all builds (incl. release) and on desktop; Android cleartext to the loopback hosts is allowed in all builds. Staging as the default and per-server storage still hold.
+
 - Every client defaults to the deployed staging pod `https://the-construct-pod.fly.dev`: desktop (`construct.baseUrl`
   / `CONSTRUCT_BASE_URL`; `:desktopApp:run` forwards `-Dconstruct.baseUrl` / `-Dconstruct.workspace` to the app JVM),
   Android (`-PconstructBaseUrl` -> `BuildConfig`) and the live-mode simulator (`-PbaseUrl`).
@@ -875,6 +889,8 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 - Debug cleartext stays limited to `10.0.2.2`, `localhost` and `127.0.0.1`; staging is HTTPS.
 
 ## D30: Layout browser UI (shared Compose) and simulator commands
+
+> Superseded by D33: the layout browser, its FAB and its simulator commands are removed in favour of the hamburger menu and the version picker.
 
 - **Where:** all in `:shared` commonMain (`LayoutBrowser.kt` UI, `LayoutBrowserModel.kt` model), so desktop, Android,
   the simulator and a future web shell share it. The only platform pieces are `layoutIoDispatcher` (`Dispatchers.IO`),
@@ -965,3 +981,160 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 - **Deliberately unchanged:** Fly app names and URLs (`the-construct-pod`, `the-construct-fake-pixelfed`), crate
   names (none contained "canvas"), the `kmp-app` directory, git history, and earlier D-entries' narrative (their
   identifiers were updated to match the code).
+
+## D32: One app, layouts as code, read-only versions API (`server::layouts`, migration v7)
+
+- **Product rule:** the pod serves ONE app, Pixelfed (workspace `pixelfed_home`), at its latest layout version. New
+  versions come only from the developer, as files in the repo plus a deploy. No client can change layout or version
+  state on the pod, and no AI generation is reachable from a client. Pixelfed interactions (like/bookmark through
+  the outbox, sign-in/out) and the counter mutation routes stay.
+- **Apps:** `layouts::APPS` = `pixelfed_home` "Pixelfed" (icon `photo`), plus two dev apps, `pixelfed_demo`
+  "Pixelfed demo" (`photo`) and `home` "Counter" (`counter`). `GET /v1/apps` lists the dev apps only with
+  `CONSTRUCT_SHOW_DEV_APPS=1`; their other endpoints always work, because tests, CI and the simulator use them.
+- **Layout files:** `layouts/<app>/NNNN.json` = `{"note": "short changelog line", "layout": <UiNode>}`. Names have
+  4 digits and are contiguous from 0001. No other keys are allowed, the note must be non-empty, and the root is the
+  app's `core://Workspace` with id = the app id. Each file is embedded with `include_str!` through one line in
+  `layouts::FILES` (`layout_file!("pixelfed_home", "0002")`). A test fails if a file in `layouts/` is not listed,
+  or if a listed file is missing. `0001.json` of each app holds the former built-in default (the classic feed / the
+  counter). The named alternatives (Editorial, Compact, Minimal, Big counter; `fixtures/layouts/`) are deleted.
+  Files are validated with the agent's structural validator (`agent::validate_structure`: depth, size, slot rules,
+  aspect ratio, padding, `/v1/` endpoint prefix). Intents may be new, since a developer wrote the file.
+- **Startup sync (`layouts::sync`, from `AppState::try_new`, before listening):** this runs per app, in one
+  transaction, and is idempotent. A file already recorded (`file_key` `<app>/NNNN`) must have the same layout hash
+  and note. A new file is appended as version `MAX(version) + 1` with source `file`, its note and its key. Anything
+  else stops the start and names the file:
+  - "layouts/pixelfed_home/0002.json changed after it was deployed as version 7; layout files are append-only, add
+    0003.json instead" (reformatting with the same layout and note is not a change)
+  - "layouts/<app>/NNNN.json was deployed as version N but is missing; layout files are append-only, restore it
+    (and add NNNN.json for a change)"
+  - "... is new but numbered below ..., which is already deployed; ... number new files after the newest one"
+  - "...: layout files are numbered without gaps, expected NNNN.json next", "... is listed twice", "not valid
+    JSON", "unknown key", "\"note\" must be a non-empty string", "invalid layout: ..."
+
+  On a fresh DB `pixelfed_home/0001` becomes version 1. On a migrated DB the files continue after the existing
+  maximum, so every 0001 appears once more as the newest version, with the same content as the old built-in.
+- **Migration v7 (Rust step):** this adds `app_versions(app_id, version, hash -> layout_blobs, source, note,
+  file_key UNIQUE NULL, created_at, PRIMARY KEY(app_id, version))`. Revision R of each workspace
+  (`workspace_revisions`) becomes app version R. Its content is the layout shown at that revision (`layout_id` at
+  `layout_version`, same blob hash) and it keeps its `created_at`, so the numbers stay the ones clients saw
+  (monotonic) and the history shows what was on screen. Source and note:
+  - a switch (reason `activate`) -> `switch`, "Switched to <title>"
+  - otherwise the shown layout version's source:
+    - `seed` -> "Built-in layout: <title>"
+    - `restore` -> "Restored <title> vN"
+    - `rollback` -> "Rolled back to vN"
+    - `agent` -> the prompt, or "AI edit"
+    - `manual` -> the prompt, or "Manual edit"
+
+  Legacy rows keep `seed | agent | rollback | restore | manual | switch`; new rows are `file`. If a revision points
+  at a missing layout version or blob, the migration refuses (it rolls back and the server does not start) rather
+  than invent history. The v6 tables `layouts`, `layout_versions` and `workspace_revisions` are kept but inert:
+  nothing reads or writes them after v7. `layout_blobs` stays live (shared by hash). Tested on a DB built with
+  migrations 1..=6 (including a switch, a restore and an agent edit), and on an empty v6 DB.
+- **HTTP API (all public, no session):**
+  - `GET /v1/apps` -> `{"apps":[{id, title, icon, latest_version, updated_at}]}` (RFC 3339 UTC).
+  - `GET /v1/apps/{id}/versions[?limit=1..=100 (20)&before=N]` -> `{app_id, latest_version, versions:[{version,
+    created_at, source, note?}], next_before?}`, newest first; `next_before` is present iff older versions exist.
+  - `GET /v1/apps/{id}/versions/{n}` -> `{app_id, version, created_at, source, note?, layout}`.
+
+  Errors: 400 `invalid_workspace_id`, 404 `app_not_found` / `version_not_found`, 400 `invalid_request` (bad query
+  or version). The version API is public because the pod serves the same layouts to everyone (no entities).
+  `GET /v1/workspaces/{id}` keeps its auth and sets only `X-Construct-Layout-Version: <latest app version>`
+  (`X-Construct-Layout-Id(-Version)` dropped). SSE `event: layout` data is `{"workspace_id","version"}`; clients
+  must accept extra keys.
+- **Removed (404 now):** `POST /v1/agent/modify_layout`, `POST /v1/workspaces/{id}/rollback`,
+  `GET /v1/workspaces/{id}/versions`, and all `/v1/layouts` routes (list, get, versions, activate, restore).
+  `CONSTRUCT_AGENT_OPEN` does nothing. `deploy/fly/pod.toml` still sets `CONSTRUCT_LLM_PROVIDER`, which is now
+  harmless: nothing reads it at startup.
+- **Agent code kept, unrouted:** `server::agent` (the rules and Anthropic providers, patch application and
+  validation) stays in the library with its unit tests and `tests/agent.rs`, so the agent can come back later
+  (e.g. as developer tooling that writes layout files). `layouts::append_version` (source `manual`, no file)
+  exists for tests and tooling only.
+- **`ActionIntent::PromptAgent` removed, `ActionIntent::Unknown` added (protocol):** with no agent route, a prompt
+  intent could only fail. `Unknown` is `#[serde(rename = "action.unknown", other)]`: any unknown intent tag
+  deserializes to it (its fields are dropped) instead of failing the whole layout. This matters because AI-edited
+  legacy versions, migrated into the history, still contain `action.agent.prompt` buttons. Without it, those
+  versions could not be served by the pod or rendered by clients. Such an action does nothing. Kotlin already
+  degraded unknown intents to `Unknown`. Layout files should never use it (rejecting it in files is a follow-up).
+
+## D33: Clients: read-only apps API, hamburger menu and version picker, server picker in all builds
+
+- **client-core / FFI:** `ConstructEngine::{list_apps(), app_versions(app_id, before?, limit?), app_version(app_id,
+  n)}` call `GET /v1/apps...`. They are blocking, public (no bearer) and pass the pod's JSON through, in the D27
+  style: own reqwest client, caller's thread, `LayoutApiError` with readable `reason`s such as "That app doesn't
+  exist.", "That version doesn't exist.", "That isn't a valid app id." and "Can't reach your pod. Check your
+  connection and try again.".
+  - Removed: `PromptAgent` dispatch, the agent thread, `agent_json`, the catalog writes (activate/restore) and the
+    old catalog reads, with their FFI exports and Kotlin wrappers.
+  - Snapshot `layout_json` = `{"app_id": "<workspace>", "version": n}` from the applied
+    `X-Construct-Layout-Version`, or `"{}"` when unversioned (the signed-out `pixelfed_home` screen).
+    `ActiveLayout` also reads the old D27 shape.
+  - `UniffiEngineBridge.close()` frees the Rust engine; later calls do nothing.
+- **Kotlin bridge:** `ConstructEngineBridge.listApps()`, `appVersions(appId, before: Long?, limit: Int?)` and
+  `appVersion(appId, version: Long)` are blocking (call them on `Dispatchers.IO`) and throw `LayoutApiException`.
+  The interface defaults throw "Apps aren't available here.". There is also `close()`.
+  - `FakeEngineBridge` serves `FakeAppCatalog`, a catalog shaped like `CONSTRUCT_SHOW_DEV_APPS=1` with a short
+    history per app: Pixelfed v1..v3, Pixelfed demo v1..v2, Counter v1..v2.
+- **Default view:** only the rendered layout plus a small hamburger button at the top left. It is an inset-aware
+  overlay (`menu-button`, content description "Menu"). There is no status line, account text, FAB or debug chip; the
+  sign-in prompts inside the layout stay.
+  - Badge (`menu-badge`, a dot) when offline, when actions are pending, or when a pinned version is behind a newer
+    one (`showMenuBadge`).
+- **Drawer:** a Material3 `ModalNavigationDrawer` in the same root (`menu-drawer`), so headless captures see it.
+  The menu state lives in `ConstructController`, so an open drawer, the picker and a half-typed URL survive
+  rotation. Back closes the innermost level (custom URL field, picker, drawer). Sections:
+  - Apps: rows `app-<id>` open the app, and `app-history-<id>` opens its version picker.
+  - Connection (`menu-connection`): "Online" / "Offline", "N pending".
+  - Account (`menu-account`): "Signed in as @x" with `menu-sign-out`, or `menu-sign-in`, which starts the sign-in
+    intent the screen offers.
+  - Server (`menu-server`).
+
+  "Newer version available" (`menu-newer`, with "Show latest") sits at the top while it applies.
+- **Opening another app** goes through an optional engine factory on `ConstructController` (same server and
+  storage; the previous engine is closed). Android, desktop and both simulator modes provide one. Without a
+  factory, the row says "Opening other apps isn't available here yet.".
+- **Version picker (`version-picker`):**
+  - Rows: "Latest" (`version-latest`), then versions newest first (`version-<n>`: "vN", relative time, the note or
+    the source). Pages of 20 with "Load older" (`versions-more`). The version on screen is checked.
+  - Selecting is **client-local**: no mutating call exists. It fetches that version's spec (cached), opens the app
+    if needed, renders the spec against the current entities, and closes the drawer.
+  - The pin is held by the controller (it survives rotation) but is not persisted: every launch shows the latest.
+  - A pin applies only while the engine shows a versioned layout of that app. The signed-out screen is shown as
+    is, and opening another app drops the pin.
+  - When the pod publishes a newer version, the pin stays. The drawer shows "Newer version available" and the
+    hamburger is badged until "Latest" / "Show latest" resumes following.
+  - Why client-local: one person's choice of an older version must not change what other clients see, and the
+    product rule allows no client writes.
+- **Default workspace** `pixelfed_home` on every surface: desktop `DEFAULT_WORKSPACE`, Android `-PconstructWorkspace`,
+  the simulator's `-Pworkspace`, and `android_smoke.sh`. The overrides keep working.
+- **Server picker in all builds:** the drawer's Server section replaces the debug-only chip (D29).
+  - Android presets: Staging, Local emulator (`http://10.0.2.2:8080`), Local USB (`http://127.0.0.1:8080`), plus
+    "Build default" when that is not a preset, and a Custom URL validated as `http(s)://host[:port]`
+    (`ServerUrls.parse`).
+  - Android saves the choice in SharedPreferences `server` / `baseUrl` (choosing the build default clears it; the
+    old `debug_server` choice is still read as a fallback) and restarts the activity with a new engine on that server's own
+    storage. Precedence: the `baseUrl` intent extra (debug builds only) > saved choice > `BuildConfig`.
+  - Cleartext: because the picker ships in release, the main `network_security_config.xml` now allows cleartext to
+    `10.0.2.2`, `localhost` and `127.0.0.1` in **all** builds (loopback only, so a release build can reach a local
+    pod over `adb reverse` or the emulator). Everything else keeps the platform default. As before (D11), this
+    governs only Java/Kotlin traffic (images); engine traffic goes through Rust, and HTTPS enforcement there is a
+    follow-up.
+  - Desktop presets: Staging, Local (`http://127.0.0.1:8080`). The choice is saved in `java.util.prefs`, node
+    `org/theconstruct/desktop`, key `baseUrl` (choosing staging clears it), and the switch happens live: a new
+    session on that server, then the old engine is closed.
+  - Desktop precedence: `-Dconstruct.baseUrl` > `CONSTRUCT_BASE_URL` > saved choice > staging. An override only
+    decides the launch server; a menu pick still switches the current run.
+  - Storage per server as in D29 (`~/.construct/servers/<url>` for anything but staging). The engine is closed on
+    window close.
+- **Simulator commands:**
+  - `open-menu`, `close-menu`
+  - `open-app <id|title>`
+  - `open-history <id|title>`
+  - `select-version <n|vN|latest>` (presses "Load older" as needed)
+  - `set-server <staging|emulator|usb|http(s)://host[:port]>`: the choice is recorded and shown in the menu, but
+    the simulator keeps its engine; recreating the engine in live mode is a follow-up.
+  - `publish-version <note>` (fixture mode only): the fake pod publishes a new newest version of the app on screen,
+    with a "What's new" banner.
+
+  Each command waits for idle and for the apps calls, and fails with a hint when its control is missing. The D30
+  browser commands and the agent controls are gone. `-Pworkspace` defaults to `pixelfed_home`.

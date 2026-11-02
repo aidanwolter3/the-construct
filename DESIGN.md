@@ -2,6 +2,11 @@
 
 > **Note:** the product was renamed from Project Canvas to The Construct (docs/DECISIONS.md D31).
 > Identifiers in this document were updated to match (`org.theconstruct`, `ConstructEngine`, `CONSTRUCT_*`).
+>
+> **Note:** the in-app AI agent flows below (user prompts, `action.agent.prompt` / `PromptAgent`,
+> `POST /v1/agent/modify_layout`, user rollback) are no longer the product. The pod now serves one app at its latest
+> layout version, layouts are developer-authored files in `layouts/` shipped with a deploy, and clients only read the
+> version history (docs/DECISIONS.md D32, D33). The agent code is kept, unrouted, for later.
 
 **Project:** The Construct (Dynamic Intent Shell & Federated Server-Driven UI)
 

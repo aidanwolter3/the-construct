@@ -11,28 +11,37 @@ are in [docs/DECISIONS.md](docs/DECISIONS.md), and status is in [docs/PROGRESS.m
 
 Milestones 1-7 are implemented: the protocol crate, the Axum server, the macOS desktop app, the Android app
 (see [Android](#android)), the SQLite cache + outbox (M5), the Pixelfed feed with OAuth2 PKCE sign-in (M6), and
-the AI layout agent with versioned layouts, rollback and SSE push (M7). A fake Pixelfed is the primary end-to-end
-upstream, and a headless simulation mode renders the shared UI to PNGs (see Simulation mode).
+versioned layouts with SSE push (M7). A fake Pixelfed is the primary end-to-end upstream, and a headless
+simulation mode renders the shared UI to PNGs (see Simulation mode).
+
+The pod serves **one app, Pixelfed** (workspace `pixelfed_home`), at its latest layout version. Layouts are code:
+new versions are files in [`layouts/`](layouts/) that ship with a deploy (DECISIONS D32). Clients can't change
+layouts. They show the layout plus a small hamburger menu with the app's version history, connection, account and
+server (D33). The AI layout agent from M7 is no longer routed: its code stays in `server::agent`, with its tests,
+so it can come back later.
 
 Quick links: [Server runtime configuration](#server-runtime-configuration),
+[Adding a new layout version](#adding-a-new-layout-version), [The menu](#the-menu-all-surfaces),
 [Try it on your phone with a real Pixelfed instance](#try-it-on-your-phone-with-a-real-pixelfed-instance),
-[Try the AI layout agent](#try-the-ai-layout-agent), [Milestone check recipes](#milestone-check-recipes).
+[Milestone check recipes](#milestone-check-recipes).
 
 ## Layout
 
 ```
 crates/protocol      UiNode / ActionIntent / WorkspaceSpec (hydration bundle) / EntityRecord (+ JSON Schema
                      registry behind the `schema` feature)
-crates/server        Axum server ("the pod"): GET /v1/workspaces/{home,pixelfed_demo,pixelfed_home}, persistent
+crates/server        Axum server ("the pod"): GET /v1/workspaces/{pixelfed_home,pixelfed_demo,home}, persistent
                      counters (SQLite), Pixelfed adapter (auth, feed normalization, actions, media proxy),
-                     versioned layouts + rollback + SSE push, layout agent (rules / Anthropic providers)
+                     layouts as code (one linear version history per app), read-only apps API, SSE push;
+                     the layout agent module (rules / Anthropic providers) is kept but not routed
 crates/client-core   ConstructEngine: fetches the workspace, holds state, applies optimistic mutations (SQLite cache +
-                     outbox sync worker), OAuth2 PKCE sign-in (pod session in a secure store), agent prompts,
-                     SSE layout subscriber
+                     outbox sync worker), OAuth2 PKCE sign-in (pod session in a secure store), read-only apps
+                     API, SSE layout subscriber
 crates/client-ffi    UniFFI bridge (EngineHandle, FfiStateSnapshot, StateObserver) + uniffi-bindgen bin
 crates/fake-pixelfed fake Pixelfed (Mastodon API + OAuth PKCE, admin/fault controls), the primary e2e upstream;
                      single binary with embedded fixtures, Dockerfile for a sidecar image
 crates/e2e           end-to-end suite: pod + engine in-process against the fake (default) or a real Pixelfed
+layouts/             layouts as code: <app>/NNNN.json ({"note", "layout"}), embedded in the pod, append-only
 fixtures/            counter_home_bundle.json, pixelfed_home_bundle.json (DESIGN.md §2.2C),
                      pixelfed_home_feed_bundle.json (simulator); pixelfed/ (Mastodon API JSON + media served by
                      fake-pixelfed, recorded/ real-instance responses, images/ seed JPEGs)
@@ -78,105 +87,39 @@ Server details:
   `{"status":503,"count":3}` makes the next 3 POSTs (other than `/v1/test/*`) return that status (400-599)
   without being applied; `"count":0` clears it. Each injected fault is logged.
 
-Versioned layouts and push channel (M7, DECISIONS D22). The layouts of `home`, `pixelfed_demo` and the signed-in
-`pixelfed_home` feed are versioned (append-only; version 1 is the built-in layout, stored on first use; entities
-are not versioned). The signed-out `pixelfed_home` screen is not versioned.
+Layouts, apps and the push channel (DECISIONS D32). Each app (= workspace) has one linear, append-only layout
+history. Its versions come from the files `layouts/<app>/NNNN.json`, which are embedded in the binary and appended
+at startup (see [Adding a new layout version](#adding-a-new-layout-version)). Entities are not versioned. The
+signed-out `pixelfed_home` screen is not versioned. Apps: `pixelfed_home` "Pixelfed", plus the dev apps
+`pixelfed_demo` "Pixelfed demo" and `home` "Counter". `GET /v1/apps` lists the dev apps only with
+`CONSTRUCT_SHOW_DEV_APPS=1`; their other endpoints always work.
 
-- `GET /v1/workspaces/{id}` serves the workspace's ACTIVE layout (see the layout catalog below) and sets
-  `X-Construct-Layout-Version: <workspace revision>` plus `X-Construct-Layout-Id` / `X-Construct-Layout-Id-Version` (absent
-  on the signed-out `pixelfed_home` screen and on its 401). The revision bumps on every visible change (an edit, a
-  restore, a switch to another layout), so clients track one number per workspace.
-- `GET /v1/workspaces/{id}/versions` -> `[{version, created_at, prompt, provider}]`, newest first (the active
-  layout's history).
-- `POST /v1/workspaces/{id}/rollback {"version": N}` -> appends a copy of version N of the active layout as a new
-  version, pushes it, and returns `{version, rolled_back_to, workspace, revision, layout_id}`. Unknown version: 404
-  `version_not_found`; unversioned workspace: 404 `workspace_not_found`; bad body: 400.
-- Versions and rollback (and the agent endpoint) need a valid pod session (`Authorization: Bearer <session>`,
-  else 401 with a `detail` saying so) unless the server runs with `CONSTRUCT_AGENT_OPEN=1` (dev/demo only; logged as a
-  warning at startup).
-- Workspace ids are 1..=64 characters of `[A-Za-z0-9_-]`; anything else gets 400 `invalid_workspace_id` (with the
-  id truncated in the echo) on the workspace GET, versions, rollback, events and the agent endpoint.
-- `GET /v1/workspaces/{id}/events` (SSE): first message is the current revision, then one message per new revision
-  of that workspace, `event: layout` / `data: {"layout_id":"home.counter","layout_version":1,"version":N,
-  "workspace_id":"home"}` (`version` = the revision), and a `: keepalive` comment
-  every 15 s. No session needed (events carry only a version number; clients refetch the workspace, which is
-  authorized as usual); for `pixelfed_home` a bearer that is not a valid session gets 401 like the workspace GET.
-
-```bash
-CONSTRUCT_AGENT_OPEN=1 cargo run -p server
-curl -sN http://127.0.0.1:8080/v1/workspaces/home/events &                  # event: layout, version 1
-curl -s -X POST -H 'content-type: application/json' -d '{"version":1}' \
-  http://127.0.0.1:8080/v1/workspaces/home/rollback | jq .version         # 2 (and the stream gets version 2)
-curl -s http://127.0.0.1:8080/v1/workspaces/home/versions | jq .
-```
-
-Layout catalog (DECISIONS D26). Each versioned workspace has several layouts (`<workspace>.<name>`), each with its
-own append-only history, and one active layout. Built-ins: `pixelfed_home.*` and `pixelfed_demo.*`: `classic`
-(default), `editorial`, `compact`, `minimal`; `home.counter` (default), `home.big_counter`. Specs are stored once
-per distinct content (SHA-256, zstd), so a restore costs a ~0.2 KB row and a distinct edit ~1.2 KB.
-
-- `GET /v1/layouts[?workspace_id=<ws>]` -> `{"layouts":[{id, workspace_id, title, description, preview_hint,
-  builtin, current_version, created_at, updated_at, active, active_version?}], "workspaces":[{workspace_id,
-  revision, layout_id, layout_version}]}` (filtered: also `workspace_id`, `workspace_revision`).
-- `GET /v1/layouts/{id}`; `GET /v1/layouts/{id}/versions[?limit=N&before=V]` -> `{"versions":[{version,
-  created_at, source, prompt?, provider?, hash, bytes}], "next_before"?}` newest first (`source`: `seed`, `agent`,
-  `rollback`, `restore`, `manual`); `GET /v1/layouts/{id}/versions/{n}` -> metadata plus `layout` (the root node).
-- `POST /v1/layouts/{id}/activate` `{}` or `{"version": n}` (restores n into the layout first) -> `{workspace_id,
-  revision, layout_id, layout_version, unchanged}`; pushed on the SSE channel.
-- `POST /v1/layouts/{id}/restore {"version": n}` -> appends a copy as a new version (undoable itself; content
-  equal to the newest -> `"unchanged": true`) -> `{layout_id, workspace_id, version, restored_from, unchanged,
-  active, revision?}`; pushed when the layout is active.
-- Reads follow the workspace GET (`pixelfed_home` layouts need a session; the unfiltered list hides them from
-  anonymous callers); activate/restore need a session unless `CONSTRUCT_AGENT_OPEN=1`. Errors: 400
-  `invalid_layout_id` / `invalid_request`, 404 `layout_not_found` / `version_not_found`.
+- `GET /v1/workspaces/{id}` serves the app's latest layout with `X-Construct-Layout-Version: <n>`. The header is
+  absent on the signed-out `pixelfed_home` screen and on its 401.
+- `GET /v1/apps` -> `{"apps":[{id, title, icon, latest_version, updated_at}]}`.
+- `GET /v1/apps/{id}/versions[?limit=1..100 (default 20)&before=N]` -> `{app_id, latest_version, versions:[{version,
+  created_at, source, note?}], next_before?}`, newest first. `next_before` is present iff older versions exist;
+  pass it as `before`. `source` is `file` for layout files. Versions migrated from the old catalog keep `seed`,
+  `agent`, `rollback`, `restore`, `manual` or `switch`, with a note.
+- `GET /v1/apps/{id}/versions/{n}` -> `{app_id, version, created_at, source, note?, layout}`.
+- All public (no session needed). Errors: 400 `invalid_workspace_id` (ids are 1..=64 characters of
+  `[A-Za-z0-9_-]`), 404 `app_not_found` / `version_not_found`, 400 `invalid_request` (bad `limit` / `before` /
+  version).
+- `GET /v1/workspaces/{id}/events` (SSE): the first message is the current version, then one per new version of
+  that app (`event: layout` / `data: {"version":N,"workspace_id":"home"}`), plus a `: keepalive` comment every
+  15 s. New versions normally arrive with a deploy (the restart ends the stream, and the reconnect's first message
+  carries the new number). No session is needed; for `pixelfed_home`, a bearer that is not a valid session gets 401
+  like the workspace GET.
+- Nothing changes a layout over HTTP. The agent, rollback, workspace versions and `/v1/layouts` routes are gone
+  (404).
 
 ```bash
-CONSTRUCT_AGENT_OPEN=1 cargo run -p server
-curl -s 'http://127.0.0.1:8080/v1/layouts?workspace_id=pixelfed_demo' | jq '.layouts[] | {id, title, active}'
-curl -s -X POST -H 'content-type: application/json' -d '{}' \
-  http://127.0.0.1:8080/v1/layouts/pixelfed_demo.editorial/activate
-# -> {"layout_id":"pixelfed_demo.editorial","layout_version":1,"revision":2,"unchanged":false,"workspace_id":"pixelfed_demo"}
-curl -s http://127.0.0.1:8080/v1/layouts/pixelfed_demo.classic/versions | jq '.versions[] | {version, source, prompt}'
-curl -s -X POST -H 'content-type: application/json' -d '{"version":1}' \
-  http://127.0.0.1:8080/v1/layouts/pixelfed_demo.classic/restore
-# -> {"active":false,"layout_id":"pixelfed_demo.classic","restored_from":1,"unchanged":true,"version":1,...}
-curl -s http://127.0.0.1:8080/v1/layouts/home.big_counter/versions/1 | jq .layout
-```
-
-Layout agent (M7, DECISIONS D25). `POST /v1/agent/modify_layout {"prompt": "...", "workspace_id": "pixelfed_home"}`
-(`workspace_id` optional, default `pixelfed_home`; any versioned workspace) turns the prompt into an RFC 6902 patch
-of the latest layout, validates the result (must deserialize as a `UiNode`, root still the same `core://Workspace`
-with 1..=50 slots, optimistic-mutation endpoints start with `/v1/`, at most 256 KB), commits it as a new version
-and pushes it on the SSE channel. Same auth as versions/rollback. It edits the signed-in feed layout, so it works
-without a Pixelfed session.
-
-- 200: a `WorkspaceSpec` body `{version, workspace, entities: {}, layout_version, provider, model, patch}` (plus
-  `explanation` from the LLM, and `"unchanged": true` with no new version when the patch is empty).
-- 422 `invalid_patch` (`detail`, `patch`, `provider`) when the patch does not apply or the result is invalid;
-  422 `unsupported_prompt` (`supported`: example prompts) from the rules provider; 422 `use_rollback` for "reset
-  layout"; 502 `provider_error`; 503 `provider_not_configured`; 400 bad body; 404 unknown workspace. Nothing is
-  committed on any error. Every prompt is logged with provider, model, op count and outcome.
-- Providers, chosen at startup (logged): `CONSTRUCT_LLM_PROVIDER` = `auto` (default: `anthropic` if
-  `ANTHROPIC_API_KEY` is set, else `rules`) | `anthropic` | `rules`. `anthropic` without a key: every prompt
-  answers 503 (the server still starts).
-  - `rules`: deterministic and offline. Phrases (case-insensitive, composable in one prompt, applied in the order
-    written, idempotent): "hide (post) captions", "show captions", "media at the (very) top" / "photos first",
-    "move the action bar above the photo", "add a weather widget (at the top)" (a placeholder slot: a text in a
-    `core://Container` with 16 dp padding; no weather component exists), "reset layout" (-> 422 pointing at rollback), and "remove the action bar", which is
-    rejected on purpose (422 `invalid_patch`) to demonstrate validation.
-  - `anthropic`: the Messages API with structured outputs. `ANTHROPIC_API_KEY`; `ANTHROPIC_BASE_URL` (default
-    `https://api.anthropic.com`); `CONSTRUCT_LLM_MODEL` (model id; default in `agent::anthropic::DEFAULT_MODEL`);
-    `CONSTRUCT_LLM_FALLBACKS=0` turns off the server-side refusal fallback. 120 s timeout, up to 2 retries on
-    429/5xx/overloaded.
-
-```bash
-CONSTRUCT_AGENT_OPEN=1 CONSTRUCT_ADDR=127.0.0.1:8681 cargo run -p server
-curl -X POST http://127.0.0.1:8681/v1/agent/modify_layout -H "Content-Type: application/json" \
-  -d '{"prompt": "Hide post captions and put media at the very top"}'
-# -> 200 {"layout_version":2,"provider":"rules","patch":[3 replace ops],"workspace":{...},...}
-curl -s http://127.0.0.1:8681/v1/workspaces/pixelfed_home/versions | jq .
-curl -s -X POST -H 'content-type: application/json' -d '{"version":1}' \
-  http://127.0.0.1:8681/v1/workspaces/pixelfed_home/rollback | jq .version   # 3
+CONSTRUCT_SHOW_DEV_APPS=1 cargo run -p server
+curl -s http://127.0.0.1:8080/v1/apps | jq '.apps[] | {id, latest_version}'
+curl -s http://127.0.0.1:8080/v1/apps/pixelfed_home/versions | jq '.versions[] | {version, source, note}'
+# -> {"version":1,"source":"file","note":"Classic feed"} on a fresh database
+curl -s http://127.0.0.1:8080/v1/apps/pixelfed_home/versions/1 | jq .layout.id     # "pixelfed_home"
+curl -sN http://127.0.0.1:8080/v1/workspaces/home/events    # event: layout, data: {"version":1,"workspace_id":"home"}
 ```
 
 ```bash
@@ -195,11 +138,14 @@ cd kmp-app
 export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ./gradlew :desktopApp:run                                              # the staging pod (default)
 ./gradlew :desktopApp:run -Dconstruct.baseUrl=http://127.0.0.1:8080       # or: CONSTRUCT_BASE_URL=... ./gradlew ...
+./gradlew :desktopApp:run -Dconstruct.baseUrl=http://127.0.0.1:8080 -Dconstruct.workspace=home   # the counter
 ```
 
-All clients default to the deployed staging pod, `https://the-construct-pod.fly.dev`; for the local server
-started above, pass its URL explicitly (`CONSTRUCT_BASE_URL=http://127.0.0.1:8080`). A "The Construct" window opens with the counter layout served by the server. Clicking
-**Increment** or **Reset** prints the intent to stdout and the count updates:
+All clients default to the deployed staging pod, `https://the-construct-pod.fly.dev`, and to the Pixelfed app
+(`pixelfed_home`; signed out, it shows "Sign in with Pixelfed"). For the local server started above, pass its URL
+explicitly (`CONSTRUCT_BASE_URL=http://127.0.0.1:8080`) or pick **Local** in the menu's Server section. With
+`-Dconstruct.workspace=home`, a "The Construct" window opens with the counter layout served by the server.
+Clicking **Increment** or **Reset** prints the intent to stdout and the count updates:
 
 ```
 [desktop] dispatch: {"intent":"action.mutation.optimistic",...}
@@ -209,9 +155,14 @@ started above, pass its URL explicitly (`CONSTRUCT_BASE_URL=http://127.0.0.1:808
 
 Options for the desktop app (set as `-D` JVM properties or environment variables):
 
-- `construct.baseUrl` / `CONSTRUCT_BASE_URL` (default `https://the-construct-pod.fly.dev`, the staging pod; local server:
-  `http://127.0.0.1:8080`)
-- `construct.workspace` / `CONSTRUCT_WORKSPACE` (default `home`; `pixelfed_demo` shows the Pixelfed feed fixture)
+- `construct.baseUrl` / `CONSTRUCT_BASE_URL`: the server at launch. Precedence: `-Dconstruct.baseUrl`, then
+  `CONSTRUCT_BASE_URL`, then the menu's saved choice (`java.util.prefs`, node `org/theconstruct/desktop`, key
+  `baseUrl`), then the staging pod `https://the-construct-pod.fly.dev`. Local server: `http://127.0.0.1:8080`. An
+  override only decides the launch server; picking a server in the menu still switches the running app (and saves
+  the choice for the next launch without an override). Any server but staging gets its own storage,
+  `~/.construct/servers/<url>`.
+- `construct.workspace` / `CONSTRUCT_WORKSPACE`: default `pixelfed_home`. Use `home` for the counter and
+  `pixelfed_demo` for the one-post demo. Other apps can also be opened from the menu.
 
 Separately, `-PskipRustBuild` is a Gradle property (`./gradlew -PskipRustBuild :desktopApp:run`) that skips
 the cargo build step.
@@ -225,7 +176,7 @@ one transaction (`sqlite3 ~/.construct/cache.db "SELECT * FROM action_outbox;"`)
 
 Queued rows are sent by a background sync worker (docs/DECISIONS.md D14), oldest first and one at a time,
 as `POST <base_url><endpoint>`. Clicks made while offline (or with the app closed before they were sent) stay
-in the queue and the UI shows "N pending"; they are flushed as soon as the server is reachable again,
+in the queue and the menu shows "N pending" (and a badge on the menu button); they are flushed as soon as the server is reachable again,
 including on the next launch. Each accepted row is deleted. A row the server rejects with a 4xx (e.g.
 decrementing below 0) is deleted and its field rolled back, with later queued clicks re-applied on top. A 5xx,
 408, 429 or network error keeps the row and retries it with exponential backoff (2 s, 4 s, ... capped at 60 s). A
@@ -236,7 +187,8 @@ deleted (0 pending)`.
 ## Server runtime configuration
 
 Everything the pod (`cargo run -p server`) reads from the environment. Empty values count as unset. The chosen
-Pixelfed instance, database path and layout agent provider are logged at startup. `GET /healthz` answers 200 `ok`
+Pixelfed instance, the database path and each app's served layout version (plus any layout file deployed as a new
+version) are logged at startup. `GET /healthz` answers 200 `ok`
 (no auth; the engine's 2 s reconnect probe uses it).
 
 | Variable | Default | Meaning |
@@ -244,6 +196,7 @@ Pixelfed instance, database path and layout agent provider are logged at startup
 | `CONSTRUCT_ADDR` | `127.0.0.1:8080` | Listen address. Use `0.0.0.0:8080` to accept LAN connections. |
 | `CONSTRUCT_DATA_DIR` | `~/.construct-server` | Directory of `server.db` (counters, Pixelfed app/account/sessions, media keys, layout versions); created if missing. |
 | `CONSTRUCT_TEST_HOOKS` | unset | `1` enables `POST /v1/test/fault` (fault injection; otherwise 404). |
+| `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: `GET /v1/apps` also lists the dev apps `pixelfed_demo` and `home` (they work either way; this only makes them show up in the clients' menu). |
 | `PIXELFED_INSTANCE_URL` | `http://127.0.0.1:8081` (the fake) | Pixelfed instance for pod->upstream calls, and the only instance accepted in auth calls. `http://localhost:8090` for the local real Pixelfed, `https://<instance>` for a public one. |
 | `PIXELFED_PUBLIC_URL` | = instance URL | Base for browser-facing links (the authorize page), e.g. `http://10.0.2.2:8081` for the emulator while the pod calls `127.0.0.1:8081`. Also accepted in auth calls. |
 | `PIXELFED_MEDIA_HOSTS` | unset | Comma-separated `host`, `host:port` or `scheme://host[:port]`: extra origins the media proxy may fetch (CDN/S3) besides the instance and public URLs. Media elsewhere become placeholders. |
@@ -251,13 +204,11 @@ Pixelfed instance, database path and layout agent provider are logged at startup
 | `PIXELFED_OWNER_ACCOUNT_ID` | unset | The only upstream account id allowed to sign in (replaces a pinned owner). Unset: the first account to sign in is pinned; others get 403 `account_not_owner`. |
 | `PIXELFED_ALLOW_ACCOUNT_CHANGE` | unset | `1`/`true`: any account may sign in and replace the stored one (no pinning). |
 | `CONSTRUCT_SESSION_TTL_DAYS` | `90` | Pod session lifetime in days (1..=36500; other values warn and use 90). |
-| `CONSTRUCT_AGENT_OPEN` | unset | `1`: layout versions, rollback, the agent endpoint, layout activate/restore and `pixelfed_home` catalog reads need no pod session. Local demos only (warned at startup). |
-| `CONSTRUCT_LLM_PROVIDER` | `auto` | Layout agent provider: `auto` (`anthropic` if `ANTHROPIC_API_KEY` is set, else `rules`), `anthropic`, `rules`. `anthropic` without a key: the server starts and prompts answer 503. |
-| `ANTHROPIC_API_KEY` | unset | Enables the Anthropic provider (never logged). |
-| `CONSTRUCT_LLM_MODEL` | `claude-opus-5-5` | Model id for the Anthropic provider (`agent::anthropic::DEFAULT_MODEL`). |
-| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Messages API base URL (proxy/gateway). |
-| `CONSTRUCT_LLM_FALLBACKS` | on | `0`/`false` turns off the server-side refusal fallback of the Anthropic request. |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
+
+The layout agent is not routed (D32), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PROVIDER`, `CONSTRUCT_LLM_MODEL`,
+`CONSTRUCT_LLM_FALLBACKS`, `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL` have no effect on the pod.
+`deploy/fly/pod.toml` still sets `CONSTRUCT_LLM_PROVIDER`; that is harmless.
 
 <a id="fake-pixelfed-environment"></a>`cargo run -p fake-pixelfed`:
 
@@ -287,7 +238,7 @@ session (DECISIONS D17, D19).
 2. Make the pod reachable from the phone. Simplest is USB: `adb reverse tcp:8080 tcp:8080` and base URL
    `http://localhost:8080`. A LAN address (`CONSTRUCT_ADDR=0.0.0.0:8080`, `http://<mac-ip>:8080`) or an HTTPS URL also
    works for the engine, which talks through Rust and is not restricted by Android's network security config; but
-   debug builds allow cleartext to `localhost`, `127.0.0.1` and `10.0.2.2` only for Java/Kotlin traffic, and images
+   the app allows cleartext to `localhost`, `127.0.0.1` and `10.0.2.2` only, and only for Java/Kotlin traffic, and images
    load through Coil/OkHttp from the pod's media proxy, so over plain-HTTP LAN the feed images fail. Use `adb
    reverse` or HTTPS. The authorize page itself is the instance's own `https://` URL, opened in the phone's browser.
 
@@ -300,9 +251,11 @@ session (DECISIONS D17, D19).
    adb shell am start -S -n org.theconstruct.android/.MainActivity --es baseUrl http://localhost:8080 --es workspace pixelfed_home
    ```
 
+   (A release build has no extras: pick **Local USB** in the menu's Server section instead.)
+
 4. Tap **Sign in with Pixelfed**: the browser opens the instance's authorize page; log in and approve; the
-   `construct://oauth` redirect returns to the app, which shows "Loading your feed…" and then `@you` and your home
-   timeline. Like and bookmark are applied at once and go through the outbox to the instance (queued while
+   `construct://oauth` redirect returns to the app, which shows your home timeline (the menu's Account section says
+   "Signed in as @you"). Like and bookmark are applied at once and go through the outbox to the instance (queued while
    offline, flushed on reconnect). **Sign out** deletes the session and the cached private feed.
 
 Notes:
@@ -318,42 +271,52 @@ Notes:
   `adb reverse tcp:8090 tcp:8090`, see "Local Pixelfed instance") on the emulator; not yet against a public
   instance.
 
-## Try the AI layout agent
+## Adding a new layout version
 
-The agent turns a prompt into a JSON Patch of the current layout, validates it, stores it as a new layout version
-and pushes it to every connected client over SSE (D22, D25).
+The only way to change what the app looks like is a new layout file plus a deploy (DECISIONS D32):
 
-- **Offline, no key:** the default `rules` provider understands fixed phrases (combinable): "hide post captions",
-  "show captions", "put media at the very top" / "photos first", "move the action bar above the photo", "add a
-  weather widget"; "remove the action bar" is rejected on purpose to show validation.
-- **With the Anthropic provider:** set `ANTHROPIC_API_KEY` (optionally `CONSTRUCT_LLM_MODEL`, default `claude-opus-5-5`) and restart
-  the pod; the startup log names the provider and model. Free-form prompts then work. (Not yet run against the live
-  API: no key was available during development.)
-- **In the app:** tap the sparkle button (bottom right, "Edit layout with AI"), type a prompt or pick a chip, and
-  tap **Send**. The panel shows "Layout updated (vN, <provider>)" and the feed changes in place; other clients on the
-  same pod update through the push channel. The prompt needs a signed-in session (or `CONSTRUCT_AGENT_OPEN=1`).
-- **Versions and rollback** (`CONSTRUCT_AGENT_OPEN=1` is for local demos only; otherwise add
-  `-H "Authorization: Bearer <session>"`):
+1. Copy the newest file of the app, e.g. `layouts/pixelfed_home/0001.json` to `layouts/pixelfed_home/0002.json`
+   (4 digits, the next number, no gaps), and edit it. The format is `{"note": "short changelog line", "layout":
+   <UiNode>}`. The note is what the menu's version history shows. The layout root is the app's
+   `core://Workspace`, and its id is the app id.
+2. Add one line to `layouts::FILES` in `crates/server/src/layouts.rs`: `layout_file!("pixelfed_home", "0002"),`.
+3. Run `cargo test` (`-p server` is enough). It validates every file (structure, size, slots, aspect ratios,
+   endpoints) and fails if a file in `layouts/` is not listed.
+4. Push to `main`. CI runs the checks and deploys the pod to staging. On start, the pod appends the file as the
+   app's next version (logged as `layout file deployed as a new version`). Connected clients reconnect their SSE
+   stream, see the newer version and refetch. Clients that follow the latest version show it live. A client pinned
+   to an older version keeps it, and its menu says "Newer version available".
 
-  ```bash
-  CONSTRUCT_AGENT_OPEN=1 cargo run -p server
-  curl -s -X POST http://127.0.0.1:8080/v1/agent/modify_layout -H 'content-type: application/json' \
-    -d '{"prompt": "Add a weather widget at the top"}' | jq '{layout_version, provider, patch}'
-  curl -s http://127.0.0.1:8080/v1/workspaces/pixelfed_home/versions | jq .
-  curl -s -X POST -H 'content-type: application/json' -d '{"version":1}' \
-    http://127.0.0.1:8080/v1/workspaces/pixelfed_home/rollback | jq '{version, rolled_back_to}'
-  ```
+Files are **append-only**. Never edit, rename or delete a deployed file: the pod refuses to start and names the
+file (e.g. "layouts/pixelfed_home/0002.json changed after it was deployed as version 7; layout files are
+append-only, add 0003.json instead"). A gap in the numbering, an invalid layout or a wrong root id also stops the
+start. Reformatting a file without changing its layout or note is fine. To undo a change, add a new file with the
+old content.
 
-- **Other layouts and going back in time** (D26): the agent edits the workspace's active layout. Switch layouts or
-  restore any earlier version of one; both are pushed to connected clients:
+## The menu (all surfaces)
 
-  ```bash
-  curl -s http://127.0.0.1:8080/v1/layouts?workspace_id=pixelfed_home | jq '.layouts[] | {id, title, active, current_version}'
-  curl -s -X POST -H 'content-type: application/json' -d '{}' \
-    http://127.0.0.1:8080/v1/layouts/pixelfed_home.minimal/activate | jq .
-  curl -s -X POST -H 'content-type: application/json' -d '{"version":2}' \
-    http://127.0.0.1:8080/v1/layouts/pixelfed_home.classic/restore | jq .
-  ```
+Desktop, Android and the simulator share one Compose UI (DECISIONS D33). The screen shows only the layout, with a
+small **menu button** at the top left (content description "Menu"). The button gets a badge dot when you are
+offline, when actions wait to be sent, or when the version you picked has a newer one. The button opens a drawer:
+
+- **Apps:** `Pixelfed` (plus `Pixelfed demo` and `Counter` when the pod runs with `CONSTRUCT_SHOW_DEV_APPS=1`).
+  Tap a row to open that app. The history button opens the **version picker**: "Latest", then every version
+  newest first ("vN", age, note), with "Load older". Picking a version shows that layout with your current data.
+  This happens only on this device: nothing changes on the pod, and the next launch shows the latest again. While
+  you view an older version and a newer one is published, the drawer shows "Newer version available" with
+  **Show latest**. Picking "Latest" follows new versions again.
+- **Connection:** Online / Offline and "N pending".
+- **Account:** "Signed in as @you" with **Sign out**, or **Sign in**.
+- **Server:** Staging, Local emulator (`http://10.0.2.2:8080`), Local USB (`http://127.0.0.1:8080`) or a custom
+  `http(s)://host[:port]` on Android; Staging or Local (`http://127.0.0.1:8080`) on desktop. This is in every
+  build, release included. Android saves the choice and restarts the activity with a new engine; desktop switches
+  in place and saves it for the next launch. Each server keeps its own cache and outbox.
+
+Back (Android) closes the innermost level (custom URL field, picker, drawer). Test tags: `menu-button`,
+`menu-badge`, `menu-drawer`, `menu-close`, `menu-back`, `app-<id>`, `app-history-<id>`, `app-error`, `apps-error`,
+`menu-newer`, `menu-newer-latest`, `menu-connection`, `menu-account`, `menu-sign-in`, `menu-sign-out`,
+`menu-server`, `server-<key>`, `server-custom`, `server-custom-url`, `server-custom-use`, `version-picker`,
+`version-latest`, `version-<n>`, `versions-more`, `versions-error`, `version-error`.
 
 ## Milestone check recipes
 
@@ -361,22 +324,22 @@ DESIGN.md M5 (offline click lands in the outbox, flushed on reconnect), with the
 
 ```bash
 cargo run -p server                                                  # terminal 1
-cd kmp-app && CONSTRUCT_BASE_URL=http://127.0.0.1:8080 ./gradlew :desktopApp:run   # terminal 2: Count: N, Online
-# stop the server with Ctrl-C in terminal 1: the status line goes Offline
-# click Increment 3 times: the count updates at once and the status line shows "3 pending"
+cd kmp-app && CONSTRUCT_BASE_URL=http://127.0.0.1:8080 CONSTRUCT_WORKSPACE=home ./gradlew :desktopApp:run   # terminal 2
+# stop the server with Ctrl-C in terminal 1: the menu button gets a badge; the menu says Offline
+# click Increment 3 times: the count updates at once and the menu shows "3 pending"
 sqlite3 ~/.construct/cache.db "SELECT id, endpoint, status, retry_count FROM action_outbox;"   # 3 PENDING rows
 cargo run -p server                                                  # terminal 1 again: within ~2 s flushed, rows deleted
 sqlite3 ~/.construct/cache.db "SELECT count(*) FROM action_outbox;"     # 0
 curl -s http://127.0.0.1:8080/v1/workspaces/home | jq '.entities["core://counters/home"].count'
 ```
 
-DESIGN.md M7 (prompt -> valid patched `WorkspaceSpec`; the open app recomposes without a restart):
+A new layout version reaches an open app without a restart (the M7 push, now driven by a deploy):
 
 ```bash
-CONSTRUCT_AGENT_OPEN=1 cargo run -p server
-curl -s -X POST http://127.0.0.1:8080/v1/agent/modify_layout -H "Content-Type: application/json" \
-  -d '{"prompt": "Hide post captions and put media at the very top"}' | jq '{layout_version, provider, patch}'
-# a desktop app or simulator showing pixelfed_home on this pod switches to the new layout within a second
+cargo run -p server                                                  # terminal 1
+cd kmp-app && CONSTRUCT_BASE_URL=http://127.0.0.1:8080 CONSTRUCT_WORKSPACE=home ./gradlew :desktopApp:run   # terminal 2
+# add layouts/home/0002.json + its layouts::FILES line (see "Adding a new layout version"), then restart terminal 1:
+# the app reconnects its event stream and shows v2 within a few seconds; the menu's Counter history lists it
 ```
 
 ## Fake Pixelfed upstream
@@ -554,11 +517,11 @@ thread; `auth_json` in every snapshot goes `pending` -> `signed_in` (username, d
 - Signing out (or a 401) removes the cached private feed (`pixelfed://` entities, the feed workspace row) from
   `cache.db`; `logout()` also drops queued Pixelfed actions, a 401 keeps them for the next sign-in. The DB runs
   with `secure_delete=ON` and the WAL is truncated after the purge, so the rows don't linger in the file's bytes.
-- UI: while signed in the status line shows `@username` and a **Sign out** button (`ConstructController.logout()`);
+- UI: the menu's Account section shows "Signed in as @username" with **Sign out** (`ConstructController.logout()`),
   "Signing in…" while pending, then "Loading your feed…" from the code exchange until the first signed-in fetch
-  lands (only then `@username`; a second "Sign in" tap meanwhile is ignored); "Sign-in failed: <message>" on
-  error, wrapped to at most 2 lines. Messages are short and human ("This pod belongs to a different Pixelfed
-  account.", "Can't reach your pod.", ...); the URL/status/body detail is in the `[ConstructEngine]` log only.
+  lands. It shows "Sign-in failed: <message>" on error, otherwise "Not signed in" with **Sign in** (the screen's own
+  sign-in button works too). Messages are short and human ("This pod belongs to a different Pixelfed account.",
+  "Can't reach your pod.", ...); the URL/status/body detail is in the `[ConstructEngine]` log only.
 
 Per platform (DECISIONS D21):
 
@@ -575,74 +538,33 @@ Per platform (DECISIONS D21):
 - **Simulator** (live mode): in-memory store and an auto-approving "browser" for the fake, or a scripted Pixelfed
   web login for a real instance with `-PpixelfedLogin=<user>:<password>` (see Simulation mode).
 
-### Layout agent and live layout updates (client)
+### Live layout updates and the apps API (client)
 
-client-core side of M7 (docs/DECISIONS.md D24):
+client-core side of D24 (push) and D33 (apps):
 
-- `{"intent":"action.agent.prompt","prompt_text":".."}` posts the prompt to `POST /v1/agent/modify_layout` (with
-  the engine's workspace id and the bearer when signed in) on a background thread. `agent_json` in every snapshot:
-  `{"state":"idle"}` -> `running` -> `done` (`message` "Layout updated (vN, rules)", or "No change needed (vN)" with
-  `unchanged: true`; `provider`, `layout_version`; the returned layout is shown at once, entities and queued actions
-  untouched) or `error` with a readable message: "I can't do that yet. Try: <3 examples>" (`unsupported_prompt`),
-  "That change would break the layout: <detail>" (`invalid_patch`), "The layout changed meanwhile; please try
-  again." (409), "The AI layout provider isn't configured on this pod.", "The AI provider failed; please try
-  again.", "Sign in to change the layout." (401), or "offline: try again when online". A newer layout version
-  arriving from elsewhere (SSE refetch) resets a finished status to idle, so the panel never shows a stale result.
-- The engine remembers the served layout version (`X-Construct-Layout-Version`) and, while online, keeps
-  `GET /v1/workspaces/<id>/events` open on a `construct-engine-events` thread. A `layout` event with a newer version
-  refetches the workspace (queued optimistic changes are re-applied on top); equal or older versions are ignored.
-  The stream reconnects after errors with a 1 s -> 30 s backoff (and after 45 s of silence), and closes when the
-  engine is dropped; a line or event over 64 KB drops the connection and reconnects. Log lines: `[ConstructEngine] events: connected to ...`, `events: layout v3 pushed (have v2);
-  refetching`, `agent: applied layout v3 (rules)`.
-- FFI: `FfiStateSnapshot.agentJson` -> `EngineSnapshot.agentJson`.
-
-### Layout catalog (client)
-
-client-core / FFI / bridge API over the pod's `/v1/layouts` endpoints (docs/DECISIONS.md D26, D27), for a layout
-browser. All calls are blocking: on Kotlin call them on `Dispatchers.IO`, never the UI thread.
+- The engine remembers the served layout version (`X-Construct-Layout-Version`). While online, it keeps
+  `GET /v1/workspaces/<id>/events` open on a `construct-engine-events` thread. A `layout` event with a newer
+  version refetches the workspace, and queued optimistic changes are re-applied on top; equal or older versions are
+  ignored. After errors the stream reconnects with a 1 s -> 30 s backoff (and after 45 s of silence). It closes when
+  the engine is dropped, and a line or event over 64 KB drops the connection and reconnects. Log lines:
+  `[ConstructEngine] events: connected to ...`, `events: layout v3 pushed (have v2); refetching`.
+- Every snapshot carries `layout_json` = `{"app_id": "<workspace>", "version": n}` (`ConstructState.activeLayout`
+  in Kotlin), or `{}` when the screen is unversioned (the signed-out `pixelfed_home` screen) or nothing has loaded.
+- Read-only apps API (blocking; on Kotlin, call it on `Dispatchers.IO`, never the UI thread). Each call returns the
+  pod's JSON body and sends no bearer (the endpoints are public):
 
 | Kotlin (`ConstructEngineBridge`) | Rust (`ConstructEngine` / `EngineHandle`) | Pod |
 |---|---|---|
-| `listLayouts()` | `list_layouts()` | `GET /v1/layouts?workspace_id=<engine's>` |
-| `layoutVersions(id, before?, limit?)` | `layout_versions(id, before, limit)` | `GET /v1/layouts/:id/versions` |
-| `layoutVersion(id, n)` | `layout_version(id, n)` | `GET /v1/layouts/:id/versions/:n` (with `layout`) |
-| `activateLayout(id, version?)` | `activate_layout(id, version)` | `POST /v1/layouts/:id/activate` |
-| `restoreLayoutVersion(id, n)` | `restore_layout_version(id, n)` | `POST /v1/layouts/:id/restore` |
+| `listApps()` | `list_apps()` | `GET /v1/apps` |
+| `appVersions(appId, before?, limit?)` | `app_versions(app_id, before, limit)` | `GET /v1/apps/:id/versions` |
+| `appVersion(appId, n)` | `app_version(app_id, n)` | `GET /v1/apps/:id/versions/:n` (with `layout`) |
 
-- Each returns the pod's JSON body. Failures throw `LayoutApiException` (Kotlin; `kind` Offline / Unauthorized /
-  NotFound / Server) with a readable message, e.g. "Sign in to change layouts." (writes need a session unless the
-  pod runs with `CONSTRUCT_AGENT_OPEN=1`) or "Can't reach your pod. Check your connection and try again.". A 401 with
-  a stale session signs out like any other request.
-- An activate / restore that changes the screen refetches the workspace before returning, so the UI shows the new
-  layout immediately (the SSE echo is a no-op).
-- Every snapshot carries `layout_json` = `{"layout_id","layout_version","revision"}` (`ConstructState.activeLayout`
-  in Kotlin) to mark the active layout and version; `{}` when unknown.
-- Simulation mode: `FakeEngineBridge` serves an in-memory catalog of the pod's built-ins (read from
-  `fixtures/layouts/`; `home`: counter with seed / AI / rollback versions, big_counter; the Pixelfed workspaces:
-  classic with seed, two AI prompts and a rollback, editorial, compact, minimal).
-
-### Layout browser (all surfaces)
-
-Every surface (desktop, Android, simulator) has the same shared-Compose browser (docs/DECISIONS.md D30):
-
-- The **layouts button** (above the AI sparkle button, "Browse layouts") opens the list of this workspace's layouts,
-  each with a **live thumbnail**: its current version rendered with your real data, scaled down and not interactive.
-  The active one is marked "Active" with its version.
-- Tap a layout for its **details and version history** (newest first: version, time, source chip: Built-in, AI prompt
-  with the prompt, Rollback, Restore, Manual; "Load older" pages back). "Use this layout" switches to it.
-- Tap a version for a full-size **preview**. On the active layout, "Restore this version" adds a copy of it on top (so
-  nothing is ever lost); on another layout, "Use this version" switches to that version.
-- Every change asks for confirmation, then closes the browser, shows the new layout at once and offers **Undo** in a
-  snackbar for 8 s (undo is itself a new version / switch, never a deletion).
-- Back (Android) closes one level at a time; rotation keeps the open level, a running change and the snackbar's Undo
-  (Undo disappears once the screen shows something else, e.g. another device switched layouts). Errors show inline
-  with "Try again"
-  (offline: "Can't reach your pod. ..."; writes without a session: "Sign in to change layouts.", unless the pod runs
-  with `CONSTRUCT_AGENT_OPEN=1`).
-- Test tags: `layouts-button`, `layouts-browser`, `layouts-close`, `layouts-back`, `layout-item-<id>`,
-  `layout-details`, `layout-use`, `version-item-<n>`, `versions-more`, `version-preview`, `version-restore`,
-  `version-use`, `confirm-dialog`, `confirm-ok`, `confirm-cancel`, `confirm-error`, `layouts-snackbar`,
-  `snackbar-undo`, `layouts-error`, `layouts-retry`.
+- Failures throw `LayoutApiException` (Kotlin; `kind` Offline / Unauthorized / NotFound / Server) with a readable
+  message, e.g. "That app doesn't exist.", "That version doesn't exist." or "Can't reach your pod. Check your
+  connection and try again.". Bridges without the API (other fakes) throw "Apps aren't available here.".
+- The agent prompt (`action.agent.prompt`), `agent_json` and the layout catalog calls are removed. A layout that
+  still contains an unknown intent (e.g. an old AI-edited version in the history) renders, and that action does
+  nothing (`ActionIntent::Unknown`).
 
 ## Local Pixelfed instance (real, optional)
 
@@ -756,23 +678,26 @@ virtual screen (no window), runs a small script against it and writes PNG screen
   -Pscript="shot start; click Increment; click Increment; assert-text Count: 2; shot after; offline; shot offline"
 
 ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -Pscreen=desktop
-./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_home \
+./gradlew -PskipRustBuild :desktopApp:simulate \
   -Pscript="wait-images; shot feed; swipe-left tag:carousel:; assert-text Page 2 of 3; shot page2; click Like; assert-text 28; shot liked"
-# layout agent (fixture mode: the fake engine's rules subset; live mode: the pod's agent endpoint)
-./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_home \
-  -Pscript="click tag:agent-fab; type tag:agent-prompt Hide post captions and put media at the very top; click tag:agent-send; wait-text 2000 Layout updated; shot after"
+# the menu: history, an older version, a newly published one, back to latest (see "Menu commands" below)
+./gradlew -PskipRustBuild :desktopApp:simulate \
+  -Pscript="open-menu; shot menu; open-history Pixelfed; shot history; select-version 1; shot v1; publish-version Bigger photos; open-menu; assert-text Newer version available; shot newer; open-history Pixelfed; select-version latest; shot latest"
 ./gradlew -PskipRustBuild :desktopApp:simulate -PscriptFile=my_script.txt -Pdensity=1 -Pout=/tmp/shots
 ./gradlew -PskipRustBuild :desktopApp:simulate -PbaseUrl=http://127.0.0.1:8080 -Pscript="shot live"   # live mode
 # live sign-in against the pod + fake upstream (see "Sign in (client)")
 ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_home -PbaseUrl=http://127.0.0.1:8080 \
-  -Pscript="shot signed-out; click Sign in with Pixelfed; wait-text 20000 @constructdemo; wait-images 20000; shot feed; click Like; shot liked"
+  -Pscript="shot signed-out; click Sign in with Pixelfed; open-menu; wait-text 20000 @constructdemo; close-menu; wait-text 20000 Alice Lumen; wait-images 20000; shot feed; click Like; shot liked"
+# live menu against a local pod started with CONSTRUCT_SHOW_DEV_APPS=1
+./gradlew -PskipRustBuild :desktopApp:simulate -PbaseUrl=http://127.0.0.1:8080 \
+  -Pscript="open-menu; open-history Pixelfed; select-version 1; open-menu; open-app Counter; assert-text Count"
 ```
 
 Flags (all optional):
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `-Pworkspace` | `home` | Workspace id. In fixture mode it selects the default fixture. |
+| `-Pworkspace` | `pixelfed_home` | Workspace (app) id at start. In fixture mode it selects the default fixture. |
 | `-Pscreen` | `phone` | `phone` (390x844 dp), `tablet` (820x1180), `desktop` (1280x800), or `WxH` in dp. |
 | `-Pdensity` | per screen | Pixels per dp: phone 3, tablet 2, desktop 2, `WxH` 2. PNG size = dp x density. |
 | `-Pscript` | `shot initial` | Script text (see below). |
@@ -792,14 +717,12 @@ directory, so `-Pfixture=fixtures/counter_home_bundle.json` works.
 it, the desktop compile triggers `:shared:buildRustFfi`, i.e. cargo). A fake in-memory engine
 (`FakeEngineBridge`) loads the bundle, applies `OptimisticMutate` clicks with the D4 expression subset, and
 toggles connectivity for `offline`/`online`. It models the outbox: clicks made while offline are applied
-locally and queued (the status line shows "N pending"), and `online` flushes them FIFO to an in-memory fake
+locally and queued (the menu shows "N pending"), and `online` flushes them FIFO to an in-memory fake
 server. That server rejects a `.../decrement` that would take the count below 0; the fake then rolls the
-field back and re-applies later queued rows (D8). The fake also answers the layout agent (`PromptAgent`) with a small
-built-in rules subset (D23): "hide (post) captions", "media at the (very) top" / "photos first" and "add a weather
-widget", composable in one prompt; each success bumps the layout version and the panel shows
-"Layout updated (vN, fake-rules)" ("No change needed (vN)" when the layout is already in that state); anything
-else shows "I can't do that yet. Try: ...", and so does nothing while
-offline (error "offline: ..."). **Live mode** runs the real Rust engine through JNA against
+field back and re-applies later queued rows (D8). It also serves a fake apps catalog (`FakeAppCatalog`, as with
+`CONSTRUCT_SHOW_DEV_APPS=1`): Pixelfed v1..v3, Pixelfed demo v1..v2, Counter v1..v2. The newest version of each is
+the fixture's own layout, and `publish-version` adds more. Opening another app switches to that app's fixture.
+**Live mode** runs the real Rust engine through JNA against
 the server. By default it uses a fresh temp storage dir, so it neither reads nor writes `~/.construct`; pass
 `-Pstorage=<dir>` to keep a persistent one. If the workspace
 does not load within `timeoutMs`, it logs a warning and still runs the script (shots show Loading/Offline).
@@ -807,16 +730,16 @@ does not load within `timeoutMs`, it logs a warning and still runs the script (s
 step runs. **Sign-in in live mode:** the engine gets an in-memory session store (every run starts signed out; the
 Keychain is never touched) and a "browser" that GETs the authorize URL with `auto=1`; when the answer is a redirect to
 the engine's loopback `redirect_uri` (the fake upstream does that, with or without `FAKE_PIXELFED_AUTO_APPROVE`), it
-follows it, so `click Sign in with Pixelfed; wait-text 20000 @constructdemo` signs in. A real Pixelfed answers with its
-login page instead: the simulator prints the authorize URL and the status line shows "no browser available"
+follows it, so `click Sign in with Pixelfed; open-menu; wait-text 20000 @constructdemo` signs in (the account is shown in the menu). A real Pixelfed answers with its
+login page instead: the simulator prints the authorize URL and the menu's Account section shows "no browser available"
 (opening the URL in a real browser and logging in still completes the sign-in while the script waits). For a real
 instance pass `-PpixelfedLogin=<login>:<password>`: the "browser" then does what a person would (`PixelfedLoginBrowser`,
 own cookie jar): `GET /login` for the CSRF `_token`, `POST /login` (Pixelfed logs in by e-mail; a login without `@` is
 sent as `<login>@example.test`, the dev seed's domain), `GET` the authorize URL, `POST` the consent page's approve
 form (`_token`, `state`, `client_id`, `auth_token`; the deny form is the one with `_method=DELETE`) and follows the
 302 to the loopback listener. Failures (wrong password, 429 throttling) are logged with the URL. After the user
-appears (`wait-text 30000 @constructadmin`), wait for feed text too (e.g. `wait-text 20000 Alice Example boosted`): the
-status line updates before the refetched feed arrives.
+appears (`open-menu; wait-text 30000 @constructadmin; close-menu`), wait for feed text too (e.g. `wait-text 20000 Alice
+Example boosted`): the account updates before the refetched feed arrives.
 
 **Images** (Coil, DECISIONS D18) are deterministic. In fixture mode the network is never used: any image URL whose
 path ends in `/storage/<file>` or `/v1/pixelfed/media/<file>` is served from `fixtures/pixelfed/media/<file>` (the
@@ -842,43 +765,44 @@ entries starting with `#` are comments. An argument cannot contain `;`, and sinc
 | `wait-images [ms]` | Waits until no image is loading (default 10000 ms, at most 600000). Works in both modes. |
 | `swipe-left <target>` / `swipe-right <target>` | Touch-swipes the selected node; `swipe-left` on a carousel shows the next page. |
 | `scroll-to <target>` | Scrolls the feed until the selected node is visible (e.g. `scroll-to Kept my distance`). |
-| `type <target> <text>` | Replaces the text of the selected text field with `<text>` (clear, then type), e.g. `type tag:agent-prompt Hide post captions`. The target is `tag:<testTag>`, a single word, or `"quoted text"` (may contain spaces); the text is the rest of the command. |
+| `type <target> <text>` | Replaces the text of the selected text field with `<text>` (clear, then type), e.g. `type tag:server-custom-url http://127.0.0.1:8080`. The target is `tag:<testTag>`, a single word, or `"quoted text"` (may contain spaces); the text is the rest of the command. |
 | `offline` / `online` | Fixture mode only: flips the engine's connectivity. |
+| `publish-version <note>` | Fixture mode only: the fake pod publishes a new newest version of the app on screen (its layout with a "What's new: <note>" banner); followers see it at once. |
 | `screen <WxH or preset>` | Restarts the renderer at the new size. Engine state carries over; UI state such as scroll position does not. |
-| `back` | A system Back press (closes the innermost open panel / browser level); fails if nothing handles it. |
-| `open-layouts` | Opens the layout browser (clicks `layouts-button`) and waits for the list (or its error). |
-| `select-layout <id>` | Opens the details of a layout: a full id (`pixelfed_demo.editorial`) or its last segment (`editorial`). |
-| `select-version <n>` | In the details, opens the preview of version `n` (`3` or `v3`), pressing "Load older" as needed. |
-| `use-layout` | Presses "Use this layout" / "Use this version" (details or preview of an inactive layout); opens the confirmation. |
-| `restore-version` | Presses "Restore this version" (preview of an older version of the active layout); opens the confirmation. |
-| `confirm` / `cancel` | Confirms / cancels the open confirmation; `confirm` waits for the result (the step message has the snackbar text or the error). |
-| `undo` | Presses Undo on the result snackbar and waits for the result. |
-| `close-layouts` | Closes the browser. |
+| `back` | A system Back press (closes the innermost menu level); fails if nothing handles it. |
+| `open-menu` | Opens the drawer (clicks `menu-button`) and waits for the apps list (or its error). |
+| `close-menu` | Closes the drawer (leaving the version picker first). |
+| `open-app <id or title>` | Opens an app from the drawer (`pixelfed_home` or `Pixelfed`) and waits until it has loaded. |
+| `open-history <id or title>` | Opens that app's version picker (opening the drawer first if needed). |
+| `select-version <n or latest>` | In the picker, shows version `n` (`2` or `v2`; presses "Load older" as needed) or follows the latest again; waits for the drawer to close. |
+| `set-server <preset or URL>` | Picks `staging`, `emulator`, `usb` or a custom `http(s)://host[:port]` in the Server section. The simulator records the choice and shows it in the menu, but keeps its engine. |
 
-The layout commands are thin wrappers over clicks on the browser's test tags (`click tag:layout-use` works too), but
-each waits until idle and until every catalog call has finished (they run on a background thread), waits up to 20 s
-for its screen, and fails with a hint when its control is missing (e.g. `select-version 2` without `select-layout`:
-"no layout details on screen (use select-layout first)"). Example (fixture or live mode):
+The menu commands are thin wrappers over clicks on the menu's test tags (`click tag:app-history-home` works too,
+see [The menu](#the-menu-all-surfaces)). Each one waits until idle and until every apps call has finished (they run
+on a background thread), and fails with a hint when its control is missing (e.g. `select-version 2` without
+`open-history`: "no version picker on screen (use open-history first)"). Examples (fixture mode). The menu commands also
+work in live mode; start the pod with `CONSTRUCT_SHOW_DEV_APPS=1` to list the dev apps. `publish-version`,
+`offline` and `online` are fixture-only.
 
 ```bash
-cat > /tmp/layouts.txt <<'SCRIPT'
-# list with thumbnails, details with history, a version preview
-open-layouts; shot list
-select-layout classic; shot details
-select-version 3; shot preview
-back; back
-# switch to Editorial ("Switched to Editorial journal" + Undo), then undo
-select-layout editorial; use-layout; confirm; shot editorial
-undo; shot undone
+cat > /tmp/menu.txt <<'SCRIPT'
+# the drawer, the Pixelfed history, an older version, a newer one published meanwhile, back to latest
+open-menu; shot menu
+open-history Pixelfed; shot history
+select-version 1; shot v1
+publish-version Bigger photos
+open-menu; assert-text Newer version available; shot newer
+open-history Pixelfed; select-version latest; shot latest
+# another app, then the server picker
+open-menu; open-app Counter; click Increment; assert-text Count: 1; shot counter
+open-menu; set-server http://127.0.0.1:8080; assert-text 127.0.0.1; close-menu
 SCRIPT
-./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -PscriptFile=/tmp/layouts.txt
-./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -Pscreen=desktop -PscriptFile=/tmp/layouts.txt
-# live: a local pod (CONSTRUCT_AGENT_OPEN=1 lets the anonymous simulator switch and restore)
-./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -PbaseUrl=http://127.0.0.1:8080 -PscriptFile=/tmp/layouts.txt
+./gradlew -PskipRustBuild :desktopApp:simulate -PscriptFile=/tmp/menu.txt
+./gradlew -PskipRustBuild :desktopApp:simulate -Pscreen=desktop -PscriptFile=/tmp/menu.txt
+# offline: the badge and the Connection section
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=home \
+  -Pscript="offline; click Increment; open-menu; assert-text Offline; assert-text 1 pending; shot offline"
 ```
-
-For `home` use `select-layout counter` / `big_counter`; there `select-version 2; restore-version; confirm` restores
-the AI version ("Restored v2 as v4").
 
 A `<target>` is either `tag:<testTag>` (an exact test tag, else the first tag containing it) or text: an exact text
 match, then an exact content description (clickable nodes preferred for both), then the same as substrings; the
@@ -886,11 +810,7 @@ first match wins. Pixelfed widgets carry content descriptions `Like`/`Unlike`, `
 `Comment`, the image alt text, and `Page n of N` on the carousel dots (plus an `n/N` badge text), and test tags
 `carousel:<post uri>`, `carousel-dots:<post uri>`, `like:<post uri>`, `bookmark:<post uri>`, `comment:<post uri>`,
 e.g. `click tag:like:pixelfed://posts/781254316723458049` or `swipe-left tag:carousel:` (the first carousel).
-The layout agent's controls (drawn over every workspace once it has loaded): the FAB `agent-fab` (content
-description `Edit layout with AI`), and in its panel the field `agent-prompt`, the chips `Hide captions`,
-`Media at the very top`, `Add a weather widget` (they fill the field), `agent-send` ("Send"), `agent-status`
-("Applying...", "Layout updated (v3, rules)", "No change needed (v3)" or the error) and `agent-close` ("Close").
-On Android, system Back closes the open panel (the typed text is kept) instead of leaving the app.
+The menu's test tags are listed in [The menu](#the-menu-all-surfaces).
 
 The output directory holds the PNGs, `steps.log` (human-readable) and `steps.json` (one entry per step:
 `index`, `command`, `arg`, `status` (`ok`/`fail`), `message`, `file`, `elapsed_ms`). Its absolute path is
@@ -928,13 +848,13 @@ Gradle properties for `:androidApp`:
 - `-PskipRustBuild`: don't run cargo; package the `.so` files already in `jniLibs`.
 - `-PandroidAbis=arm64-v8a,x86_64` (default): ABIs to build and package (`CONSTRUCT_ANDROID_ABIS` for the script,
   and the APK's `abiFilters`).
-- `-PconstructBaseUrl=https://the-construct-pod.fly.dev` (default, the staging pod) and `-PconstructWorkspace=home`
-  (default): the built-in defaults (`BuildConfig`). `-PconstructBaseUrl=http://10.0.2.2:8080` bakes in the local
+- `-PconstructBaseUrl=https://the-construct-pod.fly.dev` (default, the staging pod) and
+  `-PconstructWorkspace=pixelfed_home` (default): the built-in defaults (`BuildConfig`). `-PconstructBaseUrl=http://10.0.2.2:8080` bakes in the local
   server as seen from the emulator.
 
 Run on an emulator. The app talks to the staging pod unless told otherwise. For a local server, start it first
 (`cargo run -p server`, on the host's 127.0.0.1:8080, which the emulator reaches as `10.0.2.2:8080`) and pass
-`--es baseUrl http://10.0.2.2:8080`, or pick it in the app:
+`--es baseUrl http://10.0.2.2:8080`, or pick **Local emulator** in the menu's Server section:
 
 ```bash
 export PATH="$HOME/Library/Android/sdk/platform-tools:$HOME/Library/Android/sdk/emulator:$PATH"
@@ -945,18 +865,21 @@ adb shell 'while [ "$(getprop sys.boot_completed)" != 1 ]; do sleep 1; done'
 
 ./gradlew :androidApp:installDebug
 adb shell am start -n org.theconstruct.android/.MainActivity                                   # staging pod
-adb shell am start -S -n org.theconstruct.android/.MainActivity --es workspace pixelfed_demo   # -S restarts it
+adb shell am start -S -n org.theconstruct.android/.MainActivity --es workspace home           # -S restarts it
 adb shell am start -S -n org.theconstruct.android/.MainActivity --es baseUrl http://10.0.2.2:8080   # local server
 adb logcat -s ConstructEngine:V
 adb exec-out screencap -p > screen.png
 ```
 
 Intent extras `baseUrl` and `workspace` override the `BuildConfig` defaults (debug builds only; release builds
-ignore them). Debug builds also show a small "server: ..." chip at the bottom left: it switches between Staging,
-Local (emulator, `http://10.0.2.2:8080`), Local (USB, `http://127.0.0.1:8080`), a custom URL and the build default.
-The choice is saved (SharedPreferences) and the activity restarts with a new engine; the `baseUrl` extra still
-wins over it. A server other than the build default gets its own storage dir (`filesDir/servers/<url>`), so cached
-entities and pending outbox rows never cross servers. `scripts/android_smoke.sh` passes `--es baseUrl http://10.0.2.2:8080` (its `--base-url`). They are read when the engine is
+ignore them). In every build, release included, the menu's **Server** section switches between Staging, Local
+emulator (`http://10.0.2.2:8080`), Local USB (`http://127.0.0.1:8080`), a custom `http(s)://host[:port]` and
+"Build default" (when that is not a preset). The choice is saved (SharedPreferences `server`, key `baseUrl`) and
+the activity restarts with a new engine. Precedence: the `baseUrl` extra (debug only), then the saved choice, then
+`BuildConfig`. A server other than the build default gets its own storage dir (`filesDir/servers/<url>`), so cached
+entities and pending outbox rows never cross servers. Other apps open from the menu's Apps section (with a pod that
+lists them, `CONSTRUCT_SHOW_DEV_APPS=1`). `scripts/android_smoke.sh` passes `--es baseUrl http://10.0.2.2:8080` (its
+`--base-url`). The extras are read when the engine is
 created, so use `am start -S` (force-stop first) to switch workspace on a running app. Rotation keeps the
 same engine. Logcat tag `ConstructEngine` carries both the Kotlin log lines (`starting base_url=...`,
 `dispatch: ...`) and the Rust engine's stdout/stderr. The stdout/stderr redirect is process-wide, so the tag also
@@ -965,11 +888,11 @@ shows other native output from the app process (e.g. GL/EGL driver lines). The S
 
 On a physical phone, use `adb reverse tcp:8080 tcp:8080` and `--es baseUrl http://127.0.0.1:8080`.
 
-Cleartext caveat: the debug `network_security_config.xml` (cleartext only to `10.0.2.2`, `localhost`,
-`127.0.0.1`) governs Java/Kotlin networking only. All engine traffic goes through Rust (`reqwest`), which that
-config does not cover, so the engine will talk plain HTTP to any `baseUrl` it is given, in debug and release.
-The real controls are the base URL itself (`BuildConfig`, and intent extras that only debug builds honour).
-Enforcing HTTPS in the engine for release builds is a follow-up.
+Cleartext caveat: `network_security_config.xml` allows cleartext only to `10.0.2.2`, `localhost` and
+`127.0.0.1`, in all builds (the server picker ships in release, so a release build can reach a local pod; D33).
+That config governs Java/Kotlin networking only (images). All engine traffic goes through Rust (`reqwest`), which
+the config does not cover, so the engine will talk plain HTTP to any `baseUrl` it is given, including a custom URL
+picked in the menu. Enforcing HTTPS in the engine for release builds is a follow-up.
 
 ## App icon
 
@@ -990,14 +913,18 @@ cd kmp-app && ./gradlew :shared:allTests :desktopApp:test
 ./gradlew :androidApp:assembleDebug   # Android build check only: it doesn't launch anything
 ```
 
+Counts at the time of writing: `cargo test --workspace` 270, `:shared:allTests` 59, `:desktopApp:test` 58 (all
+passing).
+
 `assembleDebug` and the JVM host tests can't catch Android-only runtime failures (for example, Android's ICU regex
 engine rejects patterns that `java.util.regex` accepts). Two checks run on a booted emulator or device:
 
 ```bash
-# Launch check: installs the debug app, launches it per workspace, then fails on a FATAL EXCEPTION in logcat,
-# a dead process, or missing text in a `uiautomator dump` ("Count: <n>" and "Online" for home, "Sunrise over
-# Boulder" for pixelfed_demo). Writes <ws>.png, <ws>.xml and <ws>.logcat.txt to --out
-# (default kmp-app/androidApp/build/smoke).
+# Launch check: installs the debug app, launches it per workspace (default pixelfed_home; --pixelfed adds
+# pixelfed_demo and home), then fails on a FATAL EXCEPTION in logcat, a dead process, or a `uiautomator dump`
+# missing the "Menu" button or the expected text ("Sign in with Pixelfed" or a Like button for pixelfed_home,
+# "Sunrise over Boulder" for pixelfed_demo, "Count: <n>" for home). Writes <ws>.png, <ws>.xml and
+# <ws>.logcat.txt to --out (default kmp-app/androidApp/build/smoke).
 ../scripts/android_smoke.sh --pixelfed                    # device and server already running
 ../scripts/android_smoke.sh --boot --server --pixelfed    # boots Medium_Phone_API_36 headless and starts the
                                                           # server, then stops both at the end

@@ -310,6 +310,54 @@ Note: the environment restarted twice mid-work; work is now committed in small w
   `construct://oauth` against a local pod + fake Pixelfed and against staging.
 - Status: DONE.
 
+## One app, layouts as code, hamburger menu
+
+Product rule: the pod serves one app (Pixelfed, `pixelfed_home`) and its latest layout version. New versions come
+only from the developer, as files in the repo plus a deploy. No client can change layouts, and no AI is reachable
+from a client (D32, D33).
+
+- **Server (D32):**
+  - Layouts as code: `layouts/<app>/NNNN.json` (`{"note","layout"}`), embedded through `layouts::FILES`. The
+    startup sync is append-only and idempotent. It refuses to start, naming the file, on a changed, missing,
+    out-of-order, gapped or invalid file (the agent's structural validator).
+  - Each 0001 is the former built-in default. The Editorial/Compact/Minimal/Big counter alternatives
+    (`fixtures/layouts/`) are deleted.
+  - Migration v7 (`app_versions`): workspace revision R -> app version R, showing what was on screen, with a note
+    ("Switched to <title>", "Restored <title> vN", the agent prompt, ...). The v6 catalog tables are kept but
+    inert. Tested on a DB built with migrations 1..=6.
+  - Public read-only API: `GET /v1/apps` (dev apps with `CONSTRUCT_SHOW_DEV_APPS=1`) and
+    `GET /v1/apps/{id}/versions[?limit&before]`, `.../versions/{n}`.
+  - Removed: the agent route, rollback, workspace versions and all `/v1/layouts` routes, plus
+    `CONSTRUCT_AGENT_OPEN` and the `X-Construct-Layout-Id(-Version)` headers. SSE carries `{workspace_id, version}`.
+  - The agent module stays in the library, unrouted, with its tests.
+- **Protocol:** `ActionIntent::PromptAgent` removed. Unknown intent tags deserialize to `ActionIntent::Unknown`, so
+  legacy AI-edited versions still serve and render.
+- **client-core / FFI (D33):** `list_apps`, `app_versions(app_id, before, limit)`, `app_version(app_id, n)` (blocking,
+  public, pass-through JSON, `LayoutApiError` sentences). Snapshot `layout_json` = `{"app_id","version"}`.
+  - Removed: `PromptAgent` dispatch, the agent thread, `agent_json`, catalog writes and old reads.
+  - Kotlin bindings regenerated. `UniffiEngineBridge` implements the apps calls and `close()`.
+  - Tests: `client-core/tests/apps.rs` against the in-process pod; `tests/events.rs` (SSE); `EngineBridgeTest`
+    over JNA.
+- **Shared UI (D33):** the default view is the layout plus a hamburger button, badged when offline, when actions
+  are pending, or when a pinned version has a newer one.
+  - Material3 drawer: Apps (with each app's version history), Connection, Account, Server.
+  - Version picker: Latest, then versions paged by 20. A selection is client-local and not persisted; the pin
+    survives rotation in the controller and gets "Newer version available" when the pod publishes a newer
+    version.
+  - The AI FAB/panel and the layout browser are removed.
+  - Simulator: `open-menu`, `close-menu`, `open-app`, `open-history`, `select-version`, `set-server`,
+    `publish-version` (fixture `FakeAppCatalog`); the browser/AI commands are removed.
+- **Platforms (D33):** default app `pixelfed_home` everywhere. Android, desktop and both simulator modes open other
+  apps through an engine factory.
+  - Android: the debug server chip is replaced by the drawer's Server section in all builds (SharedPreferences
+    `server`, activity restart, per-server storage). Cleartext to the loopback hosts is now allowed in release too.
+  - Desktop: Staging/Local picker in `java.util.prefs`; `-Dconstruct.baseUrl` / `CONSTRUCT_BASE_URL` still win at
+    launch; switches happen in place; the engine is closed on window close.
+  - `android_smoke.sh` checks the Menu button.
+- **Tests:** cargo 270, :shared 59, :desktopApp 58 (all passing). README simulator examples re-run in fixture mode
+  (phone and desktop) and live against a local pod + fake Pixelfed (sign-in, history, select-version, open-app).
+- Review/QA: in progress.
+
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
   bookmarks are idempotent upstream, counters are not).
@@ -328,18 +376,19 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 
 ## Next steps
 
-0. One-app/menu change in progress: server done (apps API, layouts as code, migration v7); client-core/FFI done (list_apps/app_versions/app_version,
-   layout_json {"app_id","version"}, PromptAgent/agent_json/catalog writes removed, unknown intents -> ActionIntent::Unknown).
-   Shared drawer UI (hamburger menu, version picker, AI client and layout browser removed) done; live mode checked against a local pod.
-   Platform wiring done: default app pixelfed_home everywhere; Android/desktop/live simulator open apps through an
-   engine factory; the drawer's Server picker ships in all Android builds (saved, per-server storage) and on desktop.
-1. Layout browser follow-ups (A3 done): user-created layouts (copy a layout), a diff view between versions, a zstd
-   dictionary for blobs (measured ~6x smaller edits), a retention policy; Android `testTagsAsResourceId` for
-   instrumented UI tests of the browser.
-2. Feed as a `LazyColumn` with pagination (`max_id` / `Link: next`).
-3. Outbox idempotency keys (client-generated, honoured by the pod).
-4. Live test of the Anthropic provider once a key exists (prompt quality, latency, refusals).
-5. Real-Pixelfed contract test in scheduled CI on a throwaway instance (`scripts/e2e.sh --upstream real`).
-6. HTTPS enforcement in the engine for release builds; a cap on SSE subscribers.
-7. Web target for the shared UI; small follow-ups: 404 "workspace not found" UI state, golden-image diffing for
-   the simulator, Android host tests for :shared.
+1. Reject `ActionIntent::Unknown` (unknown intent tags) in layout files at startup sync. Today only legacy migrated
+   versions should contain them, but a typo in a file's intent tag would silently become a dead action.
+2. Simulator live mode: make `set-server` recreate the engine on the new server (today it is recorded and shown in
+   the menu, but the engine stays).
+3. HTTPS enforcement in the engine for release builds (now more relevant: the server picker with custom URLs ships
+   in release); a cap on SSE subscribers.
+4. Feed as a `LazyColumn` with pagination (`max_id` / `Link: next`).
+5. Outbox idempotency keys (client-generated, honoured by the pod).
+6. Real-Pixelfed contract test in scheduled CI on a throwaway instance (`scripts/e2e.sh --upstream real`).
+7. Web target for the shared UI. Small follow-ups: a 404 "workspace not found" UI state, golden-image diffing for
+   the simulator, Android host tests for :shared, Android `testTagsAsResourceId` for instrumented menu tests, a
+   zstd dictionary for layout blobs; drop `CONSTRUCT_LLM_PROVIDER` from `deploy/fly/pod.toml` (a harmless no-op
+   now).
+
+Parked (the agent can return later): the layout agent (`server::agent`, unrouted, with its tests), e.g. as developer
+tooling that writes new layout files; a live test of the Anthropic provider; diffs between versions.
