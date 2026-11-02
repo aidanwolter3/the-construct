@@ -571,6 +571,80 @@ fn failed_mutate_transaction_changes_nothing() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A cache.db that can be read but not written: the engine falls back to an
+/// in-memory copy (cached workspace still shown) and clicks keep working
+/// for the session; the file is never modified.
+#[cfg(unix)]
+#[test]
+fn read_only_cache_falls_back_to_an_in_memory_copy() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = temp_dir("readonly");
+    seed_cache(&dir, "home");
+    let db = dir.join("cache.db");
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+    let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let s = engine.snapshot();
+    assert_ne!(s.workspace_json, "null", "cached workspace copied into memory");
+    assert_eq!(count(&s), 0);
+    engine.dispatch(INCREMENT);
+    engine.dispatch(INCREMENT);
+    let s = engine.snapshot();
+    assert_eq!((count(&s), s.pending_actions), (2, 2), "mutations are not no-ops");
+
+    let raw = rusqlite::Connection::open_with_flags(
+        &db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let rows: i64 = raw
+        .query_row("SELECT COUNT(*) FROM action_outbox", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(rows, 0, "the read-only file is untouched");
+    drop(raw);
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Another connection holds the write lock on cache.db: dispatch (UI
+/// thread) gives up after the short busy timeout instead of freezing, and
+/// the failed mutate changes nothing.
+#[test]
+fn locked_cache_dispatch_returns_quickly_and_changes_nothing() {
+    use std::time::Instant;
+
+    let dir = temp_dir("locked");
+    seed_cache(&dir, "home");
+    let engine = CanvasEngine::init(dir.to_str().unwrap(), "http://127.0.0.1:1");
+    let rx = subscribe_channel(&engine);
+    let before = engine.snapshot();
+
+    let raw = rusqlite::Connection::open(dir.join("cache.db")).unwrap();
+    raw.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let started = Instant::now();
+    engine.dispatch(INCREMENT);
+    let took = started.elapsed();
+    assert!(took < Duration::from_secs(1), "dispatch blocked for {took:?}");
+    assert!(
+        took >= client_core::store::BUSY_TIMEOUT / 2,
+        "the write did wait for the lock: {took:?}"
+    );
+    let after = engine.snapshot();
+    assert_eq!(after.entities_json, before.entities_json, "state unchanged");
+    assert_eq!(after.pending_actions, 0);
+    while let Ok(s) = rx.try_recv() {
+        assert_eq!(count(&s), 0, "no snapshot with the failed mutation");
+    }
+
+    // Lock released: the next click goes through.
+    raw.execute_batch("ROLLBACK").unwrap();
+    engine.dispatch(INCREMENT);
+    let s = engine.snapshot();
+    assert_eq!((count(&s), s.pending_actions), (1, 1));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn value_token_is_substituted_in_outbox_payload() {
     let dir = temp_dir("valuetoken");

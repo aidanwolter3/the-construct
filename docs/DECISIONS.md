@@ -209,7 +209,13 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
 ## D13: Client SQLite cache and outbox (schema extensions, write-through)
 
 - **File:** `<storage_path>/cache.db` (desktop `~/.canvas/cache.db`, Android `filesDir`); empty `storage_path`
-  (simulation, tests) uses an in-memory DB, and so does a file that cannot be opened (logged). `rusqlite`
+  (simulation, tests) uses an in-memory DB, and so does a file that cannot be opened (logged). A file that opens
+  but cannot be written (read-only open, or a rolled-back write probe at open fails with `SQLITE_READONLY`)
+  falls back to an in-memory copy of its workspaces and entities, logged as `ERROR`; its outbox rows are not
+  copied (they could be flushed but never deleted from the file, so they would be re-sent later). A probe that
+  only hits another connection's lock keeps the file. `busy_timeout` is 250 ms (`store::BUSY_TIMEOUT`), not
+  SQLite's usual seconds: `dispatch` runs on the UI thread on both platforms, so a locked DB costs a click at most
+  ~250 ms, after which the mutate fails atomically. `rusqlite`
   `bundled`, WAL with `synchronous=NORMAL` (a crash never corrupts the DB; a power loss can drop the last
   commits). Schema behind `PRAGMA user_version` (v1). The bundled SQLite adds no Android `.so` dependencies.
 - **Schema extensions over DESIGN §2.3:** `entities.domain`/`entity_type` are derived from the URI
@@ -219,8 +225,12 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
   `entity_uris_json` (URIs the bundle carried); startup loads those entities plus any entity with a PENDING row.
 - **In-memory state + write-through:** `State` stays the snapshot source; every change is written to SQLite
   inside the state lock. An optimistic mutate commits entity update + outbox insert in one transaction before
-  touching memory; if it fails, nothing changes and no snapshot is sent. Dispatch->notify is logged in
-  microseconds (about 30-80 us measured on a file DB, target < 5 ms). Fetched bundles are persisted in one
+  touching memory; if it fails (logged as `ERROR`), nothing changes and no snapshot is sent. Dispatch->notify is
+  logged in microseconds; target < 5 ms. Measured on a file DB: tens of us in tests and a median of ~0.5 ms in
+  the desktop app on macOS; on the Android emulator typically 1-6 ms, with a cold-start outlier of ~18 ms on the
+  first click.
+- **Timestamps:** `created_at`/`updated_at` are unix **seconds** (DESIGN §2.3); `action_outbox.next_attempt_at`
+  is unix **milliseconds** (D14). Intentional, not a bug. Fetched bundles are persisted in one
   transaction; a persist failure is logged and the fetched state is still shown.
 - **JSON cache ignored:** `workspace_<id>.json` / `last_workspace.json` from M3/M4 are neither read nor deleted.
 - **`"$value"` token:** any JSON string exactly `"$value"` inside an intent's `payload` is replaced by the new
@@ -240,16 +250,21 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
   workspace fetch+merge with an outbox POST+apply, so a bundle never races a flush (which could count a row
   twice or drop it). That lock is shared by every engine in the process on the same `cache.db`, and dropping
   a `CanvasEngine` stops its worker before the next row, so a closing engine that is mid-POST and its
-  successor (Android activity relaunch) never send the same row twice. A `next_attempt_at` further out than
+  successor (Android activity relaunch) never send the same row twice. The shutdown flag set in
+  `CanvasEngine::drop` is checked by the worker right before each POST and by the fetch thread after its HTTP
+  call (a fetch that completes after the drop is discarded and wakes no one), so no new POST starts once the
+  handle is dropped; one already in flight may complete. A `next_attempt_at` further out than
   the backoff cap (wall clock moved backwards) is treated as due.
 - **Pass:** while online, take the lowest-id PENDING row; if its `next_attempt_at` (unix **ms**, so test
   backoffs can be sub-second) is in the future, sleep until then (FIFO never skips ahead). POST
-  `base_url + endpoint` with `payload_json`. 2xx: delete. 4xx: delete + roll back (below). 5xx or anything else
-  non-2xx/4xx, and network errors: `retry_count += 1`, `next_attempt_at = now + min(base * 2^retry_count, cap)`
+  `base_url + endpoint` with `payload_json`. 2xx: delete. 4xx: delete + roll back (below), except 408 and 429,
+  which are transient and treated like 5xx. 5xx, 408, 429 or anything else non-2xx/4xx, and network errors: `retry_count += 1`, `next_attempt_at = now + min(base * 2^retry_count, cap)`
   (defaults 1 s and 60 s, so 2, 4, ... 60 s), `last_error`, stop the pass. A network error also marks the engine
   offline; the 2 s `/healthz` probe flips it back and wakes the worker. Deletes and rollbacks bump `seq` and
   notify; a retry does not (nothing visible changes) unless it took the engine offline. Each attempt is logged
-  (`outbox #id POST url -> 200, deleted (N pending)`, 4xx with the response body).
+  (`outbox #id POST url -> 200, deleted (N pending)`, 4xx with the response body). The fetch retry loop (server
+  down at cold start) logs its first failure, then only when the error changes or every 30th attempt (about once
+  a minute), and the eventual success says how many attempts failed.
 - **Rollback:** set `entity[field]` to `prev_value_json`, or `rollback_value_json` when prev is null/absent,
   then re-evaluate `value_expr` of every later PENDING row for the same entity+field FIFO, updating their
   `prev_value_json`. Delete + entity + prev updates are one transaction; memory changes only if it commits.

@@ -21,9 +21,10 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::Duration;
 
 use protocol::{EntityRecord, UiNode};
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{Connection, ErrorCode, MAIN_DB, OptionalExtension, Row, params};
 
 pub use rusqlite::Error as StoreError;
 
@@ -371,17 +372,128 @@ impl StoreOps for StoreTx<'_> {
     }
 }
 
+/// How long a write waits for another connection's lock before failing
+/// with `SQLITE_BUSY`. Kept short because `dispatch` (and so the mutate
+/// transaction) runs on the UI thread on both platforms: a locked cache.db
+/// costs a click at most this long, then the mutate fails atomically (no
+/// change, logged) instead of freezing the UI.
+pub const BUSY_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// `file:<path>?mode=ro` with the URI-significant characters escaped.
+fn readonly_uri(path: &Path) -> String {
+    let mut uri = String::from("file:");
+    for c in path.to_string_lossy().chars() {
+        match c {
+            '%' | '?' | '#' => uri.push_str(&format!("%{:02X}", c as u32)),
+            c => uri.push(c),
+        }
+    }
+    uri.push_str("?mode=ro");
+    uri
+}
+
+/// True if `e` is SQLite's "attempt to write a readonly database" (or a
+/// read-only open).
+pub fn is_read_only_error(e: &StoreError) -> bool {
+    matches!(
+        e,
+        StoreError::SqliteFailure(f, _) if f.code == ErrorCode::ReadOnly
+    )
+}
+
+fn read_only_error(msg: &str) -> StoreError {
+    StoreError::SqliteFailure(
+        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_READONLY),
+        Some(msg.to_string()),
+    )
+}
+
 impl Store {
     /// Open (creating if needed) and migrate a file-backed DB in WAL mode.
+    ///
+    /// Fails with a read-only error ([`is_read_only_error`]) if the DB can
+    /// be read but not written (file or directory permissions), checked
+    /// with a write probe that is rolled back. A probe that only hits a
+    /// lock held by another connection does not fail the open.
     pub fn open(path: &Path) -> StoreResult<Self> {
         let conn = Connection::open(path)?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
         // WAL + NORMAL: commits append to the WAL without an fsync each
         // time; a crash never corrupts the DB, a power loss may drop the
         // last few commits.
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
-        Self::init(conn)
+        if conn.is_readonly(MAIN_DB)? {
+            return Err(read_only_error("database opened read-only"));
+        }
+        let store = Self::init(conn)?;
+        store.probe_writable()?;
+        Ok(store)
+    }
+
+    /// Rewrite `user_version` with its current value inside a transaction
+    /// that is rolled back: fails if the DB cannot be written. `SQLITE_BUSY`
+    /// (another connection holds the write lock) counts as writable.
+    fn probe_writable(&self) -> StoreResult<()> {
+        let version = self.schema_version()?;
+        let probe = (|| {
+            self.conn.execute_batch("BEGIN IMMEDIATE")?;
+            self.conn.pragma_update(None, "user_version", version)
+        })();
+        let _ = self.conn.execute_batch("ROLLBACK");
+        match probe {
+            Err(StoreError::SqliteFailure(f, _))
+                if matches!(f.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) =>
+            {
+                eprintln!(
+                    "[CanvasEngine] store: cache.db is locked by another connection at open; \
+                     writes will wait up to {} ms",
+                    BUSY_TIMEOUT.as_millis()
+                );
+                Ok(())
+            }
+            other => other,
+        }
+    }
+
+    /// A private in-memory DB holding a read-only copy of the workspaces
+    /// and entities in the DB file at `path` (opened read-only), for when
+    /// that file cannot be written. Outbox rows are deliberately not copied:
+    /// they could be flushed but never deleted from the file, so they would
+    /// be sent again once it is writable. Returns the store and the number
+    /// of (workspaces, entities) copied; if the file cannot be read the
+    /// copy is skipped (logged) and the store is empty.
+    pub fn open_in_memory_copy_of(path: &Path) -> StoreResult<(Self, usize, usize)> {
+        let store = Self::open_in_memory()?;
+        let copied = (|| {
+            store
+                .conn
+                .execute("ATTACH DATABASE ?1 AS ro", [readonly_uri(path)])?;
+            let ws = store.conn.execute(
+                "INSERT OR REPLACE INTO main.active_workspace
+                     (id, workspace_json, updated_at, entity_uris_json)
+                 SELECT id, workspace_json, updated_at, entity_uris_json FROM ro.active_workspace",
+                [],
+            )?;
+            let ents = store.conn.execute(
+                "INSERT OR REPLACE INTO main.entities
+                     (uri, domain, entity_type, payload_json, updated_at)
+                 SELECT uri, domain, entity_type, payload_json, updated_at FROM ro.entities",
+                [],
+            )?;
+            Ok::<_, StoreError>((ws, ents))
+        })();
+        let _ = store.conn.execute_batch("DETACH DATABASE ro");
+        match copied {
+            Ok((ws, ents)) => Ok((store, ws, ents)),
+            Err(e) => {
+                eprintln!(
+                    "[CanvasEngine] store: cannot copy the read-only {}: {e}",
+                    path.display()
+                );
+                Ok((store, 0, 0))
+            }
+        }
     }
 
     /// A private in-memory DB (used when `storage_path` is empty).

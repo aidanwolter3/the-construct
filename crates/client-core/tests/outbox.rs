@@ -397,11 +397,14 @@ fn server_errors_retry_with_capped_backoff_then_flush() {
     // Watch the row while it is retried.
     let mut observed = Vec::new();
     wait_until("row flushed after the faults", || {
+        // Sample the clock after the read: next_attempt_at was written
+        // before it, so next_attempt_at <= now_ms + cap must hold.
+        let first = rows(&dir).into_iter().next();
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis() as i64;
-        match rows(&dir).first() {
+        match first.as_ref() {
             Some(r) => {
                 observed.push((r.retry_count, r.next_attempt_at, now_ms, r.last_error.clone()));
                 false
@@ -598,20 +601,156 @@ fn refetch_reapplies_pending_rows_over_fetched_entity() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A server whose first `GET /v1/workspaces/home` blocks until `release`
+/// is signalled (`fetching` is signalled when it arrives), then serves the
+/// fixture. Answers /healthz and records every POST (on arrival, before the
+/// 200 reply). One thread per connection.
+struct HeldFetchServer {
+    base: String,
+    fetching: mpsc::Receiver<()>,
+    release: mpsc::Sender<()>,
+    posts: Arc<Mutex<Vec<String>>>,
+}
+
+fn serve_held_fetch() -> HeldFetchServer {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (fetching_tx, fetching_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Arc::new(Mutex::new(Some(release_rx)));
+    let posts: Arc<Mutex<Vec<String>>> = Arc::default();
+    let posts2 = Arc::clone(&posts);
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let fetching_tx = fetching_tx.clone();
+            let release_rx = Arc::clone(&release_rx);
+            let posts = Arc::clone(&posts2);
+            thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                let _ = reader.read_line(&mut request_line);
+                let mut content_length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) if line.trim().is_empty() => break,
+                        Ok(_) => {
+                            if let Some((k, v)) = line.split_once(':')
+                                && k.eq_ignore_ascii_case("content-length")
+                            {
+                                content_length = v.trim().parse().unwrap_or(0);
+                            }
+                        }
+                    }
+                }
+                let mut body = vec![0u8; content_length];
+                let _ = reader.read_exact(&mut body);
+                let body = if request_line.starts_with("POST ") {
+                    posts.lock().unwrap().push(request_line.trim().to_string());
+                    "{}"
+                } else if request_line.starts_with("GET /v1/workspaces/home ") {
+                    // Only the first fetch is held.
+                    let held = release_rx.lock().unwrap().take();
+                    if let Some(release) = held {
+                        let _ = fetching_tx.send(());
+                        let _ = release.recv_timeout(TIMEOUT);
+                    }
+                    FIXTURE
+                } else {
+                    "ok"
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                     Connection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            });
+        }
+    });
+    HeldFetchServer {
+        base: format!("http://{addr}"),
+        fetching: fetching_rx,
+        release: release_tx,
+        posts,
+    }
+}
+
 #[test]
 fn dropping_the_engine_stops_the_worker() {
-    let addr = free_addr();
+    // The engine is dropped while the fetch thread is inside its first
+    // fetch, holding the last strong reference. That fetch then succeeds
+    // (the engine would go online with a pending row), but no POST may start
+    // after the drop. Deterministic: the fetch is held open by the server
+    // until after the drop, and the check runs once the engine's state has
+    // been freed (an observer's token is released), i.e. once no thread can
+    // POST any more.
+    let HeldFetchServer {
+        base,
+        fetching,
+        release,
+        posts,
+    } = serve_held_fetch();
     let dir = temp_dir("drop");
     seed_cache(&dir);
+    let token = Arc::new(());
     {
-        let e = engine(&dir, &format!("http://{addr}"), fast_config());
+        let e = engine(&dir, &base, fast_config());
+        fetching.recv_timeout(TIMEOUT).expect("first fetch in flight");
+        let held = Arc::clone(&token);
+        e.subscribe(move |_| {
+            let _ = &held;
+        });
         e.dispatch(INCREMENT);
-    }
-    // No engine is alive, so nothing flushes even once the server is up.
-    let server = TestServer::start_on(addr);
-    thread::sleep(Duration::from_millis(400));
-    assert!(server.hits().is_empty(), "{:?}", server.hit_list());
-    assert_eq!(rows(&dir).len(), 1);
+        assert_eq!(e.snapshot().pending_actions, 1);
+        assert!(!e.snapshot().is_online);
+    } // dropped with the fetch still in flight
+    release.send(()).unwrap();
+    wait_until("engine state freed", || Arc::strong_count(&token) == 1);
+    assert!(posts.lock().unwrap().is_empty(), "POST after drop: {:?}", posts.lock().unwrap());
+    assert_eq!(rows(&dir).len(), 1, "the row stays queued for the next launch");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn throttled_and_timed_out_posts_are_retried_not_rolled_back() {
+    // 429 and 408 are transient: the row is kept and retried with backoff
+    // (no rollback), then accepted.
+    let server = TestServer::start();
+    let dir = temp_dir("transient4xx");
+    let engine = engine(&dir, &server.url(), fast_config());
+    wait_online(&engine);
+    let (tx, rx) = mpsc::channel();
+    engine.subscribe(move |s| {
+        let _ = tx.send(s);
+    });
+
+    server.fault(429, 2);
+    engine.dispatch(INCREMENT);
+    wait_flushed(&engine, &server, 1);
+    server.fault(408, 1);
+    engine.dispatch(INCREMENT);
+    wait_flushed(&engine, &server, 2);
+
+    assert_eq!(
+        server.hit_list(),
+        vec![
+            (INC.into(), 429),
+            (INC.into(), 429),
+            (INC.into(), 200),
+            (INC.into(), 408),
+            (INC.into(), 200)
+        ]
+    );
+    let seen: Vec<i64> = rx.try_iter().map(|s| count(&s)).collect();
+    assert!(
+        seen.windows(2).all(|w| w[0] <= w[1]),
+        "never rolled back: {seen:?}"
+    );
+    assert_eq!(count(&engine.snapshot()), 2);
+    assert!(rows(&dir).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

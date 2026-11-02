@@ -116,20 +116,28 @@ Note: the environment restarted twice mid-work; work is now committed in small w
 - :shared has no Android host tests; Android-only behaviour is covered by the smoke script + instrumented test.
 - Deprecated `compose.runtime/foundation/ui` accessors in shared/build.gradle.kts.
 
-## Milestone 5: SQLite cache + outbox (in progress)
+## Milestone 5: SQLite cache + outbox
 
-- Contract for the M5 units: DESIGN §2.3 plus D12 (server persistence) and D13 (client storage).
-- Done: server counters persist in SQLite (`CANVAS_DATA_DIR`, decrement rejects below zero with 422, test fault
-  hook `CANVAS_TEST_HOOKS=1`). client-core uses `<storage>/cache.db` with transactional optimistic mutate +
-  outbox insert, `seq`/`pending_actions` in snapshots, FFI bindings regenerated, Android .so builds.
-- Done: sync worker thread (FIFO flush, 2xx delete, 4xx rollback + re-apply, 5xx/network capped backoff) and
-  refetch merge (D14); Kotlin EngineSnapshot with seq stale-drop, "N pending" indicator, fake-engine outbox,
-  simulator `-Pstorage` and `wait-text`.
+- Server counters persist in SQLite (`CANVAS_DATA_DIR`, default ~/.canvas-server); decrement below zero is a 422;
+  test fault hook with `CANVAS_TEST_HOOKS=1` (D12). client-core stores entities/workspace/outbox in
+  `<storage>/cache.db` (rusqlite bundled, user_version migrations, D13); optimistic mutate updates the entity and
+  inserts the outbox row in one transaction; `seq`/`pending_actions` in snapshots; "N pending" in the UI.
+- Sync worker thread (D14): FIFO flush while online, 2xx delete, 4xx rollback to prev value + re-apply later rows,
+  5xx/408/429/network capped exponential backoff; refetch re-applies pending rows; engines on one file share a
+  flush lock; dropping the engine stops new POSTs.
+- Review fixed: double-send by two engines on one cache.db (HIGH), clock-skew stall, worker not stopping on drop,
+  "Reset" squeezed on phone (horizontal containers now FlowRow). QA fixes: read-only cache.db falls back to an
+  in-memory copy, busy timeout 250 ms (locked DB no longer freezes the UI 5 s), 408/429 retried, flaky drop test
+  made deterministic, fetch-failure log throttled.
+- QA desktop: real app + real ~/.canvas/cache.db: 3 offline clicks -> 3 PENDING rows + "3 pending", server
+  restart flushes in order, counts match; rollback, 503 retry 2/4/8 s, relaunch merge; latency median 0.5 ms.
+  QA Android (emulator): offline rows, force-stop persistence, flush, rollback, rotation, instrumented 3/3.
+- Tests: cargo 80, shared 29, desktopApp 17, android instrumented 3.
+- Deferred: idempotency keys (a POST applied server-side but timed out client-side is re-sent); toggle payload
+  "$value" is not rewritten on re-apply; Android emulator latency 1-6 ms (desktop well under).
 
 ## Next steps
 
-1. M5 remaining: independent review (Rust + Kotlin) and QA (desktop sqlite3 outbox check, simulator live
-   `-Pstorage`, Android emulator offline/online flush). Known: Reset button wraps on phone width (3 buttons).
-2. M6 Pixelfed + OAuth PKCE against a fake upstream; M7 AI layout engine (rules provider + Anthropic provider).
-3. Small follow-ups: 404 "workspace not found" UI state; HTTPS enforcement for release; golden-image diffing for
-   the simulator (Roborazzi or a pixel diff on sim PNGs); Android host tests for :shared.
+1. M6 (Pixelfed + OAuth PKCE against a local fake upstream), contract in the session's M6 spec; then M7.
+2. Small follow-ups: 404 "workspace not found" UI state; HTTPS enforcement for release; golden-image diffing for
+   the simulator (Roborazzi or a pixel diff on sim PNGs); Android host tests for :shared; outbox idempotency keys.

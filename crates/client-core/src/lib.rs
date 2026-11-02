@@ -22,8 +22,8 @@
 //! A second background thread (the sync worker, docs/DECISIONS.md D14)
 //! flushes PENDING outbox rows FIFO to `POST {base_url}{endpoint}` while
 //! online: 2xx deletes the row, 4xx deletes it and rolls the field back
-//! (re-applying later pending rows), 5xx / network errors keep it with
-//! exponential backoff. A fetched bundle has every pending row re-applied
+//! (re-applying later pending rows), 5xx / 408 / 429 / network errors keep
+//! it with exponential backoff. A fetched bundle has every pending row re-applied
 //! on top of it, so optimistic values are never clobbered.
 
 pub mod expr;
@@ -50,6 +50,9 @@ pub const CACHE_DB_FILE: &str = "cache.db";
 pub const VALUE_TOKEN: &str = "$value";
 /// Timeout for a single reachability probe.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+/// While the initial fetch keeps failing with the same error, log every
+/// this many attempts (once a minute at the default 2 s interval).
+const FETCH_FAILURE_LOG_EVERY: u32 = 30;
 /// Timeout for a single outbox POST.
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -149,6 +152,10 @@ struct State {
     seq: u64,
     /// PENDING outbox rows; kept in step with the store on every write.
     pending_actions: u32,
+    /// Consecutive transport-level fetch failures and the last error, to
+    /// keep the retry loop from logging every attempt.
+    fetch_failures: u32,
+    last_fetch_error: Option<String>,
     /// Write-through persistence. `None` only if even an in-memory DB could
     /// not be opened; mutations are then rejected.
     store: Option<Store>,
@@ -279,7 +286,7 @@ impl State {
         }
     }
 
-    /// The server rejected `row` (4xx): delete it, set the entity field
+    /// The server rejected `row` (4xx other than 408/429): delete it, set the entity field
     /// back to `prev_value` (or `rollback_value` if prev is null/absent),
     /// then re-apply every later PENDING row for the same entity+field FIFO.
     /// One transaction; memory is only changed if it commits. Returns the
@@ -413,8 +420,9 @@ impl WorkerSignal {
 /// Result of one outbox POST.
 enum FlushResult {
     Accepted(u16),
+    /// 4xx except 408/429.
     Rejected(u16, String),
-    /// 5xx or any other non-2xx/4xx status.
+    /// 5xx, 408, 429 or any other non-2xx/4xx status.
     ServerError(u16, String),
     Network(String),
 }
@@ -500,17 +508,40 @@ fn net_lock_for(db_path: Option<&Path>) -> Arc<Mutex<()>> {
 }
 
 /// Open `<storage_path>/cache.db`, falling back to an in-memory DB when
-/// `storage_path` is empty or the file cannot be opened. Also returns the
-/// `net` lock for that store (see [`net_lock_for`]).
+/// `storage_path` is empty or the file cannot be opened. A file that can be
+/// read but not written falls back to an in-memory copy of its workspaces
+/// and entities. Also returns the `net` lock for that store (see
+/// [`net_lock_for`]).
 fn open_store(storage_path: &str) -> (Option<Store>, Arc<Mutex<()>>) {
     if !storage_path.is_empty() {
         let path = PathBuf::from(storage_path).join(CACHE_DB_FILE);
-        let opened = fs::create_dir_all(storage_path)
-            .map_err(|e| e.to_string())
-            .and_then(|()| Store::open(&path).map_err(|e| e.to_string()));
+        let opened = match fs::create_dir_all(storage_path) {
+            Ok(()) => Store::open(&path).map_err(|e| (store::is_read_only_error(&e), e.to_string())),
+            Err(e) => Err((false, e.to_string())),
+        };
         match opened {
             Ok(store) => return (Some(store), net_lock_for(Some(&path))),
-            Err(e) => eprintln!(
+            Err((true, e)) => {
+                // Readable but not writable: keep the cached view in
+                // memory so the app still shows it, but every change is
+                // lost on exit.
+                eprintln!(
+                    "[CanvasEngine] ERROR: {} is read-only ({e}); using an in-memory copy. \
+                     Changes and queued actions will NOT be saved across restarts.",
+                    path.display()
+                );
+                match Store::open_in_memory_copy_of(&path) {
+                    Ok((store, ws, ents)) => {
+                        eprintln!(
+                            "[CanvasEngine] copied {ws} workspace(s) and {ents} entities from the \
+                             read-only {CACHE_DB_FILE} (outbox rows are not copied)"
+                        );
+                        return (Some(store), net_lock_for(None));
+                    }
+                    Err(e) => eprintln!("[CanvasEngine] in-memory copy failed: {e}"),
+                }
+            }
+            Err((false, e)) => eprintln!(
                 "[CanvasEngine] cannot open {storage_path}/{CACHE_DB_FILE}: {e}; using an \
                  in-memory store"
             ),
@@ -599,6 +630,9 @@ impl CanvasEngine {
                 let mut answered = false;
                 loop {
                     let Some(inner) = bg.upgrade() else { return };
+                    if inner.signal.is_shut_down() {
+                        return;
+                    }
                     if answered {
                         inner.probe();
                     } else {
@@ -668,6 +702,9 @@ impl Inner {
     /// or entities.
     fn probe(&self) {
         let reachable = reachable(&self.health_url);
+        if self.signal.is_shut_down() {
+            return;
+        }
         let snap = {
             let mut st = lock(&self.state);
             if st.is_online == reachable {
@@ -691,13 +728,26 @@ impl Inner {
     fn refresh(&self) -> FetchOutcome {
         let net = lock(&self.net);
         let result = fetch(&self.workspace_url);
+        if self.signal.is_shut_down() {
+            // The engine was dropped during the request (the fetch thread
+            // held the last strong reference): apply nothing and wake no
+            // one, so no POST can start because of this fetch.
+            return FetchOutcome::Failed;
+        }
         let outcome;
         let snap = {
             let mut st = lock(&self.state);
             match result {
                 Ok(spec) => {
+                    let failures = std::mem::take(&mut st.fetch_failures);
+                    st.last_fetch_error = None;
+                    let after = if failures > 0 {
+                        format!(" after {failures} failed attempt(s)")
+                    } else {
+                        String::new()
+                    };
                     println!(
-                        "[CanvasEngine] fetched workspace '{}' ({} entities) from {}",
+                        "[CanvasEngine] fetched workspace '{}' ({} entities) from {}{after}",
                         self.workspace_id,
                         spec.entities.len(),
                         self.workspace_url
@@ -724,7 +774,23 @@ impl Inner {
                     outcome = FetchOutcome::HttpError;
                 }
                 Err(FetchError::Other(e)) => {
-                    eprintln!("[CanvasEngine] fetch {} failed: {e}", self.workspace_url);
+                    // The fetch thread retries every poll interval while the
+                    // server is down: log the first failure, then only when
+                    // the error changes or every FETCH_FAILURE_LOG_EVERY-th.
+                    st.fetch_failures = st.fetch_failures.saturating_add(1);
+                    let n = st.fetch_failures;
+                    if n == 1
+                        || st.last_fetch_error.as_deref() != Some(e.as_str())
+                        || n.is_multiple_of(FETCH_FAILURE_LOG_EVERY)
+                    {
+                        eprintln!(
+                            "[CanvasEngine] fetch {} failed: {e} (attempt {n}; retrying every \
+                             {} ms, repeats are not logged)",
+                            self.workspace_url,
+                            self.config.poll_interval.as_millis()
+                        );
+                    }
+                    st.last_fetch_error = Some(e);
                     st.is_online = false;
                     outcome = FetchOutcome::Failed;
                 }
@@ -786,6 +852,12 @@ impl Inner {
                 return Some(Duration::from_millis((row.next_attempt_at - now) as u64));
             }
 
+            if self.signal.is_shut_down() {
+                // Checked again right before the POST: once `CanvasEngine`
+                // has been dropped no new POST starts (one already in flight
+                // may complete).
+                return None;
+            }
             let url = format!("{}{}", self.base_url, row.endpoint);
             let result = post_json(client, &url, &row.payload_json);
             let (snap, failed) = self.apply_flush_result(&row, &url, result);
@@ -968,9 +1040,10 @@ impl Inner {
             let outbox_id = match persisted {
                 Ok(id) => id,
                 Err(e) => {
+                    // Atomic: memory is untouched, the click is a no-op.
                     eprintln!(
-                        "[CanvasEngine] mutate {entity_uri}#{field}: failed to persist ({e}); \
-                         no change"
+                        "[CanvasEngine] ERROR: mutate {entity_uri}#{field}: failed to persist \
+                         ({e}); no change"
                     );
                     return;
                 }
@@ -1066,7 +1139,9 @@ fn post_json(client: &reqwest::blocking::Client, url: &str, body: &str) -> Flush
         return FlushResult::Accepted(code);
     }
     let body = resp.text().unwrap_or_default();
-    if (400..500).contains(&code) {
+    // 408 (request timeout) and 429 (too many requests) are transient:
+    // retried with backoff like 5xx, never rolled back.
+    if (400..500).contains(&code) && code != 408 && code != 429 {
         FlushResult::Rejected(code, body)
     } else {
         FlushResult::ServerError(code, body)

@@ -99,8 +99,8 @@ Queued rows are sent by a background sync worker (docs/DECISIONS.md D14), oldest
 as `POST <base_url><endpoint>`. Clicks made while offline (or with the app closed before they were sent) stay
 in the queue and the UI shows "N pending"; they are flushed as soon as the server is reachable again,
 including on the next launch. Each accepted row is deleted. A row the server rejects with a 4xx (e.g.
-decrementing below 0) is deleted and its field rolled back, with later queued clicks re-applied on top. A 5xx
-or network error keeps the row and retries it with exponential backoff (2 s, 4 s, ... capped at 60 s). A
+decrementing below 0) is deleted and its field rolled back, with later queued clicks re-applied on top. A 5xx,
+408, 429 or network error keeps the row and retries it with exponential backoff (2 s, 4 s, ... capped at 60 s). A
 re-fetched workspace has the still-pending clicks re-applied, so they never visibly disappear. The engine logs
 each attempt, e.g. `[CanvasEngine] outbox #3 POST http://127.0.0.1:8080/v1/counters/home/increment -> 200,
 deleted (0 pending)`.
