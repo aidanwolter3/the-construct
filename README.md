@@ -13,7 +13,8 @@ app (see [Android](#android)). A headless simulation mode renders the shared UI 
 crates/protocol      UiNode / ActionIntent / WorkspaceSpec (hydration bundle) / EntityRecord
 crates/server        Axum server: GET /v1/workspaces/{home,pixelfed_demo,pixelfed_home}, persistent counters
                      (SQLite), Pixelfed adapter (auth, feed normalization, actions, media proxy)
-crates/client-core   CanvasEngine: fetches the workspace, holds state, applies optimistic mutations (SQLite cache + outbox)
+crates/client-core   CanvasEngine: fetches the workspace, holds state, applies optimistic mutations (SQLite cache + outbox),
+                     OAuth2 PKCE sign-in (pod session in a secure store)
 crates/client-ffi    UniFFI bridge (EngineHandle, FfiStateSnapshot, StateObserver) + uniffi-bindgen bin
 crates/fake-pixelfed local fake Pixelfed (Mastodon API + OAuth PKCE) upstream for development and tests
 fixtures/            counter_home_bundle.json, pixelfed_home_bundle.json (DESIGN.md §2.2C);
@@ -187,6 +188,25 @@ curl -s -X POST -H 'content-type: application/json' http://127.0.0.1:8080/v1/aut
   -d '{"instance_url":"http://127.0.0.1:8081","code":"..","code_verifier":"..","redirect_uri":"http://127.0.0.1:9/cb"}'
 curl -s -H "Authorization: Bearer $SESSION" http://127.0.0.1:8080/v1/workspaces/pixelfed_home | jq .queries
 ```
+
+### Sign in (client)
+
+The engine runs the browser half of OAuth2 PKCE itself (docs/DECISIONS.md D19): a `core://Button` with
+`{"intent":"action.auth.login","instance_url":..}` (the signed-out bundle's button) starts it on a background
+thread; `auth_json` in every snapshot goes `pending` -> `signed_in` (username, display name, avatar) or `error`.
+
+- FFI: `EngineHandle.newWithOptions(storagePath, baseUrl, workspaceId, secureStore?, urlOpener?, redirectUri?)`,
+  `handleAuthRedirect(url): Boolean`, `logout()`. `SecureStore` (get/set/delete) and `UrlOpener` (open -> Boolean)
+  are Kotlin callback interfaces; exceptions in them are contained.
+- `redirectUri = null`: loopback (desktop). The engine listens once on `http://127.0.0.1:<random>/callback` for 5
+  minutes. A custom URI (Android: `canvas://oauth`): the app forwards the redirect to `handleAuthRedirect`.
+- `secureStore = null`: macOS Keychain (service `dev.canvas.client`, key `pod_session:<baseUrl>`), in-memory
+  elsewhere. The session survives restarts; `logout()` deletes it on the pod and locally.
+- `urlOpener = null` (or `open` returns false): `auth_json` says "no browser available" and the authorize URL is
+  logged (`[CanvasEngine] no browser available; to sign in, open this URL ...`); opening it by hand still works.
+  With the fake, append `&auto=1` to approve without clicking.
+- A 401 from the pod signs the client out. A like queued while the session was invalid stays pending (not rolled
+  back) and is sent after the next sign-in.
 
 ## Simulation mode
 

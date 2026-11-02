@@ -30,7 +30,15 @@
 //! (re-applying later pending rows), 5xx / 408 / 429 / network errors keep
 //! it with exponential backoff. A fetched bundle has every pending row re-applied
 //! on top of it, so optimistic values are never clobbered.
+//!
+//! M6 auth (docs/DECISIONS.md D19): `ActionIntent::AuthLogin` runs the
+//! OAuth2 PKCE flow on a background thread ([`auth`]); the resulting pod
+//! session token is kept in a [`SecureStore`] and sent as
+//! `Authorization: Bearer` on workspace fetches and outbox POSTs. A 401 from
+//! the pod clears the session; an outbox row that got a 401 stays PENDING
+//! and flushing pauses until the next sign-in.
 
+pub mod auth;
 pub mod expr;
 pub mod store;
 
@@ -38,14 +46,16 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, Weak};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use protocol::{ActionIntent, EntityRecord, FieldUpdate, UiNode, WorkspaceSpec};
-use serde_json::Value;
+use serde_json::{Value, json};
 
+pub use auth::{MemoryStore, RedirectMode, SecureStore, UrlOpener};
+use auth::{LoopbackListener, Pkce, Redirect, guarded};
 use store::{AlsoUpdate, NewOutboxRow, OutboxRow, Store, StoreOps};
 
 const DEFAULT_WORKSPACE_ID: &str = "home";
@@ -62,6 +72,8 @@ const FETCH_FAILURE_LOG_EVERY: u32 = 30;
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 /// `auth_json` until a sign-in flow sets it.
 pub const SIGNED_OUT_AUTH_JSON: &str = r#"{"state":"signed_out"}"#;
+/// Timeout for the sign-in calls to the pod (`/v1/auth/...`).
+const AUTH_HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Engine timing knobs. [`EngineConfig::default`] is what `init` uses;
 /// tests shorten the intervals so they do not sleep for seconds.
@@ -96,6 +108,108 @@ impl EngineConfig {
     }
 }
 
+/// Construction options for [`CanvasEngine::init_with_options`].
+pub struct EngineOptions {
+    pub config: EngineConfig,
+    /// Where the pod session is kept. `None`: the platform default
+    /// ([`auth::default_secure_store`]: Keychain on macOS, in-memory
+    /// elsewhere).
+    pub secure_store: Option<Arc<dyn SecureStore>>,
+    /// Opens the authorize URL. `None`: sign-in reports "no browser
+    /// available" and logs the URL (the flow keeps waiting for a redirect).
+    pub url_opener: Option<Arc<dyn UrlOpener>>,
+    pub redirect: RedirectMode,
+}
+
+impl Default for EngineOptions {
+    fn default() -> Self {
+        Self {
+            config: EngineConfig::default(),
+            secure_store: None,
+            url_opener: None,
+            redirect: RedirectMode::Loopback,
+        }
+    }
+}
+
+/// The signed-in pod session, as stored (JSON) under
+/// [`auth::session_key`].
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct Session {
+    token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    avatar_url: Option<String>,
+}
+
+impl Session {
+    /// Parse a stored value; a bare (non-JSON) string is taken as the token.
+    fn parse(raw: &str) -> Option<Self> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        match serde_json::from_str::<Session>(raw) {
+            Ok(s) if !s.token.is_empty() => Some(s),
+            Ok(_) => None,
+            Err(_) if !raw.starts_with('{') => Some(Session {
+                token: raw.to_owned(),
+                username: None,
+                display_name: None,
+                avatar_url: None,
+            }),
+            Err(_) => None,
+        }
+    }
+
+    fn auth_json(&self) -> String {
+        let mut v = json!({ "state": "signed_in" });
+        for (k, f) in [
+            ("username", &self.username),
+            ("display_name", &self.display_name),
+            ("avatar_url", &self.avatar_url),
+        ] {
+            if let Some(x) = f {
+                v[k] = json!(x);
+            }
+        }
+        v.to_string()
+    }
+}
+
+fn pending_auth_json() -> String {
+    json!({ "state": "pending" }).to_string()
+}
+
+fn error_auth_json(message: &str) -> String {
+    json!({ "state": "error", "error": message }).to_string()
+}
+
+/// A sign-in in progress. A newer `AuthLogin` (or `logout`) cancels it.
+struct Flow {
+    cancelled: AtomicBool,
+    /// The OAuth `state` this flow expects back.
+    state: String,
+    /// Custom-scheme mode: where `handle_auth_redirect` delivers.
+    redirect_tx: Option<Mutex<mpsc::Sender<Redirect>>>,
+}
+
+impl Flow {
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+}
+
+/// Why a sign-in ended without a session.
+enum LoginError {
+    /// Superseded, logged out or engine dropped: report nothing.
+    Cancelled,
+    Failed(String),
+}
+
 /// Outcome of a fetch attempt.
 enum FetchOutcome {
     /// Bundle fetched and applied.
@@ -121,7 +235,8 @@ enum FetchOutcome {
 ///   (`{query_key: [entity uri, ...]}`, `"{}"` when none). Every URI in it
 ///   is also in `entities_json` when the bundle (or cache) carried it.
 /// - `auth_json`: `{"state":"signed_out"|"pending"|"signed_in"|"error",
-///   "username"?, "error"?}`; currently always `{"state":"signed_out"}`.
+///   "username"?, "display_name"?, "avatar_url"?, "error"?}` (the account
+///   fields when signed in, `error` with a message in the error state).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateSnapshot {
     pub workspace_json: String,
@@ -165,6 +280,11 @@ struct State {
     /// Auth status JSON (see [`StateSnapshot::auth_json`]); empty means
     /// signed out.
     auth_json: String,
+    /// The pod session (bearer token), if signed in.
+    session: Option<Session>,
+    /// An outbox POST got a 401: flushing pauses until the next sign-in
+    /// (the row stays PENDING instead of being rolled back).
+    auth_blocked: bool,
     is_online: bool,
     /// Bumped on every change (cache load, fetch attempt, mutation). Used to
     /// drop stale out-of-order deliveries.
@@ -524,6 +644,8 @@ impl WorkerSignal {
 /// Result of one outbox POST.
 enum FlushResult {
     Accepted(u16),
+    /// 401: the pod wants a (new) session; retried after sign-in.
+    Unauthorized,
     /// 4xx except 408/429.
     Rejected(u16, String),
     /// 5xx, 408, 429 or any other non-2xx/4xx status.
@@ -546,6 +668,13 @@ struct Inner {
     base_url: String,
     workspace_url: String,
     health_url: String,
+    secure_store: Arc<dyn SecureStore>,
+    url_opener: Option<Arc<dyn UrlOpener>>,
+    redirect: RedirectMode,
+    /// `pod_session:<base_url>`.
+    session_key: String,
+    /// The sign-in in progress, if any.
+    flow: Mutex<Option<Arc<Flow>>>,
 }
 
 impl Drop for Inner {
@@ -689,25 +818,67 @@ impl CanvasEngine {
     }
 
     /// Like [`CanvasEngine::init`], fetching `GET {base_url}/v1/workspaces/{workspace_id}`.
+    /// Default options: platform secure store, no URL opener, loopback redirect.
     pub fn init_with_workspace(storage_path: &str, base_url: &str, workspace_id: &str) -> Self {
-        Self::init_with_config(storage_path, base_url, workspace_id, EngineConfig::default())
+        Self::init_with_options(storage_path, base_url, workspace_id, EngineOptions::default())
     }
 
-    /// Like [`CanvasEngine::init_with_workspace`] with custom timing.
+    /// Like [`CanvasEngine::init_with_workspace`] with custom timing. Uses
+    /// an in-memory [`SecureStore`] (tests: never touches the Keychain).
     pub fn init_with_config(
         storage_path: &str,
         base_url: &str,
         workspace_id: &str,
         config: EngineConfig,
     ) -> Self {
+        Self::init_with_options(
+            storage_path,
+            base_url,
+            workspace_id,
+            EngineOptions {
+                config,
+                secure_store: Some(Arc::new(MemoryStore::new())),
+                ..EngineOptions::default()
+            },
+        )
+    }
+
+    /// The general constructor: timing, secure store, URL opener and
+    /// redirect mode. A session already in the store is restored (the
+    /// snapshot starts `signed_in`).
+    pub fn init_with_options(
+        storage_path: &str,
+        base_url: &str,
+        workspace_id: &str,
+        options: EngineOptions,
+    ) -> Self {
+        let EngineOptions {
+            config,
+            secure_store,
+            url_opener,
+            redirect,
+        } = options;
+        let secure_store: Arc<dyn SecureStore> =
+            secure_store.unwrap_or_else(|| Arc::from(auth::default_secure_store()));
+        let base = base_url.trim_end_matches('/');
+        let session_key = auth::session_key(base);
+
         let (store, net) = open_store(storage_path);
         let mut state = State {
             store,
             ..State::default()
         };
         state.load_cached(workspace_id);
+        let stored = guarded("SecureStore.get", || secure_store.get(&session_key)).flatten();
+        if let Some(session) = stored.as_deref().and_then(Session::parse) {
+            println!(
+                "[CanvasEngine] restored pod session for {base} (user: {})",
+                session.username.as_deref().unwrap_or("?")
+            );
+            state.auth_json = session.auth_json();
+            state.session = Some(session);
+        }
 
-        let base = base_url.trim_end_matches('/');
         let poll_interval = config.poll_interval;
         let signal = Arc::new(WorkerSignal::default());
         let inner = Arc::new(Inner {
@@ -720,6 +891,11 @@ impl CanvasEngine {
             base_url: base.to_string(),
             workspace_url: format!("{base}/v1/workspaces/{workspace_id}"),
             health_url: format!("{base}/healthz"),
+            secure_store,
+            url_opener,
+            redirect,
+            session_key,
+            flow: Mutex::new(None),
         });
 
         // Both background threads hold only a Weak reference between
@@ -798,6 +974,22 @@ impl CanvasEngine {
     pub fn refresh(&self) {
         self.inner.refresh();
     }
+
+    /// Deliver an OAuth redirect (custom-scheme mode, e.g.
+    /// `canvas://oauth?code=..&state=..`) to the pending sign-in. Returns
+    /// true if a pending flow accepted it; false if no custom-scheme flow is
+    /// waiting, the URL carries no code/error, or its `state` does not match
+    /// (the flow then keeps waiting). Never blocks.
+    pub fn handle_auth_redirect(&self, url: &str) -> bool {
+        self.inner.handle_auth_redirect(url)
+    }
+
+    /// Sign out: cancel any sign-in, forget the session (memory and secure
+    /// store) and notify `signed_out` right away; `POST /v1/auth/logout`
+    /// (best effort) and the refetch run on a background thread.
+    pub fn logout(&self) {
+        self.inner.logout();
+    }
 }
 
 impl Inner {
@@ -829,9 +1021,42 @@ impl Inner {
         self.notify(snap);
     }
 
+    fn session_token(&self) -> Option<String> {
+        lock(&self.state).session.as_ref().map(|s| s.token.clone())
+    }
+
+    /// The pod answered 401 to a request carrying `token`: if that is still
+    /// the current session, forget it (memory + secure store) and go
+    /// `signed_out`. Returns the snapshot to deliver, if anything changed.
+    fn expire_session(&self, token: &str, what: &str) -> Option<StateSnapshot> {
+        let snap = {
+            let mut st = lock(&self.state);
+            if st.session.as_ref().map(|s| s.token.as_str()) != Some(token) {
+                return None;
+            }
+            eprintln!("[CanvasEngine] pod rejected the session on {what} (HTTP 401); signed out");
+            st.session = None;
+            st.auth_json = SIGNED_OUT_AUTH_JSON.to_string();
+            st.seq += 1;
+            st.snapshot()
+        };
+        guarded("SecureStore.delete", || {
+            self.secure_store.delete(&self.session_key)
+        });
+        Some(snap)
+    }
+
     fn refresh(&self) -> FetchOutcome {
         let net = lock(&self.net);
-        let result = fetch(&self.workspace_url);
+        let token = self.session_token();
+        let mut result = fetch(&self.workspace_url, token.as_deref());
+        if let (Err(FetchError::Status(401)), Some(t)) = (&result, &token) {
+            // The refresh below delivers a newer snapshot than this one.
+            let _ = self.expire_session(t, "workspace fetch");
+            if !self.signal.is_shut_down() {
+                result = fetch(&self.workspace_url, None);
+            }
+        }
         if self.signal.is_shut_down() {
             // The engine was dropped during the request (the fetch thread
             // held the last strong reference): apply nothing and wake no
@@ -920,14 +1145,15 @@ impl Inner {
                 // The engine was dropped mid-pass: stop before the next row.
                 return None;
             }
-            let row = {
+            let (row, token) = {
                 let mut st = lock(&self.state);
-                if !st.is_online {
+                if !st.is_online || st.auth_blocked {
                     return None;
                 }
+                let token = st.session.as_ref().map(|s| s.token.clone());
                 let store = st.store.as_ref()?;
                 match store.first_pending() {
-                    Ok(Some(row)) => row,
+                    Ok(Some(row)) => (row, token),
                     Ok(None) => {
                         // Another engine on the same cache file may have
                         // flushed rows this one counted: resync to 0.
@@ -963,7 +1189,16 @@ impl Inner {
                 return None;
             }
             let url = format!("{}{}", self.base_url, row.endpoint);
-            let result = post_json(client, &url, &row.payload_json);
+            let result = post_json(client, &url, &row.payload_json, token.as_deref());
+            if let FlushResult::Unauthorized = result {
+                let snap = self.outbox_unauthorized(&row, &url, token.as_deref());
+                drop(net);
+                if let Some(snap) = snap {
+                    self.notify(snap);
+                }
+                // Paused until a sign-in wakes the worker.
+                return None;
+            }
             let (snap, failed) = self.apply_flush_result(&row, &url, result);
             drop(net);
             if let Some(snap) = snap {
@@ -975,6 +1210,30 @@ impl Inner {
                 return Some(self.config.backoff(row.retry_count + 1));
             }
         }
+    }
+
+    /// An outbox POST got a 401. The row stays PENDING with its optimistic
+    /// value (not rolled back, retry count unchanged): flushing pauses
+    /// (`auth_blocked`) until the next sign-in, and the session that was
+    /// sent, if any, is forgotten.
+    fn outbox_unauthorized(
+        &self,
+        row: &OutboxRow,
+        url: &str,
+        token: Option<&str>,
+    ) -> Option<StateSnapshot> {
+        let expired = token.and_then(|t| self.expire_session(t, "outbox POST"));
+        let mut st = lock(&self.state);
+        eprintln!(
+            "[CanvasEngine] outbox #{} POST {url} -> 401; kept PENDING, flushing paused until \
+             sign-in ({} pending)",
+            row.id, st.pending_actions
+        );
+        st.auth_blocked = true;
+        expired.map(|_| {
+            st.seq += 1;
+            st.snapshot()
+        })
     }
 
     /// Record the outcome of POSTing `row` (state lock held only here).
@@ -1032,6 +1291,8 @@ impl Inner {
             }
             FlushResult::ServerError(code, body) => (format!("HTTP {code}: {body}"), false),
             FlushResult::Network(e) => (e, true),
+            // Handled by `outbox_unauthorized` before this is called.
+            FlushResult::Unauthorized => ("HTTP 401".to_string(), false),
         };
 
         let retry_count = row.retry_count + 1;
@@ -1055,7 +1316,7 @@ impl Inner {
         (None, true)
     }
 
-    fn dispatch(&self, intent_json: &str) {
+    fn dispatch(self: &Arc<Self>, intent_json: &str) {
         let started = Instant::now();
         let compact = serde_json::from_str::<Value>(intent_json)
             .map(|v| v.to_string())
@@ -1088,6 +1349,7 @@ impl Inner {
                 payload,
                 also,
             ),
+            ActionIntent::AuthLogin { instance_url } => self.start_login(instance_url),
             other => {
                 eprintln!(
                     "[CanvasEngine] dispatch: intent not handled by client-core yet: {other:?}"
@@ -1195,6 +1457,179 @@ impl Inner {
         );
     }
 
+    /// Set `auth_json` (bump seq) and notify.
+    fn set_auth_json(&self, auth_json: String) {
+        let snap = {
+            let mut st = lock(&self.state);
+            st.auth_json = auth_json;
+            st.seq += 1;
+            st.snapshot()
+        };
+        self.notify(snap);
+    }
+
+    /// Replace the current sign-in flow (cancelling the old one) with `new`.
+    fn replace_flow(&self, new: Option<Arc<Flow>>) {
+        let old = std::mem::replace(&mut *lock(&self.flow), new);
+        if let Some(old) = old {
+            old.cancelled.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Whether `flow` is still the current, uncancelled sign-in.
+    fn is_current(&self, flow: &Arc<Flow>) -> bool {
+        !flow.is_cancelled()
+            && !self.signal.is_shut_down()
+            && lock(&self.flow).as_ref().is_some_and(|f| Arc::ptr_eq(f, flow))
+    }
+
+    /// `ActionIntent::AuthLogin`: go `pending` and run the flow on a
+    /// background thread (the dispatching thread never blocks).
+    fn start_login(self: &Arc<Self>, instance_url: String) {
+        let (redirect_tx, redirect_rx) = match &self.redirect {
+            RedirectMode::Custom(_) => {
+                let (tx, rx) = mpsc::channel();
+                (Some(Mutex::new(tx)), Some(rx))
+            }
+            RedirectMode::Loopback => (None, None),
+        };
+        let flow = Arc::new(Flow {
+            cancelled: AtomicBool::new(false),
+            state: auth::random_state(),
+            redirect_tx,
+        });
+        self.replace_flow(Some(Arc::clone(&flow)));
+        self.set_auth_json(pending_auth_json());
+        println!("[CanvasEngine] sign-in started for {instance_url}");
+
+        let weak = Arc::downgrade(self);
+        let spawned = thread::Builder::new()
+            .name("canvas-engine-auth".into())
+            .spawn(move || {
+                let result = login_flow(&weak, &flow, &instance_url, redirect_rx);
+                let Some(inner) = weak.upgrade() else { return };
+                match result {
+                    Ok(()) => {}
+                    Err(LoginError::Cancelled) => {
+                        println!("[CanvasEngine] sign-in cancelled");
+                    }
+                    Err(LoginError::Failed(msg)) => {
+                        if inner.is_current(&flow) {
+                            eprintln!("[CanvasEngine] sign-in failed: {msg}");
+                            inner.replace_flow(None);
+                            inner.set_auth_json(error_auth_json(&msg));
+                        }
+                    }
+                }
+            });
+        if let Err(e) = spawned {
+            eprintln!("[CanvasEngine] failed to spawn the sign-in thread: {e}");
+            self.replace_flow(None);
+            self.set_auth_json(error_auth_json(&format!("cannot start sign-in: {e}")));
+        }
+    }
+
+    /// See [`CanvasEngine::handle_auth_redirect`].
+    fn handle_auth_redirect(&self, url: &str) -> bool {
+        let Some(redirect) = auth::parse_redirect(url) else {
+            eprintln!("[CanvasEngine] auth redirect without code/error ignored");
+            return false;
+        };
+        let Some(flow) = lock(&self.flow).clone() else {
+            eprintln!("[CanvasEngine] auth redirect but no sign-in is pending; ignored");
+            return false;
+        };
+        let Some(tx) = &flow.redirect_tx else {
+            eprintln!("[CanvasEngine] auth redirect ignored: this engine uses a loopback redirect");
+            return false;
+        };
+        if redirect.state() != Some(flow.state.as_str()) {
+            eprintln!("[CanvasEngine] auth redirect with a mismatched state ignored");
+            return false;
+        }
+        lock(tx).send(redirect).is_ok()
+    }
+
+    /// Store the session and go `signed_in`, then wake the outbox and
+    /// refetch (on the calling auth thread).
+    fn complete_sign_in(&self, flow: &Arc<Flow>, session: Session) -> Result<(), LoginError> {
+        // Held across the check and the update (lock order: flow, then
+        // state) so a concurrent `logout` either cancels this flow first or
+        // runs after the session is in place and removes it again.
+        let mut current = lock(&self.flow);
+        if flow.is_cancelled()
+            || self.signal.is_shut_down()
+            || !current.as_ref().is_some_and(|f| Arc::ptr_eq(f, flow))
+        {
+            return Err(LoginError::Cancelled);
+        }
+        let raw = serde_json::to_string(&session).unwrap_or_default();
+        if guarded("SecureStore.set", || self.secure_store.set(&self.session_key, &raw)).is_none() {
+            eprintln!("[CanvasEngine] the session could not be stored; it lasts until exit");
+        }
+        println!(
+            "[CanvasEngine] signed in as {}",
+            session.username.as_deref().unwrap_or("?")
+        );
+        let snap = {
+            let mut st = lock(&self.state);
+            st.auth_json = session.auth_json();
+            st.session = Some(session);
+            st.auth_blocked = false;
+            st.seq += 1;
+            st.snapshot()
+        };
+        *current = None;
+        drop(current);
+        self.notify(snap);
+        self.signal.wake();
+        self.refresh();
+        Ok(())
+    }
+
+    /// See [`CanvasEngine::logout`].
+    fn logout(self: &Arc<Self>) {
+        self.replace_flow(None);
+        let (snap, token) = {
+            let mut st = lock(&self.state);
+            let token = st.session.take().map(|s| s.token);
+            st.auth_json = SIGNED_OUT_AUTH_JSON.to_string();
+            st.auth_blocked = false;
+            st.seq += 1;
+            (st.snapshot(), token)
+        };
+        guarded("SecureStore.delete", || {
+            self.secure_store.delete(&self.session_key)
+        });
+        println!("[CanvasEngine] signed out");
+        self.notify(snap);
+        let weak = Arc::downgrade(self);
+        let url = format!("{}/v1/auth/logout", self.base_url);
+        let spawned = thread::Builder::new()
+            .name("canvas-engine-logout".into())
+            .spawn(move || {
+                if let Some(token) = token {
+                    match auth_client().and_then(|c| {
+                        c.post(&url)
+                            .bearer_auth(token)
+                            .send()
+                            .map_err(|e| e.to_string())
+                    }) {
+                        Ok(r) => println!("[CanvasEngine] POST {url} -> {}", r.status().as_u16()),
+                        Err(e) => eprintln!("[CanvasEngine] POST {url} failed (ignored): {e}"),
+                    }
+                }
+                if let Some(inner) = weak.upgrade()
+                    && !inner.signal.is_shut_down()
+                {
+                    inner.refresh();
+                }
+            });
+        if let Err(e) = spawned {
+            eprintln!("[CanvasEngine] failed to spawn the logout thread: {e}");
+        }
+    }
+
     /// Deliver a snapshot to all observers, with no locks held during the
     /// calls. Each observer skips snapshots older than one it already saw.
     fn notify(&self, snap: StateSnapshot) {
@@ -1212,14 +1647,18 @@ enum FetchError {
     Other(String),
 }
 
-fn fetch(url: &str) -> Result<WorkspaceSpec, FetchError> {
+/// `GET url`, with `Authorization: Bearer <token>` when signed in.
+fn fetch(url: &str, token: Option<&str>) -> Result<WorkspaceSpec, FetchError> {
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(5))
         .build()
         .map_err(|e| FetchError::Other(format!("client build: {e}")))?;
-    let resp = client
-        .get(url)
+    let mut req = client.get(url);
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let resp = req
         .send()
         .map_err(|e| FetchError::Other(e.to_string()))?;
     let status = resp.status();
@@ -1228,6 +1667,198 @@ fn fetch(url: &str) -> Result<WorkspaceSpec, FetchError> {
     }
     let raw = resp.text().map_err(|e| FetchError::Other(e.to_string()))?;
     serde_json::from_str(&raw).map_err(|e| FetchError::Other(format!("bad bundle: {e}")))
+}
+
+fn auth_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(AUTH_HTTP_TIMEOUT)
+        .build()
+        .map_err(|e| format!("client build: {e}"))
+}
+
+/// `POST url` with a JSON body; the parsed JSON response on 2xx, else an
+/// error message with the status and the pod's error body.
+fn post_auth(client: &reqwest::blocking::Client, url: &str, body: &Value) -> Result<Value, String> {
+    let resp = client
+        .post(url)
+        .json(body)
+        .send()
+        .map_err(|e| format!("cannot reach the pod: {e}"))?;
+    let status = resp.status();
+    let text = resp.text().unwrap_or_default();
+    if !status.is_success() {
+        let detail = serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|v| v.get("error").and_then(Value::as_str).map(str::to_owned))
+            .unwrap_or_else(|| text.chars().take(200).collect());
+        return Err(format!("POST {url} -> HTTP {}: {detail}", status.as_u16()));
+    }
+    serde_json::from_str(&text).map_err(|e| format!("POST {url}: bad response: {e}"))
+}
+
+fn json_str(v: &Value, key: &str) -> Option<String> {
+    v.get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+/// The sign-in flow (runs on the auth thread, holding only a `Weak`
+/// between steps): register the app with the pod, build the PKCE authorize
+/// URL, open it, wait for the redirect, verify `state`, exchange the code
+/// through the pod and store the session.
+fn login_flow(
+    weak: &Weak<Inner>,
+    flow: &Arc<Flow>,
+    instance_url: &str,
+    redirect_rx: Option<mpsc::Receiver<Redirect>>,
+) -> Result<(), LoginError> {
+    let failed = LoginError::Failed;
+    let (base_url, opener, redirect_mode, signal) = {
+        let inner = weak.upgrade().ok_or(LoginError::Cancelled)?;
+        (
+            inner.base_url.clone(),
+            inner.url_opener.clone(),
+            inner.redirect.clone(),
+            Arc::clone(&inner.signal),
+        )
+    };
+    let cancelled = || flow.is_cancelled() || signal.is_shut_down();
+
+    let listener = match redirect_mode {
+        RedirectMode::Loopback => Some(
+            LoopbackListener::bind()
+                .map_err(|e| failed(format!("cannot open the loopback redirect listener: {e}")))?,
+        ),
+        RedirectMode::Custom(_) => None,
+    };
+    let redirect_uri = match (&listener, &redirect_mode) {
+        (Some(l), _) => l.redirect_uri(),
+        (None, RedirectMode::Custom(uri)) => uri.clone(),
+        (None, RedirectMode::Loopback) => unreachable!("loopback always has a listener"),
+    };
+
+    let client = auth_client().map_err(failed)?;
+    let app = post_auth(
+        &client,
+        &format!("{base_url}/v1/auth/pixelfed/app"),
+        &json!({ "instance_url": instance_url, "redirect_uri": redirect_uri }),
+    )
+    .map_err(failed)?;
+    let (Some(client_id), Some(endpoint)) =
+        (json_str(&app, "client_id"), json_str(&app, "authorize_endpoint"))
+    else {
+        return Err(failed(format!("unexpected /v1/auth/pixelfed/app response: {app}")));
+    };
+    let scope = json_str(&app, "scopes").unwrap_or_else(|| "read write".to_owned());
+    let pkce = Pkce::generate();
+    let url = auth::authorize_url(
+        &endpoint,
+        &client_id,
+        &redirect_uri,
+        &scope,
+        &flow.state,
+        &pkce.challenge,
+    );
+    if cancelled() {
+        return Err(LoginError::Cancelled);
+    }
+
+    let opened = opener
+        .as_ref()
+        .and_then(|o| guarded("UrlOpener.open", || o.open(&url)))
+        .unwrap_or(false);
+    if opened {
+        println!("[CanvasEngine] opened the authorize page; waiting for the redirect to {redirect_uri}");
+    } else {
+        // Keep waiting: a human can open the logged URL by hand.
+        eprintln!(
+            "[CanvasEngine] no browser available; to sign in, open this URL (waiting {} s for \
+             the redirect to {redirect_uri}):\n{url}",
+            auth::REDIRECT_TIMEOUT.as_secs()
+        );
+        if let Some(inner) = weak.upgrade()
+            && inner.is_current(flow)
+        {
+            inner.set_auth_json(error_auth_json("no browser available"));
+        }
+    }
+
+    let redirect = match (&listener, redirect_rx) {
+        (Some(l), _) => l
+            .wait(auth::REDIRECT_TIMEOUT, &cancelled, &|r| {
+                let ok = r.state() == Some(flow.state.as_str());
+                if !ok {
+                    eprintln!("[CanvasEngine] loopback redirect with a mismatched state ignored");
+                }
+                ok
+            })
+            .map_err(|e| match e {
+                auth::WaitError::Cancelled => LoginError::Cancelled,
+                other => failed(other.to_string()),
+            })?,
+        (None, Some(rx)) => {
+            let deadline = Instant::now() + auth::REDIRECT_TIMEOUT;
+            loop {
+                if cancelled() {
+                    return Err(LoginError::Cancelled);
+                }
+                if Instant::now() >= deadline {
+                    return Err(failed(auth::WaitError::TimedOut.to_string()));
+                }
+                match rx.recv_timeout(Duration::from_millis(100)) {
+                    Ok(r) => break r,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        return Err(LoginError::Cancelled);
+                    }
+                }
+            }
+        }
+        (None, None) => return Err(failed("no redirect channel".into())),
+    };
+    if cancelled() {
+        return Err(LoginError::Cancelled);
+    }
+    let code = match redirect {
+        Redirect::Code { code, .. } => code,
+        Redirect::Error {
+            error, description, ..
+        } => {
+            let more = description.map(|d| format!(" ({d})")).unwrap_or_default();
+            return Err(failed(format!("authorization failed: {error}{more}")));
+        }
+    };
+    if let Some(inner) = weak.upgrade()
+        && inner.is_current(flow)
+    {
+        inner.set_auth_json(pending_auth_json());
+    }
+
+    let token = post_auth(
+        &client,
+        &format!("{base_url}/v1/auth/pixelfed/token"),
+        &json!({
+            "instance_url": instance_url,
+            "code": code,
+            "code_verifier": pkce.verifier,
+            "redirect_uri": redirect_uri,
+        }),
+    )
+    .map_err(failed)?;
+    let Some(session_token) = json_str(&token, "session_token") else {
+        return Err(failed("the pod returned no session_token".into()));
+    };
+    let account = token.get("account").cloned().unwrap_or(Value::Null);
+    let session = Session {
+        token: session_token,
+        username: json_str(&account, "username"),
+        display_name: json_str(&account, "display_name"),
+        avatar_url: json_str(&account, "avatar_url"),
+    };
+    let inner = weak.upgrade().ok_or(LoginError::Cancelled)?;
+    inner.complete_sign_in(flow, session)
 }
 
 /// The sync worker thread: runs flush passes until the engine is dropped.
@@ -1255,20 +1886,31 @@ fn sync_worker(engine: Weak<Inner>, signal: Arc<WorkerSignal>) {
     }
 }
 
-/// `POST url` with a JSON body, classified for the outbox.
-fn post_json(client: &reqwest::blocking::Client, url: &str, body: &str) -> FlushResult {
-    let resp = match client
+/// `POST url` with a JSON body (and the bearer when signed in),
+/// classified for the outbox.
+fn post_json(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    body: &str,
+    token: Option<&str>,
+) -> FlushResult {
+    let mut req = client
         .post(url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(body.to_string())
-        .send()
-    {
+        .body(body.to_string());
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let resp = match req.send() {
         Ok(r) => r,
         Err(e) => return FlushResult::Network(e.to_string()),
     };
     let code = resp.status().as_u16();
     if resp.status().is_success() {
         return FlushResult::Accepted(code);
+    }
+    if code == 401 {
+        return FlushResult::Unauthorized;
     }
     let body = resp.text().unwrap_or_default();
     // 408 (request timeout) and 429 (too many requests) are transient:

@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use client_core::{CanvasEngine, StateSnapshot};
+use client_core::{CanvasEngine, EngineOptions, RedirectMode, StateSnapshot};
 
 #[cfg(target_os = "android")]
 mod android_log;
@@ -53,6 +53,47 @@ pub trait StateObserver: Send + Sync {
     fn on_state_updated(&self, snapshot: FfiStateSnapshot);
 }
 
+/// Platform secure storage for the pod session (Android: Keystore-backed;
+/// desktop: pass none and the engine uses the macOS Keychain). Called from
+/// engine threads; an exception thrown here is contained (treated as
+/// "nothing stored" / "not saved").
+#[uniffi::export(callback_interface)]
+pub trait SecureStore: Send + Sync {
+    fn get(&self, key: String) -> Option<String>;
+    fn set(&self, key: String, value: String);
+    fn delete(&self, key: String);
+}
+
+/// Opens the sign-in URL in a browser; returns false if it could not.
+/// Called on the engine's auth thread (not the UI thread); an exception
+/// counts as false.
+#[uniffi::export(callback_interface)]
+pub trait UrlOpener: Send + Sync {
+    fn open(&self, url: String) -> bool;
+}
+
+struct StoreAdapter(Box<dyn SecureStore>);
+
+impl client_core::SecureStore for StoreAdapter {
+    fn get(&self, key: &str) -> Option<String> {
+        self.0.get(key.to_owned())
+    }
+    fn set(&self, key: &str, value: &str) {
+        self.0.set(key.to_owned(), value.to_owned());
+    }
+    fn delete(&self, key: &str) {
+        self.0.delete(key.to_owned());
+    }
+}
+
+struct OpenerAdapter(Box<dyn UrlOpener>);
+
+impl client_core::UrlOpener for OpenerAdapter {
+    fn open(&self, url: &str) -> bool {
+        self.0.open(url.to_owned())
+    }
+}
+
 #[derive(uniffi::Object)]
 pub struct EngineHandle {
     inner: Arc<CanvasEngine>,
@@ -85,6 +126,55 @@ impl EngineHandle {
                 &workspace_id,
             )),
         }
+    }
+
+    /// Engine with sign-in support. `secure_store`: None = the platform
+    /// default (macOS Keychain; in-memory elsewhere). `url_opener`: None =
+    /// sign-in reports "no browser available" and logs the URL.
+    /// `redirect_uri`: None = loopback (`http://127.0.0.1:<port>/callback`),
+    /// else a custom-scheme URI (e.g. `canvas://oauth`) whose redirects the
+    /// app passes to [`EngineHandle::handle_auth_redirect`].
+    #[uniffi::constructor]
+    pub fn new_with_options(
+        storage_path: String,
+        base_url: String,
+        workspace_id: String,
+        secure_store: Option<Box<dyn SecureStore>>,
+        url_opener: Option<Box<dyn UrlOpener>>,
+        redirect_uri: Option<String>,
+    ) -> Self {
+        platform_init();
+        let options = EngineOptions {
+            secure_store: secure_store
+                .map(|s| Arc::new(StoreAdapter(s)) as Arc<dyn client_core::SecureStore>),
+            url_opener: url_opener
+                .map(|o| Arc::new(OpenerAdapter(o)) as Arc<dyn client_core::UrlOpener>),
+            redirect: match redirect_uri.filter(|u| !u.trim().is_empty()) {
+                Some(uri) => RedirectMode::Custom(uri),
+                None => RedirectMode::Loopback,
+            },
+            ..EngineOptions::default()
+        };
+        Self {
+            inner: Arc::new(CanvasEngine::init_with_options(
+                &storage_path,
+                &base_url,
+                &workspace_id,
+                options,
+            )),
+        }
+    }
+
+    /// Deliver an OAuth redirect URL (custom-scheme mode). True if the
+    /// pending sign-in accepted it. Never blocks.
+    pub fn handle_auth_redirect(&self, url: String) -> bool {
+        self.inner.handle_auth_redirect(&url)
+    }
+
+    /// Sign out (non-blocking): forgets the session, notifies `signed_out`;
+    /// the pod logout call and the refetch run in the background.
+    pub fn logout(&self) {
+        self.inner.logout();
     }
 
     /// Register an observer; it immediately receives the current snapshot.
@@ -177,6 +267,54 @@ mod tests {
         let after = handle.snapshot();
         assert_eq!(after.pending_actions, 1);
         assert!(after.seq > before.seq);
+    }
+
+    struct PanickyStore;
+    impl SecureStore for PanickyStore {
+        fn get(&self, _key: String) -> Option<String> {
+            panic!("store exploded")
+        }
+        fn set(&self, _key: String, _value: String) {
+            panic!("store exploded")
+        }
+        fn delete(&self, _key: String) {
+            panic!("store exploded")
+        }
+    }
+
+    struct PanickyOpener;
+    impl UrlOpener for PanickyOpener {
+        fn open(&self, _url: String) -> bool {
+            panic!("opener exploded")
+        }
+    }
+
+    #[test]
+    fn new_with_options_survives_panicking_callbacks() {
+        let handle = EngineHandle::new_with_options(
+            String::new(),
+            "http://127.0.0.1:1".to_string(),
+            "pixelfed_home".to_string(),
+            Some(Box::new(PanickyStore)),
+            Some(Box::new(PanickyOpener)),
+            Some("canvas://oauth".to_string()),
+        );
+        assert_eq!(handle.snapshot().auth_json, r#"{"state":"signed_out"}"#);
+        assert!(!handle.handle_auth_redirect("canvas://oauth?code=x&state=y".to_string()));
+        handle.logout();
+        // Sign-in against an unreachable pod ends in the error state.
+        handle.dispatch(
+            r#"{"intent":"action.auth.login","instance_url":"http://127.0.0.1:1"}"#.to_string(),
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let auth = handle.snapshot().auth_json;
+            if auth.contains("\"error\"") && auth.contains("cannot reach the pod") {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "auth_json: {auth}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[test]

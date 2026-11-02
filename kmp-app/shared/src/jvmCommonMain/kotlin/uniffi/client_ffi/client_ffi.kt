@@ -654,8 +654,42 @@ internal open class UniffiForeignFutureStructVoid(
 internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
     fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructVoid.UniffiByValue,)
 }
+internal interface UniffiCallbackInterfaceSecureStoreMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`key`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceSecureStoreMethod1 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`key`: RustBuffer.ByValue,`value`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceSecureStoreMethod2 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`key`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
 internal interface UniffiCallbackInterfaceStateObserverMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`snapshot`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceUrlOpenerMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`url`: RustBuffer.ByValue,`uniffiOutReturn`: ByteByReference,uniffiCallStatus: UniffiRustCallStatus,)
+}
+@Structure.FieldOrder("get", "set", "delete", "uniffiFree")
+internal open class UniffiVTableCallbackInterfaceSecureStore(
+    @JvmField internal var `get`: UniffiCallbackInterfaceSecureStoreMethod0? = null,
+    @JvmField internal var `set`: UniffiCallbackInterfaceSecureStoreMethod1? = null,
+    @JvmField internal var `delete`: UniffiCallbackInterfaceSecureStoreMethod2? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+) : Structure() {
+    class UniffiByValue(
+        `get`: UniffiCallbackInterfaceSecureStoreMethod0? = null,
+        `set`: UniffiCallbackInterfaceSecureStoreMethod1? = null,
+        `delete`: UniffiCallbackInterfaceSecureStoreMethod2? = null,
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    ): UniffiVTableCallbackInterfaceSecureStore(`get`,`set`,`delete`,`uniffiFree`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceSecureStore) {
+        `get` = other.`get`
+        `set` = other.`set`
+        `delete` = other.`delete`
+        `uniffiFree` = other.`uniffiFree`
+    }
+
 }
 @Structure.FieldOrder("onStateUpdated", "uniffiFree")
 internal open class UniffiVTableCallbackInterfaceStateObserver(
@@ -673,6 +707,34 @@ internal open class UniffiVTableCallbackInterfaceStateObserver(
     }
 
 }
+@Structure.FieldOrder("open", "uniffiFree")
+internal open class UniffiVTableCallbackInterfaceUrlOpener(
+    @JvmField internal var `open`: UniffiCallbackInterfaceUrlOpenerMethod0? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+) : Structure() {
+    class UniffiByValue(
+        `open`: UniffiCallbackInterfaceUrlOpenerMethod0? = null,
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    ): UniffiVTableCallbackInterfaceUrlOpener(`open`,`uniffiFree`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceUrlOpener) {
+        `open` = other.`open`
+        `uniffiFree` = other.`uniffiFree`
+    }
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -764,6 +826,10 @@ internal interface IntegrityCheckingUniffiLib : Library {
     // Integrity check functions only
     fun uniffi_client_ffi_checksum_method_enginehandle_dispatch(
 ): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_handle_auth_redirect(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_logout(
+): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_refresh(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_snapshot(
@@ -772,9 +838,19 @@ fun uniffi_client_ffi_checksum_method_enginehandle_subscribe(
 ): Short
 fun uniffi_client_ffi_checksum_constructor_enginehandle_new(
 ): Short
+fun uniffi_client_ffi_checksum_constructor_enginehandle_new_with_options(
+): Short
 fun uniffi_client_ffi_checksum_constructor_enginehandle_new_with_workspace(
 ): Short
+fun uniffi_client_ffi_checksum_method_securestore_get(
+): Short
+fun uniffi_client_ffi_checksum_method_securestore_set(
+): Short
+fun uniffi_client_ffi_checksum_method_securestore_delete(
+): Short
 fun uniffi_client_ffi_checksum_method_stateobserver_on_state_updated(
+): Short
+fun uniffi_client_ffi_checksum_method_urlopener_open(
 ): Short
 fun ffi_client_ffi_uniffi_contract_version(
 ): Int
@@ -814,7 +890,9 @@ internal interface UniffiLib : Library {
             val lib = loadIndirect<UniffiLib>(componentName)
             // No need to check the contract version and checksums, since 
             // we already did that with `IntegrityCheckingUniffiLib` above.
+            uniffiCallbackInterfaceSecureStore.register(lib)
             uniffiCallbackInterfaceStateObserver.register(lib)
+            uniffiCallbackInterfaceUrlOpener.register(lib)
             // Loading of library with integrity check done.
             lib
         }
@@ -832,9 +910,15 @@ fun uniffi_client_ffi_fn_free_enginehandle(`ptr`: Pointer,uniffi_out_err: Uniffi
 ): Unit
 fun uniffi_client_ffi_fn_constructor_enginehandle_new(`storagePath`: RustBuffer.ByValue,`baseUrl`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Pointer
+fun uniffi_client_ffi_fn_constructor_enginehandle_new_with_options(`storagePath`: RustBuffer.ByValue,`baseUrl`: RustBuffer.ByValue,`workspaceId`: RustBuffer.ByValue,`secureStore`: RustBuffer.ByValue,`urlOpener`: RustBuffer.ByValue,`redirectUri`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Pointer
 fun uniffi_client_ffi_fn_constructor_enginehandle_new_with_workspace(`storagePath`: RustBuffer.ByValue,`baseUrl`: RustBuffer.ByValue,`workspaceId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Pointer
 fun uniffi_client_ffi_fn_method_enginehandle_dispatch(`ptr`: Pointer,`intentJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_client_ffi_fn_method_enginehandle_handle_auth_redirect(`ptr`: Pointer,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Byte
+fun uniffi_client_ffi_fn_method_enginehandle_logout(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_refresh(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
@@ -842,7 +926,11 @@ fun uniffi_client_ffi_fn_method_enginehandle_snapshot(`ptr`: Pointer,uniffi_out_
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_subscribe(`ptr`: Pointer,`observer`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_client_ffi_fn_init_callback_vtable_securestore(`vtable`: UniffiVTableCallbackInterfaceSecureStore,
+): Unit
 fun uniffi_client_ffi_fn_init_callback_vtable_stateobserver(`vtable`: UniffiVTableCallbackInterfaceStateObserver,
+): Unit
+fun uniffi_client_ffi_fn_init_callback_vtable_urlopener(`vtable`: UniffiVTableCallbackInterfaceUrlOpener,
 ): Unit
 fun ffi_client_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -973,6 +1061,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_dispatch() != 57352.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_handle_auth_redirect() != 45461.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_logout() != 63659.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_refresh() != 33148.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -985,10 +1079,25 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_client_ffi_checksum_constructor_enginehandle_new() != 42554.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_client_ffi_checksum_constructor_enginehandle_new_with_options() != 13204.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_client_ffi_checksum_constructor_enginehandle_new_with_workspace() != 47149.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_client_ffi_checksum_method_securestore_get() != 59076.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_securestore_set() != 9565.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_securestore_delete() != 37978.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_client_ffi_checksum_method_stateobserver_on_state_updated() != 49479.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_urlopener_open() != 24625.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1398,6 +1507,18 @@ public interface EngineHandleInterface {
     fun `dispatch`(`intentJson`: kotlin.String)
     
     /**
+     * Deliver an OAuth redirect URL (custom-scheme mode). True if the
+     * pending sign-in accepted it. Never blocks.
+     */
+    fun `handleAuthRedirect`(`url`: kotlin.String): kotlin.Boolean
+    
+    /**
+     * Sign out (non-blocking): forgets the session, notifies `signed_out`;
+     * the pod logout call and the refetch run in the background.
+     */
+    fun `logout`()
+    
+    /**
      * Re-fetch the workspace on the calling thread (blocking), then notify.
      */
     fun `refresh`()
@@ -1524,6 +1645,37 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
 
     
     /**
+     * Deliver an OAuth redirect URL (custom-scheme mode). True if the
+     * pending sign-in accepted it. Never blocks.
+     */override fun `handleAuthRedirect`(`url`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_handle_auth_redirect(
+        it, FfiConverterString.lower(`url`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Sign out (non-blocking): forgets the session, notifies `signed_out`;
+     * the pod logout call and the refetch run in the background.
+     */override fun `logout`()
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_logout(
+        it, _status)
+}
+    }
+    
+    
+
+    
+    /**
      * Re-fetch the workspace on the calling thread (blocking), then notify.
      */override fun `refresh`()
         = 
@@ -1569,6 +1721,24 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
 
     
     companion object {
+        
+    /**
+     * Engine with sign-in support. `secure_store`: None = the platform
+     * default (macOS Keychain; in-memory elsewhere). `url_opener`: None =
+     * sign-in reports "no browser available" and logs the URL.
+     * `redirect_uri`: None = loopback (`http://127.0.0.1:<port>/callback`),
+     * else a custom-scheme URI (e.g. `canvas://oauth`) whose redirects the
+     * app passes to [`EngineHandle::handle_auth_redirect`].
+     */ fun `newWithOptions`(`storagePath`: kotlin.String, `baseUrl`: kotlin.String, `workspaceId`: kotlin.String, `secureStore`: SecureStore?, `urlOpener`: UrlOpener?, `redirectUri`: kotlin.String?): EngineHandle {
+            return FfiConverterTypeEngineHandle.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_constructor_enginehandle_new_with_options(
+        FfiConverterString.lower(`storagePath`),FfiConverterString.lower(`baseUrl`),FfiConverterString.lower(`workspaceId`),FfiConverterOptionalTypeSecureStore.lower(`secureStore`),FfiConverterOptionalTypeUrlOpener.lower(`urlOpener`),FfiConverterOptionalString.lower(`redirectUri`),_status)
+}
+    )
+    }
+    
+
         
     /**
      * Engine for an explicit workspace id.
@@ -1680,6 +1850,96 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
 
 
 /**
+ * Platform secure storage for the pod session (Android: Keystore-backed;
+ * desktop: pass none and the engine uses the macOS Keychain). Called from
+ * engine threads; an exception thrown here is contained (treated as
+ * "nothing stored" / "not saved").
+ */
+public interface SecureStore {
+    
+    fun `get`(`key`: kotlin.String): kotlin.String?
+    
+    fun `set`(`key`: kotlin.String, `value`: kotlin.String)
+    
+    fun `delete`(`key`: kotlin.String)
+    
+    companion object
+}
+
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceSecureStore {
+    internal object `get`: UniffiCallbackInterfaceSecureStoreMethod0 {
+        override fun callback(`uniffiHandle`: Long,`key`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeSecureStore.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`get`(
+                    FfiConverterString.lift(`key`),
+                )
+            }
+            val writeReturn = { value: kotlin.String? -> uniffiOutReturn.setValue(FfiConverterOptionalString.lower(value)) }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+    internal object `set`: UniffiCallbackInterfaceSecureStoreMethod1 {
+        override fun callback(`uniffiHandle`: Long,`key`: RustBuffer.ByValue,`value`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeSecureStore.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`set`(
+                    FfiConverterString.lift(`key`),
+                    FfiConverterString.lift(`value`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+    internal object `delete`: UniffiCallbackInterfaceSecureStoreMethod2 {
+        override fun callback(`uniffiHandle`: Long,`key`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeSecureStore.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`delete`(
+                    FfiConverterString.lift(`key`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeSecureStore.handleMap.remove(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceSecureStore.UniffiByValue(
+        `get`,
+        `set`,
+        `delete`,
+        uniffiFree,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_client_ffi_fn_init_callback_vtable_securestore(vtable)
+    }
+}
+
+/**
+ * The ffiConverter which transforms the Callbacks in to handles to pass to Rust.
+ *
+ * @suppress
+ */
+public object FfiConverterTypeSecureStore: FfiConverterCallbackInterface<SecureStore>()
+
+
+
+
+
+/**
  * Implemented on the Kotlin side. Called possibly from a background thread.
  */
 public interface StateObserver {
@@ -1730,4 +1990,158 @@ internal object uniffiCallbackInterfaceStateObserver {
  * @suppress
  */
 public object FfiConverterTypeStateObserver: FfiConverterCallbackInterface<StateObserver>()
+
+
+
+
+
+/**
+ * Opens the sign-in URL in a browser; returns false if it could not.
+ * Called on the engine's auth thread (not the UI thread); an exception
+ * counts as false.
+ */
+public interface UrlOpener {
+    
+    fun `open`(`url`: kotlin.String): kotlin.Boolean
+    
+    companion object
+}
+
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceUrlOpener {
+    internal object `open`: UniffiCallbackInterfaceUrlOpenerMethod0 {
+        override fun callback(`uniffiHandle`: Long,`url`: RustBuffer.ByValue,`uniffiOutReturn`: ByteByReference,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeUrlOpener.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`open`(
+                    FfiConverterString.lift(`url`),
+                )
+            }
+            val writeReturn = { value: kotlin.Boolean -> uniffiOutReturn.setValue(FfiConverterBoolean.lower(value)) }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeUrlOpener.handleMap.remove(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceUrlOpener.UniffiByValue(
+        `open`,
+        uniffiFree,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_client_ffi_fn_init_callback_vtable_urlopener(vtable)
+    }
+}
+
+/**
+ * The ffiConverter which transforms the Callbacks in to handles to pass to Rust.
+ *
+ * @suppress
+ */
+public object FfiConverterTypeUrlOpener: FfiConverterCallbackInterface<UrlOpener>()
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?> {
+    override fun read(buf: ByteBuffer): kotlin.String? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterString.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.String?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterString.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.String?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeSecureStore: FfiConverterRustBuffer<SecureStore?> {
+    override fun read(buf: ByteBuffer): SecureStore? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeSecureStore.read(buf)
+    }
+
+    override fun allocationSize(value: SecureStore?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeSecureStore.allocationSize(value)
+        }
+    }
+
+    override fun write(value: SecureStore?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeSecureStore.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeUrlOpener: FfiConverterRustBuffer<UrlOpener?> {
+    override fun read(buf: ByteBuffer): UrlOpener? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeUrlOpener.read(buf)
+    }
+
+    override fun allocationSize(value: UrlOpener?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeUrlOpener.allocationSize(value)
+        }
+    }
+
+    override fun write(value: UrlOpener?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeUrlOpener.write(value, buf)
+        }
+    }
+}
 

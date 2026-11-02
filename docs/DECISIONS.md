@@ -372,3 +372,37 @@ advertised sizes (pixels are 2x smaller to keep files tiny) and `blurhash` is a 
 - **Fixture:** `fixtures/pixelfed_home_feed_bundle.json` is `fixtures/pixelfed/timeline_home.json` normalized by
   the D17 rules (with `{{BASE}}` = `http://127.0.0.1:8081`, image URLs left un-proxied so the sim can map them)
   plus the contract's `pixelfed_home` layout and `queries`.
+
+## D19: Client sign-in (OAuth2 PKCE in client-core, session store, 401 policy)
+
+- **Flow** (`client_core::auth` + engine, on a `canvas-engine-auth` thread; dispatch never blocks):
+  `ActionIntent::AuthLogin{instance_url}` -> `auth_json` pending -> redirect URI (loopback: bind
+  `127.0.0.1:0`, `http://127.0.0.1:<port>/callback`; custom: e.g. `canvas://oauth`) -> `POST /v1/auth/pixelfed/app`
+  -> 64-char verifier from the unreserved set (getrandom, rejection-sampled), S256 challenge, 32-char state ->
+  authorize URL (RFC 3986 percent-encoding, `%20` not `+`) -> `UrlOpener.open` -> redirect (loopback listener, or
+  `handle_auth_redirect(url)`) -> state check -> `POST /v1/auth/pixelfed/token` -> session stored -> signed_in ->
+  outbox woken -> refetch. 5 min redirect timeout. A newer AuthLogin or `logout()` cancels a pending flow.
+- **Redirect handling:** a redirect whose `state` does not match is ignored (loopback: 400 page; custom:
+  `handle_auth_redirect` returns false) and the flow keeps waiting, so a stray or forged redirect cannot kill the
+  real sign-in. Other loopback paths (favicon) get 404. `error=` with the right state ends the flow as `error`.
+  Loopback registers one upstream app per port (the pod caches apps per redirect_uri); acceptable for now.
+- **No browser:** no opener, `open` returning false or throwing -> `auth_json` error "no browser available" and the
+  authorize URL is logged; the flow keeps waiting so a human can open it (success then moves to signed_in).
+- **auth_json:** `{"state":"signed_out"}`, `{"state":"pending"}`, `{"state":"signed_in","username",
+  "display_name","avatar_url"}` (from the token response), `{"state":"error","error":"<message>"}`.
+- **Session store:** one key `pod_session:<base_url>` holding JSON `{token, username?, display_name?, avatar_url?}`
+  (a bare non-JSON value is read as a token). Restored at construction (snapshot starts signed_in). Default store
+  when the platform passes none: macOS login Keychain (`keyring` 3, apple-native only, service
+  `dev.canvas.client`; a `cfg(target_os = "macos")` dependency so Android never compiles it), in-memory
+  elsewhere. `init`/`init_with_workspace` use the default; `init_with_config` (tests) uses in-memory. Platform
+  callbacks (store, opener) run inside `catch_unwind`, so a foreign exception surfaced as a panic is contained.
+- **Bearer:** `Authorization: Bearer <session>` on workspace fetches and outbox POSTs; not on `/healthz` probes.
+- **401 policy:** fetch 401 with a session -> session cleared (memory + store), signed_out, one retry without the
+  bearer. Outbox POST 401 -> the row stays PENDING with its optimistic value (no rollback, retry count unchanged),
+  the session is cleared, and flushing pauses (`auth_blocked`, in memory) until the next sign-in wakes the worker;
+  after a restart the row is tried once more and pauses again on another 401. A user's like is never silently
+  undone just because the session expired. Note: the pod answers an invalid session on `pixelfed_home` with a 200
+  signed-out bundle, not 401, so a stale session shows the sign-in button (signing in replaces it) and is cleared
+  on the first outbox 401.
+- **Logout:** non-blocking: cancel flow, clear session + store, notify signed_out; then on a thread `POST
+  /v1/auth/logout` (best effort) and refetch.

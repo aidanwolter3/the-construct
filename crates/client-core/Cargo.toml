@@ -11,9 +11,19 @@ serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
 rusqlite.workspace = true
+# OAuth2 PKCE (auth.rs): CSPRNG verifier/state, S256 challenge.
+getrandom = "0.3"
+sha2 = "0.10"
+base64 = "0.22"
+
+# Default SecureStore on macOS: the login Keychain. Never compiled for Android.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["apple-native"] }
 
 [dev-dependencies]
 # tests/outbox.rs runs the real server (in-process, random port).
 server = { path = "../server" }
+# tests/auth.rs runs the fake Pixelfed upstream behind the real pod.
+fake-pixelfed = { path = "../fake-pixelfed" }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
