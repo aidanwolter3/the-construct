@@ -8,8 +8,12 @@
 # which fills ~/.gradle with every dependency the JVM tests and the simulator need. Gradle tries Google's Maven
 # Central mirror before repo.maven.apache.org (kmp-app/settings.gradle.kts), because Maven Central answers
 # HTTP 429 to shared cloud egress IPs. A failed step is retried with long, growing waits (30s..4min), never in a
-# tight loop, and a warm-up that still fails only prints a warning: sessions then download on first build.
-# Env: CONSTRUCT_SETUP_SKIP_WARM=1 skips the warm-up (toolchains only).
+# tight loop; a warm-up that still fails only leaves a warning: sessions then download on first build.
+#
+# The warm-up (~2-3 min) runs in the background by default, so the session starts right away. A Gradle or cargo
+# build started meanwhile waits on the cache lock instead of downloading twice. Progress goes to
+# ~/.construct-cloud-warmup.log; ~/.construct-cloud-warmup.status reads "running", "done" or "failed".
+# Env: CONSTRUCT_SETUP_WARM=background (default) | foreground | skip.
 #
 # Network access the environment needs (allow these domains in the environment's network policy):
 #   static.rust-lang.org, sh.rustup.rs, crates.io, index.crates.io, static.crates.io   (Rust)
@@ -66,23 +70,45 @@ with_backoff() {
   done
 }
 
-warm_ok=1
-if [[ "${CONSTRUCT_SETUP_SKIP_WARM:-}" != "1" ]]; then
-  (cd "$REPO_ROOT" && with_backoff cargo build -p client-ffi --release) || warm_ok=0
+WARM_LOG="$HOME/.construct-cloud-warmup.log"
+WARM_STATUS="$HOME/.construct-cloud-warmup.status"
+
+warm_caches() {
+  local ok=1
+  echo running >"$WARM_STATUS"
+  (cd "$REPO_ROOT" && with_backoff cargo build -p client-ffi --release) || ok=0
   # Compiling main + test sources resolves everything :shared:allTests, :desktopApp:test and :desktopApp:simulate
-  # use. --no-daemon so no Gradle daemon outlives the setup script.
+  # use. --no-daemon so no Gradle daemon outlives the warm-up.
   (cd "$REPO_ROOT/kmp-app" && with_backoff ./gradlew -Dorg.gradle.java.home="$JAVA_HOME_GUESS" -PskipRustBuild \
-    --no-daemon --quiet :shared:compileTestKotlinDesktop :desktopApp:compileTestKotlin) || warm_ok=0
-fi
+    --no-daemon --quiet :shared:compileTestKotlinDesktop :desktopApp:compileTestKotlin) || ok=0
+  if [[ $ok == 1 ]]; then
+    echo done >"$WARM_STATUS"
+  else
+    echo failed >"$WARM_STATUS"
+    echo "cloud_setup: WARNING: cache warm-up failed (see above); the first build will download dependencies." >&2
+  fi
+}
+
+warm_mode="${CONSTRUCT_SETUP_WARM:-background}"
+case "$warm_mode" in
+  foreground) warm_caches 2>&1 | tee "$WARM_LOG" ;;
+  background)
+    # setsid + nohup: detached from the setup script, so it keeps running after the script returns.
+    export -f warm_caches with_backoff
+    export REPO_ROOT JAVA_HOME_GUESS WARM_STATUS PATH
+    echo running >"$WARM_STATUS"
+    setsid nohup bash -c warm_caches >"$WARM_LOG" 2>&1 </dev/null &
+    echo "Cache warm-up running in the background: log $WARM_LOG, status $WARM_STATUS"
+    ;;
+  skip) ;;
+  *) echo "cloud_setup: unknown CONSTRUCT_SETUP_WARM=$warm_mode (background|foreground|skip)" >&2; exit 2 ;;
+esac
 
 cat <<EOF
 Cloud setup done.
   rustc:  $(rustc --version)
-  java:   $(java -version 2>&1 | head -n 1)
+  java:   $(java -version 2>&1 | grep -v "^Picked up" | head -n 1)
 Export for Gradle (kmp-app/gradle.properties pins a macOS JDK path; override it):
   export JAVA_HOME=$JAVA_HOME_GUESS
   ./gradlew -Dorg.gradle.java.home="\$JAVA_HOME" -PskipRustBuild ...
 EOF
-if [[ $warm_ok != 1 ]]; then
-  echo "cloud_setup: WARNING: cache warm-up failed (see above); the first build in a session will download dependencies." >&2
-fi
