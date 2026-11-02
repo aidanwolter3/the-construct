@@ -65,6 +65,8 @@ kotlin {
         }
         androidMain.dependencies {
             api("net.java.dev.jna:jna:${libs.versions.jna.get()}@aar")
+            // BackHandler (PlatformBackHandler's Android actual).
+            implementation(libs.androidx.activity.compose)
         }
     }
 }

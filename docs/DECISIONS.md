@@ -610,14 +610,20 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   as insets (no window pan) and the root's `safeDrawingPadding` lifts the panel; the status line is a polite live
   region.
 - **Status:** `EngineSnapshot.agentJson` (default `{"state":"idle"}`) -> `CanvasState.agent` (`AgentInfo`):
-  "Applying...", "Layout updated (v3, rules)", or the error message.
+  "Applying...", "Layout updated (v3, rules)", the engine's "No change needed (v3)" when `unchanged`, or the error
+  message. A send whose result equals the status before it (the same "No change needed" twice) still completes:
+  the pending send is re-based on `running`.
+- **Back:** `expect fun PlatformBackHandler(enabled, onBack)` (commonMain); Android actual = activity-compose
+  `BackHandler` (dependency added to `:shared`'s androidMain), desktop actual = a no-op unless a `LocalBackPresses`
+  is provided (tests). The open panel closes on Back, keeping the typed text; closed, Back is not consumed.
 - **Recomposition stability:** workspace slots are keyed by `slot_id` and the PostCard's author/media/action slots by
   node kind (`postCardSlotKeys`), on top of FeedList items keyed by URI. So a carousel keeps its page when captions are
   hidden, when the carousel moves to the top slot, and when a slot is inserted above the feed (tested).
 - **Fixture mode:** `FakeEngineBridge` answers `PromptAgent` with `FakeLayoutRules` (hide captions, media at the top /
   photos first, add a weather widget; composable, tree-walking, same shapes as the server's rules provider), bumps
   its layout version (not when the layout is already in the requested state, like the server's `unchanged`) and
-  reports provider `fake-rules`; unknown prompts -> error "unsupported prompt (try: ...)", a caption/media rule on a
+  reports provider `fake-rules` ("No change needed (vN)" with `unchanged` when nothing changed); unknown prompts ->
+  error "I can't do that yet. Try: ..." (client-core's wording); the weather slot is the server's padded Container; a caption/media rule on a
   layout without a PostCard -> the server's "this layout has no pixelfed://PostCard", offline -> error. Live mode sends the intent to the real engine.
 - **Simulator `type <target> <text>`:** clears the field then `performTextInput`; target `tag:<t>`, one word, or
   `"quoted text"`.
@@ -638,11 +644,16 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   version is already applied (the SSE refetch may win the race): both paths are idempotent. Not applied (a refetch
   instead) when no versioned layout is on display (`layout_version` is `None`, e.g. the signed-out `pixelfed_home`
   screen with `CANVAS_AGENT_OPEN=1`) or the session changed since the request. `agent_json` =
-  `{"state":"done","message":"Layout updated (vN, <provider>)","provider","layout_version"}`.
-- **Errors:** non-2xx -> `error` with `"<error>: <detail>"`, `"<error>; try: <supported...>"` (unsupported_prompt),
-  or `HTTP <code>: <body start>`, plus `provider` when the pod names one; transport failure -> `"offline: try again
-  when online"`. A 401 for the current session signs out like a fetch 401 (D19) and refetches; signed out, the
-  message asks to sign in.
+  `{"state":"done","message":"Layout updated (vN, <provider>)","provider","layout_version"}`; an `"unchanged": true`
+  response -> `"message":"No change needed (vN)"` plus `"unchanged":true`.
+- **Errors:** non-2xx -> `error` with a sentence per known case: `unsupported_prompt` -> "I can't do that yet. Try:
+  <first 3 supported>"; `invalid_patch` -> "That change would break the layout: <detail>"; 409 / `conflict` -> "The
+  layout changed meanwhile; please try again."; `provider_not_configured` / `provider_error` -> fixed sentences
+  (details stay in the pod log); 401 -> "Sign in to change the layout.". Others: `"<error>: <detail>"` or
+  `HTTP <code>: <body start>`; plus `provider` when the pod names one; transport failure -> `"offline: try again
+  when online"`. A 401 for the current session signs out like a fetch 401 (D19) and refetches.
+- **Stale status:** a fetch whose layout version is newer than the applied one resets a `done`/`error` status to
+  idle unless that status names this version (the prompt's own SSE echo); `running` is left alone.
 - **Layout version:** from `X-Canvas-Layout-Version` on every applied fetch (absent -> `None`, e.g. the signed-out
   `pixelfed_home` screen), or the prompt response's `layout_version`. In memory only (a restart refetches anyway). A
   fetch whose header is older than the applied version (it started before a prompt response was applied) keeps the
@@ -658,7 +669,8 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   same sign-out as a fetch 401.
 - **Parser:** WHATWG event-stream rules: LF/CRLF/CR line ends (also split across chunks), `:` comments ignored,
   one leading space stripped, multi-line `data` joined with `\n`, blank line dispatches only if data was seen,
-  unknown fields ignored. `event: layout` with `{"workspace_id","version"}` for this workspace and a version newer
+  unknown fields ignored. A line or one event's data over 64 KB (`MAX_EVENT_BYTES`) is an error: the connection is
+  dropped and reopened (with the usual backoff) instead of buffering without bound. `event: layout` with `{"workspace_id","version"}` for this workspace and a version newer
   than the applied one (or none known) -> refetch; equal/older ignored, so the server's on-connect "current
   version" message costs nothing unless the client missed a change. The refetch merge (D14) re-applies PENDING
   outbox rows, so optimistic values survive a pushed layout change.
@@ -689,7 +701,8 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   explicit values only for slots that change (so they compose and are idempotent). Nodes are found by walking the
   JSON for `pixelfed://PostCard` objects and by node kind inside their four slots, not by index. Moves ("media at
   the top", "action bar above the photo") move one slot node to a new position and keep the others' relative order
-  (for the built-in card both are the contract's swaps). A recognized rule with nothing to act on (e.g. captions on
+  (for the built-in card both are the contract's swaps). The weather slot is a `core://Container` (Vertical,
+  `padding_dp` 16) around the Caption text, so it is not flush with the screen edge. A recognized rule with nothing to act on (e.g. captions on
   `home`) is `unsupported_prompt` with a `detail`.
 - **Anthropic provider:** raw reqwest, non-streaming (`max_tokens` 16000 fits the 120 s timeout), structured outputs
   with the contract's PATCH_SCHEMA; the system prompt is two blocks, instructions + registry first (with
@@ -699,6 +712,9 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
   retried twice (honoring `retry-after`, capped at 30 s, else 1 s doubling); connect errors retried, timeouts not.
   The whole call (retries and delays included) is bounded by 170 s, under the client's 180 s. `AnthropicConfig`'s
   `Debug` redacts the key.
+- **Request hygiene:** workspace ids are 1..=64 chars of `[A-Za-z0-9_-]` (`layouts::is_valid_workspace_id`); else
+  400 `invalid_workspace_id` with a truncated echo, on agent, versions, rollback, events and the workspace GET. The
+  agent/history 401 carries `"detail":"a valid pod session is required (or CANVAS_AGENT_OPEN=1 for local demos)"`.
 - **Registry:** `schemars::JsonSchema` derived on the protocol AST/intent types behind protocol's `schema` feature
   (the server enables it); `agent::registry()` = `schema_for!(UiNode)` (intents under `$defs`). A new variant must
   derive the schema to compile, and a test checks every variant tag is in the registry.

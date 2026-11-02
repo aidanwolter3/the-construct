@@ -291,7 +291,9 @@ enum FetchOutcome {
 ///   error state, `message` = [`LOADING_FEED_MESSAGE`] while `pending` after
 ///   the code exchange until the first signed-in fetch is done).
 /// - `agent_json`: the last layout prompt, `{"state":"idle"|"running"|
-///   "done"|"error","message"?,"provider"?,"layout_version"?}`.
+///   "done"|"error","message"?,"provider"?,"layout_version"?,"unchanged"?}`
+///   (`unchanged: true` when the pod found nothing to change). Back to idle
+///   when a newer layout version arrives that the last prompt didn't make.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateSnapshot {
     pub workspace_json: String,
@@ -509,6 +511,19 @@ impl State {
         self.workspace = Some(workspace);
         self.entities = merged;
         self.queries = queries;
+    }
+
+    /// A fetch brought layout `version`, newer than the applied one. If the
+    /// last prompt's status is `done` / `error` and did not produce that
+    /// version, the status describes an older layout: back to `idle`, so
+    /// the panel shows no stale "Layout updated (v2)". A `running` prompt
+    /// keeps its status (the refetch may carry its own result).
+    fn clear_stale_agent_status(&mut self, version: u64) {
+        let a: Value = serde_json::from_str(&self.agent_json).unwrap_or_default();
+        let finished = matches!(a["state"].as_str(), Some("done" | "error"));
+        if finished && a["layout_version"].as_u64() != Some(version) {
+            self.agent_json = IDLE_AGENT_JSON.to_owned();
+        }
     }
 
     /// Replace only the layout (an agent response carries no entities):
@@ -1323,7 +1338,14 @@ impl Inner {
                             );
                             spec.workspace = current.clone();
                         }
-                        _ => st.layout_version = version,
+                        _ => {
+                            if let (Some(v), Some(have)) = (version, st.layout_version)
+                                && v > have
+                            {
+                                st.clear_stale_agent_status(v);
+                            }
+                            st.layout_version = version;
+                        }
                     }
                     st.apply_fetched(&self.workspace_id, spec);
                     st.is_online = true;
@@ -1812,11 +1834,6 @@ impl Inner {
                 .and_then(|v| json_str(&v, "provider"));
             eprintln!("[CanvasEngine] agent: HTTP {code}: {message}");
             if current() {
-                let message = if code == 401 && token.is_none() {
-                    format!("sign in to change the layout ({message})")
-                } else {
-                    message
-                };
                 self.set_agent_json(agent_json("error", Some(&message), provider.as_deref(), None));
             }
             if code == 401
@@ -1832,9 +1849,14 @@ impl Inner {
             .and_then(|v| {
                 let ws = v.get("workspace").cloned().ok_or("no workspace")?;
                 let layout: UiNode = serde_json::from_value(ws).map_err(|e| e.to_string())?;
-                Ok((layout, v.get("layout_version").and_then(Value::as_u64), json_str(&v, "provider")))
+                Ok((
+                    layout,
+                    v.get("layout_version").and_then(Value::as_u64),
+                    json_str(&v, "provider"),
+                    v.get("unchanged").and_then(Value::as_bool).unwrap_or(false),
+                ))
             });
-        let (layout, version, provider) = match parsed {
+        let (layout, version, provider, unchanged) = match parsed {
             Ok(p) => p,
             Err(e) => {
                 eprintln!("[CanvasEngine] agent: unusable response ({e}): {body}");
@@ -1882,12 +1904,25 @@ impl Inner {
                 );
             }
             if current() {
-                let message = format!(
-                    "Layout updated (v{}, {})",
-                    version.map_or("?".into(), |v| v.to_string()),
-                    provider.as_deref().unwrap_or("unknown provider")
-                );
-                st.agent_json = agent_json("done", Some(&message), provider.as_deref(), version);
+                let v = version.map_or("?".into(), |v| v.to_string());
+                st.agent_json = if unchanged {
+                    // Already in the requested state: no new version.
+                    let mut a: Value = serde_json::from_str(&agent_json(
+                        "done",
+                        Some(&format!("No change needed (v{v})")),
+                        provider.as_deref(),
+                        version,
+                    ))
+                    .unwrap_or_default();
+                    a["unchanged"] = json!(true);
+                    a.to_string()
+                } else {
+                    let message = format!(
+                        "Layout updated (v{v}, {})",
+                        provider.as_deref().unwrap_or("unknown provider")
+                    );
+                    agent_json("done", Some(&message), provider.as_deref(), version)
+                };
             }
             st.seq += 1;
             st.snapshot()
@@ -2301,9 +2336,9 @@ fn post_prompt(url: &str, body: &Value, token: Option<&str>) -> Result<(u16, Str
     Ok((code, resp.text().map_err(|e| e.to_string())?))
 }
 
-/// What a failed agent call shows: the pod's `error` code with its
-/// `detail` (or its `supported` example prompts), else the status and the
-/// start of the body.
+/// What a failed agent call shows: a sentence for the pod's known `error`
+/// codes (and 401 / 409), else the code with its `detail`, else the status
+/// and the start of the body.
 fn agent_error_message(code: u16, body: &str) -> String {
     let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
     let error = v.get("error").and_then(Value::as_str).filter(|s| !s.is_empty());
@@ -2315,14 +2350,27 @@ fn agent_error_message(code: u16, body: &str) -> String {
     let supported: Vec<&str> = v
         .get("supported")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .map(|a| a.iter().filter_map(Value::as_str).take(3).collect())
         .unwrap_or_default();
+    if code == 401 {
+        return "Sign in to change the layout.".to_owned();
+    }
+    if code == 409 || error == Some("conflict") {
+        return "The layout changed meanwhile; please try again.".to_owned();
+    }
     match (error, detail) {
+        (Some("unsupported_prompt"), _) if supported.is_empty() => "I can't do that yet.".to_owned(),
+        (Some("unsupported_prompt"), _) => {
+            format!("I can't do that yet. Try: {}", supported.join("; "))
+        }
+        (Some("invalid_patch"), Some(d)) => format!("That change would break the layout: {d}"),
+        (Some("invalid_patch"), None) => "That change would break the layout.".to_owned(),
+        (Some("provider_not_configured"), _) => {
+            "The AI layout provider isn't configured on this pod.".to_owned()
+        }
+        (Some("provider_error"), _) => "The AI provider failed; please try again.".to_owned(),
         (Some(e), Some(d)) => format!("{e}: {d}"),
         (None, Some(d)) => d,
-        (Some(e), None) if !supported.is_empty() => {
-            format!("{e}; try: {}", supported.join("; "))
-        }
         (Some(e), None) => e.to_owned(),
         (None, None) => {
             let text: String = body.trim().chars().take(200).collect();

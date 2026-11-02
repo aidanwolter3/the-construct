@@ -133,12 +133,18 @@ class FakeEngineBridge(
                 null -> agentJson(state = "error", message = "offline: the layout agent needs a connection")
                 is FakeLayoutRules.Outcome.Failed -> agentJson(state = "error", message = result.message)
                 is FakeLayoutRules.Outcome.Applied -> {
-                    // Already in the requested state: no new version (as the server answers `unchanged`).
                     if (result.layout != workspace) {
                         workspace = result.layout
                         layoutVersion++
+                        agentJson(state = "done", provider = FakeLayoutRules.PROVIDER, layoutVersion = layoutVersion)
+                    } else {
+                        // Already in the requested state: no new version, reported like client-core reports the
+                        // server's `unchanged: true`.
+                        agentJson(
+                            state = "done", message = "No change needed (v$layoutVersion)",
+                            provider = FakeLayoutRules.PROVIDER, layoutVersion = layoutVersion, unchanged = true,
+                        )
                     }
-                    agentJson(state = "done", provider = FakeLayoutRules.PROVIDER, layoutVersion = layoutVersion)
                 }
             }
             println("[sim] agent prompt '$prompt' -> $agentJson")
@@ -240,13 +246,20 @@ class FakeEngineBridge(
     }
 
     companion object {
-        private fun agentJson(state: String, message: String? = null, provider: String? = null, layoutVersion: Int? = null): String =
+        private fun agentJson(
+            state: String,
+            message: String? = null,
+            provider: String? = null,
+            layoutVersion: Int? = null,
+            unchanged: Boolean = false,
+        ): String =
             JsonObject(
                 buildMap {
                     put("state", JsonPrimitive(state))
                     message?.let { put("message", JsonPrimitive(it)) }
                     provider?.let { put("provider", JsonPrimitive(it)) }
                     layoutVersion?.let { put("layout_version", JsonPrimitive(it)) }
+                    if (unchanged) put("unchanged", JsonPrimitive(true))
                 },
             ).toString()
 

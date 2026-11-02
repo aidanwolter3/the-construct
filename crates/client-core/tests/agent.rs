@@ -176,6 +176,7 @@ fn handle(mut stream: TcpStream, st: &StubState) {
             st.agent_requests.lock().unwrap().push((auth, body));
             let reply = st.agent_reply.lock().unwrap().clone();
             match reply {
+                Some((200, body)) => respond(&mut stream, "200 OK", "", &body),
                 Some((code, body)) => respond(&mut stream, &format!("{code} Error"), "", &body),
                 None => {
                     let v = {
@@ -349,23 +350,42 @@ fn prompt_errors_show_the_pods_message_and_keep_the_layout() {
     wait_until("agent error", || agent(&engine.snapshot())["state"] == "error");
     let snap = engine.snapshot();
     let a = agent(&snap);
-    assert_eq!(a["message"], "invalid_patch: missing field `action_slot`");
+    assert_eq!(a["message"], "That change would break the layout: missing field `action_slot`");
     assert_eq!(a["provider"], "rules");
     assert_eq!(title(&snap), "Home v1", "layout unchanged");
 
-    *stub.st.agent_reply.lock().unwrap() = Some((
+    let expect = |code: u16, body: Value, want: &str| {
+        *stub.st.agent_reply.lock().unwrap() = Some((code, body.to_string()));
+        engine.dispatch(&prompt("make it pop"));
+        wait_until(want, || agent(&engine.snapshot())["message"] == want);
+        assert_eq!(agent(&engine.snapshot())["state"], "error");
+    };
+    expect(
         422,
-        json!({"error": "unsupported_prompt", "supported": ["Hide post captions", "Photos first"]})
-            .to_string(),
-    ));
-    engine.dispatch(&prompt("make it pop"));
-    wait_until("agent error", || {
-        agent(&engine.snapshot())["message"]
-            .as_str()
-            .is_some_and(|m| m.starts_with("unsupported_prompt"))
-    });
-    let msg = agent(&engine.snapshot())["message"].as_str().unwrap().to_owned();
-    assert!(msg.contains("Hide post captions") && msg.contains("Photos first"), "{msg}");
+        json!({"error": "unsupported_prompt", "detail": "the rules provider does not understand this prompt",
+               "supported": ["Hide post captions", "Photos first", "Show captions", "Reset layout"]}),
+        "I can't do that yet. Try: Hide post captions; Photos first; Show captions",
+    );
+    expect(
+        409,
+        json!({"error": "conflict", "detail": "the layout kept changing; try again"}),
+        "The layout changed meanwhile; please try again.",
+    );
+    expect(
+        503,
+        json!({"error": "provider_not_configured", "provider": "anthropic", "detail": "ANTHROPIC_API_KEY is not set"}),
+        "The AI layout provider isn't configured on this pod.",
+    );
+    expect(
+        502,
+        json!({"error": "provider_error", "provider": "anthropic", "detail": "HTTP 500"}),
+        "The AI provider failed; please try again.",
+    );
+    expect(
+        401,
+        json!({"error": "unauthorized", "detail": "a valid pod session is required"}),
+        "Sign in to change the layout.",
+    );
 
     *stub.st.agent_reply.lock().unwrap() = Some((503, "upstream down".into()));
     engine.dispatch(&prompt("Hide post captions"));
@@ -383,6 +403,69 @@ fn prompt_errors_show_the_pods_message_and_keep_the_layout() {
     assert_eq!(agent(&offline.snapshot())["state"], "running");
     wait_until("offline error", || agent(&offline.snapshot())["state"] == "error");
     assert_eq!(agent(&offline.snapshot())["message"], AGENT_OFFLINE);
+}
+
+#[test]
+fn unchanged_response_reports_no_change_needed() {
+    let stub = Stub::start();
+    let engine = engine(&stub, "");
+    ready(&stub, &engine);
+    let resp = json!({
+        "version": "1.0.0", "workspace": layout(1), "entities": {},
+        "layout_version": 1, "provider": "rules", "model": null, "patch": [], "unchanged": true,
+    });
+    *stub.st.agent_reply.lock().unwrap() = Some((200, resp.to_string()));
+    engine.dispatch(&prompt("add a weather widget"));
+    wait_until("agent done", || agent(&engine.snapshot())["state"] == "done");
+    let a = agent(&engine.snapshot());
+    assert_eq!(a["message"], "No change needed (v1)");
+    assert_eq!(a["unchanged"], true);
+    assert_eq!(a["layout_version"], 1);
+    assert_eq!(title(&engine.snapshot()), "Home v1");
+}
+
+#[test]
+fn outside_layout_change_resets_a_finished_prompt_status_to_idle() {
+    let stub = Stub::start();
+    let engine = engine(&stub, "");
+    ready(&stub, &engine);
+    engine.dispatch(&prompt("Hide post captions"));
+    wait_until("agent done", || agent(&engine.snapshot())["state"] == "done");
+    assert_eq!(agent(&engine.snapshot())["layout_version"], 2);
+    // The SSE echo of the prompt's own version keeps the status.
+    stub.push_layout(2);
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(agent(&engine.snapshot())["state"], "done");
+    // A rollback elsewhere (v3) makes "Layout updated (v2)" stale.
+    stub.set_version(3);
+    stub.push_layout(3);
+    wait_until("layout v3", || title(&engine.snapshot()) == "Home v3");
+    assert_eq!(agent(&engine.snapshot()), json!({"state": "idle"}));
+
+    // An error status goes stale the same way.
+    *stub.st.agent_reply.lock().unwrap() =
+        Some((422, json!({"error": "unsupported_prompt", "supported": ["Photos first"]}).to_string()));
+    engine.dispatch(&prompt("make it pop"));
+    wait_until("agent error", || agent(&engine.snapshot())["state"] == "error");
+    stub.set_version(4);
+    stub.push_layout(4);
+    wait_until("layout v4", || title(&engine.snapshot()) == "Home v4");
+    assert_eq!(agent(&engine.snapshot()), json!({"state": "idle"}));
+}
+
+#[test]
+fn oversized_sse_line_drops_the_connection_and_reconnects() {
+    let stub = Stub::start();
+    let engine = engine(&stub, "");
+    ready(&stub, &engine);
+    assert_eq!(stub.event_conns(), 1);
+    // 70 KB without a line end.
+    stub.push_raw(&"x".repeat(70 * 1024));
+    wait_until("reconnect", || stub.event_conns() >= 2);
+    // The new connection works.
+    stub.set_version(2);
+    stub.push_layout(2);
+    wait_until("layout v2", || title(&engine.snapshot()) == "Home v2");
 }
 
 #[test]

@@ -198,6 +198,14 @@ class CanvasControllerTest {
         assertEquals("Layout updated", agentStatusText(AgentInfo("done")))
         assertEquals("unsupported prompt", agentStatusText(AgentInfo("error", "unsupported prompt")))
         assertEquals("The layout agent failed", agentStatusText(AgentInfo("error")))
+        // `unchanged: true` (the pod found nothing to change): the engine's message, not "Layout updated".
+        val unchanged = AgentInfo.parse(
+            """{"state":"done","message":"No change needed (v2)","provider":"rules","layout_version":2,"unchanged":true}""",
+        )
+        assertEquals(AgentInfo("done", "No change needed (v2)", "rules", 2, unchanged = true), unchanged)
+        assertEquals("No change needed (v2)", agentStatusText(unchanged))
+        assertEquals("No change needed (v4)", agentStatusText(AgentInfo("done", layoutVersion = 4, unchanged = true)))
+        assertEquals(false, AgentInfo.parse("""{"state":"done","unchanged":"yes"}""").unchanged)
     }
 
     @Test

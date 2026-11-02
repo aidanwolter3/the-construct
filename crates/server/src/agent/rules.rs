@@ -173,6 +173,21 @@ fn body_caption() -> Value {
     json!({ "type": TEXT, "value_expr": "entity.caption", "style": "Body" })
 }
 
+/// The weather placeholder: a padded Container, so the text does not touch
+/// the screen edge.
+pub fn weather_content() -> Value {
+    json!({
+        "type": "core://Container",
+        "orientation": "Vertical",
+        "padding_dp": 16,
+        "children": [{
+            "type": TEXT,
+            "value_expr": "Weather widget (not available yet)",
+            "style": "Caption"
+        }]
+    })
+}
+
 /// The four slot nodes of the card at `card` (render order).
 fn slot_nodes(doc: &Value, card: &str) -> Vec<Value> {
     let card = pointer_get(doc, card);
@@ -282,11 +297,7 @@ fn rule_ops(rule: Rule, doc: &Value) -> Result<Vec<Value>, String> {
                 "value": {
                     "slot_id": WEATHER_SLOT,
                     "provider_uri": "core://placeholder",
-                    "content": {
-                        "type": TEXT,
-                        "value_expr": "Weather widget (not available yet)",
-                        "style": "Caption"
-                    }
+                    "content": weather_content()
                 }
             })])
         }

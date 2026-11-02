@@ -50,6 +50,41 @@ pub fn is_versioned(workspace_id: &str) -> bool {
     VERSIONED.contains(&workspace_id)
 }
 
+/// Longest accepted workspace id.
+pub const MAX_WORKSPACE_ID_LEN: usize = 64;
+
+/// 1..=64 characters of `[A-Za-z0-9_-]`.
+pub fn is_valid_workspace_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_WORKSPACE_ID_LEN
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// `id` cut to [`MAX_WORKSPACE_ID_LEN`] characters, for echoing in errors.
+pub fn truncated_id(id: &str) -> String {
+    let mut chars = id.chars();
+    let mut out: String = chars.by_ref().take(MAX_WORKSPACE_ID_LEN).collect();
+    if chars.next().is_some() {
+        out.push_str("...");
+    }
+    out
+}
+
+/// 400 for a malformed workspace id (`None` when it is well-formed). The
+/// echo is truncated so a huge id is not reflected back.
+pub fn reject_invalid_workspace_id(id: &str) -> Option<Response> {
+    if is_valid_workspace_id(id) {
+        return None;
+    }
+    Some(json_error(
+        StatusCode::BAD_REQUEST,
+        json!({ "error": "invalid_workspace_id", "id": truncated_id(id),
+                "detail": format!("a workspace id is 1..={MAX_WORKSPACE_ID_LEN} characters of [A-Za-z0-9_-]") }),
+    ))
+}
+
 /// A new layout version was committed (what the SSE channel carries).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayoutEvent {
@@ -208,9 +243,20 @@ pub async fn require_agent_auth(state: &Arc<AppState>, headers: &HeaderMap) -> O
     }
     match valid_session(state, headers).await {
         Ok(Some(true)) => None,
-        Ok(_) => Some(unauthorized()),
+        Ok(_) => Some(agent_unauthorized()),
         Err(e) => Some(e.into_response()),
     }
+}
+
+/// 401 for the agent / history routes, saying what would be accepted.
+fn agent_unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        [(axum::http::header::WWW_AUTHENTICATE, "Bearer")],
+        Json(json!({ "error": "unauthorized",
+                     "detail": "a valid pod session is required (or CANVAS_AGENT_OPEN=1 for local demos)" })),
+    )
+        .into_response()
 }
 
 /// `None`: no bearer; `Some(valid)` otherwise.
@@ -229,9 +275,12 @@ async fn valid_session(
 }
 
 fn not_versioned(id: &str) -> Response {
+    if let Some(r) = reject_invalid_workspace_id(id) {
+        return r;
+    }
     json_error(
         StatusCode::NOT_FOUND,
-        json!({ "error": "workspace_not_found", "id": id,
+        json!({ "error": "workspace_not_found", "id": truncated_id(id),
                 "versioned": VERSIONED }),
     )
 }

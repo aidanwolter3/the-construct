@@ -1,5 +1,6 @@
 package org.genui.canvas.desktop.sim
 
+import org.genui.canvas.Orientation
 import org.genui.canvas.SlotSpec
 import org.genui.canvas.TextStyle
 import org.genui.canvas.UiNode
@@ -11,11 +12,13 @@ import org.genui.canvas.UiNode
  * - `hide (post )?captions`: every PostCard caption becomes an empty Caption text (rendered with no space);
  * - `media at the (very )?top` / `photos first`: in every PostCard whose media slot holds the carousel, the carousel
  *   and the author header swap slots (PostCard renders author, media, action, caption in that order);
- * - `add a weather widget`: a placeholder slot `weather` at the top (idempotent).
+ * - `add a weather widget`: a placeholder slot `weather` at the top, a padded Container around a Caption text
+ *   (idempotent).
  */
 object FakeLayoutRules {
     const val PROVIDER = "fake-rules"
-    const val UNSUPPORTED = "unsupported prompt (try: hide captions, media at the very top, add a weather widget)"
+    /** Worded like client-core's message for the pod's `unsupported_prompt`. */
+    const val UNSUPPORTED = "I can't do that yet. Try: Hide captions; Media at the very top; Add a weather widget"
 
     private val HIDE_CAPTIONS = Regex("""hide (post )?captions""", RegexOption.IGNORE_CASE)
     private val MEDIA_TOP = Regex("""media at the (very )?top|photos first""", RegexOption.IGNORE_CASE)
@@ -53,12 +56,19 @@ object FakeLayoutRules {
             matched = true
             if (out is UiNode.Workspace && out.slots.none { it.slotId == "weather" }) {
                 // The same slot the server's rules provider adds.
-                val weather = SlotSpec("weather", "core://placeholder", UiNode.Text("Weather widget (not available yet)", TextStyle.Caption))
+                val weather = SlotSpec("weather", "core://placeholder", WEATHER_CONTENT)
                 out = out.copy(slots = listOf(weather) + out.slots)
             }
         }
         return if (matched) Outcome.Applied(out) else Outcome.Failed(UNSUPPORTED)
     }
+
+    /** The server rules provider's weather placeholder: padded so the text does not touch the screen edge. */
+    val WEATHER_CONTENT: UiNode = UiNode.Container(
+        Orientation.Vertical,
+        16,
+        listOf(UiNode.Text("Weather widget (not available yet)", TextStyle.Caption)),
+    )
 
     private fun hasPostCard(node: UiNode): Boolean = when (node) {
         is UiNode.Workspace -> node.slots.any { hasPostCard(it.content) }

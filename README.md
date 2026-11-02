@@ -73,7 +73,10 @@ are not versioned). The signed-out `pixelfed_home` screen is not versioned.
   and returns `{version, rolled_back_to, workspace}`. Unknown version: 404 `version_not_found`; unversioned
   workspace: 404 `workspace_not_found`; bad body: 400.
 - Versions and rollback (and the agent endpoint) need a valid pod session (`Authorization: Bearer <session>`,
-  else 401) unless the server runs with `CANVAS_AGENT_OPEN=1` (dev/demo only; logged as a warning at startup).
+  else 401 with a `detail` saying so) unless the server runs with `CANVAS_AGENT_OPEN=1` (dev/demo only; logged as a
+  warning at startup).
+- Workspace ids are 1..=64 characters of `[A-Za-z0-9_-]`; anything else gets 400 `invalid_workspace_id` (with the
+  id truncated in the echo) on the workspace GET, versions, rollback, events and the agent endpoint.
 - `GET /v1/workspaces/{id}/events` (SSE): first message is the current version, then one message per new version
   of that workspace, `event: layout` / `data: {"version":N,"workspace_id":"home"}`, and a `: keepalive` comment
   every 15 s. No session needed (events carry only a version number; clients refetch the workspace, which is
@@ -105,8 +108,8 @@ without a Pixelfed session.
   answers 503 (the server still starts).
   - `rules`: deterministic and offline. Phrases (case-insensitive, composable in one prompt, applied in the order
     written, idempotent): "hide (post) captions", "show captions", "media at the (very) top" / "photos first",
-    "move the action bar above the photo", "add a weather widget (at the top)" (a placeholder text slot; no weather
-    component exists), "reset layout" (-> 422 pointing at rollback), and "remove the action bar", which is
+    "move the action bar above the photo", "add a weather widget (at the top)" (a placeholder slot: a text in a
+    `core://Container` with 16 dp padding; no weather component exists), "reset layout" (-> 422 pointing at rollback), and "remove the action bar", which is
     rejected on purpose (422 `invalid_patch`) to demonstrate validation.
   - `anthropic`: the Messages API with structured outputs. `ANTHROPIC_API_KEY`; `ANTHROPIC_BASE_URL` (default
     `https://api.anthropic.com`); `CANVAS_LLM_MODEL` (model id; default in `agent::anthropic::DEFAULT_MODEL`);
@@ -400,14 +403,18 @@ client-core side of M7 (docs/DECISIONS.md D24):
 
 - `{"intent":"action.agent.prompt","prompt_text":".."}` posts the prompt to `POST /v1/agent/modify_layout` (with
   the engine's workspace id and the bearer when signed in) on a background thread. `agent_json` in every snapshot:
-  `{"state":"idle"}` -> `running` -> `done` (`message` "Layout updated (vN, rules)", `provider`, `layout_version`;
-  the returned layout is shown at once, entities and queued actions untouched) or `error` with the pod's
-  `error`/`detail` (e.g. `invalid_patch: ...`) or "offline: try again when online".
+  `{"state":"idle"}` -> `running` -> `done` (`message` "Layout updated (vN, rules)", or "No change needed (vN)" with
+  `unchanged: true`; `provider`, `layout_version`; the returned layout is shown at once, entities and queued actions
+  untouched) or `error` with a readable message: "I can't do that yet. Try: <3 examples>" (`unsupported_prompt`),
+  "That change would break the layout: <detail>" (`invalid_patch`), "The layout changed meanwhile; please try
+  again." (409), "The AI layout provider isn't configured on this pod.", "The AI provider failed; please try
+  again.", "Sign in to change the layout." (401), or "offline: try again when online". A newer layout version
+  arriving from elsewhere (SSE refetch) resets a finished status to idle, so the panel never shows a stale result.
 - The engine remembers the served layout version (`X-Canvas-Layout-Version`) and, while online, keeps
   `GET /v1/workspaces/<id>/events` open on a `canvas-engine-events` thread. A `layout` event with a newer version
   refetches the workspace (queued optimistic changes are re-applied on top); equal or older versions are ignored.
   The stream reconnects after errors with a 1 s -> 30 s backoff (and after 45 s of silence), and closes when the
-  engine is dropped. Log lines: `[CanvasEngine] events: connected to ...`, `events: layout v3 pushed (have v2);
+  engine is dropped; a line or event over 64 KB drops the connection and reconnects. Log lines: `[CanvasEngine] events: connected to ...`, `events: layout v3 pushed (have v2);
   refetching`, `agent: applied layout v3 (rules)`.
 - FFI: `FfiStateSnapshot.agentJson` -> `EngineSnapshot.agentJson`.
 
@@ -564,7 +571,8 @@ server. That server rejects a `.../decrement` that would take the count below 0;
 field back and re-applies later queued rows (D8). The fake also answers the layout agent (`PromptAgent`) with a small
 built-in rules subset (D23): "hide (post) captions", "media at the (very) top" / "photos first" and "add a weather
 widget", composable in one prompt; each success bumps the layout version and the panel shows
-"Layout updated (vN, fake-rules)"; anything else shows "unsupported prompt (try: ...)", and so does nothing while
+"Layout updated (vN, fake-rules)" ("No change needed (vN)" when the layout is already in that state); anything
+else shows "I can't do that yet. Try: ...", and so does nothing while
 offline (error "offline: ..."). **Live mode** runs the real Rust engine through JNA against
 the server. By default it uses a fresh temp storage dir, so it neither reads nor writes `~/.canvas`; pass
 `-Pstorage=<dir>` to keep a persistent one. If the workspace
@@ -621,7 +629,8 @@ e.g. `click tag:like:pixelfed://posts/781254316723458049` or `swipe-left tag:car
 The layout agent's controls (drawn over every workspace once it has loaded): the FAB `agent-fab` (content
 description `Edit layout with AI`), and in its panel the field `agent-prompt`, the chips `Hide captions`,
 `Media at the very top`, `Add a weather widget` (they fill the field), `agent-send` ("Send"), `agent-status`
-("Applying...", "Layout updated (v3, rules)" or the error) and `agent-close` ("Close").
+("Applying...", "Layout updated (v3, rules)", "No change needed (v3)" or the error) and `agent-close` ("Close").
+On Android, system Back closes the open panel (the typed text is kept) instead of leaving the app.
 
 The output directory holds the PNGs, `steps.log` (human-readable) and `steps.json` (one entry per step:
 `index`, `command`, `arg`, `status` (`ok`/`fail`), `message`, `file`, `elapsed_ms`). Its absolute path is

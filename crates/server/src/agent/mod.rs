@@ -398,6 +398,9 @@ async fn modify_layout(
         Value::String(s) => s.as_str(),
         _ => return bad_request("`workspace_id` must be a string"),
     };
+    if let Some(r) = layouts::reject_invalid_workspace_id(workspace_id) {
+        return r;
+    }
     if !layouts::is_versioned(workspace_id) {
         return json_error(
             StatusCode::NOT_FOUND,

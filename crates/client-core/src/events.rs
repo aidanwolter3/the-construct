@@ -29,6 +29,16 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Response headers must arrive within this long after connecting.
 const HEADERS_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Largest single line or event (`data` total) the parser buffers. The
+/// server's events are under 100 bytes; anything bigger is a broken or
+/// hostile stream, which is dropped and reconnected instead of buffered.
+pub const MAX_EVENT_BYTES: usize = 64 * 1024;
+
+/// A line or event exceeded [`MAX_EVENT_BYTES`]; the parser state is
+/// undefined afterwards (drop the connection).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SseTooLarge;
+
 /// One dispatched SSE event.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SseEvent {
@@ -58,8 +68,10 @@ impl SseParser {
         Self::default()
     }
 
-    /// Feed raw bytes; returns the events completed by them.
-    pub fn feed(&mut self, bytes: &[u8]) -> Vec<SseEvent> {
+    /// Feed raw bytes; returns the events completed by them, or
+    /// [`SseTooLarge`] once a line or an event's data passes
+    /// [`MAX_EVENT_BYTES`].
+    pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<SseEvent>, SseTooLarge> {
         let mut out = Vec::new();
         for &b in bytes {
             if std::mem::take(&mut self.skip_lf) && b == b'\n' {
@@ -69,30 +81,35 @@ impl SseParser {
                 b'\r' | b'\n' => {
                     self.skip_lf = b == b'\r';
                     let line = std::mem::take(&mut self.line);
-                    if let Some(ev) = self.line_done(&String::from_utf8_lossy(&line)) {
+                    if let Some(ev) = self.line_done(&String::from_utf8_lossy(&line))? {
                         out.push(ev);
                     }
                 }
-                _ => self.line.push(b),
+                _ => {
+                    if self.line.len() >= MAX_EVENT_BYTES {
+                        return Err(SseTooLarge);
+                    }
+                    self.line.push(b);
+                }
             }
         }
-        out
+        Ok(out)
     }
 
-    fn line_done(&mut self, line: &str) -> Option<SseEvent> {
+    fn line_done(&mut self, line: &str) -> Result<Option<SseEvent>, SseTooLarge> {
         if line.is_empty() {
             let event = std::mem::take(&mut self.event);
             let data = std::mem::take(&mut self.data);
             if !std::mem::take(&mut self.has_data) {
-                return None;
+                return Ok(None);
             }
-            return Some(SseEvent {
+            return Ok(Some(SseEvent {
                 event: if event.is_empty() { "message".into() } else { event },
                 data,
-            });
+            }));
         }
         if line.starts_with(':') {
-            return None;
+            return Ok(None);
         }
         let (field, value) = match line.split_once(':') {
             Some((f, v)) => (f, v.strip_prefix(' ').unwrap_or(v)),
@@ -101,6 +118,9 @@ impl SseParser {
         match field {
             "event" => self.event = value.to_owned(),
             "data" => {
+                if self.data.len() + value.len() + 1 > MAX_EVENT_BYTES {
+                    return Err(SseTooLarge);
+                }
                 if self.has_data {
                     self.data.push('\n');
                 }
@@ -109,7 +129,7 @@ impl SseParser {
             }
             _ => {}
         }
-        None
+        Ok(None)
     }
 }
 
@@ -283,7 +303,13 @@ fn read_stream(
             Ok(Ok(Some(bytes))) => {
                 last_data = Instant::now();
                 *backoff = RECONNECT_MIN;
-                for ev in parser.feed(&bytes) {
+                let Ok(events) = parser.feed(&bytes) else {
+                    return StreamEnd::Closed(format!(
+                        "an event or line exceeded {} KB; dropped",
+                        MAX_EVENT_BYTES / 1024
+                    ));
+                };
+                for ev in events {
                     let Some(inner) = weak.upgrade() else {
                         return StreamEnd::ShutDown;
                     };
@@ -338,10 +364,12 @@ mod tests {
     #[test]
     fn parses_events_comments_and_multiline_data() {
         let mut p = SseParser::new();
-        let out = p.feed(
-            b": keepalive\n\nevent: layout\ndata: {\"version\":2}\n\n: keepalive\n\n\
-              data: a\ndata:b\ndata\nid: 7\nretry: 10\n\n",
-        );
+        let out = p
+            .feed(
+                b": keepalive\n\nevent: layout\ndata: {\"version\":2}\n\n: keepalive\n\n\
+                  data: a\ndata:b\ndata\nid: 7\nretry: 10\n\n",
+            )
+            .unwrap();
         assert_eq!(out, vec![ev("layout", "{\"version\":2}"), ev("message", "a\nb\n")]);
     }
 
@@ -356,21 +384,45 @@ mod tests {
         // Every split point, including between CR and LF.
         for split in 0..input.len() {
             let mut p = SseParser::new();
-            let mut out = p.feed(&input.as_bytes()[..split]);
-            out.extend(p.feed(&input.as_bytes()[split..]));
+            let mut out = p.feed(&input.as_bytes()[..split]).unwrap();
+            out.extend(p.feed(&input.as_bytes()[split..]).unwrap());
             assert_eq!(out, expected, "split at {split}");
         }
         // Byte by byte.
         let mut p = SseParser::new();
-        let out: Vec<_> = input.bytes().flat_map(|b| p.feed(&[b])).collect();
+        let out: Vec<_> = input.bytes().flat_map(|b| p.feed(&[b]).unwrap()).collect();
         assert_eq!(out, expected);
     }
 
     #[test]
     fn event_without_data_is_not_dispatched_and_type_resets() {
         let mut p = SseParser::new();
-        assert!(p.feed(b"event: layout\n\n").is_empty());
-        assert_eq!(p.feed(b"data: x\n\n"), vec![ev("message", "x")]);
+        assert!(p.feed(b"event: layout\n\n").unwrap().is_empty());
+        assert_eq!(p.feed(b"data: x\n\n").unwrap(), vec![ev("message", "x")]);
+    }
+
+    #[test]
+    fn oversized_lines_and_events_are_rejected() {
+        // One endless line (no newline ever), fed in chunks.
+        let mut p = SseParser::new();
+        let chunk = vec![b'x'; 16 * 1024];
+        let mut result = Ok(Vec::new());
+        for _ in 0..5 {
+            result = p.feed(&chunk);
+            if result.is_err() {
+                break;
+            }
+        }
+        assert_eq!(result, Err(SseTooLarge));
+        // Many short data lines adding up to one huge event.
+        let mut p = SseParser::new();
+        let line = format!("data: {}\n", "y".repeat(1000));
+        let many = line.repeat(70);
+        assert_eq!(p.feed(many.as_bytes()), Err(SseTooLarge));
+        // Just under the limit still works.
+        let mut p = SseParser::new();
+        let big = format!("data: {}\n\n", "z".repeat(MAX_EVENT_BYTES - 10));
+        assert_eq!(p.feed(big.as_bytes()).unwrap().len(), 1);
     }
 
     #[test]

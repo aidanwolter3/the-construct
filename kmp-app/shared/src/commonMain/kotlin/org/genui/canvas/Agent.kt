@@ -49,19 +49,22 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 
 /**
  * Layout agent status from the snapshot's `agent_json` (M7). [state]: idle, running, done, error. [layoutVersion] is
- * the layout version the last successful prompt produced.
+ * the layout version the last successful prompt produced. [unchanged]: the pod found nothing to change (done, no new
+ * version; [message] says "No change needed (vN)").
  */
 data class AgentInfo(
     val state: String = "idle",
     val message: String? = null,
     val provider: String? = null,
     val layoutVersion: Int? = null,
+    val unchanged: Boolean = false,
 ) {
     val isRunning: Boolean get() = state == "running"
 
@@ -75,6 +78,7 @@ data class AgentInfo(
                 message = prim("message")?.contentOrNull?.takeIf { it.isNotBlank() },
                 provider = prim("provider")?.contentOrNull?.takeIf { it.isNotBlank() },
                 layoutVersion = prim("layout_version")?.takeIf { !it.isString }?.intOrNull,
+                unchanged = prim("unchanged")?.takeIf { !it.isString }?.booleanOrNull == true,
             )
         } catch (t: Exception) {
             AgentInfo()
@@ -83,12 +87,14 @@ data class AgentInfo(
 }
 
 /**
- * The prompt panel's status line: "Applying...", "Layout updated (v3, rules)" (version and provider when known), the
- * error message, or null when idle.
+ * The prompt panel's status line: "Applying...", "Layout updated (v3, rules)" (version and provider when known), "No
+ * change needed (v3)" (the engine's message) when the pod changed nothing, the error message, or null when idle.
  */
 fun agentStatusText(agent: AgentInfo): String? = when (agent.state) {
     "running" -> "Applying..."
-    "done" -> {
+    "done" -> if (agent.unchanged) {
+        agent.message ?: agent.layoutVersion?.let { "No change needed (v$it)" } ?: "No change needed"
+    } else {
         val details = listOfNotNull(agent.layoutVersion?.let { "v$it" }, agent.provider).joinToString(", ")
         if (details.isEmpty()) "Layout updated" else "Layout updated ($details)"
     }
@@ -123,11 +129,16 @@ internal fun AgentPromptOverlay(agent: AgentInfo, seq: Long, onSend: (String) ->
         val p = pending ?: return@LaunchedEffect
         if (agent == p.from) return@LaunchedEffect
         when (agent.state) {
+            // The engine took the prompt: compare the result with `running`, so a result equal to the status before
+            // the send (e.g. the same "No change needed (v2)" twice) still completes this send.
+            "running" -> pending = p.copy(from = agent)
             // Clear only the text that was sent: an edit made while the agent was running is kept.
             "done" -> { if (text.trim() == p.text) text = ""; pending = null }
             "error", "idle" -> pending = null
         }
     }
+    // Android Back closes the open panel (instead of leaving the app); the typed text is kept.
+    PlatformBackHandler(enabled = open) { open = false }
     val canSend = text.isNotBlank() && !agent.isRunning && sentAtSeq != seq
     val send = {
         // Re-read the state at tap time (two taps can land before a recomposition).

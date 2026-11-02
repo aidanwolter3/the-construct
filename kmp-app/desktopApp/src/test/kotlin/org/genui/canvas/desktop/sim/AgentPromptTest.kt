@@ -16,7 +16,11 @@ import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runSkikoComposeUiTest
 import androidx.compose.ui.unit.Density
+import androidx.compose.runtime.CompositionLocalProvider
 import org.genui.canvas.ActionIntent
+import org.genui.canvas.BackPresses
+import org.genui.canvas.LocalBackPresses
+import org.genui.canvas.Orientation
 import org.genui.canvas.CanvasApp
 import org.genui.canvas.CanvasController
 import org.genui.canvas.CanvasEngineBridge
@@ -29,6 +33,7 @@ import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -82,9 +87,65 @@ class AgentPromptTest {
         run(
             fake,
             "click tag:agent-fab; type tag:agent-prompt Make everything purple; click tag:agent-send; " +
-                "wait-text 2000 unsupported prompt; assert-text Make everything purple; assert-text Tram lines, Lisbon.",
+                "wait-text 2000 I can't do that yet. Try: Hide captions; assert-text Make everything purple; " +
+                "assert-text Tram lines, Lisbon.",
         )
         assertEquals(1, fake.layoutVersion)
+    }
+
+    @Test
+    fun aPromptThatChangesNothingSaysNoChangeNeeded() {
+        val fake = FakeEngineBridge(bundle())
+        run(
+            fake,
+            "click tag:agent-fab; click Add a weather widget; click tag:agent-send; wait-text 2000 Layout updated (v2, fake-rules); " +
+                "click Add a weather widget; click tag:agent-send; wait-text 2000 No change needed (v2); " +
+                "assert-no-text Layout updated",
+        )
+        assertEquals(2, fake.layoutVersion)
+    }
+
+    @Test
+    fun weatherPlaceholderIsPadded() {
+        assertEquals(
+            UiNode.Container(Orientation.Vertical, 16, listOf(UiNode.Text("Weather widget (not available yet)", TextStyle.Caption))),
+            FakeLayoutRules.WEATHER_CONTENT,
+        )
+        val fake = FakeEngineBridge(bundle())
+        fake.dispatch(CanvasJson.encodeIntent(ActionIntent.PromptAgent("add a weather widget")))
+        SimImages.install("fixture")
+        runSkikoComposeUiTest(size = Size(390f, 900f), density = Density(1f)) {
+            setContent { CanvasApp(CanvasController(fake)) }
+            waitForIdle()
+            val text = onNode(hasText("Weather widget (not available yet)")).getBoundsInRoot()
+            assertTrue(text.left.value >= 16f && text.top.value >= 16f, "weather text at $text should be inset by 16")
+        }
+    }
+
+    @Test
+    fun backClosesTheOpenPanelAndKeepsTheText() {
+        val fake = FakeEngineBridge(bundle())
+        val presses = BackPresses()
+        SimImages.install("fixture")
+        runSkikoComposeUiTest(size = Size(390f, 900f), density = Density(1f)) {
+            setContent {
+                CompositionLocalProvider(LocalBackPresses provides presses) { CanvasApp(CanvasController(fake)) }
+            }
+            waitForIdle()
+            // Closed panel: Back is not consumed (Android then leaves the app as usual).
+            assertFalse(presses.press())
+            onNode(hasTestTag("agent-fab")).performClick()
+            waitForIdle()
+            onNode(hasTestTag("agent-prompt")).performTextInput("Photos first")
+            waitForIdle()
+            assertTrue(presses.press())
+            waitForIdle()
+            assertEquals(0, onAllNodes(hasTestTag("agent-panel")).fetchSemanticsNodes().size)
+            assertFalse(presses.press(), "the handler is disabled once the panel is closed")
+            onNode(hasTestTag("agent-fab")).performClick()
+            waitForIdle()
+            assertEquals("Photos first", promptText())
+        }
     }
 
     @Test

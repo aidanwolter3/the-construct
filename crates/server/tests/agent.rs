@@ -257,8 +257,11 @@ async fn weather_widget_is_added_once() {
     assert_eq!(
         b["workspace"]["slots"][0],
         json!({ "slot_id": "weather", "provider_uri": "core://placeholder",
-                "content": { "type": "core://Text", "value_expr": "Weather widget (not available yet)", "style": "Caption" } })
+                "content": { "type": "core://Container", "orientation": "Vertical", "padding_dp": 16,
+                    "children": [{ "type": "core://Text", "value_expr": "Weather widget (not available yet)", "style": "Caption" }] } })
     );
+    // The padded Container passes validation (it was committed) and round-trips as a UiNode.
+    spec_workspace(&b);
     assert_eq!(
         b["patch"],
         json!([{ "op": "add", "path": "/slots/0", "value": b["workspace"]["slots"][0] }])
@@ -381,7 +384,20 @@ async fn auth_and_request_validation() {
         let (s, _, b) = prompt_raw(&pod, json!({ "prompt": DESIGN_PROMPT }), bearer).await;
         assert_eq!(s, StatusCode::UNAUTHORIZED, "{bearer:?}");
         assert_eq!(b["error"], "unauthorized");
+        assert_eq!(
+            b["detail"],
+            "a valid pod session is required (or CANVAS_AGENT_OPEN=1 for local demos)"
+        );
     }
+    // Same body on the history routes.
+    let resp = reqwest::Client::new()
+        .get(format!("{}/v1/workspaces/home/versions", pod.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let b: Value = resp.json().await.unwrap();
+    assert!(b["detail"].as_str().unwrap().contains("CANVAS_AGENT_OPEN"), "{b}");
     assert_eq!(version_count(&pod, "pixelfed_home"), 0);
     let (s, _, b) = prompt_raw(&pod, json!({ "prompt": DESIGN_PROMPT }), Some("tok")).await;
     assert_eq!(s, StatusCode::OK, "{b}");
@@ -405,6 +421,44 @@ async fn auth_and_request_validation() {
     .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     assert_eq!(b["error"], "workspace_not_found");
+}
+
+#[tokio::test]
+async fn malformed_workspace_ids_are_400_with_a_truncated_echo() {
+    let pod = open_pod().await;
+    let huge = "w".repeat(10_000);
+    let check = |s: StatusCode, b: &Value, what: &str| {
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{what}: {b}");
+        assert_eq!(b["error"], "invalid_workspace_id", "{what}");
+        assert!(b["id"].as_str().unwrap().len() <= 67, "{what}: echo is truncated");
+    };
+    let (s, b) = prompt_ws(&pod, &huge, "hide captions").await;
+    check(s, &b, "agent");
+    let (s, b) = prompt_ws(&pod, "bad id!", "hide captions").await;
+    check(s, &b, "agent charset");
+    let client = reqwest::Client::new();
+    for (method, path) in [
+        ("GET", format!("/v1/workspaces/{huge}")),
+        ("GET", format!("/v1/workspaces/{huge}/versions")),
+        ("POST", format!("/v1/workspaces/{huge}/rollback")),
+        ("GET", format!("/v1/workspaces/{huge}/events")),
+        ("GET", "/v1/workspaces/a.b/versions".to_owned()),
+    ] {
+        let url = format!("{}{path}", pod.url);
+        let req = if method == "GET" {
+            client.get(url)
+        } else {
+            client.post(url).json(&json!({ "version": 1 }))
+        };
+        let resp = req.send().await.unwrap();
+        let s = resp.status();
+        let b: Value = resp.json().await.unwrap();
+        check(s, &b, &path[..40.min(path.len())]);
+    }
+    // A well-formed unknown id is still a 404.
+    let (s, b) = prompt_ws(&pod, "no-such_ws", "hide captions").await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(b["id"], "no-such_ws");
 }
 
 // ---------- provider selection ----------

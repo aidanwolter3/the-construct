@@ -381,6 +381,9 @@ async fn get_workspace(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
+    if let Some(r) = layouts::reject_invalid_workspace_id(&id) {
+        return r;
+    }
     if id == pixelfed::layout::WORKSPACE_ID {
         return pixelfed::routes::home_workspace(&state, &headers).await;
     }
