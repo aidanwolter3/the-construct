@@ -3,11 +3,15 @@ package org.theconstruct
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -17,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineDispatcher
@@ -70,17 +75,35 @@ data class ConstructState(
  * Notifications (D52): [unread] follows the snapshots; [onNotification] hears live arrivals of every engine this
  * controller holds; [openNotification] opens a notification's app and target. Blocking pod calls run on [io].
  */
+/** The notice when the app on screen was deleted. */
+const val APP_DELETED = "This app was deleted."
+
 class ConstructController internal constructor(
     bridge: ConstructEngineBridge,
     appId: String?,
     io: CoroutineDispatcher,
-    private val openBridge: ((appId: String) -> ConstructEngineBridge)?,
+    private val defaultAppId: String? = null,
+    private val openBridge: ((appId: String) -> ConstructEngineBridge)? = null,
 ) {
+    /**
+     * [defaultAppId] is the app to fall back to when the one on screen is deleted (a custom app, decision
+     * `custom-apps-and-data-sources`); null: stay and say so.
+     */
     constructor(
         bridge: ConstructEngineBridge,
         appId: String? = null,
+        defaultAppId: String? = null,
         openBridge: ((appId: String) -> ConstructEngineBridge)? = null,
-    ) : this(bridge, appId, layoutIoDispatcher, openBridge)
+    ) : this(bridge, appId, layoutIoDispatcher, defaultAppId, openBridge)
+
+    private val _notice = MutableStateFlow<String?>(null)
+
+    /** A one-line notice over the app ("This app was deleted."), until dismissed or another app opens. */
+    val notice: StateFlow<String?> = _notice.asStateFlow()
+
+    fun dismissNotice() {
+        _notice.value = null
+    }
 
     @Volatile
     private var bridge: ConstructEngineBridge = bridge
@@ -221,8 +244,26 @@ class ConstructController internal constructor(
         if (now.engine == engine && now.seq == snapshot.seq) {
             _unread.value = NotificationsJson.parseUnread(snapshot.notificationsJson)
             applyPendingTarget()
+            if (now.activeLayout.gone) appGone(engine)
         }
     }
+
+    /**
+     * The app on screen was deleted (here or on another device): say so and open the default app, off the engine's
+     * thread (the old engine is closed by [openApp]). Once per engine.
+     */
+    private fun appGone(engine: Int) {
+        if (closed || goneHandled == engine) return
+        goneHandled = engine
+        _notice.value = APP_DELETED
+        val fallback = defaultAppId?.takeIf { it != currentAppId() } ?: return
+        background.launch {
+            if (_state.value.engine == engine) openApp(fallback, keepNotice = true)
+        }
+    }
+
+    @Volatile
+    private var goneHandled = -1
 
     /**
      * Binds the visible form's `$form.<field>` values and a fresh `$nonce` into [intent] (nothing is sent when a
@@ -448,7 +489,9 @@ class ConstructController internal constructor(
      * the same server) and closes the old engine. False, with nothing changed, when this platform can't open other apps,
      * the engine could not be created, or the controller is [close]d.
      */
-    fun openApp(id: String): Boolean {
+    fun openApp(id: String): Boolean = openApp(id, keepNotice = false)
+
+    private fun openApp(id: String, keepNotice: Boolean): Boolean {
         if (closed) return false
         if (id == currentAppId()) return true
         val factory = openBridge ?: return false
@@ -473,6 +516,7 @@ class ConstructController internal constructor(
             val engine = _state.value.engine + 1
             bridge = next
             _appId.value = id
+            if (!keepNotice) _notice.value = null
             _pinned.value = null
             navigation.clear()
             _state.value = ConstructState(isOnline = _state.value.isOnline, engine = engine)
@@ -507,6 +551,7 @@ fun ConstructApp(
     val state by controller.state.collectAsState()
     val pin by controller.pinned.collectAsState()
     val unread by controller.unread.collectAsState()
+    val notice by controller.notice.collectAsState()
     // Material3 light scheme on a white background and surface (feed photos sit on white, as on Pixelfed/Instagram).
     MaterialTheme(colorScheme = lightColorScheme(background = Color.White, surface = Color.White)) {
         Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -516,8 +561,18 @@ fun ConstructApp(
             ) {
                 MenuDrawer(controller, state, pin, server, notificationSettingsExtra) {
                     Box(Modifier.fillMaxSize()) {
-                        val workspace = displayedWorkspace(state, pin)
-                        if (workspace == null) {
+                        val workspace = displayedWorkspace(state, pin).takeUnless { state.activeLayout.gone }
+                        if (workspace == null && state.activeLayout.gone) {
+                            Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(APP_DELETED, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("app-gone"))
+                                Text(
+                                    "Open another app from the menu.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(top = 8.dp),
+                                )
+                            }
+                        } else if (workspace == null) {
                             Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text("Loading…", style = MaterialTheme.typography.bodyLarge)
                                 state.error?.let {
@@ -555,10 +610,36 @@ fun ConstructApp(
                         )
                         // An open screen covers the layout and the buttons; the drawer still opens over it.
                         ScreenHost(controller, state)
+                        notice?.takeUnless { state.activeLayout.gone }?.let {
+                            NoticeBar(it, onDismiss = controller::dismissNotice, modifier = Modifier.align(Alignment.BottomCenter))
+                        }
                         // The inbox covers everything but the drawer.
                         InboxPanel(controller)
                     }
                 }
+            }
+        }
+    }
+}
+
+/** A one-line notice at the bottom (`notice`) with Dismiss (`notice-dismiss`). */
+@Composable
+private fun NoticeBar(text: String, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        color = MaterialTheme.colorScheme.inverseSurface,
+        shape = RoundedCornerShape(12.dp),
+        shadowElevation = 4.dp,
+        modifier = modifier.padding(16.dp).fillMaxWidth().testTag("notice"),
+    ) {
+        Row(Modifier.padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text,
+                color = MaterialTheme.colorScheme.inverseOnSurface,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f).padding(vertical = 12.dp),
+            )
+            TextButton(onClick = onDismiss, modifier = Modifier.testTag("notice-dismiss")) {
+                Text("Dismiss", color = MaterialTheme.colorScheme.inversePrimary)
             }
         }
     }

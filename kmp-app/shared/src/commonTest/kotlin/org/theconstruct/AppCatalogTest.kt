@@ -295,4 +295,32 @@ class AppCatalogTest {
         assertEquals(ActionIntent.AuthLogin("https://pixelfed.test"), findSignInIntent(signedOut))
         assertNull(findSignInIntent(null))
     }
+
+    @Test
+    fun customAndHiddenAppsAndSignInProvidersParse() {
+        val apps = AppCatalogJson.parseApps(
+            """{"apps":[{"id":"recipes","kind":"builtin","hidden":true},{"id":"c-kitchen2dm","title":"Kitchen","kind":"custom","hidden":false},
+               {"id":"old"}]}""",
+        )
+        assertEquals(listOf(false, true, false), apps.map { it.custom })
+        assertEquals(listOf(true, false, false), apps.map { it.hidden })
+        val json = """{"sign_ins":[],"providers":[
+            {"id":"pixelfed","title":"Pixelfed","signed_in":false,"server_placeholder":"Server, e.g. pixelfed.social",
+             "intent":{"intent":"action.auth.login","instance_url":"https://pixelfed.social","app_path":"/v1/auth/pixelfed/app","token_path":"/v1/auth/pixelfed/token"}},
+            {"id":"other","signed_in":true},{"title":"no id"}]}"""
+        val providers = AppCatalogJson.parseProviders(json)
+        assertEquals(2, providers.size)
+        assertEquals(
+            SignInProvider(
+                "pixelfed", "Pixelfed", false,
+                ActionIntent.AuthLogin("https://pixelfed.social", "/v1/auth/pixelfed/app", "/v1/auth/pixelfed/token"),
+                "Server, e.g. pixelfed.social",
+            ),
+            providers[0],
+        )
+        assertEquals(SignInProvider("other", "other", signedIn = true), providers[1])
+        assertEquals(emptyList(), AppCatalogJson.parseProviders("""{"sign_ins":[]}"""), "an older pod lists none")
+        assertEquals(ActiveLayout("c-x", gone = true), ActiveLayout.parse("""{"app_id":"c-x","gone":true}"""))
+        assertEquals("Edit", versionSourceLabel("custom"))
+    }
 }

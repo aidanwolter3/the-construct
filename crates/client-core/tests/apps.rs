@@ -342,3 +342,93 @@ fn snapshot_layout_json_follows_the_pods_version() {
     });
     assert_eq!(signed_out.snapshot().layout_json, "{}");
 }
+
+/// An engine on app `ws` holding the pod session `token`.
+fn engine_with_token(base: &str, ws: &str, token: &str) -> ConstructEngine {
+    let store = Arc::new(client_core::MemoryStore::default());
+    client_core::SecureStore::set(
+        store.as_ref(),
+        &client_core::auth::session_key(base),
+        &json!({ "token": token }).to_string(),
+    );
+    ConstructEngine::init_with_options(
+        "",
+        base,
+        ws,
+        client_core::EngineOptions {
+            config: fast_config(),
+            secure_store: Some(store as Arc<dyn client_core::SecureStore>),
+            ..client_core::EngineOptions::default()
+        },
+    )
+}
+
+#[test]
+fn custom_apps_are_listed_hidden_and_deleted_and_the_engine_leaves_a_deleted_one() {
+    let p = pod(server::state_in_memory());
+    p.state
+        .store()
+        .create_pinned_session(&server::session::session_hash("pod-token"))
+        .unwrap();
+    // A custom app over the recipes, made with the pod token.
+    let layout = json!({"type": "core://Workspace", "id": "x", "title": "Mine",
+        "slots": [{"slot_id": "r", "provider_uri": "core://custom",
+          "content": {"type": "core://List", "query_key": "recipes:all",
+            "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}}]});
+    let created: Value = reqwest::blocking::Client::new()
+        .post(format!("{}/v1/custom-apps", p.base))
+        .bearer_auth("pod-token")
+        .json(&json!({"title": "Mine", "icon": "recipe", "feeds": [["recipes", "all"]], "layout": layout}))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let id = created["id"].as_str().unwrap().to_owned();
+
+    let e = engine_with_token(&p.base, &id, "pod-token");
+    wait_until("the custom app", || {
+        e.snapshot().workspace_json.contains("Mine")
+    });
+    let apps = parse(&e.list_apps().unwrap());
+    let row = apps["apps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == id.as_str())
+        .unwrap()
+        .clone();
+    assert_eq!(row["kind"], "custom");
+    assert_eq!(row["hidden"], false);
+
+    // Hidden apps stay in the engine's list (it asks for all of them), marked.
+    e.set_app_hidden("recipes", true).unwrap();
+    let apps = parse(&e.list_apps().unwrap());
+    let recipes = apps["apps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "recipes")
+        .unwrap()
+        .clone();
+    assert_eq!(recipes["hidden"], true);
+    e.set_app_hidden("recipes", false).unwrap();
+
+    // Deleting it: the engine on it hears `deleted` and says the app is gone
+    // (give its events stream time to connect first).
+    thread::sleep(Duration::from_millis(500));
+    e.delete_custom_app(&id).unwrap();
+    wait_until("gone", || {
+        parse(&e.snapshot().layout_json)["gone"] == json!(true)
+    });
+    assert_eq!(
+        e.delete_custom_app(&id).unwrap_err(),
+        LayoutApiError::NotFound {
+            reason: "That app doesn't exist.".into()
+        }
+    );
+    // A new engine on it learns it from the 404.
+    let late = engine_with_token(&p.base, &id, "pod-token");
+    wait_until("gone on a fresh engine", || {
+        parse(&late.snapshot().layout_json)["gone"] == json!(true)
+    });
+}

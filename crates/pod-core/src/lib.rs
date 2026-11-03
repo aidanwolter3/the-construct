@@ -48,7 +48,7 @@ use store::Store;
 
 pub use adapter::{
     AppAdapter, AppInfo, AuthPolicy, BoxFuture, Catalog, Hydration, Pod, RequestCtx, SignInAccount,
-    SignInProvider,
+    SignInProvider, SignInStart,
 };
 pub use custom::{AppRef, CustomApp};
 pub use notify::{NewNotification, PollCtx, PollOutcome, PollStatus};

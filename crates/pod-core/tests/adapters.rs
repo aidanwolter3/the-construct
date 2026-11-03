@@ -317,10 +317,14 @@ async fn sign_ins_lists_the_session_sign_ins() {
         .unwrap();
     let (status, body, _) = get_json(&state, "/v1/auth/sign-ins", None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, json!({ "sign_ins": [] }));
+    assert_eq!(
+        body,
+        json!({ "sign_ins": [],
+                "providers": [{ "id": "test", "title": "Test service", "signed_in": false }] })
+    );
     let (status, body, _) = get_json(&state, "/v1/auth/sign-ins", Some("bare")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, json!({ "sign_ins": [] }));
+    assert_eq!(body["sign_ins"], json!([]));
     let (status, _, _) = get_json(&state, "/v1/auth/sign-ins", Some("stale")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     // The default account lookup knows nothing: title and apps only.
@@ -332,7 +336,7 @@ async fn sign_ins_lists_the_session_sign_ins() {
             "id": "test",
             "title": "Test service",
             "apps": [{ "id": "gated", "title": "Gated" }],
-        }] })
+        }], "providers": [{ "id": "test", "title": "Test service", "signed_in": true }] })
     );
     // A dev app is listed only when dev apps are shown, like `GET /v1/apps`.
     let hidden = Arc::new(AppState::in_memory(vec![open_app(), Arc::new(Gated)]));

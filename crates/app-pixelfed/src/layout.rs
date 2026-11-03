@@ -45,6 +45,30 @@ fn sign_in_intent(instance_url: &str) -> ActionIntent {
     }
 }
 
+/// How Settings starts the Pixelfed sign-in: the default instance's intent,
+/// and a server box when users may pick another instance (D45; `others`:
+/// this pod allows it).
+pub fn sign_in_start(config: &PixelfedConfig, others: bool) -> pod_core::SignInStart {
+    pod_core::SignInStart {
+        intent: sign_in_intent(&config.instance_url),
+        server_placeholder: (others && config.other_instances())
+            .then(|| format!("Server, e.g. {}", example_server(config))),
+    }
+}
+
+/// An example server for the server box's placeholder.
+fn example_server(config: &PixelfedConfig) -> String {
+    if config.any_instance {
+        "pixelfed.social".to_owned()
+    } else {
+        config
+            .allowed_instances
+            .first()
+            .map(|u| host_label(u))
+            .unwrap_or_default()
+    }
+}
+
 /// Signed-out screen of app `app_id` (titled `title`): a "Sign in with
 /// Pixelfed" button for the default instance, and when users may pick
 /// another instance (D45) a server box (`$form.instance`) with its own
@@ -66,15 +90,7 @@ pub fn signed_out(config: &PixelfedConfig, app_id: &str, title: &str) -> Workspa
         },
     ];
     if config.other_instances() {
-        let example = if config.any_instance {
-            "pixelfed.social".to_owned()
-        } else {
-            config
-                .allowed_instances
-                .first()
-                .map(|u| host_label(u))
-                .unwrap_or_default()
-        };
+        let example = example_server(config);
         children.extend([
             UiNode::Text {
                 value_expr: "Or sign in to another Pixelfed server:".into(),

@@ -351,7 +351,9 @@ internal class ConstructViewModel(config: EngineConfig, private val appContext: 
         Log.i(TAG, "starting base_url=${config.baseUrl} workspace=${config.workspace} storage=${config.storageDir}")
         config.storageDir.mkdirs()
         val open = { workspace: String -> openEngine(config, workspace) }
-        val controller = ConstructController(open(config.workspace), config.workspace, open)
+        val controller = ConstructController(
+            open(config.workspace), config.workspace, defaultAppId = BuildConfig.CONSTRUCT_WORKSPACE, openBridge = open,
+        )
         // Notifications (D52): live arrivals show as OS notifications while the app is in the background; the
         // push service hands endpoints and messages to this controller while it is alive.
         controller.setDeviceInfo("android", "${Build.MANUFACTURER} ${Build.MODEL}".trim())

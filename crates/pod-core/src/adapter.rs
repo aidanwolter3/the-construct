@@ -220,6 +220,19 @@ pub trait AppAdapter: Any + Send + Sync {
         Box::pin(async {})
     }
 
+    /// How a client starts sign-in `sign_in` (one of [`Self::sign_ins`])
+    /// from its Settings, without a signed-out screen (custom apps hold no
+    /// sign-in buttons): `GET /v1/auth/sign-ins` lists it under `providers`.
+    /// Default: `None`, the provider is listed without a way to start it.
+    fn sign_in_start<'a>(
+        &'a self,
+        pod: &'a Pod,
+        sign_in: &'a str,
+    ) -> BoxFuture<'a, Option<SignInStart>> {
+        let _ = (pod, sign_in);
+        Box::pin(async { None })
+    }
+
     /// The upstream account behind sign-in `sign_in` (one of
     /// [`Self::sign_ins`]) on `session`, which has it: what the client's
     /// Settings list shows (`GET /v1/auth/sign-ins`). Keep it to stored
@@ -234,6 +247,18 @@ pub trait AppAdapter: Any + Send + Sync {
         let _ = (pod, sign_in, session);
         Box::pin(async { None })
     }
+}
+
+/// How a client starts a sign-in from its Settings
+/// ([`AppAdapter::sign_in_start`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SignInStart {
+    /// The `action.auth.login` intent for the default server.
+    pub intent: protocol::ActionIntent,
+    /// When the user may type another server (D45): the text field's
+    /// placeholder; the client then sends the intent with the typed server
+    /// as `instance_url`.
+    pub server_placeholder: Option<String>,
 }
 
 /// The account behind a session's sign-in ([`AppAdapter::sign_in_account`]).

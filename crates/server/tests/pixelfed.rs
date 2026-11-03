@@ -599,7 +599,22 @@ async fn sign_ins_lists_the_pixelfed_account_with_its_server() {
     };
     let (status, body) = list(None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, json!({ "sign_ins": [] }));
+    assert_eq!(body["sign_ins"], json!([]));
+    // Every provider, with the intent Settings dispatches to start it.
+    assert_eq!(
+        body["providers"],
+        json!([{
+            "id": "pixelfed",
+            "title": "Pixelfed",
+            "signed_in": false,
+            "intent": {
+                "intent": "action.auth.login",
+                "instance_url": env.fake.url,
+                "app_path": "/v1/auth/pixelfed/app",
+                "token_path": "/v1/auth/pixelfed/token",
+            },
+        }])
+    );
     let (status, _) = list(Some("stale".into())).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
@@ -607,15 +622,16 @@ async fn sign_ins_lists_the_pixelfed_account_with_its_server() {
     let (status, body) = list(Some(session.clone())).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
-        body,
-        json!({ "sign_ins": [{
+        body["sign_ins"],
+        json!([{
             "id": "pixelfed",
             "title": "Pixelfed",
             "server": env.fake.url,
             "username": "constructdemo",
             "apps": [{ "id": "pixelfed_home", "title": "Pixelfed" }],
-        }] })
+        }])
     );
+    assert_eq!(body["providers"][0]["signed_in"], true);
     let logout = format!("{}/v1/auth/logout", env.pod.url);
     post_json(&logout, Some(&session), json!({})).await;
     let (status, _) = list(Some(session)).await;

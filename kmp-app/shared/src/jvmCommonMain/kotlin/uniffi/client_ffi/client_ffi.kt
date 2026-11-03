@@ -872,6 +872,10 @@ internal open class UniffiVTableCallbackInterfaceUrlOpener(
 
 
 
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -890,6 +894,8 @@ internal interface IntegrityCheckingUniffiLib : Library {
     fun uniffi_client_ffi_checksum_method_enginehandle_app_version(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_app_versions(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_delete_custom_app(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_device_id(
 ): Short
@@ -924,6 +930,8 @@ fun uniffi_client_ffi_checksum_method_enginehandle_register_push(
 fun uniffi_client_ffi_checksum_method_enginehandle_remember_form_value(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_remembered_form_values(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_set_app_hidden(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_set_channel_enabled(
 ): Short
@@ -1026,6 +1034,8 @@ fun uniffi_client_ffi_fn_method_enginehandle_app_version(`ptr`: Pointer,`appId`:
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_app_versions(`ptr`: Pointer,`appId`: RustBuffer.ByValue,`before`: RustBuffer.ByValue,`limit`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_client_ffi_fn_method_enginehandle_delete_custom_app(`ptr`: Pointer,`appId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_device_id(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_discard_attachment(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1060,6 +1070,8 @@ fun uniffi_client_ffi_fn_method_enginehandle_remember_form_value(`ptr`: Pointer,
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_remembered_form_values(`ptr`: Pointer,`scope`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_client_ffi_fn_method_enginehandle_set_app_hidden(`ptr`: Pointer,`appId`: RustBuffer.ByValue,`hidden`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_set_channel_enabled(`ptr`: Pointer,`appId`: RustBuffer.ByValue,`channel`: RustBuffer.ByValue,`enabled`: Byte,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_set_device_info(`ptr`: Pointer,`platform`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1216,6 +1228,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_app_versions() != 23677.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_delete_custom_app() != 55635.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_device_id() != 26780.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1265,6 +1280,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_remembered_form_values() != 21139.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_set_app_hidden() != 21735.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_set_channel_enabled() != 57723.toShort()) {
@@ -1777,6 +1795,11 @@ public interface EngineHandleInterface {
     fun `appVersions`(`appId`: kotlin.String, `before`: kotlin.Long?, `limit`: kotlin.UInt?): kotlin.String
     
     /**
+     * Delete a custom app on the pod (`DELETE /v1/custom-apps/<id>`).
+     */
+    fun `deleteCustomApp`(`appId`: kotlin.String)
+    
+    /**
      * This installation's device id (stable across restarts).
      */
     fun `deviceId`(): kotlin.String
@@ -1876,6 +1899,12 @@ public interface EngineHandleInterface {
      * (`""` = the app's layout, else a screen id). Local SQLite read.
      */
     fun `rememberedFormValues`(`scope`: kotlin.String): Map<kotlin.String, kotlin.String>
+    
+    /**
+     * Hide an app from every device's list, or show it again
+     * (`PUT /v1/apps/<id>/hidden`).
+     */
+    fun `setAppHidden`(`appId`: kotlin.String, `hidden`: kotlin.Boolean)
     
     /**
      * Turn one of an app's channels on or off for this device.
@@ -2048,6 +2077,21 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
     }
     )
     }
+    
+
+    
+    /**
+     * Delete a custom app on the pod (`DELETE /v1/custom-apps/<id>`).
+     */
+    @Throws(LayoutApiException::class)override fun `deleteCustomApp`(`appId`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_delete_custom_app(
+        it, FfiConverterString.lower(`appId`),_status)
+}
+    }
+    
     
 
     
@@ -2319,6 +2363,22 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
     }
     )
     }
+    
+
+    
+    /**
+     * Hide an app from every device's list, or show it again
+     * (`PUT /v1/apps/<id>/hidden`).
+     */
+    @Throws(LayoutApiException::class)override fun `setAppHidden`(`appId`: kotlin.String, `hidden`: kotlin.Boolean)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_set_app_hidden(
+        it, FfiConverterString.lower(`appId`),FfiConverterBoolean.lower(`hidden`),_status)
+}
+    }
+    
     
 
     

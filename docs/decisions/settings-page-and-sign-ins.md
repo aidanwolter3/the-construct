@@ -31,6 +31,7 @@ Decision:
 - **Weighed:** putting the account list in the engine's `auth_json` (it is pushed on every snapshot and only knows
   this device's sign-ins); a full-screen Settings outside the drawer (the drawer already handles levels, Back and
   rotation).
+- **Since then:** adding a sign-in from Settings landed with custom apps (decision
+  [custom-apps-and-data-sources](custom-apps-and-data-sources.md): `providers` in `GET /v1/auth/sign-ins`).
 - **Not yet:** signing out of one provider while keeping others (needs a per-provider pod endpoint and engine auth
-  state per provider; moot until a second provider exists); adding a sign-in from Settings (sign-in buttons come
-  from app layouts today); avatars and display names in the list.
+  state per provider; moot until a second provider exists); avatars and display names in the list.

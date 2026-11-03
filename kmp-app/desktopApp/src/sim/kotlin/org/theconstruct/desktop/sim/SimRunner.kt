@@ -20,7 +20,9 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.isRoot
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.runSkikoComposeUiTest
@@ -215,7 +217,7 @@ class SimRunner(
                 // (not a failure).
                 awaitLayoutCalls()
                 val settled = awaitImages(SHOT_IMAGE_WAIT_MS)
-                val image = onRoot().captureToImage()
+                val image = captureScreen()
                 val file = File(outDir, "%02d-%s.png".format(index, sanitize(step.name)))
                 file.writeBytes(encodePng(image))
                 val note = if (settled) "" else " (${ImageLoads.inFlight.value} image(s) still loading)"
@@ -498,7 +500,7 @@ class SimRunner(
         waitForIdle()
         // The click may have opened a screen (the menu) whose node under the old pointer position got a
         // hover enter on its first layout; a second exit clears that tint from later shots.
-        onRoot().performMouseInput { moveTo(Offset(1f, 1f)); moveTo(Offset(-1f, -1f)) }
+        screenRoot().performMouseInput { moveTo(Offset(1f, 1f)); moveTo(Offset(-1f, -1f)) }
         waitForIdle()
         return how
     }
@@ -605,7 +607,9 @@ class SimRunner(
     }
 
     private fun SkikoComposeUiTest.appTags(): List<String> =
-        tagsStartingWith("app-").filter { !it.startsWith("app-history-") && it != "app-error" }
+        tagsStartingWith("app-").filter { tag ->
+            ROW_CONTROLS.none { tag.startsWith(it) } && tag != "app-error" && tag != "app-action-error" && tag != "app-gone"
+        }
 
     /** The tag of the app row for [app] (an id, else a title, case-insensitive), opening the menu as needed. */
     private fun SkikoComposeUiTest.appTag(app: String): String {
@@ -655,7 +659,7 @@ class SimRunner(
         val n = node.fetchSemanticsNode()
         val center = n.boundsInRoot.center
         val clipped = n.layoutInfo.coordinates.boundsInRoot()
-        val root = onRoot().fetchSemanticsNode().boundsInRoot
+        val root = screenRoot().fetchSemanticsNode().boundsInRoot
         return n.layoutInfo.isAttached && !clipped.isEmpty && clipped.contains(center) && root.contains(center)
     }
 
@@ -669,14 +673,35 @@ class SimRunner(
 
     private fun SkikoComposeUiTest.describeBounds(node: SemanticsNodeInteraction): String {
         val n = node.fetchSemanticsNode()
-        val root = onRoot().fetchSemanticsNode().boundsInRoot
+        val root = screenRoot().fetchSemanticsNode().boundsInRoot
         return "${n.boundsInRoot}, visible ${n.layoutInfo.coordinates.boundsInRoot()}, screen $root"
+    }
+
+    /** The app's own window root (popups such as a dropdown menu or a dialog are further roots). */
+    private fun SkikoComposeUiTest.screenRoot(): SemanticsNodeInteraction = onAllNodes(isRoot()).onFirst()
+
+    /** The screen as shown: the app's root with every popup root (menus, dialogs) drawn over it where it sits. */
+    private fun SkikoComposeUiTest.captureScreen(): ImageBitmap {
+        val roots = onAllNodes(isRoot())
+        val count = roots.fetchSemanticsNodes().size
+        val base = roots[0].captureToImage()
+        if (count == 1) return base
+        val surface = org.jetbrains.skia.Surface.makeRasterN32Premul(base.width, base.height)
+        val canvas = surface.canvas
+        canvas.drawImage(Image.makeFromBitmap(base.asSkiaBitmap()), 0f, 0f)
+        for (i in 1 until count) {
+            val popup = roots[i]
+            val at = popup.fetchSemanticsNode().positionOnScreen
+            val img = popup.captureToImage()
+            canvas.drawImage(Image.makeFromBitmap(img.asSkiaBitmap()), at.x, at.y)
+        }
+        return surface.makeImageSnapshot().toComposeImageBitmap()
     }
 
     /** Best effort: saves the screen after a failed step as `NN-FAILED.png`; null if that fails too. */
     private fun SkikoComposeUiTest.captureFailure(index: Int): File? = try {
         val file = File(outDir, "%02d-FAILED.png".format(index))
-        file.writeBytes(encodePng(onRoot().captureToImage()))
+        file.writeBytes(encodePng(captureScreen()))
         file
     } catch (e: Throwable) {
         log("[sim] could not capture failure screenshot: ${e::class.simpleName}: ${e.message}")
@@ -790,6 +815,8 @@ class SimRunner(
     }
 
     companion object {
+        /** Tags of the controls on an app row (not apps themselves). */
+        private val ROW_CONTROLS = listOf("app-history-", "app-more-", "app-custom-", "app-hide-", "app-delete-")
         private val PRETTY_JSON = Json { prettyPrint = true }
 
         /** How long the menu commands wait for their screen or for the apps calls (live pod calls time out at 15 s). */

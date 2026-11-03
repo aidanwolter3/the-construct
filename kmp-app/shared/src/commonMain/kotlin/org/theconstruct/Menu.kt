@@ -19,8 +19,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -103,6 +106,31 @@ class MenuState internal constructor(private val controller: ConstructController
     var signIns: Load<List<SignInSummary>> by mutableStateOf(Load.Loading)
         private set
 
+    /** The sign-ins the pod offers, loaded with [signIns]: Settings' "Sign in to <service>" rows. */
+    var providers: List<SignInProvider> by mutableStateOf(emptyList())
+        private set
+
+    /** The server typed into a provider's server box (by provider id). */
+    val providerServers = mutableStateMapOf<String, String>()
+
+    /** The apps list also shows the hidden apps. */
+    var showHidden by mutableStateOf(false)
+
+    /** The app whose row menu (Hide / Delete…) is open. */
+    var rowMenuFor by mutableStateOf<String?>(null)
+
+    /** The custom app asked to be deleted: the confirmation dialog is shown for it. */
+    var deleteTarget by mutableStateOf<AppSummary?>(null)
+        private set
+
+    /** A delete or hide that failed. */
+    var appActionError by mutableStateOf<String?>(null)
+        private set
+
+    /** A delete or hide is running (the dialog's button waits). */
+    var appActionBusy by mutableStateOf(false)
+        private set
+
     /** Bumped when Settings opens and by Try again: the sign-ins load is keyed on it. */
     var signInsToken by mutableStateOf(0)
         private set
@@ -147,6 +175,9 @@ class MenuState internal constructor(private val controller: ConstructController
 
     fun closeMenu() {
         open = false
+        rowMenuFor = null
+        deleteTarget = null
+        appActionError = null
         historyAppId = null
         notificationSettingsOpen = false
         settingsOpen = false
@@ -217,7 +248,9 @@ class MenuState internal constructor(private val controller: ConstructController
     internal suspend fun loadSignIns() {
         if (signIns !is Load.Ready) signIns = Load.Loading
         try {
-            signIns = Load.Ready(controller.apps.signIns())
+            val (listed, offered) = controller.apps.signInsAndProviders()
+            signIns = Load.Ready(listed)
+            providers = offered
         } catch (e: LayoutApiException) {
             if (signIns !is Load.Ready) signIns = Load.Failed(e.message)
         }
@@ -282,6 +315,70 @@ class MenuState internal constructor(private val controller: ConstructController
                 history[appId]?.let { history[appId] = it.copy(loadingMore = false, error = e.message) }
             } finally {
                 history[appId]?.let { if (it.loadingMore) history[appId] = it.copy(loadingMore = false) }
+            }
+        }
+    }
+
+    /**
+     * Starts [provider]'s sign-in from Settings (decision `custom-apps-and-data-sources`): its intent, with the typed
+     * server as `instance_url` when [useTypedServer] (nothing is sent while that box is blank). Closes the drawer.
+     */
+    fun startSignIn(provider: SignInProvider, useTypedServer: Boolean = false) {
+        val intent = provider.intent ?: return
+        val start = if (useTypedServer) {
+            val typed = providerServers[provider.id]?.trim().orEmpty()
+            if (typed.isEmpty()) return
+            intent.copy(instanceUrl = typed)
+        } else {
+            intent
+        }
+        closeMenu()
+        controller.send(start)
+    }
+
+    /** Hides [app] from every device's list (or shows it again) and reloads the list. */
+    fun setHidden(app: AppSummary, hidden: Boolean, scope: CoroutineScope) {
+        rowMenuFor = null
+        appActionError = null
+        scope.launch {
+            try {
+                controller.apps.setAppHidden(app.id, hidden)
+                appsToken++
+            } catch (e: LayoutApiException) {
+                appActionError = e.message
+            }
+        }
+    }
+
+    /** Asks to delete custom [app]: shows the confirmation. */
+    fun requestDelete(app: AppSummary) {
+        rowMenuFor = null
+        appActionError = null
+        deleteTarget = app
+    }
+
+    fun cancelDelete() {
+        if (!appActionBusy) deleteTarget = null
+    }
+
+    /**
+     * Deletes the confirmed app on the pod (every device). When it is the app on screen, the engine hears it and the
+     * controller moves to the default app with "This app was deleted.".
+     */
+    fun confirmDelete(scope: CoroutineScope) {
+        val app = deleteTarget ?: return
+        if (appActionBusy) return
+        appActionBusy = true
+        appActionError = null
+        scope.launch {
+            try {
+                controller.apps.deleteCustomApp(app.id)
+                deleteTarget = null
+                appsToken++
+            } catch (e: LayoutApiException) {
+                appActionError = e.message
+            } finally {
+                appActionBusy = false
             }
         }
     }
@@ -561,6 +658,7 @@ private fun SignInsSection(controller: ConstructController, state: ConstructStat
         listed.forEach { signIn ->
             SignInRow(signIn, onClick = { menu.showSignIn(signIn.id) })
         }
+        val offered = menu.providers.filter { !it.signedIn && it.intent != null && listed.none { l -> l.id == it.id } }
         when (auth.state) {
             "pending" -> Text(
                 auth.message ?: "Signing in…",
@@ -580,8 +678,10 @@ private fun SignInsSection(controller: ConstructController, state: ConstructStat
                     TextButton(onClick = controller::logout, modifier = Modifier.testTag("menu-sign-out")) { Text("Sign out") }
                 }
             }
-            else -> if (listed.isEmpty()) NotSignedInRow(controller, state)
+            else -> if (listed.isEmpty()) NotSignedInRow(controller, state, button = offered.isEmpty())
         }
+        // Sign-ins the pod offers and this session lacks (decision `custom-apps-and-data-sources`).
+        if (auth.state != "pending") offered.forEach { ProviderRow(menu, it) }
         when (val s = menu.signIns) {
             Load.Loading -> if (listed.isEmpty() && auth.state != "pending") LoadingRow("Loading sign-ins…")
             is Load.Failed -> if (state.isOnline == true) InlineError(s.message, tag = "sign-ins-error", onRetry = menu::retrySignIns)
@@ -590,11 +690,47 @@ private fun SignInsSection(controller: ConstructController, state: ConstructStat
     }
 }
 
+/**
+ * "Sign in to <service>" (`provider-<id>`) for a sign-in the pod offers and the session lacks; when the service lets
+ * the user pick a server (D45), a server box (`provider-server-<id>`) with its own button (`provider-server-go-<id>`).
+ */
+@Composable
+private fun ProviderRow(menu: MenuState, provider: SignInProvider) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                provider.title,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f).padding(vertical = 10.dp),
+            )
+            TextButton(onClick = { menu.startSignIn(provider) }, modifier = Modifier.testTag("provider-${provider.id}")) {
+                Text("Sign in to ${provider.title}")
+            }
+        }
+        provider.serverPlaceholder?.let { placeholder ->
+            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = menu.providerServers[provider.id].orEmpty(),
+                    onValueChange = { menu.providerServers[provider.id] = it.take(253) },
+                    placeholder = { Text(placeholder, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f).testTag("provider-server-${provider.id}"),
+                )
+                TextButton(
+                    onClick = { menu.startSignIn(provider, useTypedServer = true) },
+                    enabled = !menu.providerServers[provider.id].isNullOrBlank(),
+                    modifier = Modifier.testTag("provider-server-go-${provider.id}"),
+                ) { Text("Sign in") }
+            }
+        }
+    }
+}
+
 /** "Not signed in" (or why the last sign-in failed) with Sign in (`menu-sign-in`) when the screen offers one. */
 @Composable
-private fun NotSignedInRow(controller: ConstructController, state: ConstructState) {
+private fun NotSignedInRow(controller: ConstructController, state: ConstructState, button: Boolean = true) {
     val auth = state.auth
-    val signIn = findSignInIntent(state.workspace)
+    val signIn = findSignInIntent(state.workspace)?.takeIf { button }
     Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
             if (auth.state == "error") "Sign-in failed" + (auth.error?.let { ": $it" } ?: "") else "Not signed in",
@@ -756,9 +892,13 @@ private fun AppsSection(controller: ConstructController, state: ConstructState, 
     val menu = controller.menu
     val appIdFlow by controller.appId.collectAsState()
     val current = appIdFlow ?: state.activeLayout.appId
-    val loaded = (menu.apps as? Load.Ready)?.value.orEmpty()
-    // The app on screen is always listed (e.g. a hidden dev app, or while the list can't load).
-    val apps = if (current == null || loaded.any { it.id == current }) {
+    val scope = rememberCoroutineScope()
+    val all = (menu.apps as? Load.Ready)?.value.orEmpty()
+    val hiddenCount = all.count { it.hidden && it.id != current }
+    // Hidden apps only under "Show hidden apps"; the app on screen is always listed (e.g. a hidden dev app, or while
+    // the list can't load), unless it was deleted.
+    val loaded = all.filter { !it.hidden || menu.showHidden || it.id == current }
+    val apps = if (current == null || state.activeLayout.gone || loaded.any { it.id == current }) {
         loaded
     } else {
         listOf(AppSummary(current, (state.workspace as? UiNode.Workspace)?.title ?: current, latestVersion = state.activeLayout.version)) + loaded
@@ -774,8 +914,21 @@ private fun AppsSection(controller: ConstructController, state: ConstructState, 
             enabled = isCurrent || controller.canOpenApps,
             onOpen = { if (isCurrent) menu.closeMenu() else menu.openApp(app.id) },
             onHistory = { menu.showHistory(app.id) },
+            menuOpen = menu.rowMenuFor == app.id,
+            onMenu = { menu.rowMenuFor = if (menu.rowMenuFor == app.id) null else app.id },
+            onDismissMenu = { if (menu.rowMenuFor == app.id) menu.rowMenuFor = null },
+            onHide = { menu.setHidden(app, !app.hidden, scope) },
+            onDelete = if (app.custom) ({ menu.requestDelete(app) }) else null,
         )
     }
+    if (hiddenCount > 0) {
+        TextButton(
+            onClick = { menu.showHidden = !menu.showHidden },
+            modifier = Modifier.padding(horizontal = 12.dp).testTag("apps-show-hidden"),
+        ) { Text(if (menu.showHidden) "Hide hidden apps" else "Show hidden apps ($hiddenCount)") }
+    }
+    menu.appActionError?.takeIf { menu.deleteTarget == null }?.let { InlineError(it, tag = "app-action-error", onRetry = null) }
+    menu.deleteTarget?.let { DeleteAppDialog(menu, it, scope) }
     when (val a = menu.apps) {
         Load.Loading -> if (loaded.isEmpty()) LoadingRow("Loading apps…")
         is Load.Failed -> InlineError(a.message, tag = "apps-error", onRetry = menu::retryApps)
@@ -783,6 +936,51 @@ private fun AppsSection(controller: ConstructController, state: ConstructState, 
             ?.let { InlineError(it, tag = "apps-error", onRetry = menu::retryApps) }
     }
     menu.appError?.let { InlineError(it, tag = "app-error", onRetry = null) }
+}
+
+/** "Delete <app>?" (`delete-app-dialog`) with Delete (`delete-app-confirm`) and Cancel (`delete-app-cancel`). */
+@Composable
+private fun DeleteAppDialog(menu: MenuState, app: AppSummary, scope: CoroutineScope) {
+    AlertDialog(
+        onDismissRequest = menu::cancelDelete,
+        title = { Text("Delete ${app.title}?") },
+        text = {
+            Column {
+                Text("It goes away on all your devices. Its version history goes too.")
+                menu.appActionError?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { menu.confirmDelete(scope) },
+                enabled = !menu.appActionBusy,
+                modifier = Modifier.testTag("delete-app-confirm"),
+            ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+        },
+        dismissButton = {
+            TextButton(onClick = menu::cancelDelete, modifier = Modifier.testTag("delete-app-cancel")) { Text("Cancel") }
+        },
+        modifier = Modifier.testTag("delete-app-dialog"),
+    )
+}
+
+/** The small "Custom" label of the pod user's own apps (`app-custom-<id>`). */
+@Composable
+internal fun CustomMarker(tag: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        shape = RoundedCornerShape(6.dp),
+        modifier = Modifier.padding(end = 6.dp).testTag(tag),
+    ) {
+        Text(
+            "Custom",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onTertiaryContainer,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+        )
+    }
 }
 
 @Composable
@@ -793,6 +991,11 @@ private fun AppRow(
     enabled: Boolean,
     onOpen: () -> Unit,
     onHistory: () -> Unit,
+    menuOpen: Boolean,
+    onMenu: () -> Unit,
+    onDismissMenu: () -> Unit,
+    onHide: () -> Unit,
+    onDelete: (() -> Unit)?,
 ) {
     val shape = RoundedCornerShape(28.dp)
     Row(
@@ -819,12 +1022,41 @@ private fun AppRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (subtitle.isNotEmpty()) {
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            val line = listOfNotNull(subtitle.takeIf { it.isNotEmpty() }, "Hidden".takeIf { app.hidden }).joinToString(" · ")
+            if (line.isNotEmpty() || app.custom) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (app.custom) CustomMarker("app-custom-${app.id}")
+                    Text(
+                        line,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
         IconButton(onClick = onHistory, modifier = Modifier.testTag("app-history-${app.id}")) {
             Icon(ConstructIcons.History, contentDescription = "Version history of ${app.title}", modifier = Modifier.size(22.dp))
+        }
+        Box {
+            IconButton(onClick = onMenu, modifier = Modifier.testTag("app-more-${app.id}")) {
+                Icon(ConstructIcons.MoreVert, contentDescription = "More for ${app.title}", modifier = Modifier.size(22.dp))
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = onDismissMenu) {
+                DropdownMenuItem(
+                    text = { Text(if (app.hidden) "Show in the app list" else "Hide from the app list") },
+                    onClick = onHide,
+                    modifier = Modifier.testTag("app-hide-${app.id}"),
+                )
+                if (onDelete != null) {
+                    DropdownMenuItem(
+                        text = { Text("Delete…", color = MaterialTheme.colorScheme.error) },
+                        onClick = onDelete,
+                        modifier = Modifier.testTag("app-delete-${app.id}"),
+                    )
+                }
+            }
         }
     }
 }
@@ -1019,13 +1251,14 @@ private fun VersionPicker(controller: ConstructController, state: ConstructState
     // Reloaded when the picker opens, on Try again, and when a new version of the app on screen arrives.
     val latestOnScreen = if (isCurrent) state.activeLayout.version else null
     LaunchedEffect(appId, menu.historyToken, latestOnScreen) { menu.loadHistory(appId) }
-    val title = (menu.apps as? Load.Ready)?.value?.firstOrNull { it.id == appId }?.title
+    val summary = (menu.apps as? Load.Ready)?.value?.firstOrNull { it.id == appId }
+    val title = summary?.title
         ?: if (isCurrent) (state.workspace as? UiNode.Workspace)?.title ?: appId else appId
     val h = menu.history[appId] ?: VersionHistory()
     val pinnedHere = pinnedInPicker(state, pin, appId, isCurrent)
     val now = nowEpochSeconds()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("version-picker").padding(bottom = 16.dp)) {
-        PageHeader("Versions", onBack = menu::back, subtitle = title)
+        PageHeader("Versions", onBack = menu::back, subtitle = if (summary?.custom == true) "$title · Custom" else title)
         menu.selectError?.let { InlineError(it, tag = "version-error", onRetry = null) }
         val latest = latestOnScreen ?: h.versions.firstOrNull { it.compatible }?.version
         ChoiceRow(

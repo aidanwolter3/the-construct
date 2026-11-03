@@ -598,3 +598,8 @@ new layout files; diffs between versions.
   `kind`/`hidden`/`?all=1`, SSE `event: deleted`. Tests: `pod-core/tests/custom_apps.rs`, e2e `custom_apps.rs`
   (Kitchen over the fake Pixelfed + recipes through the engine: like via the outbox, a recipe screen, a live push to
   a second engine, delete).
+- P1c, clients: Custom marker, hide/show hidden apps, delete with confirmation, leaving a deleted app (engine
+  `gone`), "Sign in to <service>" in Settings (`providers`, `AppAdapter::sign_in_start`), simulator Kitchen fixture
+  and popup screenshots. Tests: client-core `apps.rs`, shared `AppCatalogTest`/`ConstructControllerTest`,
+  simulator `MenuTest`. Needs a device check: the row menu, the dialog and the notice on Android and the macOS
+  window.

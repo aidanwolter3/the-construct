@@ -544,6 +544,10 @@ offline, when actions wait to be sent, or when the version you picked has a newe
   you view an older version and a newer one is published, the drawer shows "Newer version available" with
   **Show latest**. Picking "Latest" follows new versions again. When the version you picked is on an older page,
   a checked "Pinned: vN" row sits under "Latest" until "Load older" lists it.
+  Custom apps (README "Custom apps") are marked **Custom** (also in the version picker). Each row's **⋮** offers
+  **Hide from the app list** (any app, on every device; "Show hidden apps (N)" lists them again) and, for custom
+  apps, **Delete…** with a confirmation. When the app on screen is deleted (here or elsewhere), the app opens the
+  default app and says "This app was deleted.".
 - **Settings** (at the bottom; decision [settings-page-and-sign-ins](docs/decisions/settings-page-and-sign-ins.md)),
   with the connection status beside it: Online / Offline and "N pending" ("Connecting…" until the engine first
   reports; no offline badge then). Offline, the Apps list from the last load stays without an error, and it reloads
@@ -552,8 +556,10 @@ offline, when actions wait to be sent, or when the version you picked has a newe
     with **Leave pod**, which forgets the pod code on this device.
   - **Sign-ins:** every sign-in on the pod (`GET /v1/auth/sign-ins`), e.g. "Pixelfed · @you · pixelfed.social".
     A row opens its detail: server, username, the apps that use it, and **Sign out of Pixelfed** (the pod stays
-    open). With none: "Not signed in" with **Sign in**, or "Signing in…" / "Sign-in failed: …". A pod that can't
-    list sign-ins (an older one) still shows "Signed in as @you" with **Sign out**.
+    open). With none: "Not signed in", or "Signing in…" / "Sign-in failed: …". Every sign-in the pod offers and
+    the session lacks gets a **Sign in to Pixelfed** row (with a server box where other servers are allowed); a pod
+    too old to list them falls back to the screen's **Sign in** button. A pod that can't list sign-ins (an older
+    one) still shows "Signed in as @you" with **Sign out**.
   - **Notifications:** the per-app notification channels (D52).
 - **Server** (in Settings): Staging, Local emulator (`http://10.0.2.2:8080`), Local USB (`http://127.0.0.1:8080`) or a custom
   URL on Android; Staging, Local (`http://127.0.0.1:8080`) or a custom `http(s)://host[:port]` on desktop. On
@@ -565,6 +571,9 @@ offline, when actions wait to be sent, or when the version you picked has a newe
 Back (Android) closes the innermost level (custom URL field, notification settings, a sign-in's detail, Settings,
 picker, drawer). Test tags: `menu-button`,
 `menu-badge`, `menu-drawer`, `menu-close`, `menu-back`, `app-<id>`, `app-history-<id>`, `app-error`, `apps-error`,
+`app-more-<id>`, `app-hide-<id>`, `app-delete-<id>`, `app-custom-<id>`, `apps-show-hidden`, `app-action-error`,
+`delete-app-dialog`, `delete-app-confirm`, `delete-app-cancel`, `app-gone`, `notice`, `notice-dismiss`,
+`provider-<id>`, `provider-server-<id>`, `provider-server-go-<id>`,
 `menu-newer`, `menu-newer-latest`, `menu-settings`, `settings`, `menu-connection`, `menu-account`, `sign-in-<id>`,
 `sign-in-detail`, `sign-ins-error`, `menu-sign-in`, `menu-sign-out`, `menu-leave-pod`, `menu-notifications`,
 `menu-server`, `server-<key>`, `server-custom`, `server-custom-url`, `server-custom-hint`, `server-custom-use`,

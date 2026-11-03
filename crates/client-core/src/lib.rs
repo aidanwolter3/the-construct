@@ -319,7 +319,9 @@ enum FetchOutcome {
 /// - `layout_json`: the layout on display, `{"app_id": <workspace id>,
 ///   "version": n}` (the app version from `X-Construct-Layout-Version` of the
 ///   applied fetch); `"{}"` while unknown or when the screen is not versioned
-///   (e.g. the signed-out `pixelfed_home` screen).
+///   (e.g. the signed-out `pixelfed_home` screen); `{"app_id", "gone": true}`
+///   when the app no longer exists on the pod (a deleted custom app: SSE
+///   `deleted`, or a 404): the UI leaves it.
 /// - `loads_json`: data path loads (`action.data.load`, docs/DECISIONS.md
 ///   D34): `{path: {"state": "loading"|"ready"|"error", "error"?}}` (`error`
 ///   is a short sentence for the UI). The queries of loaded paths are part
@@ -478,6 +480,10 @@ struct State {
     /// Staged attachments (D49), by id; each is drawn as the local entity
     /// `construct://attachments/<id>`.
     attachments: BTreeMap<String, Attachment>,
+    /// The app is gone from the pod: a custom app was deleted (SSE
+    /// `deleted`, or the workspace answered 404). Cleared by a successful
+    /// fetch. Reported as `"gone": true` in `layout_json`.
+    gone: bool,
 }
 
 impl State {
@@ -564,6 +570,9 @@ impl State {
 
     /// See [`StateSnapshot::layout_json`].
     fn layout_json(&self) -> String {
+        if self.gone {
+            return json!({ "app_id": self.workspace_id, "gone": true }).to_string();
+        }
         match self.layout_version {
             Some(n) => json!({ "app_id": self.workspace_id, "version": n }).to_string(),
             None => "{}".to_owned(),
@@ -2024,6 +2033,7 @@ impl Inner {
                     }
                     st.apply_fetched(&self.workspace_id, spec);
                     st.is_online = true;
+                    st.gone = false;
                     outcome = FetchOutcome::Fetched;
                 }
                 Err(FetchError::Status(code)) => {
@@ -2034,6 +2044,7 @@ impl Inner {
                             "[ConstructEngine] workspace '{}' not found (HTTP 404)",
                             self.workspace_id
                         );
+                        st.gone = true;
                     } else {
                         eprintln!(
                             "[ConstructEngine] fetch {} failed: HTTP {code}",

@@ -285,6 +285,18 @@ impl AppAdapter for PixelfedAdapter {
         }]
     }
 
+    fn sign_in_start<'a>(
+        &'a self,
+        pod: &'a Pod,
+        _sign_in: &'a str,
+    ) -> BoxFuture<'a, Option<pod_core::SignInStart>> {
+        Box::pin(async move {
+            let rt = self.runtime();
+            let others = crate::routes::others_allowed(pod).await.unwrap_or(false);
+            Some(crate::layout::sign_in_start(&rt.config, others))
+        })
+    }
+
     fn signed_out(&self, _sign_in: &str, app: &AppInfo, _req: &RequestCtx) -> WorkspaceSpec {
         crate::layout::signed_out(&self.runtime().config, app.id, app.title)
     }

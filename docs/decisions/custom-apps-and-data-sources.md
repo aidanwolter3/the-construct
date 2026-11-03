@@ -75,9 +75,28 @@ it only where dev apps are shown.
 A custom layout can only call routes its sources declare, with the caller's own session: no more than curl with the
 same token could do. A misleading button label is an accepted risk.
 
+## Clients (P1c)
+
+- **Apps list:** the engine lists `GET /v1/apps?all=1` (older pods ignore `all`); the menu marks custom apps
+  **Custom** (also in the version picker), keeps hidden apps under "Show hidden apps (N)", and each row's ⋮ menu
+  hides/shows any app and deletes a custom one after a confirmation (engine/FFI `set_app_hidden`,
+  `delete_custom_app`). Pinning stays client-local.
+- **A deleted app on screen:** the engine marks `layout_json` `{"app_id", "gone": true}` on the SSE `deleted`
+  event, on a workspace 404, and (through a refetch) when its events stream gets a 404. The controller then opens
+  the platform's default app (`ConstructController(defaultAppId = …)`) and shows "This app was deleted."; without
+  one it stays on a placeholder that says so. No new snapshot field, so the FFI record is unchanged.
+- **Sign in from Settings:** `GET /v1/auth/sign-ins` also lists `providers`, `{id, title, signed_in, intent?,
+  server_placeholder?}`, from the new `AppAdapter::sign_in_start` (Pixelfed: the default instance's
+  `action.auth.login`, plus a server box when other instances are allowed, D45). Settings shows "Sign in to
+  <title>" for each one the session lacks and dispatches that intent. This closes a "Not yet" of decision
+  `settings-page-and-sign-ins`.
+- **Simulator:** the fixture catalog has a custom "Kitchen" app (`c-kitchen2dm`, `fixtures/custom_kitchen_bundle.json`);
+  `shot` now draws popups (menus, dialogs) over the screen.
+- `SCHEMA_VERSION` is unchanged (no new node or intent), but the app needs a new build for the menu changes; older
+  builds keep working (they see custom apps as ordinary apps and can't delete them).
+
 Not done yet (later commits of issue #45):
 
-- **P1c:** client support (Custom marker, delete, hide, sign in from Settings).
 - **P2:** `POST /v1/mcp` for Claude with a host-issued, scoped credential (decision `mcp-connector`).
 - **P3:** layout `parts` and `core://Ref`, `ref_update` versions, copies with an update notice (decision
   `layout-parts`).
