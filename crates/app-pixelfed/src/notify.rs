@@ -571,13 +571,12 @@ async fn find_roots(
         let (top, complete) = crate::thread_root(start, |id| {
             let budget = &budget;
             async move {
-                let left =
-                    budget.fetch_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |b| {
-                        b.checked_sub(1)
-                    });
-                if left.is_err() || !path_safe(&id) {
+                // Lookups run one at a time (the walk awaits each).
+                let left = budget.load(AtomicOrdering::Relaxed);
+                if left == 0 || !path_safe(&id) {
                     return None;
                 }
+                budget.store(left - 1, AtomicOrdering::Relaxed);
                 match api.status(token, &id).await {
                     Ok(v) => Some(v),
                     Err(e) => {
