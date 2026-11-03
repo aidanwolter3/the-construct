@@ -337,10 +337,17 @@ client build. The engine and the clients know no app.
   for screen readers and bindable `tag`) makes its content tappable: a tap anywhere on it dispatches `on_click` with
   `$item` bound. A button inside keeps its own tap. The recipes list rows (`layouts/recipes/0002.json`) are
   tappable titles.
-- **Schema versions (D36, D38):** the engine sends `X-Construct-Schema: 4` (workspace fetches, data loads, the
+- **List search and groups (schema 5, D43):** `core://List` takes an optional `filter` (`value`: `$form.<field>` or
+  literal text, `fields`, optional `no_match_text`): while the value is non-blank, only items where every word of it
+  appears in one of `fields` are drawn (case and accents ignored), filtered on the client as you type, offline too.
+  A `core://TextField` without `on_submit` edits that form value (one line, with a Clear button). `group_by`
+  (`field`, `header` node bound to the group's first drawn item) draws a header wherever `item[field]` changes, so
+  headers stay right while a filter hides items. `layouts/recipes/0003.json` puts a search box over the recipes
+  list (the adapter's `search_text`: title, category, ingredient names).
+- **Schema versions (D36, D38):** the engine sends `X-Construct-Schema: 5` (workspace fetches, data loads, the
   apps API and the events stream). Every version records the schema it was written for (`"schema"` in its file). The pod serves each client
   the newest version it can draw, so an older app (no header = 1) keeps getting the last version without screens
-  or the new nodes. Screens and List/Image/TextField need `"schema": 2`; the building blocks need 3; `core://Tappable` needs 4. `GET /v1/apps/{id}/versions[/{n}]` adds `schema`,
+  or the new nodes. Screens and List/Image/TextField need `"schema": 2`; the building blocks need 3; `core://Tappable` needs 4; a List `filter` or `group_by` needs 5. `GET /v1/apps/{id}/versions[/{n}]` adds `schema`,
   `compatible` and, when false, `incompatible` (`update_required`: written for a newer app; `retired`: written for
   a schema this app no longer draws) per version; the menu greys those rows out and won't pin them. "Latest" in the
   menu is always a version this app can draw; when the newest needs a newer app, the menu adds "Update the app to
@@ -350,7 +357,8 @@ client build. The engine and the clients know no app.
   them; the old files are not edited. `RETIRED` is `[(3, 3)]`: schema 3 removed the `pixelfed://` widgets (D37),
   so schema-3 clients draw only schema-3 versions (`pixelfed_home/0003`, `pixelfed_demo/0002`). Schema 4 (D42) was
   additive (no `RETIRED` entry): schema-4 clients still draw schema-3 versions, and schema-3 clients keep getting
-  the newest schema-3 version (e.g. `recipes/0001`).
+  the newest schema-3 version (e.g. `recipes/0001`). Schema 5 (D43) was additive too (`recipes/0002` for
+  schema-4 clients).
 
 `layouts/pixelfed_home/0003.json` builds the feed from these nodes. It (like 0002) uses the rest for comments: the feed's comment button (already
 `pixelfed://posts/$item.id/comments`) opens the `comments` screen, which loads

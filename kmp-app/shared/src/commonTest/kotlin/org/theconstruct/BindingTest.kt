@@ -28,7 +28,7 @@ class BindingTest {
             is UiNode.Container -> n.children.flatMap(::all)
             is UiNode.Row -> n.children.flatMap(::all)
             is UiNode.Column -> n.children.flatMap(::all)
-            is UiNode.ItemList -> all(n.itemTemplate)
+            is UiNode.ItemList -> all(n.itemTemplate) + (n.groupBy?.let { all(it.header) } ?: emptyList())
             is UiNode.Carousel -> all(n.itemTemplate)
             is UiNode.Conditional -> all(n.content)
             is UiNode.Tappable -> all(n.content)

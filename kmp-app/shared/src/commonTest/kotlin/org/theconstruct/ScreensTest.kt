@@ -177,4 +177,44 @@ class ScreensTest {
         assertEquals(0, indentDp(null, items[1]))
         assertEquals(0, indentDp(Indent("nope", 24), items[1]))
     }
+
+    @Test
+    fun listFilterMatchesEveryWordIgnoringCaseAndAccents() {
+        val item = JsonObject(
+            mapOf(
+                "title" to JsonPrimitive("Crème Brûlée"),
+                "search_text" to JsonPrimitive("Crème Brûlée · Desserts · heavy cream · SUGAR"),
+                "tags" to kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive("french"), JsonPrimitive(3))),
+                "n" to JsonPrimitive(42),
+            )
+        )
+        assertEquals("creme brulee", foldForSearch("Crème Brûlée"))
+        assertEquals("creme", foldForSearch("cre\u0300me"), "combining marks are dropped")
+        assertTrue(matchesFilter("", item, listOf("title")), "blank: everything")
+        assertTrue(matchesFilter("   ", item, listOf("title")))
+        assertTrue(matchesFilter("creme", item, listOf("title")))
+        assertTrue(matchesFilter("BRÛLÉE", item, listOf("title")))
+        assertTrue(matchesFilter("  sugar   creme ", item, listOf("search_text")), "every word, any order")
+        assertTrue(!matchesFilter("sugar rhubarb", item, listOf("search_text")), "every word must match")
+        assertTrue(!matchesFilter("sugar", item, listOf("title")), "only the listed fields")
+        assertTrue(matchesFilter("sugar french", item, listOf("title", "search_text", "tags")), "words may match different fields")
+        assertTrue(matchesFilter("42", item, listOf("n")), "numbers are text")
+        assertTrue(!matchesFilter("x", item, listOf("missing")))
+
+        val f = ListFilter("\$form.q", listOf("title"))
+        assertEquals("", filterQuery(f, null))
+        assertEquals("", filterQuery(f, mapOf("other" to "x")))
+        assertEquals("pie", filterQuery(f, mapOf("q" to "pie")))
+        assertEquals("pie", filterQuery(ListFilter("pie", listOf("title")), null), "a literal value")
+    }
+
+    @Test
+    fun groupHeadersFollowTheDrawnItems() {
+        fun item(cat: String?) = JsonObject(if (cat == null) emptyMap() else mapOf("category" to JsonPrimitive(cat)))
+        val items = listOf(item("A"), item("A"), item("B"), item(null), item(null), item("A"))
+        assertEquals(listOf(true, false, true, true, false, true), groupStarts(items, "category"))
+        // Filtering out a group's first item moves its header to the next one drawn.
+        assertEquals(listOf(true, true), groupStarts(listOf(items[1], items[2]), "category"))
+        assertEquals(emptyList(), groupStarts(emptyList(), "category"))
+    }
 }

@@ -188,13 +188,32 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             check_dp("padding_v_dp", *padding_v_dp, MAX_PADDING_DP)
         }
         UiNode::Spacer { size_dp: Some(s) } => check_dp("spacer size_dp", *s, MAX_SIZE_DP),
-        UiNode::List { indent, .. } => match indent {
-            Some(i) if i.step_dp > MAX_PADDING_DP || i.max.unwrap_or(4) > 8 => Err(format!(
-                "indent step_dp {} / max {:?} too large (max {MAX_PADDING_DP} dp, 8 steps)",
-                i.step_dp, i.max
-            )),
-            _ => Ok(()),
-        },
+        UiNode::List {
+            indent,
+            filter,
+            group_by,
+            ..
+        } => {
+            if let Some(i) = indent
+                && (i.step_dp > MAX_PADDING_DP || i.max.unwrap_or(4) > 8)
+            {
+                return Err(format!(
+                    "indent step_dp {} / max {:?} too large (max {MAX_PADDING_DP} dp, 8 steps)",
+                    i.step_dp, i.max
+                ));
+            }
+            if let Some(f) = filter
+                && (f.value.trim().is_empty()
+                    || f.fields.is_empty()
+                    || f.fields.iter().any(|x| x.trim().is_empty()))
+            {
+                return Err("list filter needs a value and at least one field".into());
+            }
+            if group_by.as_ref().is_some_and(|g| g.field.trim().is_empty()) {
+                return Err("list group_by needs a field".into());
+            }
+            Ok(())
+        }
         UiNode::Image {
             size_dp,
             aspect_ratio,
@@ -328,4 +347,34 @@ pub fn intents(node: &UiNode) -> Vec<&ActionIntent> {
         .into_iter()
         .flat_map(UiNode::own_intents)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn list(extra: Value) -> UiNode {
+        let mut v = json!({"type": "core://List", "query_key": "q",
+            "item_template": {"type": "core://Divider"}});
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn list_filter_and_group_by_need_their_fields() {
+        let ok = list(json!({"filter": {"value": "$form.q", "fields": ["title"]},
+            "group_by": {"field": "category", "header": {"type": "core://Divider"}}}));
+        assert_eq!(check_values(&ok), Ok(()));
+        for bad in [
+            json!({"filter": {"value": " ", "fields": ["title"]}}),
+            json!({"filter": {"value": "$form.q", "fields": []}}),
+            json!({"filter": {"value": "$form.q", "fields": [""]}}),
+            json!({"group_by": {"field": "", "header": {"type": "core://Divider"}}}),
+        ] {
+            assert!(check_values(&list(bad.clone())).is_err(), "{bad}");
+        }
+    }
 }

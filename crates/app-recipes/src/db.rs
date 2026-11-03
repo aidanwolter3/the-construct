@@ -348,7 +348,9 @@ pub fn recipe_uri(slug: &str) -> String {
 
 /// Every recipe, by category then title: one `recipes://recipes/<slug>`
 /// entity each, listed in `queries["recipes:all"]`. The first recipe of a
-/// category carries `category_header` (the list draws it as a heading).
+/// category carries `category_header` (the list draws it as a heading; layouts
+/// from schema 5 group by `category` instead). `search_text` (title, category
+/// and ingredient names) is what the list's search matches (D43).
 pub fn all_recipes(conn: &Connection) -> rusqlite::Result<DataBundle> {
     let mut bundle = DataBundle::default();
     let mut order = Vec::new();
@@ -379,6 +381,7 @@ fn recipe_entities(conn: &Connection) -> rusqlite::Result<Vec<(String, EntityRec
             r.get::<_, Option<String>>(6)?,
         ))
     })?;
+    let mut ingredients = ingredient_names(conn)?;
     let mut out = Vec::new();
     let mut last_category: Option<String> = None;
     for row in rows {
@@ -388,8 +391,11 @@ fn recipe_entities(conn: &Connection) -> rusqlite::Result<Vec<(String, EntityRec
             Some(y) => format!("{category} · {y}"),
             None => category.clone(),
         };
+        let mut search = vec![title.clone(), category.clone()];
+        search.extend(ingredients.remove(&slug).unwrap_or_default());
         let mut e = EntityRecord::new();
         e.set("id", slug.clone());
+        e.set("search_text", search.join(" · "));
         e.set("title", title);
         e.set("category", category.clone());
         e.set("summary", summary);
@@ -402,6 +408,26 @@ fn recipe_entities(conn: &Connection) -> rusqlite::Result<Vec<(String, EntityRec
             last_category = Some(category);
         }
         out.push((slug, e));
+    }
+    Ok(out)
+}
+
+/// Every recipe's distinct ingredient names (alternatives included), by slug,
+/// in recipe order.
+fn ingredient_names(conn: &Connection) -> rusqlite::Result<HashMap<String, Vec<String>>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.slug, i.name FROM recipes_ingredients i
+         JOIN recipes_ingredient_groups g ON g.id = i.group_id
+         JOIN recipes r ON r.id = g.recipe_id
+         ORDER BY r.id, g.position, i.position, i.id",
+    )?;
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+        let (slug, name) = row?;
+        let names = out.entry(slug).or_default();
+        if !names.contains(&name) {
+            names.push(name);
+        }
     }
     Ok(out)
 }
@@ -781,6 +807,22 @@ mod tests {
                 "Drinks",
             ]
         );
+        // Search finds recipes by ingredient (D43): only one uses rhubarb.
+        let with = |word: &str| -> Vec<&str> {
+            order
+                .iter()
+                .filter(|u| {
+                    b.entities[*u]
+                        .get_str("search_text")
+                        .unwrap()
+                        .to_lowercase()
+                        .contains(word)
+                })
+                .map(|u| u.strip_prefix(RECIPE_PREFIX).unwrap())
+                .collect()
+        };
+        assert_eq!(with("rhubarb"), ["rhubarb-crunch"]);
+        assert!(with("butter").len() > 10);
         // Slugs are valid route parameters.
         for u in order {
             let slug = u.strip_prefix(RECIPE_PREFIX).unwrap();

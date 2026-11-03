@@ -9,7 +9,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use pod_core::layouts::parse_files;
 use pod_core::{AppAdapter, AppState, Catalog};
-use protocol::{DataBundle, WorkspaceSpec};
+use protocol::{DataBundle, UiNode, WorkspaceSpec};
 use tower::ServiceExt;
 
 fn adapters() -> Vec<Arc<dyn AppAdapter>> {
@@ -98,16 +98,22 @@ async fn the_workspace_lists_every_recipe_and_a_screen_loads_one() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
-/// Schema 4 clients get tappable rows (0002, D42); schema 3 clients keep the
-/// "View" buttons (0001).
+/// Schema 5 clients get the search box (0003, D43), schema 4 clients
+/// tappable rows (0002, D42) and schema 3 clients the "View" buttons (0001).
 #[tokio::test]
 async fn each_schema_gets_the_newest_layout_it_draws() {
     let state = Arc::new(AppState::in_memory(adapters()));
-    for (schema, tappable) in [(protocol::SCHEMA_VERSION, true), (3, false)] {
+    for (schema, search, tappable) in [
+        (protocol::SCHEMA_VERSION, true, true),
+        (4, false, true),
+        (3, false, false),
+    ] {
         let (status, body) = get_as(&state, "/v1/workspaces/recipes", schema).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
-        let types: Vec<String> = spec.workspace.walk().iter().map(|n| n.type_tag()).collect();
+        assert_eq!(protocol::required_schema(&spec.workspace), schema);
+        let walk = spec.workspace.walk();
+        let types: Vec<String> = walk.iter().map(|n| n.type_tag()).collect();
         assert_eq!(
             types.iter().any(|t| t == "core://Tappable"),
             tappable,
@@ -118,6 +124,23 @@ async fn each_schema_gets_the_newest_layout_it_draws() {
             !tappable,
             "schema {schema}"
         );
+        let filter = walk.iter().find_map(|n| match n {
+            UiNode::List {
+                filter: Some(f), ..
+            } => Some(f),
+            _ => None,
+        });
+        assert_eq!(filter.is_some(), search, "schema {schema}");
+        if let Some(f) = filter {
+            // The box edits the form value the filter reads, and the field exists.
+            assert_eq!(f.value, "$form.q");
+            assert!(walk.iter().any(|n| matches!(n,
+                UiNode::TextField { field, on_submit: None, .. } if field == "q")));
+            let recipe = spec.entities.values().next().unwrap();
+            for field in &f.fields {
+                assert!(recipe.get_str(field).is_some(), "{field}");
+            }
+        }
     }
 }
 

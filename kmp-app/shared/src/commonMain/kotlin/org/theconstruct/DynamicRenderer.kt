@@ -39,6 +39,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -205,6 +208,50 @@ fun indentDp(indent: Indent?, item: JsonObject): Int {
     return n.coerceIn(0, indent.max ?: 4) * indent.stepDp.coerceAtLeast(0)
 }
 
+/** [s] lowercased with common Latin accents removed ("Crème Brûlée" -> "creme brulee"), for [matchesFilter]. */
+fun foldForSearch(s: String): String {
+    val out = StringBuilder(s.length)
+    for (c in s.lowercase()) {
+        if (c in '\u0300'..'\u036F') continue // combining marks (decomposed accents)
+        out.append(ACCENT_FOLDS[c] ?: c)
+    }
+    return out.toString()
+}
+
+private val ACCENT_FOLDS: Map<Char, String> = buildMap {
+    fun fold(chars: String, to: String) = chars.forEach { put(it, to) }
+    fold("àáâãäåāăą", "a"); fold("çćĉċč", "c"); fold("ďđ", "d"); fold("èéêëēĕėęě", "e"); fold("ĝğġģ", "g")
+    fold("ĥħ", "h"); fold("ìíîïĩīĭįı", "i"); fold("ĵ", "j"); fold("ķ", "k"); fold("ĺļľŀł", "l"); fold("ñńņňŉ", "n")
+    fold("òóôõöøōŏő", "o"); fold("ŕŗř", "r"); fold("śŝşš", "s"); fold("ţťŧ", "t"); fold("ùúûüũūŭůűų", "u")
+    fold("ŵ", "w"); fold("ýÿŷ", "y"); fold("źżž", "z"); fold("ß", "ss"); fold("æ", "ae"); fold("œ", "oe")
+}
+
+/** The query of [filter]: the form value for `$form.<field>` (blank when unset), else the literal text. */
+fun filterQuery(filter: ListFilter, form: Map<String, String>?): String =
+    if (filter.value.startsWith("\$form.")) form?.get(filter.value.removePrefix("\$form.")).orEmpty() else filter.value
+
+/** An item field as searchable text: a string or number, or the strings of an array, joined by spaces. */
+private fun searchableText(v: JsonElement?): String = when (v) {
+    is JsonPrimitive -> if (v is JsonNull) "" else v.content
+    is JsonArray -> v.joinToString(" ") { searchableText(it) }
+    else -> ""
+}
+
+/**
+ * Whether [item] passes a list filter (D43): a blank [query] matches everything; otherwise every word of it must be
+ * found in at least one of [fields] (case and accents ignored; words may match different fields).
+ */
+fun matchesFilter(query: String, item: JsonObject, fields: List<String>): Boolean {
+    val words = foldForSearch(query).split(Regex("\\s+")).filter { it.isNotEmpty() }
+    if (words.isEmpty()) return true
+    val haystacks = fields.map { foldForSearch(searchableText(item[it])) }
+    return words.all { w -> haystacks.any { it.contains(w) } }
+}
+
+/** For each of [items], whether it starts a group: its [field] differs from the previous item's (D43). */
+fun groupStarts(items: List<JsonObject>, field: String): List<Boolean> =
+    items.mapIndexed { i, item -> i == 0 || item[field] != items[i - 1][field] }
+
 @Composable
 private fun ItemList(
     node: UiNode.ItemList,
@@ -213,17 +260,36 @@ private fun ItemList(
     modifier: Modifier,
 ) {
     val queries = LocalConstructQueries.current
-    val items = remember(node.queryKey, queries, entities) { listItems(node.queryKey, queries, entities) }
+    val all = remember(node.queryKey, queries, entities) { listItems(node.queryKey, queries, entities) }
+    // Reading the form here recomposes the list as the search field is typed into.
+    val query = node.filter?.let { filterQuery(it, LocalForm.current) }.orEmpty()
+    val items = remember(all, node.filter, query) {
+        val f = node.filter
+        if (all == null || f == null || query.isBlank()) all else all.filter { matchesFilter(query, it, f.fields) }
+    }
+    val starts = remember(items, node.groupBy) { node.groupBy?.let { g -> items?.let { groupStarts(it, g.field) } } }
     Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-        if (items != null && items.isEmpty() && node.emptyText != null) {
+        val message = when {
+            items == null || items.isNotEmpty() -> null
+            all.isNullOrEmpty() -> node.emptyText
+            else -> node.filter?.noMatchText ?: node.emptyText
+        }
+        if (message != null) {
             Text(
-                node.emptyText,
+                message,
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.Gray,
                 modifier = Modifier.padding(16.dp).testTag("list-empty"),
             )
         }
-        items?.forEach { item ->
+        items?.forEachIndexed { i, item ->
+            val header = node.groupBy?.header
+            if (header != null && starts?.getOrNull(i) == true) {
+                // Keyed by the item it heads: headers hold no state, and move with the filter.
+                key("group-header", item["uri"]) {
+                    RenderUiNode(header, entities, onDispatch, Modifier.widthIn(max = FEED_MAX_WIDTH).fillMaxWidth(), item)
+                }
+            }
             // Keyed by entity URI, so per-item state follows the item when the list changes.
             key(item["uri"]) {
                 // Phone: full width. Wider screens: a centered, readable column.
@@ -237,7 +303,10 @@ private fun ItemList(
     }
 }
 
-/** A text field bound to the form value [UiNode.TextField.field]; Send dispatches `on_submit` and clears it. */
+/**
+ * A text field bound to the form value [UiNode.TextField.field]; Send dispatches `on_submit` and clears it. Without
+ * `on_submit` (a search box) it is one line and a Clear button empties it.
+ */
 @Composable
 private fun FormTextField(node: UiNode.TextField, dispatch: (ActionIntent) -> Unit, modifier: Modifier) {
     val form = LocalForm.current
@@ -248,7 +317,20 @@ private fun FormTextField(node: UiNode.TextField, dispatch: (ActionIntent) -> Un
             value = value,
             onValueChange = { v -> form?.set(node.field, node.maxLength?.let { v.take(it) } ?: v) },
             placeholder = { Text(node.placeholder) },
-            maxLines = 4,
+            maxLines = if (submit == null) 1 else 4,
+            singleLine = submit == null,
+            trailingIcon = if (submit == null && value.isNotEmpty()) {
+                {
+                    IconButton(
+                        onClick = { form?.remove(node.field) },
+                        modifier = Modifier.testTag("textfield-clear:${node.field}"),
+                    ) {
+                        Icon(ConstructIcons.Close, contentDescription = "Clear")
+                    }
+                }
+            } else {
+                null
+            },
             modifier = Modifier.weight(1f).testTag("textfield:${node.field}"),
         )
         if (submit != null) {

@@ -426,6 +426,15 @@ from a client (D32, D33).
 - **Not yet:** editing, search, serving scaling, sign-in to read; tappable list rows instead of the View button
   (issue #15, schema 4).
 
+## List search (D43, issue #17)
+- Schema 5: `core://List` `filter` (client-side, as you type, case/accent-insensitive, every word must match) and
+  `group_by` (the list draws group headers, so they stay right while filtering). A `core://TextField` without
+  `on_submit` gets a Clear button.
+- Recipes: each recipe entity has `search_text` (title, category, ingredient names); `layouts/recipes/0003.json`
+  adds a search box. Simulator against a local pod: "rhubarb" leaves only Rhubarb Crunch; Clear restores all 81.
+- Needs a client build: Android device check on the developer's Mac.
+- **Not yet:** server-side search for very large lists (needs a debounce primitive).
+
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
   bookmarks are idempotent upstream, comments are not).

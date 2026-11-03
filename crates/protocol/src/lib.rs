@@ -12,8 +12,8 @@ pub mod intent;
 pub mod schema;
 
 pub use ast::{
-    ICONS, ImageShape, Indent, ListBinding, NODE_TYPES, Orientation, Screen, SlotSpec, TextStyle,
-    Tone, UiNode,
+    GroupBy, ICONS, ImageShape, Indent, ListBinding, ListFilter, NODE_TYPES, Orientation, Screen,
+    SlotSpec, TextStyle, Tone, UiNode,
 };
 pub use bundle::{DataBundle, EntityRecord, WorkspaceSpec};
 pub use intent::{ActionIntent, FieldUpdate, PresentationMode};
