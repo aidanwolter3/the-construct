@@ -121,6 +121,7 @@ private fun runCli(args: Array<String>): Int {
     val controller: ConstructController
     var setOnline: ((Boolean) -> Unit)? = null
     var publishVersion: ((String) -> Long)? = null
+    var notify: ((String, String, String) -> Unit)? = null
     if (mode == "fixture") {
         val fixture = opts["fixture"]?.let(::path) ?: defaultFixture(workspace, cwd)
         if (!fixture.isFile) throw UsageException("fixture not found: $fixture")
@@ -129,18 +130,22 @@ private fun runCli(args: Array<String>): Int {
         val appId = if (opts["fixture"] != null && opts["workspace"] == null) null else workspace
         // The fake pod's data path answers (screens, D34), generated from the pod by crates/server/tests/fixtures.rs.
         val screenData = findFixture("pixelfed_screen_data.json", cwd)?.readText()
+        // The fake pod's notifications (D47), shared by every engine of the run.
+        val notifications = findFixture("notifications.json", cwd)?.let { FakeNotifications.fromFixture(it.readText()) }
+            ?: FakeNotifications()
         var current = try {
-            FakeEngineBridge(fixture.readText(), appId = appId, screenData = screenData)
+            FakeEngineBridge(fixture.readText(), appId = appId, screenData = screenData, notifications = notifications)
         } catch (e: Exception) {
             throw UsageException("bad fixture $fixture: ${e.message}")
         }
         setOnline = { current.setOnline(it) }
         publishVersion = { current.publishVersion(it) }
+        notify = { app, channel, title -> notifications.inject(app, channel, title) }
         // open-app: a new fake engine on the app's default fixture, sharing the apps catalog and the connectivity.
         val openBridge = { id: String ->
             FakeEngineBridge(
                 defaultFixture(id, cwd).readText(), online = current.online, appId = id, apps = current.apps,
-                screenData = screenData,
+                screenData = screenData, notifications = notifications,
             )
                 .also { current = it }
         }
@@ -189,6 +194,7 @@ private fun runCli(args: Array<String>): Int {
         setOnline = setOnline,
         modeName = mode,
         publishVersion = publishVersion,
+        notify = notify,
         server = if (mode == "live") opts["baseUrl"] ?: LIVE_DEFAULT_BASE_URL else SimRunner.SIM_SERVERS.first().url,
     ).run(steps)
     if (result.ok) {

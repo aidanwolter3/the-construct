@@ -36,6 +36,17 @@ sealed class SimStep(val command: String, val arg: String = "") {
     /** Fixture mode only: the fake pod publishes a new newest version of the app on screen. */
     class PublishVersion(val note: String) : SimStep("publish-version", note)
 
+    // Notifications (D47).
+    /** Fixture mode only: a live notification from [app]'s [channel] (fires the listener, bumps the unread count). */
+    class Notify(val app: String, val channel: String, val title: String) : SimStep("notify", "$app $channel $title")
+    object OpenInbox : SimStep("open-inbox")
+    object CloseInbox : SimStep("close-inbox")
+    /** Clicks the inbox row containing [text] (opens its app and target). */
+    class ClickNotification(val text: String) : SimStep("click-notification", text)
+    object OpenNotificationSettings : SimStep("open-notification-settings")
+    /** [channel]: `<app>.<channel id>` (e.g. `pixelfed_home.likes`). */
+    class ToggleChannel(val channel: String) : SimStep("toggle-channel", channel)
+
     override fun toString(): String = if (arg.isEmpty()) command else "$command $arg"
 }
 
@@ -50,10 +61,15 @@ const val MAX_WAIT_MS = 600_000L
 /** Default timeout of `wait-images`. */
 const val DEFAULT_WAIT_IMAGES_MS = 10_000L
 
-/** Rejects steps that [mode] can't run: `offline`/`online`/`publish-version` need the fixture mode's fake engine. */
+/**
+ * Rejects steps that [mode] can't run: `offline`/`online`/`publish-version`/`notify` need the fixture mode's fake
+ * engine.
+ */
 fun validateStepsForMode(steps: List<SimStep>, mode: String) {
     if (mode == "fixture") return
-    val i = steps.indexOfFirst { it == SimStep.Offline || it == SimStep.Online || it is SimStep.PublishVersion }
+    val i = steps.indexOfFirst {
+        it == SimStep.Offline || it == SimStep.Online || it is SimStep.PublishVersion || it is SimStep.Notify
+    }
     if (i >= 0) {
         throw ScriptParseException("step ${i + 1} '${steps[i].command}' is not supported in $mode mode (fixture mode only)")
     }
@@ -136,6 +152,24 @@ fun parseScript(script: String): List<SimStep> {
                 SimStep.SetServer(a)
             }
             "publish-version" -> SimStep.PublishVersion(requireArg("a note (the changelog line)"))
+            "notify" -> {
+                val parts = requireArg("'<app_id> <channel> <title>'").split(Regex("\\s+"), limit = 3)
+                if (parts.size < 3 || parts[2].isBlank()) {
+                    throw ScriptParseException("${where()}: 'notify' needs '<app_id> <channel> <title>'")
+                }
+                SimStep.Notify(parts[0], parts[1], parts[2].trim())
+            }
+            "open-inbox" -> { noArg(); SimStep.OpenInbox }
+            "close-inbox" -> { noArg(); SimStep.CloseInbox }
+            "click-notification" -> SimStep.ClickNotification(requireArg("text of the notification to click"))
+            "open-notification-settings" -> { noArg(); SimStep.OpenNotificationSettings }
+            "toggle-channel" -> {
+                val a = requireArg("'<app_id>.<channel>' (e.g. pixelfed_home.likes)")
+                if (!a.contains('.') || a.startsWith('.') || a.endsWith('.') || a.any { it.isWhitespace() }) {
+                    throw ScriptParseException("${where()}: 'toggle-channel' needs '<app_id>.<channel>' (e.g. pixelfed_home.likes)")
+                }
+                SimStep.ToggleChannel(a)
+            }
             "offline" -> { noArg(); SimStep.Offline }
             "online" -> { noArg(); SimStep.Online }
             "screen" -> SimStep.Screen(
@@ -149,7 +183,8 @@ fun parseScript(script: String): List<SimStep> {
                 "${where()}: unknown command '$command' (expected one of: " +
                     "shot, click, wait, idle, assert-text, assert-no-text, wait-text, wait-images, swipe-left, swipe-right, " +
                     "scroll-to, type, back, open-menu, close-menu, open-app, open-history, select-version, set-server, " +
-                    "publish-version, offline, online, screen)",
+                    "publish-version, notify, open-inbox, close-inbox, click-notification, open-notification-settings, " +
+                    "toggle-channel, offline, online, screen)",
             )
         }
     }

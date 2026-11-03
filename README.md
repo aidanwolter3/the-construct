@@ -1011,13 +1011,19 @@ entries starting with `#` are comments. An argument cannot contain `;`, and sinc
 | `open-history <id or title>` | Opens that app's version picker (opening the drawer first if needed). |
 | `select-version <n or latest>` | In the picker, shows version `n` (`2` or `v2`; presses "Load older" as needed) or follows the latest again; waits for the drawer to close. |
 | `set-server <preset or URL>` | Picks `staging`, `emulator`, `usb` or a custom `http(s)://host[:port]` in the Server section. The simulator records the choice and shows it in the menu, but keeps its engine. |
+| `notify <app_id> <channel> <title>` | Fixture mode only: the fake pod sends a live notification (D47): the platform hook (`onNotification`) fires and the bell's unread count goes up. |
+| `open-inbox` | Clicks the bell (`inbox-button`) and waits for the inbox (`inbox`) to load; reports the rows shown or its message. |
+| `close-inbox` | Closes the inbox. |
+| `click-notification <text>` | Clicks the inbox row containing `<text>` and waits for its app (opened if it is another one) and target screen; reports both. |
+| `open-notification-settings` | Opens the menu's notification settings (`menu-notifications`) and waits for the channels. |
+| `toggle-channel <app>.<channel>` | In the settings, flips a channel's switch (`channel:<app>.<channel>`, e.g. `pixelfed_home.likes`); reports `on`/`off`. |
 
 The menu commands are thin wrappers over clicks on the menu's test tags (`click tag:app-history-pixelfed_demo` works too,
 see [The menu](#the-menu-all-surfaces)). Each one waits until idle and until every apps call has finished (they run
 on a background thread), and fails with a hint when its control is missing (e.g. `select-version 2` without
 `open-history`: "no version picker on screen (use open-history first)"). Examples (fixture mode). The menu commands also
 work in live mode; start the pod with `CONSTRUCT_SHOW_DEV_APPS=1` to list the dev apps. `publish-version`,
-`offline` and `online` are fixture-only.
+`notify`, `offline` and `online` are fixture-only.
 
 ```bash
 cat > /tmp/menu.txt <<'SCRIPT'
@@ -1057,6 +1063,19 @@ from the pod: `UPDATE_FIXTURES=1 cargo test -p server --test fixtures` (the test
 ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate -Pscreen=phone -Pout=/tmp/sim \
   -Pscript='click tag:comment:pixelfed://posts/781254316723458049; wait-text 3000 Which lens?; shot comments;
     type tag:textfield:comment Golden light!; click tag:textfield-send:comment; wait-text 3000 just now; shot sent'
+```
+
+**Notifications (D47).** The bell (`inbox-button`, content description "Notifications") sits top-right with the
+unread count (`inbox-badge`); the inbox (`inbox`) lists rows `notification-row:<id>` by day, with `inbox-mark-all`
+and `inbox-close`; the menu's `menu-notifications` opens `notification-settings` with `channel:<app>.<channel>` rows
+(`channel-switch:<app>.<channel>`). In fixture mode the fake pod serves `fixtures/notifications.json` (wire-shaped,
+except `age_seconds`, so times stay relative to now); its targets open the comments screen of `pixelfed_home` posts.
+The inbox commands also work live (`-PbaseUrl`) against a pod's real notifications.
+
+```bash
+./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -Pout=/tmp/sim \
+  -Pscript='notify pixelfed_demo likes Bob liked your post; shot badge; open-inbox; shot inbox;
+    click-notification commented on; shot comments; back; open-notification-settings; toggle-channel pixelfed_home.likes; shot settings'
 ```
 
 The output directory holds the PNGs, `steps.log` (human-readable) and `steps.json` (one entry per step:

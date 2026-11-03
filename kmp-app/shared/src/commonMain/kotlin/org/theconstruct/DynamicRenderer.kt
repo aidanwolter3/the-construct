@@ -58,6 +58,9 @@ val LocalConstructQueries: ProvidableCompositionLocal<Map<String, List<String>>>
  */
 val LocalWorkspaceTitleInset: ProvidableCompositionLocal<Dp> = staticCompositionLocalOf { 0.dp }
 
+/** Extra end padding for the workspace title, so it stays clear of the bell [ConstructApp] draws top-right. */
+val LocalWorkspaceTitleEndInset: ProvidableCompositionLocal<Dp> = staticCompositionLocalOf { 0.dp }
+
 /**
  * Renders one [UiNode]. [item] is the current item context inside a list or carousel template (the entity's
  * fields plus a synthetic `uri` field holding its entity key). Intents
@@ -78,7 +81,7 @@ fun RenderUiNode(
             Text(
                 node.title,
                 style = MaterialTheme.typography.headlineMedium,
-                modifier = Modifier.padding(start = 16.dp + LocalWorkspaceTitleInset.current, end = 16.dp, top = 12.dp, bottom = 12.dp),
+                modifier = Modifier.padding(start = 16.dp + LocalWorkspaceTitleInset.current, end = 16.dp + LocalWorkspaceTitleEndInset.current, top = 12.dp, bottom = 12.dp),
             )
             node.slots.forEach { slot ->
                 // Keyed by slot id: a layout change that inserts a slot above (e.g. a new version adding a banner at
