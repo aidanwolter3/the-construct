@@ -827,6 +827,20 @@ pub struct LayoutEvent {
     pub version: i64,
 }
 
+/// A session's data changed (D50): `event: data` to that session's
+/// subscribers of `workspace_id` only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataEvent {
+    pub workspace_id: String,
+    pub token_hash: String,
+}
+
+fn data_event(workspace_id: &str) -> Event {
+    Event::default()
+        .event("data")
+        .data(json!({ "workspace_id": workspace_id }).to_string())
+}
+
 fn layout_event(ev: &LayoutEvent) -> Event {
     Event::default()
         .event("layout")
@@ -894,19 +908,19 @@ async fn events(
     // Events carry only version numbers, so anyone may listen; only a
     // session the pod no longer knows is told so (a valid one lacking the
     // app's sign-in, e.g. a pod token's, D46, must not be dropped).
-    if let AuthPolicy::SignIn(_) = app.auth {
-        match state.caller(&headers).await {
-            Ok(Caller::Stale) => return unauthorized(),
-            Ok(_) => {}
-            Err(e) => return e.into_response(),
-        }
-    }
+    // The session's own `data` events (D50) need to know who listens.
+    let session_hash = match state.caller(&headers).await {
+        Ok(Caller::Stale) if matches!(app.auth, AuthPolicy::SignIn(_)) => return unauthorized(),
+        Ok(c) => c.into_session().map(|s| s.token_hash),
+        Err(e) => return e.into_response(),
+    };
     let schema = headers
         .contains_key(protocol::SCHEMA_HEADER)
         .then(|| client_schema(&headers));
     // Subscribe before reading the current version so nothing published in
     // between is missed (a duplicate version is harmless to clients).
     let rx = state.subscribe_layouts();
+    let data_rx = state.subscribe_data();
     let current = match announced_async(&state, &id, schema).await {
         Ok(Some(v)) => v,
         Ok(None) => return workspace_not_found(&id),
@@ -918,6 +932,8 @@ async fn events(
         sent: i64,
         schema: Option<u32>,
         rx: broadcast::Receiver<LayoutEvent>,
+        data_rx: broadcast::Receiver<DataEvent>,
+        session_hash: Option<String>,
         shutdown: tokio::sync::watch::Receiver<bool>,
         state: Arc<AppState>,
         id: String,
@@ -928,6 +944,8 @@ async fn events(
             sent: current,
             schema,
             rx,
+            data_rx,
+            session_hash,
             shutdown: state.shutdown_signal(),
             state: state.clone(),
             id,
@@ -945,11 +963,37 @@ async fn events(
                 return Some((Ok::<_, std::convert::Infallible>(e), s));
             }
             loop {
-                let received = tokio::select! {
-                    r = s.rx.recv() => r,
+                enum Got {
+                    Layout(Result<LayoutEvent, broadcast::error::RecvError>),
+                    Data(Result<DataEvent, broadcast::error::RecvError>),
+                    Stop,
+                }
+                let got = tokio::select! {
+                    r = s.rx.recv() => Got::Layout(r),
+                    d = s.data_rx.recv() => Got::Data(d),
                     // Server shutting down: end the stream so graceful
                     // shutdown is not held open by subscribers.
-                    _ = s.shutdown.wait_for(|stop| *stop) => return None,
+                    _ = s.shutdown.wait_for(|stop| *stop) => Got::Stop,
+                };
+                let received = match got {
+                    Got::Stop => return None,
+                    Got::Layout(r) => r,
+                    Got::Data(d) => {
+                        let mine = match &d {
+                            Ok(d) => {
+                                d.workspace_id == s.id
+                                    && s.session_hash.as_deref() == Some(d.token_hash.as_str())
+                            }
+                            // Lagged: a reload is never wrong.
+                            Err(broadcast::error::RecvError::Lagged(_)) => s.session_hash.is_some(),
+                            Err(broadcast::error::RecvError::Closed) => return None,
+                        };
+                        if mine {
+                            let e = data_event(&s.id);
+                            return Some((Ok(e), s));
+                        }
+                        continue;
+                    }
                 };
                 let lagged = match received {
                     Ok(ev) if ev.workspace_id == s.id => false,

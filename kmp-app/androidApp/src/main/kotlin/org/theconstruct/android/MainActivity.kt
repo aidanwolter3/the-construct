@@ -95,9 +95,11 @@ class MainActivity : ComponentActivity() {
                 session.baseUrl, ServerPrefs.options(), ServerUrls.ANDROID_CLEARTEXT_HOSTS,
                 error = vm.switchError, onSelect = vm::switchServer,
             )
+            // The system Photo Picker, registered with this activity's result registry (core://MediaPicker).
+            val picker = rememberAndroidMediaPicker()
             // The shared UI's menu button sits at the top-left of this padded box, clear of the system bars.
             Box(Modifier.fillMaxSize().background(Color.White).safeDrawingPadding()) {
-                key(session) { ConstructApp(session.controller, server = server) }
+                key(session) { ConstructApp(session.controller, server = server, mediaPicker = picker) }
             }
         }
     }

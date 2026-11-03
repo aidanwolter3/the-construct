@@ -1660,3 +1660,56 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
 - **Not yet:** remembering the chosen view across restarts; a multi-photo marker on cards (needs a numeric
   comparison or a server-made flag); more columns on wide screens.
 
+## D49: Attachments: the client stages files, the outbox uploads them, the pod stores them
+
+- **Why:** posting photos (docs/POSTING.md) needs files to travel from the user's device to an adapter. The outbox
+  and pod only moved JSON. Doing it generically means any app can take photos with a layout change and an adapter
+  route.
+- **Client:** `core://MediaPicker` puts staged attachment ids in the form. `stage_attachment(path)` (engine, FFI)
+  re-encodes to JPEG at most 2048 px on the long side, drops all metadata (GPS), stores the file under
+  `<storage>/attachments/` and registers `construct://attachments/<id>` (`url: file://…`). A create's `attachments`
+  map names the form lists; `$attachments.<name>` is the local entity URIs in `entity` and the upload ids in
+  `payload`. Engine store v5: `attachments` table; a row's attachment refs and upload ids live in its `create_json`.
+- **Outbox:** before a row's POST, each attachment without an upload id goes to `POST /v1/uploads` (raw body,
+  `Idempotency-Key`, 60 s timeout, the usual response classes). Upload ids are saved per attachment, so a retry
+  resumes. Files are deleted with their row (accepted, refused, or dropped at sign-out); unused staged files after
+  24 h.
+- **Pod:** `uploads` table (core migration v13) holding the bytes too: the pod's own database, so uploads go with
+  the pod and in-memory test pods work. Signed-in callers only; jpeg, png
+  and webp, checked by magic bytes; `CONSTRUCT_UPLOAD_MAX_BYTES` (default 20 MB); a cap on unclaimed uploads per
+  session; same key and session give the same id. Adapters `get` (same session only), `claim` and `release`;
+  unclaimed uploads go after 24 h, released ones at once.
+- **Public URL:** `GET /v1/uploads/{id}` is public under the pod's public prefix (D46), like the media proxy: images
+  load without a bearer. The id is 128 random bits; it only lives until the post is done.
+- **Trade-off:** rows still flush strictly in order, so a like made while photos upload waits behind them. Kept for
+  now: ordering is what makes rollback correct (D35).
+- **Weighed:** multipart on the create POST (one request, but the outbox would hold or re-read files per retry and
+  every adapter would parse multipart); uploading at pick time (fast Share, but uploads for posts never sent, and no
+  offline picking); base64 in JSON (a third larger, hits the 2 MB body limit).
+
+## D50: Creates can stay pending on the server; the pod can say "your data changed"
+
+- **Why:** Pixelfed processes media after upload, so a post isn't there when the create returns. The client's
+  placeholder is dropped on the first reload after a 2xx (D35), so the server has to keep showing it, and tell the
+  client when the real thing exists.
+- **Pending on the server:** an adapter may answer a create with 202 and list its own placeholder under the URI the
+  client used (`…/pending-<client_id>`), with whatever state fields the layout shows. The Pixelfed adapter does so
+  from `pixelfed_pending_posts`; failed rows stay listed with Retry and Discard until the user acts.
+- **`event: data`:** `AppState::publish_data(workspace_id, session_id)` sends `event: data` `{workspace_id}` on the
+  workspace's SSE stream, only to subscribers of that session. It carries no data: the engine reloads the workspace
+  and its loaded data (debounced). Older engines ignore unknown events. Clients also reload when brought to the
+  foreground.
+- **`AppAdapter::resume(pod)`:** runs once when a pod opens, so adapters restart jobs a restart interrupted.
+- **Weighed:** answering the create only when Pixelfed is done (requests of a minute or more, and the outbox timeout
+  is 10 s); the client polling (traffic for every open client, and still a delay); putting data in the event (the
+  fetch paths already do auth and normalising).
+
+## D51: Schema 9: media picker, multi-line fields, richer creates
+
+- `core://MediaPicker {field, max_items, label?}` (D49).
+- `core://TextField.lines`: a multi-line field without `on_submit` (amends D43's single-line rule).
+- `action.mutation.create` gains `attachments`, `position` (`start` | `end`, default `end`: where the placeholder goes
+  in its list) and `dismiss` (close the screen after dispatch).
+- `$form?.<field>` binds a blank field to `""` instead of blocking the send (a caption is optional).
+- Icons `add_photo`, `add`, `refresh`.
+- Additive: `RETIRED` is unchanged; schema-7 clients get the newest layout they can draw.

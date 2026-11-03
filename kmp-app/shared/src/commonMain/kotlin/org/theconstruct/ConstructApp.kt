@@ -91,6 +91,9 @@ class ConstructController(
     /** The hamburger menu's state: kept here so an open drawer or version picker survives rotation. */
     val menu: MenuState = MenuState(this)
 
+    /** Photos staged by `core://MediaPicker` that no create has taken yet (D49). */
+    val attachments: Attachments = Attachments({ this.bridge })
+
     /** The back stack of screens and their form values (D34). */
     val navigation: Navigation = Navigation(this)
 
@@ -155,12 +158,17 @@ class ConstructController(
     /**
      * Binds the visible form's `$form.<field>` values and a fresh `$nonce` into [intent] (nothing is sent when a
      * referenced field is blank), opens or closes screens for navigation intents that match the layout's screens
-     * (DECISIONS D34), and sends everything else to the engine.
+     * (DECISIONS D34), and sends everything else to the engine. A create hands its attachments to the engine and, with
+     * `dismiss` (schema 9), closes the screen it was sent from (clearing its form).
      */
     fun dispatch(intent: ActionIntent) {
         val bound = bindForm(intent, navigation.activeForm()) ?: return
         if (navigation.handle(bound)) return
         send(bound)
+        if (bound is ActionIntent.Create) {
+            attachments.consume(attachmentIds(bound.attachments))
+            if (bound.dismiss) navigation.dismiss()
+        }
     }
 
     /** Encodes [intent] and forwards it to the engine as is. */
@@ -272,47 +280,58 @@ class ConstructController(
 
 /**
  * The shared root UI: the rendered layout and, over it, the hamburger button that opens the menu (apps and their
- * versions, connection, account, server). [server] is the platform's server picker (null = no Server section).
+ * versions, connection, account, server). [server] is the platform's server picker (null = no Server section);
+ * [mediaPicker] the platform's photo picker for `core://MediaPicker` (null = picking photos is not available).
  */
 @Composable
-fun ConstructApp(controller: ConstructController, modifier: Modifier = Modifier, server: ServerChoice? = null) {
+fun ConstructApp(
+    controller: ConstructController,
+    modifier: Modifier = Modifier,
+    server: ServerChoice? = null,
+    mediaPicker: MediaPickerPlatform? = null,
+) {
     val state by controller.state.collectAsState()
     val pin by controller.pinned.collectAsState()
     // Material3 light scheme on a white background and surface (feed photos sit on white, as on Pixelfed/Instagram).
     MaterialTheme(colorScheme = lightColorScheme(background = Color.White, surface = Color.White)) {
         Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            MenuDrawer(controller, state, pin, server) {
-                Box(Modifier.fillMaxSize()) {
-                    val workspace = displayedWorkspace(state, pin)
-                    if (workspace == null) {
-                        Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("Loading…", style = MaterialTheme.typography.bodyLarge)
-                            state.error?.let {
-                                Text(
-                                    it,
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    textAlign = TextAlign.Center,
-                                    modifier = Modifier.padding(top = 8.dp),
-                                )
+            CompositionLocalProvider(
+                LocalMediaPickerPlatform provides mediaPicker,
+                LocalAttachments provides controller.attachments,
+            ) {
+                MenuDrawer(controller, state, pin, server) {
+                    Box(Modifier.fillMaxSize()) {
+                        val workspace = displayedWorkspace(state, pin)
+                        if (workspace == null) {
+                            Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("Loading…", style = MaterialTheme.typography.bodyLarge)
+                                state.error?.let {
+                                    Text(
+                                        it,
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.padding(top = 8.dp),
+                                    )
+                                }
+                            }
+                        } else {
+                            CompositionLocalProvider(
+                                LocalConstructQueries provides state.queries,
+                                LocalWorkspaceTitleInset provides MENU_BUTTON_INSET,
+                                LocalForm provides controller.navigation.rootForm,
+                            ) {
+                                RenderUiNode(workspace, state.entities, controller::dispatch, Modifier.fillMaxSize())
                             }
                         }
-                    } else {
-                        CompositionLocalProvider(
-                            LocalConstructQueries provides state.queries,
-                            LocalWorkspaceTitleInset provides MENU_BUTTON_INSET,
-                            LocalForm provides controller.navigation.rootForm,
-                        ) {
-                            RenderUiNode(workspace, state.entities, controller::dispatch, Modifier.fillMaxSize())
-                        }
+                        MenuButton(
+                            badge = showMenuBadge(state, pin),
+                            onClick = controller.menu::openMenu,
+                            modifier = Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 8.dp),
+                        )
+                        // An open screen covers the layout and the menu button; the drawer still opens over it.
+                        ScreenHost(controller, state)
                     }
-                    MenuButton(
-                        badge = showMenuBadge(state, pin),
-                        onClick = controller.menu::openMenu,
-                        modifier = Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 8.dp),
-                    )
-                    // An open screen covers the layout and the menu button; the drawer still opens over it.
-                    ScreenHost(controller, state)
                 }
             }
         }

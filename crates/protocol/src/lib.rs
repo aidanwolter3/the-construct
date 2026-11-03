@@ -16,7 +16,7 @@ pub use ast::{
     NODE_TYPES, Orientation, Screen, SlotSpec, TextStyle, Tone, UiNode,
 };
 pub use bundle::{DataBundle, EntityRecord, WorkspaceSpec};
-pub use intent::{ActionIntent, FieldUpdate, PresentationMode};
+pub use intent::{ActionIntent, FieldUpdate, Position, PresentationMode};
 pub use schema::{
     Compatibility, RETIRED, SCHEMA_HEADER, SCHEMA_VERSION, compatibility, oldest_layout_schema,
     required_schema,

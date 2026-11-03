@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::intent::ActionIntent;
 
 /// Node types this build knows (an other type is [`UiNode::Unknown`]).
-pub const NODE_TYPES: [&str; 19] = [
+pub const NODE_TYPES: [&str; 20] = [
     "core://Workspace",
     "core://Container",
     "core://Text",
@@ -35,10 +35,11 @@ pub const NODE_TYPES: [&str; 19] = [
     "core://Tappable",
     "core://Box",
     "core://ChoiceChips",
+    "core://MediaPicker",
 ];
 
 /// Icon names clients draw (`core://IconButton`, `core://Chip`).
-pub const ICONS: [&str; 12] = [
+pub const ICONS: [&str; 15] = [
     "favorite",
     "favorite_border",
     "chat_bubble",
@@ -52,6 +53,10 @@ pub const ICONS: [&str; 12] = [
     // Schema 6 (D44): older clients draw a chip with these without its icon.
     "flame",
     "timer",
+    // Schema 9 (D51).
+    "add_photo",
+    "add",
+    "refresh",
 ];
 
 fn one() -> f64 {
@@ -161,7 +166,9 @@ pub enum UiNode {
     /// A text input whose value is the form value `$form.<field>` for the
     /// intents of its screen. `on_submit` (a send button, and the keyboard's
     /// submit) is dispatched with the value bound, then the field is cleared;
-    /// it is not dispatched while the field is blank.
+    /// it is not dispatched while the field is blank. `lines` (schema 9,
+    /// D51) makes a field without `on_submit` multi-line, growing up to that
+    /// many lines (a caption).
     #[serde(rename = "core://TextField")]
     TextField {
         field: String,
@@ -171,6 +178,8 @@ pub enum UiNode {
         max_length: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         on_submit: Option<ActionIntent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lines: Option<u32>,
     },
 
     // Schema 3 (docs/DECISIONS.md D36)
@@ -338,6 +347,19 @@ pub enum UiNode {
         padding_h_dp: u16,
     },
 
+    // Schema 9 (docs/DECISIONS.md D49, D51)
+    /// Pick photos from the device: thumbnails of the picked ones (each with
+    /// a remove button) and an add tile while fewer than `max_items` are
+    /// picked. The form value `$form.<field>` is the list of staged
+    /// attachment ids, for an `action.mutation.create`'s `attachments`.
+    #[serde(rename = "core://MediaPicker")]
+    MediaPicker {
+        field: String,
+        max_items: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
+
     /// A node of a type this build does not know: its JSON, kept as is.
     #[serde(skip)]
     Unknown(Value),
@@ -422,6 +444,7 @@ impl UiNode {
             | UiNode::Chip { .. }
             | UiNode::Badge { .. }
             | UiNode::ChoiceChips { .. }
+            | UiNode::MediaPicker { .. }
             | UiNode::Unknown(_) => Vec::new(),
         }
     }

@@ -150,6 +150,14 @@ pub trait AppAdapter: Any + Send + Sync {
         app_id: &'a str,
         req: &'a RequestCtx,
     ) -> BoxFuture<'a, Hydration>;
+
+    /// Background work to pick up when a pod opens (D50), such as jobs a
+    /// restart interrupted. Called once per pod, on the pod's runtime, after
+    /// migrations; runs concurrently with requests. Default: nothing.
+    fn resume<'a>(&'a self, pod: &'a Pod) -> BoxFuture<'a, ()> {
+        let _ = pod;
+        Box::pin(async {})
+    }
 }
 
 /// What [`AppAdapter::hydrate`] returns.
@@ -363,6 +371,7 @@ impl Catalog {
                 .adapters
                 .iter()
                 .flat_map(|a| a.public_paths())
+                .chain(std::iter::once(&crate::uploads::PUBLIC_PATH))
                 .any(|p| path.starts_with(p))
     }
 

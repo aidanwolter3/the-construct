@@ -378,6 +378,21 @@ impl Inner {
     /// version is newer than the last applied one (or when none is known).
     /// Blocking (the refetch); called on the events thread.
     fn on_push_event(&self, ev: &SseEvent) {
+        if ev.event == "data" {
+            // D50: the pod's data changed (e.g. a post finished): reload the
+            // workspace and every loaded data path.
+            let ws = serde_json::from_str::<Value>(&ev.data)
+                .ok()
+                .and_then(|v| v.get("workspace_id")?.as_str().map(str::to_owned));
+            if ws.as_deref().is_some_and(|w| w != self.workspace_id) {
+                return;
+            }
+            println!("[ConstructEngine] events: data changed; reloading");
+            if !self.signal.is_shut_down() {
+                self.reload_all();
+            }
+            return;
+        }
         let Some((ws, version)) = parse_layout_event(ev) else {
             if ev.event == "layout" {
                 eprintln!(

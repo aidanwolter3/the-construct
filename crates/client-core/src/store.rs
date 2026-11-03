@@ -33,7 +33,7 @@ pub use rusqlite::Error as StoreError;
 pub type StoreResult<T> = Result<T, StoreError>;
 
 /// Current schema version (`PRAGMA user_version`).
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Outbox row status for rows not yet accepted or rejected by the server.
 pub const STATUS_PENDING: &str = "PENDING";
@@ -101,9 +101,30 @@ const MIGRATION_V4: &str = "
 ALTER TABLE action_outbox ADD COLUMN session_bound INTEGER NOT NULL DEFAULT 1;
 ";
 
+/// Schema v5 (D49): staged attachments (files under `<storage>/attachments/`).
+/// `released_at` is set once the create that carried them was accepted (the
+/// file is kept a little longer, while the placeholder may still show it).
+const MIGRATION_V5: &str = "
+CREATE TABLE IF NOT EXISTS attachments (
+    id TEXT PRIMARY KEY NOT NULL,
+    path TEXT NOT NULL,
+    mime TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    released_at INTEGER
+);
+";
+
 /// `MIGRATIONS[i]` upgrades schema v`i` to v`i+1`, each in one transaction.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] =
-    [MIGRATION_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4];
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [
+    MIGRATION_V1,
+    MIGRATION_V2,
+    MIGRATION_V3,
+    MIGRATION_V4,
+    MIGRATION_V5,
+];
 
 /// `(domain, entity_type)` from a `<domain>://<type>/<id...>` URI, e.g.
 /// `pixelfed://posts/101` -> `("pixelfed", "posts")`. Missing parts are `""`.
@@ -145,11 +166,40 @@ fn also_to_json(also: &[AlsoUpdate]) -> StoreResult<Option<String>> {
 
 /// What an `action.mutation.create` row adds: its temporary entity
 /// (the row's `entity_uri`) is listed in `queries[query_key]` while pending.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct CreateInfo {
     pub query_key: String,
     #[serde(default)]
     pub refresh_workspace: bool,
+    /// The temporary entity is listed first (`position: start`, schema 9).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub at_start: bool,
+    /// Attachments uploaded before the POST (D49), in payload order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<AttachmentRef>,
+}
+
+/// One attachment of a create row: the create's attachment `name`, the staged
+/// attachment `id`, and its pod upload id once uploaded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachmentRef {
+    pub name: String,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload_id: Option<String>,
+}
+
+/// A staged attachment (`attachments` table).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attachment {
+    pub id: String,
+    pub path: String,
+    pub mime: String,
+    pub size: i64,
+    pub width: u32,
+    pub height: u32,
+    pub created_at: i64,
+    pub released_at: Option<i64>,
 }
 
 /// One cached data path answer (`data_loads`).
@@ -556,6 +606,72 @@ pub trait StoreOps {
                      next_attempt_at = ?2, last_error = ?3 WHERE id = ?1",
             )?
             .execute(params![id, next_attempt_at, last_error])?;
+        Ok(())
+    }
+
+    /// Replace a create row's create info (an attachment got its upload id).
+    fn set_create_info(&self, id: i64, info: &CreateInfo) -> StoreResult<()> {
+        let raw = serde_json::to_string(info).map_err(json_err)?;
+        self.conn()
+            .prepare_cached("UPDATE action_outbox SET create_json = ?2 WHERE id = ?1")?
+            .execute(params![id, raw])?;
+        Ok(())
+    }
+
+    // ---- attachments ----
+
+    fn insert_attachment(&self, a: &Attachment) -> StoreResult<()> {
+        self.conn()
+            .prepare_cached(
+                "INSERT OR REPLACE INTO attachments
+                     (id, path, mime, size, width, height, created_at, released_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?
+            .execute(params![
+                a.id,
+                a.path,
+                a.mime,
+                a.size,
+                a.width,
+                a.height,
+                a.created_at,
+                a.released_at
+            ])?;
+        Ok(())
+    }
+
+    /// Every staged attachment, oldest first.
+    fn load_attachments(&self) -> StoreResult<Vec<Attachment>> {
+        let mut stmt = self.conn().prepare_cached(
+            "SELECT id, path, mime, size, width, height, created_at, released_at
+             FROM attachments ORDER BY created_at, id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(Attachment {
+                id: r.get(0)?,
+                path: r.get(1)?,
+                mime: r.get(2)?,
+                size: r.get(3)?,
+                width: r.get(4)?,
+                height: r.get(5)?,
+                created_at: r.get(6)?,
+                released_at: r.get(7)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    fn delete_attachment(&self, id: &str) -> StoreResult<()> {
+        self.conn()
+            .prepare_cached("DELETE FROM attachments WHERE id = ?1")?
+            .execute([id])?;
+        Ok(())
+    }
+
+    fn release_attachment(&self, id: &str, now: i64) -> StoreResult<()> {
+        self.conn()
+            .prepare_cached("UPDATE attachments SET released_at = ?2 WHERE id = ?1")?
+            .execute(params![id, now])?;
         Ok(())
     }
 
@@ -1186,6 +1302,7 @@ mod tests {
         let create = CreateInfo {
             query_key: "q".into(),
             refresh_workspace: true,
+            ..Default::default()
         };
         let id = s
             .insert_outbox(&NewOutboxRow {

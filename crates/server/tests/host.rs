@@ -567,3 +567,52 @@ async fn concurrent_temporary_pods_respect_the_cap() {
     assert_eq!(made, 2);
     assert_eq!(env.host.store().live_temporary_count().unwrap(), 2);
 }
+
+/// Uploads (D49) pass through the host (a body far over the 16 KB the host
+/// reads itself), stay in their pod, and load without a bearer only from
+/// their pod's public prefix.
+#[tokio::test]
+async fn uploads_go_to_their_pod_and_load_from_its_public_prefix() {
+    let env = env().await;
+    let a = env.create("a", false).await;
+    let b = env.create("b", false).await;
+    let mut photo = vec![0xFF, 0xD8, 0xFF, 0xE0];
+    photo.resize(3 * 1024 * 1024, 7);
+    let resp = client()
+        .post(env.url("/v1/uploads"))
+        .bearer_auth(&a)
+        .header("content-type", "image/jpeg")
+        .header("idempotency-key", "photo-1")
+        .body(photo.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let id = resp.json::<Value>().await.unwrap()["upload_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let id_a = env.host.store().pod_by_name("a").unwrap().unwrap().id;
+    let id_b = env.host.store().pod_by_name("b").unwrap().unwrap().id;
+    let resp = client()
+        .get(env.url(&format!("/v1/p/{id_a}/v1/uploads/{id}")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.bytes().await.unwrap().len(), photo.len());
+    for (url, bearer) in [
+        (format!("/v1/p/{id_b}/v1/uploads/{id}"), None),
+        (format!("/v1/uploads/{id}"), Some(&b)),
+    ] {
+        let mut req = client().get(env.url(&url));
+        if let Some(t) = bearer {
+            req = req.bearer_auth(t);
+        }
+        assert_eq!(
+            req.send().await.unwrap().status(),
+            StatusCode::NOT_FOUND,
+            "{url}"
+        );
+    }
+}
