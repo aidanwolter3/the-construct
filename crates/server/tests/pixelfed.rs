@@ -938,7 +938,7 @@ async fn a_session_from_before_v11_stays_signed_in() {
         let later: Vec<String> = conn
             .prepare(
                 "SELECT name FROM sqlite_master WHERE type = 'table'
-                 AND (name LIKE 'recipes%' OR name LIKE 'collections%' OR name IN ('pixelfed_session_instance', 'pixelfed_pending_posts'))
+                 AND (name LIKE 'recipes%' OR name LIKE 'collections%' OR name LIKE 'watcher%' OR name IN ('pixelfed_session_instance', 'pixelfed_pending_posts'))
                  OR (type = 'table' AND name IN ('pod_settings', 'uploads', 'notifications',
                      'notification_polls', 'devices', 'device_channel_prefs',
                      'pixelfed_notify_cursor', 'custom_apps'))",
