@@ -32,6 +32,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - run: scripts/check_decisions.sh
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 

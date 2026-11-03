@@ -16,7 +16,8 @@ it will have this repo and CLAUDE.md, but none of the current conversation.
    `enhancement` (anything else). Title: the problem, not the fix, in plain words.
 3. Body, in this order (keep it short; paths and names over prose):
    - `## Problem`: what happens, where (file paths, functions, endpoints), how it was found (PR #, command and
-     its error output verbatim when short). Link the relevant `docs/DECISIONS.md` entries (Dnn).
+     its error output verbatim when short). Link the relevant decisions (`docs/DECISIONS.md` Dnn, or
+     `docs/decisions/<name>.md`).
    - `## Suggested fix`: the approach you'd take and the files it touches. Mark guesses as guesses.
    - `## Done when`: one or two checkable outcomes (a command that passes, a behavior on screen).
    - Note if it needs the developer's Mac (Android/device checks, the macOS window): cloud sessions can't do those.
