@@ -78,7 +78,8 @@ fn lenient_secs<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<i64>, D
 /// private addresses (a local fake, a Fly-internal host). Instances users
 /// type under `PIXELFED_ALLOWED_INSTANCES=*`, and media outside the
 /// allowlist, use the `public` pair, whose resolver drops every non-public
-/// address and which follows redirects only to public HTTPS names (D45).
+/// address (D45). The API clients follow no redirects; the media clients
+/// follow them only within their route.
 #[derive(Debug, Clone)]
 pub struct Clients {
     trusted_api: reqwest::Client,
@@ -98,11 +99,16 @@ fn builder(timeout: Duration) -> reqwest::ClientBuilder {
         .user_agent(USER_AGENT)
 }
 
-use pod_core::net::is_public_https as public_https;
-
 impl Clients {
     pub fn new(policy: MediaPolicy) -> Self {
-        let trusted_api = builder(API_TIMEOUT).build().expect("reqwest client");
+        // The API clients never follow redirects: a 307/308 would resend
+        // form bodies holding client_secret, code, code_verifier or
+        // refresh_token (and bearer tokens) to wherever the instance points.
+        // A Mastodon API answers directly; a 3xx comes back as a `Status`.
+        let trusted_api = builder(API_TIMEOUT)
+            .redirect(redirect::Policy::none())
+            .build()
+            .expect("reqwest client");
         let p = policy.clone();
         let trusted_media = builder(MEDIA_TIMEOUT)
             .redirect(redirect::Policy::custom(move |attempt| {
@@ -122,16 +128,7 @@ impl Clients {
         let public_api = builder(API_TIMEOUT)
             .no_proxy()
             .dns_resolver(Arc::new(PublicOnlyResolver))
-            .redirect(redirect::Policy::custom(|attempt| {
-                if attempt.previous().len() >= MAX_REDIRECTS {
-                    attempt.error("too many redirects")
-                } else if public_https(attempt.url()) {
-                    attempt.follow()
-                } else {
-                    tracing::warn!(host = ?attempt.url().host_str(), "redirect to a non-public URL refused");
-                    attempt.stop()
-                }
-            }))
+            .redirect(redirect::Policy::none())
             .build()
             .expect("reqwest client");
         let p = policy.clone();
@@ -595,6 +592,44 @@ mod tests {
         ] {
             assert!(!is_public_ip(bad.parse().unwrap()), "{bad}");
         }
+    }
+
+    /// L5 (#31): a 307/308 from the token endpoint must not resend the form
+    /// (client_secret, refresh_token) to the redirect target.
+    #[tokio::test]
+    async fn api_clients_do_not_follow_redirects() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static STOLEN: AtomicUsize = AtomicUsize::new(0);
+        let app = axum::Router::new()
+            .route(
+                "/oauth/token",
+                axum::routing::post(|| async {
+                    (
+                        StatusCode::TEMPORARY_REDIRECT,
+                        [(reqwest::header::LOCATION, "/steal")],
+                    )
+                }),
+            )
+            .route(
+                "/steal",
+                axum::routing::post(|| async {
+                    STOLEN.fetch_add(1, Ordering::SeqCst);
+                    "{}"
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let clients = Clients::new(MediaPolicy::default());
+        let api = clients.api(&Instance {
+            url: format!("http://{addr}"),
+            trusted: true,
+        });
+        match api.refresh_token("id", "secret", "refresh").await {
+            Err(UpstreamError::Status(StatusCode::TEMPORARY_REDIRECT, _)) => {}
+            other => panic!("expected the 307 back, got {other:?}"),
+        }
+        assert_eq!(STOLEN.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

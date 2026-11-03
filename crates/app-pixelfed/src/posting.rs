@@ -434,12 +434,13 @@ enum Stop {
     Refused(String),
 }
 
-/// A short reason from an upstream error body (`{"error": "..."}`).
+/// A short reason from an upstream error body (`{"error": "..."}`). A body
+/// that isn't such JSON (an HTML error page, a proxy's text) is not shown.
 fn reason(detail: &str) -> String {
     let text = serde_json::from_str::<Value>(detail)
         .ok()
         .and_then(|v| v["error"].as_str().map(str::to_owned))
-        .unwrap_or_else(|| detail.to_owned());
+        .unwrap_or_default();
     let mut text = text.trim().to_owned();
     if text.chars().count() > 160 {
         text = text.chars().take(160).collect::<String>() + "…";
@@ -698,7 +699,16 @@ mod tests {
             "Validation failed: too long"
         );
         assert_eq!(reason(""), "Pixelfed refused the post.");
-        assert!(reason(&"x".repeat(500)).chars().count() <= 161);
+        assert!(
+            reason(&format!(r#"{{"error":"{}"}}"#, "x".repeat(500)))
+                .chars()
+                .count()
+                <= 161
+        );
+        assert_eq!(
+            reason("<html>502 Bad Gateway nginx</html>"),
+            "Pixelfed refused the post."
+        );
         assert!(valid_client_id("abcdef0123456789"));
         assert!(!valid_client_id("short"));
         assert_eq!(pending_uri("abcdefgh"), "pixelfed://posts/pending-abcdefgh");

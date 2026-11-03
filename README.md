@@ -318,8 +318,10 @@ adapter wrote, and a navigation target in that app's own layout routes.
   | `DELETE /v1/devices/{id}` | forget the device (the engine calls it on sign-out) |
   | `GET /v1/push/key` | `{"vapid_public_key"}` (404 `push_unavailable` with `CONSTRUCT_PUSH=off`) |
 
-  Push endpoints must be `https://` on a public host (any local URL with `CONSTRUCT_TEST_HOOKS=1`, for test
-  receivers); deliveries resolve only public addresses. 404/410 from the push service drops the subscription, as do 5
+  Push endpoints must be `https://` on the default port (443) of a public host name (any local URL with
+  `CONSTRUCT_TEST_HOOKS=1`, for test receivers); deliveries resolve only public addresses and follow no redirects. A
+  port rule rather than a domain allowlist keeps self-hosted UnifiedPush distributors working. Endpoints stored
+  before this rule are dropped on their next delivery. 404/410 from the push service drops the subscription, as do 5
   failures in a row. At most 20 devices and 60 deliveries a minute per pod.
 - **Try it:** `server pods notify-test <name>` (or, against the fake upstream, inject one with its admin API; see
   "Fake Pixelfed upstream").
