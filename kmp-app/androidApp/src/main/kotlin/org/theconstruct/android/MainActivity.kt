@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.verify.domain.DomainVerificationManager
+import android.content.pm.verify.domain.DomainVerificationUserState
 import android.graphics.Color as AndroidColor
 import android.net.Uri
 import android.os.Build
@@ -31,6 +33,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import org.theconstruct.AuthRedirects
 import org.theconstruct.ConstructApp
 import org.theconstruct.ConstructController
 import org.theconstruct.ConstructEngineBridge
@@ -53,13 +56,46 @@ private const val EXTRA_WORKSPACE = "workspace"
 /** savedInstanceState key: the user switched servers in the menu, so a launch `baseUrl` extra no longer applies. */
 private const val STATE_SWITCHED_SERVER = "switchedServer"
 
-/** OAuth redirect URI (custom scheme); the manifest's intent filter routes it back to [MainActivity]. */
-internal const val AUTH_REDIRECT_URI = "construct://oauth"
+/**
+ * The sign-in redirect (decision `android-app-link-sign-in-redirect`): the verified App Link
+ * `https://<APP_LINK_HOST>/oauth/android` for the pod on that host, else `construct://oauth`. The manifest's intent
+ * filters route both back to [MainActivity].
+ */
+internal object AppLinks {
+    /**
+     * Whether this device hands `https://<APP_LINK_HOST>/…` links to this app. Android 12+ says per host: verified
+     * against the pod's assetlinks.json (this build's signing cert listed), or turned on by the user in the app's
+     * "Open by default" settings. Android 8-11 verify at install and have no API to ask; an unverified link there shows
+     * a chooser that includes this app, so it is used.
+     */
+    fun verified(context: Context): Boolean {
+        val host = BuildConfig.APP_LINK_HOST
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+        return try {
+            val state = context.getSystemService(DomainVerificationManager::class.java)
+                ?.getDomainVerificationUserState(context.packageName)
+                ?: return false
+            when (state.hostToStateMap[host]) {
+                DomainVerificationUserState.DOMAIN_STATE_VERIFIED, DomainVerificationUserState.DOMAIN_STATE_SELECTED -> true
+                else -> false
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "cannot read the App Link state of $host: $e")
+            false
+        }
+    }
+
+    /** The redirect URI to register for [baseUrl] ([AuthRedirects.forServer]). */
+    fun redirectUriFor(context: Context, baseUrl: String): String {
+        val verified = AuthRedirects.appLinkFor(baseUrl, BuildConfig.APP_LINK_HOST) != null && verified(context)
+        return AuthRedirects.forServer(baseUrl, BuildConfig.APP_LINK_HOST, verified)
+    }
+}
 
 /**
- * `launchMode="singleTask"` (manifest): the browser runs in its own task (ACTION_VIEW + NEW_TASK), so the
- * `construct://oauth` redirect must come back to *this* instance (and its ViewModel's engine, which holds the
- * pending sign-in) via [onNewIntent]; singleTop would start a second activity in the browser's task.
+ * `launchMode="singleTask"` (manifest): the browser runs in its own task (ACTION_VIEW + NEW_TASK), so the sign-in
+ * redirect must come back to *this* instance (and its ViewModel's engine, which holds the pending sign-in) via
+ * [onNewIntent]; singleTop would start a second activity in the browser's task.
  */
 class MainActivity : ComponentActivity() {
     private lateinit var vm: ConstructViewModel
@@ -209,7 +245,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handleAuthRedirect(intent: Intent?) {
         val uri = intent?.data ?: return
-        if (intent.action != Intent.ACTION_VIEW || uri.scheme != "construct" || uri.host != "oauth") return
+        if (intent.action != Intent.ACTION_VIEW || !AuthRedirects.isRedirect(uri.toString(), BuildConfig.APP_LINK_HOST)) return
         vm.handleAuthRedirect(uri.toString())
     }
 }
@@ -365,16 +401,20 @@ internal class ConstructViewModel(config: EngineConfig, private val appContext: 
         return Session(config.baseUrl, controller)
     }
 
-    /** Sign-in (DECISIONS D19): Keystore-backed session store, the system browser, `construct://oauth` redirect. */
+    /**
+     * Sign-in (DECISIONS D19): Keystore-backed session store, the system browser, and the redirect [AppLinks] picks
+     * for this server (the App Link, or `construct://oauth`).
+     */
     private fun openEngine(config: EngineConfig, workspace: String): ConstructEngineBridge {
-        Log.i(TAG, "opening engine for workspace=$workspace")
+        val redirectUri = AppLinks.redirectUriFor(appContext, config.baseUrl)
+        Log.i(TAG, "opening engine for workspace=$workspace redirect=$redirectUri")
         return UniffiEngineBridge.create(
             config.storageDir.absolutePath,
             config.baseUrl,
             workspace,
             secureStore = KeystoreSecureStore(appContext),
             urlOpener = AndroidUrlOpener(appContext),
-            redirectUri = AUTH_REDIRECT_URI,
+            redirectUri = redirectUri,
         )
     }
 
@@ -414,7 +454,7 @@ internal class ConstructViewModel(config: EngineConfig, private val appContext: 
         }
     }
 
-    /** Forwards a `construct://oauth?...` redirect to the current engine's pending sign-in. */
+    /** Forwards a sign-in redirect (App Link or `construct://oauth?...`) to the current engine's pending sign-in. */
     fun handleAuthRedirect(url: String): Boolean = controller.handleAuthRedirect(url)
 
     override fun onCleared() {

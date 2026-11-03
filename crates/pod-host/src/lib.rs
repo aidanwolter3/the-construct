@@ -11,11 +11,13 @@
 //! Inside its pod the token is a *pinned* session (never expires, a logout
 //! keeps it), so every pod route, sign-in and SSE stream works unchanged.
 //! Without a valid token a caller gets only `/healthz`, the "Open your pod"
-//! screen and the two `/v1/pods/*` calls; images (adapters'
+//! screen, the two `/v1/pods/*` calls and the Android sign-in redirect's
+//! [`app_links`] routes; images (adapters'
 //! [`pod_core::AppAdapter::public_paths`]) load without a bearer from
 //! `/v1/p/<pod id>/…`. `CONSTRUCT_OPEN_POD` (development only) serves callers
 //! without a token from one named pod, like the single-pod server before D46.
 
+pub mod app_links;
 pub mod db;
 pub mod limits;
 pub mod screen;
@@ -158,11 +160,16 @@ pub struct HostConfig {
     /// HTTPS proxy (Fly, `FLY_APP_NAME`): on plain HTTP it would be ignored,
     /// and on `localhost` it would pin the name to HTTPS for other servers.
     pub hsts: bool,
+    /// The Android app allowed to open this server's https sign-in redirect
+    /// (`CONSTRUCT_ANDROID_PACKAGE`, `CONSTRUCT_ANDROID_CERT_SHA256`; decision
+    /// `android-app-link-sign-in-redirect`).
+    pub android: app_links::AndroidAppLinks,
 }
 
 impl HostConfig {
     /// `CONSTRUCT_OPEN_POD`, `CONSTRUCT_TEMP_PODS`, `CONSTRUCT_TEMP_POD_HOURS`,
-    /// `CONSTRUCT_TEMP_POD_MAX`, and [`StorageLimits::from_env`].
+    /// `CONSTRUCT_TEMP_POD_MAX`, [`StorageLimits::from_env`] and
+    /// [`app_links::AndroidAppLinks::from_env`].
     pub fn from_env() -> Self {
         let var = |k: &str| {
             std::env::var(k)
@@ -190,6 +197,7 @@ impl HostConfig {
             trust_fly_client_ip: var("FLY_APP_NAME").is_some(),
             storage: StorageLimits::from_env(),
             hsts: var("FLY_APP_NAME").is_some(),
+            android: app_links::AndroidAppLinks::from_env(),
         }
     }
 }
@@ -826,6 +834,8 @@ pub fn app(host: Arc<Host>) -> Router {
         .route(screen::OPEN_PATH, post(open_with_token))
         .route(screen::TEMPORARY_PATH, post(temporary_pod))
         .route("/v1/p/{pod_id}/{*rest}", get(public_route))
+        .route(app_links::ASSET_LINKS_PATH, get(app_links::asset_links))
+        .route(app_links::REDIRECT_PATH, get(app_links::redirect_page))
         .fallback(dispatch)
         .with_state(host.clone())
         .layer(axum::middleware::map_response_with_state(

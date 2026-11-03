@@ -493,6 +493,9 @@ pub struct AppState {
     /// notification authors).
     accounts: HashMap<String, Value>,
     mastodon_threads: bool,
+    /// Exact redirect URIs accepted with admin off besides
+    /// [`client_redirect_uri`] ones (`FAKE_PIXELFED_EXTRA_REDIRECTS`).
+    extra_redirects: Vec<String>,
 }
 
 impl AppState {
@@ -636,6 +639,7 @@ impl AppState {
             admin: true,
             accounts,
             mastodon_threads: false,
+            extra_redirects: Vec::new(),
         };
         state.reset(false);
         Ok(state)
@@ -658,6 +662,14 @@ impl AppState {
     /// replies only; the default). `FAKE_PIXELFED_THREADS=mastodon` in the binary.
     pub fn with_mastodon_threads(mut self, enabled: bool) -> Self {
         self.mastodon_threads = enabled;
+        self
+    }
+
+    /// Exact redirect URIs apps may register with admin off, besides
+    /// `construct://` and loopback ones: e.g. the staging pod's Android App
+    /// Link (`https://<pod>/oauth/android`).
+    pub fn with_extra_redirects(mut self, uris: Vec<String>) -> Self {
+        self.extra_redirects = uris;
         self
     }
 
@@ -1638,16 +1650,18 @@ async fn create_app(
             .into_response();
     }
     // Public deployments (admin off, e.g. staging) only accept redirect URIs a
-    // Construct client uses, so the authorize page (and `auto=1`) can't be
+    // Construct client uses (plus the exact extra ones configured), so the authorize page (and `auto=1`) can't be
     // used to bounce visitors to an arbitrary site.
     if !state.admin_enabled()
-        && let Some(bad) = redirect_uris.iter().find(|u| !client_redirect_uri(u))
+        && let Some(bad) = redirect_uris
+            .iter()
+            .find(|u| !client_redirect_uri(u) && !state.extra_redirects.contains(u))
     {
         tracing::warn!(redirect_uri = %bad, "app registration for a non-client redirect URI rejected");
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(json!({
-                "error": "redirect_uris may only be construct:// or http(s) loopback URIs"
+                "error": "redirect_uris may only be construct://, http(s) loopback or FAKE_PIXELFED_EXTRA_REDIRECTS URIs"
             })),
         )
             .into_response();

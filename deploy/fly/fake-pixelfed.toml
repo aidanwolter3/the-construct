@@ -12,6 +12,9 @@ primary_region = "dfw"
   FAKE_PIXELFED_PUBLIC_URL = "https://the-construct-fake-pixelfed.fly.dev"
   # Admin/fault endpoints stay off on the public internet.
   FAKE_PIXELFED_ADMIN = "0"
+  # With admin off only construct:// and loopback redirect URIs register, plus these exact ones:
+  # the staging pod's Android App Link (decision android-app-link-sign-in-redirect).
+  FAKE_PIXELFED_EXTRA_REDIRECTS = "https://the-construct-pod.fly.dev/oauth/android"
   RUST_LOG = "info"
 
 [http_service]

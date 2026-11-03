@@ -156,10 +156,15 @@ async fn authorize(env: &Env) -> (String, String) {
 
 /// [`authorize`] on pod `pod` for the fake at `instance`.
 async fn authorize_at(pod: &str, instance: &str) -> (String, String) {
+    authorize_with(pod, instance, REDIRECT).await
+}
+
+/// [`authorize_at`] with the client's `redirect` URI.
+async fn authorize_with(pod: &str, instance: &str, redirect: &str) -> (String, String) {
     let (status, app) = post_json(
         &format!("{pod}/v1/auth/pixelfed/app"),
         None,
-        json!({ "instance_url": instance, "redirect_uri": REDIRECT }),
+        json!({ "instance_url": instance, "redirect_uri": redirect }),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{app}");
@@ -174,7 +179,7 @@ async fn authorize_at(pod: &str, instance: &str) -> (String, String) {
         .query(&[
             ("response_type", "code"),
             ("client_id", app["client_id"].as_str().unwrap()),
-            ("redirect_uri", REDIRECT),
+            ("redirect_uri", redirect),
             ("scope", "read write"),
             ("state", "st4te"),
             ("code_challenge", &challenge),
@@ -185,7 +190,10 @@ async fn authorize_at(pod: &str, instance: &str) -> (String, String) {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FOUND);
     let location = reqwest::Url::parse(resp.headers()["location"].to_str().unwrap()).unwrap();
-    assert!(location.as_str().starts_with(REDIRECT));
+    assert!(
+        location.as_str().starts_with(&format!("{redirect}?")),
+        "{location}"
+    );
     let q: std::collections::HashMap<_, _> = location.query_pairs().into_owned().collect();
     assert_eq!(q["state"], "st4te");
     (q["code"].clone(), verifier)
@@ -1355,7 +1363,12 @@ async fn sessions_expire_after_the_ttl() {
 async fn app_registration_only_for_allowed_redirect_uris() {
     let env = env_custom(
         server::state_in_memory(),
-        |c| c.extra_redirects = vec!["myapp://signed-in".into()],
+        |c| {
+            c.extra_redirects = vec![
+                "myapp://signed-in".into(),
+                "https://pod.example/oauth/android".into(),
+            ]
+        },
         |_, _| {},
     )
     .await;
@@ -1372,6 +1385,10 @@ async fn app_registration_only_for_allowed_redirect_uris() {
         "http://localhost:9@evil.example/callback",
         "construct://oauth/x",
         "myapp://signed-in/x",
+        "https://pod.example/oauth/android/x",
+        "https://pod.example/oauth/android?x=1",
+        "https://evil.example/oauth/android",
+        "http://pod.example/oauth/android",
     ] {
         let (status, body) = post_json(
             &app_url,
@@ -1387,6 +1404,7 @@ async fn app_registration_only_for_allowed_redirect_uris() {
         "http://localhost:65535/callback",
         "construct://oauth",
         "myapp://signed-in",
+        "https://pod.example/oauth/android",
     ] {
         let (status, body) = post_json(
             &app_url,
@@ -1396,6 +1414,41 @@ async fn app_registration_only_for_allowed_redirect_uris() {
         .await;
         assert_eq!(status, StatusCode::OK, "{ok}: {body}");
     }
+}
+
+/// The Android app's App Link redirect (decision
+/// `android-app-link-sign-in-redirect`): an https URI the deployment lists in
+/// `PIXELFED_EXTRA_REDIRECTS` signs in end to end, and the code is bound to
+/// it (the token call must name the same redirect).
+#[tokio::test]
+async fn sign_in_with_an_app_link_redirect() {
+    const APP_LINK: &str = "https://pod.example/oauth/android";
+    let env = env_custom(
+        server::state_in_memory(),
+        |c| c.extra_redirects = vec![APP_LINK.into()],
+        |_, _| {},
+    )
+    .await;
+    let token_url = format!("{}/v1/auth/pixelfed/token", env.pod.url);
+    let (code, verifier) = authorize_with(&env.pod.url, &env.fake.url, APP_LINK).await;
+    let (status, body) = post_json(
+        &token_url,
+        None,
+        json!({ "instance_url": env.fake.url, "code": code, "code_verifier": verifier,
+                "redirect_uri": "construct://oauth" }),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK, "{body}");
+    let (code, verifier) = authorize_with(&env.pod.url, &env.fake.url, APP_LINK).await;
+    let (status, body) = post_json(
+        &token_url,
+        None,
+        json!({ "instance_url": env.fake.url, "code": code, "code_verifier": verifier,
+                "redirect_uri": APP_LINK }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["account"]["username"], "constructdemo");
 }
 
 #[tokio::test]

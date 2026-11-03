@@ -222,7 +222,9 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 | `PIXELFED_PUBLIC_URL` | = instance URL | Base for the default instance's browser-facing links (the authorize page), e.g. `http://10.0.2.2:8081` for the emulator while the pod calls `127.0.0.1:8081`. Also accepted in auth calls. |
 | `PIXELFED_ALLOWED_INSTANCES` | unset | Other instances users may sign in to (D45): comma-separated base URLs (trusted like the default, may be private), and/or `*` for any public `https://` instance typed on the sign-in screen (only public IP addresses are contacted for those, and their media may come from any public HTTPS host). Set: the signed-out screen adds a server box. Unset: only the default instance. |
 | `PIXELFED_MEDIA_HOSTS` | unset | Comma-separated `host`, `host:port` or `scheme://host[:port]`: extra origins the media proxy may fetch (CDN/S3) besides the configured instances. Media elsewhere become placeholders (except public HTTPS media under `*`). |
-| `PIXELFED_EXTRA_REDIRECTS` | unset | Comma-separated exact redirect URIs accepted by `/v1/auth/pixelfed/app`, besides `http://127.0.0.1:<port>/callback`, `http://localhost:<port>/callback` and `construct://oauth`. |
+| `PIXELFED_EXTRA_REDIRECTS` | unset | Comma-separated exact redirect URIs accepted by `/v1/auth/pixelfed/app`, besides `http://127.0.0.1:<port>/callback`, `http://localhost:<port>/callback` and `construct://oauth`. A pod that serves the Android App Link lists `https://<its host>/oauth/android` here (staging does). |
+| `CONSTRUCT_ANDROID_CERT_SHA256` | unset | Comma-separated SHA-256 fingerprints (`AA:BB:…` or 64 hex digits) of the Android signing certificates whose builds may open this server's `https://<host>/oauth/android` sign-in redirect (App Links; decision [`android-app-link-sign-in-redirect`](docs/decisions/android-app-link-sign-in-redirect.md)). Served at `GET /.well-known/assetlinks.json` (no auth); unset: 404 there, and Android 12+ builds keep `construct://oauth`. List the release key and any debug keys that should verify. Not secret (every APK carries its certificate). |
+| `CONSTRUCT_ANDROID_PACKAGE` | `org.theconstruct.android` | The Android package `assetlinks.json` names, and the one the `/oauth/android` fallback page opens. |
 | `PIXELFED_OWNER_ACCOUNT_ID` | unset | The only upstream account id allowed to sign in to the default instance (replaces a pinned owner). Unset, and on every other instance: the first account to sign in is pinned; others get 403 `account_not_owner`. |
 | `PIXELFED_ALLOW_ACCOUNT_CHANGE` | unset | `1`/`true`: on the default and listed instances any account may sign in and replace the stored one (no pinning). Instances typed under `*` always keep their first account. |
 | `CONSTRUCT_SESSION_TTL_DAYS` | `90` | Lifetime of sessions other than pod tokens, in days (1..=36500; other values warn and use 90). Pod tokens don't expire. |
@@ -341,7 +343,8 @@ adapter wrote, and a navigation target in that app's own layout routes.
 ## Try it on your phone with a real Pixelfed instance
 
 Nothing has to be registered by hand: the pod registers its own OAuth app on the instance (`POST /api/v1/apps`,
-redirect `construct://oauth`) on the first sign-in. The pod keeps the upstream token; the phone only gets a pod
+redirect `construct://oauth`, or on staging the App Link `https://the-construct-pod.fly.dev/oauth/android`) on the
+first sign-in. The pod keeps the upstream token; the phone only gets a pod
 session (DECISIONS D17, D19).
 
 **On staging:** open your pod (enter your pod code, or tap **Try a temporary pod**; see [Pods](#pods)). Staging
@@ -377,7 +380,7 @@ browser. "Sign in with Pixelfed" still goes to the fake. Your upstream token liv
    (A release build has no extras: pick **Local USB** in Settings' server picker instead.)
 
 4. Tap **Sign in with Pixelfed**: the browser opens the instance's authorize page; log in and approve; the
-   `construct://oauth` redirect returns to the app, which shows your home timeline (Settings lists
+   `construct://oauth` redirect (a local pod has no App Link) returns to the app, which shows your home timeline (Settings lists
    "Pixelfed · @you · <instance>"). Like and bookmark are applied at once and go through the outbox to the instance (queued while
    offline, flushed on reconnect). **Sign out** deletes the session and the cached private feed.
 
@@ -722,7 +725,8 @@ Endpoints:
   (registers an app upstream once per redirect_uri; a cached app is re-checked with a `client_credentials` grant
   and re-registered if the instance no longer knows it). Another instance -> 400 `instance_not_allowed`.
   `redirect_uri` must be `http://127.0.0.1:<port>/callback`, `http://localhost:<port>/callback`, `construct://oauth`
-  or a `PIXELFED_EXTRA_REDIRECTS` entry, else 400 `redirect_uri_not_allowed`.
+  or a `PIXELFED_EXTRA_REDIRECTS` entry (e.g. the Android App Link `https://<pod host>/oauth/android`), else 400
+  `redirect_uri_not_allowed`.
 - `POST /v1/auth/pixelfed/token {instance_url, code, code_verifier, redirect_uri}` -> `{session_token,
   account:{id, username, display_name, avatar_url}}`. Upstream rejection -> 400 `oauth_exchange_failed`. An
   account other than the pinned owner -> 403 `account_not_owner` (the stored account is untouched).
@@ -792,7 +796,8 @@ thread; `auth_json` in every snapshot goes `pending` -> `signed_in` (username, d
   are Kotlin callback interfaces; exceptions in them are contained.
 - `redirectUri = null`: loopback (desktop). The engine listens once on `http://127.0.0.1:47823/callback` for 5
   minutes (a fixed port so the pod reuses one upstream OAuth app; if 47823 is busy, a random port, which registers
-  another app). A custom URI (Android: `construct://oauth`): the app forwards the redirect to `handleAuthRedirect`.
+  another app). A custom URI (Android: the App Link `https://<pod host>/oauth/android` or `construct://oauth`, see
+  below): the app forwards the redirect to `handleAuthRedirect`, which matches it by `state` whatever its form.
   The custom-scheme flow is also kept in the secure store (`pending_auth:<baseUrl>`, 10 minutes), so a redirect
   that cold-starts the app after its process was killed still signs in; one that matches nothing shows "Sign-in
   was interrupted; please try again".
@@ -818,8 +823,17 @@ Per platform (DECISIONS D21):
 - **Desktop** (`desktopApp` Main.kt): no store (Keychain), loopback redirect, and the default browser via
   `java.awt.Desktop.browse` (else `open <url>`). Clicking "Sign in with Pixelfed" opens the browser; after approving,
   the browser lands on the "Signed in" page and the window shows the feed.
-- **Android**: `construct://oauth` intent filter on `MainActivity` (`launchMode="singleTask"`, so the redirect returns to
-  the same activity and engine through `onNewIntent`); the session is encrypted with an AndroidKeyStore AES/GCM key
+- **Android**: the redirect is a verified App Link when the server is the build's App Link host (default the staging
+  pod; `-PconstructAppLinkHost`) and the device has verified it (Android 12+ is asked through
+  `DomainVerificationManager`; 8-11 verify at install), else `construct://oauth` (decision
+  [`android-app-link-sign-in-redirect`](docs/decisions/android-app-link-sign-in-redirect.md); the custom scheme can
+  be claimed by any app). Both intent filters are on `MainActivity` (`launchMode="singleTask"`, so the redirect
+  returns to the same activity and engine through `onNewIntent`). The App Link's filter has `autoVerify`: Android
+  fetches `https://<host>/.well-known/assetlinks.json`, which must list the build's signing certificate
+  (`CONSTRUCT_ANDROID_CERT_SHA256`). If the browser keeps the redirect anyway, the pod's `/oauth/android` page has an
+  **Open The Construct** button that opens this package only (an `intent:` link carrying the query on
+  `construct://oauth`). Check with `adb shell pm get-app-links org.theconstruct.android` (`verified`) and the log
+  line `opening engine for workspace=… redirect=…`. The session is encrypted with an AndroidKeyStore AES/GCM key
   (`construct_session_key`) and kept in SharedPreferences `construct_secure`; the authorize page opens with `ACTION_VIEW`.
   For the emulator, start the pod with `PIXELFED_PUBLIC_URL=http://10.0.2.2:8081` (and the fake with
   `FAKE_PIXELFED_PUBLIC_URL=http://10.0.2.2:8081`) so the browser can reach the authorize page. If the browser is not
