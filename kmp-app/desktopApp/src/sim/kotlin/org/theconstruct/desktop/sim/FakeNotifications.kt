@@ -12,7 +12,7 @@ import org.theconstruct.LayoutApiException
 import org.theconstruct.NotificationChannelInfo
 
 /**
- * In-memory stand-in for the pod's notifications (D47) with the engine's JSON shapes, shared by every
+ * In-memory stand-in for the pod's notifications (D52) with the engine's JSON shapes, shared by every
  * [FakeEngineBridge] of a simulator run (like [FakeAppCatalog]). Loaded from `fixtures/notifications.json`
  * ([fromFixture]: wire-shaped entries, except `age_seconds`, so `created_at` = now - age). [inject] adds a live arrival:
  * every subscribed bridge fires its listener and re-emits its snapshot (the unread count). Thread-safe.

@@ -18,7 +18,7 @@ junit = "4.13.2"
 # Coil 3 image loading (DECISIONS: Coil). 3.4.x is the newest line built against Kotlin 2.3 / Compose 1.9;
 # 3.5+ requires Kotlin 2.4 and Compose 1.11.1+.
 coil = "3.4.0"
-# Closed-app notifications on Android (D47): UnifiedPush receives standard Web Push from the pod. The embedded FCM
+# Closed-app notifications on Android (D52): UnifiedPush receives standard Web Push from the pod. The embedded FCM
 # distributor makes the app its own distributor on phones without one (Play services, via the UnifiedPush project's
 # public Web Push -> FCM gateway); no Firebase project or Google credentials anywhere.
 unifiedpush-connector = "3.3.5"

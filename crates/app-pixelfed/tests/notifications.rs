@@ -1,4 +1,4 @@
-//! Pixelfed notifications (D47): the adapter's polls against the fake upstream
+//! Pixelfed notifications (D52): the adapter's polls against the fake upstream
 //! (`crates/fake-pixelfed`) on a random local port: the quiet first poll and
 //! its cursor, new notifications, paging, a revoked token, upstream failures,
 //! the pod setting that limits instances, and the core's scheduler path.

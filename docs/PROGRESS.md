@@ -515,7 +515,7 @@ from a client (D32, D33).
 Parked: a layout agent (deleted in D37; it can come back from git history), e.g. as developer tooling that writes
 new layout files; diffs between versions.
 
-## Notifications from apps (D47)
+## Notifications from apps (D52)
 
 - Design in `docs/NOTIFICATIONS.md`, built in one PR: protocol notification types; pod-core pipeline (store once,
   SSE `notification` / `notifications_read` events, Web Push with a server-wide VAPID key, devices and per-device

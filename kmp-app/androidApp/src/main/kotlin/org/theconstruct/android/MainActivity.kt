@@ -64,7 +64,7 @@ internal const val AUTH_REDIRECT_URI = "construct://oauth"
 class MainActivity : ComponentActivity() {
     private lateinit var vm: ConstructViewModel
 
-    /** The session whose push registration and channels are set up (D47); redone after a server switch. */
+    /** The session whose push registration and channels are set up (D52); redone after a server switch. */
     @Volatile
     private var pushReadyFor: ConstructController? = null
 
@@ -151,7 +151,7 @@ class MainActivity : ComponentActivity() {
         if (pushReadyFor !== vm.controller) setUpNotifications(vm.controller)
     }
 
-    /** A tapped notification (D47): open its app and target. */
+    /** A tapped notification (D52): open its app and target. */
     private fun handleNotificationTap(intent: Intent?) {
         val app = intent?.getStringExtra(EXTRA_NOTIFICATION_APP) ?: return
         val target = intent.getStringExtra(EXTRA_NOTIFICATION_TARGET)
@@ -162,7 +162,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Notifications for [controller]'s pod (D47): ask for the permission once (Android 13+), make the Android
+     * Notifications for [controller]'s pod (D52): ask for the permission once (Android 13+), make the Android
      * channels from the pod's list, and register for Web Push with the pod's VAPID key. Needs a pod session; without
      * one it quietly does nothing and [onResume] tries again.
      */
@@ -334,7 +334,7 @@ internal class ConstructViewModel(config: EngineConfig, private val appContext: 
         config.storageDir.mkdirs()
         val open = { workspace: String -> openEngine(config, workspace) }
         val controller = ConstructController(open(config.workspace), config.workspace, open)
-        // Notifications (D47): live arrivals show as OS notifications while the app is in the background; the
+        // Notifications (D52): live arrivals show as OS notifications while the app is in the background; the
         // push service hands endpoints and messages to this controller while it is alive.
         controller.setDeviceInfo("android", "${Build.MANUFACTURER} ${Build.MODEL}".trim())
         controller.onNotification = { n -> if (!AppNotifications.foreground) AppNotifications.show(appContext, n) }

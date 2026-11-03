@@ -26,7 +26,7 @@ const MIGRATIONS: &[&str] = &[
          created_at INTEGER NOT NULL
      );
      CREATE INDEX credentials_pod ON credentials(pod_id);",
-    // 2 (D47): when each pod next wants its notification polls run (NULL:
+    // 2 (D52): when each pod next wants its notification polls run (NULL:
     // nothing to poll), so the scheduler opens only pods that need it; and
     // server-wide secrets (the Web Push VAPID key when none is configured).
     "ALTER TABLE pods ADD COLUMN next_wake_at INTEGER;

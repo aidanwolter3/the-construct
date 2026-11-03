@@ -56,7 +56,7 @@ pub fn pod_factory(
 }
 
 /// [`pod_factory`] whose pods send notifications by Web Push with `push`
-/// (one sender, and so one VAPID key, for the whole server; D47).
+/// (one sender, and so one VAPID key, for the whole server; D52).
 pub fn pod_factory_with_push(
     pixelfed: PixelfedConfig,
     test_hooks: bool,
@@ -74,7 +74,7 @@ pub fn pod_factory_with_push(
     })
 }
 
-/// The Web Push sender from the environment (D47), or `None` with
+/// The Web Push sender from the environment (D52), or `None` with
 /// `CONSTRUCT_PUSH=off`. The VAPID key is `CONSTRUCT_VAPID_PRIVATE_KEY`, else
 /// one kept in `<data_dir>/host.db`; the contact is `CONSTRUCT_VAPID_SUBJECT`.
 /// With test hooks, deliveries may go to local endpoints (test receivers).

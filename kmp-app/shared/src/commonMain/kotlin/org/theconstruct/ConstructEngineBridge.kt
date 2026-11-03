@@ -26,7 +26,7 @@ data class EngineSnapshot(
     val layoutJson: String = "{}",
     /** Data path loads (DECISIONS D34): `{path: {"state":"loading"|"ready"|"error","error"?}}`; `"{}"` when none. */
     val loadsJson: String = "{}",
-    /** Unread notifications (D47): `{"unread_total":N,"unread_by_app":{"app":n}}`. Parse with [NotificationsJson.parseUnread]. */
+    /** Unread notifications (D52): `{"unread_total":N,"unread_by_app":{"app":n}}`. Parse with [NotificationsJson.parseUnread]. */
     val notificationsJson: String = "{\"unread_total\":0,\"unread_by_app\":{}}",
 )
 
@@ -77,7 +77,7 @@ interface ConstructEngineBridge {
     /** `GET /v1/apps/{appId}/versions/{version}`: the version's metadata plus its full `layout` (a workspace [UiNode]). */
     fun appVersion(appId: String, version: Long): String = throw appsUnavailable()
 
-    // Notifications from apps (D47, docs/NOTIFICATIONS.md). The blocking calls (list, mark read, channels, push key) are
+    // Notifications from apps (D52, docs/NOTIFICATIONS.md). The blocking calls (list, mark read, channels, push key) are
     // like the apps calls: off the UI thread, pod JSON in, [LayoutApiException] out. The defaults make a fake without
     // notifications compile: listing throws "not available", the rest do nothing.
 

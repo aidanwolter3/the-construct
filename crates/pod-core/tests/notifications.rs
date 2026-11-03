@@ -1,4 +1,4 @@
-//! Notifications from apps (D47) with a test adapter: storing once, unread
+//! Notifications from apps (D52) with a test adapter: storing once, unread
 //! counts and reads, devices and channel choices, polling and its backoff,
 //! the events stream, and Web Push to a local receiver.
 

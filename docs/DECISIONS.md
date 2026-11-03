@@ -1617,7 +1617,7 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
 - **Not yet:** self-service sign-up; per-device credentials and revoking one device; evicting idle pods from memory;
   sample recipes for temporary pods; a pod quota on disk; a separate Fly app for anonymous demos.
 
-## D47: Notifications from apps are a generic pod pipeline; only adapters know their source
+## D52: Notifications from apps are a generic pod pipeline; only adapters know their source
 
 Design: `docs/NOTIFICATIONS.md`. README "Notifications" has the API and configuration.
 

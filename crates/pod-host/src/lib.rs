@@ -58,7 +58,7 @@ pub const POLL_CONCURRENCY: usize = 8;
 /// `host_secrets` key of the generated VAPID private key.
 pub const VAPID_SECRET: &str = "vapid_private_key";
 
-/// The server's Web Push VAPID private key (D47): `configured` (the
+/// The server's Web Push VAPID private key (D52): `configured` (the
 /// `CONSTRUCT_VAPID_PRIVATE_KEY` value) or one generated once and kept in
 /// `<dir>/host.db`. Called before the host opens, so pods can be built with it.
 pub fn vapid_private_key(dir: &FsPath, configured: Option<&str>) -> Result<String, String> {
@@ -577,7 +577,7 @@ impl Host {
         });
     }
 
-    /// Run due notification polls (D47): every open pod and every pod
+    /// Run due notification polls (D52): every open pod and every pod
     /// `host.db` says is due, at most [`POLL_CONCURRENCY`] at once; each pod's
     /// next wake goes back to `host.db`, so after a restart only pods with
     /// work are opened. Returns how many pods were looked at.

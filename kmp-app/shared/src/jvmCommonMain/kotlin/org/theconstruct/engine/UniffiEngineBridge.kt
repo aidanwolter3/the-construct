@@ -70,7 +70,7 @@ class UniffiEngineBridge(val handle: EngineHandle) : ConstructEngineBridge {
     override fun appVersion(appId: String, version: Long): String =
         catalog("$appId v$version") { handle.appVersion(appId, version) }
 
-    // Notifications (D47). The listener is held here too (UniFFI's handle map also pins it).
+    // Notifications (D52). The listener is held here too (UniFFI's handle map also pins it).
     @Volatile
     private var notificationListener: NotificationListener? = null
 

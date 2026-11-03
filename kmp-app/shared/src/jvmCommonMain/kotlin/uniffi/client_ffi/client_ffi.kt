@@ -2382,7 +2382,7 @@ data class FfiStateSnapshot (
      */
     var `loadsJson`: kotlin.String, 
     /**
-     * Unread notifications (D47): `{"unread_total": n, "unread_by_app":
+     * Unread notifications (D52): `{"unread_total": n, "unread_by_app":
      * {app_id: n}}`; zeros while signed out.
      */
     var `notificationsJson`: kotlin.String
@@ -2586,7 +2586,7 @@ public object FfiConverterTypeLayoutApiError : FfiConverterRustBuffer<LayoutApiE
 
 /**
  * Gets each notification that arrives live while the engine's events
- * stream is open (D47), as `Notification` JSON (`{id, app_id, channel,
+ * stream is open (D52), as `Notification` JSON (`{id, app_id, channel,
  * title, body, image_url?, target_uri?, group_key?, created_at, read}`), so
  * the platform can show it. Never called for notifications fetched by a
  * list call, replayed or passed to `handle_push_message`. Called on the

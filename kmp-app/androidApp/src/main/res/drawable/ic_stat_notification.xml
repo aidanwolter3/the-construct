@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Status bar icon for notifications from apps (DECISIONS D47): a plain bell, white on transparent. -->
+<!-- Status bar icon for notifications from apps (DECISIONS D52): a plain bell, white on transparent. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"

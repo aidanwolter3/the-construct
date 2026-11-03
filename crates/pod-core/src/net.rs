@@ -1,4 +1,4 @@
-//! Outbound HTTP to hosts a user picked (D45, D47): a typed Pixelfed
+//! Outbound HTTP to hosts a user picked (D45, D52): a typed Pixelfed
 //! instance, a device's Web Push endpoint. Such a host must not reach the
 //! pod's own network, so names resolve only to public addresses
 //! ([`PublicOnlyResolver`]) and redirects go only to public `https://` names.

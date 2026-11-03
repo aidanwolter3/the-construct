@@ -56,7 +56,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
-// The notification inbox (D47): a bell over the top-right corner of the layout (badged with the unread count) opens a
+// The notification inbox (D52): a bell over the top-right corner of the layout (badged with the unread count) opens a
 // panel listing every app's notifications, newest first, by day; tapping one opens its app and target. The menu's
 // "Notifications" entry lists the apps' channels with switches. Generic: apps are only ids, titles and icons from the
 // apps catalog. Test tags are listed in README "Simulation mode".

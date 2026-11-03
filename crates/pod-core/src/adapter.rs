@@ -154,7 +154,7 @@ pub trait AppAdapter: Any + Send + Sync {
         req: &'a RequestCtx,
     ) -> BoxFuture<'a, Hydration>;
 
-    /// The kinds of notification this adapter's apps send (D47), such as
+    /// The kinds of notification this adapter's apps send (D52), such as
     /// "Likes". Called at startup and when listing channels. Each channel's
     /// `app_id` must be one of [`Self::apps`]; ids are `[a-z0-9_]{1,32}`,
     /// unique per app, and never change once shipped (devices store their
@@ -170,7 +170,7 @@ pub trait AppAdapter: Any + Send + Sync {
         None
     }
 
-    /// Fetch new notifications from the upstream (D47): called by the host
+    /// Fetch new notifications from the upstream (D52): called by the host
     /// scheduler every [`Self::poll_interval`], outside any request, with a
     /// 20 s timeout. Keep your own cursor in your own tables; report each
     /// upstream event with a stable `dedupe_key` (reporting one twice is

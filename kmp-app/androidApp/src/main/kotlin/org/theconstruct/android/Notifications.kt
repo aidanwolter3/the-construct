@@ -17,13 +17,13 @@ import org.theconstruct.NotificationChannelInfo
 
 private const val TAG = "ConstructNotify"
 
-/** Intent extras of a tapped notification (DECISIONS D47): [MainActivity] opens the app and its target. */
+/** Intent extras of a tapped notification (DECISIONS D52): [MainActivity] opens the app and its target. */
 internal const val EXTRA_NOTIFICATION_APP = "notificationApp"
 internal const val EXTRA_NOTIFICATION_TARGET = "notificationTarget"
 internal const val EXTRA_NOTIFICATION_ID = "notificationId"
 
 /**
- * OS notifications for notifications from apps (DECISIONS D47). Generic: the pod declares the channels (one Android
+ * OS notifications for notifications from apps (DECISIONS D52). Generic: the pod declares the channels (one Android
  * channel per app channel, id `"<app_id>.<channel>"`, grouped per app) and writes the text; nothing here knows an app.
  */
 internal object AppNotifications {

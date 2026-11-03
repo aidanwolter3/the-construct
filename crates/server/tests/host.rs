@@ -568,7 +568,7 @@ async fn concurrent_temporary_pods_respect_the_cap() {
     assert_eq!(env.host.store().live_temporary_count().unwrap(), 2);
 }
 
-/// D47: the host's scheduler opens a pod with a registered device, polls its
+/// D52: the host's scheduler opens a pod with a registered device, polls its
 /// Pixelfed account (first poll quiet), then stores a new like as unread.
 #[tokio::test]
 async fn the_scheduler_polls_pods_with_devices() {

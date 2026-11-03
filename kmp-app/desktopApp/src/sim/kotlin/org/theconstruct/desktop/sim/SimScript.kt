@@ -36,7 +36,7 @@ sealed class SimStep(val command: String, val arg: String = "") {
     /** Fixture mode only: the fake pod publishes a new newest version of the app on screen. */
     class PublishVersion(val note: String) : SimStep("publish-version", note)
 
-    // Notifications (D47).
+    // Notifications (D52).
     /** Fixture mode only: a live notification from [app]'s [channel] (fires the listener, bumps the unread count). */
     class Notify(val app: String, val channel: String, val title: String) : SimStep("notify", "$app $channel $title")
     object OpenInbox : SimStep("open-inbox")

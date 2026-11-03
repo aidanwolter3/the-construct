@@ -1,5 +1,5 @@
 {
-  "note": "Simulator fixture (D47): FakeEngineBridge serves these from listNotifications/notificationChannels. Wire shape, except age_seconds (created_at = now - age_seconds when loaded). target_uri post ids have comments data in pixelfed_screen_data.json.",
+  "note": "Simulator fixture (D52): FakeEngineBridge serves these from listNotifications/notificationChannels. Wire shape, except age_seconds (created_at = now - age_seconds when loaded). target_uri post ids have comments data in pixelfed_screen_data.json.",
   "notifications": [
     {
       "id": "fx-6",

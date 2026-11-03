@@ -219,7 +219,7 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 | `PIXELFED_OWNER_ACCOUNT_ID` | unset | The only upstream account id allowed to sign in to the default instance (replaces a pinned owner). Unset, and on every other instance: the first account to sign in is pinned; others get 403 `account_not_owner`. |
 | `PIXELFED_ALLOW_ACCOUNT_CHANGE` | unset | `1`/`true`: on the default and listed instances any account may sign in and replace the stored one (no pinning). Instances typed under `*` always keep their first account. |
 | `CONSTRUCT_SESSION_TTL_DAYS` | `90` | Lifetime of sessions other than pod tokens, in days (1..=36500; other values warn and use 90). Pod tokens don't expire. |
-| `CONSTRUCT_VAPID_PRIVATE_KEY` | generated | Web Push signing key for notifications (D47): base64url of a 32-byte P-256 private key. Unset: the server generates one on first start and keeps it in `host.db` (devices subscribed with its public key keep working across restarts). Staging/production should set it as a secret so a lost volume doesn't orphan subscriptions. |
+| `CONSTRUCT_VAPID_PRIVATE_KEY` | generated | Web Push signing key for notifications (D52): base64url of a 32-byte P-256 private key. Unset: the server generates one on first start and keeps it in `host.db` (devices subscribed with its public key keep working across restarts). Staging/production should set it as a secret so a lost volume doesn't orphan subscriptions. |
 | `CONSTRUCT_VAPID_SUBJECT` | the repo URL | Contact (`mailto:` or `https:`) that push services may use to reach the operator. |
 | `CONSTRUCT_PUSH` | on | `off`: no Web Push (notifications still reach the inbox and open apps). |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
@@ -291,7 +291,7 @@ paths, e.g. the Pixelfed media proxy).
 
 ## Notifications
 
-Apps send notifications through the pod (D47, design in `docs/NOTIFICATIONS.md`). Only an app's adapter knows where
+Apps send notifications through the pod (D52, design in `docs/NOTIFICATIONS.md`). Only an app's adapter knows where
 they come from; the pod, the engine and the clients see an app id, a channel the adapter declares ("Likes"), text the
 adapter wrote, and a navigation target in that app's own layout routes.
 
@@ -1011,7 +1011,7 @@ entries starting with `#` are comments. An argument cannot contain `;`, and sinc
 | `open-history <id or title>` | Opens that app's version picker (opening the drawer first if needed). |
 | `select-version <n or latest>` | In the picker, shows version `n` (`2` or `v2`; presses "Load older" as needed) or follows the latest again; waits for the drawer to close. |
 | `set-server <preset or URL>` | Picks `staging`, `emulator`, `usb` or a custom `http(s)://host[:port]` in the Server section. The simulator records the choice and shows it in the menu, but keeps its engine. |
-| `notify <app_id> <channel> <title>` | Fixture mode only: the fake pod sends a live notification (D47): the platform hook (`onNotification`) fires and the bell's unread count goes up. |
+| `notify <app_id> <channel> <title>` | Fixture mode only: the fake pod sends a live notification (D52): the platform hook (`onNotification`) fires and the bell's unread count goes up. |
 | `open-inbox` | Clicks the bell (`inbox-button`) and waits for the inbox (`inbox`) to load; reports the rows shown or its message. |
 | `close-inbox` | Closes the inbox. |
 | `click-notification <text>` | Clicks the inbox row containing `<text>` and waits for its app (opened if it is another one) and target screen; reports both. |
@@ -1065,7 +1065,7 @@ from the pod: `UPDATE_FIXTURES=1 cargo test -p server --test fixtures` (the test
     type tag:textfield:comment Golden light!; click tag:textfield-send:comment; wait-text 3000 just now; shot sent'
 ```
 
-**Notifications (D47).** The bell (`inbox-button`, content description "Notifications") sits top-right with the
+**Notifications (D52).** The bell (`inbox-button`, content description "Notifications") sits top-right with the
 unread count (`inbox-badge`); the inbox (`inbox`) lists rows `notification-row:<id>` by day, with `inbox-mark-all`
 and `inbox-close`; the menu's `menu-notifications` opens `notification-settings` with `channel:<app>.<channel>` rows
 (`channel-switch:<app>.<channel>`). In fixture mode the fake pod serves `fixtures/notifications.json` (wire-shaped,

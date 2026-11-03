@@ -144,7 +144,7 @@ const MIGRATIONS: &[Migration] = &[
          value TEXT NOT NULL
      );",
     ),
-    // v13 (D47): notifications from apps. `notifications` holds what adapters
+    // v13 (D52): notifications from apps. `notifications` holds what adapters
     // reported (`UNIQUE(app_id, dedupe_key)` makes reporting idempotent);
     // `notification_polls` is each polling adapter's schedule and backoff
     // (`stopped_for` = the sign-in it lost; a new sign-in resumes it);
@@ -640,7 +640,7 @@ fn attach_sign_in_on(conn: &Connection, token_hash: &str, sign_in: &str) -> rusq
          VALUES (?1, ?2, ?3)",
         params![token_hash, sign_in, now_secs()],
     )?;
-    // A polling adapter that lost this sign-in polls again (D47).
+    // A polling adapter that lost this sign-in polls again (D52).
     conn.execute(
         "UPDATE notification_polls SET stopped_for = NULL, next_at = 0, failures = 0
          WHERE stopped_for = ?1",

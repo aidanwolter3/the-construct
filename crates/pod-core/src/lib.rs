@@ -94,7 +94,7 @@ pub struct AppState {
     sse_keepalive: std::time::Duration,
     /// Set by [`AppState::shutdown`]: open SSE streams end.
     shutdown: tokio::sync::watch::Sender<bool>,
-    /// Notifications: the events fan-out, open device streams, polls (D47).
+    /// Notifications: the events fan-out, open device streams, polls (D52).
     pub(crate) notifier: notify::Notifier,
     /// Web Push sender shared by the server's pods; `None`: no Web Push.
     push: Option<notify::SharedPush>,
@@ -199,7 +199,7 @@ impl AppState {
         self.sse_keepalive
     }
 
-    /// Send notifications by Web Push with `sender` (D47).
+    /// Send notifications by Web Push with `sender` (D52).
     pub fn with_push(mut self, sender: Option<notify::SharedPush>) -> Self {
         self.push = sender;
         self

@@ -64,9 +64,9 @@ data class ConstructState(
  * [openApp] only reports that other apps can't be opened here.
  *
  * Also holds what must outlive a composition (Android rotation; not process restart): the version the user pinned
- * ([pinned]), the menu's state ([menu]) and the notification inbox's ([inbox], D47).
+ * ([pinned]), the menu's state ([menu]) and the notification inbox's ([inbox], D52).
  *
- * Notifications (D47): [unread] follows the snapshots; [onNotification] hears live arrivals of every engine this
+ * Notifications (D52): [unread] follows the snapshots; [onNotification] hears live arrivals of every engine this
  * controller holds; [openNotification] opens a notification's app and target. Blocking pod calls run on [io].
  */
 class ConstructController internal constructor(
@@ -279,7 +279,7 @@ class ConstructController internal constructor(
     }
 
     // -----------------------------------------------------------------------------------------------------------------
-    // Notifications (D47)
+    // Notifications (D52)
     // -----------------------------------------------------------------------------------------------------------------
 
     /** What the pod shows for this device (e.g. "android", the model): applied now and to every engine created later. */

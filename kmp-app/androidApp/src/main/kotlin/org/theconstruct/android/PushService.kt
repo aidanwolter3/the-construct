@@ -13,7 +13,7 @@ import org.unifiedpush.android.connector.PushService as UnifiedPushService
 private const val TAG = "ConstructPush"
 
 /**
- * Closed-app notifications (DECISIONS D47). The pod sends standard Web Push (RFC 8291, VAPID) to an endpoint a
+ * Closed-app notifications (DECISIONS D52). The pod sends standard Web Push (RFC 8291, VAPID) to an endpoint a
  * UnifiedPush distributor gives this app: a distributor app such as ntfy, or, on phones without one, the embedded FCM
  * distributor (Play services, through the UnifiedPush project's public Web Push -> FCM gateway). The connector
  * library keeps the Web Push keys and decrypts; this app only hands the endpoint to the pod and shows messages.

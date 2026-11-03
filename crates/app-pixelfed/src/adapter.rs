@@ -1,5 +1,5 @@
 //! [`PixelfedAdapter`]: the `pixelfed_home` app, the `pixelfed` sign-in and
-//! its notifications (D47, [`crate::notify`]).
+//! its notifications (D52, [`crate::notify`]).
 
 use std::sync::{Arc, RwLock};
 

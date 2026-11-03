@@ -11,7 +11,7 @@ plugins {
 //   -PconstructWorkspace=<id>       default workspace for BuildConfig.CONSTRUCT_WORKSPACE (default: pixelfed_home)
 //   -PandroidAbis=arm64-v8a,x86_64   ABIs to build with cargo-ndk and package
 //   -PskipRustBuild              don't run scripts/build_android.sh (use the existing jniLibs)
-//   -PnoFcmFallback              leave out the embedded FCM distributor (D47): closed-app notifications then need a
+//   -PnoFcmFallback              leave out the embedded FCM distributor (D52): closed-app notifications then need a
 //                                UnifiedPush distributor app (e.g. ntfy) on the phone
 val stagingBaseUrl = "https://the-construct-pod.fly.dev"
 val constructBaseUrl = providers.gradleProperty("constructBaseUrl").getOrElse(stagingBaseUrl)
@@ -70,7 +70,7 @@ dependencies {
     implementation(project(":shared"))
     implementation(libs.androidx.activity.compose)
     implementation(libs.compose.material3)
-    // Notifications when the app is closed (D47): Web Push via UnifiedPush, FCM fallback unless -PnoFcmFallback.
+    // Notifications when the app is closed (D52): Web Push via UnifiedPush, FCM fallback unless -PnoFcmFallback.
     implementation(libs.unifiedpush.connector)
     if (fcmFallback) implementation(libs.unifiedpush.embedded.fcm)
 

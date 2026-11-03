@@ -35,7 +35,7 @@ pub struct FfiStateSnapshot {
     pub layout_json: String,
     /// Data path loads: `{path: {"state", "error"?}}` (docs/DECISIONS.md D34).
     pub loads_json: String,
-    /// Unread notifications (D47): `{"unread_total": n, "unread_by_app":
+    /// Unread notifications (D52): `{"unread_total": n, "unread_by_app":
     /// {app_id: n}}`; zeros while signed out.
     pub notifications_json: String,
 }
@@ -121,7 +121,7 @@ pub trait UrlOpener: Send + Sync {
 }
 
 /// Gets each notification that arrives live while the engine's events
-/// stream is open (D47), as `Notification` JSON (`{id, app_id, channel,
+/// stream is open (D52), as `Notification` JSON (`{id, app_id, channel,
 /// title, body, image_url?, target_uri?, group_key?, created_at, read}`), so
 /// the platform can show it. Never called for notifications fetched by a
 /// list call, replayed or passed to `handle_push_message`. Called on the
@@ -289,7 +289,7 @@ impl EngineHandle {
         Ok(self.inner.app_version(&app_id, version)?)
     }
 
-    // Notifications (D47). The calls below are blocking (call them off the
+    // Notifications (D52). The calls below are blocking (call them off the
     // UI thread) and return JSON. Without a session there are none: lists
     // are empty, counts zero, and the calls that need one fail
     // `Unauthorized`.

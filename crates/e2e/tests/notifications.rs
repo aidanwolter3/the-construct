@@ -1,4 +1,4 @@
-//! Notifications end to end (D47), against the fake only: sign in through the engine,
+//! Notifications end to end (D52), against the fake only: sign in through the engine,
 //! register a device, let the pod poll (its quiet first poll), inject a like on the fake
 //! through `POST /_admin/notifications`, poll again and read it from
 //! `GET /v1/notifications`. Polls are driven directly (`AppState::poll_due`), not by the

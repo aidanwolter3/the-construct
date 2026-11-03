@@ -2,7 +2,7 @@
 //! account and its pinned owner per instance, and the media proxy's keys
 //! (core migrations v2-v4, which predate per-adapter migrations; D40); and
 //! which instance each session signed in to ([`MIGRATIONS`], D45) and the
-//! notification poll's cursor per instance (D47).
+//! notification poll's cursor per instance (D52).
 //!
 //! [`PixelfedStore`] adds these queries to the core's [`Store`].
 
@@ -23,7 +23,7 @@ pub static MIGRATIONS: &[Migration] = &[
              instance   TEXT NOT NULL
          );",
     ),
-    // 2 (D47): the notification poll's position per instance: the newest
+    // 2 (D52): the notification poll's position per instance: the newest
     // upstream notification id seen (`last_id`, None while there were none)
     // and when the first poll ran (its backlog was stored quietly).
     Migration::Sql(
@@ -145,7 +145,7 @@ pub trait PixelfedStore {
         keys: impl IntoIterator<Item = (&'a String, &'a String)>,
     ) -> rusqlite::Result<()>;
     fn media_url(&self, key: &str) -> rusqlite::Result<Option<String>>;
-    /// Every stored upstream account, by instance (D47 polls each).
+    /// Every stored upstream account, by instance (D52 polls each).
     fn pixelfed_accounts(&self) -> rusqlite::Result<Vec<(String, PixelfedAccount)>>;
     /// The notification cursor of `instance`: `None` before its first poll,
     /// else the newest upstream notification id seen (None: none yet).

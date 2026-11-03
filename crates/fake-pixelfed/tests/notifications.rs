@@ -1,4 +1,4 @@
-//! The fake's notifications (D47): `GET /api/v1/notifications` with Mastodon paging, the
+//! The fake's notifications (D52): `GET /api/v1/notifications` with Mastodon paging, the
 //! seeded fixture notifications and `POST /_admin/notifications`.
 
 use std::sync::Arc;

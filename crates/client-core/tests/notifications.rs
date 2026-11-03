@@ -1,4 +1,4 @@
-//! Notifications in the engine (D47): the device header and registration,
+//! Notifications in the engine (D52): the device header and registration,
 //! the events stream's `notification` / `notifications_read` events, the
 //! catch-up fetch on (re)connect, mark-read, push messages and sign-out,
 //! against a small hand-rolled stub of the pod that records every request.

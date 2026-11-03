@@ -1,4 +1,4 @@
-//! Notifications from apps (D47). Generic: the pod and the clients see an
+//! Notifications from apps (D52). Generic: the pod and the clients see an
 //! app id, a channel id the app's adapter declares, ready-made text and a
 //! navigation target the client resolves against that app's layout routes.
 //! Nothing here names an app.
@@ -106,7 +106,7 @@ pub struct ReadEvent {
     pub unread_by_app: std::collections::BTreeMap<String, u32>,
 }
 
-/// The decrypted body of a Web Push message the pod sends (D47).
+/// The decrypted body of a Web Push message the pod sends (D52).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PushPayload {
     /// Payload format; 1.

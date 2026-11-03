@@ -28,7 +28,7 @@
 //! - `CONSTRUCT_SHOW_DEV_APPS=1`: `GET /v1/apps` also lists the dev apps.
 //! - `CONSTRUCT_SESSION_TTL_DAYS`: lifetime of sessions other than pod tokens.
 //! - `CONSTRUCT_VAPID_PRIVATE_KEY`, `CONSTRUCT_VAPID_SUBJECT`, `CONSTRUCT_PUSH=off`:
-//!   Web Push for notifications (D47); without a key the server makes one and
+//!   Web Push for notifications (D52); without a key the server makes one and
 //!   keeps it in `host.db`.
 //! - `PIXELFED_*`: see `PixelfedConfig::from_env` and README.
 //!

@@ -89,7 +89,7 @@ private var windowFocused = true
 private var mainWindow: ComposeWindow? = null
 
 /**
- * D47 on desktop, while the app runs: a live notification becomes an OS notification through the tray (only while the
+ * D52 on desktop, while the app runs: a live notification becomes an OS notification through the tray (only while the
  * window is not focused; when focused, the bell's badge updates). No closed-app push on desktop.
  */
 private fun postNotification(tray: TrayState?, n: AppNotification) {

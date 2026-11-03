@@ -308,7 +308,7 @@ enum FetchOutcome {
 ///   is a short sentence for the UI). The queries of loaded paths are part
 ///   of `queries_json` (cached, so also shown offline), as are the temporary
 ///   entities of pending `action.mutation.create` rows.
-/// - `notifications_json`: unread notification counts (D47),
+/// - `notifications_json`: unread notification counts (D52),
 ///   `{"unread_total": n, "unread_by_app": {app_id: n}}` (apps with none
 ///   left out; zeros while signed out). Lists come from
 ///   [`ConstructEngine::list_notifications`].
@@ -453,7 +453,7 @@ struct State {
     settling: Vec<(String, String)>,
     /// Queued by the flush of an accepted create.
     followups: Vec<Followup>,
-    /// Unread notifications (D47; see [`StateSnapshot::notifications_json`]).
+    /// Unread notifications (D52; see [`StateSnapshot::notifications_json`]).
     unread_total: u32,
     unread_by_app: BTreeMap<String, u32>,
 }
@@ -1060,7 +1060,7 @@ struct Inner {
     /// Serializes reads/writes of `pending_key` (lock order: `pending_io`,
     /// then `flow`).
     pending_io: Mutex<()>,
-    /// This installation's id (D47), sent as `x-construct-device`.
+    /// This installation's id (D52), sent as `x-construct-device`.
     device_id: String,
     /// Device registration state (lock order: `device_io`, then `device`,
     /// then `state`; never held during HTTP except `device_io`).

@@ -130,7 +130,7 @@ private fun runCli(args: Array<String>): Int {
         val appId = if (opts["fixture"] != null && opts["workspace"] == null) null else workspace
         // The fake pod's data path answers (screens, D34), generated from the pod by crates/server/tests/fixtures.rs.
         val screenData = findFixture("pixelfed_screen_data.json", cwd)?.readText()
-        // The fake pod's notifications (D47), shared by every engine of the run.
+        // The fake pod's notifications (D52), shared by every engine of the run.
         val notifications = findFixture("notifications.json", cwd)?.let { FakeNotifications.fromFixture(it.readText()) }
             ?: FakeNotifications()
         var current = try {

@@ -101,7 +101,7 @@ const MIGRATION_V4: &str = "
 ALTER TABLE action_outbox ADD COLUMN session_bound INTEGER NOT NULL DEFAULT 1;
 ";
 
-/// Schema v5 (D47): small engine values (`engine_kv`: the device id, the
+/// Schema v5 (D52): small engine values (`engine_kv`: the device id, the
 /// last fetched notification channels and unread counts, the remembered
 /// push subscription) and the notification cache (the newest
 /// [`NOTIFICATIONS_KEPT`], so the inbox works offline). `json` is the

@@ -50,7 +50,7 @@ import org.theconstruct.UiNode
  * the fake pod accepts it if some data path lists its query (the entity is added there, with a `meta` field, if it has
  * one, set to "just now") and the client reloads those paths; otherwise it is rejected and removed.
  *
- * Notifications (D47): with [notifications] (shared by the run's bridges) the notification calls answer from it, the
+ * Notifications (D52): with [notifications] (shared by the run's bridges) the notification calls answer from it, the
  * snapshot carries its unread counts, and [FakeNotifications.inject] fires this bridge's listener (live arrival) while
  * it is open. Without, the interface defaults apply ("Notifications aren't available here.").
  */

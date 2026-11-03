@@ -1,6 +1,6 @@
-# Notifications from apps: design (D47)
+# Notifications from apps: design (D52)
 
-Status: built (see D47 in `docs/DECISIONS.md` for what changed while building: no wake hook, the FCM fallback needs no
+Status: built (see D52 in `docs/DECISIONS.md` for what changed while building: no wake hook, the FCM fallback needs no
 Firebase project, the engine's offline behaviour). Section 10's phases shipped together.
 
 ## Context
@@ -204,7 +204,7 @@ into a generic `pod_core::net` module so both use it.
 5. **Web Push**: `pod_core::net` extraction, VAPID config, `push` sender, device push subscriptions, skip-if-SSE;
    Android UnifiedPush connector; then the FCM embedded distributor behind a build property.
 6. Optional: `/v1/notifications/data` for per-app notification screens in layouts.
-Each phase gets a `docs/DECISIONS.md` entry (D47 = this design; later entries for decisions made while building) and
+Each phase gets a `docs/DECISIONS.md` entry (D52 = this design; later entries for decisions made while building) and
 a PROGRESS.md note; README gets the routes, env vars and sim commands.
 
 ## Files to touch (representative)

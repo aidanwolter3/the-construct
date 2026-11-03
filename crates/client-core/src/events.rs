@@ -3,7 +3,7 @@
 //! while the engine is online and refetches the workspace when a
 //! `layout` event names a version newer than the last applied one. The same
 //! stream carries `notification` / `notifications_read` events for every app
-//! of the pod (D47, handled in [`crate::notify`]); after each (re)connect with
+//! of the pod (D52, handled in [`crate::notify`]); after each (re)connect with
 //! a session the engine fetches recent notifications to catch up.
 //!
 //! The stream is read with async reqwest on a private current-thread Tokio
@@ -237,7 +237,7 @@ pub(crate) fn events_thread(
                     protocol::SCHEMA_VERSION.to_string(),
                 )
                 // Marks this device live: the pod sends it no Web Push
-                // while the stream is open (D47).
+                // while the stream is open (D52).
                 .header(protocol::DEVICE_HEADER, &device);
             if let Some(t) = &token {
                 req = req.bearer_auth(t);

@@ -1,4 +1,4 @@
-//! Web Push deliveries (D47): RFC 8291 encryption and RFC 8292 VAPID via
+//! Web Push deliveries (D52): RFC 8291 encryption and RFC 8292 VAPID via
 //! `web-push-native`, sent with reqwest. The endpoint comes from a device, so
 //! deliveries go through the public-only client ([`crate::net`]) unless the
 //! server runs with test hooks (local test receivers).

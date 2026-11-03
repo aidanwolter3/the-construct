@@ -935,7 +935,7 @@ async fn events(
     if let (AuthPolicy::SignIn(_), Caller::Stale) = (app.auth, &caller) {
         return unauthorized();
     }
-    // Notifications (D47) are private: only a valid session hears them, for
+    // Notifications (D52) are private: only a valid session hears them, for
     // every app of the pod. A device with a stream open gets no Web Push.
     let notify_rx = caller.session().map(|_| state.subscribe_notifications());
     let live = match (&caller, crate::notify::device_id(&headers)) {

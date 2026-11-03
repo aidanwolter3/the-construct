@@ -1,4 +1,4 @@
-//! Notifications from Pixelfed (D47, docs/NOTIFICATIONS.md section 5).
+//! Notifications from Pixelfed (D52, docs/NOTIFICATIONS.md section 5).
 //!
 //! The pod core polls this adapter ([`poll`]) while the pod has a registered
 //! device. For each stored upstream account (one per instance) it reads
