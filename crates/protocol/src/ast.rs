@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::intent::ActionIntent;
 
 /// Node types this build knows (an other type is [`UiNode::Unknown`]).
-pub const NODE_TYPES: [&str; 21] = [
+pub const NODE_TYPES: [&str; 22] = [
     "core://Workspace",
     "core://Container",
     "core://Text",
@@ -37,6 +37,7 @@ pub const NODE_TYPES: [&str; 21] = [
     "core://ChoiceChips",
     "core://MediaPicker",
     "core://Sticky",
+    "core://Progress",
 ];
 
 /// Icon names clients draw (`core://IconButton`, `core://Chip`).
@@ -382,6 +383,17 @@ pub enum UiNode {
     #[serde(rename = "core://Sticky")]
     Sticky { content: Box<UiNode> },
 
+    // Feature `progress` (crates/protocol/features/progress.md)
+    /// An indeterminate circular spinner for work in progress, `size_dp`
+    /// across (default 16), drawn in a quiet theme colour. It has no
+    /// children and no intents; show it while a status field says so with a
+    /// `core://Conditional` around it.
+    #[serde(rename = "core://Progress")]
+    Progress {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size_dp: Option<u16>,
+    },
+
     /// A node of a type this build does not know: its JSON, kept as is.
     #[serde(skip)]
     Unknown(Value),
@@ -468,6 +480,7 @@ impl UiNode {
             | UiNode::Badge { .. }
             | UiNode::ChoiceChips { .. }
             | UiNode::MediaPicker { .. }
+            | UiNode::Progress { .. }
             | UiNode::Unknown(_) => Vec::new(),
         }
     }

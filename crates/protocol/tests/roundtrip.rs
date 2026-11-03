@@ -677,3 +677,35 @@ fn sequences_and_local_sets_round_trip_and_need_their_features() {
         ["local_set"]
     );
 }
+
+#[test]
+fn progress_round_trips_and_needs_its_feature() {
+    let wire = r#"{"type":"core://Progress","size_dp":20}"#;
+    let parsed: UiNode = serde_json::from_str(wire).unwrap();
+    assert_eq!(parsed, UiNode::Progress { size_dp: Some(20) });
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
+    // The size is optional and omitted when unset.
+    let bare: UiNode = serde_json::from_str(r#"{"type":"core://Progress"}"#).unwrap();
+    assert_eq!(bare, UiNode::Progress { size_dp: None });
+    assert_eq!(
+        serde_json::to_string(&bare).unwrap(),
+        r#"{"type":"core://Progress"}"#
+    );
+    assert!(bare.children().is_empty());
+    assert!(bare.own_intents().is_empty());
+    // A spinner in a group header, shown while the section is unsorted.
+    let list: UiNode = serde_json::from_value(json!({
+        "type": "core://List", "query_key": "collection:groceries",
+        "item_template": {"type": "core://Text", "value_expr": "$item.name", "style": "Body"},
+        "group_by": {"field": "section", "header": {"type": "core://Row", "spacing_dp": 8, "children": [
+            {"type": "core://Text", "value_expr": "$item.section", "style": "Label"},
+            {"type": "core://Conditional", "value": "$item.section", "equals": "Unsorted",
+             "content": {"type": "core://Progress"}}]}},
+    }))
+    .unwrap();
+    assert_eq!(protocol::required_features(&list), ["progress"]);
+    assert!(protocol::FEATURES.contains(&"progress"));
+    // Nothing else needs it.
+    let plain: UiNode = serde_json::from_value(json!({"type": "core://Divider"})).unwrap();
+    assert!(protocol::required_features(&plain).is_empty());
+}
