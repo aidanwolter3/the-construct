@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::intent::ActionIntent;
 
 /// Node types this build knows (an other type is [`UiNode::Unknown`]).
-pub const NODE_TYPES: [&str; 20] = [
+pub const NODE_TYPES: [&str; 21] = [
     "core://Workspace",
     "core://Container",
     "core://Text",
@@ -36,6 +36,7 @@ pub const NODE_TYPES: [&str; 20] = [
     "core://Box",
     "core://ChoiceChips",
     "core://MediaPicker",
+    "core://Sticky",
 ];
 
 /// Icon names clients draw (`core://IconButton`, `core://Chip`).
@@ -143,7 +144,7 @@ pub enum UiNode {
         /// Schema 8 (D48): space left and right of the items.
         #[serde(default, skip_serializing_if = "is_zero")]
         padding_h_dp: u16,
-        /// Schema 11: one item to scroll to and tint ([`ListFocus`]).
+        /// Schema 12: one item to scroll to and tint ([`ListFocus`]).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         focus: Option<ListFocus>,
     },
@@ -370,6 +371,17 @@ pub enum UiNode {
         label: Option<String>,
     },
 
+    // Schema 11 (docs/decisions/sticky-nodes.md)
+    /// `content` that scrolls with the page until it reaches the top of the
+    /// scrolling view, then stays pinned there while the rest of its parent
+    /// scrolls under it (like CSS `position: sticky`). It scrolls away with
+    /// the end of its parent. Pinned, it is drawn on the page background, so
+    /// what scrolls under it is hidden. Only meaningful in a scrolling
+    /// column: not inside a `core://List` or `core://Carousel` template or
+    /// another `core://Sticky` (rejected by the pod's validation).
+    #[serde(rename = "core://Sticky")]
+    Sticky { content: Box<UiNode> },
+
     /// A node of a type this build does not know: its JSON, kept as is.
     #[serde(skip)]
     Unknown(Value),
@@ -441,7 +453,8 @@ impl UiNode {
             UiNode::Carousel { item_template, .. } => vec![item_template],
             UiNode::Conditional { content, .. }
             | UiNode::Tappable { content, .. }
-            | UiNode::Box { content, .. } => {
+            | UiNode::Box { content, .. }
+            | UiNode::Sticky { content } => {
                 vec![content]
             }
             UiNode::Text { .. }
@@ -548,7 +561,7 @@ pub struct ListWhere {
     pub equals: String,
 }
 
-/// `core://List` `focus` (schema 11, docs/decisions/list-focus.md): the item
+/// `core://List` `focus` (schema 12, docs/decisions/list-focus.md): the item
 /// whose entity URI equals `uri` (usually built from a route parameter, e.g.
 /// `pixelfed://comments/$route.comment`) is scrolled into view the first time
 /// the list draws it, and drawn on `background` with `content_color` (both

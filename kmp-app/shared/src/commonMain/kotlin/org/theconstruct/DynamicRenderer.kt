@@ -46,6 +46,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -63,6 +64,12 @@ import kotlinx.serialization.json.JsonPrimitive
 
 /** The most lines a `core://TextField` grows to (its `lines` is clamped to this). */
 private const val MAX_TEXT_FIELD_LINES = 12
+
+/**
+ * How far below the top of the workspace pinned `core://Sticky` content stops: clear of the menu and bell buttons
+ * (40 dp, 8 dp from the top) that [ConstructApp] draws over it.
+ */
+val STICKY_WORKSPACE_INSET = 56.dp
 
 /** Maximum width of a list item on wide screens (a readable column, like Instagram/Pixelfed web). */
 val FEED_MAX_WIDTH = 560.dp
@@ -95,20 +102,27 @@ fun RenderUiNode(
 ) {
     val dispatch: (ActionIntent) -> Unit = { onDispatch(bindIntent(it, item)) }
     when (node) {
-        is UiNode.Workspace -> Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-            Text(
-                node.title,
-                style = MaterialTheme.typography.headlineMedium,
-                modifier = Modifier.padding(start = 16.dp + LocalWorkspaceTitleInset.current, end = 16.dp + LocalWorkspaceTitleEndInset.current, top = 12.dp, bottom = 12.dp),
-            )
-            node.slots.forEach { slot ->
-                // Keyed by slot id: a layout change that inserts a slot above (e.g. a new version adding a banner at
-                // the top) keeps the state of the slots below (feed pager positions).
-                key(slot.slotId) {
-                    RenderUiNode(slot.content, entities, onDispatch, Modifier, item)
+        is UiNode.Workspace -> {
+            val scroll = rememberScrollState()
+            // `core://Sticky` content pins below the menu and bell buttons drawn over the top corners.
+            val sticky = remember(scroll) { StickyScroll(scroll, topInset = STICKY_WORKSPACE_INSET) }
+            Column(modifier.fillMaxSize().verticalScroll(scroll).stickyContent(sticky)) {
+                Text(
+                    node.title,
+                    style = MaterialTheme.typography.headlineMedium,
+                    modifier = Modifier.padding(start = 16.dp + LocalWorkspaceTitleInset.current, end = 16.dp + LocalWorkspaceTitleEndInset.current, top = 12.dp, bottom = 12.dp),
+                )
+                CompositionLocalProvider(LocalStickyScroll provides sticky) {
+                    node.slots.forEach { slot ->
+                        // Keyed by slot id: a layout change that inserts a slot above (e.g. a new version adding a
+                        // banner at the top) keeps the state of the slots below (feed pager positions).
+                        key(slot.slotId) {
+                            RenderUiNode(slot.content, entities, onDispatch, Modifier, item)
+                        }
+                    }
                 }
+                Spacer(Modifier.height(16.dp))
             }
-            Spacer(Modifier.height(16.dp))
         }
 
         is UiNode.Container -> {
@@ -221,6 +235,8 @@ fun RenderUiNode(
         is UiNode.ChoiceChips -> NodeChoiceChips(node, modifier)
 
         is UiNode.MediaPicker -> NodeMediaPicker(node, entities, modifier)
+
+        is UiNode.Sticky -> NodeSticky(node, entities, onDispatch, item, modifier)
 
         is UiNode.Unknown -> Text(
             "Unsupported component: ${node.type.ifEmpty { "<missing type>" }}",

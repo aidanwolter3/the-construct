@@ -41,8 +41,9 @@ fn layout_files_parse_and_validate() {
     let files = parse_files(&catalog, FILES).unwrap();
     assert_eq!(files.len(), FILES.len());
     assert_eq!(files[0].schema, 3);
-    // The newest recipes layout (0004) is written for schema 6 (D44).
-    assert_eq!(files.last().unwrap().schema, 6);
+    // The newest recipes layout (0005) pins the search box and chips
+    // (`core://Sticky`, schema 11).
+    assert_eq!(files.last().unwrap().schema, 11);
 }
 
 async fn get(state: &Arc<AppState>, path: &str) -> (StatusCode, serde_json::Value) {
@@ -99,13 +100,17 @@ async fn the_workspace_lists_every_recipe_and_a_screen_loads_one() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
-/// Schema 6 clients get the coloured list with category chips (0004, D44),
+/// Schema 11 clients get the search box and chips pinned at the top (0005),
+/// schema 6 clients the coloured list with category chips (0004, D44),
 /// schema 5 clients the search box (0003, D43), schema 4 clients tappable
 /// rows (0002, D42) and schema 3 clients the "View" buttons (0001).
 #[tokio::test]
 async fn each_schema_gets_the_newest_layout_it_draws() {
     let state = Arc::new(AppState::in_memory(adapters()));
     for (schema, search, tappable) in [
+        (11, true, true),
+        (10, true, true),
+        (9, true, true),
         (6, true, true),
         (5, true, true),
         (4, false, true),
@@ -114,9 +119,28 @@ async fn each_schema_gets_the_newest_layout_it_draws() {
         let (status, body) = get_as(&state, "/v1/workspaces/recipes", schema).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
-        assert_eq!(protocol::required_schema(&spec.workspace), schema);
+        let drawn = if schema == 9 || schema == 10 {
+            6
+        } else {
+            schema
+        };
+        assert_eq!(protocol::required_schema(&spec.workspace), drawn);
         let walk = spec.workspace.walk();
         let types: Vec<String> = walk.iter().map(|n| n.type_tag()).collect();
+        // Schema 11: the search box and chips are pinned together.
+        let sticky = walk.iter().find_map(|n| match n {
+            UiNode::Sticky { content } => Some(content.walk()),
+            _ => None,
+        });
+        assert_eq!(sticky.is_some(), schema >= 11, "schema {schema}");
+        if let Some(pinned) = sticky {
+            assert!(pinned.iter().any(|n| matches!(n, UiNode::TextField { .. })));
+            assert!(
+                pinned
+                    .iter()
+                    .any(|n| matches!(n, UiNode::ChoiceChips { .. }))
+            );
+        }
         assert_eq!(
             types.iter().any(|t| t == "core://Tappable"),
             tappable,

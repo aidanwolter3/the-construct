@@ -418,6 +418,7 @@ fn sync_appends_new_files_once_and_refuses_changes() {
         (8, 4),
         (9, 5),
         (10, 6),
+        (11, 6),
         (protocol::SCHEMA_VERSION, 7),
     ] {
         let served = active_for(&store, &catalog(), "pixelfed_home", schema)

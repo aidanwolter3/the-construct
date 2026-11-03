@@ -829,7 +829,7 @@ async fn versions_say_whether_the_client_can_draw_them() {
     assert_eq!(
         rows(&page(Some(protocol::SCHEMA_VERSION)).await),
         [
-            (7, 11, None),
+            (7, 12, None),
             (6, 10, None),
             (5, 9, None),
             (4, 8, None),
@@ -841,7 +841,7 @@ async fn versions_say_whether_the_client_can_draw_them() {
     // A schema 10 client draws up to 0006, not 0007 (list focus).
     assert_eq!(
         rows(&page(Some(10)).await)[..2],
-        [(7, 11, update.clone()), (6, 10, None)]
+        [(7, 12, update.clone()), (6, 10, None)]
     );
     // A schema 9 client draws up to 0005, not 0006 (remembered List/Cards).
     assert_eq!(
@@ -854,7 +854,7 @@ async fn versions_say_whether_the_client_can_draw_them() {
     assert_eq!(
         rows(&page(Some(7)).await),
         [
-            (7, 11, update.clone()),
+            (7, 12, update.clone()),
             (6, 10, update.clone()),
             (5, 9, update.clone()),
             (4, 8, update.clone()),
@@ -867,7 +867,7 @@ async fn versions_say_whether_the_client_can_draw_them() {
     assert_eq!(
         rows(&page(Some(2)).await),
         [
-            (7, 11, update.clone()),
+            (7, 12, update.clone()),
             (6, 10, update.clone()),
             (5, 9, update.clone()),
             (4, 8, update.clone()),
@@ -881,7 +881,7 @@ async fn versions_say_whether_the_client_can_draw_them() {
     assert_eq!(
         rows(&body),
         [
-            (7, 11, update.clone()),
+            (7, 12, update.clone()),
             (6, 10, update.clone()),
             (5, 9, update.clone()),
             (4, 8, update.clone()),

@@ -1,6 +1,6 @@
 {
   "note": "Comments show their post above them, with a like button on each comment; a comment notification opens the whole thread, scrolled to the comment and highlighted",
-  "schema": 11,
+  "schema": 12,
   "layout": {
     "type": "core://Workspace",
     "id": "pixelfed_home",

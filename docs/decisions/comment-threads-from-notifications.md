@@ -21,6 +21,6 @@ Decision:
   endpoint (Pixelfed favourites work on any status). Pixelfed has no emoji reactions, so only likes; reactions
   stored only in the pod would be invisible to everyone on Pixelfed.
 
-Limits: clients older than schema 11 stay on layout 0006 (or older), which has no `comment_thread` route, so tapping a new
+Limits: clients older than schema 12 stay on layout 0006 (or older), which has no `comment_thread` route, so tapping a new
 comment notification there only opens the app. A link from an old notification that names a comment still posts new
 comments as replies to that comment (the footer replies to `$route.id`).

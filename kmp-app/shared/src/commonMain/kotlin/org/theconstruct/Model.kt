@@ -121,7 +121,7 @@ data class GroupBy(val field: String, val header: UiNode)
 data class ListWhere(val field: String, val equals: String)
 
 /**
- * `core://List` `focus` (schema 11, docs/decisions/list-focus.md): the item whose entity URI is [uri] is scrolled into
+ * `core://List` `focus` (schema 12, docs/decisions/list-focus.md): the item whose entity URI is [uri] is scrolled into
  * view the first time the list draws it, and drawn on [background] with [contentColor] (`#RRGGBB`).
  */
 @Serializable
@@ -188,7 +188,7 @@ sealed class UiNode {
         @SerialName("spacing_dp") val spacingDp: Int = 0,
         /** Schema 8 (D48): space left and right of the items. */
         @SerialName("padding_h_dp") val paddingHDp: Int = 0,
-        /** Schema 11: one item to scroll to and tint ([ListFocus]). */
+        /** Schema 12: one item to scroll to and tint ([ListFocus]). */
         val focus: ListFocus? = null,
     ) : UiNode()
 
@@ -351,6 +351,13 @@ sealed class UiNode {
         @SerialName("max_items") val maxItems: Int,
         val label: String? = null,
     ) : UiNode()
+
+    /**
+     * `core://Sticky` (schema 11): [content] scrolls with the page until it reaches the top of the scrolling view, then
+     * stays pinned there (on the page background) while the rest of its parent scrolls under it ([StickyScroll]).
+     */
+    @Serializable
+    data class Sticky(val content: UiNode) : UiNode()
 
     /** A node whose `type` this client does not know. [raw] is the full original object. */
     data class Unknown(val type: String, val raw: JsonObject) : UiNode()
@@ -544,6 +551,7 @@ object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode
         Variant("core://Box", UiNode.Box::class, UiNode.Box.serializer()),
         Variant("core://ChoiceChips", UiNode.ChoiceChips::class, UiNode.ChoiceChips.serializer()),
         Variant("core://MediaPicker", UiNode.MediaPicker::class, UiNode.MediaPicker.serializer()),
+        Variant("core://Sticky", UiNode.Sticky::class, UiNode.Sticky.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): UiNode = UiNode.Unknown(tag, raw)
