@@ -1005,6 +1005,8 @@ fn vocabulary() -> Value {
               "doc": "Run several intents in order as one tap, with one $nonce for all of them (e.g. a create, then an action.local.set, then action.navigation.back). Prefer composing steps over asking for a new intent." },
             { "intent": "action.local.set", "fields": "entity_uri, field, value_expr, also?: [{field, value_expr}]",
               "doc": "Set fields of a loaded entity on this device only (no request), e.g. view state like added/expanded shown with core://Conditional. The next load of the entity from the pod replaces it." },
+            { "intent": "action.link.open", "fields": "url",
+              "doc": "Open an http(s) link in the device's browser (e.g. a Get tickets button with url $item.tickets_url). Nothing is sent to the pod." },
         ],
         "bindings": {
             "$item.<field>": "a field of the list or carousel item",

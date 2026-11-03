@@ -10,6 +10,8 @@ sealed class SimStep(val command: String, val arg: String = "") {
     object Idle : SimStep("idle")
     class AssertText(val text: String) : SimStep("assert-text", text)
     class AssertNoText(val text: String) : SimStep("assert-no-text", text)
+    /** Fails unless an `action.link.open` opened a link containing [text] (no browser opens in the simulator). */
+    class AssertLink(val text: String) : SimStep("assert-link", text)
     class WaitText(val timeoutMs: Long, val text: String) : SimStep("wait-text", "$timeoutMs $text")
     object Offline : SimStep("offline")
     object Online : SimStep("online")
@@ -113,6 +115,7 @@ fun parseScript(script: String): List<SimStep> {
             "idle" -> { noArg(); SimStep.Idle }
             "assert-text" -> SimStep.AssertText(requireArg("the expected text"))
             "assert-no-text" -> SimStep.AssertNoText(requireArg("the text that must be absent"))
+            "assert-link" -> SimStep.AssertLink(requireArg("text the opened link contains"))
             "wait-text" -> {
                 val a = requireArg("a timeout in ms and the text")
                 val ms = a.substringBefore(' ').toLongOrNull()?.takeIf { it in 0..MAX_WAIT_MS }

@@ -1,5 +1,8 @@
 # A built-in watcher source polls websites for events and notifies matches; sites and rules are rows
 
+Partly superseded by [watcher-rules-per-site](watcher-rules-per-site.md) (rules belong to one site; shared model
+settings; the app no longer edits sites and rules).
+
 Date: 2026-11-03. Related: D40, D52, [custom-apps-and-data-sources](custom-apps-and-data-sources.md),
 [collections](collections.md), [mcp-connector](mcp-connector.md), issue #58.
 

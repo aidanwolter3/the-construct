@@ -20,7 +20,7 @@ pub use pod_host as host;
 
 /// The pod's adapters, in `GET /v1/apps` order: the Pixelfed feed (with the
 /// `pixelfed` sign-in), the recipes, the watcher (configured from
-/// `CONSTRUCT_WATCHER_*`), then the `pixelfed_demo` dev app; and
+/// `CONSTRUCT_INFER_*` and `CONSTRUCT_WATCHER_*`), then the `pixelfed_demo` dev app; and
 /// Collections (no apps of its own: data custom apps declare).
 pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
     vec![
