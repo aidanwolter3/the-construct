@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -118,6 +119,10 @@ fun RenderUiNode(
                 TextStyle.Caption -> MaterialTheme.typography.labelSmall
                 TextStyle.Label -> MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
                 TextStyle.Secondary -> MaterialTheme.typography.bodySmall
+                TextStyle.Display -> MaterialTheme.typography.headlineSmall.copy(
+                    fontFamily = FontFamily.Serif,
+                    fontWeight = FontWeight.SemiBold,
+                )
             },
             color = if (node.style == TextStyle.Secondary) MutedText else Color.Unspecified,
             modifier = modifier,
@@ -136,7 +141,11 @@ fun RenderUiNode(
         is UiNode.Row -> Row(
             modifier.padding(horizontal = node.paddingHDp.dp, vertical = node.paddingVDp.dp),
             horizontalArrangement = Arrangement.spacedBy(node.spacingDp.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = when (node.align) {
+                Align.Start -> Alignment.Top
+                Align.End -> Alignment.Bottom
+                Align.Center, null -> Alignment.CenterVertically
+            },
         ) {
             node.children.forEach { child ->
                 if (child is UiNode.Spacer && child.sizeDp == null) {
@@ -150,6 +159,11 @@ fun RenderUiNode(
         is UiNode.Column -> Column(
             modifier.fillMaxWidth().padding(horizontal = node.paddingHDp.dp, vertical = node.paddingVDp.dp),
             verticalArrangement = Arrangement.spacedBy(node.spacingDp.dp),
+            horizontalAlignment = when (node.align) {
+                Align.Start -> Alignment.Start
+                Align.Center -> Alignment.CenterHorizontally
+                Align.End -> Alignment.End
+            },
         ) {
             node.children.forEach { RenderUiNode(it, entities, onDispatch, Modifier, item) }
         }
@@ -180,6 +194,10 @@ fun RenderUiNode(
             if (tag != null) mod = mod.testTag(tag)
             RenderUiNode(node.content, entities, onDispatch, mod, item)
         }
+
+        is UiNode.Box -> NodeBox(node, entities, onDispatch, item, modifier)
+
+        is UiNode.ChoiceChips -> NodeChoiceChips(node, modifier)
 
         is UiNode.Unknown -> Text(
             "Unsupported component: ${node.type.ifEmpty { "<missing type>" }}",
@@ -227,8 +245,7 @@ private val ACCENT_FOLDS: Map<Char, String> = buildMap {
 }
 
 /** The query of [filter]: the form value for `$form.<field>` (blank when unset), else the literal text. */
-fun filterQuery(filter: ListFilter, form: Map<String, String>?): String =
-    if (filter.value.startsWith("\$form.")) form?.get(filter.value.removePrefix("\$form.")).orEmpty() else filter.value
+fun filterQuery(filter: ListFilter, form: Map<String, String>?): String = formOrLiteral(filter.value, form)
 
 /** An item field as searchable text: a string or number, or the strings of an array, joined by spaces. */
 private fun searchableText(v: JsonElement?): String = when (v) {
@@ -252,6 +269,30 @@ fun matchesFilter(query: String, item: JsonObject, fields: List<String>): Boolea
 fun groupStarts(items: List<JsonObject>, field: String): List<Boolean> =
     items.mapIndexed { i, item -> i == 0 || item[field] != items[i - 1][field] }
 
+/** For each of [items], the size of the group it is in ([groupStarts]): a group header's `group_count` (D44). */
+fun groupCounts(starts: List<Boolean>): List<Int> {
+    val out = MutableList(starts.size) { 0 }
+    var begin = 0
+    for (i in 1..starts.size) {
+        if (i == starts.size || starts[i]) {
+            for (j in begin until i) out[j] = i - begin
+            begin = i
+        }
+    }
+    return out
+}
+
+/**
+ * Whether [item] passes a list's `where` (D44): a blank [value] matches everything; otherwise the item's [field] must
+ * equal it exactly.
+ */
+fun matchesWhere(value: String, item: JsonObject, field: String): Boolean =
+    value.isBlank() || searchableText(item[field]) == value
+
+/** A form-or-literal value: the form value for `$form.<field>` (blank when unset), else [value] itself. */
+fun formOrLiteral(value: String, form: Map<String, String>?): String =
+    if (value.startsWith("\$form.")) form?.get(value.removePrefix("\$form.")).orEmpty() else value
+
 @Composable
 private fun ItemList(
     node: UiNode.ItemList,
@@ -262,12 +303,18 @@ private fun ItemList(
     val queries = LocalConstructQueries.current
     val all = remember(node.queryKey, queries, entities) { listItems(node.queryKey, queries, entities) }
     // Reading the form here recomposes the list as the search field is typed into.
-    val query = node.filter?.let { filterQuery(it, LocalForm.current) }.orEmpty()
-    val items = remember(all, node.filter, query) {
+    val form = LocalForm.current
+    val query = node.filter?.let { filterQuery(it, form) }.orEmpty()
+    val whereValue = node.where?.let { formOrLiteral(it.equals, form) }.orEmpty()
+    val items = remember(all, node.filter, query, node.where, whereValue) {
         val f = node.filter
-        if (all == null || f == null || query.isBlank()) all else all.filter { matchesFilter(query, it, f.fields) }
+        val w = node.where
+        all
+            ?.let { list -> if (w == null || whereValue.isBlank()) list else list.filter { matchesWhere(whereValue, it, w.field) } }
+            ?.let { list -> if (f == null || query.isBlank()) list else list.filter { matchesFilter(query, it, f.fields) } }
     }
     val starts = remember(items, node.groupBy) { node.groupBy?.let { g -> items?.let { groupStarts(it, g.field) } } }
+    val counts = remember(starts) { starts?.let(::groupCounts) }
     Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         val message = when {
             items == null || items.isNotEmpty() -> null
@@ -287,7 +334,8 @@ private fun ItemList(
             if (header != null && starts?.getOrNull(i) == true) {
                 // Keyed by the item it heads: headers hold no state, and move with the filter.
                 key("group-header", item["uri"]) {
-                    RenderUiNode(header, entities, onDispatch, Modifier.widthIn(max = FEED_MAX_WIDTH).fillMaxWidth(), item)
+                    val headed = JsonObject(item + ("group_count" to JsonPrimitive(counts?.getOrNull(i) ?: 0)))
+                    RenderUiNode(header, entities, onDispatch, Modifier.widthIn(max = FEED_MAX_WIDTH).fillMaxWidth(), headed)
                 }
             }
             // Keyed by entity URI, so per-item state follows the item when the list changes.

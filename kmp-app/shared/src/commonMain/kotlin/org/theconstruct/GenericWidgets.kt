@@ -1,6 +1,15 @@
 package org.theconstruct
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -226,5 +235,89 @@ internal fun NodeBadge(node: UiNode.Badge, entities: Map<String, JsonObject>, it
             Spacer(Modifier.width(6.dp))
         }
         Text(interpolate(node.text, entities, item), style = MaterialTheme.typography.labelMedium, color = MutedText)
+    }
+}
+
+/**
+ * `core://Box` (schema 6, D44): the content on a rounded surface. Colours are bound ([interpolate]) then parsed as
+ * `#RRGGBB`; one that does not parse is not drawn. [UiNode.Box.contentColor] becomes the content colour of the text
+ * and icons inside.
+ */
+@Composable
+internal fun NodeBox(
+    node: UiNode.Box,
+    entities: Map<String, JsonObject>,
+    onDispatch: (ActionIntent) -> Unit,
+    item: JsonObject?,
+    modifier: Modifier,
+) {
+    fun color(expr: String?) = expr?.let { parseHexColor(interpolate(it, entities, item).trim()) }
+    val bg = color(node.background)
+    val fg = color(node.contentColor)
+    val border = color(node.borderColor)
+    val shape = RoundedCornerShape(node.cornerDp.coerceAtLeast(0).dp)
+    var mod = modifier
+    node.widthDp?.takeIf { it > 0 }?.let { mod = mod.width(it.dp) }
+    node.heightDp?.takeIf { it > 0 }?.let { mod = mod.height(it.dp) }
+    mod = mod.clip(shape)
+    if (bg != null) mod = mod.background(bg, shape)
+    if (border != null) mod = mod.border(1.dp, border, shape)
+    mod = mod.padding(horizontal = node.paddingHDp.dp, vertical = node.paddingVDp.dp)
+    val alignment = when (node.align) {
+        Align.Start -> Alignment.CenterStart
+        Align.Center -> Alignment.Center
+        Align.End -> Alignment.CenterEnd
+    }
+    Box(mod, contentAlignment = alignment) {
+        if (fg != null) {
+            CompositionLocalProvider(LocalContentColor provides fg) {
+                RenderUiNode(node.content, entities, onDispatch, Modifier, item)
+            }
+        } else {
+            RenderUiNode(node.content, entities, onDispatch, Modifier, item)
+        }
+    }
+}
+
+private val ChoiceSelectedBg = Color(0xFF1B1B1F)
+private val ChoiceBg = Color(0xFFF2F2F5)
+private val ChoiceText = Color(0xFF3A3A3C)
+
+/**
+ * `core://ChoiceChips` (schema 6, D44): a sideways-scrolling row of chips editing the form value
+ * [UiNode.ChoiceChips.field]. Tapping one stores its value (an empty value clears the field). Tags:
+ * `choice:<field>:<value>`.
+ */
+@Composable
+internal fun NodeChoiceChips(node: UiNode.ChoiceChips, modifier: Modifier) {
+    val form = LocalForm.current
+    val current = form?.get(node.field).orEmpty()
+    Row(
+        modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = node.paddingHDp.coerceAtLeast(0).dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        node.options.forEach { option ->
+            val isSelected = option.value == current
+            Text(
+                option.label,
+                style = MaterialTheme.typography.labelLarge,
+                color = if (isSelected) Color.White else ChoiceText,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(if (isSelected) ChoiceSelectedBg else ChoiceBg)
+                    .clickable {
+                        if (option.value.isEmpty()) form?.remove(node.field) else form?.set(node.field, option.value)
+                    }
+                    .semantics {
+                        selected = isSelected
+                        role = Role.Tab
+                    }
+                    .testTag("choice:${node.field}:${option.value}")
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+            )
+        }
     }
 }

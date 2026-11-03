@@ -1,5 +1,6 @@
 package org.theconstruct
 
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -153,6 +154,45 @@ class ModelTest {
         )
         for (n in nodes) assertEquals(n, ConstructJson.decodeNode(ConstructJson.encodeNode(n)), n.toString())
         assertTrue(ConstructJson.encodeNode(UiNode.Divider) == "{\"type\":\"core://Divider\"}", ConstructJson.encodeNode(UiNode.Divider))
+    }
+
+    @Test
+    fun schema6NodesDecodeFromTheWire() {
+        val box = assertIs<UiNode.Box>(ConstructJson.decodeNode(
+            """{"type":"core://Box","background":"${'$'}item.color","content_color":"#A3361B","corner_dp":12,
+               "width_dp":44,"height_dp":44,"align":"Center","content":{"type":"core://Text","value_expr":"Q","style":"Display"}}"""
+        ))
+        assertEquals("\$item.color", box.background)
+        assertEquals(Align.Center, box.align)
+        assertEquals(TextStyle.Display, assertIs<UiNode.Text>(box.content).style)
+        val chips = assertIs<UiNode.ChoiceChips>(ConstructJson.decodeNode(
+            """{"type":"core://ChoiceChips","field":"cat","options":[{"label":"All"},{"label":"Mains","value":"Main Dishes"}]}"""
+        ))
+        assertEquals(listOf(ChoiceOption("All", ""), ChoiceOption("Mains", "Main Dishes")), chips.options)
+        val list = assertIs<UiNode.ItemList>(ConstructJson.decodeNode(
+            """{"type":"core://List","query_key":"q","item_template":{"type":"core://Divider"},
+               "where":{"field":"category_short","equals":"${'$'}form.cat"}}"""
+        ))
+        assertEquals(ListWhere("category_short", "\$form.cat"), list.where)
+        val row = assertIs<UiNode.Row>(ConstructJson.decodeNode("""{"type":"core://Row","children":[],"align":"Start"}"""))
+        assertEquals(Align.Start, row.align)
+        assertNull(assertIs<UiNode.Row>(ConstructJson.decodeNode("""{"type":"core://Row","children":[]}""")).align)
+        for (n in listOf(box, chips, list, row, UiNode.Column(emptyList(), align = Align.Center))) {
+            assertEquals(n, ConstructJson.decodeNode(ConstructJson.encodeNode(n)), n.toString())
+        }
+        assertTrue(!ConstructJson.encodeNode(UiNode.Column(emptyList())).contains("align"), "default align is omitted")
+    }
+
+    @Test
+    fun listWhereAndGroupCounts() {
+        val item = JsonObject(mapOf("category_short" to JsonPrimitive("Desserts")))
+        assertTrue(matchesWhere("", item, "category_short"))
+        assertTrue(matchesWhere("Desserts", item, "category_short"))
+        assertTrue(!matchesWhere("Dessert", item, "category_short"), "exact match only")
+        assertEquals("Mains", formOrLiteral("\$form.cat", mapOf("cat" to "Mains")))
+        assertEquals("", formOrLiteral("\$form.cat", emptyMap()))
+        assertEquals(listOf(2, 2, 1, 3, 3, 3), groupCounts(listOf(true, false, true, true, false, false)))
+        assertEquals(emptyList(), groupCounts(emptyList()))
     }
 
     @Test

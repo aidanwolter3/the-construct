@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::intent::ActionIntent;
 
 /// Node types this build knows (an other type is [`UiNode::Unknown`]).
-pub const NODE_TYPES: [&str; 17] = [
+pub const NODE_TYPES: [&str; 19] = [
     "core://Workspace",
     "core://Container",
     "core://Text",
@@ -33,10 +33,12 @@ pub const NODE_TYPES: [&str; 17] = [
     "core://Chip",
     "core://Badge",
     "core://Tappable",
+    "core://Box",
+    "core://ChoiceChips",
 ];
 
 /// Icon names clients draw (`core://IconButton`, `core://Chip`).
-pub const ICONS: [&str; 10] = [
+pub const ICONS: [&str; 12] = [
     "favorite",
     "favorite_border",
     "chat_bubble",
@@ -47,6 +49,9 @@ pub const ICONS: [&str; 10] = [
     "send",
     "arrow_back",
     "close",
+    // Schema 6 (D44): older clients draw a chip with these without its icon.
+    "flame",
+    "timer",
 ];
 
 fn one() -> f64 {
@@ -106,7 +111,7 @@ pub enum UiNode {
     /// item right by `item[indent.field] * step_dp` (capped at `max` steps).
     /// `empty_text` shows when the query is present but empty. `filter` and
     /// `group_by` are schema 5 (docs/DECISIONS.md D43): see [`ListFilter`]
-    /// and [`GroupBy`].
+    /// and [`GroupBy`]; `where` is schema 6 (D44, [`ListWhere`]).
     #[serde(rename = "core://List")]
     List {
         query_key: String,
@@ -119,6 +124,9 @@ pub enum UiNode {
         filter: Option<ListFilter>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         group_by: Option<GroupBy>,
+        /// Schema 6 (D44): see [`ListWhere`].
+        #[serde(rename = "where", default, skip_serializing_if = "Option::is_none")]
+        where_: Option<ListWhere>,
     },
     /// An image from a URL (a literal or a binding such as
     /// `"$item.avatar_url"`). `size_dp` makes it a square of that size;
@@ -166,8 +174,13 @@ pub enum UiNode {
         padding_h_dp: u16,
         #[serde(default, skip_serializing_if = "is_zero")]
         padding_v_dp: u16,
+        /// Schema 6 (D44): `Start` puts the children at the top, `End` at the
+        /// bottom (default: centred).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        align: Option<Align>,
     },
-    /// Children stacked, full width.
+    /// Children stacked, full width. `align` (schema 6, D44) places children
+    /// narrower than the column (default `Start`).
     #[serde(rename = "core://Column")]
     Column {
         children: Vec<UiNode>,
@@ -177,6 +190,8 @@ pub enum UiNode {
         padding_h_dp: u16,
         #[serde(default, skip_serializing_if = "is_zero")]
         padding_v_dp: u16,
+        #[serde(default, skip_serializing_if = "is_start")]
+        align: Align,
     },
     /// Empty space: `size_dp` along the parent's axis, or (no size, in a
     /// `core://Row`) all the remaining width.
@@ -262,6 +277,48 @@ pub enum UiNode {
         tag: Option<String>,
     },
 
+    // Schema 6 (docs/DECISIONS.md D44)
+    /// `content` on a coloured, rounded surface. `background`, `content_color`
+    /// (text and icons inside) and `border_color` are `#RRGGBB`, or a binding
+    /// that resolves to one (`$item.color`, `${<uri>#color}`); one that does
+    /// not resolve draws nothing. Without `width_dp` / `height_dp` the box
+    /// wraps its content (a `core://Column` inside fills the width); with
+    /// them, `align` places the content inside it.
+    #[serde(rename = "core://Box")]
+    Box {
+        content: Box<UiNode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        background: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_color: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        border_color: Option<String>,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        corner_dp: u16,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        padding_h_dp: u16,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        padding_v_dp: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width_dp: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height_dp: Option<u16>,
+        #[serde(default, skip_serializing_if = "is_start")]
+        align: Align,
+    },
+    /// A one-line, sideways-scrolling row of chips editing the form value
+    /// `$form.<field>` (like a `core://TextField`): tapping an option sets
+    /// the value to the option's `value` (an empty value clears it). The
+    /// option whose value equals the form value (or the empty one, while the
+    /// value is unset) is drawn selected.
+    #[serde(rename = "core://ChoiceChips")]
+    ChoiceChips {
+        field: String,
+        options: Vec<ChoiceOption>,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        padding_h_dp: u16,
+    },
+
     /// A node of a type this build does not know: its JSON, kept as is.
     #[serde(skip)]
     Unknown(Value),
@@ -331,7 +388,9 @@ impl UiNode {
                 .chain(group_by.as_ref().map(|g| g.header.as_ref()))
                 .collect(),
             UiNode::Carousel { item_template, .. } => vec![item_template],
-            UiNode::Conditional { content, .. } | UiNode::Tappable { content, .. } => {
+            UiNode::Conditional { content, .. }
+            | UiNode::Tappable { content, .. }
+            | UiNode::Box { content, .. } => {
                 vec![content]
             }
             UiNode::Text { .. }
@@ -343,6 +402,7 @@ impl UiNode {
             | UiNode::IconButton { .. }
             | UiNode::Chip { .. }
             | UiNode::Badge { .. }
+            | UiNode::ChoiceChips { .. }
             | UiNode::Unknown(_) => Vec::new(),
         }
     }
@@ -426,6 +486,37 @@ pub struct GroupBy {
     pub header: Box<UiNode>,
 }
 
+/// `core://List` `where` (schema 6, D44): while `equals` (`$form.<field>` or
+/// literal text) is non-blank, only items whose `field` equals it exactly are
+/// drawn. Applied before the list's [`ListFilter`]; both can be set (a
+/// category picker and a search box over one list).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListWhere {
+    pub field: String,
+    pub equals: String,
+}
+
+/// One `core://ChoiceChips` option: `label` is drawn, `value` is stored.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ChoiceOption {
+    pub label: String,
+    #[serde(default)]
+    pub value: String,
+}
+
+/// Where `core://Box` places its content (schema 6).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Align {
+    #[default]
+    Start,
+    Center,
+    End,
+}
+
+fn is_start(a: &Align) -> bool {
+    *a == Align::Start
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ImageShape {
     #[default]
@@ -458,6 +549,8 @@ pub enum TextStyle {
     Label,
     /// Small and muted (schema 3).
     Secondary,
+    /// A large serif title (schema 6, D44).
+    Display,
 }
 
 /// `core://Chip` colour.

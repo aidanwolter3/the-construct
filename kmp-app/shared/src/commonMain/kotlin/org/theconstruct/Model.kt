@@ -46,7 +46,16 @@ data class SlotSpec(
 enum class Orientation { Vertical, Horizontal }
 
 @Serializable
-enum class TextStyle { Headline, Title, Body, Caption, Label, Secondary }
+enum class TextStyle {
+    Headline, Title, Body, Caption, Label, Secondary,
+
+    /** A large serif title (schema 6, D44). */
+    Display,
+}
+
+/** Where `core://Box` puts its content, how a `core://Column` places its children, or a `core://Row`'s vertical alignment (schema 6, D44). */
+@Serializable
+enum class Align { Start, Center, End }
 
 /** `core://Chip` colour. */
 @Serializable
@@ -93,9 +102,20 @@ data class ListFilter(
     @SerialName("no_match_text") val noMatchText: String? = null,
 )
 
-/** `core://List` group headers (schema 5, D43): [header] is drawn before each drawn item whose [field] changes. */
+/**
+ * `core://List` group headers (schema 5, D43): [header] is drawn before each drawn item whose [field] changes. From
+ * schema 6 (D44) the header's `$item` also has `group_count`, the number of drawn items in its group.
+ */
 @Serializable
 data class GroupBy(val field: String, val header: UiNode)
+
+/** `core://List` `where` (schema 6, D44): while [equals] (`$form.<field>` or literal) is non-blank, only items whose [field] equals it are drawn. */
+@Serializable
+data class ListWhere(val field: String, val equals: String)
+
+/** One `core://ChoiceChips` option (schema 6, D44): [label] is drawn, [value] is stored. */
+@Serializable
+data class ChoiceOption(val label: String, val value: String = "")
 
 // ---------------------------------------------------------------------------
 // UI AST, discriminated by "type"
@@ -143,6 +163,7 @@ sealed class UiNode {
         @SerialName("empty_text") val emptyText: String? = null,
         val filter: ListFilter? = null,
         @SerialName("group_by") val groupBy: GroupBy? = null,
+        @SerialName("where") val where: ListWhere? = null,
     ) : UiNode()
 
     /**
@@ -174,22 +195,27 @@ sealed class UiNode {
 
     // Schema 3 (DECISIONS D36): generic building blocks for composing any app on the pod.
 
-    /** Children side by side, vertically centred, not wrapping; a [Spacer] without a size takes the rest. */
+    /**
+     * Children side by side, not wrapping; a [Spacer] without a size takes the rest. Vertically centred unless [align]
+     * (schema 6) says `Start` (top) or `End` (bottom).
+     */
     @Serializable
     data class Row(
         val children: List<UiNode>,
         @SerialName("spacing_dp") val spacingDp: Int = 0,
         @SerialName("padding_h_dp") val paddingHDp: Int = 0,
         @SerialName("padding_v_dp") val paddingVDp: Int = 0,
+        val align: Align? = null,
     ) : UiNode()
 
-    /** Children stacked, full width. */
+    /** Children stacked, full width; [align] (schema 6) places narrower children. */
     @Serializable
     data class Column(
         val children: List<UiNode>,
         @SerialName("spacing_dp") val spacingDp: Int = 0,
         @SerialName("padding_h_dp") val paddingHDp: Int = 0,
         @SerialName("padding_v_dp") val paddingVDp: Int = 0,
+        val align: Align = Align.Start,
     ) : UiNode()
 
     /** Empty space: [sizeDp], or (null, in a [Row]) the remaining width. */
@@ -248,6 +274,36 @@ sealed class UiNode {
         val content: UiNode,
         @SerialName("content_description") val contentDescription: String? = null,
         val tag: String? = null,
+    ) : UiNode()
+
+    /**
+     * [content] on a coloured, rounded surface (schema 6, D44). Colours are `#RRGGBB` or a binding resolving to one
+     * ([interpolate]); [contentColor] colours the text and icons inside. Without [widthDp] / [heightDp] the box wraps
+     * its content; with them, [align] places it.
+     */
+    @Serializable
+    data class Box(
+        val content: UiNode,
+        val background: String? = null,
+        @SerialName("content_color") val contentColor: String? = null,
+        @SerialName("border_color") val borderColor: String? = null,
+        @SerialName("corner_dp") val cornerDp: Int = 0,
+        @SerialName("padding_h_dp") val paddingHDp: Int = 0,
+        @SerialName("padding_v_dp") val paddingVDp: Int = 0,
+        @SerialName("width_dp") val widthDp: Int? = null,
+        @SerialName("height_dp") val heightDp: Int? = null,
+        val align: Align = Align.Start,
+    ) : UiNode()
+
+    /**
+     * A sideways-scrolling row of chips editing the form value `$form.<field>` (schema 6, D44): a tap sets it to the
+     * option's value (empty clears it); the matching option (the empty one while unset) is selected.
+     */
+    @Serializable
+    data class ChoiceChips(
+        val field: String,
+        val options: List<ChoiceOption>,
+        @SerialName("padding_h_dp") val paddingHDp: Int = 0,
     ) : UiNode()
 
     /** A node whose `type` this client does not know. [raw] is the full original object. */
@@ -421,6 +477,8 @@ object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode
         Variant("core://Chip", UiNode.Chip::class, UiNode.Chip.serializer()),
         Variant("core://Badge", UiNode.Badge::class, UiNode.Badge.serializer()),
         Variant("core://Tappable", UiNode.Tappable::class, UiNode.Tappable.serializer()),
+        Variant("core://Box", UiNode.Box::class, UiNode.Box.serializer()),
+        Variant("core://ChoiceChips", UiNode.ChoiceChips::class, UiNode.ChoiceChips.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): UiNode = UiNode.Unknown(tag, raw)

@@ -1,6 +1,6 @@
 use protocol::{
-    ActionIntent, EntityRecord, FieldUpdate, GroupBy, ImageShape, ListBinding, ListFilter,
-    Orientation, PresentationMode, SlotSpec, TextStyle, Tone, UiNode, WorkspaceSpec,
+    ActionIntent, Align, EntityRecord, FieldUpdate, GroupBy, ImageShape, ListBinding, ListFilter,
+    ListWhere, Orientation, PresentationMode, SlotSpec, TextStyle, Tone, UiNode, WorkspaceSpec,
 };
 use serde_json::{Value, json};
 
@@ -25,8 +25,10 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
         spacing_dp: 0,
         padding_h_dp: 0,
         padding_v_dp: 0,
+        align: Align::Start,
         children: vec![
             UiNode::Row {
+                align: None,
                 spacing_dp: 10,
                 padding_h_dp: 12,
                 padding_v_dp: 10,
@@ -62,6 +64,7 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
                 tag: author_tag,
             },
             UiNode::Row {
+                align: Some(Align::Start),
                 spacing_dp: 0,
                 padding_h_dp: 4,
                 padding_v_dp: 0,
@@ -155,6 +158,7 @@ fn full_workspace() -> UiNode {
                             empty_text: None,
                             filter: None,
                             group_by: None,
+                            where_: None,
                         },
                         UiNode::List {
                             query_key: "timeline:pinned".into(),
@@ -178,6 +182,10 @@ fn full_workspace() -> UiNode {
                                     value_expr: "$item.day".into(),
                                     style: TextStyle::Title,
                                 }),
+                            }),
+                            where_: Some(ListWhere {
+                                field: "kind".into(),
+                                equals: "$form.kind".into(),
                             }),
                         },
                     ],

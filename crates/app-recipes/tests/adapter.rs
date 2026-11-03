@@ -98,13 +98,15 @@ async fn the_workspace_lists_every_recipe_and_a_screen_loads_one() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
-/// Schema 5 clients get the search box (0003, D43), schema 4 clients
-/// tappable rows (0002, D42) and schema 3 clients the "View" buttons (0001).
+/// Schema 6 clients get the coloured list with category chips (0004, D44),
+/// schema 5 clients the search box (0003, D43), schema 4 clients tappable
+/// rows (0002, D42) and schema 3 clients the "View" buttons (0001).
 #[tokio::test]
 async fn each_schema_gets_the_newest_layout_it_draws() {
     let state = Arc::new(AppState::in_memory(adapters()));
     for (schema, search, tappable) in [
         (protocol::SCHEMA_VERSION, true, true),
+        (5, true, true),
         (4, false, true),
         (3, false, false),
     ] {
@@ -140,6 +142,35 @@ async fn each_schema_gets_the_newest_layout_it_draws() {
             for field in &f.fields {
                 assert!(recipe.get_str(field).is_some(), "{field}");
             }
+        }
+        let chips = walk.iter().find_map(|n| match n {
+            UiNode::ChoiceChips { field, options, .. } => Some((field, options)),
+            _ => None,
+        });
+        assert_eq!(chips.is_some(), schema >= 6, "schema {schema}");
+        if let Some((field, options)) = chips {
+            // Every chip but "All" picks a category that has recipes, through
+            // the list's `where`.
+            let where_ = walk
+                .iter()
+                .find_map(|n| match n {
+                    UiNode::List {
+                        where_: Some(w), ..
+                    } => Some(w),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(where_.equals, format!("$form.{field}"));
+            let shorts: std::collections::HashSet<&str> = spec
+                .entities
+                .values()
+                .filter_map(|e| e.get_str(&where_.field))
+                .collect();
+            assert_eq!(options[0].value, "");
+            for o in &options[1..] {
+                assert!(shorts.contains(o.value.as_str()), "{}", o.value);
+            }
+            assert_eq!(options.len() - 1, shorts.len(), "a chip per category");
         }
     }
 }
