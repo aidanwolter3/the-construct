@@ -116,7 +116,7 @@ async fn apps_lists_dev_apps_only_when_shown() {
     let (status, _, body) = get(&pod, "/v1/apps").await;
     assert_eq!(status, StatusCode::OK);
     let apps = body["apps"].as_array().unwrap();
-    assert_eq!(apps.len(), 2, "{body}");
+    assert_eq!(apps.len(), 3, "{body}");
     let a = &apps[0];
     assert_eq!(
         (&a["id"], &a["title"], &a["icon"], &a["latest_version"]),
@@ -131,6 +131,10 @@ async fn apps_lists_dev_apps_only_when_shown() {
     assert_eq!(
         (&apps[1]["id"], &apps[1]["title"], &apps[1]["icon"]),
         (&json!("recipes"), &json!("Recipes"), &json!("recipe"))
+    );
+    assert_eq!(
+        (&apps[2]["id"], &apps[2]["title"], &apps[2]["icon"]),
+        (&json!("watcher"), &json!("Watcher"), &json!("dashboard"))
     );
 
     let dev = spawn(server::state_in_memory().with_dev_apps(true)).await;
@@ -154,6 +158,7 @@ async fn apps_lists_dev_apps_only_when_shown() {
         [
             ("pixelfed_home", "Pixelfed", "photo", files("pixelfed_home")),
             ("recipes", "Recipes", "recipe", files("recipes")),
+            ("watcher", "Watcher", "dashboard", files("watcher")),
             (
                 "pixelfed_demo",
                 "Pixelfed demo",

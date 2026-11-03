@@ -5,7 +5,7 @@
 //! The core's modules are re-exported (`server::layouts`, `server::store`,
 //! ...), `server::pixelfed` is the Pixelfed adapter crate and
 //! `server::recipes` the recipes adapter crate, `server::collections` the
-//! Collections adapter crate.
+//! Collections adapter crate, `server::watcher` the watcher adapter crate.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -14,16 +14,21 @@ pub use app_collections as collections;
 pub use app_pixelfed as pixelfed;
 pub use app_pixelfed::{DEFAULT_PIXELFED_URL, PixelfedAdapter, PixelfedConfig};
 pub use app_recipes as recipes;
+pub use app_watcher as watcher;
 pub use pod_core::*;
 pub use pod_host as host;
 
 /// The pod's adapters, in `GET /v1/apps` order: the Pixelfed feed (with the
-/// `pixelfed` sign-in), the recipes, then the `pixelfed_demo` dev app; and
+/// `pixelfed` sign-in), the recipes, the watcher (configured from
+/// `CONSTRUCT_WATCHER_*`), then the `pixelfed_demo` dev app; and
 /// Collections (no apps of its own: data custom apps declare).
 pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
     vec![
         Arc::new(PixelfedAdapter::new(pixelfed)),
         Arc::new(app_recipes::RecipesAdapter::new()),
+        Arc::new(app_watcher::WatcherAdapter::new(
+            app_watcher::WatcherConfig::from_env(),
+        )),
         app_pixelfed::apps::demo_adapter(),
         Arc::new(app_collections::CollectionsAdapter::new()),
     ]
@@ -74,13 +79,17 @@ pub fn new_pod_settings(import_recipes: bool) -> Vec<(String, String)> {
 }
 
 /// Extra settings of temporary pods (anyone can make one, D46): Pixelfed
-/// only on the default instance, so a visitor can't make the server contact
-/// hosts of their choosing (fetch URLs, register OAuth apps).
+/// only on the default instance, and no watcher fetches, so a visitor can't
+/// make the server contact hosts of their choosing (fetch URLs, register
+/// OAuth apps).
 pub fn temporary_pod_settings() -> Vec<(String, String)> {
-    vec![(
-        app_pixelfed::OTHER_INSTANCES_SETTING.to_owned(),
-        "0".to_owned(),
-    )]
+    vec![
+        (
+            app_pixelfed::OTHER_INSTANCES_SETTING.to_owned(),
+            "0".to_owned(),
+        ),
+        (app_watcher::check::FETCH_SETTING.to_owned(), "0".to_owned()),
+    ]
 }
 
 /// Builds each pod of a host (D46): every pod gets the same adapters (shared
@@ -146,6 +155,7 @@ pub const DEFAULT_VAPID_SUBJECT: &str = "https://github.com/aidanwolter3/the-con
 pub fn layout_files() -> Vec<layouts::LayoutSource> {
     let mut files = app_pixelfed::apps::files();
     files.extend_from_slice(app_recipes::FILES);
+    files.extend_from_slice(app_watcher::FILES);
     files
 }
 

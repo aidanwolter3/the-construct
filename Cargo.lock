@@ -165,6 +165,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "app-watcher"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "getrandom 0.3.4",
+ "http-body-util",
+ "pod-core",
+ "protocol",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2600,6 +2619,7 @@ dependencies = [
  "app-collections",
  "app-pixelfed",
  "app-recipes",
+ "app-watcher",
  "axum",
  "base64 0.22.1",
  "fake-pixelfed",
