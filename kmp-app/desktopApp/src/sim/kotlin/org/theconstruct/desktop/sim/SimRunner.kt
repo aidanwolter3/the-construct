@@ -816,7 +816,7 @@ class SimRunner(
 
     companion object {
         /** Tags of the controls on an app row (not apps themselves). */
-        private val ROW_CONTROLS = listOf("app-history-", "app-more-", "app-custom-", "app-hide-", "app-delete-")
+        private val ROW_CONTROLS = listOf("app-history-", "app-more-", "app-custom-", "app-hide-", "app-delete-", "app-updates-")
         private val PRETTY_JSON = Json { prettyPrint = true }
 
         /** How long the menu commands wait for their screen or for the apps calls (live pod calls time out at 15 s). */

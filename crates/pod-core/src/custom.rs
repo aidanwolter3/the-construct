@@ -24,7 +24,7 @@
 // Helpers return a ready error `Response` for the handler to send as is.
 #![allow(clippy::result_large_err)]
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -57,6 +57,14 @@ pub const AUTHOR_USER: &str = "user";
 pub const AUTHOR_CLAUDE: &str = "claude";
 /// The pod setting listing hidden app ids (a JSON array).
 pub const HIDDEN_SETTING: &str = "apps.hidden";
+/// The pod setting of dismissed update notices: `{custom app id: the
+/// built-in version dismissed}` (decision `layout-parts`).
+pub const DISMISSED_SETTING: &str = "updates.dismissed";
+/// `AppVersion::source` of a version appended because a referenced
+/// built-in app changed.
+pub const SOURCE_REF_UPDATE: &str = "ref_update";
+/// `AppVersion::author` of a version the pod appended itself.
+pub const AUTHOR_POD: &str = "pod";
 /// Soft-deleted custom apps are purged this long after deletion.
 pub const PURGE_AFTER_SECS: i64 = 30 * 86_400;
 /// Most feeds one custom app may list.
@@ -399,10 +407,59 @@ pub fn check_layout(
     };
     obj.insert("id".into(), json!(id));
     let sources = feed_sources(pod, feeds);
+    // References to built-in parts (decision `layout-parts`) are checked
+    // expanded (with the built-ins' latest versions): what they bring must
+    // fit this app's sources too. They are stored as written.
+    let has_refs = !crate::parts::refs(&layout).is_empty();
+    let expanded = if has_refs {
+        crate::parts::expand(
+            pod.store(),
+            pod.catalog(),
+            &layout,
+            None,
+            crate::parts::Mode::Strict,
+        )
+        .map_err(|e| invalid_layout(&e))?
+    } else {
+        layout.clone()
+    };
     let node =
-        crate::validate::custom_layout(id, &layout, &sources).map_err(|e| invalid_layout(&e))?;
-    let json = serde_json::to_string(&node).expect("a UiNode serializes");
+        crate::validate::custom_layout(id, &expanded, &sources).map_err(|e| invalid_layout(&e))?;
+    let json = if has_refs {
+        layout.to_string()
+    } else {
+        serde_json::to_string(&node).expect("a UiNode serializes")
+    };
     Ok((node, json))
+}
+
+/// A write's `copied_from` (`{app, version}` of a built-in app): checked.
+fn check_copied_from(pod: &Pod, body: &Value) -> Result<Option<String>, Refusal> {
+    let Some(c) = body.get("copied_from").filter(|c| !c.is_null()) else {
+        return Ok(None);
+    };
+    let (Some(app), Some(version)) = (c["app"].as_str(), c["version"].as_i64()) else {
+        return Err(invalid(
+            "invalid_copied_from",
+            "\"copied_from\" is {\"app\": <built-in app>, \"version\": n}",
+        ));
+    };
+    let exists = pod.catalog().is_app(app)
+        && pod
+            .store()
+            .app_version(app, version)
+            .ok()
+            .flatten()
+            .is_some();
+    if !exists {
+        return Err(invalid(
+            "invalid_copied_from",
+            format!("'{app}' v{version} is not a built-in app's version"),
+        ));
+    }
+    Ok(Some(
+        json!({ "copied_from": { "app": app, "version": version } }).to_string(),
+    ))
 }
 
 fn check_title(v: Option<&Value>) -> Result<Option<String>, Refusal> {
@@ -451,6 +508,8 @@ pub enum Writer {
     User,
     /// The MCP endpoint (decision `mcp-connector`).
     Claude,
+    /// The pod itself (a `ref_update`).
+    Pod,
 }
 
 impl Writer {
@@ -458,6 +517,7 @@ impl Writer {
         match self {
             Writer::User => AUTHOR_USER,
             Writer::Claude => AUTHOR_CLAUDE,
+            Writer::Pod => AUTHOR_POD,
         }
     }
 }
@@ -530,6 +590,8 @@ struct NewVersion<'a> {
     note: &'a str,
     schema: u32,
     by: Writer,
+    /// Its `meta_json`; `None`: the previous version's (a copy stays one).
+    meta: Option<String>,
 }
 
 /// Append a version and prune the oldest beyond the cap.
@@ -539,6 +601,10 @@ fn append(
     id: &str,
     v: NewVersion<'_>,
 ) -> rusqlite::Result<i64> {
+    let meta = match v.meta {
+        Some(m) => Some(m),
+        None => crate::store::latest_app_version_on(tx, id)?.and_then(|l| l.meta_json),
+    };
     let version = crate::store::append_authored_version_on(
         tx,
         id,
@@ -548,7 +614,7 @@ fn append(
         v.schema,
         Authored {
             author: v.by.author(),
-            meta_json: None,
+            meta_json: meta.as_deref(),
         },
     )?;
     tx.execute(
@@ -569,6 +635,7 @@ pub async fn create(pod: &Pod, body: &Value, by: Writer) -> Result<Written, Refu
     let icon = check_icon(Some(body.get("icon").unwrap_or(&json!("photo"))))?.expect("checked");
     let feeds = check_feeds(pod, &body["feeds"])?;
     let note = check_note(body.get("note"), "Created")?;
+    let meta = check_copied_from(pod, body)?;
     let id = new_custom_id();
     let (layout, json) = check_layout(pod, &id, &feeds, &body["layout"])?;
     let schema = recorded_schema(&layout);
@@ -604,6 +671,7 @@ pub async fn create(pod: &Pod, body: &Value, by: Writer) -> Result<Written, Refu
                 note: &note,
                 schema,
                 by,
+                meta: meta.clone(),
             },
         )?)
     })
@@ -644,6 +712,7 @@ pub async fn update_layout(
         };
     let (layout, json) = check_layout(pod, id, &app.feeds, &body["layout"])?;
     let schema = recorded_schema(&layout);
+    let meta = check_copied_from(pod, body)?;
     let caps = pod.custom.caps;
     let app_id = id.to_owned();
     let version = write(pod, move |tx| {
@@ -667,6 +736,7 @@ pub async fn update_layout(
                 note: &note,
                 schema,
                 by,
+                meta: meta.clone(),
             },
         )?)
     })
@@ -734,12 +804,13 @@ pub async fn restore(pod: &Pod, id: &str, body: &Value, by: Writer) -> Result<Wr
     let old = blocking(pod, move |s| s.app_version(&lookup, n))
         .await
         .map_err(|(st, Json(b))| (st, b))?;
-    let Some((_, json)) = old else {
+    let Some((old_meta, json)) = old else {
         return Err(refuse(
             StatusCode::NOT_FOUND,
             json!({ "error": "version_not_found", "app_id": id, "version": n }),
         ));
     };
+    let meta = old_meta.meta_json.clone().or_else(|| Some("{}".to_owned()));
     let layout: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
     let (node, json) = check_layout(pod, id, &app.feeds, &layout)?;
     let schema = recorded_schema(&node);
@@ -757,6 +828,7 @@ pub async fn restore(pod: &Pod, id: &str, body: &Value, by: Writer) -> Result<Wr
                 note: &note,
                 schema,
                 by,
+                meta: meta.clone(),
             },
         )?)
     })
@@ -849,6 +921,141 @@ pub async fn describe(pod: &Pod, id: &str) -> Result<Value, Refusal> {
     }))
 }
 
+// ---------- built-in parts and copies (decision `layout-parts`) ----------
+
+/// After a deploy appended versions of built-in apps (`changed`: `(app,
+/// new version)`): append a `ref_update` version ("Pixelfed updated to
+/// v6") to every live custom app whose latest layout references one of
+/// them without a pinned version, so its history says what changed and
+/// clients refetch. Returns the custom versions appended. Blocking.
+pub fn ref_updates(
+    store: &Store,
+    catalog: &crate::Catalog,
+    changed: &[(String, i64)],
+) -> rusqlite::Result<Vec<(String, i64)>> {
+    if changed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let apps = store.with_conn(custom_apps_on)?;
+    let mut out = Vec::new();
+    for app in apps {
+        let Some((_, json)) = store.app_latest(&app.id)? else {
+            continue;
+        };
+        if !crate::parts::may_hold_refs(&json) {
+            continue;
+        }
+        let doc: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
+        let refs = crate::parts::refs(&doc);
+        let Some((builtin, version)) = changed
+            .iter()
+            .find(|(a, _)| refs.iter().any(|r| r.version.is_none() && r.app == *a))
+        else {
+            continue;
+        };
+        let title = catalog.app(builtin).map_or(builtin.as_str(), |a| a.title);
+        let note = format!("{title} updated to v{version}");
+        let schema = crate::parts::expand(store, catalog, &doc, None, crate::parts::Mode::Lenient)
+            .ok()
+            .and_then(|v| serde_json::from_value::<protocol::UiNode>(v).ok())
+            .map_or(
+                protocol::oldest_layout_schema(protocol::SCHEMA_VERSION),
+                |n| recorded_schema(&n),
+            );
+        let id = app.id.clone();
+        let v = store.transaction(|tx| {
+            append(
+                tx,
+                Caps::default(),
+                &id,
+                NewVersion {
+                    json: &json,
+                    source: SOURCE_REF_UPDATE,
+                    note: &note,
+                    schema,
+                    by: Writer::Pod,
+                    meta: None,
+                },
+            )
+        })?;
+        tracing::info!(app = %app.id, version = v, "{note}");
+        out.push((app.id, v));
+    }
+    Ok(out)
+}
+
+/// The dismissed update notices ([`DISMISSED_SETTING`]).
+pub fn dismissed(store: &Store) -> rusqlite::Result<HashMap<String, i64>> {
+    Ok(store
+        .pod_setting(DISMISSED_SETTING)?
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default())
+}
+
+/// The built-in a custom app's latest version was copied from, `(app,
+/// version)` (`meta_json.copied_from`). Blocking.
+pub fn copied_from(store: &Store, id: &str) -> rusqlite::Result<Option<(String, i64)>> {
+    let Some(v) = store.app_latest_meta(id)? else {
+        return Ok(None);
+    };
+    Ok(v.meta_json
+        .and_then(|m| serde_json::from_str::<Value>(&m).ok())
+        .and_then(|m| {
+            let c = &m["copied_from"];
+            Some((c["app"].as_str()?.to_owned(), c["version"].as_i64()?))
+        }))
+}
+
+/// `GET /v1/apps` `updates_from` of a custom app copied from a built-in:
+/// `{app, title, from_version, to_version}` when that app has a newer
+/// version a client of `schema` can draw, not dismissed. Blocking.
+pub fn updates_from(
+    store: &Store,
+    catalog: &crate::Catalog,
+    id: &str,
+    schema: u32,
+    dismissed: &HashMap<String, i64>,
+) -> rusqlite::Result<Option<Value>> {
+    let Some((app, from)) = copied_from(store, id)? else {
+        return Ok(None);
+    };
+    let Some(newest) = crate::layouts::newest_compatible(store, &app, schema)? else {
+        return Ok(None);
+    };
+    let seen = dismissed.get(id).copied().unwrap_or(0).max(from);
+    if newest.version <= seen {
+        return Ok(None);
+    }
+    let title = catalog
+        .app(&app)
+        .map_or(app.as_str(), |a| a.title)
+        .to_owned();
+    Ok(Some(
+        json!({ "app": app, "title": title, "from_version": from, "to_version": newest.version }),
+    ))
+}
+
+/// Dismiss app `id`'s update notice up to built-in version `version`.
+pub async fn dismiss_update(pod: &Pod, id: &str, version: i64) -> Result<(), Refusal> {
+    load(pod, id).await?;
+    let app_id = id.to_owned();
+    write(pod, move |tx| {
+        let mut map: HashMap<String, i64> = crate::store::pod_setting_on(tx, DISMISSED_SETTING)?
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or_default();
+        map.insert(app_id, version);
+        tx.execute(
+            "INSERT OR REPLACE INTO pod_settings (key, value) VALUES (?1, ?2)",
+            params![
+                DISMISSED_SETTING,
+                serde_json::to_string(&map).expect("serializes")
+            ],
+        )?;
+        Ok(())
+    })
+    .await
+}
+
 // ---------- routes ----------
 
 pub(crate) fn router() -> Router<Pod> {
@@ -861,6 +1068,10 @@ pub(crate) fn router() -> Router<Pod> {
         )
         .route("/v1/custom-apps/{id}/layout", put(layout_route))
         .route("/v1/custom-apps/{id}/restore", post(restore_route))
+        .route(
+            "/v1/custom-apps/{id}/dismiss-update",
+            post(dismiss_update_route),
+        )
         .route("/v1/apps/{id}/hidden", put(hidden_route))
 }
 
@@ -1028,5 +1239,29 @@ async fn hidden_route(
     };
     answer(set_hidden(&pod, &id, hidden).await, |()| {
         Json(json!({ "ok": true, "id": id, "hidden": hidden })).into_response()
+    })
+}
+
+async fn dismiss_update_route(
+    State(pod): State<Pod>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(r) = require_session(&pod, &headers).await {
+        return r;
+    }
+    let body = match parse_json_body(&headers, &body) {
+        Ok(v) => v,
+        Err(e) => return e.into_response(),
+    };
+    let Some(version) = body["version"].as_i64().filter(|v| *v >= 1) else {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "invalid_request", "expected": { "version": "the built-in version dismissed" } }),
+        );
+    };
+    answer(dismiss_update(&pod, &id, version).await, |()| {
+        Json(json!({ "ok": true })).into_response()
     })
 }

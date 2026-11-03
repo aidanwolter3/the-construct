@@ -450,6 +450,12 @@ impl EngineHandle {
         Ok(self.inner.delete_custom_app(&app_id)?)
     }
 
+    /// Stop showing a custom app's "has updates" notice (up to the built-in
+    /// `version`; `POST /v1/custom-apps/<id>/dismiss-update`).
+    pub fn dismiss_update(&self, app_id: String, version: i64) -> Result<(), LayoutApiError> {
+        Ok(self.inner.dismiss_update(&app_id, version)?)
+    }
+
     /// Hide an app from every device's list, or show it again
     /// (`PUT /v1/apps/<id>/hidden`).
     pub fn set_app_hidden(&self, app_id: String, hidden: bool) -> Result<(), LayoutApiError> {

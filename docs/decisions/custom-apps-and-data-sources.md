@@ -98,9 +98,10 @@ same token could do. A misleading button label is an accepted risk.
 Claude edits custom apps through `POST /v1/mcp` with a host-issued, pod-scoped credential: decision
 [mcp-connector](mcp-connector.md) (P2).
 
-Not done yet (later commits of issue #45):
+Custom layouts reuse built-in parts by reference (`core://Ref`), and copies hear about updates: decision
+[layout-parts](layout-parts.md) (P3).
 
-- **P3:** layout `parts` and `core://Ref`, `ref_update` versions, copies with an update notice (decision
-  `layout-parts`).
+Not done yet:
+
 - `action.auth.login` paths in built-in layout files are not checked against a manifest; none uses one today (the
   signed-out screens are code).

@@ -107,10 +107,18 @@ data class AppSummary(
     val latestCompatibleVersion: Long? = latestVersion,
     val custom: Boolean = false,
     val hidden: Boolean = false,
+    /** A copy of a built-in that has a newer version since (decision `layout-parts`); null otherwise. */
+    val updatesFrom: AppUpdates? = null,
 ) {
     /** The app's newest version when this build can't draw it ("Update the app to see vN"), else null. */
     val updateRequiredFor: Long? get() = updateRequiredFor(latestVersion, latestCompatibleVersion)
 }
+
+/**
+ * A custom app copied from built-in app [app] ([title]): that app has version [toVersion] since. The menu says "<title>
+ * has updates · ask Claude to bring them in" until dismissed.
+ */
+data class AppUpdates(val app: String, val title: String, val toVersion: Long)
 
 /** [latest] when it is newer than [compatible] (the newest version this build can draw), else null. */
 fun updateRequiredFor(latest: Long?, compatible: Long?): Long? =
@@ -195,6 +203,11 @@ object AppCatalogJson {
                 latestCompatibleVersion = o.latestCompatible(),
                 custom = o.jStr("kind") == "custom",
                 hidden = o.jPrim("hidden")?.takeIf { !it.isString }?.booleanOrNull == true,
+                updatesFrom = (o["updates_from"] as? JsonObject)?.let { u ->
+                    val app = u.jStr("app") ?: return@let null
+                    val to = u.jLong("to_version") ?: return@let null
+                    AppUpdates(app, u.jStr("title") ?: app, to)
+                },
             )
         }
 
@@ -410,6 +423,9 @@ class AppRepository(
 
     /** Deletes custom app [appId] on the pod (every device). */
     suspend fun deleteCustomApp(appId: String) = call { bridge().deleteCustomApp(appId) }
+
+    /** Stops showing [appId]'s "has updates" notice, up to built-in [version]. */
+    suspend fun dismissUpdate(appId: String, version: Long) = call { bridge().dismissUpdate(appId, version) }
 
     /** Hides app [appId] from every device's list, or shows it again. */
     suspend fun setAppHidden(appId: String, hidden: Boolean) = call { bridge().setAppHidden(appId, hidden) }

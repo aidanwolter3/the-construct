@@ -608,3 +608,8 @@ new layout files; diffs between versions.
   3) that reach only `/v1/mcp`, `server pods mcp` / `revoke-mcp`. Tests: `server/tests/mcp.rs` (the OAuth flow, the
   scope, every tool, rotation and revocation), host-db migration, JSON Patch and vocabulary unit tests. Needs one
   manual run with Claude (a custom connector against staging) to confirm the connector flow.
+- P3, built-in parts (decision `layout-parts`): `pod_core::parts` (screens, slots and declared parts; `core://Ref`
+  expanded when serving, validated expanded), layout files' `"parts"`, `ref_update` versions after a deploy,
+  `copied_from` / `updates_from` / `dismiss-update`, MCP `list_parts` / `rebase_context` / `dismiss_update`, and the
+  menu's "has updates" row (engine/FFI `dismiss_update`). Tests: `pod-core/tests/parts.rs`, `server/tests/mcp.rs`,
+  shared `AppCatalogTest`, simulator `MenuTest`. Needs a device check of the notice row.

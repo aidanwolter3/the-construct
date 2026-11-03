@@ -410,6 +410,9 @@ async fn claude_connects_with_oauth_and_the_pod_code() {
         "rename_app",
         "delete_app",
         "set_hidden",
+        "list_parts",
+        "rebase_context",
+        "dismiss_update",
     ] {
         assert!(names.contains(&want), "{want}: {names:?}");
     }
@@ -515,10 +518,22 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
 
     let (err, vocab) = env.tool(&access, "describe_vocabulary", json!({})).await;
     assert!(!err);
+    // Every client node type, plus the pod-only core://Ref.
     assert_eq!(
         vocab["nodes"].as_array().unwrap().len(),
-        protocol::NODE_TYPES.len()
+        protocol::NODE_TYPES.len() + 1
     );
+    let (err, parts) = env
+        .tool(&access, "list_parts", json!({"app": "pixelfed_home"}))
+        .await;
+    assert!(!err, "{parts}");
+    let names: Vec<&str> = parts["apps"][0]["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["part"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"screen:post"), "{names:?}");
 
     let (err, layout) = env
         .tool(&access, "get_layout", json!({"app": "recipes"}))
@@ -689,6 +704,30 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     assert!(!err);
     let (status, _) = env.get(&format!("/v1/workspaces/{id}"), host_token).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    // A copy of the recipes app: rebase_context hands over what to merge.
+    let (_, now) = env
+        .tool(&access, "get_layout", json!({"app": "recipes"}))
+        .await;
+    let (err, copy) = env
+        .tool(
+            &access,
+            "create_app",
+            json!({"title": "My recipes", "feeds": [["recipes", "all"]], "layout": now["layout"],
+                "copied_from": {"app": "recipes", "version": now["version"]}}),
+        )
+        .await;
+    assert!(!err, "{copy}");
+    let (err, ctx) = env
+        .tool(&access, "rebase_context", json!({"app": copy["id"]}))
+        .await;
+    assert!(!err, "{ctx}");
+    assert_eq!(ctx["copied_from"]["app"], "recipes");
+    assert_eq!(ctx["base"]["version"], ctx["builtin_latest"]["version"]);
+    let (err, not_copy) = env
+        .tool(&access, "rebase_context", json!({"app": "recipes"}))
+        .await;
+    assert!(err);
+    assert_eq!(not_copy["error"], "not_a_copy");
     // An unknown tool is an error result, not a protocol error.
     let (err, unknown) = env.tool(&access, "drop_tables", json!({})).await;
     assert!(err);

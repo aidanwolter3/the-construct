@@ -148,7 +148,10 @@ JSON layouts (server-driven UI) over data sources. You can build and edit the us
 call list_data_sources and describe_vocabulary first, read a built-in app's layout with get_layout for \
 working examples, sample_data to see real fields, then create_app or update_layout. Every write is \
 validated (errors give a JSON pointer and what is allowed) and appears live on the user's devices; \
-restore_version undoes an edit. Built-in apps can't be edited, only hidden.";
+restore_version undoes an edit. Built-in apps can't be edited, only hidden. To start from a built-in app, \
+reuse its parts by reference ({\"type\": \"core://Ref\", \"app\": ..., \"part\": ...}; list_parts lists them): \
+they stay current. Copy a part only to change it, and pass copied_from so the user hears when the \
+built-in changes (rebase_context then gives you what to merge).";
 
 // ---------- tools ----------
 
@@ -166,6 +169,8 @@ fn tools() -> Vec<Value> {
     let layout = json!({ "type": "object", "description": "A core://Workspace layout (see describe_vocabulary); its id is set by the pod" });
     let app = json!({ "type": "string", "description": "An app id" });
     let note = json!({ "type": "string", "description": "What changed, in the user's words (shown in the version history)" });
+    let copied = json!({ "type": "object", "description": "When the layout copies parts of a built-in app: {app, version} of what was copied",
+        "properties": { "app": { "type": "string" }, "version": { "type": "integer" } } });
     vec![
         tool(
             "list_apps",
@@ -209,7 +214,7 @@ fn tools() -> Vec<Value> {
             "create_app",
             "Create a custom app. It appears on the user's devices at once.",
             json!({ "title": { "type": "string" }, "icon": { "type": "string", "enum": custom::APP_ICONS },
-                    "feeds": feeds, "layout": layout, "note": note }),
+                    "feeds": feeds, "layout": layout, "note": note, "copied_from": copied }),
             &["title", "feeds", "layout"],
         ),
         tool(
@@ -217,7 +222,7 @@ fn tools() -> Vec<Value> {
             "Save a new version of a custom app's layout: a whole layout, or a JSON Patch (RFC 6902) against the latest. Pass base_version (the version you read) so a concurrent edit isn't lost.",
             json!({ "app": app, "layout": layout,
                     "json_patch": { "type": "array", "items": { "type": "object" } },
-                    "note": note, "base_version": { "type": "integer" } }),
+                    "note": note, "base_version": { "type": "integer" }, "copied_from": copied }),
             &["app"],
         ),
         tool(
@@ -237,6 +242,24 @@ fn tools() -> Vec<Value> {
             "Delete a custom app on every device. Only when the user asked for it.",
             json!({ "app": app }),
             &["app"],
+        ),
+        tool(
+            "list_parts",
+            "The parts of built-in apps a custom layout can reference with core://Ref (screens, slots and named parts), with each part's layout.",
+            json!({ "app": { "type": "string", "description": "A built-in app (all when left out)" }, "with_layouts": { "type": "boolean" } }),
+            &[],
+        ),
+        tool(
+            "rebase_context",
+            "For a custom app copied from a built-in (copied_from): the built-in layout it was copied from, the built-in's latest, and the custom app's current layout, to merge new built-in changes into the copy. Save the merge with update_layout and copied_from set to the new version; or dismiss_update if the user doesn't want it.",
+            json!({ "app": app }),
+            &["app"],
+        ),
+        tool(
+            "dismiss_update",
+            "Stop telling the user that the built-in a custom app was copied from has updates (up to a version).",
+            json!({ "app": app, "version": { "type": "integer" } }),
+            &["app", "version"],
         ),
         tool(
             "set_hidden",
@@ -312,6 +335,18 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
                 .map(|()| json!({ "ok": true }))
                 .map_err(refused),
             Err(e) => Err(e),
+        },
+        "list_parts" => list_parts(pod, &args).await,
+        "rebase_context" => rebase_context(pod, &args).await,
+        "dismiss_update" => match (str_arg(&args, "app"), args["version"].as_i64()) {
+            (Ok(app), Some(v)) => custom::dismiss_update(pod, app, v)
+                .await
+                .map(|()| json!({ "ok": true }))
+                .map_err(refused),
+            (Err(e), _) => Err(e),
+            (_, None) => {
+                Err(json!({ "error": "invalid_arguments", "detail": "\"version\" is required" }))
+            }
         },
         "set_hidden" => match (str_arg(&args, "app"), args["hidden"].as_bool()) {
             (Ok(app), Some(hidden)) => custom::set_hidden(pod, app, hidden)
@@ -431,6 +466,75 @@ async fn get_layout(pod: &Pod, args: &Value) -> Result<Value, Value> {
             "version": h.version, "note": h.note, "source": h.source, "author": h.author,
             "created_at": crate::layouts::rfc3339(h.created_at),
         })).collect::<Vec<_>>(),
+    }))
+}
+
+async fn list_parts(pod: &Pod, args: &Value) -> Result<Value, Value> {
+    let only = args["app"].as_str().map(str::to_owned);
+    let with_layouts = args["with_layouts"].as_bool().unwrap_or(false);
+    let apps: Vec<(String, String)> = pod
+        .catalog()
+        .apps()
+        .filter(|a| !a.dev || pod.show_dev_apps())
+        .filter(|a| only.as_deref().is_none_or(|o| o == a.id))
+        .map(|a| (a.id.to_owned(), a.title.to_owned()))
+        .collect();
+    if apps.is_empty() {
+        return Err(json!({ "error": "app_not_found", "detail": "parts come from built-in apps" }));
+    }
+    let listed = crate::blocking(pod, move |s| {
+        apps.into_iter()
+            .map(|(id, title)| {
+                let parts = crate::parts::load(s, &id, None, None)?.unwrap_or_default();
+                Ok(json!({
+                    "app": id, "title": title, "version": parts.version,
+                    "parts": parts.parts.iter().map(|(name, v)| {
+                        let mut row = json!({ "part": name,
+                            "where": if name.starts_with("screen:") { "screens" } else { "any node" } });
+                        if with_layouts {
+                            row["layout"] = v.clone();
+                        }
+                        row
+                    }).collect::<Vec<_>>(),
+                }))
+            })
+            .collect::<rusqlite::Result<Vec<_>>>()
+    })
+    .await
+    .map_err(|(s, Json(b))| refused((s, b)))?;
+    Ok(json!({ "apps": listed,
+        "use": "{\"type\": \"core://Ref\", \"app\": <app>, \"part\": <part>} (add \"version\" to pin one); the pod expands it when serving and keeps it current" }))
+}
+
+async fn rebase_context(pod: &Pod, args: &Value) -> Result<Value, Value> {
+    let app = str_arg(args, "app")?.to_owned();
+    let lookup = app.clone();
+    let found = crate::blocking(pod, move |s| {
+        let Some((from_app, from)) = custom::copied_from(s, &lookup)? else {
+            return Ok(None);
+        };
+        let base = s.app_version(&from_app, from)?;
+        let latest = s.app_latest(&from_app)?;
+        let current = s.app_latest(&lookup)?;
+        Ok(Some((from_app, from, base, latest, current)))
+    })
+    .await
+    .map_err(|(s, Json(b))| refused((s, b)))?;
+    let Some((from_app, from, base, latest, current)) = found else {
+        return Err(
+            json!({ "error": "not_a_copy", "detail": "this app has no copied_from; references stay current by themselves" }),
+        );
+    };
+    let layout = |v: Option<(crate::store::AppVersion, String)>| {
+        v.map(|(m, j)| json!({ "version": m.version, "layout": serde_json::from_str::<Value>(&j).unwrap_or(Value::Null) }))
+    };
+    Ok(json!({
+        "app": app,
+        "copied_from": { "app": from_app, "version": from },
+        "base": layout(base),
+        "builtin_latest": layout(latest),
+        "custom": layout(current),
+        "how": "Merge what changed from base to builtin_latest into custom, keep the user's changes, then update_layout with copied_from {app, version: builtin_latest.version} and base_version custom.version. If the user doesn't want it, dismiss_update.",
     }))
 }
 
@@ -833,10 +937,17 @@ pub const NODE_DOCS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// The pod-only node of a custom layout (never sent to clients).
+pub const REF_DOC: (&str, &str, &str) = (
+    "core://Ref",
+    "app, part, version?",
+    "A built-in app's part (list_parts): a screen:<id> part in screens, any other part as a node. The pod expands it when serving, from the built-in's newest version (or the pinned one), so it stays current.",
+);
+
 fn vocabulary() -> Value {
     json!({
         "schema": protocol::SCHEMA_VERSION,
-        "nodes": NODE_DOCS.iter().map(|(t, f, d)| json!({ "type": t, "fields": f, "doc": d })).collect::<Vec<_>>(),
+        "nodes": NODE_DOCS.iter().chain(std::iter::once(&REF_DOC)).map(|(t, f, d)| json!({ "type": t, "fields": f, "doc": d })).collect::<Vec<_>>(),
         "icons": protocol::ICONS,
         "intents": [
             { "intent": "action.navigation.open", "fields": "target_uri, presentation: Push|Modal|Replace", "doc": "Open a screen whose route matches target_uri." },

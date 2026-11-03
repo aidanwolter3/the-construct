@@ -641,6 +641,8 @@ pub struct FileVersion {
     /// The file's declared `"schema"` (recorded once, then append-only like
     /// the content; not part of `file_hash`).
     pub schema: u32,
+    /// `AppVersion::meta_json` of the new version (its declared parts).
+    pub meta_json: Option<String>,
 }
 
 /// What [`Store::sync_layout_files`] did.
@@ -918,6 +920,12 @@ fn sync_app_files_on(
             Some((&file.key, &file.file_hash)),
             file.schema,
         )?;
+        if let Some(meta) = &file.meta_json {
+            tx.execute(
+                "UPDATE app_versions SET meta_json = ?1 WHERE app_id = ?2 AND version = ?3",
+                params![meta, app_id, version],
+            )?;
+        }
         report.appended.push((file.path.clone(), version));
     }
     Ok(Ok(()))
@@ -1540,6 +1548,7 @@ mod tests {
             // Stands in for `layouts::file_hash` (the file's own content).
             file_hash: content_hash(&format!("{note}\n{json}")),
             schema: 1,
+            meta_json: None,
         }
     }
 

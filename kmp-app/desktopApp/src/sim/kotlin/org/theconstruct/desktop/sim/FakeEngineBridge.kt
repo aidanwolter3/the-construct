@@ -425,6 +425,13 @@ class FakeEngineBridge(
         }
     }
 
+    override fun dismissUpdate(appId: String, version: Long) {
+        appsCall {
+            apps.dismissUpdate(appId, version)
+            ""
+        }
+    }
+
     override fun setAppHidden(appId: String, hidden: Boolean) {
         appsCall {
             apps.setHidden(appId, hidden)

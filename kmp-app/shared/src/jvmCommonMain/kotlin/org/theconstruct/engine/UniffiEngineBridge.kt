@@ -81,6 +81,13 @@ class UniffiEngineBridge(val handle: EngineHandle) : ConstructEngineBridge {
         }
     }
 
+    override fun dismissUpdate(appId: String, version: Long) {
+        catalog("dismiss update of $appId") {
+            handle.dismissUpdate(appId, version)
+            ""
+        }
+    }
+
     override fun setAppHidden(appId: String, hidden: Boolean) {
         catalog("app $appId hidden=$hidden") {
             handle.setAppHidden(appId, hidden)

@@ -90,6 +90,9 @@ interface ConstructEngineBridge {
     /** `DELETE /v1/custom-apps/{appId}`: deletes the pod user's own app on every device. BLOCKING. */
     fun deleteCustomApp(appId: String): Unit = throw appsUnavailable()
 
+    /** `POST /v1/custom-apps/{appId}/dismiss-update`: no more "has updates" notice up to [version]. BLOCKING. */
+    fun dismissUpdate(appId: String, version: Long): Unit = throw appsUnavailable()
+
     /** `PUT /v1/apps/{appId}/hidden`: hides the app from every device's list, or shows it again. BLOCKING. */
     fun setAppHidden(appId: String, hidden: Boolean): Unit = throw appsUnavailable()
 

@@ -448,6 +448,20 @@ class MenuTest {
     }
 
     @Test
+    fun aCopiedAppSaysItsBuiltInHasUpdatesUntilDismissed() {
+        val (first, controller) = switching()
+        compose(controller) {
+            controller.menu.openMenu()
+            waitForIdle()
+            waitUntil(timeoutMillis = 5_000) { has("app-updates-${FakeAppCatalog.KITCHEN}") }
+            onNode(hasText("Pixelfed demo has updates · ask Claude to bring them in")).assertExists()
+            onNode(hasTestTag("app-updates-dismiss-${FakeAppCatalog.KITCHEN}")).performClick()
+            waitUntil(timeoutMillis = 5_000) { !has("app-updates-${FakeAppCatalog.KITCHEN}") }
+            assertTrue(first.apps.has(FakeAppCatalog.KITCHEN))
+        }
+    }
+
+    @Test
     fun settingsOffersTheSignInsThePodHas() {
         val fake = feed()
         val controller = ConstructController(fake, fake.appId)

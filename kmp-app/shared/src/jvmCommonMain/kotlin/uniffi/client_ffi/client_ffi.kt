@@ -876,6 +876,8 @@ internal open class UniffiVTableCallbackInterfaceUrlOpener(
 
 
 
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -900,6 +902,8 @@ fun uniffi_client_ffi_checksum_method_enginehandle_delete_custom_app(
 fun uniffi_client_ffi_checksum_method_enginehandle_device_id(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_discard_attachment(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_dismiss_update(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_dispatch(
 ): Short
@@ -1039,6 +1043,8 @@ fun uniffi_client_ffi_fn_method_enginehandle_delete_custom_app(`ptr`: Pointer,`a
 fun uniffi_client_ffi_fn_method_enginehandle_device_id(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_discard_attachment(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_client_ffi_fn_method_enginehandle_dismiss_update(`ptr`: Pointer,`appId`: RustBuffer.ByValue,`version`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_dispatch(`ptr`: Pointer,`intentJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
@@ -1235,6 +1241,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_discard_attachment() != 46768.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_dismiss_update() != 61874.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_dispatch() != 57352.toShort()) {
@@ -1810,6 +1819,12 @@ public interface EngineHandleInterface {
     fun `discardAttachment`(`id`: kotlin.String)
     
     /**
+     * Stop showing a custom app's "has updates" notice (up to the built-in
+     * `version`; `POST /v1/custom-apps/<id>/dismiss-update`).
+     */
+    fun `dismissUpdate`(`appId`: kotlin.String, `version`: kotlin.Long)
+    
+    /**
      * Handle an `ActionIntent` JSON string. Never panics.
      */
     fun `dispatch`(`intentJson`: kotlin.String)
@@ -2118,6 +2133,22 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_discard_attachment(
         it, FfiConverterString.lower(`id`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Stop showing a custom app's "has updates" notice (up to the built-in
+     * `version`; `POST /v1/custom-apps/<id>/dismiss-update`).
+     */
+    @Throws(LayoutApiException::class)override fun `dismissUpdate`(`appId`: kotlin.String, `version`: kotlin.Long)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_dismiss_update(
+        it, FfiConverterString.lower(`appId`),FfiConverterLong.lower(`version`),_status)
 }
     }
     

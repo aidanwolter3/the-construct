@@ -497,6 +497,7 @@ fn db_with_a_changed_file(dir: &std::path::Path) {
         json: "{}".into(),
         file_hash: "0".repeat(64),
         schema: 1,
+        meta_json: None,
     };
     store
         .sync_layout_files(&[("pixelfed_demo", vec![file])])

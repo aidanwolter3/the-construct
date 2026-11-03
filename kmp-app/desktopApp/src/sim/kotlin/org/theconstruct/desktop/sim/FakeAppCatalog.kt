@@ -39,6 +39,9 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
     private class App(val id: String, val title: String, val icon: String, val custom: Boolean = false) {
         val versions = mutableListOf<Version>()
         var hidden = false
+
+        /** `(built-in app, its newer version)` this copy hasn't seen; null = no notice. */
+        var updatesFrom: Pair<String, Long>? = null
     }
 
     private val apps = LinkedHashMap<String, App>()
@@ -70,6 +73,19 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
 
     @Synchronized
     fun isCustom(id: String): Boolean = apps[id]?.custom == true
+
+    /** Says custom app [id] was copied from [builtIn], which has [version] since. */
+    @Synchronized
+    fun setUpdatesFrom(id: String, builtIn: String, version: Long) {
+        app(id).updatesFrom = builtIn to version
+    }
+
+    /** `POST /v1/custom-apps/{id}/dismiss-update`. */
+    @Synchronized
+    fun dismissUpdate(id: String, version: Long) {
+        val a = app(id)
+        if (a.updatesFrom?.second?.let { it <= version } == true) a.updatesFrom = null
+    }
 
     @Synchronized
     fun has(id: String): Boolean = id in apps
@@ -110,6 +126,13 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
                     "icon" to JsonPrimitive(a.icon),
                     "kind" to JsonPrimitive(if (a.custom) "custom" else "builtin"),
                     "hidden" to JsonPrimitive(a.hidden),
+                    "updates_from" to (a.updatesFrom?.let { (b, v) ->
+                        obj(
+                            "app" to JsonPrimitive(b),
+                            "title" to JsonPrimitive(apps[b]?.title ?: b),
+                            "to_version" to JsonPrimitive(v),
+                        )
+                    } ?: JsonNull),
                     "latest_version" to JsonPrimitive(a.versions.size),
                     "latest_compatible_version" to (latestCompatibleVersion(a.id)?.let { JsonPrimitive(it) } ?: JsonNull),
                     "updated_at" to JsonPrimitive(rfc3339(a.versions.last().createdAt)),
@@ -205,6 +228,10 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
             for (id in KNOWN) {
                 val layout = if (id == appId) base else defaultLayout(id, from) ?: continue
                 catalog.addFixtureApp(id, layout)
+            }
+            // The fixture's Kitchen is a copy of the demo, which has a newer version since (decision `layout-parts`).
+            if (catalog.has(KITCHEN) && catalog.has("pixelfed_demo")) {
+                catalog.setUpdatesFrom(KITCHEN, "pixelfed_demo", catalog.latestVersion("pixelfed_demo") ?: 1)
             }
             if (!catalog.has(appId)) {
                 catalog.add(

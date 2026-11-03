@@ -116,6 +116,9 @@ pub struct LayoutFile {
     pub file_hash: String,
     /// The client schema the layout is written for (`"schema"`).
     pub schema: u32,
+    /// Named parts other layouts may reference (`"parts"`, decision
+    /// `layout-parts`).
+    pub parts: std::collections::BTreeMap<String, UiNode>,
 }
 
 impl LayoutFile {
@@ -128,6 +131,14 @@ impl LayoutFile {
             json: to_json(&self.layout),
             file_hash: self.file_hash.clone(),
             schema: self.schema,
+            meta_json: (!self.parts.is_empty()).then(|| {
+                let parts: serde_json::Map<String, Value> = self
+                    .parts
+                    .iter()
+                    .map(|(k, v)| (k.clone(), node_value(v)))
+                    .collect();
+                json!({ "parts": parts }).to_string()
+            }),
         }
     }
 }
@@ -139,7 +150,16 @@ impl LayoutFile {
 /// (field order, a new defaulted field), unlike a hash of the re-serialized
 /// `UiNode`.
 pub fn file_hash(note: &str, layout: &Value) -> String {
-    let doc = json!({ "layout": layout, "note": note });
+    file_hash_with_parts(note, layout, None)
+}
+
+/// [`file_hash`] of a file that also declares `"parts"` (they are hashed
+/// with it; files without parts hash as before).
+pub fn file_hash_with_parts(note: &str, layout: &Value, parts: Option<&Value>) -> String {
+    let mut doc = json!({ "layout": layout, "note": note });
+    if let Some(p) = parts {
+        doc["parts"] = p.clone();
+    }
     let mut out = String::new();
     write_canonical(&doc, &mut out);
     crate::store::content_hash(&out)
@@ -244,10 +264,10 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
     };
     if let Some(k) = obj
         .keys()
-        .find(|k| !matches!(k.as_str(), "note" | "schema" | "layout"))
+        .find(|k| !matches!(k.as_str(), "note" | "schema" | "layout" | "parts"))
     {
         return Err(fail(format!(
-            "unknown key '{k}' (only \"note\", \"schema\" and \"layout\")"
+            "unknown key '{k}' (only \"note\", \"schema\", \"layout\" and \"parts\")"
         )));
     }
     let note = obj
@@ -311,8 +331,40 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
             "\"schema\" is {schema} but the layout uses vocabulary from schema {needs}"
         )));
     }
-    let file_hash = file_hash(&note, layout);
+    let raw_parts = obj.get("parts");
+    let mut parts = std::collections::BTreeMap::new();
+    if let Some(p) = raw_parts {
+        let Value::Object(map) = p else {
+            return Err(fail("\"parts\" must be an object of named nodes".into()));
+        };
+        for (name, v) in map {
+            if name.is_empty()
+                || name.contains(':')
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+            {
+                return Err(fail(format!("part name '{name}' must be [a-z0-9_]+")));
+            }
+            let node: UiNode = serde_json::from_value(v.clone())
+                .map_err(|e| fail(format!("part '{name}' is not a node: {e}")))?;
+            if let Some(t) = crate::validate::unknown_node_types(&node).first() {
+                return Err(fail(format!("part '{name}': unknown node type '{t}'")));
+            }
+            crate::source::check_routes(&node, &catalog.app_sources(src.app_id))
+                .map_err(|e| fail(format!("part '{name}': {e}")))?;
+            let needs = protocol::required_schema(&node);
+            if needs > schema {
+                return Err(fail(format!(
+                    "part '{name}' uses vocabulary from schema {needs}, above the file's {schema}"
+                )));
+            }
+            parts.insert(name.clone(), node);
+        }
+    }
+    let file_hash = file_hash_with_parts(&note, layout, raw_parts);
     Ok(LayoutFile {
+        parts,
         app_id: src.app_id.to_owned(),
         number,
         path,
@@ -433,7 +485,7 @@ pub fn active(
     match store.app_latest(workspace_id)? {
         Some((v, json)) => Ok(Some(Served {
             version: v.version,
-            layout: from_json(&json)?,
+            layout: from_json(&crate::parts::serve(store, catalog, &json, None))?,
         })),
         None => Ok(None),
     }
@@ -505,7 +557,7 @@ pub fn active_for(
     }
     Ok(Some(Served {
         version: v.version,
-        layout: from_json(&json)?,
+        layout: from_json(&crate::parts::serve(store, catalog, &json, Some(schema)))?,
     }))
 }
 
@@ -683,8 +735,10 @@ async fn list_apps(
         .filter(|a| !a.dev || state.show_dev_apps())
         .copied()
         .collect();
+    let st = state.clone();
     let listed = blocking(&state, move |s| {
         let hidden = crate::custom::hidden_apps(s)?;
+        let dismissed = crate::custom::dismissed(s)?;
         let custom = s.with_conn(crate::custom::custom_apps_on)?;
         let mut apps: Vec<crate::custom::AppRef> = builtin
             .into_iter()
@@ -699,7 +753,13 @@ async fn list_apps(
                 let latest = s.app_latest_meta(a.id())?;
                 let compatible = newest_compatible(s, a.id(), schema)?.map(|v| v.version);
                 let is_hidden = hidden.iter().any(|h| h == a.id());
-                Ok((a, is_hidden, latest, compatible))
+                let updates = match &a {
+                    crate::custom::AppRef::Custom(c) => {
+                        crate::custom::updates_from(s, st.catalog(), &c.id, schema, &dismissed)?
+                    }
+                    crate::custom::AppRef::Builtin(_) => None,
+                };
+                Ok((a, is_hidden, latest, compatible, updates))
             })
             .collect::<rusqlite::Result<Vec<_>>>()
     })
@@ -710,8 +770,8 @@ async fn list_apps(
     };
     let apps: Vec<Value> = listed
         .iter()
-        .map(|(a, hidden, v, compatible)| {
-            json!({
+        .map(|(a, hidden, v, compatible, updates)| {
+            let mut row = json!({
                 "id": a.id(),
                 "title": a.title(),
                 "icon": a.icon(),
@@ -720,7 +780,11 @@ async fn list_apps(
                 "latest_version": v.as_ref().map(|v| v.version),
                 "latest_compatible_version": compatible,
                 "updated_at": v.as_ref().map(|v| rfc3339(v.created_at)),
-            })
+            });
+            if let Some(u) = updates {
+                row["updates_from"] = u.clone();
+            }
+            row
         })
         .collect();
     Json(json!({ "apps": apps })).into_response()
@@ -815,7 +879,16 @@ async fn app_version(
         );
     };
     let lookup = app_id.clone();
-    let found = blocking(&state, move |s| s.app_version(&lookup, n)).await;
+    let schema = client_schema(&headers);
+    let st = state.clone();
+    let found = blocking(&state, move |s| {
+        // A custom version's built-in parts, as this client would be served them.
+        Ok(s.app_version(&lookup, n)?.map(|(v, json)| {
+            let served = crate::parts::serve(s, st.catalog(), &json, Some(schema));
+            (v, served)
+        }))
+    })
+    .await;
     match found {
         Ok(Some((v, stored))) => {
             let mut body = version_json(&v, client_schema(&headers));

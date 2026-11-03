@@ -330,13 +330,18 @@ curl -fsS -H "Authorization: Bearer $token" -H 'content-type: application/json' 
   failing source shows no data, and the layout can say so (`${core://sources/pixelfed#signed_in}`). Sign-ins start
   from Settings; custom layouts can't hold sign-in buttons.
 - Caps per pod: 50 apps, 500 versions per app (the oldest are pruned), 256 KiB per layout, 60 writes a minute.
+- **Built-in parts** (decision `layout-parts`): `{"type": "core://Ref", "app": "pixelfed_home", "part":
+  "screen:post"}` reuses a built-in's screen (`screen:<id>`), slot content (`slot:<id>`) or declared part (a layout
+  file's `"parts"`); the pod expands it when serving and keeps it current (a deploy appends a `ref_update` version).
+  A copy says `"copied_from": {"app", "version"}`; `GET /v1/apps` then reports `updates_from` when that built-in
+  moves on, until `POST /v1/custom-apps/{id}/dismiss-update {version}`.
 
 ### Claude (MCP)
 
 Each pod has an MCP endpoint, `POST /v1/mcp` (decision `mcp-connector`), so Claude can build and edit your custom
 apps. Its tools: `list_apps`, `list_data_sources`, `describe_vocabulary`, `get_layout`, `sample_data`,
 `validate_layout`, `create_app`, `update_layout` (a layout or a JSON Patch, with `base_version`), `restore_version`,
-`rename_app`, `delete_app`, `set_hidden`. Writes go through the same validation as the API above and show in the
+`rename_app`, `delete_app`, `set_hidden`, `list_parts`, `rebase_context`, `dismiss_update`. Writes go through the same validation as the API above and show in the
 version history as written by Claude.
 
 - **Claude (web, desktop, mobile):** add a custom connector with the URL `https://<server>/v1/mcp`. Claude finds the
@@ -593,7 +598,7 @@ picker, drawer). Test tags: `menu-button`,
 `menu-badge`, `menu-drawer`, `menu-close`, `menu-back`, `app-<id>`, `app-history-<id>`, `app-error`, `apps-error`,
 `app-more-<id>`, `app-hide-<id>`, `app-delete-<id>`, `app-custom-<id>`, `apps-show-hidden`, `app-action-error`,
 `delete-app-dialog`, `delete-app-confirm`, `delete-app-cancel`, `app-gone`, `notice`, `notice-dismiss`,
-`provider-<id>`, `provider-server-<id>`, `provider-server-go-<id>`,
+`provider-<id>`, `provider-server-<id>`, `provider-server-go-<id>`, `app-updates-<id>`, `app-updates-dismiss-<id>`,
 `menu-newer`, `menu-newer-latest`, `menu-settings`, `settings`, `menu-connection`, `menu-account`, `sign-in-<id>`,
 `sign-in-detail`, `sign-ins-error`, `menu-sign-in`, `menu-sign-out`, `menu-leave-pod`, `menu-notifications`,
 `menu-server`, `server-<key>`, `server-custom`, `server-custom-url`, `server-custom-hint`, `server-custom-use`,

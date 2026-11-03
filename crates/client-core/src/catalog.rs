@@ -244,6 +244,19 @@ impl ConstructEngine {
             .map(|_| ())
     }
 
+    /// `POST /v1/custom-apps/<id>/dismiss-update {version}`: stop showing
+    /// that the built-in this custom app was copied from has updates (up to
+    /// `version`). Blocking.
+    pub fn dismiss_update(&self, app_id: &str, version: i64) -> Result<(), LayoutApiError> {
+        self.inner
+            .catalog_call(
+                reqwest::Method::POST,
+                &format!("/v1/custom-apps/{}/dismiss-update", segment(app_id)),
+                Some(&serde_json::json!({ "version": version })),
+            )
+            .map(|_| ())
+    }
+
     /// `PUT /v1/apps/<id>/hidden {hidden}`: hide an app from every device's
     /// app list, or show it again. Blocking.
     pub fn set_app_hidden(&self, app_id: &str, hidden: bool) -> Result<(), LayoutApiError> {

@@ -304,6 +304,12 @@ class AppCatalogTest {
         )
         assertEquals(listOf(false, true, false), apps.map { it.custom })
         assertEquals(listOf(true, false, false), apps.map { it.hidden })
+        val copy = AppCatalogJson.parseApps(
+            """{"apps":[{"id":"c-x","kind":"custom","updates_from":{"app":"pixelfed_home","title":"Pixelfed","from_version":5,"to_version":6}},
+               {"id":"c-y","kind":"custom","updates_from":{"title":"no app"}}]}""",
+        )
+        assertEquals(AppUpdates("pixelfed_home", "Pixelfed", 6), copy[0].updatesFrom)
+        assertNull(copy[1].updatesFrom)
         val json = """{"sign_ins":[],"providers":[
             {"id":"pixelfed","title":"Pixelfed","signed_in":false,"server_placeholder":"Server, e.g. pixelfed.social",
              "intent":{"intent":"action.auth.login","instance_url":"https://pixelfed.social","app_path":"/v1/auth/pixelfed/app","token_path":"/v1/auth/pixelfed/token"}},

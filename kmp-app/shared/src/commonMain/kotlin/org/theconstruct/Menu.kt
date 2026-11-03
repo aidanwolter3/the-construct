@@ -350,6 +350,20 @@ class MenuState internal constructor(private val controller: ConstructController
         }
     }
 
+    /** Dismisses [app]'s "has updates" notice and reloads the list. */
+    fun dismissUpdate(app: AppSummary, scope: CoroutineScope) {
+        val updates = app.updatesFrom ?: return
+        appActionError = null
+        scope.launch {
+            try {
+                controller.apps.dismissUpdate(app.id, updates.toVersion)
+                appsToken++
+            } catch (e: LayoutApiException) {
+                appActionError = e.message
+            }
+        }
+    }
+
     /** Asks to delete custom [app]: shows the confirmation. */
     fun requestDelete(app: AppSummary) {
         rowMenuFor = null
@@ -920,6 +934,7 @@ private fun AppsSection(controller: ConstructController, state: ConstructState, 
             onHide = { menu.setHidden(app, !app.hidden, scope) },
             onDelete = if (app.custom) ({ menu.requestDelete(app) }) else null,
         )
+        app.updatesFrom?.let { UpdatesRow(app, it, onDismiss = { menu.dismissUpdate(app, scope) }) }
     }
     if (hiddenCount > 0) {
         TextButton(
@@ -936,6 +951,26 @@ private fun AppsSection(controller: ConstructController, state: ConstructState, 
             ?.let { InlineError(it, tag = "apps-error", onRetry = menu::retryApps) }
     }
     menu.appError?.let { InlineError(it, tag = "app-error", onRetry = null) }
+}
+
+/**
+ * Under a copied custom app (`app-updates-<id>`): "<built-in> has updates · ask Claude to bring them in" with
+ * Dismiss (`app-updates-dismiss-<id>`).
+ */
+@Composable
+private fun UpdatesRow(app: AppSummary, updates: AppUpdates, onDismiss: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 64.dp, end = 12.dp).testTag("app-updates-${app.id}"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "${updates.title} has updates · ask Claude to bring them in",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onDismiss, modifier = Modifier.testTag("app-updates-dismiss-${app.id}")) { Text("Dismiss") }
+    }
 }
 
 /** "Delete <app>?" (`delete-app-dialog`) with Delete (`delete-app-confirm`) and Cancel (`delete-app-cancel`). */

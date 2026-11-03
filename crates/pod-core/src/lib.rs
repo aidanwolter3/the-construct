@@ -20,6 +20,7 @@ pub mod layouts;
 pub mod mcp;
 pub mod net;
 pub mod notify;
+pub mod parts;
 pub mod push;
 pub mod secrets;
 pub mod session;
@@ -177,6 +178,19 @@ impl AppState {
         for (path, version) in &report.appended {
             tracing::info!(file = %path, version, "layout file deployed as a new version");
         }
+        // Custom apps that reference a built-in that just changed get a
+        // `ref_update` version (decision `layout-parts`).
+        let changed: Vec<(String, i64)> = report
+            .appended
+            .iter()
+            .filter_map(|(path, version)| {
+                let app = path.strip_prefix("layouts/")?.split('/').next()?;
+                Some((app.to_owned(), *version))
+            })
+            .rev() // the newest version of each app first
+            .collect();
+        custom::ref_updates(&store, &catalog, &changed)
+            .map_err(|e| format!("updating custom apps after the layout sync: {e}"))?;
         Ok(Self {
             locals: Mutex::new(Vec::new()),
             store,
