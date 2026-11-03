@@ -1,0 +1,27 @@
+[package]
+name = "app-collections"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The Collections data source (decision `collections`): data custom apps
+# declare and keep in the pod itself (`collections_*` tables), changed by
+# Claude over MCP. No upstream, no apps of its own.
+
+[dependencies]
+pod-core = { path = "../pod-core" }
+protocol = { workspace = true }
+serde_json.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+axum = { version = "0.8", features = ["http2"] }
+tokio = { version = "1", features = ["rt", "time"] }
+tracing = "0.1"
+sha2 = "0.10"
+getrandom = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

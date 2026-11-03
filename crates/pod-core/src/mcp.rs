@@ -109,9 +109,9 @@ async fn handle(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Resp
     };
     let params = obj.get("params").cloned().unwrap_or(Value::Null);
     let answer = match method {
-        "initialize" => Ok(initialize(&params)),
+        "initialize" => Ok(initialize(&pod, &params)),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tools() })),
+        "tools/list" => Ok(json!({ "tools": all_tools(&pod) })),
         "tools/call" => Ok(call_tool(&pod, &headers, &params).await),
         "resources/list" => Ok(json!({ "resources": [] })),
         "prompts/list" => Ok(json!({ "prompts": [] })),
@@ -128,7 +128,7 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-fn initialize(params: &Value) -> Value {
+fn initialize(pod: &Pod, params: &Value) -> Value {
     let asked = params["protocolVersion"].as_str().unwrap_or("");
     let version = PROTOCOL_VERSIONS
         .iter()
@@ -139,8 +139,20 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": { "tools": { "listChanged": false } },
         "serverInfo": { "name": "the-construct-pod", "title": "The Construct", "version": env!("CARGO_PKG_VERSION") },
-        "instructions": INSTRUCTIONS,
+        "instructions": instructions(pod),
     })
+}
+
+/// [`INSTRUCTIONS`] and every adapter's paragraph.
+fn instructions(pod: &Pod) -> String {
+    let mut out = INSTRUCTIONS.to_owned();
+    for a in pod.catalog().adapters() {
+        if let Some(more) = a.mcp_instructions() {
+            out.push_str("\n\n");
+            out.push_str(more);
+        }
+    }
+    out
 }
 
 const INSTRUCTIONS: &str = "This is the user's own pod in The Construct. It serves apps whose screens are \
@@ -161,6 +173,23 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
         "description": description,
         "inputSchema": { "type": "object", "properties": properties, "required": required },
     })
+}
+
+/// The names of the core's own tools (adapters may not reuse them).
+pub fn core_tool_names() -> Vec<String> {
+    tools()
+        .iter()
+        .filter_map(|t| t["name"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// The core's tools, then every adapter's ([`crate::AppAdapter::mcp_tools`]).
+fn all_tools(pod: &Pod) -> Vec<Value> {
+    let mut out = tools();
+    for a in pod.catalog().adapters() {
+        out.extend(a.mcp_tools());
+    }
+    out
 }
 
 fn tools() -> Vec<Value> {
@@ -358,7 +387,16 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
                 Err(json!({ "error": "invalid_arguments", "detail": "\"hidden\" is a boolean" }))
             }
         },
-        _ => Err(json!({ "error": "unknown_tool", "tool": name })),
+        _ => {
+            let mut found = None;
+            for a in pod.catalog().adapters() {
+                if let Some(f) = a.mcp_call(pod, name, &args) {
+                    found = Some(f.await);
+                    break;
+                }
+            }
+            found.unwrap_or_else(|| Err(json!({ "error": "unknown_tool", "tool": name })))
+        }
     };
     tool_result(r)
 }
@@ -624,7 +662,13 @@ async fn sample_data(pod: &Pod, headers: &HeaderMap, args: &Value) -> Result<Val
     } else {
         let feed = args["feed"]
             .as_str()
-            .or_else(|| manifest.feeds.first().map(|f| f.name))
+            .or_else(|| {
+                manifest
+                    .feeds
+                    .iter()
+                    .find(|f| !f.is_pattern())
+                    .map(|f| f.name)
+            })
             .unwrap_or("");
         if manifest.feed(feed).is_none() {
             return Err(json!({ "error": "unknown_feed", "feed": feed,

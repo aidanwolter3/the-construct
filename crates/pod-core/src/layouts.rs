@@ -967,7 +967,9 @@ pub struct LayoutEvent {
 pub struct DataEvent {
     /// A data source id (an adapter's name).
     pub source: String,
-    pub token_hash: String,
+    /// The session whose data changed; `None`: the pod's own data (every
+    /// session's subscribers, decision `collections`).
+    pub token_hash: Option<String>,
 }
 
 fn data_event(workspace_id: &str) -> Event {
@@ -1292,7 +1294,9 @@ async fn events(
                         let mine = match &d {
                             Ok(d) => {
                                 s.sources.contains(&d.source.as_str())
-                                    && s.session_hash.as_deref() == Some(d.token_hash.as_str())
+                                    && d.token_hash.as_ref().is_none_or(|h| {
+                                        s.session_hash.as_deref() == Some(h.as_str())
+                                    })
                             }
                             // Lagged: a reload is never wrong.
                             Err(broadcast::error::RecvError::Lagged(_)) => s.session_hash.is_some(),

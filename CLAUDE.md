@@ -13,6 +13,8 @@ Apps today: Pixelfed (`pixelfed_home`) and Recipes (`recipes`). Read `README.md`
 - `crates/app-pixelfed` — the Pixelfed adapter (OAuth, feed, likes, comments, media proxy, `pixelfed_*` tables) and
   the `pixelfed_demo` dev app (a `StaticAdapter`).
 - `crates/app-recipes` — the recipes adapter (`recipes_*` tables, the recipe import migration, D41).
+- `crates/app-collections` — Collections: data custom apps declare over MCP (`collections_*` tables, change sets,
+  row edits; decision `collections`).
 - `crates/pod-host` — one server, many pods (D46): `host.db`, pod tokens, temporary pods, routing by bearer token.
 - `crates/server` — the server binary: `pod-host` over pods built from `pod-core` + the compile-time adapters
   (`server::adapters`); `server pods …` is the admin CLI.

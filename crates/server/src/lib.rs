@@ -4,11 +4,13 @@
 //!
 //! The core's modules are re-exported (`server::layouts`, `server::store`,
 //! ...), `server::pixelfed` is the Pixelfed adapter crate and
-//! `server::recipes` the recipes adapter crate.
+//! `server::recipes` the recipes adapter crate, `server::collections` the
+//! Collections adapter crate.
 
 use std::path::Path;
 use std::sync::Arc;
 
+pub use app_collections as collections;
 pub use app_pixelfed as pixelfed;
 pub use app_pixelfed::{DEFAULT_PIXELFED_URL, PixelfedAdapter, PixelfedConfig};
 pub use app_recipes as recipes;
@@ -16,12 +18,14 @@ pub use pod_core::*;
 pub use pod_host as host;
 
 /// The pod's adapters, in `GET /v1/apps` order: the Pixelfed feed (with the
-/// `pixelfed` sign-in), the recipes, then the `pixelfed_demo` dev app.
+/// `pixelfed` sign-in), the recipes, then the `pixelfed_demo` dev app; and
+/// Collections (no apps of its own: data custom apps declare).
 pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
     vec![
         Arc::new(PixelfedAdapter::new(pixelfed)),
         Arc::new(app_recipes::RecipesAdapter::new()),
         app_pixelfed::apps::demo_adapter(),
+        Arc::new(app_collections::CollectionsAdapter::new()),
     ]
 }
 

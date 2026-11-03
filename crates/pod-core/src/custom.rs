@@ -299,7 +299,7 @@ pub fn recorded_schema(layout: &protocol::UiNode) -> u32 {
 // ---------- validation ----------
 
 /// Why a write was refused: the HTTP status and JSON body.
-type Refusal = (StatusCode, Value);
+pub type Refusal = (StatusCode, Value);
 
 fn refuse(status: StatusCode, body: Value) -> Refusal {
     (status, body)
@@ -312,7 +312,8 @@ fn invalid(error: &str, detail: impl Into<String>) -> Refusal {
     )
 }
 
-fn invalid_layout(e: &LayoutError) -> Refusal {
+/// A refused layout: 422 `invalid_layout` with `at` and `allowed`.
+pub fn invalid_layout(e: &LayoutError) -> Refusal {
     let mut body = json!({ "error": "invalid_layout", "detail": e.to_string() });
     body["at"] = json!(e.pointer);
     body["allowed"] = json!(e.allowed);
@@ -390,13 +391,29 @@ pub fn feed_sources<'a>(
 }
 
 /// Validate `layout` for app `id` over `feeds`, with the root id set to
-/// `id`: the parsed layout and its JSON.
+/// `id`: the parsed layout and its JSON. The sources' own checks
+/// ([`crate::AppAdapter::check_custom_layout`]) run too.
 pub fn check_layout(
     pod: &Pod,
     id: &str,
     feeds: &[(String, String)],
     layout: &Value,
 ) -> Result<(protocol::UiNode, String), Refusal> {
+    let (node, json, expanded) = check_layout_with(pod, id, feeds, layout, true)?;
+    let _ = expanded;
+    Ok((node, json))
+}
+
+/// [`check_layout`], with or without the sources' own checks (`hooks`; a
+/// source checking a layout against data it is about to change runs its
+/// own), also answering the layout as validated (parts expanded).
+pub fn check_layout_with(
+    pod: &Pod,
+    id: &str,
+    feeds: &[(String, String)],
+    layout: &Value,
+    hooks: bool,
+) -> Result<(protocol::UiNode, String, Value), Refusal> {
     let mut layout = layout.clone();
     let Some(obj) = layout.as_object_mut() else {
         return Err(invalid_layout(&LayoutError {
@@ -425,12 +442,27 @@ pub fn check_layout(
     };
     let node =
         crate::validate::custom_layout(id, &expanded, &sources).map_err(|e| invalid_layout(&e))?;
+    if hooks {
+        for (name, _) in &sources {
+            let Some((adapter, _)) = pod.catalog().source(name) else {
+                continue;
+            };
+            let names: Vec<String> = feeds
+                .iter()
+                .filter(|(s, _)| s == name)
+                .map(|(_, f)| f.clone())
+                .collect();
+            adapter
+                .check_custom_layout(pod, &names, &expanded)
+                .map_err(|e| invalid_layout(&e))?;
+        }
+    }
     let json = if has_refs {
         layout.to_string()
     } else {
         serde_json::to_string(&node).expect("a UiNode serializes")
     };
-    Ok((node, json))
+    Ok((node, json, expanded))
 }
 
 /// A write's `copied_from` (`{app, version}` of a built-in app): checked.
@@ -919,6 +951,132 @@ pub async fn describe(pod: &Pod, id: &str) -> Result<Value, Refusal> {
         "latest_version": version,
         "layout": layout,
     }))
+}
+
+// ---------- staged writes (another source's change set) ----------
+
+/// A checked layout edit of a custom app, to append inside another write's
+/// transaction ([`commit_staged`]): how a source changes its data and the
+/// apps that show it at once (decision `collections`).
+#[derive(Debug, Clone)]
+pub struct StagedLayout {
+    pub id: String,
+    json: String,
+    schema: u32,
+    note: String,
+    meta: Option<String>,
+    base: Option<i64>,
+}
+
+/// Check an edit `{layout, note?, base_version?, copied_from?}` of custom
+/// app `app` without the sources' own checks (the caller runs them against
+/// the data it is about to write): the staged edit and the layout as
+/// validated (parts expanded).
+pub fn stage_layout(
+    pod: &Pod,
+    app: &CustomApp,
+    body: &Value,
+) -> Result<(StagedLayout, Value), Refusal> {
+    let note = check_note(body.get("note"), "Edited")?;
+    let base =
+        match body.get("base_version") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(v.as_i64().filter(|n| *n >= 1).ok_or_else(|| {
+                invalid("invalid_request", "\"base_version\" is a version number")
+            })?),
+        };
+    let (node, json, expanded) =
+        check_layout_with(pod, &app.id, &app.feeds, &body["layout"], false)?;
+    let meta = check_copied_from(pod, body)?;
+    Ok((
+        StagedLayout {
+            id: app.id.clone(),
+            json,
+            schema: recorded_schema(&node),
+            note,
+            meta,
+            base,
+        },
+        expanded,
+    ))
+}
+
+/// Count one custom-app write against the pod's rate cap.
+pub fn allow_write(pod: &Pod) -> Result<(), Refusal> {
+    if pod.custom.allow_write() {
+        return Ok(());
+    }
+    Err(refuse(
+        StatusCode::TOO_MANY_REQUESTS,
+        json!({ "error": "rate_limited", "detail": format!("at most {} custom-app writes a minute", pod.custom.caps.writes_per_minute) }),
+    ))
+}
+
+/// Append a staged edit in `tx` (the caller publishes the version with
+/// [`crate::AppState::publish_layout`] after committing). `Ok(Err(_))`:
+/// refused (the app changed since `base_version`, or was deleted); roll
+/// back.
+pub fn commit_staged(
+    tx: &rusqlite::Transaction<'_>,
+    pod: &Pod,
+    staged: &StagedLayout,
+    by: Writer,
+) -> rusqlite::Result<Result<i64, Refusal>> {
+    if custom_app_on(tx, &staged.id)?.is_none() {
+        return Ok(Err(not_found(&staged.id)));
+    }
+    let latest = crate::store::latest_app_version_on(tx, &staged.id)?.map(|v| v.version);
+    if let Some(base) = staged.base
+        && Some(base) != latest
+    {
+        return Ok(Err(refuse(
+            StatusCode::CONFLICT,
+            json!({ "error": "stale_base", "app": staged.id, "latest_version": latest,
+                    "detail": "the app changed since that version; read it again and reapply your edit" }),
+        )));
+    }
+    let v = append(
+        tx,
+        pod.custom.caps,
+        &staged.id,
+        NewVersion {
+            json: &staged.json,
+            source: SOURCE_CUSTOM,
+            note: &staged.note,
+            schema: staged.schema,
+            by,
+            meta: staged.meta.clone(),
+        },
+    )?;
+    Ok(Ok(v))
+}
+
+/// The latest layout of every live custom app with a feed of `source`:
+/// `(app, latest version, layout as served to a current client, parts
+/// expanded)`. Blocking.
+pub fn apps_using(
+    store: &Store,
+    catalog: &crate::Catalog,
+    source: &str,
+) -> rusqlite::Result<Vec<(CustomApp, i64, Value)>> {
+    let mut out = Vec::new();
+    for app in store.with_conn(custom_apps_on)? {
+        if !app.feeds.iter().any(|(s, _)| s == source) {
+            continue;
+        }
+        let Some((v, json)) = store.app_latest(&app.id)? else {
+            continue;
+        };
+        let doc: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
+        let doc = if crate::parts::may_hold_refs(&json) {
+            crate::parts::expand(store, catalog, &doc, None, crate::parts::Mode::Lenient)
+                .unwrap_or(doc)
+        } else {
+            doc
+        };
+        out.push((app, v.version, doc));
+    }
+    Ok(out)
 }
 
 // ---------- built-in parts and copies (decision `layout-parts`) ----------
