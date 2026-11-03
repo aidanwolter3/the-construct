@@ -302,3 +302,79 @@ async fn data_events_reach_only_their_session_and_resume_runs_once() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert_eq!(resumed.load(Ordering::SeqCst), 1);
 }
+
+/// Decision `pod-storage-limits`: a pod's uploads together stay under its
+/// quota (507, retried by clients); a released upload frees its bytes.
+#[tokio::test]
+async fn uploads_stay_under_the_pod_quota() {
+    let photo = [JPEG, &[0u8; 400]].concat();
+    let quota = (2 * photo.len()) as u64;
+    let state = AppState::in_memory(vec![Arc::new(Up(Arc::default()))])
+        .with_upload_max_bytes(1024)
+        .with_upload_quota_bytes(Some(quota));
+    for t in ["alice", "bob"] {
+        state.store().create_session(&session_hash(t)).unwrap();
+    }
+    let pod: Pod = Arc::new(state);
+    let a = upload(&pod, Some("alice"), Some("1"), "image/jpeg", &photo).await;
+    assert_eq!(a.0, StatusCode::OK);
+    assert_eq!(
+        upload(&pod, Some("bob"), Some("1"), "image/jpeg", &photo)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    // The quota is the pod's, not the session's.
+    let (status, body) = upload(&pod, Some("bob"), Some("2"), "image/jpeg", &photo).await;
+    assert_eq!(status, StatusCode::INSUFFICIENT_STORAGE);
+    assert_eq!(body["error"], "upload_quota_exceeded");
+    // A retry of a stored upload still answers its id.
+    let again = upload(&pod, Some("alice"), Some("1"), "image/jpeg", &photo).await;
+    assert_eq!(again.1["upload_id"], a.1["upload_id"]);
+
+    let id = a.1["upload_id"].as_str().unwrap().to_owned();
+    let up = pod.uploads();
+    assert!(up.claim(&[id], &session("alice"), "t:1").await.unwrap());
+    up.release("t:1").await.unwrap();
+    assert_eq!(
+        upload(&pod, Some("bob"), Some("2"), "image/jpeg", &photo)
+            .await
+            .0,
+        StatusCode::OK
+    );
+}
+
+/// Decision `pod-storage-limits`: nothing is stored once the data volume is
+/// nearly full.
+#[cfg(unix)]
+#[tokio::test]
+async fn uploads_stop_when_the_disk_is_nearly_full() {
+    let dir = tempfile::tempdir().unwrap();
+    let full = pod_core::disk::DiskGuard::new(dir.path(), u64::MAX);
+    let state = AppState::in_memory(vec![Arc::new(Up(Arc::default()))])
+        .with_upload_max_bytes(1024)
+        .with_disk_guard(Some(full));
+    state
+        .store()
+        .create_session(&session_hash("alice"))
+        .unwrap();
+    let pod: Pod = Arc::new(state);
+    let (status, body) = upload(&pod, Some("alice"), Some("1"), "image/jpeg", JPEG).await;
+    assert_eq!(status, StatusCode::INSUFFICIENT_STORAGE);
+    assert_eq!(body["error"], "low_disk_space");
+    let roomy = pod_core::disk::DiskGuard::new(dir.path(), 0);
+    let state = AppState::in_memory(vec![Arc::new(Up(Arc::default()))])
+        .with_upload_max_bytes(1024)
+        .with_disk_guard(Some(roomy));
+    state
+        .store()
+        .create_session(&session_hash("alice"))
+        .unwrap();
+    let pod: Pod = Arc::new(state);
+    assert_eq!(
+        upload(&pod, Some("alice"), Some("1"), "image/jpeg", JPEG)
+            .await
+            .0,
+        StatusCode::OK
+    );
+}

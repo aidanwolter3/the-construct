@@ -506,6 +506,73 @@ async fn the_open_pod_serves_callers_without_a_token() {
     tokio::time::sleep(Duration::from_millis(1)).await;
 }
 
+/// Security audit #31 (L1): a DNS-rebinding page reaches the loopback
+/// server under its own domain name, so the open pod refuses that Host.
+/// Pod tokens work with any Host.
+#[tokio::test]
+async fn the_open_pod_refuses_foreign_host_names() {
+    let env = env_with(HostConfig {
+        open_pod: Some("dev".into()),
+        ..HostConfig::default()
+    })
+    .await;
+    let client = reqwest::Client::new();
+    let port = env.server.url.rsplit(':').next().unwrap().to_owned();
+    let with_host = |host: String, token: Option<String>| {
+        let mut req = client
+            .get(env.url("/v1/workspaces/pixelfed_demo"))
+            .header("host", host);
+        if let Some(t) = token {
+            req = req.bearer_auth(t);
+        }
+        async move { req.send().await.unwrap() }
+    };
+    for ok in [
+        format!("127.0.0.1:{port}"),
+        format!("localhost:{port}"),
+        format!("10.0.2.2:{port}"),
+    ] {
+        let resp = with_host(ok.clone(), None).await;
+        assert_eq!(resp.status(), StatusCode::OK, "{ok}");
+    }
+    let resp = with_host(format!("rebind.evil.example:{port}"), None).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "host_not_allowed");
+    let token = env.create("me", false).await;
+    let resp = with_host("pod.example".to_owned(), Some(token)).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "a pod token works with any Host"
+    );
+}
+
+/// Security audit #31 (Info): every response carries the basic security
+/// headers; HSTS only when the host is behind HTTPS.
+#[tokio::test]
+async fn responses_carry_security_headers() {
+    for hsts in [false, true] {
+        let env = env_with(HostConfig {
+            hsts,
+            ..HostConfig::default()
+        })
+        .await;
+        for path in ["/healthz", "/v1/workspaces/recipes", "/v1/nowhere"] {
+            let resp = reqwest::get(env.url(path)).await.unwrap();
+            let h = resp.headers();
+            assert_eq!(h["x-content-type-options"], "nosniff", "{path}");
+            assert_eq!(h["referrer-policy"], "no-referrer", "{path}");
+            assert_eq!(h["x-frame-options"], "DENY", "{path}");
+            assert_eq!(
+                h["content-security-policy"], "default-src 'none'; frame-ancestors 'none'",
+                "{path}"
+            );
+            assert_eq!(h.get("strict-transport-security").is_some(), hsts, "{path}");
+        }
+    }
+}
+
 /// Security review of D46: anyone can make a temporary pod, so it must not
 /// make the server contact hosts of the visitor's choosing. It is held to the
 /// default Pixelfed instance; an admin pod may use the other allowed ones.

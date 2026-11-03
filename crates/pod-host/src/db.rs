@@ -78,7 +78,17 @@ pub struct HostStore {
 }
 
 impl HostStore {
+    /// Open (creating if needed, mode 0600) `host.db`.
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
+        pod_core::util::private_db_file(path).map_err(|e| {
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(1),
+                Some(format!(
+                    "making {} private (mode 0600): {e}",
+                    path.display()
+                )),
+            )
+        })?;
         let conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;

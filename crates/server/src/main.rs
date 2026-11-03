@@ -21,7 +21,10 @@
 //! - `CONSTRUCT_DATA_DIR`: `host.db` and `pods/` (default `~/.construct-server`).
 //! - `CONSTRUCT_OPEN_POD=<name>`: callers without a pod token use this pod
 //!   (created if missing). Development only. Unset on a loopback address (the
-//!   default `127.0.0.1:8080`): the pod `dev`; `off` turns that off.
+//!   default `127.0.0.1:8080`): the pod `dev`; `off` turns that off. Refused
+//!   on a non-loopback address unless `CONSTRUCT_INSECURE_OPEN_POD_ON_NETWORK=1`,
+//!   and always behind Fly (`FLY_APP_NAME`). Only requests whose `Host` is
+//!   `localhost` or an IP address use it (no DNS rebinding).
 //! - `CONSTRUCT_TEMP_PODS=1`, `CONSTRUCT_TEMP_POD_HOURS`, `CONSTRUCT_TEMP_POD_MAX`:
 //!   anyone may create a temporary pod.
 //! - `CONSTRUCT_TEST_HOOKS=1`: enables `POST /v1/test/fault` in every pod.
@@ -30,6 +33,10 @@
 //! - `CONSTRUCT_VAPID_PRIVATE_KEY`, `CONSTRUCT_VAPID_SUBJECT`, `CONSTRUCT_PUSH=off`:
 //!   Web Push for notifications (D52); without a key the server makes one and
 //!   keeps it in `host.db`.
+//! - `CONSTRUCT_SECRETS_KEY`: base64 of 32 random bytes (comma-separated:
+//!   key rotation, first one seals) that seals upstream credentials in the
+//!   pod databases (`pod_core::secrets`). Unset: stored unsealed, with a
+//!   warning; a malformed value stops the server.
 //! - `PIXELFED_*`: see `PixelfedConfig::from_env` and README.
 //!
 //! A pod's layout files are synced into its database when the pod is first
@@ -82,6 +89,10 @@ fn main() -> std::process::ExitCode {
         .with_writer(std::io::stderr)
         .init();
     server::validate_fixtures();
+    if let Err(e) = init_secrets() {
+        eprintln!("server: {e}");
+        return std::process::ExitCode::FAILURE;
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
@@ -110,6 +121,27 @@ fn main() -> std::process::ExitCode {
             std::process::ExitCode::from(2)
         }
     }
+}
+
+/// Read `CONSTRUCT_SECRETS_KEY` once, before any pod opens, and say whether
+/// upstream credentials are sealed. A deploy without the key keeps working
+/// (credentials stay or become plaintext) but logs an error on Fly.
+fn init_secrets() -> Result<(), String> {
+    let secrets = server::secrets::Secrets::init_process()?;
+    if secrets.enabled() {
+        tracing::info!(key_ids = ?secrets.key_ids(), "upstream credentials are sealed at rest");
+    } else if std::env::var_os("FLY_APP_NAME").is_some() {
+        tracing::error!(
+            "CONSTRUCT_SECRETS_KEY is not set: upstream sign-in tokens are stored UNENCRYPTED. \
+             Set it with `flyctl secrets set CONSTRUCT_SECRETS_KEY=$(openssl rand -base64 32)`"
+        );
+    } else {
+        tracing::warn!(
+            "CONSTRUCT_SECRETS_KEY is not set: upstream sign-in tokens are stored unencrypted \
+             (fine for development)"
+        );
+    }
+    Ok(())
 }
 
 fn print_token(what: &str, name: &str, token: &str) {
@@ -228,14 +260,26 @@ async fn serve() -> Result<(), String> {
         temporary_pod_settings: server::temporary_pod_settings(),
         ..HostConfig::from_env()
     };
+    let on_fly = std::env::var_os("FLY_APP_NAME").is_some_and(|v| !v.is_empty());
     // Only this machine can reach a loopback server: keep `cargo run -p
     // server` working without a pod token, as before D46.
-    let loopback = addr
-        .parse::<SocketAddr>()
-        .is_ok_and(|a| a.ip().is_loopback())
-        || addr.starts_with("localhost:");
-    if config.open_pod.is_none() && loopback && std::env::var("CONSTRUCT_OPEN_POD").is_err() {
+    if config.open_pod.is_none()
+        && !on_fly
+        && server::is_loopback_addr(&addr)
+        && std::env::var("CONSTRUCT_OPEN_POD").is_err()
+    {
         config.open_pod = Some("dev".to_owned());
+    }
+    if config.open_pod.is_some() {
+        let opt_in = std::env::var(server::INSECURE_OPEN_POD_VAR).is_ok_and(|v| v == "1");
+        server::check_open_pod(&addr, on_fly, opt_in)?;
+        if opt_in && !server::is_loopback_addr(&addr) {
+            tracing::warn!(
+                %addr,
+                "{}=1: anyone on this network can use the open pod",
+                server::INSECURE_OPEN_POD_VAR
+            );
+        }
     }
     if let Some(t) = config.temporary {
         tracing::info!(hours = t.hours, max = t.max_live, "temporary pods enabled");

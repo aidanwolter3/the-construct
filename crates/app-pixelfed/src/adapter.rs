@@ -123,6 +123,18 @@ impl AppAdapter for PixelfedAdapter {
         crate::db::MIGRATIONS
     }
 
+    fn on_open(&self, store: &pod_core::store::Store) -> Result<(), String> {
+        let sealed =
+            crate::db::reseal(store).map_err(|e| format!("sealing stored credentials: {e}"))?;
+        if sealed > 0 {
+            tracing::info!(
+                sealed,
+                "sealed stored Pixelfed credentials under the current key"
+            );
+        }
+        Ok(())
+    }
+
     fn public_paths(&self) -> &'static [&'static str] {
         // Images load without the bearer; keys are opaque hashes of public
         // upstream media (D17).

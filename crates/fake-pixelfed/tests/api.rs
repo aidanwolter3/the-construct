@@ -6,7 +6,9 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use fake_pixelfed::{AppState, Config, app, default_fixtures_dir, s256_challenge};
+use fake_pixelfed::{
+    AppState, Config, app, client_redirect_uri, default_fixtures_dir, s256_challenge,
+};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -344,6 +346,64 @@ async fn authorize_rejects_unregistered_redirect_and_missing_pkce() {
         get(&router, &no_pkce, None).await.status,
         StatusCode::BAD_REQUEST
     );
+}
+
+#[test]
+fn client_redirect_uris_are_construct_or_loopback() {
+    for ok in [
+        "construct://oauth",
+        "http://127.0.0.1:47823/callback",
+        "http://localhost:9/cb",
+        "https://localhost/callback",
+        "http://[::1]:8080/callback",
+        "http://127.0.0.1",
+    ] {
+        assert!(client_redirect_uri(ok), "{ok}");
+    }
+    for bad in [
+        "https://evil.test",
+        "https://evil.test/?u=http://127.0.0.1:1/",
+        "http://127.0.0.1.evil.test:9/callback",
+        "http://localhost:9@evil.test/callback",
+        "http://localhost@evil.test/",
+        "http://localhost\\@evil.test/",
+        "http://127.0.0.1:0/callback",
+        "http://127.0.0.1:99999/callback",
+        "http://[::1].evil.test/",
+        "javascript:alert(1)",
+        "myapp://signed-in",
+        "",
+    ] {
+        assert!(!client_redirect_uri(bad), "{bad}");
+    }
+}
+
+/// With admin off (the public staging deployment), only client redirect URIs
+/// can be registered, so `auto=1` can't redirect anywhere else.
+#[tokio::test]
+async fn public_fake_only_registers_client_redirect_uris() {
+    let router = app(Arc::new(
+        AppState::new(Config {
+            fixtures_dir: default_fixtures_dir(),
+            public_url: format!("{BASE}/"),
+            auto_approve: false,
+            seed_token: None,
+        })
+        .expect("fixtures load")
+        .with_admin(false),
+    ));
+    for bad in ["https://evil.test", "construct://oauth https://evil.test"] {
+        let r = post_form(
+            &router,
+            "/api/v1/apps",
+            &[("client_name", "x"), ("redirect_uris", bad)],
+        )
+        .await;
+        assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{bad}");
+    }
+    let (client_id, _) = register(&router).await;
+    let code = authorize(&router, &client_id, VERIFIER).await;
+    assert!(!code.is_empty());
 }
 
 #[tokio::test]

@@ -20,6 +20,9 @@ tracing = "0.1"
 sha2 = "0.10"
 base64 = "0.22"
 getrandom = "0.3"
+# Sealing adapters' upstream credentials at rest (`secrets`); already in the
+# tree through web-push-native.
+aes-gcm = "0.10"
 # `stream::unfold` for the SSE stream.
 futures-util = { version = "0.3", default-features = false }
 # Content-addressed layout blobs.
@@ -29,6 +32,10 @@ zstd = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # Web Push (RFC 8291 encryption, RFC 8292 VAPID), no HTTP stack of its own.
 web-push-native = "0.5"
+
+[target.'cfg(unix)'.dependencies]
+# Free disk space (`statvfs`) for the low-disk guard on uploads.
+rustix = { version = "1", features = ["fs"] }
 
 [dev-dependencies]
 tempfile = "3"
