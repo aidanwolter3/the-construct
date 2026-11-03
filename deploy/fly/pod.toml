@@ -9,9 +9,13 @@ primary_region = "dfw"
   CONSTRUCT_ADDR = "0.0.0.0:8080"
   CONSTRUCT_DATA_DIR = "/data"
   RUST_LOG = "info"
-  # Staging talks to the fake Pixelfed app (deploy/fly/fake-pixelfed.toml), never a real instance.
+  # The default instance ("Sign in with Pixelfed") is the fake Pixelfed app
+  # (deploy/fly/fake-pixelfed.toml).
   PIXELFED_INSTANCE_URL = "https://the-construct-fake-pixelfed.fly.dev"
+  # The sign-in screen's server box accepts any public HTTPS Pixelfed instance (D45).
+  PIXELFED_ALLOWED_INSTANCES = "*"
   # Test environment: any fake account may sign in and replace the stored one.
+  # Not on typed-in instances: there the first account to sign in keeps it (D45).
   PIXELFED_ALLOW_ACCOUNT_CHANGE = "1"
   CONSTRUCT_LLM_PROVIDER = "auto"
 

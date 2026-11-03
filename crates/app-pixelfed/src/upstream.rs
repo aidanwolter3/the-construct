@@ -1,12 +1,16 @@
-//! HTTP client for the configured Pixelfed (Mastodon API) instance.
+//! HTTP clients for Pixelfed (Mastodon API) instances and their media.
 
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
 
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::{StatusCode, redirect};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::MediaAllowlist;
+use crate::config::{Instance, is_public_host};
+use crate::{MediaPolicy, MediaRoute};
 
 /// Total timeout for API calls.
 pub const API_TIMEOUT: Duration = Duration::from_secs(10);
@@ -69,48 +73,214 @@ fn lenient_secs<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<i64>, D
     Ok(secs.filter(|s| *s > 0))
 }
 
-/// Upstream client: API calls go to `instance_url` (server-side reachable).
+/// The pod's HTTP clients (built once; cheap to clone). Instances and
+/// media the operator configured use the `trusted` pair, which may reach
+/// private addresses (a local fake, a Fly-internal host). Instances users
+/// type under `PIXELFED_ALLOWED_INSTANCES=*`, and media outside the
+/// allowlist, use the `public` pair, whose resolver drops every non-public
+/// address and which follows redirects only to public HTTPS names (D45).
+#[derive(Debug, Clone)]
+pub struct Clients {
+    trusted_api: reqwest::Client,
+    trusted_media: reqwest::Client,
+    public_api: reqwest::Client,
+    public_media: reqwest::Client,
+    policy: MediaPolicy,
+}
+
+const USER_AGENT: &str = concat!("construct-pod/", env!("CARGO_PKG_VERSION"));
+const MAX_REDIRECTS: usize = 5;
+
+fn builder(timeout: Duration) -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(timeout)
+        .user_agent(USER_AGENT)
+}
+
+/// An `https://<public host>` URL (default port; no IP literal).
+fn public_https(url: &reqwest::Url) -> bool {
+    url.scheme() == "https" && url.port().is_none() && url.host_str().is_some_and(is_public_host)
+}
+
+impl Clients {
+    pub fn new(policy: MediaPolicy) -> Self {
+        let trusted_api = builder(API_TIMEOUT).build().expect("reqwest client");
+        let p = policy.clone();
+        let trusted_media = builder(MEDIA_TIMEOUT)
+            .redirect(redirect::Policy::custom(move |attempt| {
+                if attempt.previous().len() >= MAX_REDIRECTS {
+                    attempt.error("too many media redirects")
+                } else if p.route_url(attempt.url()) == Some(MediaRoute::Trusted) {
+                    attempt.follow()
+                } else {
+                    // A public target is fetched again with the public client.
+                    attempt.stop()
+                }
+            }))
+            .build()
+            .expect("reqwest client");
+        let public_api = builder(API_TIMEOUT)
+            .dns_resolver(Arc::new(PublicOnlyResolver))
+            .redirect(redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= MAX_REDIRECTS {
+                    attempt.error("too many redirects")
+                } else if public_https(attempt.url()) {
+                    attempt.follow()
+                } else {
+                    tracing::warn!(host = ?attempt.url().host_str(), "redirect to a non-public URL refused");
+                    attempt.stop()
+                }
+            }))
+            .build()
+            .expect("reqwest client");
+        let p = policy.clone();
+        let public_media = builder(MEDIA_TIMEOUT)
+            .dns_resolver(Arc::new(PublicOnlyResolver))
+            .redirect(redirect::Policy::custom(move |attempt| {
+                if attempt.previous().len() >= MAX_REDIRECTS {
+                    attempt.error("too many media redirects")
+                } else if p.route_url(attempt.url()).is_some() {
+                    attempt.follow()
+                } else {
+                    tracing::warn!(host = ?attempt.url().host_str(), "media redirect to a host outside the allowlist refused");
+                    attempt.stop()
+                }
+            }))
+            .build()
+            .expect("reqwest client");
+        Self {
+            trusted_api,
+            trusted_media,
+            public_api,
+            public_media,
+            policy,
+        }
+    }
+
+    /// The API client for `instance`.
+    pub fn api(&self, instance: &Instance) -> Upstream {
+        Upstream {
+            http: if instance.trusted {
+                self.trusted_api.clone()
+            } else {
+                self.public_api.clone()
+            },
+            instance_url: instance.url.trim_end_matches('/').to_owned(),
+        }
+    }
+
+    /// GET a media URL (no credentials are sent: media are public and the URL
+    /// may be on another host) with the client its [`MediaRoute`] calls for.
+    /// A redirect to a URL the policy refuses is not followed (the 3xx comes
+    /// back as a `Status` error); one from a trusted origin to a public URL
+    /// is fetched with the public client.
+    pub async fn fetch_media(
+        &self,
+        url: &str,
+        route: MediaRoute,
+    ) -> Result<reqwest::Response, UpstreamError> {
+        let client = match route {
+            MediaRoute::Trusted => &self.trusted_media,
+            MediaRoute::Public => &self.public_media,
+        };
+        let mut resp = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| UpstreamError::Unreachable(e.to_string()))?;
+        if route == MediaRoute::Trusted && resp.status().is_redirection() {
+            let next = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|l| l.to_str().ok())
+                .and_then(|l| resp.url().join(l).ok())
+                .filter(|u| self.policy.route_url(u) == Some(MediaRoute::Public));
+            if let Some(next) = next {
+                resp = self
+                    .public_media
+                    .get(next)
+                    .send()
+                    .await
+                    .map_err(|e| UpstreamError::Unreachable(e.to_string()))?;
+            }
+        }
+        if !resp.status().is_success() {
+            return Err(UpstreamError::Status(resp.status(), String::new()));
+        }
+        Ok(resp)
+    }
+}
+
+/// The system resolver, keeping only public addresses: a name a user typed
+/// (or a federated post's media host) must not reach the pod's own network.
+struct PublicOnlyResolver;
+
+impl Resolve for PublicOnlyResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        let host = name.as_str().to_owned();
+        Box::pin(async move {
+            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
+                .await?
+                .filter(|a| is_public_ip(a.ip()))
+                .collect();
+            if addrs.is_empty() {
+                tracing::warn!(%host, "refused: the name has no public address");
+                return Err(format!("{host} has no public address").into());
+            }
+            Ok(Box::new(addrs.into_iter()) as Addrs)
+        })
+    }
+}
+
+/// A globally routable unicast address (not private, loopback, link-local,
+/// CGNAT, ULA, documentation, multicast, ...).
+pub fn is_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => is_public_v4(v4),
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_public_v4(v4);
+            }
+            let s = v6.segments();
+            !(v6.is_unspecified()
+                || v6.is_loopback()
+                || v6.is_multicast()
+                || (s[0] & 0xfe00) == 0xfc00 // unique local (fc00::/7, e.g. Fly's fdaa::)
+                || (s[0] & 0xffc0) == 0xfe80 // link-local
+                || (s[0] & 0xffc0) == 0xfec0 // site-local (deprecated)
+                || (s[0] == 0x2001 && s[1] == 0x0db8) // documentation
+                || (s[0] == 0x0064 && s[1] == 0xff9b) // NAT64: embeds an IPv4 address
+                || s[0] == 0 // ::/16 (IPv4-compatible and other reserved)
+                || s[0] == 0x2002) // 6to4: embeds an IPv4 address
+        }
+    }
+}
+
+fn is_public_v4(ip: Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
+    !(ip.is_unspecified()
+        || ip.is_private()
+        || ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_broadcast()
+        || ip.is_documentation()
+        || ip.is_multicast()
+        || a == 0
+        || (a == 100 && (64..128).contains(&b)) // CGNAT 100.64/10
+        || (a == 192 && b == 0 && c == 0) // 192.0.0/24
+        || (a == 198 && (b == 18 || b == 19)) // benchmarking 198.18/15
+        || a >= 240) // reserved
+}
+
+/// API client for one instance ([`Clients::api`]).
 #[derive(Debug, Clone)]
 pub struct Upstream {
     http: reqwest::Client,
-    /// Media fetches: redirects are followed only to allowlisted origins.
-    media: reqwest::Client,
     instance_url: String,
 }
 
 impl Upstream {
-    pub fn new(instance_url: &str, media_allow: MediaAllowlist) -> Self {
-        let user_agent = concat!("construct-pod/", env!("CARGO_PKG_VERSION"));
-        let http = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(API_TIMEOUT)
-            .user_agent(user_agent)
-            .build()
-            .expect("reqwest client");
-        let policy = redirect::Policy::custom(move |attempt| {
-            if attempt.previous().len() >= 5 {
-                attempt.error("too many media redirects")
-            } else if media_allow.allows_url(attempt.url()) {
-                attempt.follow()
-            } else {
-                tracing::warn!(host = ?attempt.url().host_str(), "media redirect to a host outside the allowlist refused");
-                attempt.stop()
-            }
-        });
-        let media = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(MEDIA_TIMEOUT)
-            .user_agent(user_agent)
-            .redirect(policy)
-            .build()
-            .expect("reqwest client");
-        Self {
-            http,
-            media,
-            instance_url: instance_url.trim_end_matches('/').to_owned(),
-        }
-    }
-
     fn url(&self, path: &str) -> String {
         format!("{}{path}", self.instance_url)
     }
@@ -280,22 +450,6 @@ impl Upstream {
         }
         Self::send_json(req).await
     }
-
-    /// GET a media URL (no credentials are sent: media are public and the URL
-    /// may be on another allowlisted host). A redirect to a host outside the
-    /// allowlist is not followed (the 3xx comes back as a `Status` error).
-    pub async fn fetch_media(&self, url: &str) -> Result<reqwest::Response, UpstreamError> {
-        let resp = self
-            .media
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| UpstreamError::Unreachable(e.to_string()))?;
-        if !resp.status().is_success() {
-            return Err(UpstreamError::Status(resp.status(), String::new()));
-        }
-        Ok(resp)
-    }
 }
 
 #[cfg(test)]
@@ -326,5 +480,55 @@ mod tests {
         .unwrap();
         assert_eq!((t.refresh_token, t.expires_in), (None, Some(3600)));
         assert!(serde_json::from_str::<TokenResponse>(r#"{"token_type":"Bearer"}"#).is_err());
+    }
+
+    #[test]
+    fn public_ips() {
+        for ok in [
+            "1.1.1.1",
+            "8.8.8.8",
+            "2606:4700:4700::1111",
+            "::ffff:1.1.1.1",
+        ] {
+            assert!(is_public_ip(ok.parse().unwrap()), "{ok}");
+        }
+        for bad in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "0.0.0.0",
+            "255.255.255.255",
+            "224.0.0.1",
+            "240.0.0.1",
+            "198.18.0.1",
+            "192.0.0.8",
+            "::1",
+            "::",
+            "fdaa:0:1::2",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.1",
+            "64:ff9b::a00:1",
+            "2002:a00:1::1",
+            "2001:db8::1",
+        ] {
+            assert!(!is_public_ip(bad.parse().unwrap()), "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn public_client_refuses_private_names() {
+        let clients = Clients::new(MediaPolicy::default());
+        let api = clients.api(&Instance {
+            url: "https://localhost".into(),
+            trusted: false,
+        });
+        match api.verify_credentials("t").await {
+            Err(UpstreamError::Unreachable(e)) => assert!(e.contains("error"), "{e}"),
+            other => panic!("expected a refused connection, got {other:?}"),
+        }
     }
 }

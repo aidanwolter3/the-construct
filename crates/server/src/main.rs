@@ -53,6 +53,8 @@ async fn main() -> std::io::Result<()> {
     tracing::info!(
         instance = %pixelfed.instance_url,
         public = %pixelfed.public_url,
+        others = ?pixelfed.allowed_instances,
+        any_instance = pixelfed.any_instance,
         "Pixelfed adapter configured"
     );
     let state = match server::AppState::open_dir(&dir, server::adapters(pixelfed)) {

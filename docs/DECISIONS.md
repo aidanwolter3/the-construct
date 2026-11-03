@@ -1508,3 +1508,44 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   `amount` (fraction characters: "⅓ cup"), `thing`, `details`. Steps: `temp_text`, `time_text`, `has_cues`.
 - **Layout:** `layouts/recipes/0004.json` (schema 6). Schema-5 clients keep `recipes/0003`.
 - **Not yet:** recipe photos; ticking off ingredients while cooking; a grid list.
+
+## D45: Sign in to any Pixelfed instance from the sign-in screen
+
+- **Why:** the pod talked to one configured instance (staging: the fake), so trying the app against a real Pixelfed
+  meant running your own pod. Now the signed-out screen can take a server name, and one pod serves sessions on
+  different instances.
+- **Configuration:** `PIXELFED_INSTANCE_URL` stays the default instance ("Sign in with Pixelfed"; sessions from
+  before D45 use it). `PIXELFED_ALLOWED_INSTANCES` lists other instances (comma-separated base URLs, trusted like the
+  default) and/or `*` for any public `https://` instance. Unset: the old one-instance behaviour, no server box.
+  Staging sets `*`.
+- **No client change:** the signed-out screen (built by the adapter, not versioned) adds a `core://TextField`
+  (`field: "instance"`) and a "Sign in to this server" button whose `AuthLogin.instance_url` is `$form.instance`.
+  The client already binds form values into intents and sends nothing while the field is blank; the engine passes
+  `instance_url` through to the pod's `/app` and `/token` calls, which resolve it.
+- **Resolving a typed instance:** trimmed; no scheme means `https://`; it must be a bare base URL (no path, query,
+  fragment or credentials) and is stored as `scheme://host[:port]` (lowercase host, default port dropped). The
+  default's instance or public URL maps to the default; a listed URL to that instance; under `*`, an
+  `https://<public name>` on the default port. Anything else is 400 `instance_not_allowed` (the existing client
+  message).
+- **SSRF guard for typed instances:** the user now picks a host the pod connects to, so under `*` the host must be a
+  dotted DNS name (no IP literal, no `localhost`/`.local`/`.internal`/...), and the API and media clients used for
+  them resolve names through a resolver that drops every non-public address (private, loopback, link-local, CGNAT,
+  ULA such as Fly's `fdaa::`, IPv4-mapped/NAT64/6to4 forms of those, ...) and follow redirects only to public
+  `https://` names. The operator's own instances keep the unrestricted clients (the fake and the local dev stack are
+  on private addresses).
+- **Media under `*`:** a user's instance may serve media from any CDN, so besides the allowlist the proxy rewrites
+  and fetches any public `https://` media URL with the guarded client (`MediaPolicy`, `MediaRoute::{Trusted,
+  Public}`). A trusted origin's redirect to a public URL is refetched with the guarded client.
+- **Store:** the adapter's first own migration adds `pixelfed_session_instance(token_hash PK, instance)`, written in
+  the sign-in transaction; rows of sessions that are gone are pruned at the next sign-in. Accounts, owners and OAuth
+  apps were already keyed by instance. A session whose stored instance the pod no longer accepts reads as signed
+  out. The token response also carries `instance_url`.
+- **Owners:** pinning stays per instance. `PIXELFED_OWNER_ACCOUNT_ID` now applies to the default instance only (ids
+  are per instance). `PIXELFED_ALLOW_ACCOUNT_CHANGE` applies to the default and listed instances, never to typed
+  ones: otherwise, on staging, a second person signing in to the same real instance would replace the first
+  person's stored token and their sessions would read the newcomer's feed.
+- **Weighed:** one account per session instead of per instance (a real multi-user pod: more tables, and the pod is
+  meant to be personal); a client-side instance picker in the menu (needs a client build; the layout can do it);
+  instance discovery via NodeInfo before registering (a typo now just fails as "Can't reach Pixelfed right now.").
+- **Not yet:** checked against a public instance (needs a device or the desktop app); a way to remove a stored
+  account from a typed-in instance other than deleting the row; per-instance rate limits.

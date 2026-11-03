@@ -205,12 +205,13 @@ version) are logged at startup. `GET /healthz` answers 200 `ok`
 | `CONSTRUCT_DATA_DIR` | `~/.construct-server` | Directory of `server.db` (Pixelfed app/account/sessions, media keys, layout versions); created if missing. |
 | `CONSTRUCT_TEST_HOOKS` | unset | `1` enables `POST /v1/test/fault` (fault injection; otherwise 404). |
 | `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: `GET /v1/apps` also lists the dev app `pixelfed_demo` (it works either way; this only makes it show up in the clients' menu). |
-| `PIXELFED_INSTANCE_URL` | `http://127.0.0.1:8081` (the fake) | Pixelfed instance for pod->upstream calls, and the only instance accepted in auth calls. `http://localhost:8090` for the local real Pixelfed, `https://<instance>` for a public one. |
-| `PIXELFED_PUBLIC_URL` | = instance URL | Base for browser-facing links (the authorize page), e.g. `http://10.0.2.2:8081` for the emulator while the pod calls `127.0.0.1:8081`. Also accepted in auth calls. |
-| `PIXELFED_MEDIA_HOSTS` | unset | Comma-separated `host`, `host:port` or `scheme://host[:port]`: extra origins the media proxy may fetch (CDN/S3) besides the instance and public URLs. Media elsewhere become placeholders. |
+| `PIXELFED_INSTANCE_URL` | `http://127.0.0.1:8081` (the fake) | The default Pixelfed instance: the "Sign in with Pixelfed" button uses it. `http://localhost:8090` for the local real Pixelfed, `https://<instance>` for a public one. |
+| `PIXELFED_PUBLIC_URL` | = instance URL | Base for the default instance's browser-facing links (the authorize page), e.g. `http://10.0.2.2:8081` for the emulator while the pod calls `127.0.0.1:8081`. Also accepted in auth calls. |
+| `PIXELFED_ALLOWED_INSTANCES` | unset | Other instances users may sign in to (D45): comma-separated base URLs (trusted like the default, may be private), and/or `*` for any public `https://` instance typed on the sign-in screen (only public IP addresses are contacted for those, and their media may come from any public HTTPS host). Set: the signed-out screen adds a server box. Unset: only the default instance. |
+| `PIXELFED_MEDIA_HOSTS` | unset | Comma-separated `host`, `host:port` or `scheme://host[:port]`: extra origins the media proxy may fetch (CDN/S3) besides the configured instances. Media elsewhere become placeholders (except public HTTPS media under `*`). |
 | `PIXELFED_EXTRA_REDIRECTS` | unset | Comma-separated exact redirect URIs accepted by `/v1/auth/pixelfed/app`, besides `http://127.0.0.1:<port>/callback`, `http://localhost:<port>/callback` and `construct://oauth`. |
-| `PIXELFED_OWNER_ACCOUNT_ID` | unset | The only upstream account id allowed to sign in (replaces a pinned owner). Unset: the first account to sign in is pinned; others get 403 `account_not_owner`. |
-| `PIXELFED_ALLOW_ACCOUNT_CHANGE` | unset | `1`/`true`: any account may sign in and replace the stored one (no pinning). |
+| `PIXELFED_OWNER_ACCOUNT_ID` | unset | The only upstream account id allowed to sign in to the default instance (replaces a pinned owner). Unset, and on every other instance: the first account to sign in is pinned; others get 403 `account_not_owner`. |
+| `PIXELFED_ALLOW_ACCOUNT_CHANGE` | unset | `1`/`true`: on the default and listed instances any account may sign in and replace the stored one (no pinning). Instances typed under `*` always keep their first account. |
 | `CONSTRUCT_SESSION_TTL_DAYS` | `90` | Pod session lifetime in days (1..=36500; other values warn and use 90). |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
 
@@ -235,6 +236,15 @@ The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PR
 Nothing has to be registered by hand: the pod registers its own OAuth app on the instance (`POST /api/v1/apps`,
 redirect `construct://oauth`) on the first sign-in. The pod keeps the upstream token; the phone only gets a pod
 session (DECISIONS D17, D19).
+
+**On staging (no setup):** the staging pod runs with `PIXELFED_ALLOWED_INSTANCES=*` (D45). Open the Pixelfed app
+signed out, type your server (e.g. `pixelfed.social`) in the box under "Or sign in to another Pixelfed server", tap
+**Sign in to this server**, log in and approve in the browser. "Sign in with Pixelfed" still goes to the fake. Staging
+keeps your upstream token in its database; the first account to sign in on each typed-in server owns it there (others
+get "This pod belongs to a different Pixelfed account."). Sign out and ask for the row to be removed, or use your own
+pod, if that matters.
+
+**On your own pod:**
 
 1. Start the pod for the instance (any account on it; the first one to sign in becomes the pod's owner):
 
@@ -278,6 +288,8 @@ Notes:
 - Verified against the local real Pixelfed 0.15.2 (`PIXELFED_INSTANCE_URL=http://localhost:8090` plus
   `adb reverse tcp:8090 tcp:8090`, see "Local Pixelfed instance") on the emulator; not yet against a public
   instance.
+- To offer more instances than the default, set `PIXELFED_ALLOWED_INSTANCES` (a list, or `*`); the signed-out screen
+  then has a server box. A typed value without a scheme means `https://`.
 
 ## Adding a new layout version
 
