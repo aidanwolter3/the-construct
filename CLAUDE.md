@@ -83,7 +83,8 @@ Staging needs a pod token (D46). Make a temporary one (24 h, deleted afterwards;
 - PRs that change the interface (layouts, shared UI, new node types) must embed screenshots of the changed
   screens, taken with the headless simulator (`:desktopApp:simulate`), before/after where it helps. Images can't
   be uploaded through the API: push the PNGs to a side branch `screenshots/<pr-branch>` (never merged) and embed
-  them with `https://raw.githubusercontent.com/aidanwolter3/the-construct/screenshots/<pr-branch>/<file>.png`.
+  them with `https://github.com/aidanwolter3/the-construct/blob/screenshots/<pr-branch>/<file>.png?raw=true`
+  (the repo is private, so `raw.githubusercontent.com` links don't render).
 - Keep sessions to one task: file follow-up work as a GitHub issue with the `/ticket` skill
   (`.claude/skills/ticket`); each issue starts with a link that opens a new session on it.
 
