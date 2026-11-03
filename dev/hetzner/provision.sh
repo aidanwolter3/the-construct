@@ -14,9 +14,17 @@
 #   --domain HOST          serve the construct server over HTTPS at HOST via Caddy
 #                          (point the DNS A record at this server first)
 #   --pixelfed-domain HOST also proxy the local Pixelfed (port 8090) at HOST over HTTPS
+#                          (needs --domain and --repo). The committed dev APP_KEY and seed
+#                          passwords are public, so this writes a fresh APP_KEY and random
+#                          seed passwords to the clone's dev/pixelfed/pixelfed.local.env
+#                          (gitignored; mode 600) before Pixelfed is ever started.
 #   --repo URL             git clone URL for the project (e.g. git@github.com:you/the_construct.git)
-#   --runner-url URL       GitHub repo URL for a self-hosted Actions runner
-#   --runner-token TOKEN   registration token (repo Settings > Actions > Runners > New)
+#   --runner-url URL       GitHub repo URL for a self-hosted Actions runner. It runs as its
+#                          own unprivileged user (gh-runner: no sudo, no docker group).
+#                          The registration token (repo Settings > Actions > Runners > New)
+#                          is read from CONSTRUCT_RUNNER_TOKEN, else from the first line of
+#                          stdin, never from the command line (it would show in ps/history):
+#                            ssh root@<IP> 'bash /root/provision.sh --runner-url URL' < token.txt
 #   --swap GB              swap file size (default: 4)
 #
 # Re-running is safe: each step checks whether it has already been done.
@@ -33,7 +41,8 @@ DOMAIN=""
 PIXELFED_DOMAIN=""
 REPO_URL=""
 RUNNER_URL=""
-RUNNER_TOKEN=""
+RUNNER_TOKEN="${CONSTRUCT_RUNNER_TOKEN:-}"
+RUNNER_USER=gh-runner
 SWAP_GB=4
 
 # Pinned tool versions (override via environment).
@@ -51,9 +60,11 @@ while [[ $# -gt 0 ]]; do
     --pixelfed-domain) PIXELFED_DOMAIN="$2"; shift 2 ;;
     --repo) REPO_URL="$2"; shift 2 ;;
     --runner-url) RUNNER_URL="$2"; shift 2 ;;
-    --runner-token) RUNNER_TOKEN="$2"; shift 2 ;;
+    --runner-token)
+      echo "--runner-token is gone: pass the token in CONSTRUCT_RUNNER_TOKEN or on stdin (see --help)" >&2
+      exit 2 ;;
     --swap) SWAP_GB="$2"; shift 2 ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,38p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -65,9 +76,19 @@ as_dev() { sudo -u "$DEV_USER" -H bash -lc "$1"; }
 if [[ $WANT_ANDROID -eq 1 && "$(uname -m)" != "x86_64" ]]; then
   echo "--android needs an x86_64 server (the Android SDK tools on Linux are x86_64-only)." >&2; exit 2
 fi
-if [[ -n "$RUNNER_URL" && -z "$RUNNER_TOKEN" ]] || [[ -z "$RUNNER_URL" && -n "$RUNNER_TOKEN" ]]; then
-  echo "--runner-url and --runner-token must be given together" >&2; exit 2
+if [[ -n "$PIXELFED_DOMAIN" && ( -z "$DOMAIN" || -z "$REPO_URL" ) ]]; then
+  echo "--pixelfed-domain needs --domain (Caddy) and --repo (where its secrets file goes)" >&2; exit 2
 fi
+if [[ -n "$RUNNER_URL" && -z "$RUNNER_TOKEN" ]]; then
+  # Read before anything else can consume stdin. -s: no echo when typed at a terminal.
+  [[ -t 0 ]] && printf 'Runner registration token: ' >&2
+  IFS= read -rs RUNNER_TOKEN || true
+  [[ -t 0 ]] && echo >&2
+  [[ -n "$RUNNER_TOKEN" ]] || {
+    echo "--runner-url needs a registration token in CONSTRUCT_RUNNER_TOKEN or on stdin" >&2; exit 2
+  }
+fi
+unset CONSTRUCT_RUNNER_TOKEN
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -239,20 +260,60 @@ if [[ -n "$REPO_URL" ]]; then
   "
 fi
 
-# ----------------------------------------------------- github actions runner
-if [[ -n "$RUNNER_URL" ]]; then
-  log "GitHub Actions self-hosted runner for $RUNNER_URL"
-  as_dev "
-    set -e
-    mkdir -p ~/actions-runner && cd ~/actions-runner
-    if [[ ! -f .runner ]]; then
-      curl -fsSLo runner.tgz https://github.com/actions/runner/releases/download/v$GH_RUNNER_VERSION/actions-runner-linux-x64-$GH_RUNNER_VERSION.tar.gz
-      tar xzf runner.tgz && rm runner.tgz
-      ./config.sh --unattended --url '$RUNNER_URL' --token '$RUNNER_TOKEN' --name \"\$(hostname)\" --labels construct-e2e$( [[ -e /dev/kvm ]] && echo ',kvm' )
-    fi
-  "
-  (cd "/home/$DEV_USER/actions-runner" && ./svc.sh install "$DEV_USER" && ./svc.sh start) || true
+# ------------------------------------------- public pixelfed: fresh secrets
+# The committed APP_KEY (dev/pixelfed/pixelfed.env) and the seed passwords in
+# scripts/pixelfed_dev.sh are public. Behind --pixelfed-domain the instance is
+# on the internet, so give it its own (pixelfed.local.env overrides both).
+PF_LOCAL_ENV="/home/$DEV_USER/src/the_construct/dev/pixelfed/pixelfed.local.env"
+if [[ -n "$PIXELFED_DOMAIN" ]]; then
+  log "Fresh Pixelfed APP_KEY and seed passwords ($PF_LOCAL_ENV)"
+  if [[ ! -d "$(dirname "$PF_LOCAL_ENV")" ]]; then
+    echo "WARNING: no clone at ~/src/the_construct yet, so no secrets were written." >&2
+    echo "         Do not start Pixelfed; fix the clone and re-run this script first." >&2
+  elif [[ -f "$PF_LOCAL_ENV" ]]; then
+    echo "Keeping the existing $PF_LOCAL_ENV"
+  else
+    rand() { head -c "$1" /dev/urandom | base64 | tr '+/' '-_'; }
+    as_dev "umask 077 && cat > '$PF_LOCAL_ENV'" <<EOF
+# Generated by dev/hetzner/provision.sh --pixelfed-domain. Secret; gitignored.
+# Overrides dev/pixelfed/pixelfed.env (docker compose) and the seed passwords in scripts/pixelfed_dev.sh.
+# Changing APP_KEY later logs everyone out; keep this file with the Pixelfed volumes.
+APP_KEY="base64:$(head -c 32 /dev/urandom | base64)"
+CONSTRUCT_SEED_ADMIN_PASS="$(rand 18)"
+CONSTRUCT_SEED_ALICE_PASS="$(rand 18)"
+CONSTRUCT_SEED_BOB_PASS="$(rand 18)"
+EOF
+  fi
 fi
+
+# ----------------------------------------------------- github actions runner
+# Its own user: jobs run code from the repo, so they get no sudo and no docker
+# group (docker group membership is root-equivalent). Jobs install their own
+# toolchains (the dev user's rustup is not shared); the system JDK is there.
+if [[ -n "$RUNNER_URL" ]]; then
+  log "GitHub Actions self-hosted runner for $RUNNER_URL (user $RUNNER_USER)"
+  if ! id "$RUNNER_USER" >/dev/null 2>&1; then
+    adduser --disabled-password --gecos "" "$RUNNER_USER"
+  fi
+  RUNNER_DIR="/home/$RUNNER_USER/actions-runner"
+  RUNNER_LABELS=construct-e2e
+  [[ -e /dev/kvm ]] && RUNNER_LABELS+=,kvm
+  # The token goes through stdin (printf is a builtin, so it never shows in ps);
+  # config.sh reads ACTIONS_RUNNER_INPUT_TOKEN in place of --token.
+  printf '%s\n' "$RUNNER_TOKEN" | sudo -u "$RUNNER_USER" -H bash -c '
+    set -euo pipefail
+    IFS= read -r ACTIONS_RUNNER_INPUT_TOKEN
+    export ACTIONS_RUNNER_INPUT_TOKEN
+    mkdir -p "$1" && cd "$1"
+    if [[ ! -f .runner ]]; then
+      curl -fsSLo runner.tgz "https://github.com/actions/runner/releases/download/v$2/actions-runner-linux-x64-$2.tar.gz"
+      tar xzf runner.tgz && rm runner.tgz
+      ./config.sh --unattended --url "$3" --name "$(hostname)" --labels "$4"
+    fi
+  ' runner-setup "$RUNNER_DIR" "$GH_RUNNER_VERSION" "$RUNNER_URL" "$RUNNER_LABELS"
+  (cd "$RUNNER_DIR" && ./svc.sh install "$RUNNER_USER" && ./svc.sh start) || true
+fi
+unset RUNNER_TOKEN
 
 # ------------------------------------------------------------------- summary
 IP=$(curl -fsS4 https://ifconfig.me || hostname -I | awk '{print $1}')
@@ -268,4 +329,6 @@ This server's GitHub deploy key (add to the repo if private):
   $(cat /home/$DEV_USER/.ssh/id_ed25519.pub)
 Private ports: ssh -L 8080:localhost:8080 -L 8090:localhost:8090 $DEV_USER@$IP
 $( [[ -n "$DOMAIN" ]] && echo "HTTPS:         https://$DOMAIN -> construct server" )
+$( [[ -n "$PIXELFED_DOMAIN" ]] && echo "Pixelfed:      https://$PIXELFED_DOMAIN -> 127.0.0.1:8090; APP_KEY and seed passwords: $PF_LOCAL_ENV" )
+$( [[ -n "$RUNNER_URL" ]] && echo "Runner:        user $RUNNER_USER (no sudo, no docker), $RUNNER_DIR" )
 EOF

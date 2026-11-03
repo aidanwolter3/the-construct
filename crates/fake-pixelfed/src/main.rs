@@ -10,6 +10,8 @@
 //! - `FAKE_PIXELFED_FIXTURES`: fixture directory (default: the copies embedded in the binary).
 //! - `FAKE_PIXELFED_ADMIN`: `1` serves the `/_admin` test controls on any address, `0` never;
 //!   unset, only when bound to a loopback address.
+//!   With admin off, `POST /api/v1/apps` only accepts `construct://` and loopback redirect
+//!   URIs (so the public staging fake is not an open redirector).
 
 use std::io::IsTerminal;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
