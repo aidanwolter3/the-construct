@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::intent::ActionIntent;
 
 /// Node types this build knows (an other type is [`UiNode::Unknown`]).
-pub const NODE_TYPES: [&str; 16] = [
+pub const NODE_TYPES: [&str; 17] = [
     "core://Workspace",
     "core://Container",
     "core://Text",
@@ -32,6 +32,7 @@ pub const NODE_TYPES: [&str; 16] = [
     "core://IconButton",
     "core://Chip",
     "core://Badge",
+    "core://Tappable",
 ];
 
 /// Icon names clients draw (`core://IconButton`, `core://Chip`).
@@ -240,6 +241,21 @@ pub enum UiNode {
     #[serde(rename = "core://Badge")]
     Badge { text: String, icon: String },
 
+    // Schema 4 (docs/DECISIONS.md D42)
+    /// `content` (any node) made tappable: a tap anywhere on it dispatches
+    /// `on_click` (with `$item` bound inside a list). A button inside keeps its
+    /// own tap. `content_description` is read by screen readers; `tag`
+    /// (bindable) names it for tests.
+    #[serde(rename = "core://Tappable")]
+    Tappable {
+        on_click: ActionIntent,
+        content: Box<UiNode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_description: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
+    },
+
     /// A node of a type this build does not know: its JSON, kept as is.
     #[serde(skip)]
     Unknown(Value),
@@ -304,7 +320,9 @@ impl UiNode {
             UiNode::List { item_template, .. } | UiNode::Carousel { item_template, .. } => {
                 vec![item_template]
             }
-            UiNode::Conditional { content, .. } => vec![content],
+            UiNode::Conditional { content, .. } | UiNode::Tappable { content, .. } => {
+                vec![content]
+            }
             UiNode::Text { .. }
             | UiNode::Button { .. }
             | UiNode::Image { .. }
@@ -321,7 +339,9 @@ impl UiNode {
     /// The intents this node itself holds (not its children's).
     pub fn own_intents(&self) -> Vec<&ActionIntent> {
         match self {
-            UiNode::Button { on_click, .. } | UiNode::IconButton { on_click, .. } => vec![on_click],
+            UiNode::Button { on_click, .. }
+            | UiNode::IconButton { on_click, .. }
+            | UiNode::Tappable { on_click, .. } => vec![on_click],
             UiNode::TextField { on_submit, .. } => on_submit.iter().collect(),
             _ => Vec::new(),
         }

@@ -13,6 +13,8 @@
 //!   `Carousel`, `IconButton`, `Chip`, `Badge`, and the `Label` / `Secondary`
 //!   text styles. Breaking (D37): the `pixelfed://` widgets are gone, so
 //!   schema 3 clients draw only layouts written for schema 3.
+//! - 4: `core://Tappable` (any node made tappable, D42). Additive: schema 4
+//!   clients still draw schema 3 layouts.
 //!
 //! # A breaking schema change
 //!
@@ -28,7 +30,7 @@ use crate::{ActionIntent, TextStyle, UiNode};
 /// Request header carrying the client's schema version.
 pub const SCHEMA_HEADER: &str = "x-construct-schema";
 /// The schema version this build draws.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Breaking changes, oldest first: `(client schema, oldest layout schema it
 /// draws)`. A client of schema `c` draws layouts written for schemas
@@ -108,6 +110,7 @@ fn node_schema(node: &UiNode) -> u32 {
         | UiNode::IconButton { .. }
         | UiNode::Chip { .. }
         | UiNode::Badge { .. } => 3,
+        UiNode::Tappable { .. } => 4,
         _ => 1,
     }
 }
@@ -175,6 +178,18 @@ mod tests {
              "on_click": {"intent": "action.navigation.back"}}}),
         );
         assert_eq!(required_schema(&deep), 3);
+        let tappable = node(
+            json!({"type": "core://List", "query_key": "q", "item_template":
+            {"type": "core://Tappable",
+             "on_click": {"intent": "action.navigation.open", "target_uri": "x://$item.id",
+                          "presentation": "Push"},
+             "content": {"type": "core://Text", "value_expr": "$item.title", "style": "Body"}}}),
+        );
+        assert_eq!(required_schema(&tappable), 4);
+        // Its intent is checked like a button's, and its content is a child.
+        let t = &tappable.children()[0];
+        assert_eq!(t.own_intents().len(), 1);
+        assert_eq!(t.children().len(), 1);
     }
 
     #[test]
@@ -225,6 +240,10 @@ mod tests {
                 }
                 "core://Chip" => json!({"type": t, "text": "x"}),
                 "core://Badge" => json!({"type": t, "text": "x", "icon": "repeat"}),
+                "core://Tappable" => {
+                    json!({"type": t, "on_click": {"intent": "action.navigation.back"},
+                                            "content": {"type": "core://Divider"}})
+                }
                 other => panic!("no sample for {other}"),
             };
             let n: UiNode = serde_json::from_value(v).unwrap_or_else(|e| panic!("{t}: {e}"));
@@ -262,5 +281,10 @@ mod tests {
         assert_eq!(compatibility(1, 3), Retired);
         assert_eq!(compatibility(3, 3), Compatible);
         assert_eq!(Retired.reason(), Some("retired"));
+        // Schema 4 (D42) is additive: it still draws schema 3 layouts.
+        assert_eq!(oldest_layout_schema(4), 3);
+        assert_eq!(compatibility(3, 4), Compatible);
+        assert_eq!(compatibility(4, 3), UpdateRequired);
+        assert_eq!(compatibility(2, 4), Retired);
     }
 }

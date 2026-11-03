@@ -1,5 +1,6 @@
 package org.theconstruct
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -14,6 +15,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.IconButton
@@ -163,6 +166,17 @@ fun RenderUiNode(
         is UiNode.Chip -> NodeChip(node, entities, item, modifier)
 
         is UiNode.Badge -> NodeBadge(node, entities, item, modifier)
+
+        // The click goes on the content's own modifier, so the whole drawn area is the target; a button inside
+        // consumes its own taps (the innermost clickable wins).
+        is UiNode.Tappable -> {
+            val description = node.contentDescription?.let { interpolate(it, entities, item) }
+            val tag = node.tag?.let { bindItemTokens(it, item) }
+            var mod = modifier.clickable(onClickLabel = description) { dispatch(node.onClick) }
+            if (description != null) mod = mod.semantics { contentDescription = description }
+            if (tag != null) mod = mod.testTag(tag)
+            RenderUiNode(node.content, entities, onDispatch, mod, item)
+        }
 
         is UiNode.Unknown -> Text(
             "Unsupported component: ${node.type.ifEmpty { "<missing type>" }}",
