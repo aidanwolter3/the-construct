@@ -1497,7 +1497,11 @@ fn a_data_load_401_signs_out() {
     });
     wait_signed_out_bundle(&engine);
     // Sign-out forgets load states. The events stream may notice the revoked
-    // session first: the load then runs signed out and says so.
+    // session first: the load then runs signed out and says so, once its
+    // request (still in flight here) comes back.
+    wait_until("load settled", || {
+        loads(&engine.snapshot())[&path]["state"] != "loading"
+    });
     let loads = loads(&engine.snapshot());
     assert!(
         loads == json!({})

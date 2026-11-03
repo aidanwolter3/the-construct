@@ -21,7 +21,8 @@
 //! A background thread retries the initial fetch every few seconds until
 //! the server answers; after that it probes `GET {base_url}/healthz` on the
 //! same interval so `is_online` tracks the server going away and coming
-//! back. Reconnecting does not re-fetch the workspace, so local optimistic
+//! back (offline only after a few misses in a row, so a blip does not
+//! flash the offline badge; online again on the first answer). Reconnecting does not re-fetch the workspace, so local optimistic
 //! changes survive.
 //!
 //! A second background thread (the sync worker, docs/DECISIONS.md D14)
@@ -81,7 +82,13 @@ pub const CACHE_DB_FILE: &str = "cache.db";
 /// Payload token replaced by the new optimistic field value at dispatch.
 pub const VALUE_TOKEN: &str = "$value";
 /// Timeout for a single reachability probe.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+/// Consecutive failed probes before an online engine reports offline. A
+/// single slow or dropped probe (a network blip, a stale pooled
+/// connection) is common on phones and Wi-Fi; flipping offline for it
+/// flashes the offline badge and restarts the event stream for nothing.
+/// Coming back online still takes one successful probe.
+const PROBE_MISSES_BEFORE_OFFLINE: u32 = 3;
 /// While the initial fetch keeps failing with the same error, log every
 /// this many attempts (once a minute at the default 2 s interval).
 const FETCH_FAILURE_LOG_EVERY: u32 = 30;
@@ -304,7 +311,8 @@ enum FetchOutcome {
 /// - `entities_json`: the URI-keyed entity map as a JSON object (`"{}"` if
 ///   empty).
 /// - `is_online`: whether the server answered the most recent fetch or
-///   reachability probe.
+///   reachability probe (a lone missed probe is ignored; see
+///   `PROBE_MISSES_BEFORE_OFFLINE`).
 /// - `seq`: the engine's state sequence number; strictly increases with
 ///   every change, so consumers can drop snapshots that arrive out of order.
 /// - `pending_actions`: number of PENDING `action_outbox` rows.
@@ -1554,13 +1562,22 @@ impl ConstructEngine {
             .name("construct-engine-fetch".into())
             .spawn(move || {
                 let mut answered = false;
+                // One client for every probe, so its keep-alive connection
+                // is reused instead of a new TCP + TLS handshake each time.
+                // Owned by this thread so it is dropped off any runtime.
+                let probe_client = reqwest::blocking::Client::builder()
+                    .connect_timeout(PROBE_TIMEOUT)
+                    .timeout(PROBE_TIMEOUT)
+                    .build()
+                    .ok();
+                let mut misses = 0u32;
                 loop {
                     let Some(inner) = bg.upgrade() else { return };
                     if inner.signal.is_shut_down() {
                         return;
                     }
                     if answered {
-                        inner.probe();
+                        inner.probe(probe_client.as_ref(), &mut misses);
                     } else {
                         answered = !matches!(inner.refresh(), FetchOutcome::Failed);
                     }
@@ -1845,16 +1862,25 @@ impl Inner {
     }
 
     /// Check whether the server is reachable (any HTTP response counts) and
-    /// notify observers if `is_online` changed. Never touches the workspace
-    /// or entities.
-    fn probe(&self) {
-        let reachable = reachable(&self.health_url);
+    /// notify observers if `is_online` changed. Going offline takes
+    /// [`PROBE_MISSES_BEFORE_OFFLINE`] misses in a row (`misses` counts
+    /// them across calls). Never touches the workspace or entities.
+    fn probe(&self, client: Option<&reqwest::blocking::Client>, misses: &mut u32) {
+        let reachable = reachable(client, &self.health_url);
         if self.signal.is_shut_down() {
             return;
+        }
+        if reachable {
+            *misses = 0;
+        } else {
+            *misses = misses.saturating_add(1);
         }
         let snap = {
             let mut st = lock(&self.state);
             if st.is_online == reachable {
+                return;
+            }
+            if !reachable && *misses < PROBE_MISSES_BEFORE_OFFLINE {
                 return;
             }
             st.is_online = reachable;
@@ -3902,14 +3928,19 @@ fn upload_file(
     }
 }
 
-/// True if the server sent any HTTP response to `GET url`.
-fn reachable(url: &str) -> bool {
-    reqwest::blocking::Client::builder()
-        .connect_timeout(PROBE_TIMEOUT)
-        .timeout(PROBE_TIMEOUT)
-        .build()
-        .and_then(|c| c.get(url).send())
-        .is_ok()
+/// True if the server sent any HTTP response to `GET url`. `client` is
+/// the fetch thread's shared probe client (`None` if it failed to build:
+/// a one-off client is used instead).
+fn reachable(client: Option<&reqwest::blocking::Client>, url: &str) -> bool {
+    match client {
+        Some(c) => c.get(url).send().is_ok(),
+        None => reqwest::blocking::Client::builder()
+            .connect_timeout(PROBE_TIMEOUT)
+            .timeout(PROBE_TIMEOUT)
+            .build()
+            .and_then(|c| c.get(url).send())
+            .is_ok(),
+    }
 }
 
 #[cfg(test)]
