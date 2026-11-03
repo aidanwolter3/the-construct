@@ -156,7 +156,7 @@ private fun runCli(args: Array<String>): Int {
             )
                 .also { current = it }
         }
-        controller = ConstructController(current, current.appId, openBridge)
+        controller = ConstructController(current, current.appId, defaultAppId = DEFAULT_WORKSPACE, openBridge = openBridge)
     } else {
         // Same default as the desktop app (the staging pod); pass -PbaseUrl=http://127.0.0.1:8080 for a local server.
         val baseUrl = opts["baseUrl"] ?: LIVE_DEFAULT_BASE_URL
@@ -181,7 +181,7 @@ private fun runCli(args: Array<String>): Int {
             urlOpener = opener,
         ).also { liveBridge = it }
         // open-app: a new engine for that app on the same server and storage (the controller closes the old one).
-        controller = ConstructController(open(workspace), workspace, ::open)
+        controller = ConstructController(open(workspace), workspace, defaultAppId = DEFAULT_WORKSPACE, openBridge = ::open)
         val deadline = System.nanoTime() + timeoutMs * 1_000_000
         while (controller.state.value.workspace == null && System.nanoTime() < deadline) Thread.sleep(50)
         val s = controller.state.value
@@ -235,6 +235,7 @@ fun defaultFixture(workspace: String, from: File): File {
     val name = when (workspace) {
         "pixelfed_demo" -> "pixelfed_home_bundle.json"
         "pixelfed_home" -> "pixelfed_home_feed_bundle.json"
+        FakeAppCatalog.KITCHEN -> "custom_kitchen_bundle.json"
         else -> throw UsageException("no default fixture for workspace '$workspace'; pass -Pfixture=<bundle.json> or use live mode")
     }
     return findFixture(name, from) ?: throw UsageException("fixtures/$name not found above $from")

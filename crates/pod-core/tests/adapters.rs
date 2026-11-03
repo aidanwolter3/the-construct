@@ -14,8 +14,8 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::{Migration, open_session_on};
 use pod_core::{
-    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, Catalog, Hydration, Pod, RequestCtx,
-    SignInProvider, StaticAdapter,
+    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, Catalog, FeedSpec, Hydration, Pod,
+    RequestCtx, SignInProvider, SourceManifest, StaticAdapter,
 };
 use protocol::{DataBundle, EntityRecord, WorkspaceSpec};
 use serde_json::{Value, json};
@@ -50,6 +50,7 @@ const OPEN: AppInfo = AppInfo {
     icon: "photo",
     dev: false,
     auth: AuthPolicy::Public,
+    feeds: &[("open", "all")],
 };
 const GATED: AppInfo = AppInfo {
     id: "gated",
@@ -57,6 +58,7 @@ const GATED: AppInfo = AppInfo {
     icon: "photo",
     dev: true,
     auth: AuthPolicy::SignIn("test"),
+    feeds: &[("gated", "all")],
 };
 
 fn open_app() -> Arc<dyn AppAdapter> {
@@ -108,10 +110,20 @@ impl AppAdapter for Gated {
             ),
         )
     }
-    fn hydrate<'a>(
+    fn manifest(&self) -> SourceManifest {
+        SourceManifest {
+            feeds: &[FeedSpec {
+                name: "all",
+                query_keys: &[],
+                doc: "",
+            }],
+            ..SourceManifest::new("T")
+        }
+    }
+    fn feed<'a>(
         &'a self,
         _pod: &'a Pod,
-        _app_id: &'a str,
+        _feed: &'a str,
         req: &'a RequestCtx,
     ) -> BoxFuture<'a, Hydration> {
         Box::pin(async move {
@@ -305,10 +317,14 @@ async fn sign_ins_lists_the_session_sign_ins() {
         .unwrap();
     let (status, body, _) = get_json(&state, "/v1/auth/sign-ins", None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, json!({ "sign_ins": [] }));
+    assert_eq!(
+        body,
+        json!({ "sign_ins": [],
+                "providers": [{ "id": "test", "title": "Test service", "signed_in": false }] })
+    );
     let (status, body, _) = get_json(&state, "/v1/auth/sign-ins", Some("bare")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, json!({ "sign_ins": [] }));
+    assert_eq!(body["sign_ins"], json!([]));
     let (status, _, _) = get_json(&state, "/v1/auth/sign-ins", Some("stale")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     // The default account lookup knows nothing: title and apps only.
@@ -320,7 +336,7 @@ async fn sign_ins_lists_the_session_sign_ins() {
             "id": "test",
             "title": "Test service",
             "apps": [{ "id": "gated", "title": "Gated" }],
-        }] })
+        }], "providers": [{ "id": "test", "title": "Test service", "signed_in": true }] })
     );
     // A dev app is listed only when dev apps are shown, like `GET /v1/apps`.
     let hidden = Arc::new(AppState::in_memory(vec![open_app(), Arc::new(Gated)]));
@@ -350,11 +366,13 @@ fn the_core_names_no_app() {
             if code.starts_with("//") {
                 continue;
             }
-            assert!(
-                !code.to_ascii_lowercase().contains("pixelfed"),
-                "src/{name}:{}: the core must not name an app: {line}",
-                i + 1
-            );
+            for app in ["pixelfed", "recipes"] {
+                assert!(
+                    !code.to_ascii_lowercase().contains(app),
+                    "src/{name}:{}: the core must not name an app: {line}",
+                    i + 1
+                );
+            }
         }
     }
 }

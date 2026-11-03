@@ -113,7 +113,7 @@ class EngineBridgeTest {
             assertEquals(VERSION_1, bridge.appVersion("home", 1L))
             synchronized(requests) {
                 assertEquals(
-                    listOf("/v1/apps", "/v1/apps/home/versions?before=3&limit=2", "/v1/apps/home/versions", "/v1/apps/home/versions/1"),
+                    listOf("/v1/apps?all=1", "/v1/apps/home/versions?before=3&limit=2", "/v1/apps/home/versions", "/v1/apps/home/versions/1"),
                     requests,
                 )
             }

@@ -64,7 +64,10 @@ interface ConstructEngineBridge {
     // calls: call them off the UI thread (e.g. on Dispatchers.IO). Each returns the pod's JSON body unchanged or throws
     // [LayoutApiException] with a readable message. The defaults throw, so fakes without apps compile unchanged.
 
-    /** `GET /v1/apps`: `{"apps":[{"id","title","icon","latest_version","updated_at"}]}`. */
+    /**
+     * `GET /v1/apps?all=1`: `{"apps":[{"id","title","icon","kind","hidden","latest_version","updated_at"}]}`, hidden
+     * apps included (`kind`/`hidden` are missing from older pods).
+     */
     fun listApps(): String = throw appsUnavailable()
 
     /**
@@ -79,9 +82,19 @@ interface ConstructEngineBridge {
 
     /**
      * `GET /v1/auth/sign-ins` (Settings): `{"sign_ins":[{"id","title","server"?,"username"?,"apps":[{"id",
-     * "title"}]}]}`; `{"sign_ins":[]}` without a session. BLOCKING, like the apps calls. Default: none.
+     * "title"}]}], "providers":[{"id","title","signed_in","intent"?,"server_placeholder"?}]}`; `{"sign_ins":[]}`
+     * without a session. BLOCKING, like the apps calls. Default: none.
      */
     fun signIns(): String = """{"sign_ins":[]}"""
+
+    /** `DELETE /v1/custom-apps/{appId}`: deletes the pod user's own app on every device. BLOCKING. */
+    fun deleteCustomApp(appId: String): Unit = throw appsUnavailable()
+
+    /** `POST /v1/custom-apps/{appId}/dismiss-update`: no more "has updates" notice up to [version]. BLOCKING. */
+    fun dismissUpdate(appId: String, version: Long): Unit = throw appsUnavailable()
+
+    /** `PUT /v1/apps/{appId}/hidden`: hides the app from every device's list, or shows it again. BLOCKING. */
+    fun setAppHidden(appId: String, hidden: Boolean): Unit = throw appsUnavailable()
 
     // Notifications from apps (D52, docs/NOTIFICATIONS.md). The blocking calls (list, mark read, channels, push key) are
     // like the apps calls: off the UI thread, pod JSON in, [LayoutApiException] out. The defaults make a fake without

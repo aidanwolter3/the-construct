@@ -9,16 +9,22 @@
 //!
 //! Apps plug in through [`AppAdapter`]: the `server` binary builds the
 //! adapters and passes them to [`AppState::try_new`]. The core never names an
-//! app; adapters supply each app's data, routes, sign-ins and tables.
+//! app; adapters supply each app's data, routes, sign-ins and tables. Each
+//! adapter is also a data source ([`source`]): an app is a layout plus a
+//! list of feeds, which the core runs and merges.
 
 pub mod adapter;
+pub mod custom;
 pub mod disk;
 pub mod layouts;
+pub mod mcp;
 pub mod net;
 pub mod notify;
+pub mod parts;
 pub mod push;
 pub mod secrets;
 pub mod session;
+pub mod source;
 pub mod static_app;
 pub mod store;
 pub mod uploads;
@@ -44,10 +50,12 @@ use store::Store;
 
 pub use adapter::{
     AppAdapter, AppInfo, AuthPolicy, BoxFuture, Catalog, Hydration, Pod, RequestCtx, SignInAccount,
-    SignInProvider,
+    SignInProvider, SignInStart,
 };
+pub use custom::{AppRef, CustomApp};
 pub use notify::{NewNotification, PollCtx, PollOutcome, PollStatus};
 pub use session::{Caller, Session};
+pub use source::{EntityDoc, FeedSpec, PathSpec, SourceManifest};
 pub use static_app::StaticAdapter;
 
 /// `WorkspaceSpec::version` of the bundles the pod builds.
@@ -123,7 +131,19 @@ pub struct AppState {
     /// This pod's public path prefix, set by the host (D46), for work done
     /// outside a request (notification polls).
     public_prefix: std::sync::OnceLock<String>,
+    /// Custom apps: caps and the write-rate window.
+    pub(crate) custom: custom::CustomState,
+    /// Served by a pod host (D46), which sets [`CREDENTIAL_HEADER`] (and
+    /// removes any a client sent): only then is that header trusted.
+    hosted: std::sync::atomic::AtomicBool,
+    /// Per-process secret of internal requests ([`session::INTERNAL_HEADER`]).
+    internal_secret: String,
 }
+
+/// Request header a pod host sets on a request whose bearer was an MCP
+/// credential (`mcp`, decision `mcp-connector`); the host removes any value
+/// a client sent. Trusted only by a hosted pod ([`AppState::set_hosted`]).
+pub const CREDENTIAL_HEADER: &str = "x-construct-credential";
 
 impl AppState {
     /// State over `store` serving `adapters`, after running their migrations
@@ -158,6 +178,19 @@ impl AppState {
         for (path, version) in &report.appended {
             tracing::info!(file = %path, version, "layout file deployed as a new version");
         }
+        // Custom apps that reference a built-in that just changed get a
+        // `ref_update` version (decision `layout-parts`).
+        let changed: Vec<(String, i64)> = report
+            .appended
+            .iter()
+            .filter_map(|(path, version)| {
+                let app = path.strip_prefix("layouts/")?.split('/').next()?;
+                Some((app.to_owned(), *version))
+            })
+            .rev() // the newest version of each app first
+            .collect();
+        custom::ref_updates(&store, &catalog, &changed)
+            .map_err(|e| format!("updating custom apps after the layout sync: {e}"))?;
         Ok(Self {
             locals: Mutex::new(Vec::new()),
             store,
@@ -179,6 +212,13 @@ impl AppState {
             notifier: notify::Notifier::default(),
             push: None,
             public_prefix: std::sync::OnceLock::new(),
+            custom: custom::CustomState::default(),
+            hosted: std::sync::atomic::AtomicBool::new(false),
+            internal_secret: {
+                let mut buf = [0u8; 32];
+                getrandom::fill(&mut buf).expect("OS random number generator");
+                util::hex(&buf)
+            },
         })
     }
 
@@ -294,11 +334,13 @@ impl AppState {
         uploads::Uploads { pod: self }
     }
 
-    /// Tell `session`'s clients of `workspace_id` that its data changed
-    /// (`event: data`, D50): they reload. No-op without subscribers.
-    pub fn publish_data(&self, workspace_id: &str, session: &Session) {
+    /// Tell `session`'s clients that data of `source` (an adapter's
+    /// [`AppAdapter::name`]) changed (`event: data`, D50): every app that
+    /// draws on that source ([`Catalog::app_sources`]) reloads. No-op
+    /// without subscribers.
+    pub fn publish_data(&self, source: &str, session: &Session) {
         let _ = self.data_tx.send(layouts::DataEvent {
-            workspace_id: workspace_id.to_owned(),
+            source: source.to_owned(),
             token_hash: session.token_hash.clone(),
         });
     }
@@ -332,10 +374,98 @@ impl AppState {
                 {
                     tracing::info!(deleted = n, "old unclaimed uploads deleted");
                 }
+                let purged = blocking(&pod, |s| custom::purge(s, util::now_secs())).await;
+                if let Ok(n) = purged
+                    && n > 0
+                {
+                    tracing::info!(purged = n, "deleted custom apps purged");
+                }
                 drop(pod);
                 tokio::time::sleep(uploads::SWEEP_EVERY).await;
             }
         });
+    }
+
+    /// This pod is served by a pod host, which owns [`CREDENTIAL_HEADER`].
+    pub fn set_hosted(&self) {
+        self.hosted.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The credential kind a pod host vouched for (`mcp`), if hosted.
+    pub fn host_credential(&self, headers: &HeaderMap) -> Option<String> {
+        if !self.hosted.load(std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
+        headers
+            .get(CREDENTIAL_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    }
+
+    /// The `[`session::INTERNAL_HEADER`]` value that makes an internal request
+    /// act as session `token_hash`.
+    pub(crate) fn internal_as(&self, token_hash: &str) -> String {
+        format!("{}:{token_hash}", self.internal_secret)
+    }
+
+    /// The session hash of an internal request ([`Self::internal_as`]).
+    pub(crate) fn internal_caller(&self, headers: &HeaderMap) -> Option<String> {
+        let v = headers.get(session::INTERNAL_HEADER)?.to_str().ok()?;
+        let (secret, hash) = v.split_once(':')?;
+        let ok = secret.len() == self.internal_secret.len()
+            && secret
+                .bytes()
+                .zip(self.internal_secret.bytes())
+                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                == 0;
+        ok.then(|| hash.to_owned())
+    }
+
+    /// Limits on custom apps ([`custom::Caps`]).
+    pub fn with_custom_app_caps(mut self, caps: custom::Caps) -> Self {
+        self.custom = custom::CustomState::new(caps);
+        self
+    }
+
+    /// The app `id`: a built-in one, or a live custom app. `None` for an
+    /// unknown or deleted app.
+    pub async fn app(self: &Pod, id: &str) -> Result<Option<custom::AppRef>, ApiError> {
+        if let Some(a) = self.catalog.app(id) {
+            return Ok(Some(custom::AppRef::Builtin(*a)));
+        }
+        if !custom::is_custom_id(id) {
+            return Ok(None);
+        }
+        let id = id.to_owned();
+        blocking(self, move |s| {
+            s.with_conn(|c| custom::custom_app_on(c, &id))
+        })
+        .await
+        .map(|a| a.map(custom::AppRef::Custom))
+    }
+
+    /// The data sources app `app` draws on: its feeds' sources, plus a
+    /// built-in app's own adapter.
+    pub fn sources_of(&self, app: &custom::AppRef) -> Vec<&'static str> {
+        match app {
+            custom::AppRef::Builtin(a) => self
+                .catalog
+                .app_sources(a.id)
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect(),
+            custom::AppRef::Custom(a) => {
+                let mut out: Vec<&'static str> = Vec::new();
+                for (s, _) in &a.feeds {
+                    if let Some((adapter, _)) = self.catalog.source(s)
+                        && !out.contains(&adapter.name())
+                    {
+                        out.push(adapter.name());
+                    }
+                }
+                out
+            }
+        }
     }
 
     /// Enable `POST /v1/test/fault` (`CONSTRUCT_TEST_HOOKS=1`).
@@ -387,8 +517,9 @@ impl AppState {
     }
 
     /// Broadcast a new app version to SSE subscribers (no-op without any).
-    /// Nothing at runtime appends versions (they come with a deploy); tests
-    /// and tooling that append with [`layouts::append_version`] call this.
+    /// Built-in apps get new versions only with a deploy; custom app writes
+    /// ([`custom`]) call this, and so do tests and tooling that append with
+    /// [`layouts::append_version`].
     pub fn publish_layout(&self, workspace_id: &str, version: i64) {
         let _ = self.layout_tx.send(layouts::LayoutEvent {
             workspace_id: workspace_id.to_owned(),
@@ -432,6 +563,8 @@ pub fn app(state: Pod) -> Router {
         .merge(session::router())
         .merge(layouts::router())
         .merge(notify::router())
+        .merge(custom::router())
+        .merge(mcp::router())
         .merge(uploads::router(state.upload_max_bytes));
     for a in state.catalog.adapters() {
         router = router.merge(a.router());
@@ -480,9 +613,9 @@ fn signed_out(state: &Pod, sign_in: &str, app: &AppInfo, req: &RequestCtx) -> Wo
     adapter.signed_out(sign_in, app, req)
 }
 
-/// `GET /v1/workspaces/:id`: the app's data from its adapter
-/// ([`AppAdapter::hydrate`]) with the newest layout version the client can
-/// draw (`X-Construct-Layout-Version`). An app that requires a sign-in
+/// `GET /v1/workspaces/:id`: the app's data, its feeds' merged
+/// ([`compose`]), with the newest layout version the client can draw
+/// (`X-Construct-Layout-Version`). An app that requires a sign-in
 /// ([`AuthPolicy::SignIn`]) gets its signed-out screen instead when the
 /// caller lacks it: 200 without a bearer, 401 + `X-Construct-Session: invalid`
 /// with one, so the client learns its session is stale.
@@ -494,14 +627,15 @@ async fn get_workspace(
     if let Some(r) = layouts::reject_invalid_workspace_id(&id) {
         return r;
     }
-    let (Some(app), Some(adapter)) = (
-        state.catalog.app(&id).copied(),
-        state.catalog.adapter_for(&id).cloned(),
-    ) else {
-        return json_error(
-            StatusCode::NOT_FOUND,
-            json!({ "error": "workspace_not_found", "id": id }),
-        );
+    let app = match state.app(&id).await {
+        Ok(Some(app)) => app,
+        Ok(None) => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                json!({ "error": "workspace_not_found", "id": id }),
+            );
+        }
+        Err(e) => return e.into_response(),
     };
     let caller = match state.caller(&headers).await {
         Ok(c) => c,
@@ -516,33 +650,25 @@ async fn get_workspace(
         headers,
         session: caller.clone().into_session(),
     };
-    if let AuthPolicy::SignIn(sign_in) = app.auth
+    if let custom::AppRef::Builtin(info) = &app
+        && let AuthPolicy::SignIn(sign_in) = info.auth
         && !caller.has(sign_in)
     {
-        let screen = signed_out(&state, sign_in, &app, &req);
+        let screen = signed_out(&state, sign_in, info, &req);
         return if stale {
             session::stale_session(screen)
         } else {
             Json(screen).into_response()
         };
     }
-    let bundle = match adapter.hydrate(&state, &id, &req).await {
-        Hydration::Data(bundle) => bundle,
-        Hydration::Screen(screen) => return Json(screen).into_response(),
-        Hydration::StaleSession(screen) => {
-            // A pinned session stays; only the unusable sign-in goes.
-            if let (Some(session), AuthPolicy::SignIn(sign_in)) = (&req.session, app.auth)
-                && session.pinned
-            {
-                let (hash, sign_in) = (session.token_hash.clone(), sign_in.to_owned());
-                if let Err(e) = blocking(&state, move |s| s.detach_sign_in(&hash, &sign_in)).await {
-                    return e.into_response();
-                }
-                return Json(screen).into_response();
-            }
-            return session::stale_session(screen);
-        }
-        Hydration::Error(r) => return r,
+    let feeds = app.feeds();
+    let feeds: Vec<(&str, &str)> = feeds
+        .iter()
+        .map(|(s, f)| (s.as_str(), f.as_str()))
+        .collect();
+    let bundle = match compose(&state, &feeds, &caller, &req, app.is_custom()).await {
+        Ok(bundle) => bundle,
+        Err(r) => return *r,
     };
     let served = match layouts::active_for_client(&state, &id, &req.headers).await {
         Ok(Some(v)) => v,
@@ -562,6 +688,122 @@ async fn get_workspace(
         queries: bundle.queries,
     };
     (layouts::served_headers(served.version), Json(spec)).into_response()
+}
+
+/// Run `feeds` (`(source, feed)`, checked by the catalog) concurrently and
+/// merge their data in order. A feed whose source needs a sign-in the caller
+/// lacks is skipped.
+///
+/// A built-in app (`lenient` false) ends the request on any other answer
+/// than data, the first in feed order winning: a fixed screen is served as
+/// is; a stale sign-in on a pinned session (a pod token, D46) loses only
+/// that sign-in and gets the screen, any other session a 401 with it; an
+/// error passes through.
+///
+/// A custom app (`lenient` true) keeps going: a failing feed is skipped and
+/// recorded, a stale sign-in on a pinned session is detached (on any other
+/// session it is a 401, as for built-ins). It also gets one
+/// `core://sources/<id>` entity per source, `{title, signed_in, error?}`,
+/// so its layout can tell a signed-out or failing source apart.
+async fn compose(
+    state: &Pod,
+    feeds: &[(&str, &str)],
+    caller: &Caller,
+    req: &RequestCtx,
+    lenient: bool,
+) -> Result<protocol::DataBundle, Box<Response>> {
+    let runs = feeds.iter().map(|(source, feed)| async move {
+        let (adapter, manifest) = state.catalog.source(source)?;
+        if let Some(sign_in) = manifest.sign_in
+            && !caller.has(sign_in)
+        {
+            return None;
+        }
+        Some((
+            adapter.name(),
+            manifest.sign_in,
+            adapter.feed(state, feed, req).await,
+        ))
+    });
+    let mut bundle = protocol::DataBundle::default();
+    // Sources whose sign-in went stale or whose feed failed.
+    let mut detached: Vec<&str> = Vec::new();
+    let mut errors: Vec<(&str, String)> = Vec::new();
+    for (source, sign_in, answer) in futures_util::future::join_all(runs)
+        .await
+        .into_iter()
+        .flatten()
+    {
+        match answer {
+            Hydration::Data(data) => {
+                bundle.entities.extend(data.entities);
+                bundle.queries.extend(data.queries);
+            }
+            Hydration::Screen(screen) if !lenient => {
+                return Err(Box::new(Json(screen).into_response()));
+            }
+            Hydration::Screen(_) => errors.push((source, "unavailable".into())),
+            Hydration::StaleSession(screen) => {
+                // A pinned session stays; only the unusable sign-in goes.
+                if let (Some(session), Some(sign_in)) = (&req.session, sign_in)
+                    && session.pinned
+                {
+                    let (hash, sign_in) = (session.token_hash.clone(), sign_in.to_owned());
+                    if let Err(e) =
+                        blocking(state, move |s| s.detach_sign_in(&hash, &sign_in)).await
+                    {
+                        return Err(Box::new(e.into_response()));
+                    }
+                    if !lenient {
+                        return Err(Box::new(Json(screen).into_response()));
+                    }
+                    detached.push(source);
+                    continue;
+                }
+                return Err(Box::new(session::stale_session(screen)));
+            }
+            Hydration::Error(r) if !lenient => return Err(Box::new(r)),
+            Hydration::Error(r) => {
+                let status = r.status();
+                tracing::warn!(source, %status, "a custom app's feed failed; served without it");
+                errors.push((source, format!("error {}", status.as_u16())));
+            }
+        }
+    }
+    if lenient {
+        let mut seen: Vec<&str> = Vec::new();
+        for (source, _) in feeds {
+            let Some((adapter, manifest)) = state.catalog.source(source) else {
+                continue;
+            };
+            let name = adapter.name();
+            if seen.contains(&name) {
+                continue;
+            }
+            seen.push(name);
+            let signed_in =
+                !detached.contains(&name) && manifest.sign_in.is_none_or(|s| caller.has(s));
+            let mut e = protocol::EntityRecord::default();
+            e.set("id", name);
+            e.set("title", manifest.title);
+            e.set("signed_in", signed_in);
+            if let Some((_, err)) = errors.iter().find(|(s, _)| *s == name) {
+                e.set("error", err.clone());
+            }
+            bundle.entities.insert(format!("core://sources/{name}"), e);
+        }
+    }
+    Ok(bundle)
+}
+
+/// What a [`AppAdapter::feed`] answers for a feed name it doesn't know (the
+/// catalog checks app feeds, so only a direct caller can get it): 404
+/// `feed_not_found`.
+pub fn unknown_feed(source: &str, feed: &str) -> Hydration {
+    Hydration::Error(json_error(
+        StatusCode::NOT_FOUND,
+        json!({ "error": "feed_not_found", "source": source, "feed": feed }),
+    ))
 }
 
 /// A JSON error response, kept small so it can travel in `Result::Err`.

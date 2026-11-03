@@ -341,10 +341,20 @@ impl Harness {
         store: &Arc<MemoryStore>,
         opener: Option<Arc<dyn UrlOpener>>,
     ) -> ConstructEngine {
+        self.engine_on(store, opener, WORKSPACE)
+    }
+
+    /// An engine on app `workspace` (same cache and redirect as [`Self::engine`]).
+    pub fn engine_on(
+        &self,
+        store: &Arc<MemoryStore>,
+        opener: Option<Arc<dyn UrlOpener>>,
+        workspace: &str,
+    ) -> ConstructEngine {
         ConstructEngine::init_with_options(
             "",
             &self.pod_url,
-            WORKSPACE,
+            workspace,
             EngineOptions {
                 config: fast_config(),
                 secure_store: Some(Arc::clone(store) as Arc<dyn SecureStore>),

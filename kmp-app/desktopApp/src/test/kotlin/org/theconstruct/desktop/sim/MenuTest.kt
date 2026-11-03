@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runSkikoComposeUiTest
 import androidx.compose.ui.unit.Density
 import org.theconstruct.ConstructApp
@@ -87,7 +88,8 @@ class MenuTest {
                 "close-menu; assert-no-text Your pod; assert-no-text Version history of Pixelfed",
         )
         assertEquals("0 sign-in(s)", r.steps[7].message)
-        assertEquals("2 app(s)", r.steps[0].message)
+        // Pixelfed, Pixelfed demo and the fixture's custom Kitchen.
+        assertEquals("3 app(s)", r.steps[0].message)
     }
 
     @Test
@@ -368,5 +370,111 @@ class MenuTest {
         runner(fake, controller).ok(
             "open-settings; assert-text Signed in as @constructdemo; click tag:menu-sign-out; assert-text Not signed in",
         )
+    }
+
+    /** The feed engine, opening other apps of the shared fixture catalog on their own fixtures. */
+    private fun switching(): Pair<FakeEngineBridge, ConstructController> {
+        val first = feed()
+        val controller = ConstructController(first, first.appId, defaultAppId = "pixelfed_home") { id ->
+            val name = when (id) {
+                FakeAppCatalog.KITCHEN -> "custom_kitchen_bundle.json"
+                "pixelfed_demo" -> "pixelfed_home_bundle.json"
+                else -> "pixelfed_home_feed_bundle.json"
+            }
+            FakeEngineBridge(bundle(name), appId = id, apps = first.apps)
+        }
+        return first to controller
+    }
+
+    @Test
+    fun customAppsAreMarkedAndAnyAppCanBeHiddenAndShownAgain() {
+        val (_, controller) = switching()
+        compose(controller) {
+            controller.menu.openMenu()
+            waitForIdle()
+            waitUntil(timeoutMillis = 5_000) { has("app-${FakeAppCatalog.KITCHEN}") }
+            assertTrue(has("app-custom-${FakeAppCatalog.KITCHEN}"), "the custom marker")
+            assertFalse(has("app-custom-pixelfed_home"))
+            onNode(hasTestTag("app-more-pixelfed_demo")).performClick()
+            waitForIdle()
+            onNode(hasTestTag("app-hide-pixelfed_demo")).performClick()
+            waitUntil(timeoutMillis = 5_000) { !has("app-pixelfed_demo") }
+            onNode(hasText("Show hidden apps (1)")).performClick()
+            waitForIdle()
+            assertTrue(has("app-pixelfed_demo"))
+            onNode(hasText("Hidden", substring = true)).assertExists()
+            onNode(hasTestTag("app-more-pixelfed_demo")).performClick()
+            waitForIdle()
+            onNode(hasText("Show in the app list")).performClick()
+            waitUntil(timeoutMillis = 5_000) { !has("apps-show-hidden") }
+            // Built-ins have no Delete.
+            onNode(hasTestTag("app-more-pixelfed_home")).performClick()
+            waitForIdle()
+            assertFalse(has("app-delete-pixelfed_home"))
+        }
+    }
+
+    @Test
+    fun deletingTheCustomAppOnScreenAsksThenFallsBackToTheDefaultApp() {
+        val (first, controller) = switching()
+        compose(controller) {
+            assertTrue(controller.openApp(FakeAppCatalog.KITCHEN))
+            waitUntil(timeoutMillis = 5_000) { onAllNodes(hasText("Kitchen")).fetchSemanticsNodes().isNotEmpty() }
+            controller.menu.openMenu()
+            waitForIdle()
+            waitUntil(timeoutMillis = 5_000) { has("app-more-${FakeAppCatalog.KITCHEN}") }
+            onNode(hasTestTag("app-more-${FakeAppCatalog.KITCHEN}")).performClick()
+            waitForIdle()
+            onNode(hasTestTag("app-delete-${FakeAppCatalog.KITCHEN}")).performClick()
+            waitForIdle()
+            onNode(hasText("Delete Kitchen?")).assertExists()
+            onNode(hasTestTag("delete-app-cancel")).performClick()
+            waitForIdle()
+            assertTrue(first.apps.has(FakeAppCatalog.KITCHEN), "Cancel keeps it")
+            onNode(hasTestTag("app-more-${FakeAppCatalog.KITCHEN}")).performClick()
+            waitForIdle()
+            onNode(hasTestTag("app-delete-${FakeAppCatalog.KITCHEN}")).performClick()
+            waitForIdle()
+            onNode(hasTestTag("delete-app-confirm")).performClick()
+            waitUntil(timeoutMillis = 5_000) { controller.currentAppId() == "pixelfed_home" }
+            assertFalse(first.apps.has(FakeAppCatalog.KITCHEN))
+            assertEquals(org.theconstruct.APP_DELETED, controller.notice.value)
+            controller.menu.closeMenu()
+            waitUntil(timeoutMillis = 5_000) { has("notice") }
+            onNode(hasTestTag("notice-dismiss")).performClick()
+            waitForIdle()
+            assertNull(controller.notice.value)
+        }
+    }
+
+    @Test
+    fun aCopiedAppSaysItsBuiltInHasUpdatesUntilDismissed() {
+        val (first, controller) = switching()
+        compose(controller) {
+            controller.menu.openMenu()
+            waitForIdle()
+            waitUntil(timeoutMillis = 5_000) { has("app-updates-${FakeAppCatalog.KITCHEN}") }
+            onNode(hasText("Pixelfed demo has updates · ask Claude to bring them in")).assertExists()
+            onNode(hasTestTag("app-updates-dismiss-${FakeAppCatalog.KITCHEN}")).performClick()
+            waitUntil(timeoutMillis = 5_000) { !has("app-updates-${FakeAppCatalog.KITCHEN}") }
+            assertTrue(first.apps.has(FakeAppCatalog.KITCHEN))
+        }
+    }
+
+    @Test
+    fun settingsOffersTheSignInsThePodHas() {
+        val fake = feed()
+        val controller = ConstructController(fake, fake.appId)
+        compose(controller) {
+            controller.menu.showSettings()
+            waitForIdle()
+            waitUntil(timeoutMillis = 5_000) { has("provider-pixelfed") }
+            onNode(hasText("Sign in to Pixelfed")).assertExists()
+            onNode(hasText("Not signed in")).assertExists()
+            assertFalse(has("menu-sign-in"), "the provider row replaces the screen's button")
+            onNode(hasTestTag("provider-pixelfed")).performClick()
+            waitForIdle()
+            assertFalse(controller.menu.open, "signing in closes the menu")
+        }
     }
 }

@@ -607,7 +607,22 @@ async fn sign_ins_lists_the_pixelfed_account_with_its_server() {
     };
     let (status, body) = list(None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, json!({ "sign_ins": [] }));
+    assert_eq!(body["sign_ins"], json!([]));
+    // Every provider, with the intent Settings dispatches to start it.
+    assert_eq!(
+        body["providers"],
+        json!([{
+            "id": "pixelfed",
+            "title": "Pixelfed",
+            "signed_in": false,
+            "intent": {
+                "intent": "action.auth.login",
+                "instance_url": env.fake.url,
+                "app_path": "/v1/auth/pixelfed/app",
+                "token_path": "/v1/auth/pixelfed/token",
+            },
+        }])
+    );
     let (status, _) = list(Some("stale".into())).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
@@ -615,15 +630,16 @@ async fn sign_ins_lists_the_pixelfed_account_with_its_server() {
     let (status, body) = list(Some(session.clone())).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
-        body,
-        json!({ "sign_ins": [{
+        body["sign_ins"],
+        json!([{
             "id": "pixelfed",
             "title": "Pixelfed",
             "server": env.fake.url,
             "username": "constructdemo",
             "apps": [{ "id": "pixelfed_home", "title": "Pixelfed" }],
-        }] })
+        }])
     );
+    assert_eq!(body["providers"][0]["signed_in"], true);
     let logout = format!("{}/v1/auth/logout", env.pod.url);
     post_json(&logout, Some(&session), json!({})).await;
     let (status, _) = list(Some(session)).await;
@@ -915,7 +931,8 @@ async fn a_session_from_before_v11_stays_signed_in() {
         conn.execute_batch(
             "DROP TABLE session_sign_ins; DROP TABLE adapter_migrations;
              ALTER TABLE sessions DROP COLUMN pinned; ALTER TABLE app_versions DROP COLUMN features;
-             PRAGMA user_version = 10;",
+             ALTER TABLE app_versions DROP COLUMN author;
+             ALTER TABLE app_versions DROP COLUMN meta_json; PRAGMA user_version = 10;",
         )
         .unwrap();
         let later: Vec<String> = conn
@@ -924,7 +941,7 @@ async fn a_session_from_before_v11_stays_signed_in() {
                  AND (name LIKE 'recipes%' OR name IN ('pixelfed_session_instance', 'pixelfed_pending_posts'))
                  OR (type = 'table' AND name IN ('pod_settings', 'uploads', 'notifications',
                      'notification_polls', 'devices', 'device_channel_prefs',
-                     'pixelfed_notify_cursor'))",
+                     'pixelfed_notify_cursor', 'custom_apps'))",
             )
             .unwrap()
             .query_map([], |r| r.get(0))

@@ -16,8 +16,8 @@ use pod_core::layouts::LayoutSource;
 use pod_core::push::{PushSender, test_device_keys};
 use pod_core::session::session_hash;
 use pod_core::{
-    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, Catalog, Hydration, NewNotification, Pod,
-    PollCtx, PollOutcome, PollStatus, RequestCtx,
+    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, Catalog, FeedSpec, Hydration,
+    NewNotification, Pod, PollCtx, PollOutcome, PollStatus, RequestCtx, SourceManifest,
 };
 use protocol::{DataBundle, Importance, NotificationChannel, PushPayload};
 use serde_json::{Value, json};
@@ -37,6 +37,7 @@ const BELL: AppInfo = AppInfo {
     icon: "photo",
     dev: false,
     auth: AuthPolicy::Public,
+    feeds: &[("bell", "all")],
 };
 
 /// Polls answer from a queue of outcomes (empty queue: nothing new).
@@ -56,12 +57,17 @@ impl AppAdapter for Bell {
     fn layout_files(&self) -> &'static [LayoutSource] {
         FILES
     }
-    fn hydrate<'a>(
-        &'a self,
-        _: &'a Pod,
-        _: &'a str,
-        _: &'a RequestCtx,
-    ) -> BoxFuture<'a, Hydration> {
+    fn manifest(&self) -> SourceManifest {
+        SourceManifest {
+            feeds: &[FeedSpec {
+                name: "all",
+                query_keys: &[],
+                doc: "",
+            }],
+            ..SourceManifest::new("T")
+        }
+    }
+    fn feed<'a>(&'a self, _: &'a Pod, _: &'a str, _: &'a RequestCtx) -> BoxFuture<'a, Hydration> {
         Box::pin(async { Hydration::Data(DataBundle::default()) })
     }
     fn notification_channels(&self) -> Vec<NotificationChannel> {
@@ -172,7 +178,17 @@ fn the_catalog_checks_channels() {
         fn layout_files(&self) -> &'static [LayoutSource] {
             FILES
         }
-        fn hydrate<'a>(
+        fn manifest(&self) -> SourceManifest {
+            SourceManifest {
+                feeds: &[FeedSpec {
+                    name: "all",
+                    query_keys: &[],
+                    doc: "",
+                }],
+                ..SourceManifest::new("T")
+            }
+        }
+        fn feed<'a>(
             &'a self,
             _: &'a Pod,
             _: &'a str,
@@ -200,7 +216,17 @@ fn the_catalog_checks_channels() {
         fn layout_files(&self) -> &'static [LayoutSource] {
             FILES
         }
-        fn hydrate<'a>(
+        fn manifest(&self) -> SourceManifest {
+            SourceManifest {
+                feeds: &[FeedSpec {
+                    name: "all",
+                    query_keys: &[],
+                    doc: "",
+                }],
+                ..SourceManifest::new("T")
+            }
+        }
+        fn feed<'a>(
             &'a self,
             _: &'a Pod,
             _: &'a str,

@@ -7,7 +7,9 @@
 //! New versions come only from the developer: files
 //! `layouts/<app_id>/NNNN.json` in the repo, embedded in the binary by the
 //! app's adapter ([`crate::AppAdapter::layout_files`]) and appended at startup
-//! by [`sync`] before the server listens. No HTTP route changes a layout.
+//! by [`sync`] before the server listens. No HTTP route changes a built-in
+//! app's layout; custom apps (the pod user's own, [`crate::custom`]) get
+//! their versions from validated writes instead of files.
 //!
 //! # Adding a layout version
 //!
@@ -84,6 +86,9 @@ pub const DEFAULT_SSE_STREAMS_PER_TOKEN: usize = 8;
 /// Capacity of the layout broadcast channel (a lagging subscriber is caught
 /// up with the current version, so losing intermediate events is harmless).
 pub const CHANNEL_CAPACITY: usize = 64;
+/// The version a [`LayoutEvent`] carries when a custom app was deleted:
+/// its streams send `event: deleted` and end.
+pub const DELETED_VERSION: i64 = -1;
 /// Default and largest page of `GET /v1/apps/:id/versions`.
 pub const DEFAULT_VERSIONS_LIMIT: i64 = 20;
 pub const MAX_VERSIONS_LIMIT: i64 = 100;
@@ -112,6 +117,9 @@ pub struct LayoutFile {
     pub file_hash: String,
     /// The client schema the layout is written for (`"schema"`).
     pub schema: u32,
+    /// Named parts other layouts may reference (`"parts"`, decision
+    /// `layout-parts`).
+    pub parts: std::collections::BTreeMap<String, UiNode>,
 }
 
 impl LayoutFile {
@@ -124,6 +132,14 @@ impl LayoutFile {
             json: to_json(&self.layout),
             file_hash: self.file_hash.clone(),
             schema: self.schema,
+            meta_json: (!self.parts.is_empty()).then(|| {
+                let parts: serde_json::Map<String, Value> = self
+                    .parts
+                    .iter()
+                    .map(|(k, v)| (k.clone(), node_value(v)))
+                    .collect();
+                json!({ "parts": parts }).to_string()
+            }),
         }
     }
 }
@@ -135,7 +151,16 @@ impl LayoutFile {
 /// (field order, a new defaulted field), unlike a hash of the re-serialized
 /// `UiNode`.
 pub fn file_hash(note: &str, layout: &Value) -> String {
-    let doc = json!({ "layout": layout, "note": note });
+    file_hash_with_parts(note, layout, None)
+}
+
+/// [`file_hash`] of a file that also declares `"parts"` (they are hashed
+/// with it; files without parts hash as before).
+pub fn file_hash_with_parts(note: &str, layout: &Value, parts: Option<&Value>) -> String {
+    let mut doc = json!({ "layout": layout, "note": note });
+    if let Some(p) = parts {
+        doc["parts"] = p.clone();
+    }
     let mut out = String::new();
     write_canonical(&doc, &mut out);
     crate::store::content_hash(&out)
@@ -240,10 +265,10 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
     };
     if let Some(k) = obj
         .keys()
-        .find(|k| !matches!(k.as_str(), "note" | "schema" | "layout"))
+        .find(|k| !matches!(k.as_str(), "note" | "schema" | "layout" | "parts"))
     {
         return Err(fail(format!(
-            "unknown key '{k}' (only \"note\", \"schema\" and \"layout\")"
+            "unknown key '{k}' (only \"note\", \"schema\", \"layout\" and \"parts\")"
         )));
     }
     let note = obj
@@ -284,6 +309,10 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
             "invalid layout: unknown node type '{t}' (a typo? this build does not know it)"
         )));
     }
+    // Layouts reach only what their app's data sources declare (decision
+    // `custom-apps-and-data-sources`).
+    crate::source::check_routes(&parsed, &catalog.app_sources(src.app_id))
+        .map_err(|e| fail(format!("invalid layout: {e}")))?;
     let schema = obj
         .get("schema")
         .and_then(Value::as_u64)
@@ -303,8 +332,40 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
             "\"schema\" is {schema} but the layout uses vocabulary from schema {needs}"
         )));
     }
-    let file_hash = file_hash(&note, layout);
+    let raw_parts = obj.get("parts");
+    let mut parts = std::collections::BTreeMap::new();
+    if let Some(p) = raw_parts {
+        let Value::Object(map) = p else {
+            return Err(fail("\"parts\" must be an object of named nodes".into()));
+        };
+        for (name, v) in map {
+            if name.is_empty()
+                || name.contains(':')
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+            {
+                return Err(fail(format!("part name '{name}' must be [a-z0-9_]+")));
+            }
+            let node: UiNode = serde_json::from_value(v.clone())
+                .map_err(|e| fail(format!("part '{name}' is not a node: {e}")))?;
+            if let Some(t) = crate::validate::unknown_node_types(&node).first() {
+                return Err(fail(format!("part '{name}': unknown node type '{t}'")));
+            }
+            crate::source::check_routes(&node, &catalog.app_sources(src.app_id))
+                .map_err(|e| fail(format!("part '{name}': {e}")))?;
+            let needs = protocol::required_schema(&node);
+            if needs > schema {
+                return Err(fail(format!(
+                    "part '{name}' uses vocabulary from schema {needs}, above the file's {schema}"
+                )));
+            }
+            parts.insert(name.clone(), node);
+        }
+    }
+    let file_hash = file_hash_with_parts(&note, layout, raw_parts);
     Ok(LayoutFile {
+        parts,
         app_id: src.app_id.to_owned(),
         number,
         path,
@@ -419,13 +480,13 @@ pub fn active(
     catalog: &Catalog,
     workspace_id: &str,
 ) -> rusqlite::Result<Option<Served>> {
-    if !catalog.is_app(workspace_id) {
+    if !catalog.is_app(workspace_id) && !crate::custom::is_custom_id(workspace_id) {
         return Ok(None);
     }
     match store.app_latest(workspace_id)? {
         Some((v, json)) => Ok(Some(Served {
             version: v.version,
-            layout: from_json(&json)?,
+            layout: from_json(&crate::parts::serve(store, catalog, &json, None))?,
         })),
         None => Ok(None),
     }
@@ -485,7 +546,7 @@ pub fn active_for(
     workspace_id: &str,
     client: &protocol::ClientCaps,
 ) -> rusqlite::Result<Option<Served>> {
-    if !catalog.is_app(workspace_id) {
+    if !catalog.is_app(workspace_id) && !crate::custom::is_custom_id(workspace_id) {
         return Ok(None);
     }
     let Some(latest) = store.app_latest_meta(workspace_id)? else {
@@ -509,7 +570,7 @@ pub fn active_for(
     }
     Ok(Some(Served {
         version: v.version,
-        layout: from_json(&json)?,
+        layout: from_json(&crate::parts::serve(store, catalog, &json, Some(client)))?,
     }))
 }
 
@@ -626,17 +687,20 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/v1/workspaces/{id}/events", get(events))
 }
 
-/// 400 for a malformed id, 404 `app_not_found` for an unknown one.
-fn known_app(catalog: &Catalog, id: &str) -> Result<AppInfo, Response> {
+/// 400 for a malformed id, 404 `app_not_found` for an unknown one: the
+/// app's id.
+async fn known_app(state: &Arc<AppState>, id: &str) -> Result<String, Response> {
     if let Some(r) = reject_invalid_workspace_id(id) {
         return Err(r);
     }
-    catalog.app(id).copied().ok_or_else(|| {
-        json_error(
+    match state.app(id).await {
+        Ok(Some(a)) => Ok(a.id().to_owned()),
+        Ok(None) => Err(json_error(
             StatusCode::NOT_FOUND,
             json!({ "error": "app_not_found", "id": id }),
-        )
-    })
+        )),
+        Err(e) => Err(e.into_response()),
+    }
 }
 
 /// One version's metadata for `client`: `schema` (what it was written for),
@@ -655,6 +719,9 @@ fn version_json(v: &AppVersion, client: &protocol::ClientCaps) -> Value {
     if let Some(n) = &v.note {
         out["note"] = json!(n);
     }
+    if let Some(a) = &v.author {
+        out["author"] = json!(a);
+    }
     if !v.features.is_empty() {
         out["features"] = json!(v.features);
     }
@@ -664,48 +731,77 @@ fn version_json(v: &AppVersion, client: &protocol::ClientCaps) -> Value {
     out
 }
 
-/// `GET /v1/apps` -> `{"apps": [{id, title, icon, latest_version,
-/// latest_compatible_version, updated_at}]}` (public). Dev apps only with
-/// `CONSTRUCT_SHOW_DEV_APPS=1`. `latest_compatible_version` is the newest
-/// version the client ([`protocol::SCHEMA_HEADER`],
-/// [`protocol::FEATURES_HEADER`]) can draw, i.e. what opening the app serves
-/// it (null if none fits).
-async fn list_apps(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+/// `GET /v1/apps[?all=1]` -> `{"apps": [{id, title, icon, kind, hidden,
+/// latest_version, latest_compatible_version, updated_at, updates_from?}]}`
+/// (public): built-in apps, then custom ones (`kind` `builtin` | `custom`)
+/// oldest first. Hidden apps (`PUT /v1/apps/:id/hidden`) are listed only
+/// with `?all=1`. Dev apps only with `CONSTRUCT_SHOW_DEV_APPS=1`.
+/// `latest_compatible_version` is the newest version the client
+/// ([`protocol::SCHEMA_HEADER`], [`protocol::FEATURES_HEADER`]) can draw,
+/// i.e. what opening the app serves it (null if none fits).
+async fn list_apps(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
     let client = client_caps(&headers);
-    let shown: Vec<AppInfo> = state
+    let all = query.get("all").is_some_and(|v| v == "1" || v == "true");
+    let builtin: Vec<AppInfo> = state
         .catalog()
         .apps()
         .filter(|a| !a.dev || state.show_dev_apps())
         .copied()
         .collect();
-    let ids: Vec<&'static str> = shown.iter().map(|a| a.id).collect();
-    let latest = blocking(&state, move |s| {
-        ids.iter()
-            .map(|id| {
-                Ok((
-                    s.app_latest_meta(id)?,
-                    newest_compatible(s, id, &client)?.map(|v| v.version),
-                ))
+    let st = state.clone();
+    let listed = blocking(&state, move |s| {
+        let hidden = crate::custom::hidden_apps(s)?;
+        let dismissed = crate::custom::dismissed(s)?;
+        let custom = s.with_conn(crate::custom::custom_apps_on)?;
+        let mut apps: Vec<crate::custom::AppRef> = builtin
+            .into_iter()
+            .map(crate::custom::AppRef::Builtin)
+            .chain(custom.into_iter().map(crate::custom::AppRef::Custom))
+            .collect();
+        if !all {
+            apps.retain(|a| !hidden.iter().any(|h| h == a.id()));
+        }
+        apps.into_iter()
+            .map(|a| {
+                let latest = s.app_latest_meta(a.id())?;
+                let compatible = newest_compatible(s, a.id(), &client)?.map(|v| v.version);
+                let is_hidden = hidden.iter().any(|h| h == a.id());
+                let updates = match &a {
+                    crate::custom::AppRef::Custom(c) => {
+                        crate::custom::updates_from(s, st.catalog(), &c.id, &client, &dismissed)?
+                    }
+                    crate::custom::AppRef::Builtin(_) => None,
+                };
+                Ok((a, is_hidden, latest, compatible, updates))
             })
             .collect::<rusqlite::Result<Vec<_>>>()
     })
     .await;
-    let latest = match latest {
+    let listed = match listed {
         Ok(l) => l,
         Err(e) => return e.into_response(),
     };
-    let apps: Vec<Value> = shown
+    let apps: Vec<Value> = listed
         .iter()
-        .zip(latest)
-        .map(|(a, (v, compatible))| {
-            json!({
-                "id": a.id,
-                "title": a.title,
-                "icon": a.icon,
+        .map(|(a, hidden, v, compatible, updates)| {
+            let mut row = json!({
+                "id": a.id(),
+                "title": a.title(),
+                "icon": a.icon(),
+                "kind": a.kind(),
+                "hidden": hidden,
                 "latest_version": v.as_ref().map(|v| v.version),
                 "latest_compatible_version": compatible,
                 "updated_at": v.as_ref().map(|v| rfc3339(v.created_at)),
-            })
+            });
+            if let Some(u) = updates {
+                row["updates_from"] = u.clone();
+            }
+            row
         })
         .collect();
     Json(json!({ "apps": apps })).into_response()
@@ -732,7 +828,7 @@ async fn app_versions(
     Query(query): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Response {
-    let app = match known_app(state.catalog(), &id) {
+    let app_id = match known_app(&state, &id).await {
         Ok(a) => a,
         Err(r) => return r,
     };
@@ -752,12 +848,13 @@ async fn app_versions(
         Some(None) => return bad_query(),
     };
     let client = client_caps(&headers);
+    let lookup = app_id.clone();
     let result = blocking(&state, {
         let client = client.clone();
         move |s| {
-            let latest = s.app_latest_meta(app.id)?.map(|v| v.version);
-            let compatible = newest_compatible(s, app.id, &client)?.map(|v| v.version);
-            let rows = s.app_versions(app.id, before, limit + 1)?;
+            let latest = s.app_latest_meta(&lookup)?.map(|v| v.version);
+            let compatible = newest_compatible(s, &lookup, &client)?.map(|v| v.version);
+            let rows = s.app_versions(&lookup, before, limit + 1)?;
             Ok((latest, compatible, rows))
         }
     })
@@ -769,7 +866,7 @@ async fn app_versions(
     let more = rows.len() as i64 > limit;
     let page = &rows[..rows.len().min(limit as usize)];
     let mut body = json!({
-        "app_id": app.id,
+        "app_id": app_id,
         "latest_version": latest,
         "latest_compatible_version": compatible,
         "versions": page
@@ -791,7 +888,7 @@ async fn app_version(
     Path((id, n)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    let app = match known_app(state.catalog(), &id) {
+    let app_id = match known_app(&state, &id).await {
         Ok(a) => a,
         Err(r) => return r,
     };
@@ -801,11 +898,21 @@ async fn app_version(
             json!({ "error": "invalid_request", "expected": { "version": "integer >= 1" } }),
         );
     };
-    let found = blocking(&state, move |s| s.app_version(app.id, n)).await;
+    let lookup = app_id.clone();
+    let client = client_caps(&headers);
+    let st = state.clone();
+    let found = blocking(&state, move |s| {
+        // A custom version's built-in parts, as this client would be served them.
+        Ok(s.app_version(&lookup, n)?.map(|(v, json)| {
+            let served = crate::parts::serve(s, st.catalog(), &json, Some(&client));
+            (v, served)
+        }))
+    })
+    .await;
     match found {
         Ok(Some((v, stored))) => {
             let mut body = version_json(&v, &client_caps(&headers));
-            body["app_id"] = json!(app.id);
+            body["app_id"] = json!(app_id);
             body["layout"] = match from_json(&stored) {
                 Ok(layout) => node_value(&layout),
                 // A legacy version this build cannot read as a UiNode: serve
@@ -813,7 +920,7 @@ async fn app_version(
                 Err(e) => match serde_json::from_str::<Value>(&stored) {
                     Ok(raw) => {
                         tracing::warn!(
-                            app = app.id,
+                            app = %app_id,
                             version = n,
                             "serving a stored layout that is not a valid UiNode as is: {e}"
                         );
@@ -821,13 +928,13 @@ async fn app_version(
                     }
                     Err(e) => {
                         tracing::error!(
-                            app = app.id,
+                            app = %app_id,
                             version = n,
                             "stored layout is not JSON: {e}"
                         );
                         return json_error(
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            json!({ "error": "corrupt_version", "app_id": app.id, "version": n,
+                            json!({ "error": "corrupt_version", "app_id": app_id, "version": n,
                                     "detail": "the stored layout of this version is not valid JSON" }),
                         );
                     }
@@ -837,7 +944,7 @@ async fn app_version(
         }
         Ok(None) => json_error(
             StatusCode::NOT_FOUND,
-            json!({ "error": "version_not_found", "app_id": app.id, "version": n }),
+            json!({ "error": "version_not_found", "app_id": app_id, "version": n }),
         ),
         Err(e) => e.into_response(),
     }
@@ -854,11 +961,12 @@ pub struct LayoutEvent {
     pub version: i64,
 }
 
-/// A session's data changed (D50): `event: data` to that session's
-/// subscribers of `workspace_id` only.
+/// A session's data from one source changed (D50): `event: data` to that
+/// session's subscribers of the apps that draw on `source` only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataEvent {
-    pub workspace_id: String,
+    /// A data source id (an adapter's name).
+    pub source: String,
     pub token_hash: String,
 }
 
@@ -1038,8 +1146,10 @@ async fn events(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(app) = state.catalog().app(&id).copied() else {
-        return workspace_not_found(&id);
+    let app = match state.app(&id).await {
+        Ok(Some(app)) => app,
+        Ok(None) => return workspace_not_found(&id),
+        Err(e) => return e.into_response(),
     };
     // Events carry only version numbers, so anyone may listen; only a
     // session the pod no longer knows is told so (a valid one lacking the
@@ -1048,7 +1158,7 @@ async fn events(
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
-    if let (AuthPolicy::SignIn(_), Caller::Stale) = (app.auth, &caller) {
+    if let (AuthPolicy::SignIn(_), Caller::Stale) = (app.auth(), &caller) {
         return unauthorized();
     }
     let slot = match caller.session() {
@@ -1071,8 +1181,10 @@ async fn events(
         (Caller::Signed(_), Some(device)) => Some(state.device_live(&device)),
         _ => None,
     };
-    // The session's own `data` events (D50) need to know who listens.
+    // The session's own `data` events (D50) need to know who listens, and
+    // which sources this app draws on.
     let session_hash = caller.session().map(|s| s.token_hash.clone());
+    let sources = state.sources_of(&app);
     let client = headers
         .contains_key(protocol::SCHEMA_HEADER)
         .then(|| client_caps(&headers));
@@ -1088,6 +1200,8 @@ async fn events(
     tracing::info!(workspace = %id, version = current, ?client, "layout events subscriber connected");
     struct S {
         first: bool,
+        /// The app was deleted: the `deleted` event went out, end.
+        done: bool,
         sent: i64,
         client: Option<protocol::ClientCaps>,
         rx: broadcast::Receiver<LayoutEvent>,
@@ -1095,6 +1209,7 @@ async fn events(
         _live: Option<crate::notify::LiveDevice>,
         data_rx: broadcast::Receiver<DataEvent>,
         session_hash: Option<String>,
+        sources: Vec<&'static str>,
         recheck: Option<tokio::time::Interval>,
         _slot: Option<SseSlot>,
         shutdown: tokio::sync::watch::Receiver<bool>,
@@ -1110,6 +1225,7 @@ async fn events(
     let stream = futures_util::stream::unfold(
         S {
             first: true,
+            done: false,
             sent: current,
             client,
             rx,
@@ -1117,6 +1233,7 @@ async fn events(
             _live: live,
             data_rx,
             session_hash,
+            sources,
             recheck,
             _slot: slot,
             shutdown: state.shutdown_signal(),
@@ -1130,6 +1247,9 @@ async fn events(
                     version: s.sent,
                 })
             };
+            if s.done {
+                return None;
+            }
             if s.first {
                 s.first = false;
                 let e = event(&s);
@@ -1171,7 +1291,7 @@ async fn events(
                     Got::Data(d) => {
                         let mine = match &d {
                             Ok(d) => {
-                                d.workspace_id == s.id
+                                s.sources.contains(&d.source.as_str())
                                     && s.session_hash.as_deref() == Some(d.token_hash.as_str())
                             }
                             // Lagged: a reload is never wrong.
@@ -1189,6 +1309,13 @@ async fn events(
                     }
                 };
                 let lagged = match received {
+                    Ok(ev) if ev.workspace_id == s.id && ev.version == DELETED_VERSION => {
+                        s.done = true;
+                        let e = Event::default()
+                            .event("deleted")
+                            .data(json!({ "workspace_id": s.id }).to_string());
+                        return Some((Ok(e), s));
+                    }
                     Ok(ev) if ev.workspace_id == s.id => false,
                     Ok(_) => continue,
                     Err(broadcast::error::RecvError::Lagged(n)) => {

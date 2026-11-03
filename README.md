@@ -236,6 +236,7 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 | `CONSTRUCT_POD_UPLOAD_QUOTA_BYTES` | `524288000` (500 MiB) | Most bytes all of an admin pod's uploads may hold together (then 507 `upload_quota_exceeded`, retried by clients). |
 | `CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES` | `26214400` (25 MiB) | The same for a temporary pod. |
 | `CONSTRUCT_MIN_FREE_DISK_BYTES` | `104857600` (100 MiB) | Free space kept on the data volume: below it uploads get 507 `low_disk_space` and new temporary pods 503 `low_disk_space`, so the volume never fills and every pod's other writes keep working. |
+| `CONSTRUCT_PUBLIC_URL` | from each request's `Host` | The base URL clients reach the server at, for the OAuth metadata Claude reads (decision `mcp-connector`), e.g. `https://the-construct-pod.fly.dev`. Unset: the request's `Host`, `https` behind Fly or with `X-Forwarded-Proto: https`. |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
 
 The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PROVIDER`, `CONSTRUCT_LLM_MODEL`,
@@ -279,6 +280,8 @@ paths, e.g. the Pixelfed media proxy).
   server pods rotate <name>                      # new code; the old one stops working, app sign-ins end
   server pods delete <name>                      # stops now; files deleted within 5 minutes
   server pods notify-test <name>                 # a test notification: inbox + Web Push to the pod's devices
+  server pods mcp <name> [label]                 # a credential for Claude Code (reaches only /v1/mcp); printed once
+  server pods revoke-mcp <name>                  # disconnect Claude (every MCP credential of the pod)
   server pods list
   ```
 
@@ -304,6 +307,53 @@ paths, e.g. the Pixelfed media proxy).
   Then delete the renamed original (it still holds the old sessions and app tokens):
   `fly ssh console -a the-construct-pod -C "/server pods remove-adopted"`. The image has no shell, so `rm` doesn't
   exist there (not in `fly ssh sftp shell` either).
+
+## Custom apps
+
+A pod's user can have apps of their own next to the built-in ones (decision `custom-apps-and-data-sources`, issue
+#45): any layout the node vocabulary can draw, over the feeds, screen data and actions the pod's data sources
+declare (each adapter's `SourceManifest`). They are served like built-ins (workspace, SSE, versions, schema
+negotiation) and marked `"kind": "custom"` in `GET /v1/apps`. Every write is validated against the app's sources
+(errors name a JSON pointer and what is allowed) and appended to the app's history.
+
+```bash
+pod=http://127.0.0.1:8080; token=cpod_…   # the pod token
+curl -fsS -H "Authorization: Bearer $token" -H 'content-type: application/json' $pod/v1/custom-apps -d '{
+  "title": "Kitchen", "icon": "recipe", "feeds": [["recipes", "all"], ["pixelfed", "home"]],
+  "note": "Recipes next to my feed", "layout": {"type": "core://Workspace", "title": "Kitchen", "slots": […]}}'
+```
+
+- `GET /v1/custom-apps/{id}` (feeds, latest layout), `PUT …/{id}/layout {layout, note?, base_version?}` (409
+  `stale_base`), `PATCH …/{id} {title?, icon?, feeds?}`, `POST …/{id}/restore {version}`, `DELETE …/{id}` (soft;
+  purged after 30 days; open streams get `event: deleted`), `POST /v1/custom-apps/validate {feeds, layout}` (dry run),
+  `PUT /v1/apps/{id}/hidden {hidden}` (any app; hidden apps are listed only with `GET /v1/apps?all=1`).
+- Writes need the pod token's session; any valid session may delete and hide. The pod sets the layout's root `id`.
+- A custom app's root also gets `core://sources/<source>` entities `{title, signed_in, error?}`: a signed-out or
+  failing source shows no data, and the layout can say so (`${core://sources/pixelfed#signed_in}`). Sign-ins start
+  from Settings; custom layouts can't hold sign-in buttons.
+- Caps per pod: 50 apps, 500 versions per app (the oldest are pruned), 256 KiB per layout, 60 writes a minute.
+- **Built-in parts** (decision `layout-parts`): `{"type": "core://Ref", "app": "pixelfed_home", "part":
+  "screen:post"}` reuses a built-in's screen (`screen:<id>`), slot content (`slot:<id>`) or declared part (a layout
+  file's `"parts"`); the pod expands it when serving and keeps it current (a deploy appends a `ref_update` version).
+  A copy says `"copied_from": {"app", "version"}`; `GET /v1/apps` then reports `updates_from` when that built-in
+  moves on, until `POST /v1/custom-apps/{id}/dismiss-update {version}`.
+
+### Claude (MCP)
+
+Each pod has an MCP endpoint, `POST /v1/mcp` (decision `mcp-connector`), so Claude can build and edit your custom
+apps. Its tools: `list_apps`, `list_data_sources`, `describe_vocabulary`, `get_layout`, `sample_data`,
+`validate_layout`, `create_app`, `update_layout` (a layout or a JSON Patch, with `base_version`), `restore_version`,
+`rename_app`, `delete_app`, `set_hidden`, `list_parts`, `rebase_context`, `dismiss_update`. Writes go through the same validation as the API above and show in the
+version history as written by Claude.
+
+- **Claude (web, desktop, mobile):** add a custom connector with the URL `https://<server>/v1/mcp`. Claude finds the
+  server's OAuth endpoints, registers itself and opens a page where you type your pod code. It then holds a
+  credential that reaches only this pod's `/v1/mcp`: no app routes, no sign-ins, no pod settings.
+- **Claude Code:** `server pods mcp <name>` prints a credential, then
+  `claude mcp add --transport http construct https://<server>/v1/mcp --header "Authorization: Bearer cmcp_…"`
+  (OAuth works too).
+- **Disconnect:** `server pods revoke-mcp <name>`. Rotating the pod code (`server pods rotate`) keeps Claude
+  connected.
 
 ## Notifications
 
@@ -535,6 +585,10 @@ offline, when actions wait to be sent, or when the version you picked has a newe
   you view an older version and a newer one is published, the drawer shows "Newer version available" with
   **Show latest**. Picking "Latest" follows new versions again. When the version you picked is on an older page,
   a checked "Pinned: vN" row sits under "Latest" until "Load older" lists it.
+  Custom apps (README "Custom apps") are marked **Custom** (also in the version picker). Each row's **⋮** offers
+  **Hide from the app list** (any app, on every device; "Show hidden apps (N)" lists them again) and, for custom
+  apps, **Delete…** with a confirmation. When the app on screen is deleted (here or elsewhere), the app opens the
+  default app and says "This app was deleted.".
 - **Settings** (at the bottom; decision [settings-page-and-sign-ins](docs/decisions/settings-page-and-sign-ins.md)),
   with the connection status beside it: Online / Offline and "N pending" ("Connecting…" until the engine first
   reports; no offline badge then). Offline, the Apps list from the last load stays without an error, and it reloads
@@ -543,8 +597,10 @@ offline, when actions wait to be sent, or when the version you picked has a newe
     with **Leave pod**, which forgets the pod code on this device.
   - **Sign-ins:** every sign-in on the pod (`GET /v1/auth/sign-ins`), e.g. "Pixelfed · @you · pixelfed.social".
     A row opens its detail: server, username, the apps that use it, and **Sign out of Pixelfed** (the pod stays
-    open). With none: "Not signed in" with **Sign in**, or "Signing in…" / "Sign-in failed: …". A pod that can't
-    list sign-ins (an older one) still shows "Signed in as @you" with **Sign out**.
+    open). With none: "Not signed in", or "Signing in…" / "Sign-in failed: …". Every sign-in the pod offers and
+    the session lacks gets a **Sign in to Pixelfed** row (with a server box where other servers are allowed); a pod
+    too old to list them falls back to the screen's **Sign in** button. A pod that can't list sign-ins (an older
+    one) still shows "Signed in as @you" with **Sign out**.
   - **Notifications:** the per-app notification channels (D52).
 - **Server** (in Settings): Staging, Local emulator (`http://10.0.2.2:8080`), Local USB (`http://127.0.0.1:8080`) or a custom
   URL on Android; Staging, Local (`http://127.0.0.1:8080`) or a custom `http(s)://host[:port]` on desktop. On
@@ -556,6 +612,9 @@ offline, when actions wait to be sent, or when the version you picked has a newe
 Back (Android) closes the innermost level (custom URL field, notification settings, a sign-in's detail, Settings,
 picker, drawer). Test tags: `menu-button`,
 `menu-badge`, `menu-drawer`, `menu-close`, `menu-back`, `app-<id>`, `app-history-<id>`, `app-error`, `apps-error`,
+`app-more-<id>`, `app-hide-<id>`, `app-delete-<id>`, `app-custom-<id>`, `apps-show-hidden`, `app-action-error`,
+`delete-app-dialog`, `delete-app-confirm`, `delete-app-cancel`, `app-gone`, `notice`, `notice-dismiss`,
+`provider-<id>`, `provider-server-<id>`, `provider-server-go-<id>`, `app-updates-<id>`, `app-updates-dismiss-<id>`,
 `menu-newer`, `menu-newer-latest`, `menu-settings`, `settings`, `menu-connection`, `menu-account`, `sign-in-<id>`,
 `sign-in-detail`, `sign-ins-error`, `menu-sign-in`, `menu-sign-out`, `menu-leave-pod`, `menu-notifications`,
 `menu-server`, `server-<key>`, `server-custom`, `server-custom-url`, `server-custom-hint`, `server-custom-use`,

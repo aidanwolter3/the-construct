@@ -16,8 +16,8 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::Store;
 use pod_core::{
-    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, Hydration, NewNotification, Pod,
-    RequestCtx,
+    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, FeedSpec, Hydration, NewNotification,
+    Pod, RequestCtx, SourceManifest,
 };
 use protocol::{DataBundle, Importance, NotificationChannel};
 use tower::ServiceExt;
@@ -43,17 +43,23 @@ impl AppAdapter for Bell {
             icon: "photo",
             dev: false,
             auth: AuthPolicy::Public,
+            feeds: &[("bell", "all")],
         }]
     }
     fn layout_files(&self) -> &'static [LayoutSource] {
         FILES
     }
-    fn hydrate<'a>(
-        &'a self,
-        _: &'a Pod,
-        _: &'a str,
-        _: &'a RequestCtx,
-    ) -> BoxFuture<'a, Hydration> {
+    fn manifest(&self) -> SourceManifest {
+        SourceManifest {
+            feeds: &[FeedSpec {
+                name: "all",
+                query_keys: &[],
+                doc: "",
+            }],
+            ..SourceManifest::new("T")
+        }
+    }
+    fn feed<'a>(&'a self, _: &'a Pod, _: &'a str, _: &'a RequestCtx) -> BoxFuture<'a, Hydration> {
         Box::pin(async { Hydration::Data(DataBundle::default()) })
     }
     fn notification_channels(&self) -> Vec<NotificationChannel> {

@@ -36,8 +36,12 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
         val incompatible: String? = null,
     )
 
-    private class App(val id: String, val title: String, val icon: String) {
+    private class App(val id: String, val title: String, val icon: String, val custom: Boolean = false) {
         val versions = mutableListOf<Version>()
+        var hidden = false
+
+        /** `(built-in app, its newer version)` this copy hasn't seen; null = no notice. */
+        var updatesFrom: Pair<String, Long>? = null
     }
 
     private val apps = LinkedHashMap<String, App>()
@@ -45,6 +49,42 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
     @Synchronized
     fun add(id: String, title: String, icon: String, vararg versions: Version) {
         apps[id] = App(id, title, icon).also { it.versions += versions }
+    }
+
+    /** Adds the pod user's own app ([AppSummary.custom]): it can be deleted. */
+    @Synchronized
+    fun addCustom(id: String, title: String, icon: String, vararg versions: Version) {
+        apps[id] = App(id, title, icon, custom = true).also { it.versions += versions }
+    }
+
+    /** `DELETE /v1/custom-apps/{id}`: only a custom app can go. */
+    @Synchronized
+    fun delete(id: String) {
+        val a = app(id)
+        if (!a.custom) throw LayoutApiException("That app doesn't exist.", LayoutApiException.Kind.NotFound, 404)
+        apps.remove(id)
+    }
+
+    /** `PUT /v1/apps/{id}/hidden`. */
+    @Synchronized
+    fun setHidden(id: String, hidden: Boolean) {
+        app(id).hidden = hidden
+    }
+
+    @Synchronized
+    fun isCustom(id: String): Boolean = apps[id]?.custom == true
+
+    /** Says custom app [id] was copied from [builtIn], which has [version] since. */
+    @Synchronized
+    fun setUpdatesFrom(id: String, builtIn: String, version: Long) {
+        app(id).updatesFrom = builtIn to version
+    }
+
+    /** `POST /v1/custom-apps/{id}/dismiss-update`. */
+    @Synchronized
+    fun dismissUpdate(id: String, version: Long) {
+        val a = app(id)
+        if (a.updatesFrom?.second?.let { it <= version } == true) a.updatesFrom = null
     }
 
     @Synchronized
@@ -84,6 +124,15 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
                     "id" to JsonPrimitive(a.id),
                     "title" to JsonPrimitive(a.title),
                     "icon" to JsonPrimitive(a.icon),
+                    "kind" to JsonPrimitive(if (a.custom) "custom" else "builtin"),
+                    "hidden" to JsonPrimitive(a.hidden),
+                    "updates_from" to (a.updatesFrom?.let { (b, v) ->
+                        obj(
+                            "app" to JsonPrimitive(b),
+                            "title" to JsonPrimitive(apps[b]?.title ?: b),
+                            "to_version" to JsonPrimitive(v),
+                        )
+                    } ?: JsonNull),
                     "latest_version" to JsonPrimitive(a.versions.size),
                     "latest_compatible_version" to (latestCompatibleVersion(a.id)?.let { JsonPrimitive(it) } ?: JsonNull),
                     "updated_at" to JsonPrimitive(rfc3339(a.versions.last().createdAt)),
@@ -146,7 +195,10 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
     }
 
     companion object {
-        private val ID = Regex("[a-z0-9_]{1,64}")
+        private val ID = Regex("[a-z0-9_-]{1,64}")
+
+        /** The fixture's custom app (a "Kitchen" over the demo posts, `fixtures/custom_kitchen_bundle.json`). */
+        const val KITCHEN = "c-kitchen2dm"
         private const val HOUR = 3_600L
         private const val DAY = 86_400L
         const val BANNER_SLOT = "whats_new"
@@ -165,7 +217,7 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
             }
         }
 
-        private val KNOWN = listOf("pixelfed_home", "pixelfed_demo")
+        private val KNOWN = listOf("pixelfed_home", "pixelfed_demo", KITCHEN)
 
         /**
          * The fixture catalog: [appId]'s history ends with [base] (the running bundle's layout); the other known apps
@@ -176,6 +228,10 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
             for (id in KNOWN) {
                 val layout = if (id == appId) base else defaultLayout(id, from) ?: continue
                 catalog.addFixtureApp(id, layout)
+            }
+            // The fixture's Kitchen is a copy of the demo, which has a newer version since (decision `layout-parts`).
+            if (catalog.has(KITCHEN) && catalog.has("pixelfed_demo")) {
+                catalog.setUpdatesFrom(KITCHEN, "pixelfed_demo", catalog.latestVersion("pixelfed_demo") ?: 1)
             }
             if (!catalog.has(appId)) {
                 catalog.add(
@@ -195,6 +251,10 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
         private fun FakeAppCatalog.addFixtureApp(id: String, base: UiNode) {
             val t = clock()
             when (id) {
+                KITCHEN -> addCustom(
+                    id, "Kitchen", "recipe",
+                    Version(base, "Recipes next to my feed", t - 4 * HOUR, source = "custom"),
+                )
                 "pixelfed_home" -> add(
                     id, "Pixelfed", "photo",
                     Version(captionFirst(base), "First feed: caption above the photo", t - 9 * DAY),

@@ -444,6 +444,23 @@ impl EngineHandle {
     pub fn sign_ins(&self) -> Result<String, LayoutApiError> {
         Ok(self.inner.sign_ins()?)
     }
+
+    /// Delete a custom app on the pod (`DELETE /v1/custom-apps/<id>`).
+    pub fn delete_custom_app(&self, app_id: String) -> Result<(), LayoutApiError> {
+        Ok(self.inner.delete_custom_app(&app_id)?)
+    }
+
+    /// Stop showing a custom app's "has updates" notice (up to the built-in
+    /// `version`; `POST /v1/custom-apps/<id>/dismiss-update`).
+    pub fn dismiss_update(&self, app_id: String, version: i64) -> Result<(), LayoutApiError> {
+        Ok(self.inner.dismiss_update(&app_id, version)?)
+    }
+
+    /// Hide an app from every device's list, or show it again
+    /// (`PUT /v1/apps/<id>/hidden`).
+    pub fn set_app_hidden(&self, app_id: String, hidden: bool) -> Result<(), LayoutApiError> {
+        Ok(self.inner.set_app_hidden(&app_id, hidden)?)
+    }
 }
 
 fn serde_json_string(info: &client_core::AttachmentInfo) -> Result<String, String> {

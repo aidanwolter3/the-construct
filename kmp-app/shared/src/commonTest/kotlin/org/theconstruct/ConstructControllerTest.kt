@@ -39,6 +39,10 @@ private class FakeBridge : ConstructEngineBridge {
     /** Emits with an auto-incremented seq unless [seq] is given. */
     fun emit(workspace: String, entities: String, online: Boolean, pending: Int = 0, seq: Long = nextSeq++) =
         listener!!(EngineSnapshot(workspace, entities, online, seq, pending))
+
+    /** Emits a snapshot whose `layout_json` is [layout]. */
+    fun emitLayout(workspace: String, entities: String, layout: String) =
+        listener!!(EngineSnapshot(workspace, entities, true, nextSeq++, 0, layoutJson = layout))
 }
 
 class ConstructControllerTest {
@@ -275,5 +279,35 @@ class ConstructControllerTest {
     private companion object {
         const val COUNT_1 = """{"core://counters/home":{"count":1}}"""
         const val COUNT_3 = """{"core://counters/home":{"count":3}}"""
+    }
+
+    @Test
+    fun aDeletedAppOnScreenFallsBackToTheDefaultAppWithANotice() {
+        val first = FakeBridge()
+        val second = FakeBridge()
+        val opened = mutableListOf<String>()
+        val controller = ConstructController(first, "c-kitchen2dm", kotlinx.coroutines.Dispatchers.Unconfined, "pixelfed_home") { id ->
+            opened += id
+            second
+        }
+        val (ws, ents) = snapshotOf(COUNTER_BUNDLE_JSON)
+        first.emitLayout(ws, ents, """{"app_id":"c-kitchen2dm","version":3}""")
+        assertNull(controller.notice.value)
+        first.emitLayout(ws, ents, """{"app_id":"c-kitchen2dm","gone":true}""")
+        // (The background dispatcher is Unconfined here: the switch already happened.)
+        assertEquals(listOf("pixelfed_home"), opened)
+        assertFalse(controller.state.value.activeLayout.gone, "the new engine's state")
+        assertEquals("pixelfed_home", controller.currentAppId())
+        assertEquals(APP_DELETED, controller.notice.value, "the notice outlives the switch")
+        assertEquals(1, first.closes)
+        controller.dismissNotice()
+        assertNull(controller.notice.value)
+        // Without a default (or when the default itself is gone): stay, with the notice.
+        val lone = FakeBridge()
+        val stay = ConstructController(lone, "pixelfed_home", kotlinx.coroutines.Dispatchers.Unconfined, "pixelfed_home") { error("no switch") }
+        lone.emitLayout(ws, ents, """{"app_id":"pixelfed_home","gone":true}""")
+        assertTrue(stay.state.value.activeLayout.gone)
+        assertEquals(APP_DELETED, stay.notice.value)
+        assertEquals("pixelfed_home", stay.currentAppId())
     }
 }

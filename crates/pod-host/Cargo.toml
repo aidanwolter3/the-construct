@@ -20,6 +20,8 @@ tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 sha2 = "0.10"
 getrandom = "0.3"
+# oauth.rs: PKCE (S256) and token encoding.
+base64 = "0.22"
 
 [dev-dependencies]
 tempfile = "3"

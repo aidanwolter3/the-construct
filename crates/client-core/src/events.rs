@@ -295,6 +295,16 @@ pub(crate) fn events_thread(
                 }
                 "HTTP 401".to_string()
             }
+            Err(ConnectError::Status(404)) => {
+                // The app may be gone (a custom app deleted while this
+                // stream was down): a refetch tells (its 404 marks it gone).
+                if last_error.as_deref() != Some("HTTP 404")
+                    && let Some(inner) = weak.upgrade()
+                {
+                    inner.refresh();
+                }
+                "HTTP 404".to_string()
+            }
             Err(ConnectError::Status(code)) => format!("HTTP {code}"),
             Err(ConnectError::Other(e)) => e,
         };
@@ -393,6 +403,25 @@ impl Inner {
     /// Blocking (the refetch); called on the events thread.
     fn on_push_event(&self, ev: &SseEvent) {
         if self.on_notification_event(ev) {
+            return;
+        }
+        if ev.event == "deleted" {
+            // A custom app was deleted (decision
+            // `custom-apps-and-data-sources`): the UI leaves it.
+            let ws = serde_json::from_str::<Value>(&ev.data)
+                .ok()
+                .and_then(|v| v.get("workspace_id")?.as_str().map(str::to_owned));
+            if ws.as_deref() != Some(self.workspace_id.as_str()) {
+                return;
+            }
+            println!("[ConstructEngine] events: this app was deleted");
+            let snap = {
+                let mut st = lock(&self.state);
+                st.gone = true;
+                st.seq += 1;
+                st.snapshot()
+            };
+            self.notify(snap);
             return;
         }
         if ev.event == "data" {

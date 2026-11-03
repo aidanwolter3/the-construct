@@ -28,6 +28,10 @@ use crate::{ApiError, AppState, AuthPolicy, Pod, blocking};
 /// clears its session and refetches without the bearer.
 pub const SESSION_HEADER: &str = "x-construct-session";
 
+/// Request header of an internal request made on a session's behalf
+/// ([`AppState::internal_caller`]).
+pub const INTERNAL_HEADER: &str = "x-construct-internal-as";
+
 /// Default pod session lifetime (`CONSTRUCT_SESSION_TTL_DAYS`).
 pub const DEFAULT_SESSION_TTL_DAYS: i64 = 90;
 
@@ -152,10 +156,19 @@ impl AppState {
     /// The caller of a request: no bearer, a stale one, or a valid session
     /// with its sign-ins.
     pub async fn caller(self: &Pod, headers: &HeaderMap) -> Result<Caller, ApiError> {
+        // An internal request on the owner's behalf (the MCP endpoint's data
+        // samples): `<per-process secret>:<session hash>`, never from outside.
+        if let Some(hash) = self.internal_caller(headers) {
+            return self.caller_for_hash(hash).await;
+        }
         let Some(token) = bearer(headers) else {
             return Ok(Caller::Anonymous);
         };
-        let hash = session_hash(token);
+        self.caller_for_hash(session_hash(token)).await
+    }
+
+    /// The caller whose session hash is `hash`.
+    pub(crate) async fn caller_for_hash(self: &Pod, hash: String) -> Result<Caller, ApiError> {
         let ttl = self.session_ttl_secs();
         blocking(self, move |s| {
             if !s.session_valid(&hash, ttl)? {
@@ -181,29 +194,36 @@ pub(crate) fn router() -> Router<Pod> {
 
 /// `GET /v1/auth/sign-ins`: the sign-ins on the caller's session, for
 /// the client's Settings: `{"sign_ins": [{"id", "title", "server"?,
-/// "username"?, "apps": [{"id", "title"}]}]}` in sign-in id order. `apps` are
-/// the listed apps (`GET /v1/apps`) that require the sign-in. No bearer: an
-/// empty list; a stale one: 401. Sign-ins no adapter provides any more are
-/// left out.
+/// "username"?, "apps": [{"id", "title"}]}], "providers": [...]}` in sign-in
+/// id order. `apps` are the listed apps (`GET /v1/apps`) that require the
+/// sign-in. No bearer: no sign-ins; a stale one: 401. Sign-ins no adapter
+/// provides any more are left out.
+///
+/// `providers` lists every sign-in the pod offers, so Settings can start
+/// one: `{"id", "title", "signed_in", "intent"?, "server_placeholder"?}`;
+/// `intent` is the `action.auth.login` to dispatch
+/// ([`crate::AppAdapter::sign_in_start`]), `server_placeholder` is set when
+/// the user may type another server instead (sent as `instance_url`).
 async fn sign_ins(State(state): State<Pod>, headers: HeaderMap) -> Response {
     let caller = match state.caller(&headers).await {
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
     let session = match caller {
-        Caller::Anonymous => return Json(json!({ "sign_ins": [] })).into_response(),
+        Caller::Anonymous => None,
         Caller::Stale => return unauthorized(),
-        Caller::Signed(s) => s,
+        Caller::Signed(s) => Some(s),
     };
     let catalog = state.catalog();
     let mut out: Vec<Value> = Vec::new();
-    for id in &session.sign_ins {
+    for id in session.iter().flat_map(|s| &s.sign_ins) {
+        let session = session.as_ref().expect("iterating its sign-ins");
         let (Some(provider), Some(adapter)) = (catalog.sign_in(id), catalog.sign_in_adapter(id))
         else {
             continue;
         };
         let account = adapter
-            .sign_in_account(&state, id, &session)
+            .sign_in_account(&state, id, session)
             .await
             .unwrap_or_default();
         let apps: Vec<Value> = catalog
@@ -221,7 +241,25 @@ async fn sign_ins(State(state): State<Pod>, headers: HeaderMap) -> Response {
         }
         out.push(row);
     }
-    Json(json!({ "sign_ins": out })).into_response()
+    let mut providers: Vec<Value> = Vec::new();
+    for a in catalog.adapters() {
+        for p in a.sign_ins() {
+            let mut row = json!({
+                "id": p.id,
+                "title": p.title,
+                "signed_in": session.as_ref().is_some_and(|s| s.has(p.id)),
+            });
+            if let Some(start) = a.sign_in_start(&state, p.id).await {
+                row["intent"] = serde_json::to_value(&start.intent).unwrap_or(Value::Null);
+                if let Some(ph) = start.server_placeholder {
+                    row["server_placeholder"] = json!(ph);
+                }
+            }
+            providers.push(row);
+        }
+    }
+    providers.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    Json(json!({ "sign_ins": out, "providers": providers })).into_response()
 }
 
 /// `POST /v1/auth/logout` (bearer): deletes the pod session and its sign-ins.

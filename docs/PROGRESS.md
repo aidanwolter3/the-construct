@@ -598,3 +598,33 @@ new layout files; diffs between versions.
   `apps.rs`), notifications integration, client-core, shared `ScreensTest`, `NotificationsSimTest`.
 - Needs a device check (Android, macOS window): the scroll to the comment and the tint at real sizes.
 
+## Data sources (issue #45, P1a)
+
+- Decision `custom-apps-and-data-sources`: `AppAdapter::hydrate` became `manifest()` (feeds, data paths, actions,
+  entity schemes and field docs; `pod_core::source`) plus named `feed`s. `AppInfo::feeds` lists an app's root feeds
+  as `(source, feed)`; `get_workspace` runs them concurrently and merges. `publish_data` is keyed by source.
+- Startup checks: manifests, unique entity schemes, non-overlapping query keys, app feeds exist, and every route a
+  layout file uses is in its app's sources' manifests.
+- No wire change: built-in answers are byte-identical, fixtures regenerate unchanged, no client build.
+- Tests: `pod-core/tests/sources.rs` (catalog checks, the route check, two-source composition with a signed-out
+  and a stale source, data-event fan-out), `source.rs` unit tests, `the_core_names_no_app` also checks "recipes".
+- P1b, custom apps on the pod: core migration v15, `pod_core::custom` (create, edit, rename, restore, delete,
+  validate, hide), `validate::custom_layout`, lenient composition with `core://sources/<id>`, caps, `/v1/apps`
+  `kind`/`hidden`/`?all=1`, SSE `event: deleted`. Tests: `pod-core/tests/custom_apps.rs`, e2e `custom_apps.rs`
+  (Kitchen over the fake Pixelfed + recipes through the engine: like via the outbox, a recipe screen, a live push to
+  a second engine, delete).
+- P1c, clients: Custom marker, hide/show hidden apps, delete with confirmation, leaving a deleted app (engine
+  `gone`), "Sign in to <service>" in Settings (`providers`, `AppAdapter::sign_in_start`), simulator Kitchen fixture
+  and popup screenshots. Tests: client-core `apps.rs`, shared `AppCatalogTest`/`ConstructControllerTest`,
+  simulator `MenuTest`. Needs a device check: the row menu, the dialog and the notice on Android and the macOS
+  window.
+- P2, Claude through MCP (decision `mcp-connector`): `POST /v1/mcp` with 12 tools (`pod_core::mcp`), the host's
+  OAuth 2.1 server (`pod_host::oauth`: discovery, DCR, a pod-code page, PKCE), `mcp` credentials (host.db migration
+  3) that reach only `/v1/mcp`, `server pods mcp` / `revoke-mcp`. Tests: `server/tests/mcp.rs` (the OAuth flow, the
+  scope, every tool, rotation and revocation), host-db migration, JSON Patch and vocabulary unit tests. Needs one
+  manual run with Claude (a custom connector against staging) to confirm the connector flow.
+- P3, built-in parts (decision `layout-parts`): `pod_core::parts` (screens, slots and declared parts; `core://Ref`
+  expanded when serving, validated expanded), layout files' `"parts"`, `ref_update` versions after a deploy,
+  `copied_from` / `updates_from` / `dismiss-update`, MCP `list_parts` / `rebase_context` / `dismiss_update`, and the
+  menu's "has updates" row (engine/FFI `dismiss_update`). Tests: `pod-core/tests/parts.rs`, `server/tests/mcp.rs`,
+  shared `AppCatalogTest`, simulator `MenuTest`. Needs a device check of the notice row.

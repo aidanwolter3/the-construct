@@ -29,6 +29,8 @@ import kotlinx.serialization.json.longOrNull
 data class ActiveLayout(
     val appId: String? = null,
     val version: Long? = null,
+    /** The app is gone from the pod (a deleted custom app): `{"app_id","gone":true}`. */
+    val gone: Boolean = false,
 ) {
     companion object {
         /** Lenient: anything unparsable reads as unknown. */
@@ -37,6 +39,7 @@ data class ActiveLayout(
             ActiveLayout(
                 appId = o.jStr("app_id")?.takeIf { it.isNotBlank() },
                 version = o.jLong("version"),
+                gone = o.jPrim("gone")?.takeIf { !it.isString }?.booleanOrNull == true,
             )
         } catch (t: Exception) {
             ActiveLayout()
@@ -64,6 +67,19 @@ data class SignInSummary(
 }
 
 /**
+ * A sign-in the pod offers (`GET /v1/auth/sign-ins` `providers`), for Settings' "Sign in to <title>" row: [intent]
+ * is the `action.auth.login` that starts it (null: the pod gives no way to start it from Settings), and
+ * [serverPlaceholder] is set when the user may type another server instead (sent as the intent's `instance_url`).
+ */
+data class SignInProvider(
+    val id: String,
+    val title: String,
+    val signedIn: Boolean = false,
+    val intent: ActionIntent.AuthLogin? = null,
+    val serverPlaceholder: String? = null,
+)
+
+/**
  * An apps / versions call failed. [message] is a short sentence for the UI ("Can't reach your pod. ..."); [kind] tells
  * the cases apart; [status] is the HTTP status for [Kind.Server] (0 if none).
  */
@@ -78,7 +94,9 @@ class LayoutApiException(
 /**
  * One entry of `GET /v1/apps`. [updatedAt] is in epoch seconds (0 = unknown). [latestVersion] is the app's newest
  * version; [latestCompatibleVersion] the newest one this build can draw, i.e. what opening the app shows (null when
- * none fits; equal to [latestVersion] from a pod too old to say).
+ * none fits; equal to [latestVersion] from a pod too old to say). [custom]: the pod user's own app (`kind: "custom"`,
+ * decision `custom-apps-and-data-sources`), which they can delete; [hidden]: hidden from the app list on every device
+ * (shown only under "Show hidden apps").
  */
 data class AppSummary(
     val id: String,
@@ -87,10 +105,20 @@ data class AppSummary(
     val latestVersion: Long? = null,
     val updatedAt: Long = 0,
     val latestCompatibleVersion: Long? = latestVersion,
+    val custom: Boolean = false,
+    val hidden: Boolean = false,
+    /** A copy of a built-in that has a newer version since (decision `layout-parts`); null otherwise. */
+    val updatesFrom: AppUpdates? = null,
 ) {
     /** The app's newest version when this build can't draw it ("Update the app to see vN"), else null. */
     val updateRequiredFor: Long? get() = updateRequiredFor(latestVersion, latestCompatibleVersion)
 }
+
+/**
+ * A custom app copied from built-in app [app] ([title]): that app has version [toVersion] since. The menu says "<title>
+ * has updates · ask Claude to bring them in" until dismissed.
+ */
+data class AppUpdates(val app: String, val title: String, val toVersion: Long)
 
 /** [latest] when it is newer than [compatible] (the newest version this build can draw), else null. */
 fun updateRequiredFor(latest: Long?, compatible: Long?): Long? =
@@ -173,6 +201,37 @@ object AppCatalogJson {
                 latestVersion = o.jLong("latest_version"),
                 updatedAt = parseTimestamp(o["updated_at"]),
                 latestCompatibleVersion = o.latestCompatible(),
+                custom = o.jStr("kind") == "custom",
+                hidden = o.jPrim("hidden")?.takeIf { !it.isString }?.booleanOrNull == true,
+                updatesFrom = (o["updates_from"] as? JsonObject)?.let { u ->
+                    val app = u.jStr("app") ?: return@let null
+                    val to = u.jLong("to_version") ?: return@let null
+                    AppUpdates(app, u.jStr("title") ?: app, to)
+                },
+            )
+        }
+
+    /**
+     * `GET /v1/auth/sign-ins` `providers`: `[{"id","title","signed_in","intent"?,"server_placeholder"?}]` (missing from
+     * older pods: none).
+     */
+    fun parseProviders(json: String): List<SignInProvider> =
+        ((obj(json)["providers"] as? JsonArray) ?: JsonArray(emptyList())).mapNotNull { e ->
+            val o = e as? JsonObject ?: return@mapNotNull null
+            val id = o.jStr("id")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val intent = (o["intent"] as? JsonObject)?.let {
+                try {
+                    ConstructJson.json.decodeFromJsonElement(ActionIntentSerializer, it) as? ActionIntent.AuthLogin
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            SignInProvider(
+                id = id,
+                title = o.jStr("title")?.takeIf { it.isNotBlank() } ?: id,
+                signedIn = o.jPrim("signed_in")?.takeIf { !it.isString }?.booleanOrNull == true,
+                intent = intent,
+                serverPlaceholder = o.jStr("server_placeholder")?.takeIf { it.isNotBlank() },
             )
         }
 
@@ -274,6 +333,8 @@ fun versionSourceLabel(source: String): String = when (source) {
     "restore" -> "Restore"
     "manual" -> "Manual edit"
     "switch" -> "Layout switch"
+    "custom" -> "Edit"
+    "ref_update" -> "Built-in update"
     "" -> "Unknown"
     else -> source.replaceFirstChar { it.uppercase() }
 }
@@ -348,11 +409,26 @@ class AppRepository(
         call { AppCatalogJson.parseVersions(bridge().appVersions(appId, before, limit)) }
 
     /** The session's sign-ins; a pod without `/v1/auth/sign-ins` (404) has none to list. */
-    suspend fun signIns(): List<SignInSummary> = try {
-        call { AppCatalogJson.parseSignIns(bridge().signIns()) }
+    suspend fun signIns(): List<SignInSummary> = signInsAndProviders().first
+
+    /** The session's sign-ins and the providers Settings can start a sign-in with (one call). */
+    suspend fun signInsAndProviders(): Pair<List<SignInSummary>, List<SignInProvider>> = try {
+        call {
+            val json = bridge().signIns()
+            AppCatalogJson.parseSignIns(json) to AppCatalogJson.parseProviders(json)
+        }
     } catch (e: LayoutApiException) {
-        if (e.kind == LayoutApiException.Kind.NotFound) emptyList() else throw e
+        if (e.kind == LayoutApiException.Kind.NotFound) emptyList<SignInSummary>() to emptyList() else throw e
     }
+
+    /** Deletes custom app [appId] on the pod (every device). */
+    suspend fun deleteCustomApp(appId: String) = call { bridge().deleteCustomApp(appId) }
+
+    /** Stops showing [appId]'s "has updates" notice, up to built-in [version]. */
+    suspend fun dismissUpdate(appId: String, version: Long) = call { bridge().dismissUpdate(appId, version) }
+
+    /** Hides app [appId] from every device's list, or shows it again. */
+    suspend fun setAppHidden(appId: String, hidden: Boolean) = call { bridge().setAppHidden(appId, hidden) }
 
     suspend fun spec(appId: String, version: Long): UiNode {
         specs[appId to version]?.let { return it }

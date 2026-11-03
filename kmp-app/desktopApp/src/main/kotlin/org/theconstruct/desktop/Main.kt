@@ -61,7 +61,7 @@ private fun openSession(root: File, baseUrl: String, workspace: String): Session
         println("[desktop] opening engine for workspace=$appId")
         return UniffiEngineBridge.create(storage.absolutePath, baseUrl, appId, urlOpener = BrowserOpener)
     }
-    val controller = ConstructController(open(workspace), workspace, ::open)
+    val controller = ConstructController(open(workspace), workspace, defaultAppId = DEFAULT_WORKSPACE, openBridge = ::open)
     controller.setDeviceInfo("desktop", deviceName())
     return Session(baseUrl, controller)
 }

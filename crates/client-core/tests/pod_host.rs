@@ -186,7 +186,15 @@ fn a_device_opens_a_pod_signs_in_signs_out_and_leaves() {
             && s.workspace_json.contains("Sign in with Pixelfed")
     });
     assert_eq!(token(&store).as_deref(), Some(pod_token.as_str()));
-    assert_eq!(sign_ins(&engine), json!({ "sign_ins": [] }));
+    let listed = sign_ins(&engine);
+    assert_eq!(listed["sign_ins"], json!([]));
+    // Settings can start the sign-in again.
+    assert_eq!(listed["providers"][0]["id"], "pixelfed");
+    assert_eq!(listed["providers"][0]["signed_in"], false);
+    assert_eq!(
+        listed["providers"][0]["intent"]["intent"],
+        "action.auth.login"
+    );
 
     // Leave the pod on this device.
     engine.forget_session();

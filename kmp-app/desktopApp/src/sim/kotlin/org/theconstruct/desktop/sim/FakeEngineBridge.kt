@@ -410,10 +410,62 @@ class FakeEngineBridge(
 
     override fun appVersion(appId: String, version: Long): String = appsCall { apps.versionJson(appId, version) }
 
+    override fun deleteCustomApp(appId: String) {
+        appsCall {
+            apps.delete(appId)
+            ""
+        }
+        // The pod tells every engine on the app (SSE `deleted`).
+        if (appId == this.appId) {
+            synchronized(lock) {
+                gone = true
+                seq++
+            }
+            emit()
+        }
+    }
+
+    override fun dismissUpdate(appId: String, version: Long) {
+        appsCall {
+            apps.dismissUpdate(appId, version)
+            ""
+        }
+    }
+
+    override fun setAppHidden(appId: String, hidden: Boolean) {
+        appsCall {
+            apps.setHidden(appId, hidden)
+            ""
+        }
+    }
+
+    /** This engine's app was deleted: `layout_json` says `gone`. */
+    private var gone = false
+
     override fun signIns(): String = appsCall {
         val auth = synchronized(lock) { authJson }
         val o = runCatching { ConstructJson.json.parseToJsonElement(auth).jsonObject }.getOrNull()
-        if ((o?.get("state") as? JsonPrimitive)?.contentOrNull != "signed_in") return@appsCall """{"sign_ins":[]}"""
+        val provider = buildJsonObject {
+            put("id", "pixelfed")
+            put("title", "Pixelfed")
+            put("signed_in", (o?.get("state") as? JsonPrimitive)?.contentOrNull == "signed_in")
+            put(
+                "intent",
+                buildJsonObject {
+                    put("intent", "action.auth.login")
+                    put("instance_url", SIGN_IN_SERVER)
+                    put("app_path", "/v1/auth/pixelfed/app")
+                    put("token_path", "/v1/auth/pixelfed/token")
+                },
+            )
+        }
+        val providers = buildJsonArray { add(provider) }
+        if ((o?.get("state") as? JsonPrimitive)?.contentOrNull != "signed_in") {
+            return@appsCall buildJsonObject {
+                put("sign_ins", buildJsonArray {})
+                put("providers", providers)
+            }.toString()
+        }
         val row = buildJsonObject {
             put("id", "pixelfed")
             put("title", "Pixelfed")
@@ -421,7 +473,10 @@ class FakeEngineBridge(
             (o["username"] as? JsonPrimitive)?.contentOrNull?.let { put("username", it) }
             put("apps", buildJsonArray { add(buildJsonObject { put("id", "pixelfed_home"); put("title", "Pixelfed") }) })
         }
-        buildJsonObject { put("sign_ins", buildJsonArray { add(row) }) }.toString()
+        buildJsonObject {
+            put("sign_ins", buildJsonArray { add(row) })
+            put("providers", providers)
+        }.toString()
     }
 
     private fun appsCall(read: () -> String): String {
@@ -629,7 +684,11 @@ class FakeEngineBridge(
         queriesJson = queriesLocked(),
         loadsJson = JsonObject(loads).toString(),
         authJson = authJson,
-        layoutJson = JsonObject(mapOf("app_id" to JsonPrimitive(appId), "version" to JsonPrimitive(shownVersion))).toString(),
+        layoutJson = if (gone) {
+            JsonObject(mapOf("app_id" to JsonPrimitive(appId), "gone" to JsonPrimitive(true))).toString()
+        } else {
+            JsonObject(mapOf("app_id" to JsonPrimitive(appId), "version" to JsonPrimitive(shownVersion))).toString()
+        },
         notificationsJson = notifications?.unreadJson() ?: NO_UNREAD,
     )
 

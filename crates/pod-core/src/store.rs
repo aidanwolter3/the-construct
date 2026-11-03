@@ -217,6 +217,25 @@ const MIGRATIONS: &[Migration] = &[
     // features a version uses (comma-separated, sorted; worked out from the
     // layout when it is appended). Every earlier version uses none.
     Migration::Sql("ALTER TABLE app_versions ADD COLUMN features TEXT NOT NULL DEFAULT '';"),
+    // v16 (decision `custom-apps-and-data-sources`): custom apps, owned by
+    // the pod's user. `feeds_json` is the app's root feeds, `[[source,
+    // feed], ...]`; `deleted_at` marks a soft delete (purged after 30 days).
+    // Their versions are `app_versions` rows like a built-in app's;
+    // `author` says who wrote a version (`user` | `claude`; NULL for files)
+    // and `meta_json` holds extra facts about it (`copied_from`, ...).
+    Migration::Sql(
+        "CREATE TABLE custom_apps (
+         id         TEXT PRIMARY KEY NOT NULL,
+         title      TEXT NOT NULL,
+         icon       TEXT NOT NULL,
+         feeds_json TEXT NOT NULL,
+         created_at INTEGER NOT NULL,
+         updated_at INTEGER NOT NULL,
+         deleted_at INTEGER
+     );
+     ALTER TABLE app_versions ADD COLUMN author TEXT;
+     ALTER TABLE app_versions ADD COLUMN meta_json TEXT;",
+    ),
 ];
 
 /// A pod setting inside a transaction (an adapter migration reads its
@@ -604,6 +623,11 @@ pub struct AppVersion {
     pub schema: Option<u32>,
     /// The layout features the version uses ([`protocol::required_features`]).
     pub features: Vec<String>,
+    /// Who wrote it: `user` or `claude` for a custom app's version, `None`
+    /// for a layout file's (store v16).
+    pub author: Option<String>,
+    /// Extra facts about the version as a JSON object, e.g. `copied_from`.
+    pub meta_json: Option<String>,
 }
 
 impl AppVersion {
@@ -637,6 +661,8 @@ pub struct FileVersion {
     /// The file's declared `"schema"` (recorded once, then append-only like
     /// the content; not part of `file_hash`).
     pub schema: u32,
+    /// `AppVersion::meta_json` of the new version (its declared parts).
+    pub meta_json: Option<String>,
 }
 
 /// What [`Store::sync_layout_files`] did.
@@ -716,8 +742,7 @@ pub fn open_session_on(
     attach_sign_in_on(tx, token_hash, sign_in)
 }
 
-const APP_VERSION_COLS: &str =
-    "app_id, version, created_at, source, note, file_key, hash, schema, features";
+const APP_VERSION_COLS: &str = "app_id, version, created_at, source, note, file_key, hash, schema, features, author, meta_json";
 
 fn app_version_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AppVersion> {
     Ok(AppVersion {
@@ -732,10 +757,15 @@ fn app_version_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AppVersion> {
         features: protocol::parse_features(&r.get::<_, String>(8)?)
             .into_iter()
             .collect(),
+        author: r.get(9)?,
+        meta_json: r.get(10)?,
     })
 }
 
-fn latest_app_version_on(conn: &Connection, app_id: &str) -> rusqlite::Result<Option<AppVersion>> {
+pub(crate) fn latest_app_version_on(
+    conn: &Connection,
+    app_id: &str,
+) -> rusqlite::Result<Option<AppVersion>> {
     conn.query_row(
         &format!(
             "SELECT {APP_VERSION_COLS} FROM app_versions WHERE app_id = ?1
@@ -749,6 +779,31 @@ fn latest_app_version_on(conn: &Connection, app_id: &str) -> rusqlite::Result<Op
 
 /// A layout file's key and content hash (versions created from files).
 type FileRef<'a> = Option<(&'a str, &'a str)>;
+
+/// A version written at runtime (a custom app's): who wrote it and extra
+/// facts ([`AppVersion::author`], [`AppVersion::meta_json`]).
+pub(crate) struct Authored<'a> {
+    pub author: &'a str,
+    pub meta_json: Option<&'a str>,
+}
+
+/// Append a custom app's version: `json` as version `MAX + 1`.
+pub(crate) fn append_authored_version_on(
+    conn: &Connection,
+    app_id: &str,
+    json: &str,
+    source: &str,
+    note: Option<&str>,
+    schema: u32,
+    by: Authored<'_>,
+) -> rusqlite::Result<i64> {
+    let version = append_app_version_on(conn, app_id, json, source, note, None, schema)?;
+    conn.execute(
+        "UPDATE app_versions SET author = ?1, meta_json = ?2 WHERE app_id = ?3 AND version = ?4",
+        params![by.author, by.meta_json, app_id, version],
+    )?;
+    Ok(version)
+}
 
 /// Append `json` as version `MAX + 1` of the app (blob stored once by hash);
 /// `file` = `(file_key, file_hash)`; `schema` = the schema it was written for.
@@ -890,6 +945,12 @@ fn sync_app_files_on(
             Some((&file.key, &file.file_hash)),
             file.schema,
         )?;
+        if let Some(meta) = &file.meta_json {
+            tx.execute(
+                "UPDATE app_versions SET meta_json = ?1 WHERE app_id = ?2 AND version = ?3",
+                params![meta, app_id, version],
+            )?;
+        }
         report.appended.push((file.path.clone(), version));
     }
     Ok(Ok(()))
@@ -1129,6 +1190,18 @@ impl Store {
             params![token_hash, now_secs()],
         )?;
         tx.commit()
+    }
+
+    /// The pod owner's session: the newest pinned one (a pod token's,
+    /// D46), if any.
+    pub fn owner_session(&self) -> rusqlite::Result<Option<String>> {
+        self.conn()
+            .query_row(
+                "SELECT token_hash FROM sessions WHERE pinned = 1 ORDER BY created_at DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
     }
 
     /// Whether the session is pinned (a pod token's).
@@ -1534,6 +1607,7 @@ mod tests {
             // Stands in for `layouts::file_hash` (the file's own content).
             file_hash: content_hash(&format!("{note}\n{json}")),
             schema: 1,
+            meta_json: None,
         }
     }
 

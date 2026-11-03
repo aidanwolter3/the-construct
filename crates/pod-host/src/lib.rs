@@ -20,6 +20,7 @@
 pub mod app_links;
 pub mod db;
 pub mod limits;
+pub mod oauth;
 pub mod screen;
 
 use std::collections::HashMap;
@@ -42,7 +43,7 @@ use pod_core::{AppState, PUBLIC_PREFIX_HEADER, Pod, json_error, parse_json_body}
 use serde_json::json;
 use tower::ServiceExt;
 
-pub use db::{HostStore, PodKind, PodRow};
+pub use db::{CredentialKind, HostStore, PodKind, PodRow};
 use limits::{ClientKeys, RateLimit, TwoLevel};
 
 /// Builds a pod over its opened store: runs the adapters' migrations and the
@@ -160,6 +161,10 @@ pub struct HostConfig {
     /// HTTPS proxy (Fly, `FLY_APP_NAME`): on plain HTTP it would be ignored,
     /// and on `localhost` it would pin the name to HTTPS for other servers.
     pub hsts: bool,
+    /// `CONSTRUCT_PUBLIC_URL`: the base URL clients reach this server at
+    /// (OAuth metadata, decision `mcp-connector`); else from each request's
+    /// `Host`.
+    pub public_url: Option<String>,
     /// The Android app allowed to open this server's https sign-in redirect
     /// (`CONSTRUCT_ANDROID_PACKAGE`, `CONSTRUCT_ANDROID_CERT_SHA256`; decision
     /// `android-app-link-sign-in-redirect`).
@@ -197,6 +202,7 @@ impl HostConfig {
             trust_fly_client_ip: var("FLY_APP_NAME").is_some(),
             storage: StorageLimits::from_env(),
             hsts: var("FLY_APP_NAME").is_some(),
+            public_url: var("CONSTRUCT_PUBLIC_URL"),
             android: app_links::AndroidAppLinks::from_env(),
         }
     }
@@ -267,6 +273,8 @@ pub struct Host {
     opening: tokio::sync::Mutex<()>,
     open_pod_id: OnceLock<String>,
     code_tries: RateLimit,
+    /// OAuth client registrations per client address.
+    registrations: RateLimit,
     temp_creates: TwoLevel,
     /// Makes the temporary-pod cap check and the creation one step.
     temp_lock: Mutex<()>,
@@ -297,6 +305,7 @@ impl Host {
             // code can't be guessed, and a global one lets anyone lock
             // everyone out of entering their code.
             code_tries: RateLimit::new(10, Duration::from_secs(60)),
+            registrations: RateLimit::new(20, Duration::from_secs(3600)),
             // Per IPv4 address or IPv6 /64, and per /48 (security audit #31,
             // M2): a /48 holds 65536 /64s, and a few are enough to take
             // every temporary pod.
@@ -516,8 +525,51 @@ impl Host {
         Ok(removed)
     }
 
+    /// A new MCP credential for pod `name` (`cmcp_…`, shown once), e.g. for
+    /// Claude Code (`claude mcp add --transport http ... --header
+    /// "Authorization: Bearer <it>"`); `label` says whose it is.
+    pub fn issue_mcp(&self, name: &str, label: &str) -> Result<String, String> {
+        let pod = self
+            .store
+            .pod_by_name(name)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("no pod named {name:?}"))?;
+        let token = {
+            let mut buf = [0u8; 32];
+            getrandom::fill(&mut buf).map_err(|e| e.to_string())?;
+            format!("{}{}", oauth::MCP_TOKEN_PREFIX, hex(&buf))
+        };
+        self.store
+            .insert_mcp_credential(&pod.id, &session_hash(&token), label)
+            .map_err(|e| e.to_string())?;
+        Ok(token)
+    }
+
+    /// Revoke every MCP credential of pod `name` (Claude is disconnected);
+    /// how many went.
+    pub fn revoke_mcp(&self, name: &str) -> Result<usize, String> {
+        let pod = self
+            .store
+            .pod_by_name(name)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("no pod named {name:?}"))?;
+        self.store.revoke_mcp(&pod.id).map_err(|e| e.to_string())
+    }
+
+    /// `(label, created_at)` of pod `name`'s MCP credentials.
+    pub fn mcp_credentials(&self, name: &str) -> Result<Vec<(String, i64)>, String> {
+        let pod = self
+            .store
+            .pod_by_name(name)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("no pod named {name:?}"))?;
+        self.store
+            .mcp_credentials(&pod.id)
+            .map_err(|e| e.to_string())
+    }
+
     /// A new token for pod `name`; the old one stops working everywhere and
-    /// the pod's sign-ins (made with it) end.
+    /// the pod's sign-ins (made with it) end. Claude's MCP credentials stay.
     pub fn rotate(&self, name: &str) -> Result<String, String> {
         let pod = self
             .store
@@ -785,6 +837,7 @@ impl Host {
             ))
         })?;
         state.set_public_prefix(&format!("/v1/p/{id}"));
+        state.set_hosted();
         let pod: Pod = Arc::new(state);
         let open = Arc::new(OpenPod {
             router: pod_core::app(pod.clone()),
@@ -808,6 +861,24 @@ impl Host {
                     json!({ "error": "host_error" }),
                 ))
             })
+    }
+
+    /// The live pod a credential belongs to, and its kind.
+    async fn credential(
+        self: &Arc<Self>,
+        token: &str,
+    ) -> Result<Option<(String, CredentialKind)>, Box<Response>> {
+        let hash = session_hash(token);
+        match self.blocking(move |h| h.store.credential(&hash)).await? {
+            Ok(found) => Ok(found),
+            Err(e) => {
+                tracing::error!(error = %e, "host store error");
+                Err(Box::new(json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({ "error": "host_error" }),
+                )))
+            }
+        }
     }
 
     /// The live pod `token` opens.
@@ -834,6 +905,24 @@ pub fn app(host: Arc<Host>) -> Router {
         .route(screen::OPEN_PATH, post(open_with_token))
         .route(screen::TEMPORARY_PATH, post(temporary_pod))
         .route("/v1/p/{pod_id}/{*rest}", get(public_route))
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(oauth::protected_resource),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource/v1/mcp",
+            get(oauth::protected_resource),
+        )
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(oauth::authorization_server),
+        )
+        .route("/oauth/register", post(oauth::register))
+        .route(
+            "/oauth/authorize",
+            get(oauth::authorize_page).post(oauth::authorize_submit),
+        )
+        .route("/oauth/token", post(oauth::token))
         .route(app_links::ASSET_LINKS_PATH, get(app_links::asset_links))
         .route(app_links::REDIRECT_PATH, get(app_links::redirect_page))
         .fallback(dispatch)
@@ -916,7 +1005,11 @@ fn valid_port(p: &str) -> bool {
 /// host runs behind Fly (its proxy sets it), else the connection's peer.
 /// IPv6 addresses count per /64 (one subscriber usually has a whole /64)
 /// and per /48 ([`ClientKeys`]).
-fn client_keys(req_headers: &HeaderMap, peer: Option<SocketAddr>, trust_fly: bool) -> ClientKeys {
+pub(crate) fn client_keys(
+    req_headers: &HeaderMap,
+    peer: Option<SocketAddr>,
+    trust_fly: bool,
+) -> ClientKeys {
     let ip = trust_fly
         .then(|| {
             req_headers
@@ -929,13 +1022,13 @@ fn client_keys(req_headers: &HeaderMap, peer: Option<SocketAddr>, trust_fly: boo
     ClientKeys::of(ip)
 }
 
-fn peer(req: &Request) -> Option<SocketAddr> {
+pub(crate) fn peer(req: &Request) -> Option<SocketAddr> {
     req.extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0)
 }
 
-fn rate_limited() -> Response {
+pub(crate) fn rate_limited() -> Response {
     json_error(
         StatusCode::TOO_MANY_REQUESTS,
         json!({ "error": "rate_limited" }),
@@ -953,12 +1046,36 @@ fn set_prefix(headers: &mut HeaderMap, pod_id: &str) {
 /// Every request that is not the host's: to the bearer's pod (or the open
 /// pod), else the answer for a caller without a pod.
 async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
+    // Headers only the host (or the pod itself) may set.
+    req.headers_mut().remove(pod_core::CREDENTIAL_HEADER);
+    req.headers_mut().remove(pod_core::session::INTERNAL_HEADER);
     let token = bearer(req.headers()).map(str::to_owned);
-    let found = match &token {
-        Some(t) => match host.pod_for_token(t).await {
+    let credential = match &token {
+        Some(t) => match host.credential(t).await {
             Ok(found) => found,
             Err(r) => return *r,
         },
+        None => None,
+    };
+    // The MCP endpoint (decision `mcp-connector`): an MCP credential or the
+    // pod token, never the open pod; an MCP credential reaches nothing else.
+    let is_mcp = req.uri().path() == oauth::MCP_PATH;
+    let found = match credential {
+        Some((id, CredentialKind::Mcp)) if is_mcp => {
+            req.headers_mut().remove(header::AUTHORIZATION);
+            req.headers_mut()
+                .insert(pod_core::CREDENTIAL_HEADER, HeaderValue::from_static("mcp"));
+            Some(id)
+        }
+        Some((_, CredentialKind::Mcp)) => {
+            return json_error(
+                StatusCode::FORBIDDEN,
+                json!({ "error": "mcp_credential_scope",
+                        "detail": "this credential only reaches the pod's MCP endpoint" }),
+            );
+        }
+        Some((id, CredentialKind::PodToken)) => Some(id),
+        None if is_mcp => return oauth::mcp_unauthorized(&host, req.headers()),
         None => None,
     };
     let pod_id = match (found, host.open_pod_id.get()) {

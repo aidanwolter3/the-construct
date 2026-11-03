@@ -74,6 +74,27 @@ class UniffiEngineBridge(val handle: EngineHandle) : ConstructEngineBridge {
 
     override fun signIns(): String = catalog("sign-ins") { handle.signIns() }
 
+    override fun deleteCustomApp(appId: String) {
+        catalog("delete app $appId") {
+            handle.deleteCustomApp(appId)
+            ""
+        }
+    }
+
+    override fun dismissUpdate(appId: String, version: Long) {
+        catalog("dismiss update of $appId") {
+            handle.dismissUpdate(appId, version)
+            ""
+        }
+    }
+
+    override fun setAppHidden(appId: String, hidden: Boolean) {
+        catalog("app $appId hidden=$hidden") {
+            handle.setAppHidden(appId, hidden)
+            ""
+        }
+    }
+
     // Notifications (D52). The listener is held here too (UniFFI's handle map also pins it).
     @Volatile
     private var notificationListener: NotificationListener? = null

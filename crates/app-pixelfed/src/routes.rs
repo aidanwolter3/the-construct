@@ -623,7 +623,7 @@ async fn exchange_token(State(state): State<Pod>, headers: HeaderMap, body: Byte
 
 // ---------- home feed ----------
 
-/// The data of `GET /v1/workspaces/pixelfed_home` ([`pod_core::AppAdapter::hydrate`];
+/// The data of `GET /v1/workspaces/pixelfed_home` (the `home` feed, [`pod_core::AppAdapter::feed`];
 /// the core has checked the caller's session has the `pixelfed` sign-in).
 /// No stored account, or the upstream rejected the stored token: a stale
 /// session (401 with the signed-out screen, so the client clears its session).
