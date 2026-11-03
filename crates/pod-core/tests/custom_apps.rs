@@ -493,6 +493,30 @@ async fn layouts_may_only_use_their_sources() {
 }
 
 #[tokio::test]
+async fn a_progress_spinner_is_accepted_and_needs_its_feature() {
+    let env = env();
+    // A spinner beside each item while its status is "pending".
+    let mut l = kitchen_a();
+    l["slots"][0]["content"]["item_template"] = json!({"type": "core://Row", "children": [
+        {"type": "core://Text", "style": "Body", "value_expr": "$item.from"},
+        {"type": "core://Conditional", "value": "$item.status", "equals": "pending",
+         "content": {"type": "core://Progress", "size_dp": 16}}]});
+    let (status, b) = create(&env, json!([["a", "all"]]), l).await;
+    assert_eq!(status, StatusCode::CREATED, "{b}");
+    let id = b["id"].as_str().unwrap();
+    let (status, v) = call(
+        &env.pod,
+        "GET",
+        &format!("/v1/apps/{id}/versions"),
+        Some("plain"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v["versions"][0]["features"], json!(["progress"]), "{v}");
+}
+
+#[tokio::test]
 async fn edits_append_history_and_restore_appends_a_copy() {
     let env = env();
     let (_, b) = create(&env, ab(), kitchen()).await;

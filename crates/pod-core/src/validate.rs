@@ -210,6 +210,7 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             check_dp("padding_v_dp", *padding_v_dp, MAX_PADDING_DP)
         }
         UiNode::Spacer { size_dp: Some(s) } => check_dp("spacer size_dp", *s, MAX_SIZE_DP),
+        UiNode::Progress { size_dp: Some(s) } => check_dp("progress size_dp", *s, MAX_SIZE_DP),
         UiNode::List {
             indent,
             filter,
@@ -901,6 +902,16 @@ mod tests {
         ] {
             assert!(check_sticky(&node(bad.clone()), None).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn progress_size_is_bounded() {
+        let p = |v: Value| node(v);
+        assert_eq!(check_values(&p(json!({"type": "core://Progress"}))), Ok(()));
+        let sized = json!({"type": "core://Progress", "size_dp": 24});
+        assert_eq!(check_values(&p(sized)), Ok(()));
+        let huge = json!({"type": "core://Progress", "size_dp": 9999});
+        assert!(check_values(&p(huge)).is_err());
     }
 
     #[test]

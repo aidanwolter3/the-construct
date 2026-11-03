@@ -630,6 +630,9 @@ client build. The engine and the clients know no app.
   vocabulary in `protocol::required_features` (docs/decisions/layout-features.md). Clients send the features they
   draw in `X-Construct-Features`; the pod serves a version only to clients that have every feature it uses (else
   `update_required`) and lists them as `features` in `GET /v1/apps/{id}/versions[/{n}]`.
+- **Progress (feature `progress`):** `core://Progress` (`size_dp` optional, default 16) is an indeterminate
+  circular spinner in a quiet theme colour, with no children or intents. Put it in a `core://Conditional` to show
+  work in progress, e.g. a group header that spins while its `section` is still `"Unsorted"`.
 - **A breaking schema change:** bump `protocol::SCHEMA_VERSION` and add `(new schema, oldest layout schema it still
   draws)` to `protocol::RETIRED`. Older versions then show as incompatible to new clients and are never served to
   them; the old files are not edited. `RETIRED` is `[(3, 3)]`: schema 3 removed the `pixelfed://` widgets (D37),

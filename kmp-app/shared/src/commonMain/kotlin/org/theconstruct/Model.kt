@@ -359,6 +359,13 @@ sealed class UiNode {
     @Serializable
     data class Sticky(val content: UiNode) : UiNode()
 
+    /**
+     * `core://Progress` (feature `progress`): an indeterminate circular spinner [sizeDp] across (default
+     * [PROGRESS_DEFAULT_SIZE_DP]) for work in progress, e.g. inside a [Conditional] on a status field.
+     */
+    @Serializable
+    data class Progress(@SerialName("size_dp") val sizeDp: Int? = null) : UiNode()
+
     /** A node whose `type` this client does not know. [raw] is the full original object. */
     data class Unknown(val type: String, val raw: JsonObject) : UiNode()
 }
@@ -579,6 +586,7 @@ object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode
         Variant("core://ChoiceChips", UiNode.ChoiceChips::class, UiNode.ChoiceChips.serializer()),
         Variant("core://MediaPicker", UiNode.MediaPicker::class, UiNode.MediaPicker.serializer()),
         Variant("core://Sticky", UiNode.Sticky::class, UiNode.Sticky.serializer()),
+        Variant("core://Progress", UiNode.Progress::class, UiNode.Progress.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): UiNode = UiNode.Unknown(tag, raw)

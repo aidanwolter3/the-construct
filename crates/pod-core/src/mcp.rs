@@ -979,6 +979,11 @@ pub const NODE_DOCS: &[(&str, &str, &str)] = &[
         "content",
         "Pins content to the top while its column scrolls (not inside a List or Carousel).",
     ),
+    (
+        "core://Progress",
+        "size_dp?",
+        "An indeterminate spinner for work in progress, e.g. inside a core://Conditional on a status field",
+    ),
 ];
 
 /// The pod-only node of a custom layout (never sent to clients).
