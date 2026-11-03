@@ -15,6 +15,8 @@
 //!   created_at (unix s), url, and `reblogged_by_uri` / `reblogged_by_name` when the
 //!   timeline entry was a reblog (the post is the INNER status, so actions target the
 //!   inner id). The author fields are copies, so layouts bind them on the post (D36).
+//!   `cover_url` / `cover_blurhash` (the first media's preview, else its image) and
+//!   `media_count` are copies too, for the cards view (D48).
 //! - `pixelfed://users/<id>`: id, username (acct), display_name, avatar_url.
 //! - `pixelfed://media/<id>`: id, type, url, preview_url, aspect_ratio, alt_text, blurhash.
 //!
@@ -550,6 +552,21 @@ pub fn normalize_post(
         author.get("avatar_url").cloned().unwrap_or(Value::Null),
     );
     post.set("author_uri", author_uri);
+    // The first media, for the cards view (D48).
+    let first = media_uris.first().map(|uri| &entities[uri]);
+    let cover = first.and_then(|m| {
+        ["preview_url", "url"]
+            .into_iter()
+            .find_map(|k| m.get(k).filter(|v| v.is_string()).cloned())
+    });
+    post.set("cover_url", cover.unwrap_or(Value::Null));
+    post.set(
+        "cover_blurhash",
+        first
+            .and_then(|m| m.get("blurhash").cloned())
+            .unwrap_or(Value::Null),
+    );
+    post.set("media_count", media_uris.len());
     post.set("media_uris", media_uris);
     post.set("caption", caption);
     post.set("content_warning", json!(content_warning));
@@ -577,6 +594,33 @@ pub const COMMENT_PREFIX: &str = "pixelfed://comments/";
 
 pub fn comment_uri(id: &str) -> String {
     format!("{COMMENT_PREFIX}{id}")
+}
+
+/// The query key of the post screen (D48): the one post.
+pub fn post_query(post_id: &str) -> String {
+    format!("post:{post_id}")
+}
+
+/// The post screen's data (D48) from a `GET /api/v1/statuses/<id>` response:
+/// the post (the inner one of a reblog) with its author and media, and
+/// `queries["post:<id>"]` listing it. `None` when it is not a status.
+pub fn normalize_post_screen(
+    id: &str,
+    raw: &Value,
+    media: &mut MediaUrls,
+) -> Option<protocol::DataBundle> {
+    let status = Status::deserialize(raw)
+        .inspect_err(|e| tracing::warn!(error = %e, %id, "unparseable Pixelfed status"))
+        .ok()?;
+    let target = status.target();
+    let mut entities = BTreeMap::new();
+    let post = normalize_post(target, media, &mut entities);
+    let uri = post_uri(&target.id);
+    entities.insert(uri.clone(), post);
+    Some(protocol::DataBundle {
+        entities,
+        queries: BTreeMap::from([(post_query(id), vec![uri])]),
+    })
 }
 
 /// The query key of a post's comments (the comments screen lists it).

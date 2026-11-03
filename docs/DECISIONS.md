@@ -1632,3 +1632,31 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
 - **Weighed:** Pixelfed's web endpoints (`/api/v2/comments/...`) return nested replies, but they are not part of the
   OAuth API and are undocumented; fetching every comment's `context` regardless of its count costs a call per comment
   and finds nothing Pixelfed would not list (it returns no replies while the count is 0).
+
+## D48: A cards view for Pixelfed: list grids and form-driven conditionals (schema 8)
+
+- **Why:** the user asked for a grid view of the Pixelfed feed and picked, from mockups, a List/Cards switch above the
+  feed with two-column cards (cover photo, author, like count) that open the post. The shared UI could not draw it:
+  a `core://List` stacks full-width items, and nothing could show part of a layout based on a switch.
+- **Generic vocabulary (additive schema 8):** `core://List` `columns` (0/1 = one item per row, at most 6),
+  `spacing_dp` (between items, both ways) and `padding_h_dp`. A grid row is a `Row` of equal-weight cells, top-aligned,
+  a short last row left-aligned; a group header starts a new row; `indent` is ignored in a grid. `core://Conditional`
+  reads `$form.<field>` ("" while unset) and takes `equals`: show the content only when the value, as text (null and
+  missing are ""), equals it. A switch is then a `core://ChoiceChips` over a form value plus one `Conditional` per
+  view; the empty option is the default view.
+- **Pixelfed (`layouts/pixelfed_home/0004.json`, adapter only):** the feed slot is a Column of the chips and two
+  Conditionals (the old post list, and a two-column `core://List` of `Tappable` cards over the same
+  `timeline:home` query, so both views share entities and likes). A card opens the new post screen
+  (`pixelfed://posts/{id}`, Push), whose data `GET /v1/pixelfed/screens/post?id=<id>` returns the post (the inner one
+  of a boost), its author and media and `queries["post:<id>"]`; it reuses the feed's post card. Posts gain
+  `cover_url` (first media's preview, else its image, proxied), `cover_blurhash` and `media_count`. Text-only posts
+  show their caption on a tinted box instead of a photo.
+- **Compatibility:** 0004 declares schema 8, so apps of schema 7 and older keep 0003; the switch value is per
+  screen form state, so it resets when the app restarts.
+- **Weighed:** a server-only grid (the adapter grouping posts into row entities with fixed-size tiles on a separate
+  screen) needed no client build but could not fill the screen width or switch in place; a dedicated
+  `core://Grid` node (the List already has the query, filter, `where` and groups a grid needs); a three-column
+  photo-only grid and a server-side view setting (the user chose cards; a form value needs no endpoint).
+- **Not yet:** remembering the chosen view across restarts; a multi-photo marker on cards (needs a numeric
+  comparison or a server-made flag); more columns on wide screens.
+

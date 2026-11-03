@@ -153,7 +153,7 @@ sealed class UiNode {
 
     /**
      * `core://List` (D34): the entities of `queries[queryKey]`, each rendered with [itemTemplate]. [filter] and
-     * [groupBy] are schema 5 (D43).
+     * [groupBy] are schema 5 (D43); [columns], [spacingDp] and [paddingHDp] schema 8 (D48).
      */
     @Serializable
     data class ItemList(
@@ -164,6 +164,12 @@ sealed class UiNode {
         val filter: ListFilter? = null,
         @SerialName("group_by") val groupBy: GroupBy? = null,
         @SerialName("where") val where: ListWhere? = null,
+        /** Schema 8 (D48): items in this many equal columns (a grid); 0 and 1 mean one per row. */
+        val columns: Int = 0,
+        /** Schema 8 (D48): space between items (both ways in a grid). */
+        @SerialName("spacing_dp") val spacingDp: Int = 0,
+        /** Schema 8 (D48): space left and right of the items. */
+        @SerialName("padding_h_dp") val paddingHDp: Int = 0,
     ) : UiNode()
 
     /**
@@ -226,9 +232,12 @@ sealed class UiNode {
     @Serializable
     data object Divider : UiNode()
 
-    /** [content] only when [value] (e.g. `$item.caption`) is truthy ([isTruthy]). */
+    /**
+     * [content] only when [value] (e.g. `$item.caption`, or `$form.<field>` from schema 8) is truthy ([isTruthy]), or
+     * with [equals] (schema 8, D48) when the value as text equals it ([conditionShows]).
+     */
     @Serializable
-    data class Conditional(val value: String, val content: UiNode) : UiNode()
+    data class Conditional(val value: String, val content: UiNode, val equals: String? = null) : UiNode()
 
     /** A pager over the entities [items] names, each drawn with [itemTemplate]; see protocol `core://Carousel`. */
     @Serializable

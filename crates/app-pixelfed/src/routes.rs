@@ -48,6 +48,7 @@ pub fn router() -> Router<Pod> {
         .route("/v1/pixelfed/posts/bookmark", post(bookmark))
         .route("/v1/pixelfed/posts/comment", post(comment))
         .route("/v1/pixelfed/screens/comments", get(comments_screen))
+        .route("/v1/pixelfed/screens/post", get(post_screen))
         .route("/v1/pixelfed/media/{key}", get(media))
 }
 
@@ -852,6 +853,59 @@ async fn comments_screen(
         bundle.entities.insert(uri, c);
     }
     bundle.queries.insert(super::comments_query(&id), order);
+    Json(bundle).into_response()
+}
+
+/// `GET /v1/pixelfed/screens/post?id=<id>`: the data of the post screen (D48), a
+/// `DataBundle` with the post, its author and media, and `queries["post:<id>"]`
+/// ([`normalize_post_screen`]). No session: 401; upstream 4xx: same status (404
+/// `post_not_found`); 5xx / unreachable or not a status: 502.
+async fn post_screen(
+    State(state): State<Pod>,
+    headers: HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let rt = adapter(&state).runtime();
+    let (instance, account) = match signed_in_account(&state, &headers).await {
+        Ok(found) => found,
+        Err(r) => return *r,
+    };
+    let upstream = rt.api(&instance);
+    let id = params
+        .get("id")
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_default();
+    if !valid_status_id(&id) {
+        return invalid_request(json!({ "id": "status id" }));
+    }
+    let (result, _) = with_token(&state, &instance, account, |token| {
+        let (upstream, id) = (&upstream, &id);
+        async move { upstream.status(&token, id).await }
+    })
+    .await;
+    let raw = match result {
+        Ok(v) => v,
+        Err(UpstreamError::Status(status, detail)) if status.is_client_error() => {
+            return comment_rejected(&id, status, &detail);
+        }
+        Err(e) => return bad_gateway(&e),
+    };
+    let others = match others_allowed(&state).await {
+        Ok(o) => o,
+        Err(e) => return e.into_response(),
+    };
+    let mut media = MediaUrls::new(&proxy_base(&headers), rt.media_for(others));
+    let Some(bundle) = super::normalize_post_screen(&id, &raw, &mut media) else {
+        return api_error(
+            StatusCode::BAD_GATEWAY,
+            json!({ "error": "upstream_unparseable" }),
+        )
+        .into_response();
+    };
+    if let Err(e) = save_media_keys(&state, media).await {
+        return e.into_response();
+    }
+    tracing::info!(%id, "Pixelfed post served");
     Json(bundle).into_response()
 }
 

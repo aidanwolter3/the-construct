@@ -78,6 +78,18 @@ class ScreensSimTest {
         )
     }
 
+    /** The cards view (D48): the switch shows a two-column grid; a card opens the post screen; List goes back. */
+    @Test
+    fun cardsSwitchShowsTheGridAndACardOpensThePost() {
+        run(
+            fake(),
+            "assert-no-text Open post by; click tag:choice:view:cards; wait-text 3000 Open post by Alice Lumen; " +
+                "assert-no-text one coffee later; click tag:card:$CAROUSEL; wait-text 3000 one coffee later; " +
+                "click tag:like:$CAROUSEL; assert-text Unlike; back; assert-text Open post by; " +
+                "click tag:choice:view:; assert-no-text Open post by; assert-text one coffee later",
+        )
+    }
+
     companion object {
         const val CAROUSEL = "pixelfed://posts/781254316723458049"
         const val PATH = "/v1/pixelfed/screens/comments?post_id=781254316723458049"

@@ -20,6 +20,8 @@ pub const MAX_PADDING_DP: u16 = 64;
 pub const MAX_SIZE_DP: u16 = 512;
 /// Most options in one `core://ChoiceChips`.
 pub const MAX_CHOICES: usize = 50;
+/// Most columns of a `core://List` grid.
+pub const MAX_COLUMNS: u16 = 6;
 
 /// Nesting depth of objects/arrays (a scalar root is 0). Iterative, so a deep
 /// document cannot overflow the stack here.
@@ -205,8 +207,16 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             filter,
             group_by,
             where_,
+            columns,
+            spacing_dp,
+            padding_h_dp,
             ..
         } => {
+            if *columns > MAX_COLUMNS {
+                return Err(format!("list columns {columns} (max {MAX_COLUMNS})"));
+            }
+            check_dp("list spacing_dp", *spacing_dp, MAX_PADDING_DP)?;
+            check_dp("list padding_h_dp", *padding_h_dp, MAX_PADDING_DP)?;
             if let Some(i) = indent
                 && (i.step_dp > MAX_PADDING_DP || i.max.unwrap_or(4) > 8)
             {
@@ -487,5 +497,18 @@ mod tests {
         assert!(check_values(&chips(json!([]))).is_err());
         assert!(check_values(&chips(json!([{"label": "A"}, {"label": "B"}]))).is_err());
         assert!(check_values(&chips(json!([{"label": " ", "value": "a"}]))).is_err());
+    }
+
+    #[test]
+    fn list_grids_are_checked() {
+        let ok = list(json!({"columns": 2, "spacing_dp": 12, "padding_h_dp": 12}));
+        assert_eq!(check_values(&ok), Ok(()));
+        for bad in [
+            json!({"columns": 40}),
+            json!({"spacing_dp": 500}),
+            json!({"padding_h_dp": 500}),
+        ] {
+            assert!(check_values(&list(bad.clone())).is_err(), "{bad}");
+        }
     }
 }
