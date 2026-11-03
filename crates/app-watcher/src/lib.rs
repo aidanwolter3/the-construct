@@ -90,13 +90,13 @@ pub const MANIFEST: SourceManifest = SourceManifest {
     data_paths: &[
         PathSpec {
             pattern: "/v1/watcher/screens/event?id={id}",
-            query_keys: &[],
-            doc: "One event (watcher://events/{id}).",
+            query_keys: &["watcher:event:{id}"],
+            doc: "One event (watcher://events/{id}), also as a one-item list.",
         },
         PathSpec {
             pattern: "/v1/watcher/screens/target?id={id}",
-            query_keys: &["watcher:target:{id}:events"],
-            doc: "One website and its upcoming events.",
+            query_keys: &["watcher:target:{id}", "watcher:target:{id}:events"],
+            doc: "One website (also as a one-item list) and its upcoming events.",
         },
     ],
     actions: &[

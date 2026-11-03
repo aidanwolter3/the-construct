@@ -116,85 +116,97 @@
         "title": "${watcher://events/$route.id#source}",
         "data": "/v1/watcher/screens/event?id=$route.id",
         "content": {
-          "type": "core://Column",
-          "children": [
-            {
-              "type": "core://Text",
-              "value_expr": "${watcher://events/$route.id#title}",
-              "style": "Display"
-            },
-            {
-              "type": "core://Text",
-              "value_expr": "${watcher://events/$route.id#when_text}",
-              "style": "Title"
-            },
-            {
-              "type": "core://Text",
-              "value_expr": "${watcher://events/$route.id#venue}",
-              "style": "Body"
-            },
-            {
-              "type": "core://Conditional",
-              "value": "${watcher://events/$route.id#rules_text}",
-              "content": {
+          "type": "core://List",
+          "query_key": "watcher:event:$route.id",
+          "item_template": {
+            "type": "core://Column",
+            "children": [
+              {
                 "type": "core://Text",
-                "value_expr": "${watcher://events/$route.id#rules_text}",
-                "style": "Secondary"
-              }
-            },
-            {
-              "type": "core://Divider"
-            },
-            {
-              "type": "core://Text",
-              "value_expr": "${watcher://events/$route.id#description}",
-              "style": "Body"
-            },
-            {
-              "type": "core://Conditional",
-              "value": "${watcher://events/$route.id#url}",
-              "content": {
-                "type": "core://Column",
-                "children": [
-                  {
-                    "type": "core://Text",
-                    "value_expr": "Event page",
-                    "style": "Label"
-                  },
-                  {
-                    "type": "core://Text",
-                    "value_expr": "${watcher://events/$route.id#url}",
-                    "style": "Secondary"
-                  }
-                ],
-                "spacing_dp": 2
-              }
-            },
-            {
-              "type": "core://Conditional",
-              "value": "${watcher://events/$route.id#seen}",
-              "content": {
-                "type": "core://Button",
-                "label": "Mark as seen",
-                "on_click": {
-                  "intent": "action.mutation.optimistic",
-                  "entity_uri": "watcher://events/$route.id",
-                  "field": "seen",
-                  "value_expr": "true",
-                  "rollback_value": false,
-                  "endpoint": "/v1/watcher/events/seen",
-                  "payload": {
-                    "id": "$route.id",
-                    "seen": "$value"
-                  }
+                "value_expr": "$item.title",
+                "style": "Display"
+              },
+              {
+                "type": "core://Text",
+                "value_expr": "$item.when_text",
+                "style": "Title"
+              },
+              {
+                "type": "core://Conditional",
+                "value": "$item.venue",
+                "content": {
+                  "type": "core://Text",
+                  "value_expr": "$item.venue",
+                  "style": "Body"
                 }
               },
-              "equals": "false"
-            }
-          ],
-          "spacing_dp": 10,
-          "padding_h_dp": 16,
-          "padding_v_dp": 16
+              {
+                "type": "core://Conditional",
+                "value": "$item.rules_text",
+                "content": {
+                  "type": "core://Text",
+                  "value_expr": "$item.rules_text",
+                  "style": "Secondary"
+                }
+              },
+              {
+                "type": "core://Divider"
+              },
+              {
+                "type": "core://Conditional",
+                "value": "$item.description",
+                "content": {
+                  "type": "core://Text",
+                  "value_expr": "$item.description",
+                  "style": "Body"
+                }
+              },
+              {
+                "type": "core://Conditional",
+                "value": "$item.url",
+                "content": {
+                  "type": "core://Column",
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "value_expr": "Event page",
+                      "style": "Label"
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.url",
+                      "style": "Secondary"
+                    }
+                  ],
+                  "spacing_dp": 2
+                }
+              },
+              {
+                "type": "core://Conditional",
+                "value": "$item.seen",
+                "content": {
+                  "type": "core://Button",
+                  "label": "Mark as seen",
+                  "on_click": {
+                    "intent": "action.mutation.optimistic",
+                    "entity_uri": "$item.uri",
+                    "field": "seen",
+                    "value_expr": "true",
+                    "rollback_value": false,
+                    "endpoint": "/v1/watcher/events/seen",
+                    "payload": {
+                      "id": "$item.id",
+                      "seen": "$value"
+                    }
+                  }
+                },
+                "equals": "false"
+              }
+            ],
+            "spacing_dp": 10,
+            "padding_h_dp": 16,
+            "padding_v_dp": 16
+          }
         }
       },
       {
@@ -206,83 +218,123 @@
           "type": "core://Column",
           "children": [
             {
-              "type": "core://Column",
-              "children": [
-                {
-                  "type": "core://Text",
-                  "value_expr": "${watcher://targets/$route.id#health_text}",
-                  "style": "Body"
-                },
-                {
-                  "type": "core://Text",
-                  "value_expr": "${watcher://targets/$route.id#url}",
-                  "style": "Secondary"
-                },
-                {
-                  "type": "core://Text",
-                  "value_expr": "${watcher://targets/$route.id#meta}",
-                  "style": "Caption"
-                },
-                {
-                  "type": "core://Row",
-                  "children": [
-                    {
-                      "type": "core://Button",
-                      "label": "Check now",
-                      "on_click": {
-                        "intent": "action.mutation.optimistic",
-                        "entity_uri": "watcher://targets/$route.id",
-                        "field": "refreshing",
-                        "value_expr": "true",
-                        "rollback_value": false,
-                        "endpoint": "/v1/watcher/targets/refresh",
-                        "payload": {
-                          "id": "$route.id"
-                        }
+              "type": "core://List",
+              "query_key": "watcher:target:$route.id",
+              "item_template": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://Row",
+                    "children": [
+                      {
+                        "type": "core://Container",
+                        "orientation": "Vertical",
+                        "padding_dp": 0,
+                        "children": [
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.health_text",
+                            "style": "Body"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "type": "core://Conditional",
+                        "value": "$item.failing",
+                        "content": {
+                          "type": "core://Chip",
+                          "text": "Needs attention",
+                          "icon": "warning",
+                          "tone": "Warning"
+                        },
+                        "equals": "true"
                       }
-                    },
-                    {
-                      "type": "core://Button",
-                      "label": "Stop watching",
-                      "on_click": {
-                        "intent": "action.mutation.optimistic",
-                        "entity_uri": "watcher://targets/$route.id",
-                        "field": "archived",
-                        "value_expr": "true",
-                        "rollback_value": false,
-                        "endpoint": "/v1/watcher/targets/update",
-                        "payload": {
-                          "id": "$route.id",
-                          "archived": "$value"
-                        }
-                      }
-                    }
-                  ],
-                  "spacing_dp": 8
-                },
-                {
-                  "type": "core://Conditional",
-                  "value": "${watcher://targets/$route.id#archived}",
-                  "content": {
+                    ],
+                    "spacing_dp": 8,
+                    "align": "Center"
+                  },
+                  {
                     "type": "core://Text",
-                    "value_expr": "Archived: no longer checked.",
+                    "value_expr": "$item.url",
                     "style": "Secondary"
                   },
-                  "equals": "true"
-                },
-                {
-                  "type": "core://Spacer",
-                  "size_dp": 8
-                },
+                  {
+                    "type": "core://Text",
+                    "value_expr": "$item.meta",
+                    "style": "Caption"
+                  },
+                  {
+                    "type": "core://Conditional",
+                    "value": "$item.archived",
+                    "content": {
+                      "type": "core://Row",
+                      "children": [
+                        {
+                          "type": "core://Button",
+                          "label": "Check now",
+                          "on_click": {
+                            "intent": "action.mutation.optimistic",
+                            "entity_uri": "$item.uri",
+                            "field": "refreshing",
+                            "value_expr": "true",
+                            "rollback_value": false,
+                            "endpoint": "/v1/watcher/targets/refresh",
+                            "payload": {
+                              "id": "$item.id"
+                            }
+                          }
+                        },
+                        {
+                          "type": "core://Button",
+                          "label": "Stop watching",
+                          "on_click": {
+                            "intent": "action.mutation.optimistic",
+                            "entity_uri": "$item.uri",
+                            "field": "archived",
+                            "value_expr": "true",
+                            "rollback_value": false,
+                            "endpoint": "/v1/watcher/targets/update",
+                            "payload": {
+                              "id": "$item.id",
+                              "archived": "$value"
+                            }
+                          }
+                        }
+                      ],
+                      "spacing_dp": 8
+                    },
+                    "equals": "false"
+                  },
+                  {
+                    "type": "core://Conditional",
+                    "value": "$item.archived",
+                    "content": {
+                      "type": "core://Text",
+                      "value_expr": "Archived: no longer checked.",
+                      "style": "Secondary"
+                    },
+                    "equals": "true"
+                  }
+                ],
+                "spacing_dp": 6,
+                "padding_h_dp": 16,
+                "padding_v_dp": 12
+              }
+            },
+            {
+              "type": "core://Column",
+              "children": [
                 {
                   "type": "core://Text",
                   "value_expr": "Upcoming events",
                   "style": "Title"
                 }
               ],
-              "spacing_dp": 6,
               "padding_h_dp": 16,
-              "padding_v_dp": 12
+              "padding_v_dp": 4
             },
             {
               "type": "core://List",

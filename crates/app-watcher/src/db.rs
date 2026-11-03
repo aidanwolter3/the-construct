@@ -86,6 +86,16 @@ pub const MATCHES_QUERY: &str = "watcher:matches";
 pub const TARGETS_QUERY: &str = "watcher:targets";
 pub const RULES_QUERY: &str = "watcher:rules";
 
+/// The event screen's one-item list (screens bind `$item` through a List).
+pub fn event_query(id: &str) -> String {
+    format!("watcher:event:{id}")
+}
+
+/// The target screen's one-item list.
+pub fn target_query(id: &str) -> String {
+    format!("watcher:target:{id}")
+}
+
 pub fn target_events_query(id: &str) -> String {
     format!("watcher:target:{id}:events")
 }
@@ -943,6 +953,7 @@ pub fn event_screen(c: &Connection, id: &str) -> rusqlite::Result<Option<DataBun
     };
     let mut b = DataBundle::default();
     b.entities.insert(event_uri(id), e);
+    b.queries.insert(event_query(id), vec![event_uri(id)]);
     Ok(Some(b))
 }
 
@@ -954,6 +965,7 @@ pub fn target_screen(c: &Connection, id: &str, now: i64) -> rusqlite::Result<Opt
     let mut b = DataBundle::default();
     b.entities
         .insert(target_uri(id), target_entity(c, &t, now)?);
+    b.queries.insert(target_query(id), vec![target_uri(id)]);
     let q = target_events_query(id);
     b.queries.insert(q.clone(), Vec::new());
     let ids: Vec<String> = {
