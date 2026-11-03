@@ -33,6 +33,8 @@
 //!   (D49, D51). Additive.
 //! - 10: `core://ChoiceChips` `remember` (the client keeps the chosen value
 //!   on the device, docs/decisions/remembered-form-values.md). Additive.
+//! - 11: `core://Sticky` (content pinned to the top while its parent
+//!   scrolls, docs/decisions/sticky-nodes.md). Additive.
 //!
 //! # A breaking schema change
 //!
@@ -48,7 +50,7 @@ use crate::{ActionIntent, Align, Position, TextStyle, UiNode};
 /// Request header carrying the client's schema version.
 pub const SCHEMA_HEADER: &str = "x-construct-schema";
 /// The schema version this build draws.
-pub const SCHEMA_VERSION: u32 = 10;
+pub const SCHEMA_VERSION: u32 = 11;
 
 /// Breaking changes, oldest first: `(client schema, oldest layout schema it
 /// draws)`. A client of schema `c` draws layouts written for schemas
@@ -138,6 +140,7 @@ fn icon_schema(icon: &str) -> u32 {
 
 fn node_schema(node: &UiNode) -> u32 {
     match node {
+        UiNode::Sticky { .. } => 11,
         UiNode::ChoiceChips { remember: true, .. } => 10,
         UiNode::MediaPicker { .. } => 9,
         UiNode::TextField { lines: Some(_), .. } => 9,
@@ -342,6 +345,11 @@ mod tests {
             "entity": {}, "endpoint": "/v1/x", "payload": {"c": "$form?.caption"}}}),
         );
         assert_eq!(required_schema(&optional), 9);
+        // Schema 11: sticky content; its content is a child.
+        let sticky = node(json!({"type": "core://Sticky", "content":
+            {"type": "core://TextField", "field": "q"}}));
+        assert_eq!(required_schema(&sticky), 11);
+        assert_eq!(sticky.children().len(), 1);
         // Round trip keeps the new fields.
         let back: UiNode = serde_json::from_value(serde_json::to_value(&attach).unwrap()).unwrap();
         assert_eq!(back, attach);
@@ -422,6 +430,7 @@ mod tests {
                 "core://Box" => json!({"type": t, "content": {"type": "core://Divider"}}),
                 "core://ChoiceChips" => json!({"type": t, "field": "f", "options": []}),
                 "core://MediaPicker" => json!({"type": t, "field": "f", "max_items": 4}),
+                "core://Sticky" => json!({"type": t, "content": {"type": "core://Divider"}}),
                 other => panic!("no sample for {other}"),
             };
             let n: UiNode = serde_json::from_value(v).unwrap_or_else(|e| panic!("{t}: {e}"));
@@ -485,5 +494,9 @@ mod tests {
         assert_eq!(oldest_layout_schema(10), 3);
         assert_eq!(compatibility(9, 10), Compatible);
         assert_eq!(compatibility(10, 9), UpdateRequired);
+        // Schema 11 (sticky nodes) is additive too.
+        assert_eq!(oldest_layout_schema(11), 3);
+        assert_eq!(compatibility(10, 11), Compatible);
+        assert_eq!(compatibility(11, 10), UpdateRequired);
     }
 }
