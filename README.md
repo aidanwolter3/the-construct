@@ -118,7 +118,10 @@ endpoints always work. (The `home` "Counter" app was removed, D39.)
   (what a workspace GET serves it), so a version it can't draw sends nothing; without the header it is the app's
   latest (D38). New versions normally arrive with a deploy (the restart ends the stream, and the reconnect's first message
   carries the new number). No session is needed; for `pixelfed_home`, a bearer that is not a valid session gets 401
-  like the workspace GET.
+  like the workspace GET. A stream opened with a session ends once the session is revoked (logout, `server pods
+  rotate`, expiry): it is re-checked before each private event and every 15 s. One session token may hold 8
+  streams open; another gets 429 `{"error": "too_many_streams", "limit": 8}` (decision
+  [`sse-session-revocation`](docs/decisions/sse-session-revocation.md)).
 - Nothing changes a layout over HTTP. The agent, rollback, workspace versions and `/v1/layouts` routes are gone
   (404).
 
