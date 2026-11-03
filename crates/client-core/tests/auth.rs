@@ -516,6 +516,13 @@ fn outbox_401_keeps_the_like_pending_until_the_next_sign_in() {
     engine.dispatch(&env.login_intent());
     wait_signed_in(&engine);
     let (id, count) = unliked_post(&engine.snapshot());
+    // Revoke only once the events stream runs with the session: a stream
+    // that connects after the revocation would sign out first (its own
+    // 401), before the like this test is about is queued.
+    let device = engine.device_id();
+    wait_until("the events stream open with the session", || {
+        env.pod_state.device_is_live(&device)
+    });
 
     // The pod forgets the session (e.g. revoked elsewhere).
     let token = stored_token(&env, &store);

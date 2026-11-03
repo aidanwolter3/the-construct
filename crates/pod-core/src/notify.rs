@@ -451,7 +451,9 @@ impl AppState {
         }
     }
 
-    fn is_live(&self, device: &str) -> bool {
+    /// Whether `device` has an events stream open with a valid session (it
+    /// hears arrivals live, so it gets no Web Push).
+    pub fn device_is_live(&self, device: &str) -> bool {
         self.notifier
             .live
             .lock()
@@ -574,7 +576,7 @@ impl AppState {
         };
         let channels = self.notification_channels();
         for t in targets {
-            if self.is_live(&t.device) {
+            if self.device_is_live(&t.device) {
                 continue;
             }
             for n in &fresh {
