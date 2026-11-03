@@ -1,7 +1,8 @@
 //! The Pixelfed adapter's tables: registered OAuth apps, the stored upstream
 //! account and its pinned owner per instance, and the media proxy's keys
 //! (core migrations v2-v4, which predate per-adapter migrations; D40); and
-//! which instance each session signed in to ([`MIGRATIONS`], D45).
+//! which instance each session signed in to ([`MIGRATIONS`], D45) and the
+//! notification poll's cursor per instance (D47).
 //!
 //! [`PixelfedStore`] adds these queries to the core's [`Store`].
 
@@ -20,6 +21,16 @@ pub static MIGRATIONS: &[Migration] = &[
         "CREATE TABLE pixelfed_session_instance (
              token_hash TEXT PRIMARY KEY NOT NULL,
              instance   TEXT NOT NULL
+         );",
+    ),
+    // 2 (D47): the notification poll's position per instance: the newest
+    // upstream notification id seen (`last_id`, None while there were none)
+    // and when the first poll ran (its backlog was stored quietly).
+    Migration::Sql(
+        "CREATE TABLE IF NOT EXISTS pixelfed_notify_cursor (
+             instance       TEXT PRIMARY KEY NOT NULL,
+             last_id        TEXT,
+             initialized_at INTEGER NOT NULL
          );",
     ),
 ];
@@ -134,6 +145,30 @@ pub trait PixelfedStore {
         keys: impl IntoIterator<Item = (&'a String, &'a String)>,
     ) -> rusqlite::Result<()>;
     fn media_url(&self, key: &str) -> rusqlite::Result<Option<String>>;
+    /// Every stored upstream account, by instance (D47 polls each).
+    fn pixelfed_accounts(&self) -> rusqlite::Result<Vec<(String, PixelfedAccount)>>;
+    /// The notification cursor of `instance`: `None` before its first poll,
+    /// else the newest upstream notification id seen (None: none yet).
+    fn notify_cursor(&self, instance: &str) -> rusqlite::Result<Option<Option<String>>>;
+    /// Move the cursor of `instance` (created on the first poll).
+    fn save_notify_cursor(&self, instance: &str, last_id: Option<&str>) -> rusqlite::Result<()>;
+    /// Forget the cursor of `instance` (its account is gone; the next
+    /// sign-in starts with a quiet first poll again).
+    fn delete_notify_cursor(&self, instance: &str) -> rusqlite::Result<()>;
+}
+
+const ACCOUNT_COLS: &str =
+    "access_token, account_id, username, refresh_token, expires_at, redirect_uri";
+
+fn row_to_account(r: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<PixelfedAccount> {
+    Ok(PixelfedAccount {
+        access_token: r.get(at)?,
+        account_id: r.get(at + 1)?,
+        username: r.get(at + 2)?,
+        refresh_token: r.get(at + 3)?,
+        expires_at: r.get(at + 4)?,
+        redirect_uri: r.get(at + 5)?,
+    })
 }
 
 impl PixelfedStore for Store {
@@ -187,19 +222,9 @@ impl PixelfedStore for Store {
     fn pixelfed_account(&self, instance: &str) -> rusqlite::Result<Option<PixelfedAccount>> {
         self.with_conn(|c| {
             c.query_row(
-                "SELECT access_token, account_id, username, refresh_token, expires_at, redirect_uri
-                 FROM pixelfed_account WHERE instance = ?1",
+                &format!("SELECT {ACCOUNT_COLS} FROM pixelfed_account WHERE instance = ?1"),
                 [instance],
-                |r| {
-                    Ok(PixelfedAccount {
-                        access_token: r.get(0)?,
-                        account_id: r.get(1)?,
-                        username: r.get(2)?,
-                        refresh_token: r.get(3)?,
-                        expires_at: r.get(4)?,
-                        redirect_uri: r.get(5)?,
-                    })
-                },
+                |r| row_to_account(r, 0),
             )
             .optional()
         })
@@ -328,6 +353,49 @@ impl PixelfedStore for Store {
             .optional()
         })
     }
+
+    fn pixelfed_accounts(&self) -> rusqlite::Result<Vec<(String, PixelfedAccount)>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare_cached(&format!(
+                "SELECT instance, {ACCOUNT_COLS} FROM pixelfed_account ORDER BY instance"
+            ))?;
+            stmt.query_map([], |r| Ok((r.get(0)?, row_to_account(r, 1)?)))?
+                .collect()
+        })
+    }
+
+    fn notify_cursor(&self, instance: &str) -> rusqlite::Result<Option<Option<String>>> {
+        self.with_conn(|c| {
+            c.query_row(
+                "SELECT last_id FROM pixelfed_notify_cursor WHERE instance = ?1",
+                [instance],
+                |r| r.get(0),
+            )
+            .optional()
+        })
+    }
+
+    fn save_notify_cursor(&self, instance: &str, last_id: Option<&str>) -> rusqlite::Result<()> {
+        self.with_conn(|c| {
+            c.execute(
+                "INSERT INTO pixelfed_notify_cursor (instance, last_id, initialized_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(instance) DO UPDATE SET last_id = excluded.last_id",
+                params![instance, last_id, now_secs()],
+            )
+        })?;
+        Ok(())
+    }
+
+    fn delete_notify_cursor(&self, instance: &str) -> rusqlite::Result<()> {
+        self.with_conn(|c| {
+            c.execute(
+                "DELETE FROM pixelfed_notify_cursor WHERE instance = ?1",
+                [instance],
+            )
+        })?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -448,6 +516,28 @@ mod tests {
         assert!(s.pixelfed_account("i").unwrap().is_some());
         assert!(s.delete_pixelfed_account_if_token("i", "new").unwrap());
         assert!(s.pixelfed_account("i").unwrap().is_none());
+    }
+
+    #[test]
+    fn accounts_and_notify_cursors() {
+        let s = store();
+        s.save_pixelfed_account("b", &account("2", "y")).unwrap();
+        s.save_pixelfed_account("a", &account("1", "x")).unwrap();
+        let all = s.pixelfed_accounts().unwrap();
+        assert_eq!(
+            all.iter()
+                .map(|(i, a)| (i.as_str(), a.access_token.as_str()))
+                .collect::<Vec<_>>(),
+            [("a", "x"), ("b", "y")]
+        );
+        assert_eq!(s.notify_cursor("a").unwrap(), None);
+        s.save_notify_cursor("a", None).unwrap();
+        assert_eq!(s.notify_cursor("a").unwrap(), Some(None));
+        s.save_notify_cursor("a", Some("42")).unwrap();
+        assert_eq!(s.notify_cursor("a").unwrap(), Some(Some("42".into())));
+        assert_eq!(s.notify_cursor("b").unwrap(), None);
+        s.delete_notify_cursor("a").unwrap();
+        assert_eq!(s.notify_cursor("a").unwrap(), None);
     }
 
     #[test]

@@ -85,7 +85,7 @@ async fn signed_in_account(
 #[derive(Default)]
 struct PodRules(std::sync::OnceLock<bool>);
 
-async fn others_allowed(state: &Pod) -> Result<bool, ApiError> {
+pub(crate) async fn others_allowed(state: &Pod) -> Result<bool, ApiError> {
     let rules = state.local::<PodRules>();
     if let Some(v) = rules.0.get() {
         return Ok(*v);
@@ -164,7 +164,7 @@ fn proxy_base(headers: &HeaderMap) -> String {
     format!("{scheme}://{host}{prefix}{MEDIA_PATH}")
 }
 
-async fn save_media_keys(state: &Pod, media: MediaUrls) -> Result<(), ApiError> {
+pub(crate) async fn save_media_keys(state: &Pod, media: MediaUrls) -> Result<(), ApiError> {
     if media.keys.is_empty() {
         return Ok(());
     }
@@ -294,7 +294,7 @@ async fn refresh_account(
 /// once and retry. A 401 that survives (no refresh possible, or the fresh
 /// token is rejected too) is returned as `Status(401)`. Also returns the
 /// access token of the last attempt (the one a surviving 401 rejected).
-async fn with_token<T, F, Fut>(
+pub(crate) async fn with_token<T, F, Fut>(
     state: &Pod,
     instance: &Instance,
     account: PixelfedAccount,

@@ -109,6 +109,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "fake-pixelfed",
  "futures-util",
  "getrandom 0.3.4",
  "pod-core",
@@ -495,6 +496,7 @@ version = "0.1.0"
 dependencies = [
  "client-core",
  "libc",
+ "serde_json",
  "uniffi",
 ]
 

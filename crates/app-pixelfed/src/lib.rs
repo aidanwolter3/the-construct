@@ -3,7 +3,8 @@
 //! [`pod_core::AppAdapter`] ([`PixelfedAdapter`], [`apps::demo_adapter`]).
 //!
 //! Mastodon-API JSON -> normalized Construct entities: everything in this
-//! module (except [`upstream`], [`routes`], [`adapter`] and [`db`]) is pure: it
+//! module (except [`upstream`], [`routes`], [`adapter`], [`db`] and the polling
+//! part of [`notify`]) is pure: it
 //! turns upstream JSON into URI-keyed [`EntityRecord`]s and an ordered timeline.
 //! Input is parsed leniently (every optional Mastodon field may be absent or
 //! null; a status that cannot be parsed at all is skipped and logged).
@@ -26,6 +27,7 @@ pub mod apps;
 pub mod config;
 pub mod db;
 pub mod layout;
+pub mod notify;
 pub mod routes;
 pub mod upstream;
 

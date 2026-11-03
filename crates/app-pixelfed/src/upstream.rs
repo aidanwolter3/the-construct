@@ -373,6 +373,29 @@ impl Upstream {
         .await
     }
 
+    /// `GET /api/v1/notifications?min_id=..&limit=..` (Mastodon: newest
+    /// first; with `min_id`, the page immediately newer than it). Scope
+    /// `read`.
+    pub async fn notifications(
+        &self,
+        token: &str,
+        min_id: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<Value>, UpstreamError> {
+        let limit = limit.to_string();
+        let mut query = vec![("limit", limit.as_str())];
+        if let Some(min) = min_id {
+            query.push(("min_id", min));
+        }
+        Self::send_json(
+            self.http
+                .get(self.url("/api/v1/notifications"))
+                .query(&query)
+                .bearer_auth(token),
+        )
+        .await
+    }
+
     /// `POST /api/v1/statuses` as a reply (a comment) to `in_reply_to_id`.
     /// `idempotency_key`, when given, is sent as `Idempotency-Key` so a
     /// retried request does not post twice (Mastodon semantics).

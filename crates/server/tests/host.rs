@@ -567,3 +567,58 @@ async fn concurrent_temporary_pods_respect_the_cap() {
     assert_eq!(made, 2);
     assert_eq!(env.host.store().live_temporary_count().unwrap(), 2);
 }
+
+/// D47: the host's scheduler opens a pod with a registered device, polls its
+/// Pixelfed account (first poll quiet), then stores a new like as unread.
+#[tokio::test]
+async fn the_scheduler_polls_pods_with_devices() {
+    let env = env().await;
+    let token = env.create("alice", false).await;
+    sign_in(&env, &token).await;
+    // No device yet: nothing is polled.
+    env.host.run_due_polls().await;
+    let (status, _, list) = get(&env.url("/v1/notifications?limit=0"), Some(&token)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list["unread_total"], 0);
+
+    let resp = client()
+        .put(env.url("/v1/devices/device-0001"))
+        .bearer_auth(&token)
+        .json(&json!({"platform": "desktop"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    env.host.run_due_polls().await; // first poll: backlog stored quietly
+    let (_, _, list) = get(&env.url("/v1/notifications"), Some(&token)).await;
+    assert_eq!(list["unread_total"], 0);
+    assert!(!list["notifications"].as_array().unwrap().is_empty(), "{list}");
+
+    let (status, made) = post(
+        &format!("{}/_admin/notifications", env.fake.url),
+        None,
+        json!({"type": "favourite", "from": "carol"}),
+    )
+    .await;
+    assert!(status.is_success(), "{made}");
+    // Not due for two minutes; make it due as a restart would find it.
+    env.host.run_due_polls().await;
+    let (_, _, list) = get(&env.url("/v1/notifications?limit=0"), Some(&token)).await;
+    assert_eq!(list["unread_total"], 0, "the next poll is not due yet");
+    let dir = env._dir.path().join("pods");
+    let pod_dir = std::fs::read_dir(&dir).unwrap().next().unwrap().unwrap().path();
+    rusqlite::Connection::open(pod_dir.join("server.db"))
+        .unwrap()
+        .execute("UPDATE notification_polls SET next_at = 0", [])
+        .unwrap();
+    env.host.run_due_polls().await;
+    let (_, _, list) = get(&env.url("/v1/notifications"), Some(&token)).await;
+    assert_eq!(list["unread_total"], 1, "{list}");
+    let first = &list["notifications"][0];
+    assert_eq!(first["channel"], "likes");
+    assert!(first["title"].as_str().unwrap().contains("liked your post"), "{first}");
+    assert!(
+        first["target_uri"].as_str().unwrap().starts_with("pixelfed://posts/"),
+        "{first}"
+    );
+}
