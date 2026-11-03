@@ -120,6 +120,17 @@ data class GroupBy(val field: String, val header: UiNode)
 @Serializable
 data class ListWhere(val field: String, val equals: String)
 
+/**
+ * `core://List` `focus` (schema 12, docs/decisions/list-focus.md): the item whose entity URI is [uri] is scrolled into
+ * view the first time the list draws it, and drawn on [background] with [contentColor] (`#RRGGBB`).
+ */
+@Serializable
+data class ListFocus(
+    val uri: String,
+    val background: String? = null,
+    @SerialName("content_color") val contentColor: String? = null,
+)
+
 /** One `core://ChoiceChips` option (schema 6, D44): [label] is drawn, [value] is stored. */
 @Serializable
 data class ChoiceOption(val label: String, val value: String = "")
@@ -177,6 +188,8 @@ sealed class UiNode {
         @SerialName("spacing_dp") val spacingDp: Int = 0,
         /** Schema 8 (D48): space left and right of the items. */
         @SerialName("padding_h_dp") val paddingHDp: Int = 0,
+        /** Schema 12: one item to scroll to and tint ([ListFocus]). */
+        val focus: ListFocus? = null,
     ) : UiNode()
 
     /**

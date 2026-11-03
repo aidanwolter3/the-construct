@@ -729,9 +729,9 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
         .send()
         .await
         .unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("6"));
+    assert_eq!(version(&resp).as_deref(), Some("7"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
-    assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 3));
+    assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 4));
     // A newer version replaces the feed layout; entities still come upstream.
     let mut node = server::layouts::builtin(&server::catalog(), "pixelfed_home").unwrap();
     if let UiNode::Workspace { title, .. } = &mut node {
@@ -739,7 +739,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     }
     server::layouts::append_version(state.store(), "pixelfed_home", &node, None).unwrap();
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("7"));
+    assert_eq!(version(&resp).as_deref(), Some("8"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert_eq!(spec.workspace, node);
     assert_eq!(spec.queries["timeline:home"].len(), 5);
@@ -1631,7 +1631,13 @@ async fn comments_screen_data_is_a_bundle_in_thread_order() {
     ]
     .map(|(id, d)| (format!("pixelfed://comments/781300000000000{id}"), d));
     assert_eq!(shape, want);
-    assert_eq!(bundle.entities.len(), 7);
+    // The comments, plus the post, its author and its media (shown above them).
+    let comments = bundle
+        .entities
+        .keys()
+        .filter(|u| u.starts_with("pixelfed://comments/"))
+        .count();
+    assert_eq!(comments, 7);
     let first = &bundle.entities[&order[0]];
     assert_eq!(
         first.get_str("text"),
@@ -1676,6 +1682,60 @@ async fn comments_screen_data_is_a_bundle_in_thread_order() {
         let (status, _) = get_comments_screen(&env.pod.url, bearer, CAROUSEL).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
+}
+
+/// The comments screen shows its post; asked for a comment (an older
+/// notification's link), it shows the whole thread of the comment's post.
+#[tokio::test]
+async fn comments_screen_data_has_the_post_even_from_a_comment() {
+    let env = env().await;
+    let session = sign_in(&env).await;
+    let post_uri = format!("pixelfed://posts/{CAROUSEL}");
+    let (status, data) = get_comments_screen(&env.pod.url, Some(&session), CAROUSEL).await;
+    assert_eq!(status, StatusCode::OK, "{data}");
+    assert_eq!(
+        data["queries"][format!("post:{CAROUSEL}")],
+        json!([post_uri])
+    );
+    assert!(
+        data["entities"][&post_uri]["caption"]
+            .as_str()
+            .unwrap()
+            .starts_with("Sunrise over Boulder"),
+        "{data}"
+    );
+    let whole = thread_shape(&data, CAROUSEL);
+    assert_eq!(whole.len(), 7);
+
+    // 103 replies to 102, which replies to 101, a comment on the post.
+    let reply = "781300000000000103";
+    let (status, data) = get_comments_screen(&env.pod.url, Some(&session), reply).await;
+    assert_eq!(status, StatusCode::OK, "{data}");
+    assert_eq!(data["queries"][format!("post:{reply}")], json!([post_uri]));
+    assert_eq!(thread_shape(&data, reply), whole);
+    let first = data["queries"][format!("comments:{reply}")][0]
+        .as_str()
+        .unwrap();
+    assert_eq!(data["entities"][first]["post_id"], CAROUSEL);
+
+    // Liking a comment uses the posts' like endpoint.
+    let (status, body) = post_json(
+        &format!("{}/v1/pixelfed/posts/like", env.pod.url),
+        Some(&session),
+        json!({ "id": "781300000000000101", "liked": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        (&body["is_liked"], &body["like_count"]),
+        (&json!(true), &json!(4))
+    );
+    let (_, data) = get_comments_screen(&env.pod.url, Some(&session), CAROUSEL).await;
+    let liked = &data["entities"]["pixelfed://comments/781300000000000101"];
+    assert_eq!(
+        (&liked["is_liked"], &liked["like_count"]),
+        (&json!(true), &json!(4))
+    );
 }
 
 /// The `/context` paths the fake was asked for, sorted.

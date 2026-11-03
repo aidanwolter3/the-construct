@@ -102,7 +102,13 @@ async fn first_poll_is_quiet_then_new_ones_alert() {
     let channels: Vec<&str> = out.new.iter().map(|n| n.channel.as_str()).collect();
     assert_eq!(channels, ["comments", "likes", "comments"], "oldest first");
     assert!(out.new.iter().all(|n| n.quiet));
-    assert_eq!(out.new[2].title, "Carol Ortiz commented on your post");
+    // A reply to our comment opens the post's thread at the reply.
+    assert_eq!(out.new[2].title, "Carol Ortiz replied to your comment");
+    let target = out.new[2].target_uri.as_deref().unwrap();
+    assert!(
+        target.starts_with("pixelfed://posts/") && target.contains("/comments/"),
+        "{target}"
+    );
     assert_eq!(
         out.new[2].body,
         "@constructdemo an intervalometer, 30 s exposures."
@@ -465,11 +471,13 @@ async fn the_scheduler_path_stores_and_serves_them() {
     assert_eq!(list["unread_by_app"]["pixelfed_home"], 1);
     let newest = &list["notifications"][0];
     assert_eq!(newest["channel"], "comments");
-    assert_eq!(newest["title"], "Bob 🚲 commented on your post");
+    // A reply to our comment 504: the thread of its post, at the reply.
+    assert_eq!(newest["title"], "Bob 🚲 replied to your comment");
     assert_eq!(newest["body"], "@constructdemo glad too");
-    assert_eq!(
-        newest["target_uri"],
-        "pixelfed://posts/781300000000000504/comments"
+    let target = newest["target_uri"].as_str().unwrap();
+    assert!(
+        target.starts_with("pixelfed://posts/781198765432109057/comments/"),
+        "{target}"
     );
     assert_eq!(newest["read"], false);
     server.abort();

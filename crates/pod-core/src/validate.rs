@@ -218,8 +218,18 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             columns,
             spacing_dp,
             padding_h_dp,
+            focus,
             ..
         } => {
+            if let Some(f) = focus {
+                if f.uri.trim().is_empty() {
+                    return Err("list focus needs a uri".into());
+                }
+                for c in [&f.background, &f.content_color].into_iter().flatten() {
+                    check_tint(c)
+                        .map_err(|_| format!("list focus colour '{c}' must be #RRGGBB"))?;
+                }
+            }
             if *columns > MAX_COLUMNS {
                 return Err(format!("list columns {columns} (max {MAX_COLUMNS})"));
             }
