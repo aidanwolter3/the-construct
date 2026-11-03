@@ -20,6 +20,7 @@ tokio = { version = "1", features = ["rt", "time"] }
 tracing = "0.1"
 sha2 = "0.10"
 getrandom = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

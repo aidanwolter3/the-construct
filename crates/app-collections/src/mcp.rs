@@ -23,7 +23,12 @@ intents (describe_collection gives ready-made layout snippets). Change a collect
 sending the app layout changes that go with it in the same call: nothing applies if any app would \
 break. edit_rows changes rows directly (imports, backfills): it first answers a preview, which you \
 must show the user (the count and the sample) before calling again with its confirm token; every edit \
-can be undone with undo_edit.";
+can be undone with undo_edit. Any field may be computed from the row's other fields \
+whenever they change: compute: {kind: \"expr\", expr} evaluates a small expression at once (entity.<field>, \
+literals, + joins text or adds numbers, -, !, c ? a : b, parentheses), and compute: {kind: \"model\", from: \
+[fields], prompt} has a model answer the prompt about those fields in the background (a choice answers one \
+of its options; each input is asked once, and a value set by hand is kept and remembered for that input). \
+order_by may list several fields ([\"section\", \"done\"]; a choice sorts by the order of its options).";
 
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({
@@ -36,10 +41,18 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
 pub fn tools() -> Vec<Value> {
     let collection = json!({ "type": "string", "description": "A collection's name" });
     let note = json!({ "type": "string", "description": "What changed, in the user's words (shown in the history)" });
-    let field = json!({ "type": "object", "description": "{name, type: text|number|bool|date|choice, options? (choice), optional?, default?}",
+    let compute = json!({ "type": ["object", "null"],
+        "description": "The pod computes the value from the row's other fields (not from other computed fields), again whenever they change; a value written by hand stays until they change. kind \"expr\": {kind, expr}, e.g. \"entity.quantity ? entity.name + \\\" (\\\" + entity.quantity + \\\")\\\" : entity.name\" (entity.<field>, JSON literals, + joins text or adds numbers, -, !, c ? a : b, parentheses; an empty value is \"\" or 0 and false in a condition), evaluated in the write. kind \"model\": {kind, from: field or [fields], prompt}, e.g. {from: \"name\", prompt: \"Which grocery store section is this item in?\"}: a model answers in the background (a choice: one of its options; text: trimmed), each input once; a value set by hand is remembered as the answer for that input. Needs optional or a default (what the row reads until computed). null: stop computing.",
+        "properties": { "kind": { "type": "string", "enum": ["expr", "model"] }, "expr": { "type": "string" },
+            "from": { "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
+            "prompt": { "type": "string" } }, "required": ["kind"] });
+    let field = json!({ "type": "object", "description": "{name, type: text|number|bool|date|choice, options? (choice), optional?, default?, compute?}",
         "properties": { "name": { "type": "string" }, "type": { "type": "string", "enum": model::Kind::ALL },
-            "options": { "type": "array", "items": { "type": "string" } }, "optional": { "type": "boolean" }, "default": {} },
+            "options": { "type": "array", "items": { "type": "string" } }, "optional": { "type": "boolean" }, "default": {},
+            "compute": compute },
         "required": ["name", "type"] });
+    let order = json!({ "description": "A field, or a list of fields (first key first), rows are listed by (else oldest first). A choice sorts by the order of its options; empty values last.",
+        "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] });
     let apps = json!({ "type": "array", "description": "Custom app layouts that change with it: [{app, layout | json_patch, base_version?, note?}]",
         "items": { "type": "object", "properties": { "app": { "type": "string" }, "layout": { "type": "object" },
             "json_patch": { "type": "array", "items": { "type": "object" } }, "base_version": { "type": "integer" }, "note": { "type": "string" } },
@@ -56,7 +69,7 @@ pub fn tools() -> Vec<Value> {
             "Declare a new collection (name [a-z][a-z0-9_]*, permanent) with typed fields. Custom apps then use it as a feed [\"collections\", name].",
             json!({ "name": collection, "title": { "type": "string" },
                     "fields": { "type": "array", "items": field },
-                    "order_by": { "type": "string", "description": "A field rows are listed by (else oldest first)" },
+                    "order_by": order,
                     "descending": { "type": "boolean" }, "note": note }),
             &["name", "fields"],
         ),
@@ -68,7 +81,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "apply_change",
-            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, optional?, default?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, optional?, default?} | {op: set_order, field?, descending?} | {op: set_title, title}]. Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
+            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, optional?, default?, compute?} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title}]. compute ({kind: \"expr\", expr} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
             json!({ "collection": collection, "base_version": { "type": "integer", "description": "The definition version you read" },
                     "changes": { "type": "array", "items": { "type": "object" } }, "apps": apps, "note": note }),
             &["collection", "changes"],
@@ -186,7 +199,7 @@ async fn list(pod: &Pod) -> Result<Value, Value> {
                         let rows = db::all_rows(c, &def.name, false)?.len();
                         Ok(json!({
                             "name": def.name, "title": def.title, "version": version, "rows": rows,
-                            "fields": def.live_fields().map(model::Field::describe).collect::<Vec<_>>(),
+                            "fields": def.live_fields().map(|f| def.describe_field(f)).collect::<Vec<_>>(),
                             "used_by": users(&apps, &def.name),
                         }))
                     })
@@ -204,9 +217,10 @@ async fn define(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Val
         return Err(bad("\"fields\" is a list of {name, type, ...}"));
     };
     let mut fields = Vec::new();
+    let invalid = |i: usize, e: String| json!({ "error": "invalid_field", "at": format!("/fields/{i}"), "detail": e, "status": 400 });
     for (i, spec) in specs.iter().enumerate() {
         let f = model::parse_field(spec, format!("f{}", i + 1), caps.text_chars)
-            .map_err(|e| json!({ "error": "invalid_field", "at": format!("/fields/{i}"), "detail": e, "status": 400 }))?;
+            .map_err(|e| invalid(i, e))?;
         fields.push(f);
     }
     let title = args["title"]
@@ -219,17 +233,16 @@ async fn define(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Val
         title,
         next_field: fields.len() as u32 + 1,
         fields,
-        order_by: None,
+        order_by: Vec::new(),
         descending: args["descending"].as_bool().unwrap_or(false),
     };
-    if let Some(o) = args["order_by"].as_str().filter(|o| !o.is_empty()) {
-        def.order_by = Some(
-            def.field(o)
-                .ok_or_else(|| bad(format!("order_by '{o}' is not one of the fields")))?
-                .id
-                .clone(),
-        );
+    // After every field exists: a compute may read a later one.
+    for (i, spec) in specs.iter().enumerate() {
+        model::set_compute(&mut def, &format!("f{}", i + 1), spec.get("compute"))
+            .map_err(|e| invalid(i, e))?;
     }
+    let order = model::order_names(args.get("order_by")).map_err(bad)?;
+    def.order_by = model::resolve_order(&def, &order).map_err(bad)?;
     model::check_definition(&def, caps.fields)
         .map_err(|e| json!({ "error": "invalid_definition", "detail": e, "status": 400 }))?;
     let note = note_arg(args, "Created");
@@ -357,11 +370,15 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
                     .into_iter()
                     .map(|(f, n)| json!({ "field": def.by_id(&f).map_or(f.clone(), |x| x.name.clone()), "values": n }))
                     .collect();
+                let computed: Vec<Value> = db::computed_counts(c, &lookup)?
+                    .into_iter()
+                    .filter_map(|(f, n)| def.by_id(&f).filter(|x| x.compute.is_some()).map(|x| json!({ "field": x.name, "answers": n })))
+                    .collect();
                 Ok(Some((
                     latest,
                     shown,
                     rows,
-                    aside,
+                    (aside, computed),
                     db::def_history(c, &lookup, 20)?,
                     db::recent_edits(c, &lookup)?,
                     users(&apps, &lookup),
@@ -370,7 +387,7 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
         })
         .await
         .map_err(db_err)?;
-    let Some((latest, shown, rows, aside, history, edits, used_by)) = found else {
+    let Some((latest, shown, rows, (aside, computed), history, edits, used_by)) = found else {
         return Err(missing(&name));
     };
     let Some((v, def)) = shown else {
@@ -383,6 +400,7 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
         "definition": def.describe(pod_core::util::now_secs(), KEEP_SECS),
         "rows": rows,
         "kept_aside": aside,
+        "computed_answers": computed,
         "history": history,
         "recent_edits": edits,
         "used_by": used_by,
@@ -521,8 +539,9 @@ async fn commit(
     let pod2 = pod.clone();
     let def = planned.def.clone();
     let convert = planned.convert.clone();
+    let to_compute = planned.compute.clone();
     let coll = name.to_owned();
-    let (version, conversions, versions) = refusable(pod, move |tx| {
+    let (version, conversions, versions, jobs) = refusable(pod, move |tx| {
         let current = db::latest_def(tx, &coll)?.map(|(v, _)| v);
         if current != Some(base) {
             return Ok(Err(json!({ "error": "stale_base", "status": 409, "latest_version": current,
@@ -536,6 +555,10 @@ async fn commit(
                 conversions.push(db::convert_field(tx, &coll, f, version, now, caps.text_chars)?);
             }
         }
+        let mut jobs = Vec::new();
+        for id in &to_compute {
+            jobs.extend(crate::compute::backfill(tx, &def, id, caps.rows, caps.text_chars)?);
+        }
         let mut versions = Vec::new();
         for s in &staged {
             match custom::commit_staged(tx, &pod2, s, Writer::Claude)? {
@@ -546,18 +569,21 @@ async fn commit(
                 }
             }
         }
-        Ok(Ok((version, conversions, versions)))
+        Ok(Ok((version, conversions, versions, jobs)))
     })
     .await?;
     for (app, v) in &versions {
         pod.publish_layout(app, *v);
     }
     pod.publish_data_all(NAME);
+    let computing = jobs.len();
+    crate::compute::spawn(pod, name, jobs);
     Ok(json!({
         "ok": true, "collection": name, "version": version,
         "conversions": conversions.iter().map(|c| c.to_json(&planned.def.title)).collect::<Vec<_>>(),
         "apps": versions.iter().map(|(a, v)| json!({ "app": a, "version": v })).collect::<Vec<_>>(),
         "definition": planned.def.describe(pod_core::util::now_secs(), KEEP_SECS),
+        "computing_rows": computing,
     }))
 }
 
@@ -626,12 +652,14 @@ async fn edit_rows(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, 
     }
     let confirm = args["confirm"].as_str().map(str::to_owned);
     let note = note_arg(args, "Edited rows");
+    let collection = name.clone();
     let out = refusable(pod, move |tx| {
         let Some((version, def)) = db::latest_def(tx, &name)? else {
             return Ok(Err(missing(&name)));
         };
         let now = pod_core::util::now_secs();
         let mut planned: Vec<Change> = Vec::new();
+        let mut writes: Vec<Map<String, Value>> = Vec::new();
         let mut hasher = Sha256::new();
         hasher.update(format!("{name}\n{version}\n"));
         for (i, e) in edits.iter().enumerate() {
@@ -653,6 +681,7 @@ async fn edit_rows(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, 
                     return invalid(d);
                 }
                 planned.push(("create", row.id.clone(), None, row));
+                writes.push(values);
                 continue;
             }
             let id = e["id"].as_str().unwrap_or("");
@@ -684,6 +713,7 @@ async fn edit_rows(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, 
                 _ => "restore",
             };
             planned.push((op, id.to_owned(), Some(before), after));
+            writes.push(if op == "update" { values } else { Map::new() });
         }
         let token = hasher
             .finalize()
@@ -717,7 +747,7 @@ async fn edit_rows(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, 
                 preview["detail"] = json!("the rows or the collection changed since that preview (or the edits differ); show the user this new preview");
                 return Ok(Err(preview));
             }
-            return Ok(Ok(preview));
+            return Ok(Ok((Vec::new(), preview)));
         }
         let added_rows = count("create") as i64 + planned.iter().filter(|(o, _, b, _)| *o == "restore" && b.as_ref().is_some_and(|b| b.deleted_at.is_some())).count() as i64 - count("delete") as i64;
         let bytes: i64 = planned
@@ -731,7 +761,20 @@ async fn edit_rows(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, 
             return Ok(Err(e));
         }
         let mut records = Vec::new();
-        for (op, id, before, after) in &planned {
+        let mut jobs = Vec::new();
+        for ((op, id, before, after), write) in planned.iter_mut().zip(&writes) {
+            if *op == "create" || *op == "update" {
+                jobs.extend(crate::compute::after_write(
+                    tx,
+                    &def,
+                    before.as_ref().map(|b| &b.values),
+                    after,
+                    write,
+                    now,
+                    caps.text_chars,
+                )?);
+            }
+            let after = &*after;
             if *op == "create" {
                 db::insert_row(tx, &name, after)?;
             } else {
@@ -740,17 +783,20 @@ async fn edit_rows(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, 
             records.push((id.clone(), before.as_ref().map(Row::state), after.state()));
         }
         let edit = db::record_edit(tx, &name, &note, &records, now)?;
-        Ok(Ok(json!({
+        let count = |op: &str| planned.iter().filter(|(o, ..)| *o == op).count();
+        Ok(Ok((jobs, json!({
             "ok": true, "edit": edit, "count": planned.len(),
             "creates": count("create"), "updates": count("update"),
             "deletes": count("delete"), "restores": count("restore"),
             "created": planned.iter().filter(|(o, ..)| *o == "create").map(|(_, id, ..)| id).collect::<Vec<_>>(),
             "undo": "undo_edit with this edit id (for 30 days)",
-        })))
+        }))))
     })
     .await?;
+    let (jobs, out) = out;
     if out["ok"] == true {
         pod.publish_data_all(NAME);
+        crate::compute::spawn(pod, &collection, jobs);
     }
     Ok(out)
 }

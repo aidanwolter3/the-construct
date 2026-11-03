@@ -17,6 +17,12 @@ pub const MAX_TITLE_CHARS: usize = 60;
 pub const MAX_OPTIONS: usize = 50;
 /// Longest choice option.
 pub const MAX_OPTION_CHARS: usize = 60;
+/// Longest `compute` prompt.
+pub const MAX_PROMPT_CHARS: usize = 500;
+/// Most source fields of a `model` compute.
+pub const MAX_SOURCES: usize = 4;
+/// Most fields a collection is ordered by.
+pub const MAX_ORDER_KEYS: usize = 4;
 
 /// Names every row has (never a field's name): its id, its URI, whether it
 /// was deleted, when it was made and last changed, and the client's id of
@@ -82,6 +88,10 @@ pub struct Field {
     /// Names it had before: still accepted from writes and bindings.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
+    /// How the pod computes its value from the row's other fields
+    /// (decision `collection-computed-fields`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute: Option<Compute>,
     /// Soft-removed at (unix seconds): hidden, its data kept for the purge
     /// window and restorable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,6 +99,46 @@ pub struct Field {
     /// Its data was purged (after the window): it can't come back.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub purged: bool,
+}
+
+/// How a field's value is computed from the row's other fields (field
+/// ids, so a rename keeps it), whenever they change; a value written by
+/// hand is kept until they change again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Compute {
+    /// An expression ([`crate::expr`]) over the row, its field references
+    /// stored as ids; evaluated in the write itself.
+    Expr { expr: String },
+    /// A model's answer to `prompt` about the values of fields `from`,
+    /// coerced to the field's type (a choice: one of its options); asked
+    /// in the background, cached per input, and taught by hand edits.
+    Model { from: Vec<String>, prompt: String },
+}
+
+impl Compute {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Compute::Expr { .. } => "expr",
+            Compute::Model { .. } => "model",
+        }
+    }
+
+    /// The parsed expression of an `expr` compute (ids).
+    pub fn parsed(&self) -> Option<crate::expr::Expr> {
+        match self {
+            Compute::Expr { expr } => crate::expr::parse(expr).ok(),
+            Compute::Model { .. } => None,
+        }
+    }
+
+    /// The field ids it reads.
+    pub fn sources(&self) -> Vec<String> {
+        match self {
+            Compute::Expr { .. } => self.parsed().map(|e| e.fields()).unwrap_or_default(),
+            Compute::Model { from, .. } => from.clone(),
+        }
+    }
 }
 
 impl Field {
@@ -132,9 +182,17 @@ pub struct Definition {
     pub title: String,
     /// In order, removed ones too.
     pub fields: Vec<Field>,
-    /// The field id rows are listed by (else oldest first).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub order_by: Option<String>,
+    /// The field ids rows are listed by, first key first (else oldest
+    /// first). Stored as a string when there is one (as before multi-key
+    /// sorting), else a list.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        serialize_with = "ser_order",
+        deserialize_with = "de_order"
+    )]
+    pub order_by: Vec<String>,
+    /// Every order key descending.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub descending: bool,
     /// The next field id's number.
@@ -174,6 +232,40 @@ impl Definition {
         out
     }
 
+    /// The name of field id `id` (the id itself if there is none).
+    pub fn name_of(&self, id: &str) -> String {
+        self.by_id(id)
+            .map_or_else(|| id.to_owned(), |f| f.name.clone())
+    }
+
+    /// [`Field::describe`] plus its `compute`, with field names.
+    pub fn describe_field(&self, f: &Field) -> Value {
+        let mut v = f.describe();
+        match &f.compute {
+            Some(c @ Compute::Expr { expr }) => {
+                let text = c
+                    .parsed()
+                    .and_then(|e| e.map_fields(&|id| Ok(self.name_of(id))).ok())
+                    .map_or_else(|| expr.clone(), |e| e.to_string());
+                v["compute"] = json!({ "kind": "expr", "expr": text });
+            }
+            Some(Compute::Model { from, prompt }) => {
+                let from: Vec<String> = from.iter().map(|id| self.name_of(id)).collect();
+                v["compute"] = json!({ "kind": "model", "from": from, "prompt": prompt });
+            }
+            None => {}
+        }
+        v
+    }
+
+    /// The live fields rows are ordered by.
+    pub fn order_fields(&self) -> impl Iterator<Item = &Field> {
+        self.order_by
+            .iter()
+            .filter_map(|id| self.by_id(id))
+            .filter(|f| f.live())
+    }
+
     /// `{name, title, fields, removed_fields, order_by}` for Claude.
     pub fn describe(&self, now: i64, window: i64) -> Value {
         let removed: Vec<Value> = self
@@ -181,7 +273,7 @@ impl Definition {
             .iter()
             .filter(|f| !f.live() && !f.purged)
             .map(|f| {
-                let mut v = f.describe();
+                let mut v = self.describe_field(f);
                 let left = (f.removed_at.unwrap_or(now) + window - now).max(0);
                 v["restorable_for_days"] = json!((left + 86_399) / 86_400);
                 v
@@ -190,12 +282,178 @@ impl Definition {
         json!({
             "name": self.name,
             "title": self.title,
-            "fields": self.live_fields().map(Field::describe).collect::<Vec<_>>(),
+            "fields": self.live_fields().map(|f| self.describe_field(f)).collect::<Vec<_>>(),
             "removed_fields": removed,
-            "order_by": self.order_by.as_deref().and_then(|id| self.by_id(id)).map(|f| f.name.clone()),
+            "order_by": order_json(self.order_fields().map(|f| f.name.clone()).collect()),
             "descending": self.descending,
         })
     }
+}
+
+/// An order as JSON: `null`, one name, or a list of names.
+pub fn order_json(names: Vec<String>) -> Value {
+    match names.len() {
+        0 => Value::Null,
+        1 => json!(names[0]),
+        _ => json!(names),
+    }
+}
+
+fn ser_order<S: serde::Serializer>(v: &[String], s: S) -> Result<S::Ok, S::Error> {
+    match v {
+        [one] => s.serialize_str(one),
+        _ => v.serialize(s),
+    }
+}
+
+fn de_order<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Order {
+        One(String),
+        Many(Vec<String>),
+        None(()),
+    }
+    Ok(match Order::deserialize(d)? {
+        Order::One(s) => vec![s],
+        Order::Many(v) => v,
+        Order::None(()) => Vec::new(),
+    })
+}
+
+/// The names an order spec gives: a name, a list of names, or empty
+/// (`null`, `""`, `[]`).
+pub fn order_names(v: Option<&Value>) -> Result<Vec<String>, String> {
+    match v {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::String(s)) if s.trim().is_empty() => Ok(Vec::new()),
+        Some(Value::String(s)) => Ok(vec![s.trim().to_owned()]),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|i| {
+                i.as_str()
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| "an order is a field name or a list of field names".to_owned())
+            })
+            .collect(),
+        Some(_) => Err("an order is a field name or a list of field names".into()),
+    }
+}
+
+/// Field ids for the order `names` (names or aliases of live fields).
+pub fn resolve_order(def: &Definition, names: &[String]) -> Result<Vec<String>, String> {
+    names
+        .iter()
+        .map(|n| {
+            def.field(n).map(|f| f.id.clone()).ok_or_else(|| {
+                format!(
+                    "order field '{n}' is not one of the fields ({})",
+                    def.live_fields()
+                        .map(|f| f.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
+        })
+        .collect()
+}
+
+/// Set field `id`'s `compute` from a spec (`null`: not computed; `None`:
+/// unchanged): `{kind: "expr", expr: "<expression over entity.<field>>"}`
+/// or `{kind: "model", from: <field> | [<fields>], prompt}`. Field names
+/// resolve against `def` and are stored as ids.
+pub fn set_compute(def: &mut Definition, id: &str, v: Option<&Value>) -> Result<(), String> {
+    let Some(v) = v else { return Ok(()) };
+    let name = def.by_id(id).map(|f| f.name.clone()).unwrap_or_default();
+    let field_id = |n: &str| {
+        def.field(n).map(|f| f.id.clone()).ok_or_else(|| {
+            format!(
+                "field '{name}': compute reads '{n}', which is not one of the fields ({})",
+                def.live_fields()
+                    .map(|f| f.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+    };
+    let shape = || {
+        format!(
+            "field '{name}': compute is {{kind: \"expr\", expr}}, {{kind: \"model\", from, prompt}} or null"
+        )
+    };
+    let compute = match v {
+        Value::Null => None,
+        Value::Object(o) => match o.get("kind").and_then(Value::as_str) {
+            Some("expr") => {
+                let text = o.get("expr").and_then(Value::as_str).unwrap_or("");
+                let parsed = crate::expr::parse(text)
+                    .map_err(|e| format!("field '{name}': compute.expr: {e}"))?;
+                let ids = parsed.map_fields(&|n| field_id(n))?;
+                Some(Compute::Expr {
+                    expr: ids.to_string(),
+                })
+            }
+            Some("model") => {
+                let names = match o.get("from") {
+                    Some(Value::String(s)) => vec![s.trim().to_owned()],
+                    Some(Value::Array(a)) => a
+                        .iter()
+                        .map(|x| x.as_str().map(|s| s.trim().to_owned()))
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or_else(|| {
+                            format!("field '{name}': compute.from is a field or a list of fields")
+                        })?,
+                    _ => {
+                        return Err(format!(
+                            "field '{name}': compute.from names the fields the model reads"
+                        ));
+                    }
+                };
+                if names.is_empty() || names.len() > MAX_SOURCES {
+                    return Err(format!(
+                        "field '{name}': compute.from is 1..={MAX_SOURCES} fields"
+                    ));
+                }
+                let mut from: Vec<String> = Vec::new();
+                for n in &names {
+                    let id = field_id(n)?;
+                    if from.contains(&id) {
+                        return Err(format!("field '{name}': compute.from lists '{n}' twice"));
+                    }
+                    from.push(id);
+                }
+                let prompt = o
+                    .get("prompt")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or("");
+                if prompt.is_empty() || prompt.chars().count() > MAX_PROMPT_CHARS {
+                    return Err(format!(
+                        "field '{name}': compute.prompt (what to answer about the fields) is 1..={MAX_PROMPT_CHARS} characters"
+                    ));
+                }
+                Some(Compute::Model {
+                    from,
+                    prompt: prompt.to_owned(),
+                })
+            }
+            _ => return Err(shape()),
+        },
+        _ => return Err(shape()),
+    };
+    if let Some(f) = def.fields.iter_mut().find(|f| f.id == id) {
+        f.compute = compute;
+    }
+    Ok(())
+}
+
+/// The text `text` as a cache key: lowercase, inner spaces collapsed.
+pub fn cache_key(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Whether `s` is a valid collection or field name: `[a-z][a-z0-9_]*`, at
@@ -366,6 +624,7 @@ pub fn parse_field(spec: &Value, id: String, max_chars: usize) -> Result<Field, 
         optional: spec["optional"].as_bool().unwrap_or(false),
         default: None,
         aliases: Vec::new(),
+        compute: None,
         removed_at: None,
         purged: false,
     };
@@ -442,8 +701,8 @@ pub fn set_default(field: &mut Field, v: Option<&Value>, max_chars: usize) -> Re
     }
 }
 
-/// Check a whole definition: unique names (aliases included), a valid
-/// order field.
+/// Check a whole definition: unique names (aliases included), valid order
+/// fields, computed fields that can be computed.
 pub fn check_definition(def: &Definition, max_fields: usize) -> Result<(), String> {
     if !valid_name(&def.name) {
         return Err(format!(
@@ -475,10 +734,68 @@ pub fn check_definition(def: &Definition, max_fields: usize) -> Result<(), Strin
             }
         }
     }
-    if let Some(o) = &def.order_by
-        && !def.by_id(o).is_some_and(Field::live)
-    {
-        return Err("the order field is not a live field".into());
+    for (i, o) in def.order_by.iter().enumerate() {
+        if !def.by_id(o).is_some_and(Field::live) {
+            return Err("an order field is not a live field".into());
+        }
+        if def.order_by[..i].contains(o) {
+            return Err("a field is listed twice in the order".into());
+        }
+    }
+    if def.order_by.len() > MAX_ORDER_KEYS {
+        return Err(format!(
+            "rows are ordered by at most {MAX_ORDER_KEYS} fields"
+        ));
+    }
+    for f in &live {
+        let Some(compute) = &f.compute else { continue };
+        if !f.optional && f.default.is_none() {
+            return Err(format!(
+                "field '{}' is computed, so it must be optional or have a default (what a row reads until it is computed)",
+                f.name
+            ));
+        }
+        if let Compute::Expr { expr } = compute
+            && compute.parsed().is_none()
+        {
+            return Err(format!(
+                "field '{}': compute.expr '{expr}' doesn't parse",
+                f.name
+            ));
+        }
+        let sources = compute.sources();
+        if sources.is_empty() {
+            return Err(format!(
+                "field '{}' is computed from no field (an expression reads entity.<field>)",
+                f.name
+            ));
+        }
+        for id in sources {
+            match def.by_id(&id) {
+                Some(src) if src.id == f.id => {
+                    return Err(format!("field '{}' can't be computed from itself", f.name));
+                }
+                Some(src) if !src.live() => {
+                    return Err(format!(
+                        "field '{}' is computed from '{}', which is removed; change or drop its compute first",
+                        f.name, src.name
+                    ));
+                }
+                Some(src) if src.compute.is_some() => {
+                    return Err(format!(
+                        "field '{}' is computed from '{}', which is computed itself (not supported yet)",
+                        f.name, src.name
+                    ));
+                }
+                Some(_) => {}
+                None => {
+                    return Err(format!(
+                        "field '{}' is computed from a field that doesn't exist",
+                        f.name
+                    ));
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -607,7 +924,7 @@ mod tests {
                     ..field(json!({"name": "due", "type": "date", "optional": true}))
                 },
             ],
-            order_by: None,
+            order_by: Vec::new(),
             descending: false,
             next_field: 4,
         }
@@ -746,7 +1063,145 @@ mod tests {
         assert!(check_definition(&def, 10).is_err());
         let mut def = todos();
         assert!(check_definition(&def, 2).is_err());
-        def.order_by = Some("f9".into());
+        def.order_by = vec!["f9".into()];
         assert!(check_definition(&def, 10).is_err());
+        def.order_by = vec!["f1".into(), "f1".into()];
+        assert!(check_definition(&def, 10).is_err());
+    }
+
+    #[test]
+    fn orders_read_old_single_strings_and_write_one_key_as_a_string() {
+        let mut def = todos();
+        def.order_by = vec!["f2".into()];
+        let text = serde_json::to_value(&def).unwrap();
+        assert_eq!(text["order_by"], json!("f2"), "one key stays a string");
+        let back: Definition = serde_json::from_value(text).unwrap();
+        assert_eq!(back.order_by, vec!["f2".to_owned()]);
+        def.order_by = vec!["f2".into(), "f1".into()];
+        let text = serde_json::to_value(&def).unwrap();
+        assert_eq!(text["order_by"], json!(["f2", "f1"]));
+        let back: Definition = serde_json::from_value(text).unwrap();
+        assert_eq!(back.order_by, def.order_by);
+        def.order_by.clear();
+        let text = serde_json::to_value(&def).unwrap();
+        assert!(text.get("order_by").is_none());
+        let mut with_null = text.clone();
+        with_null["order_by"] = Value::Null;
+        let back: Definition = serde_json::from_value(with_null).unwrap();
+        assert!(back.order_by.is_empty());
+        assert_eq!(
+            order_names(Some(&json!(["a", " b "]))),
+            Ok(vec!["a".to_owned(), "b".to_owned()])
+        );
+        assert!(order_names(Some(&json!([1]))).is_err());
+    }
+
+    #[test]
+    fn computed_fields_read_other_live_fields_by_id() {
+        let mut def = todos();
+        let section = Field {
+            id: "f4".into(),
+            ..field(json!({"name": "section", "type": "choice",
+                           "options": ["Produce", "Other"], "default": "Other"}))
+        };
+        let label = Field {
+            id: "f5".into(),
+            ..field(json!({"name": "label", "type": "text", "optional": true}))
+        };
+        def.fields.push(section);
+        def.fields.push(label);
+        set_compute(
+            &mut def,
+            "f4",
+            Some(&json!({"kind": "model", "from": "title", "prompt": "Which store section?"})),
+        )
+        .unwrap();
+        assert_eq!(
+            def.by_id("f4").unwrap().compute,
+            Some(Compute::Model {
+                from: vec!["f1".into()],
+                prompt: "Which store section?".into()
+            })
+        );
+        set_compute(
+            &mut def,
+            "f5",
+            Some(&json!({"kind": "expr", "expr": "entity.done ? \"✓ \" + entity.title : entity.title"})),
+        )
+        .unwrap();
+        assert_eq!(
+            def.by_id("f5").unwrap().compute,
+            Some(Compute::Expr {
+                expr: "entity.f2 ? \"✓ \" + entity.f1 : entity.f1".into()
+            })
+        );
+        assert_eq!(check_definition(&def, 10), Ok(()));
+        let d = def.describe_field(def.by_id("f5").unwrap());
+        assert_eq!(
+            d["compute"],
+            json!({"kind": "expr", "expr": "entity.done ? \"✓ \" + entity.title : entity.title"})
+        );
+        let d = def.describe_field(def.by_id("f4").unwrap());
+        assert_eq!(
+            d["compute"],
+            json!({"kind": "model", "from": ["title"], "prompt": "Which store section?"})
+        );
+        // Any type can be computed; a rename keeps the sources.
+        def.fields[0].name = "name".into();
+        assert_eq!(
+            def.describe_field(def.by_id("f5").unwrap())["compute"]["expr"],
+            "entity.done ? \"✓ \" + entity.name : entity.name"
+        );
+        def.fields[0].name = "title".into();
+        // From itself, from a computed field, from a removed one.
+        let mut bad = def.clone();
+        set_compute(
+            &mut bad,
+            "f4",
+            Some(&json!({"kind": "model", "from": "section", "prompt": "x"})),
+        )
+        .unwrap();
+        assert!(check_definition(&bad, 10).is_err());
+        let mut bad = def.clone();
+        set_compute(
+            &mut bad,
+            "f5",
+            Some(&json!({"kind": "expr", "expr": "entity.section"})),
+        )
+        .unwrap();
+        assert!(check_definition(&bad, 10).is_err());
+        let mut bad = def.clone();
+        bad.fields[0].removed_at = Some(1);
+        assert!(check_definition(&bad, 10).is_err());
+        // Never required without a default; never from nothing.
+        let mut bad = def.clone();
+        bad.fields[3].default = None;
+        assert!(check_definition(&bad, 10).is_err());
+        let mut bad = def.clone();
+        set_compute(
+            &mut bad,
+            "f5",
+            Some(&json!({"kind": "expr", "expr": "\"x\""})),
+        )
+        .unwrap();
+        assert!(check_definition(&bad, 10).is_err());
+        for spec in [
+            json!({"kind": "model", "from": "nope", "prompt": "x"}),
+            json!({"kind": "model", "from": "title"}),
+            json!({"kind": "model", "from": [], "prompt": "x"}),
+            json!({"kind": "model", "from": ["title", "title"], "prompt": "x"}),
+            json!({"kind": "expr", "expr": "entity.nope"}),
+            json!({"kind": "expr", "expr": "size(entity.title)"}),
+            json!({"kind": "sql", "expr": "x"}),
+            json!("entity.title"),
+        ] {
+            assert!(
+                set_compute(&mut def.clone(), "f4", Some(&spec)).is_err(),
+                "{spec}"
+            );
+        }
+        set_compute(&mut def, "f4", Some(&Value::Null)).unwrap();
+        assert!(def.by_id("f4").unwrap().compute.is_none());
+        assert_eq!(cache_key("  Oat   MILK "), "oat milk");
     }
 }

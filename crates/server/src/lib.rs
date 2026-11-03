@@ -30,7 +30,10 @@ pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
             app_watcher::WatcherConfig::from_env(),
         )),
         app_pixelfed::apps::demo_adapter(),
-        Arc::new(app_collections::CollectionsAdapter::new()),
+        Arc::new(
+            app_collections::CollectionsAdapter::new()
+                .with_model(app_collections::compute::MessagesModel::from_env()),
+        ),
     ]
 }
 
