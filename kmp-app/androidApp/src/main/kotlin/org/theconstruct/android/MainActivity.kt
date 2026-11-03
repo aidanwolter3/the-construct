@@ -1,10 +1,12 @@
 package org.theconstruct.android
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color as AndroidColor
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -13,6 +15,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -60,6 +64,15 @@ internal const val AUTH_REDIRECT_URI = "construct://oauth"
 class MainActivity : ComponentActivity() {
     private lateinit var vm: ConstructViewModel
 
+    /** The session whose push registration and channels are set up (D47); redone after a server switch. */
+    @Volatile
+    private var pushReadyFor: ConstructController? = null
+
+    private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        Log.i(TAG, "notification permission ${if (granted) "granted" else "denied"}")
+        setUpNotifications(vm.controller)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // The shared UI uses Material3's light scheme, so ask for dark system-bar icons regardless of the
         // device's night mode; the root below pads by the safe-drawing insets so nothing sits under the bars.
@@ -86,7 +99,10 @@ class MainActivity : ComponentActivity() {
         // Normally the redirect arrives through onNewIntent; this covers a cold start by the redirect (the
         // pending flow is gone then, so the engine just ignores it). Not on recreation (rotation): the intent
         // was already handled.
-        if (savedInstanceState == null) handleAuthRedirect(intent)
+        if (savedInstanceState == null) {
+            handleAuthRedirect(intent)
+            handleNotificationTap(intent)
+        }
 
         setContent {
             val session = vm.session
@@ -99,6 +115,7 @@ class MainActivity : ComponentActivity() {
             Box(Modifier.fillMaxSize().background(Color.White).safeDrawingPadding()) {
                 key(session) { ConstructApp(session.controller, server = server) }
             }
+            LaunchedEffect(session) { setUpNotifications(session.controller) }
         }
     }
 
@@ -115,6 +132,61 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleAuthRedirect(intent)
+        handleNotificationTap(intent)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        AppNotifications.foreground = true
+    }
+
+    override fun onStop() {
+        AppNotifications.foreground = false
+        super.onStop()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // The pod session may have appeared since (pod code entered, signed in): try again.
+        if (pushReadyFor !== vm.controller) setUpNotifications(vm.controller)
+    }
+
+    /** A tapped notification (D47): open its app and target. */
+    private fun handleNotificationTap(intent: Intent?) {
+        val app = intent?.getStringExtra(EXTRA_NOTIFICATION_APP) ?: return
+        val target = intent.getStringExtra(EXTRA_NOTIFICATION_TARGET)
+        val id = intent.getStringExtra(EXTRA_NOTIFICATION_ID)
+        intent.removeExtra(EXTRA_NOTIFICATION_APP) // not again on recreation
+        Log.i(TAG, "opening notification $id of $app")
+        vm.controller.openNotification(app, target, id)
+    }
+
+    /**
+     * Notifications for [controller]'s pod (D47): ask for the permission once (Android 13+), make the Android
+     * channels from the pod's list, and register for Web Push with the pod's VAPID key. Needs a pod session; without
+     * one it quietly does nothing and [onResume] tries again.
+     */
+    private fun setUpNotifications(controller: ConstructController) {
+        if (Build.VERSION.SDK_INT >= 33 && !AppNotifications.permitted(this)) {
+            val prefs = getSharedPreferences("notifications", MODE_PRIVATE)
+            if (!prefs.getBoolean("asked", false)) {
+                prefs.edit().putBoolean("asked", true).apply()
+                askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                return
+            }
+        }
+        Thread({
+            val key = controller.pushPublicKey()
+            val channels = controller.notificationChannels()
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                AppNotifications.syncChannels(this, channels, controller::appTitle)
+                if (key != null) {
+                    Push.register(this, key)
+                    pushReadyFor = controller
+                }
+            }
+        }, "construct-notify-setup").start()
     }
 
     private fun handleAuthRedirect(intent: Intent?) {
@@ -261,7 +333,14 @@ internal class ConstructViewModel(config: EngineConfig, private val appContext: 
         Log.i(TAG, "starting base_url=${config.baseUrl} workspace=${config.workspace} storage=${config.storageDir}")
         config.storageDir.mkdirs()
         val open = { workspace: String -> openEngine(config, workspace) }
-        return Session(config.baseUrl, ConstructController(open(config.workspace), config.workspace, open))
+        val controller = ConstructController(open(config.workspace), config.workspace, open)
+        // Notifications (D47): live arrivals show as OS notifications while the app is in the background; the
+        // push service hands endpoints and messages to this controller while it is alive.
+        controller.setDeviceInfo("android", "${Build.MANUFACTURER} ${Build.MODEL}".trim())
+        controller.onNotification = { n -> if (!AppNotifications.foreground) AppNotifications.show(appContext, n) }
+        Push.controller = controller
+        Push.resend(appContext, controller)
+        return Session(config.baseUrl, controller)
     }
 
     /** Sign-in (DECISIONS D19): Keystore-backed session store, the system browser, `construct://oauth` redirect. */
@@ -318,6 +397,7 @@ internal class ConstructViewModel(config: EngineConfig, private val appContext: 
 
     override fun onCleared() {
         Log.i(TAG, "closing engine")
+        if (Push.controller === controller) Push.controller = null
         controller.close()
     }
 }

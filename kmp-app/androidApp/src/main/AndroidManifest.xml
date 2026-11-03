@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Notifications from apps (DECISIONS D47); asked for at runtime on Android 13+. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Cleartext HTTP only to the dev server (10.0.2.2 / localhost / 127.0.0.1), in all builds since the menu's
          server picker ships in release too: res/xml/network_security_config.xml (DECISIONS D11, D29). -->
@@ -31,5 +33,14 @@
                 <data android:scheme="construct" android:host="oauth" />
             </intent-filter>
         </activity>
+        <!-- Web Push messages from the pod, delivered by a UnifiedPush distributor (or the embedded FCM one), also
+             while the app is closed (DECISIONS D47). -->
+        <service
+            android:name=".PushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>
