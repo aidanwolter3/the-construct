@@ -910,6 +910,8 @@ fn migrate(conn: &mut Connection, target: usize) -> rusqlite::Result<()> {
 
 pub struct Store {
     conn: Mutex<Connection>,
+    /// Seals adapters' upstream credentials at rest ([`crate::secrets`]).
+    secrets: crate::secrets::Secrets,
 }
 
 const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -947,8 +949,15 @@ fn enable_wal(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 impl Store {
-    /// Open (creating if needed) the database file and run migrations.
+    /// Open (creating if needed, mode 0600) the database file and run
+    /// migrations. Secrets are sealed with [`crate::secrets::Secrets::process`].
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
+        if let Err(e) = crate::util::private_db_file(path) {
+            return Err(refuse(format!(
+                "making {} private (mode 0600): {e}",
+                path.display()
+            )));
+        }
         let conn = Connection::open(path)?;
         // Before WAL: switching the journal mode can meet a concurrent starter.
         conn.busy_timeout(BUSY_TIMEOUT)?;
@@ -965,7 +974,20 @@ impl Store {
         migrate(&mut conn, MIGRATIONS.len())?;
         Ok(Self {
             conn: Mutex::new(conn),
+            secrets: crate::secrets::Secrets::process(),
         })
+    }
+
+    /// Seal secrets with `secrets` instead of the process-wide keys (tests,
+    /// or a host that reads its keys elsewhere).
+    pub fn with_secrets(mut self, secrets: crate::secrets::Secrets) -> Self {
+        self.secrets = secrets;
+        self
+    }
+
+    /// The keys adapters seal their stored upstream credentials with.
+    pub fn secrets(&self) -> &crate::secrets::Secrets {
+        &self.secrets
     }
 
     fn conn(&self) -> MutexGuard<'_, Connection> {

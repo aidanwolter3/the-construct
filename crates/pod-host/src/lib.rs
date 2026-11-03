@@ -65,7 +65,8 @@ pub fn vapid_private_key(dir: &FsPath, configured: Option<&str>) -> Result<Strin
     if let Some(k) = configured {
         return Ok(k.to_owned());
     }
-    std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+    pod_core::util::create_private_dir(dir)
+        .map_err(|e| format!("creating {}: {e}", dir.display()))?;
     let store = HostStore::open(&dir.join("host.db")).map_err(|e| e.to_string())?;
     store
         .secret_or(
@@ -266,10 +267,14 @@ pub struct Host {
 }
 
 impl Host {
-    /// The host over `<dir>/host.db` (created) and `<dir>/pods/`.
+    /// The host over `<dir>/host.db` (created) and `<dir>/pods/`. Both
+    /// directories are private to the server's user (0700), the databases
+    /// 0600.
     pub fn open(dir: &FsPath, factory: PodFactory, config: HostConfig) -> Result<Self, String> {
-        std::fs::create_dir_all(dir.join("pods"))
-            .map_err(|e| format!("creating {}: {e}", dir.display()))?;
+        for d in [dir.to_owned(), dir.join("pods")] {
+            pod_core::util::create_private_dir(&d)
+                .map_err(|e| format!("creating {}: {e}", d.display()))?;
+        }
         let store = HostStore::open(&dir.join("host.db"))
             .map_err(|e| format!("opening {}: {e}", dir.join("host.db").display()))?;
         let host = Self {
@@ -368,7 +373,7 @@ impl Host {
         let id = new_pod_id();
         let dir = self.pod_dir(&id)?;
         let result = (|| {
-            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            pod_core::util::create_private_dir(&dir).map_err(|e| e.to_string())?;
             let store = Store::open(&dir.join("server.db")).map_err(|e| e.to_string())?;
             for (k, v) in settings {
                 store.set_pod_setting(k, v).map_err(|e| e.to_string())?;
@@ -435,7 +440,7 @@ impl Host {
         let dir = self.pod_dir(&id)?;
         let dest = dir.join("server.db");
         let result = (|| {
-            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            pod_core::util::create_private_dir(&dir).map_err(|e| e.to_string())?;
             {
                 let conn = rusqlite::Connection::open(src).map_err(|e| e.to_string())?;
                 conn.busy_timeout(Duration::from_secs(5))

@@ -227,6 +227,7 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 | `PIXELFED_ALLOW_ACCOUNT_CHANGE` | unset | `1`/`true`: on the default and listed instances any account may sign in and replace the stored one (no pinning). Instances typed under `*` always keep their first account. |
 | `CONSTRUCT_SESSION_TTL_DAYS` | `90` | Lifetime of sessions other than pod tokens, in days (1..=36500; other values warn and use 90). Pod tokens don't expire. |
 | `CONSTRUCT_VAPID_PRIVATE_KEY` | generated | Web Push signing key for notifications (D52): base64url of a 32-byte P-256 private key. Unset: the server generates one on first start and keeps it in `host.db` (devices subscribed with its public key keep working across restarts). Staging/production should set it as a secret so a lost volume doesn't orphan subscriptions. |
+| `CONSTRUCT_SECRETS_KEY` | unset | Seals upstream credentials (Pixelfed access/refresh tokens, OAuth client secrets) in the pod databases with AES-256-GCM: base64 of 32 random bytes (`openssl rand -base64 32`). Comma-separated: key rotation (the first seals, all open; values are re-sealed under the first when a pod opens). Unset: stored in plaintext, with a startup warning (an error on Fly). Setting it later seals existing rows when each pod opens. A sealed row whose key is missing or wrong reads as signed out (logged); the right key restores it. Malformed: the server refuses to start. Staging/production must set it as a secret (decision [`upstream-credentials-sealed-at-rest`](docs/decisions/upstream-credentials-sealed-at-rest.md)). The data dir and pod dirs are 0700 and the databases 0600 either way. |
 | `CONSTRUCT_VAPID_SUBJECT` | the repo URL | Contact (`mailto:` or `https:`) that push services may use to reach the operator. |
 | `CONSTRUCT_PUSH` | on | `off`: no Web Push (notifications still reach the inbox and open apps). |
 | `CONSTRUCT_UPLOAD_MAX_BYTES` | `20971520` (20 MB) | Largest file a client may upload to `POST /v1/uploads` (photos for a post, D49); at least 1024. |
@@ -329,8 +330,10 @@ adapter wrote, and a navigation target in that app's own layout routes.
   | `DELETE /v1/devices/{id}` | forget the device (the engine calls it on sign-out) |
   | `GET /v1/push/key` | `{"vapid_public_key"}` (404 `push_unavailable` with `CONSTRUCT_PUSH=off`) |
 
-  Push endpoints must be `https://` on a public host (any local URL with `CONSTRUCT_TEST_HOOKS=1`, for test
-  receivers); deliveries resolve only public addresses. 404/410 from the push service drops the subscription, as do 5
+  Push endpoints must be `https://` on the default port (443) of a public host name (any local URL with
+  `CONSTRUCT_TEST_HOOKS=1`, for test receivers); deliveries resolve only public addresses and follow no redirects. A
+  port rule rather than a domain allowlist keeps self-hosted UnifiedPush distributors working. Endpoints stored
+  before this rule are dropped on their next delivery. 404/410 from the push service drops the subscription, as do 5
   failures in a row. At most 20 devices and 60 deliveries a minute per pod.
 - **Try it:** `server pods notify-test <name>` (or, against the fake upstream, inject one with its admin API; see
   "Fake Pixelfed upstream").
