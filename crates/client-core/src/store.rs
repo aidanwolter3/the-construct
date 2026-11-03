@@ -24,6 +24,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use protocol::{EntityRecord, Notification, UiNode};
+use rusqlite::config::DbConfig;
 use rusqlite::{Connection, ErrorCode, MAIN_DB, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1080,6 +1081,16 @@ impl Store {
         }
         let conn = Connection::open(path)?;
         conn.busy_timeout(BUSY_TIMEOUT)?;
+        // No checkpoint when the connection closes. That checkpoint holds
+        // an exclusive lock on the file while it syncs, which blocks
+        // every other connection, readers included. An engine's
+        // connection closes when its last background thread lets go,
+        // possibly after a new engine on the same storage has started:
+        // on a slow disk that new engine's open waited out the busy
+        // timeout and fell back to an in-memory store (issue #44).
+        // Commits still checkpoint automatically, without that lock; the
+        // WAL file simply stays next to cache.db between runs.
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)?;
         // WAL + NORMAL: commits append to the WAL without an fsync each
         // time; a crash never corrupts the DB, a power loss may drop the
         // last few commits.
@@ -1511,6 +1522,37 @@ mod tests {
             1
         );
         drop(s);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// Closing a connection must not checkpoint: that checkpoint holds an
+    /// exclusive lock that blocks a new engine opening the same file
+    /// (issue #44). The WAL is left as it is and the data stays readable.
+    #[test]
+    fn closing_a_store_does_not_checkpoint() {
+        let path = temp_db("no-ckpt-on-close");
+        let wal = path.with_file_name("cache.db-wal");
+        let mut old = Store::open(&path).unwrap();
+        old.transaction(|tx| {
+            tx.upsert_entity("core://counters/home", &entity(r#"{"count":7}"#), 1)
+        })
+        .unwrap();
+        let wal_len = std::fs::metadata(&wal).unwrap().len();
+        assert!(wal_len > 0);
+        let new = Store::open(&path).unwrap();
+        drop(old);
+        assert_eq!(std::fs::metadata(&wal).unwrap().len(), wal_len);
+        drop(new);
+        assert_eq!(std::fs::metadata(&wal).unwrap().len(), wal_len);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .load_entities(&["core://counters/home".into()])
+                .unwrap()
+                .len(),
+            1
+        );
+        drop(reopened);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
