@@ -465,6 +465,22 @@ async fn adopting_a_single_pod_database_keeps_its_data() {
     let (status, _, body) = get(&env.url("/v1/workspaces/recipes"), Some(&pod.token)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["queries"]["recipes:all"].as_array().unwrap().len(), 81);
+    // The renamed original can go once the pod works; a lookalike for a pod
+    // that doesn't exist stays.
+    let stranger = old.path().join(format!("x.adopted-{}", "0".repeat(32)));
+    std::fs::write(&stranger, "keep").unwrap();
+    let host = env.host.clone();
+    let dir = old.path().to_owned();
+    let removed = tokio::task::spawn_blocking(move || host.remove_adopted(&dir).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        removed,
+        [old.path().join(format!("server.db.adopted-{}", pod.id))]
+    );
+    assert!(stranger.is_file());
+    let (status, _, _) = get(&env.url("/v1/workspaces/recipes"), Some(&pod.token)).await;
+    assert_eq!(status, StatusCode::OK, "the pod is unaffected");
 }
 
 #[tokio::test]

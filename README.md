@@ -257,6 +257,7 @@ paths, e.g. the Pixelfed media proxy).
   ```bash
   server pods create <name> [--import-recipes]   # prints the pod code once; --import-recipes: the family collection
   server pods adopt <name> <path/to/server.db>   # a pre-D46 single-pod database becomes a pod (copied, checked first)
+  server pods remove-adopted [dir]               # delete the renamed originals adopt left behind (default: data dir)
   server pods rotate <name>                      # new code; the old one stops working, app sign-ins end
   server pods delete <name>                      # stops now; files deleted within 5 minutes
   server pods list
@@ -280,7 +281,9 @@ paths, e.g. the Pixelfed media proxy).
   (`fly volumes snapshots create <volume id>`), then
   `fly ssh console -a the-construct-pod -C "/server pods adopt <name> /data/server.db"` and keep the printed code.
   Install the app build with the "Open your pod" screen and enter the code: the recipes and everything else are there.
-  Then delete `/data/server.db.adopted-*`: it still holds the old sessions and app tokens.
+  Then delete the renamed original (it still holds the old sessions and app tokens):
+  `fly ssh console -a the-construct-pod -C "/server pods remove-adopted"`. The image has no shell, so `rm` doesn't
+  exist there (not in `fly ssh sftp shell` either).
 
 ## Try it on your phone with a real Pixelfed instance
 

@@ -8,6 +8,8 @@
 //! - `pods create <name> [--import-recipes]`: a new pod; prints its token once.
 //! - `pods adopt <name> <path/to/server.db>`: make a pre-D46 single-pod
 //!   database a pod (copied and checked first; the original is renamed).
+//! - `pods remove-adopted [dir]`: delete those renamed originals (default: the
+//!   data dir) once the pod works. The image has no shell, so no `rm`.
 //! - `pods rotate <name>`: a new token; the old one stops working.
 //! - `pods delete <name>`: stop a pod now; its files go at the next sweep.
 //! - `pods list`.
@@ -87,7 +89,8 @@ fn main() -> std::process::ExitCode {
         _ => {
             eprintln!(
                 "usage: server [serve]\n       server pods create <name> [--import-recipes]\n       \
-                 server pods adopt <name> <path/to/server.db>\n       server pods rotate <name>\n       \
+                 server pods adopt <name> <path/to/server.db>\n       server pods remove-adopted [dir]\n       \
+                 server pods rotate <name>\n       \
                  server pods delete <name>\n       server pods list"
             );
             std::process::ExitCode::from(2)
@@ -138,8 +141,7 @@ fn pods(args: &[&str]) -> Result<(), String> {
             );
             println!(
                 "It still holds the old sessions and app tokens: once the pod works, delete it \
-                 (rm {path}.adopted-{}*).",
-                pod.id
+                 with `server pods remove-adopted`."
             );
         }
         ["rotate", name] => {
@@ -153,6 +155,20 @@ fn pods(args: &[&str]) -> Result<(), String> {
                 "Pod '{name}' is stopped; the server deletes its files within {} minutes.",
                 server::host::SWEEP_EVERY.as_secs() / 60
             );
+        }
+        ["remove-adopted", rest @ ..] => {
+            let dir = match rest {
+                [] => dir,
+                [path] => PathBuf::from(path),
+                _ => return Err("usage: server pods remove-adopted [dir]".into()),
+            };
+            let removed = host.remove_adopted(&dir)?;
+            if removed.is_empty() {
+                println!("No adopted originals in {}.", dir.display());
+            }
+            for p in removed {
+                println!("Deleted {}", p.display());
+            }
         }
         ["list"] => {
             for p in host.store().pods().map_err(|e| e.to_string())? {
@@ -168,7 +184,11 @@ fn pods(args: &[&str]) -> Result<(), String> {
                 );
             }
         }
-        _ => return Err("unknown pods command (create, adopt, rotate, delete, list)".into()),
+        _ => {
+            return Err(
+                "unknown pods command (create, adopt, remove-adopted, rotate, delete, list)".into(),
+            );
+        }
     }
     Ok(())
 }
