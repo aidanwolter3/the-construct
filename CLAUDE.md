@@ -109,4 +109,5 @@ layout state.
 - Read files with the Read tool — never `cat`, `head`, `tail`, `sed` or `awk` to read files (developer's rule).
 - No model names in commit messages or docs prose.
 - Commit messages follow standard git style: an imperative subject line of at most 70 characters, a blank line,
-  then a body explaining what and why, with every line wrapped at 70 characters or fewer.
+  then a body explaining what and why, with every line wrapped at 70 characters or fewer
+  (trailers such as `Co-Authored-By` and long URLs are exempt).
