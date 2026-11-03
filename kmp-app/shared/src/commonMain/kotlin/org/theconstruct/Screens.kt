@@ -1,14 +1,11 @@
 package org.theconstruct
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -36,8 +33,8 @@ import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -308,8 +305,8 @@ class Navigation internal constructor(private val controller: ConstructControlle
 }
 
 /**
- * The top screen over the layout (in-tree, like the menu: headless captures see it): a bar with Back and the title, the
- * data load's progress or error (with Try again), the content (scrolling) and the footer. Tags: `screen:<id>`,
+ * The top screen over the layout (in-tree, like the menu: headless captures see it): a bar with Back, the title and a
+ * spinner while the data loads, the load's error (with Try again), the content (scrolling) and the footer. Tags: `screen:<id>`,
  * `screen-back`, `screen-loading`, `screen-error`, `screen-retry`.
  */
 @Composable
@@ -327,6 +324,7 @@ internal fun ScreenHost(controller: ConstructController, state: ConstructState) 
             ) {
                 Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
                     Column(Modifier.fillMaxSize().widthIn(max = FEED_MAX_WIDTH)) {
+                        val load = entry.screen.data?.let { state.loads[it] }
                         Row(
                             Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp, top = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -337,12 +335,19 @@ internal fun ScreenHost(controller: ConstructController, state: ConstructState) 
                             Text(
                                 interpolate(entry.screen.title, state.entities),
                                 style = MaterialTheme.typography.titleLarge,
-                                modifier = Modifier.semantics { heading() },
+                                modifier = Modifier.weight(1f).semantics { heading() },
                             )
+                            // Progress sits in the bar (its height is fixed by the Back button), so the content
+                            // below doesn't jump when the load finishes.
+                            if (load?.state == "loading") {
+                                CircularProgressIndicator(
+                                    Modifier.size(16.dp).testTag("screen-loading").semantics { contentDescription = "Loading" },
+                                    strokeWidth = 2.dp,
+                                )
+                            }
                         }
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                        val load = entry.screen.data?.let { state.loads[it] }
-                        LoadStatusRow(load, onRetry = nav::retry)
+                        LoadErrorRow(load, onRetry = nav::retry)
                         val scroll = rememberScrollState()
                         // After a submit from the footer (e.g. a new item at the end of a list), follow the content
                         // to its end once it grows.
@@ -379,17 +384,8 @@ internal fun ScreenHost(controller: ConstructController, state: ConstructState) 
 }
 
 @Composable
-private fun LoadStatusRow(load: LoadState?, onRetry: () -> Unit) {
+private fun LoadErrorRow(load: LoadState?, onRetry: () -> Unit) {
     when (load?.state) {
-        "loading" -> Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp).testTag("screen-loading"),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-            Spacer(Modifier.width(8.dp))
-            Text("Loading…", style = MaterialTheme.typography.bodySmall, color = Color(0xFF737373))
-        }
         "error" -> Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp).testTag("screen-error"),
             verticalAlignment = Alignment.CenterVertically,
