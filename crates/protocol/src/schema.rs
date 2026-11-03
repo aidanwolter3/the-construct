@@ -31,6 +31,8 @@
 //!   `action.mutation.create` `attachments` / `position` / `dismiss`, the
 //!   `$form?.<field>` binding and the `add_photo` / `add` / `refresh` icons
 //!   (D49, D51). Additive.
+//! - 10: `core://ChoiceChips` `remember` (the client keeps the chosen value
+//!   on the device, docs/decisions/remembered-form-values.md). Additive.
 //!
 //! # A breaking schema change
 //!
@@ -46,7 +48,7 @@ use crate::{ActionIntent, Align, Position, TextStyle, UiNode};
 /// Request header carrying the client's schema version.
 pub const SCHEMA_HEADER: &str = "x-construct-schema";
 /// The schema version this build draws.
-pub const SCHEMA_VERSION: u32 = 9;
+pub const SCHEMA_VERSION: u32 = 10;
 
 /// Breaking changes, oldest first: `(client schema, oldest layout schema it
 /// draws)`. A client of schema `c` draws layouts written for schemas
@@ -136,6 +138,7 @@ fn icon_schema(icon: &str) -> u32 {
 
 fn node_schema(node: &UiNode) -> u32 {
     match node {
+        UiNode::ChoiceChips { remember: true, .. } => 10,
         UiNode::MediaPicker { .. } => 9,
         UiNode::TextField { lines: Some(_), .. } => 9,
         UiNode::Chip { icon: Some(i), .. } | UiNode::Badge { icon: i, .. } => icon_schema(i),
@@ -342,6 +345,26 @@ mod tests {
         // Round trip keeps the new fields.
         let back: UiNode = serde_json::from_value(serde_json::to_value(&attach).unwrap()).unwrap();
         assert_eq!(back, attach);
+        // Schema 10: remembered choice chips.
+        let remembered = node(
+            json!({"type": "core://ChoiceChips", "field": "view", "remember": true,
+            "options": [{"label": "List"}, {"label": "Cards", "value": "cards"}]}),
+        );
+        assert_eq!(required_schema(&remembered), 10);
+        let back: UiNode =
+            serde_json::from_value(serde_json::to_value(&remembered).unwrap()).unwrap();
+        assert_eq!(back, remembered);
+        let forgotten = node(
+            json!({"type": "core://ChoiceChips", "field": "view", "remember": false,
+            "options": [{"label": "List"}]}),
+        );
+        assert_eq!(required_schema(&forgotten), 6);
+        assert!(
+            serde_json::to_value(&forgotten)
+                .unwrap()
+                .get("remember")
+                .is_none()
+        );
     }
 
     #[test]
@@ -458,5 +481,9 @@ mod tests {
         assert_eq!(oldest_layout_schema(9), 3);
         assert_eq!(compatibility(8, 9), Compatible);
         assert_eq!(compatibility(9, 8), UpdateRequired);
+        // Schema 10 is additive too.
+        assert_eq!(oldest_layout_schema(10), 3);
+        assert_eq!(compatibility(9, 10), Compatible);
+        assert_eq!(compatibility(10, 9), UpdateRequired);
     }
 }

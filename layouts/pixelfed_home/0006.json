@@ -1,0 +1,765 @@
+{
+  "note": "Remember the List/Cards choice on each device",
+  "schema": 10,
+  "layout": {
+    "type": "core://Workspace",
+    "id": "pixelfed_home",
+    "title": "Pixelfed",
+    "slots": [
+      {
+        "slot_id": "feed",
+        "provider_uri": "pixelfed://home_timeline",
+        "content": {
+          "type": "core://Column",
+          "spacing_dp": 4,
+          "children": [
+            {
+              "type": "core://Row",
+              "padding_h_dp": 12,
+              "padding_v_dp": 4,
+              "children": [
+                {
+                  "type": "core://Text",
+                  "value_expr": "Home",
+                  "style": "Title"
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "type": "core://IconButton",
+                  "icon": "add_photo",
+                  "content_description": "New post",
+                  "tag": "new-post",
+                  "on_click": {
+                    "intent": "action.navigation.open",
+                    "target_uri": "pixelfed://compose",
+                    "presentation": "Modal"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "core://ChoiceChips",
+              "field": "view",
+              "remember": true,
+              "padding_h_dp": 16,
+              "options": [
+                {
+                  "label": "List",
+                  "value": ""
+                },
+                {
+                  "label": "Cards",
+                  "value": "cards"
+                }
+              ]
+            },
+            {
+              "type": "core://Conditional",
+              "value": "$form.view",
+              "equals": "",
+              "content": {
+                "type": "core://List",
+                "query_key": "timeline:home",
+                "empty_text": "No posts",
+                "item_template": {
+                  "type": "core://Column",
+                  "children": [
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.reblogged_by_name",
+                      "content": {
+                        "type": "core://Badge",
+                        "text": "$item.reblogged_by_name boosted",
+                        "icon": "repeat"
+                      }
+                    },
+                    {
+                      "type": "core://Row",
+                      "spacing_dp": 10,
+                      "padding_h_dp": 12,
+                      "padding_v_dp": 10,
+                      "children": [
+                        {
+                          "type": "core://Image",
+                          "url": "$item.author_avatar_url",
+                          "shape": "Circle",
+                          "size_dp": 36
+                        },
+                        {
+                          "type": "core://Column",
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "value_expr": "$item.author_name",
+                              "style": "Label"
+                            },
+                            {
+                              "type": "core://Text",
+                              "value_expr": "$item.author_handle",
+                              "style": "Secondary"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "core://Carousel",
+                      "items": "$item.media_uris",
+                      "aspect_ratio": 1.0,
+                      "aspect_field": "aspect_ratio",
+                      "min_aspect": 0.8,
+                      "max_aspect": 1.91,
+                      "tag": "carousel:$item.uri",
+                      "item_template": {
+                        "type": "core://Image",
+                        "url": "$item.url",
+                        "content_description": "$item.alt_text",
+                        "blurhash": "$item.blurhash"
+                      }
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.pending_label",
+                      "content": {
+                        "type": "core://Row",
+                        "spacing_dp": 8,
+                        "padding_h_dp": 14,
+                        "padding_v_dp": 6,
+                        "children": [
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.pending_label",
+                            "style": "Secondary"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.failed",
+                      "content": {
+                        "type": "core://Column",
+                        "spacing_dp": 6,
+                        "padding_h_dp": 14,
+                        "padding_v_dp": 6,
+                        "children": [
+                          {
+                            "type": "core://Chip",
+                            "text": "$item.error",
+                            "icon": "warning",
+                            "tone": "Warning"
+                          },
+                          {
+                            "type": "core://Row",
+                            "spacing_dp": 8,
+                            "children": [
+                              {
+                                "type": "core://Button",
+                                "label": "Retry",
+                                "on_click": {
+                                  "intent": "action.mutation.optimistic",
+                                  "entity_uri": "$item.uri",
+                                  "field": "failed",
+                                  "value_expr": "false",
+                                  "rollback_value": true,
+                                  "endpoint": "/v1/pixelfed/posts/pending/retry",
+                                  "payload": {
+                                    "client_id": "$item.client_id"
+                                  },
+                                  "also": [
+                                    {
+                                      "field": "pending_label",
+                                      "value_expr": "\"Posting…\""
+                                    }
+                                  ]
+                                }
+                              },
+                              {
+                                "type": "core://Button",
+                                "label": "Discard",
+                                "on_click": {
+                                  "intent": "action.mutation.optimistic",
+                                  "entity_uri": "$item.uri",
+                                  "field": "failed",
+                                  "value_expr": "false",
+                                  "rollback_value": true,
+                                  "endpoint": "/v1/pixelfed/posts/pending/discard",
+                                  "payload": {
+                                    "client_id": "$item.client_id"
+                                  },
+                                  "also": [
+                                    {
+                                      "field": "pending_label",
+                                      "value_expr": "\"Removing…\""
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.id",
+                      "content": {
+                        "type": "core://Row",
+                        "padding_h_dp": 4,
+                        "children": [
+                          {
+                            "type": "core://IconButton",
+                            "icon": "favorite_border",
+                            "active_icon": "favorite",
+                            "active": "$item.is_liked",
+                            "active_tint": "#ED4956",
+                            "content_description": "Like",
+                            "active_content_description": "Unlike",
+                            "tag": "like:$item.uri",
+                            "on_click": {
+                              "intent": "action.mutation.optimistic",
+                              "entity_uri": "$item.uri",
+                              "field": "is_liked",
+                              "value_expr": "!entity.is_liked",
+                              "rollback_value": false,
+                              "endpoint": "/v1/pixelfed/posts/like",
+                              "payload": {
+                                "id": "$item.id",
+                                "liked": "$value"
+                              },
+                              "also": [
+                                {
+                                  "field": "like_count",
+                                  "value_expr": "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1"
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.like_count",
+                            "style": "Label"
+                          },
+                          {
+                            "type": "core://Spacer",
+                            "size_dp": 8
+                          },
+                          {
+                            "type": "core://IconButton",
+                            "icon": "chat_bubble",
+                            "content_description": "Comment",
+                            "tag": "comment:$item.uri",
+                            "on_click": {
+                              "intent": "action.navigation.open",
+                              "presentation": "Modal",
+                              "target_uri": "pixelfed://posts/$item.id/comments"
+                            }
+                          },
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.reply_count",
+                            "content": {
+                              "type": "core://Text",
+                              "value_expr": "$item.reply_count",
+                              "style": "Label"
+                            }
+                          },
+                          {
+                            "type": "core://Spacer"
+                          },
+                          {
+                            "type": "core://IconButton",
+                            "icon": "bookmark_border",
+                            "active_icon": "bookmark",
+                            "active": "$item.is_bookmarked",
+                            "content_description": "Bookmark",
+                            "active_content_description": "Remove bookmark",
+                            "tag": "bookmark:$item.uri",
+                            "on_click": {
+                              "intent": "action.mutation.optimistic",
+                              "entity_uri": "$item.uri",
+                              "field": "is_bookmarked",
+                              "value_expr": "!entity.is_bookmarked",
+                              "rollback_value": false,
+                              "endpoint": "/v1/pixelfed/posts/bookmark",
+                              "payload": {
+                                "id": "$item.id",
+                                "bookmarked": "$value"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.content_warning",
+                      "content": {
+                        "type": "core://Column",
+                        "padding_h_dp": 14,
+                        "padding_v_dp": 4,
+                        "children": [
+                          {
+                            "type": "core://Chip",
+                            "text": "$item.content_warning_label",
+                            "icon": "warning",
+                            "tone": "Warning"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.caption",
+                      "content": {
+                        "type": "core://Column",
+                        "padding_h_dp": 14,
+                        "children": [
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.caption",
+                            "style": "Body"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "type": "core://Spacer",
+                      "size_dp": 12
+                    },
+                    {
+                      "type": "core://Divider"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "core://Conditional",
+              "value": "$form.view",
+              "equals": "cards",
+              "content": {
+                "type": "core://List",
+                "query_key": "timeline:home",
+                "empty_text": "No posts",
+                "columns": 2,
+                "spacing_dp": 16,
+                "padding_h_dp": 12,
+                "item_template": {
+                  "type": "core://Tappable",
+                  "content_description": "Open post by $item.author_name",
+                  "tag": "card:$item.uri",
+                  "on_click": {
+                    "intent": "action.navigation.open",
+                    "presentation": "Push",
+                    "target_uri": "pixelfed://posts/$item.id"
+                  },
+                  "content": {
+                    "type": "core://Column",
+                    "spacing_dp": 6,
+                    "children": [
+                      {
+                        "type": "core://Conditional",
+                        "value": "$item.cover_url",
+                        "content": {
+                          "type": "core://Image",
+                          "url": "$item.cover_url",
+                          "shape": "Rounded",
+                          "aspect_ratio": 0.8,
+                          "content_description": "Photo by $item.author_name",
+                          "blurhash": "$item.cover_blurhash"
+                        }
+                      },
+                      {
+                        "type": "core://Conditional",
+                        "value": "$item.cover_url",
+                        "equals": "",
+                        "content": {
+                          "type": "core://Box",
+                          "background": "#EEF0F4",
+                          "corner_dp": 8,
+                          "padding_h_dp": 12,
+                          "padding_v_dp": 12,
+                          "content": {
+                            "type": "core://Column",
+                            "children": [
+                              {
+                                "type": "core://Text",
+                                "value_expr": "$item.caption",
+                                "style": "Body"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "type": "core://Conditional",
+                        "value": "$item.content_warning",
+                        "content": {
+                          "type": "core://Chip",
+                          "text": "$item.content_warning_label",
+                          "icon": "warning",
+                          "tone": "Warning"
+                        }
+                      },
+                      {
+                        "type": "core://Row",
+                        "spacing_dp": 6,
+                        "children": [
+                          {
+                            "type": "core://Image",
+                            "url": "$item.author_avatar_url",
+                            "shape": "Circle",
+                            "size_dp": 20
+                          },
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.author_name",
+                            "style": "Label"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "core://Text",
+                        "value_expr": "♥ $item.like_count",
+                        "style": "Secondary"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "screens": [
+      {
+        "id": "post",
+        "route": "pixelfed://posts/{id}",
+        "title": "Post",
+        "data": "/v1/pixelfed/screens/post?id=$route.id",
+        "content": {
+          "type": "core://List",
+          "query_key": "post:$route.id",
+          "empty_text": "Post not found",
+          "item_template": {
+            "type": "core://Column",
+            "children": [
+              {
+                "type": "core://Conditional",
+                "value": "$item.reblogged_by_name",
+                "content": {
+                  "type": "core://Badge",
+                  "text": "$item.reblogged_by_name boosted",
+                  "icon": "repeat"
+                }
+              },
+              {
+                "type": "core://Row",
+                "spacing_dp": 10,
+                "padding_h_dp": 12,
+                "padding_v_dp": 10,
+                "children": [
+                  {
+                    "type": "core://Image",
+                    "url": "$item.author_avatar_url",
+                    "shape": "Circle",
+                    "size_dp": 36
+                  },
+                  {
+                    "type": "core://Column",
+                    "children": [
+                      {
+                        "type": "core://Text",
+                        "value_expr": "$item.author_name",
+                        "style": "Label"
+                      },
+                      {
+                        "type": "core://Text",
+                        "value_expr": "$item.author_handle",
+                        "style": "Secondary"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "core://Carousel",
+                "items": "$item.media_uris",
+                "aspect_ratio": 1.0,
+                "aspect_field": "aspect_ratio",
+                "min_aspect": 0.8,
+                "max_aspect": 1.91,
+                "tag": "carousel:$item.uri",
+                "item_template": {
+                  "type": "core://Image",
+                  "url": "$item.url",
+                  "content_description": "$item.alt_text",
+                  "blurhash": "$item.blurhash"
+                }
+              },
+              {
+                "type": "core://Row",
+                "padding_h_dp": 4,
+                "children": [
+                  {
+                    "type": "core://IconButton",
+                    "icon": "favorite_border",
+                    "active_icon": "favorite",
+                    "active": "$item.is_liked",
+                    "active_tint": "#ED4956",
+                    "content_description": "Like",
+                    "active_content_description": "Unlike",
+                    "tag": "like:$item.uri",
+                    "on_click": {
+                      "intent": "action.mutation.optimistic",
+                      "entity_uri": "$item.uri",
+                      "field": "is_liked",
+                      "value_expr": "!entity.is_liked",
+                      "rollback_value": false,
+                      "endpoint": "/v1/pixelfed/posts/like",
+                      "payload": {
+                        "id": "$item.id",
+                        "liked": "$value"
+                      },
+                      "also": [
+                        {
+                          "field": "like_count",
+                          "value_expr": "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "type": "core://Text",
+                    "value_expr": "$item.like_count",
+                    "style": "Label"
+                  },
+                  {
+                    "type": "core://Spacer",
+                    "size_dp": 8
+                  },
+                  {
+                    "type": "core://IconButton",
+                    "icon": "chat_bubble",
+                    "content_description": "Comment",
+                    "tag": "comment:$item.uri",
+                    "on_click": {
+                      "intent": "action.navigation.open",
+                      "presentation": "Modal",
+                      "target_uri": "pixelfed://posts/$item.id/comments"
+                    }
+                  },
+                  {
+                    "type": "core://Conditional",
+                    "value": "$item.reply_count",
+                    "content": {
+                      "type": "core://Text",
+                      "value_expr": "$item.reply_count",
+                      "style": "Label"
+                    }
+                  },
+                  {
+                    "type": "core://Spacer"
+                  },
+                  {
+                    "type": "core://IconButton",
+                    "icon": "bookmark_border",
+                    "active_icon": "bookmark",
+                    "active": "$item.is_bookmarked",
+                    "content_description": "Bookmark",
+                    "active_content_description": "Remove bookmark",
+                    "tag": "bookmark:$item.uri",
+                    "on_click": {
+                      "intent": "action.mutation.optimistic",
+                      "entity_uri": "$item.uri",
+                      "field": "is_bookmarked",
+                      "value_expr": "!entity.is_bookmarked",
+                      "rollback_value": false,
+                      "endpoint": "/v1/pixelfed/posts/bookmark",
+                      "payload": {
+                        "id": "$item.id",
+                        "bookmarked": "$value"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "core://Conditional",
+                "value": "$item.content_warning",
+                "content": {
+                  "type": "core://Column",
+                  "padding_h_dp": 14,
+                  "padding_v_dp": 4,
+                  "children": [
+                    {
+                      "type": "core://Chip",
+                      "text": "$item.content_warning_label",
+                      "icon": "warning",
+                      "tone": "Warning"
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "core://Conditional",
+                "value": "$item.caption",
+                "content": {
+                  "type": "core://Column",
+                  "padding_h_dp": 14,
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.caption",
+                      "style": "Body"
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "core://Spacer",
+                "size_dp": 12
+              },
+              {
+                "type": "core://Divider"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "comments",
+        "route": "pixelfed://posts/{id}/comments",
+        "title": "Comments",
+        "data": "/v1/pixelfed/screens/comments?post_id=$route.id",
+        "content": {
+          "type": "core://List",
+          "query_key": "comments:$route.id",
+          "empty_text": "No comments yet. Be the first!",
+          "indent": {
+            "field": "depth",
+            "step_dp": 24,
+            "max": 4
+          },
+          "item_template": {
+            "type": "core://Container",
+            "orientation": "Vertical",
+            "padding_dp": 8,
+            "children": [
+              {
+                "type": "core://Container",
+                "orientation": "Horizontal",
+                "padding_dp": 0,
+                "children": [
+                  {
+                    "type": "core://Image",
+                    "url": "$item.avatar_url",
+                    "shape": "Circle",
+                    "size_dp": 28,
+                    "content_description": "$item.author_name"
+                  },
+                  {
+                    "type": "core://Text",
+                    "value_expr": "$item.author_name",
+                    "style": "Body"
+                  }
+                ]
+              },
+              {
+                "type": "core://Text",
+                "value_expr": "$item.text",
+                "style": "Body"
+              },
+              {
+                "type": "core://Text",
+                "value_expr": "$item.meta",
+                "style": "Caption"
+              }
+            ]
+          }
+        },
+        "footer": {
+          "type": "core://TextField",
+          "field": "comment",
+          "placeholder": "Add a comment…",
+          "max_length": 500,
+          "on_submit": {
+            "intent": "action.mutation.create",
+            "query_key": "comments:$route.id",
+            "entity_uri": "pixelfed://comments/pending-$nonce",
+            "entity": {
+              "author_name": "You",
+              "text": "$form.comment",
+              "meta": "Sending…",
+              "depth": 0
+            },
+            "endpoint": "/v1/pixelfed/posts/comment",
+            "payload": {
+              "id": "$route.id",
+              "text": "$form.comment",
+              "client_id": "$nonce"
+            },
+            "refresh_workspace": true
+          }
+        }
+      },
+      {
+        "id": "compose",
+        "route": "pixelfed://compose",
+        "title": "New post",
+        "content": {
+          "type": "core://Column",
+          "spacing_dp": 12,
+          "padding_h_dp": 16,
+          "padding_v_dp": 12,
+          "children": [
+            {
+              "type": "core://MediaPicker",
+              "field": "photos",
+              "max_items": 4,
+              "label": "Add photos"
+            },
+            {
+              "type": "core://TextField",
+              "field": "caption",
+              "placeholder": "Write a caption…",
+              "max_length": 500,
+              "lines": 4
+            }
+          ]
+        },
+        "footer": {
+          "type": "core://Button",
+          "label": "Share",
+          "on_click": {
+            "intent": "action.mutation.create",
+            "query_key": "timeline:home",
+            "position": "start",
+            "entity_uri": "pixelfed://posts/pending-$nonce",
+            "entity": {
+              "author_name": "You",
+              "caption": "$form?.caption",
+              "media_uris": "$attachments.photos",
+              "pending_label": "Posting…"
+            },
+            "attachments": {
+              "photos": "$form.photos"
+            },
+            "endpoint": "/v1/pixelfed/posts/create",
+            "payload": {
+              "caption": "$form?.caption",
+              "media": "$attachments.photos",
+              "client_id": "$nonce"
+            },
+            "refresh_workspace": true,
+            "dismiss": true
+          }
+        }
+      }
+    ]
+  }
+}

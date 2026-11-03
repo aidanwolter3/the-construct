@@ -436,6 +436,35 @@ fn cache_is_keyed_by_workspace_id() {
 }
 
 #[test]
+fn remembered_form_values_survive_a_restart_per_app() {
+    let dir = temp_dir("form-values");
+    let storage = dir.to_str().unwrap();
+    let base = "http://127.0.0.1:1";
+    {
+        let home = ConstructEngine::init_with_workspace(storage, base, "home");
+        assert!(home.remembered_form_values("").is_empty());
+        home.remember_form_value("", "view", Some("cards"));
+        home.remember_form_value("post", "view", Some("grid"));
+        // Empty, oversized and nameless values are not stored.
+        home.remember_form_value("", "sort", Some(""));
+        home.remember_form_value("", "big", Some(&"x".repeat(2000)));
+        home.remember_form_value("", "", Some("x"));
+    }
+    let home = ConstructEngine::init_with_workspace(storage, base, "home");
+    let root = home.remembered_form_values("");
+    assert_eq!(root.len(), 1);
+    assert_eq!(root["view"], "cards");
+    assert_eq!(home.remembered_form_values("post")["view"], "grid");
+    // Another app on the same storage has its own values.
+    let other = ConstructEngine::init_with_workspace(storage, base, "recipes");
+    assert!(other.remembered_form_values("").is_empty());
+    // None forgets.
+    home.remember_form_value("", "view", None);
+    assert!(home.remembered_form_values("").is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn http_404_keeps_engine_online() {
     let base = serve_fixture();
     let engine = ConstructEngine::init_with_workspace("", &base, "missing");

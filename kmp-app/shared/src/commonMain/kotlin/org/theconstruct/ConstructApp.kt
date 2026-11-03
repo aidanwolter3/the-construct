@@ -13,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -199,6 +200,8 @@ class ConstructController internal constructor(
             decodeError = "Failed to decode engine state: ${t.message}"
             null
         }
+        // Remembered form values (schema 10) are in the form before the layout first draws.
+        if (_pinned.value == null) decoded?.workspace?.let(navigation::restoreRoot)
         _state.update { cur ->
             when {
                 cur.engine != engine || snapshot.seq <= cur.seq -> cur
@@ -411,6 +414,7 @@ class ConstructController internal constructor(
      */
     fun pin(appId: String, version: Long, layout: UiNode): Boolean {
         if (closed) return false
+        navigation.restoreRoot(layout)
         _pinned.value = PinnedVersion(appId, version, layout)
         return true
     }
@@ -418,6 +422,24 @@ class ConstructController internal constructor(
     /** Back to the latest version (and following new ones as they are published). */
     fun followLatest() {
         _pinned.value = null
+        navigation.restoreRoot(_state.value.workspace)
+    }
+
+    /** The remembered values of form [scope] for the app on screen (schema 10); empty on any error. */
+    internal fun rememberedFormValues(scope: String): Map<String, String> = try {
+        bridge.rememberedFormValues(scope)
+    } catch (t: Throwable) {
+        println("[Construct] remembered form values: $t")
+        emptyMap()
+    }
+
+    /** Saves one remembered form value of the app on screen (null forgets it); errors are logged. */
+    internal fun rememberFormValue(scope: String, field: String, value: String?) {
+        try {
+            bridge.rememberFormValue(scope, field, value)
+        } catch (t: Throwable) {
+            println("[Construct] remembering $field: $t")
+        }
     }
 
     /**
@@ -514,6 +536,9 @@ fun ConstructApp(
                                 LocalWorkspaceTitleInset provides MENU_BUTTON_INSET,
                                 LocalWorkspaceTitleEndInset provides BELL_BUTTON_INSET,
                                 LocalForm provides controller.navigation.rootForm,
+                                LocalFormMemory provides remember(controller) {
+                                    FormMemory { f, v -> controller.navigation.remember(ROOT_FORM_SCOPE, f, v) }
+                                },
                             ) {
                                 RenderUiNode(workspace, state.entities, controller::dispatch, Modifier.fillMaxSize())
                             }

@@ -281,6 +281,7 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             field,
             options,
             padding_h_dp,
+            ..
         } => {
             if field.trim().is_empty() {
                 return Err("choice chips need a field".into());

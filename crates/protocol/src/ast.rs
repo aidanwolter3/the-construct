@@ -339,12 +339,19 @@ pub enum UiNode {
     /// the value to the option's `value` (an empty value clears it). The
     /// option whose value equals the form value (or the empty one, while the
     /// value is unset) is drawn selected.
+    ///
+    /// Schema 10: with `remember`, the client keeps the chosen value on the
+    /// device (per app and screen) and restores it the next time the layout
+    /// or screen opens, e.g. a List/Cards switch. Only a value that is still
+    /// one of the options is restored.
     #[serde(rename = "core://ChoiceChips")]
     ChoiceChips {
         field: String,
         options: Vec<ChoiceOption>,
         #[serde(default, skip_serializing_if = "is_zero")]
         padding_h_dp: u16,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        remember: bool,
     },
 
     // Schema 9 (docs/DECISIONS.md D49, D51)
