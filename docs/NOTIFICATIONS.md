@@ -1,6 +1,7 @@
 # Notifications from apps: design (D47)
 
-Status: designed, not built. Phases are in section 10; each phase records its own decisions as new D-entries.
+Status: built (see D47 in `docs/DECISIONS.md` for what changed while building: no wake hook, the FCM fallback needs no
+Firebase project, the engine's offline behaviour). Section 10's phases shipped together.
 
 ## Context
 The goal: Pixelfed notifications (likes, comments, follows, ...) from the pod, on the user's devices, including when the app
