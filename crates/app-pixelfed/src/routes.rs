@@ -215,15 +215,15 @@ fn instance_not_allowed(rt: &Runtime, got: &str) -> Response {
     )
 }
 
-/// 502 for an unreachable upstream or one that answered 5xx.
+/// 502 for an unreachable upstream or one that answered 5xx. The detail
+/// (upstream body, reqwest errors with host names, store errors) is logged
+/// only; clients get a stable code and the upstream status.
 fn bad_gateway(e: &UpstreamError) -> Response {
     tracing::warn!(error = %e, "Pixelfed upstream failure");
     let body = match e {
-        UpstreamError::Unreachable(detail) => {
-            json!({ "error": "upstream_unreachable", "detail": detail })
-        }
-        UpstreamError::Status(status, detail) => {
-            json!({ "error": "upstream_error", "status": status.as_u16(), "detail": detail })
+        UpstreamError::Unreachable(_) => json!({ "error": "upstream_unreachable" }),
+        UpstreamError::Status(status, _) => {
+            json!({ "error": "upstream_error", "status": status.as_u16() })
         }
     };
     json_error(StatusCode::BAD_GATEWAY, body)
@@ -245,7 +245,10 @@ async fn refresh_account(
     let _guard = lock.0.lock().await;
     let rt = pf.runtime();
     let instance = inst.url.clone();
-    let store_err = |e: ApiError| UpstreamError::Unreachable(format!("pod store: {e:?}"));
+    let store_err = |e: ApiError| {
+        tracing::error!(?e, "pod store failed during a Pixelfed token refresh");
+        UpstreamError::Unreachable("pod store".into())
+    };
     let current = {
         let i = instance.clone();
         blocking(state, move |s| s.pixelfed_account(&i))
@@ -449,9 +452,10 @@ async fn register_app(State(state): State<Pod>, headers: HeaderMap, body: Bytes)
                 app
             }
             Err(UpstreamError::Status(status, detail)) if status.is_client_error() => {
+                tracing::warn!(status = status.as_u16(), %detail, "Pixelfed app registration rejected upstream");
                 return json_error(
                     StatusCode::BAD_REQUEST,
-                    json!({ "error": "app_registration_failed", "status": status.as_u16(), "detail": detail }),
+                    json!({ "error": "app_registration_failed", "status": status.as_u16() }),
                 );
             }
             Err(e) => return bad_gateway(&e),
@@ -512,7 +516,7 @@ async fn exchange_token(State(state): State<Pod>, headers: HeaderMap, body: Byte
         tracing::info!(status = status.as_u16(), %detail, "OAuth exchange rejected upstream");
         json_error(
             StatusCode::BAD_REQUEST,
-            json!({ "error": "oauth_exchange_failed", "status": status.as_u16(), "detail": detail }),
+            json!({ "error": "oauth_exchange_failed", "status": status.as_u16() }),
         )
     };
     let token = match upstream
@@ -822,7 +826,7 @@ async fn toggle(state: Pod, headers: HeaderMap, body: Bytes, kind: Toggle) -> Re
             tracing::info!(%id, action, status = status.as_u16(), %detail, "Pixelfed action rejected upstream");
             api_error(
                 status,
-                json!({ "error": "upstream_rejected", "status": status.as_u16(), "detail": detail }),
+                json!({ "error": "upstream_rejected", "status": status.as_u16() }),
             )
             .into_response()
         }
@@ -836,7 +840,7 @@ async fn toggle(state: Pod, headers: HeaderMap, body: Bytes, kind: Toggle) -> Re
 pub const MAX_COMMENT_CHARS: usize = 500;
 
 /// An upstream 4xx on a comments call, passed through with the pod's error shape
-/// (`post_not_found` for 404).
+/// (`post_not_found` for 404). The upstream body is logged, not returned.
 fn comment_rejected(id: &str, status: StatusCode, detail: &str) -> Response {
     tracing::info!(%id, status = status.as_u16(), %detail, "Pixelfed comments call rejected upstream");
     let error = if status == StatusCode::NOT_FOUND {
@@ -844,11 +848,7 @@ fn comment_rejected(id: &str, status: StatusCode, detail: &str) -> Response {
     } else {
         "upstream_rejected"
     };
-    api_error(
-        status,
-        json!({ "error": error, "status": status.as_u16(), "detail": detail }),
-    )
-    .into_response()
+    api_error(status, json!({ "error": error, "status": status.as_u16() })).into_response()
 }
 
 /// `GET /v1/pixelfed/screens/comments?post_id=<id>`: the data of the comments screen
@@ -1220,4 +1220,33 @@ fn capped_stream(
             Err(e) => Some((Err(std::io::Error::other(e)), (None, seen))),
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn body(resp: Response) -> Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// L4 (#31): upstream bodies and error strings stay in the log.
+    #[tokio::test]
+    async fn errors_do_not_echo_upstream_details() {
+        let secret = "internal-host.flycast:8080 <html>stack trace</html>";
+        let b = body(bad_gateway(&UpstreamError::Unreachable(secret.into()))).await;
+        assert_eq!(b, json!({ "error": "upstream_unreachable" }));
+        let b = body(bad_gateway(&UpstreamError::Status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            secret.into(),
+        )))
+        .await;
+        assert_eq!(b, json!({ "error": "upstream_error", "status": 500 }));
+        let b = body(comment_rejected("1", StatusCode::NOT_FOUND, secret)).await;
+        assert_eq!(b["error"], "post_not_found");
+        assert!(!b.to_string().contains("stack"), "{b}");
+    }
 }

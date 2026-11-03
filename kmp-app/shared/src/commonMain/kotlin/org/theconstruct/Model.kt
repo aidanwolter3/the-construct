@@ -121,7 +121,7 @@ data class GroupBy(val field: String, val header: UiNode)
 data class ListWhere(val field: String, val equals: String)
 
 /**
- * `core://List` `focus` (schema 10, docs/decisions/list-focus.md): the item whose entity URI is [uri] is scrolled into
+ * `core://List` `focus` (schema 11, docs/decisions/list-focus.md): the item whose entity URI is [uri] is scrolled into
  * view the first time the list draws it, and drawn on [background] with [contentColor] (`#RRGGBB`).
  */
 @Serializable
@@ -188,7 +188,7 @@ sealed class UiNode {
         @SerialName("spacing_dp") val spacingDp: Int = 0,
         /** Schema 8 (D48): space left and right of the items. */
         @SerialName("padding_h_dp") val paddingHDp: Int = 0,
-        /** Schema 10: one item to scroll to and tint ([ListFocus]). */
+        /** Schema 11: one item to scroll to and tint ([ListFocus]). */
         val focus: ListFocus? = null,
     ) : UiNode()
 
@@ -328,13 +328,16 @@ sealed class UiNode {
 
     /**
      * A sideways-scrolling row of chips editing the form value `$form.<field>` (schema 6, D44): a tap sets it to the
-     * option's value (empty clears it); the matching option (the empty one while unset) is selected.
+     * option's value (empty clears it); the matching option (the empty one while unset) is selected. With [remember]
+     * (schema 10) the device keeps the choice and restores it when the layout or screen opens again
+     * ([rememberedChoices], docs/decisions/remembered-form-values.md).
      */
     @Serializable
     data class ChoiceChips(
         val field: String,
         val options: List<ChoiceOption>,
         @SerialName("padding_h_dp") val paddingHDp: Int = 0,
+        val remember: Boolean = false,
     ) : UiNode()
 
     /**

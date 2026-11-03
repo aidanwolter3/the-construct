@@ -101,7 +101,7 @@ class NotificationsSimTest {
                 "assert-text Comments; assert-text Which lens?",
         )
         assertEquals("pixelfed_home", controller.currentAppId())
-        // A comment notification opens the whole thread at the comment (layout 0006).
+        // A comment notification opens the whole thread at the comment (layout 0007).
         assertEquals("comment_thread", controller.navigation.top?.screen?.id)
         assertEquals(
             mapOf("id" to "781254316723458049", "comment" to "781300000000000107"),

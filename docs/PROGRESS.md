@@ -573,12 +573,22 @@ new layout files; diffs between versions.
   menu and feed tests.
 - Needs a device check (Android, macOS window): the drawer and Settings at real sizes and Back on Android.
 
-## Comment threads, comment likes, list focus (schema 10)
+## Remembered form values (schema 10)
 
-- `layouts/pixelfed_home/0006.json`: the comments screen shows the post (author, a photo strip, like/bookmark,
+- `core://ChoiceChips` `remember` (decision `remembered-form-values`): the device keeps the choice per app and form
+  and restores it when the layout or a screen opens. `layouts/pixelfed_home/0006.json` remembers List/Cards.
+- Engine store v7 (`form_values`), engine/FFI `remembered_form_values` / `remember_form_value`; the shared UI fills
+  the root form in the snapshot callback (before the first draw) and a screen's form when it opens.
+- Tests: protocol schema, client-core store and engine (survives a restart, per app), shared `RememberedFormTest`,
+  simulator `theChosenViewIsRememberedAcrossRestarts`.
+- Needs a client build and a device check (Android: pick Cards, kill the app, reopen: Cards).
+
+## Comment threads, comment likes, list focus (schema 11)
+
+- `layouts/pixelfed_home/0007.json`: the comments screen shows the post (author, a photo strip, like/bookmark,
   caption) above the threaded comments, and each comment has a like button. A new `comment_thread` screen
   (`pixelfed://posts/{id}/comments/{comment}`) scrolls to the comment and tints it.
-- Protocol: `core://List` `focus` (schema 10, decision `list-focus`). Shared UI scrolls it into view once.
+- Protocol: `core://List` `focus` (schema 11, decision `list-focus`). Shared UI scrolls it into view once.
 - Pixelfed adapter: comment notifications link to the post's thread at the comment (the poll walks up to the post;
   "replied to your comment"); the comments data call returns the post too and walks up from a comment id
   (decision `comment-threads-from-notifications`).

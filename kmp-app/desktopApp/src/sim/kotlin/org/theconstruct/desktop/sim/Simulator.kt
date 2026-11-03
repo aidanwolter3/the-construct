@@ -134,8 +134,13 @@ private fun runCli(args: Array<String>): Int {
         // The fake pod's notifications (D52), shared by every engine of the run.
         val notifications = findFixture("notifications.json", cwd)?.let { FakeNotifications.fromFixture(it.readText()) }
             ?: FakeNotifications()
+        // The device's remembered form values (schema 10), kept across open-app like the engine's cache.db.
+        val formValues = FakeFormValues()
         var current = try {
-            FakeEngineBridge(fixture.readText(), appId = appId, screenData = screenData, notifications = notifications)
+            FakeEngineBridge(
+                fixture.readText(), appId = appId, screenData = screenData, notifications = notifications,
+                formValues = formValues,
+            )
         } catch (e: Exception) {
             throw UsageException("bad fixture $fixture: ${e.message}")
         }
@@ -147,7 +152,7 @@ private fun runCli(args: Array<String>): Int {
         val openBridge = { id: String ->
             FakeEngineBridge(
                 defaultFixture(id, cwd).readText(), online = current.online, appId = id, apps = current.apps,
-                screenData = screenData, notifications = notifications,
+                screenData = screenData, notifications = notifications, formValues = formValues,
             )
                 .also { current = it }
         }

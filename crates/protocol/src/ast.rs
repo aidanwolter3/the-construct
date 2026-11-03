@@ -143,7 +143,7 @@ pub enum UiNode {
         /// Schema 8 (D48): space left and right of the items.
         #[serde(default, skip_serializing_if = "is_zero")]
         padding_h_dp: u16,
-        /// Schema 10: one item to scroll to and tint ([`ListFocus`]).
+        /// Schema 11: one item to scroll to and tint ([`ListFocus`]).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         focus: Option<ListFocus>,
     },
@@ -342,12 +342,19 @@ pub enum UiNode {
     /// the value to the option's `value` (an empty value clears it). The
     /// option whose value equals the form value (or the empty one, while the
     /// value is unset) is drawn selected.
+    ///
+    /// Schema 10: with `remember`, the client keeps the chosen value on the
+    /// device (per app and screen) and restores it the next time the layout
+    /// or screen opens, e.g. a List/Cards switch. Only a value that is still
+    /// one of the options is restored.
     #[serde(rename = "core://ChoiceChips")]
     ChoiceChips {
         field: String,
         options: Vec<ChoiceOption>,
         #[serde(default, skip_serializing_if = "is_zero")]
         padding_h_dp: u16,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        remember: bool,
     },
 
     // Schema 9 (docs/DECISIONS.md D49, D51)
@@ -541,7 +548,7 @@ pub struct ListWhere {
     pub equals: String,
 }
 
-/// `core://List` `focus` (schema 10, docs/decisions/list-focus.md): the item
+/// `core://List` `focus` (schema 11, docs/decisions/list-focus.md): the item
 /// whose entity URI equals `uri` (usually built from a route parameter, e.g.
 /// `pixelfed://comments/$route.comment`) is scrolled into view the first time
 /// the list draws it, and drawn on `background` with `content_color` (both

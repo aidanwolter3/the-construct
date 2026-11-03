@@ -76,6 +76,10 @@ use crate::{ApiError, AppState, blocking, json_error};
 pub const VERSION_HEADER: &str = "x-construct-layout-version";
 /// Default SSE keepalive interval.
 pub const DEFAULT_KEEPALIVE: Duration = Duration::from_secs(15);
+/// Default cap on open SSE streams per session token. A client keeps one
+/// stream open; the headroom covers a pod token shared by a few devices and
+/// dead connections the server has not noticed yet.
+pub const DEFAULT_SSE_STREAMS_PER_TOKEN: usize = 8;
 /// Capacity of the layout broadcast channel (a lagging subscriber is caught
 /// up with the current version, so losing intermediate events is harmless).
 pub const CHANNEL_CAPACITY: usize = 64;
@@ -853,6 +857,73 @@ fn layout_event(ev: &LayoutEvent) -> Event {
 /// resolves for one that doesn't). A lag only loses events (the client
 /// refreshes its counts when it reconnects), so it is skipped; a closed
 /// channel stops notifications on this stream.
+/// The next tick of a stream's session re-check; never without one.
+async fn tick(i: &mut Option<tokio::time::Interval>) {
+    match i {
+        Some(i) => {
+            i.tick().await;
+        }
+        None => std::future::pending().await,
+    }
+}
+
+/// Whether the session an events stream was opened with is still valid
+/// (`None`: no session, nothing to revoke). A store error counts as invalid:
+/// the client reconnects and is checked afresh.
+async fn session_still_valid(state: &Arc<AppState>, hash: Option<&str>) -> bool {
+    let Some(hash) = hash.map(str::to_owned) else {
+        return true;
+    };
+    let ttl = state.session_ttl_secs();
+    let valid = blocking(state, move |s| s.session_valid(&hash, ttl))
+        .await
+        .unwrap_or(false);
+    if !valid {
+        tracing::info!("events stream closed: its session is no longer valid");
+    }
+    valid
+}
+
+/// One open SSE stream of a session token, counted in
+/// [`AppState::sse_streams`] until dropped.
+pub struct SseSlot {
+    state: Arc<AppState>,
+    token_hash: String,
+}
+
+impl AppState {
+    /// Take a stream slot for `token_hash`, or `None` when it already has
+    /// [`Self::sse_streams_per_token`] streams open.
+    pub fn sse_slot(self: &Arc<Self>, token_hash: &str) -> Option<SseSlot> {
+        let mut open = self.sse_streams.lock().unwrap_or_else(|e| e.into_inner());
+        let n = open.entry(token_hash.to_owned()).or_default();
+        if *n >= self.sse_streams_per_token() {
+            return None;
+        }
+        *n += 1;
+        Some(SseSlot {
+            state: self.clone(),
+            token_hash: token_hash.to_owned(),
+        })
+    }
+}
+
+impl Drop for SseSlot {
+    fn drop(&mut self) {
+        let mut open = self
+            .state
+            .sse_streams
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = open.get_mut(&self.token_hash) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                open.remove(&self.token_hash);
+            }
+        }
+    }
+}
+
 async fn recv_notify(rx: &mut Option<broadcast::Receiver<NotifyEvent>>) -> Option<NotifyEvent> {
     let Some(r) = rx.as_mut() else {
         return std::future::pending().await;
@@ -931,6 +1002,16 @@ async fn announced_async(
 /// ids and numbers, no content); for an app with [`AuthPolicy::SignIn`] a
 /// bearer that is not a valid session with that sign-in is 401 so the client
 /// learns it is stale.
+///
+/// A stream opened with a session ends once that session stops being valid
+/// (logout, `server pods rotate`, expiry): the session is checked again
+/// before each private event (`notification`, `data`) and on every keepalive
+/// interval, so the stream never forwards anything after the revocation and
+/// closes within one interval even when idle. A re-check rather than a
+/// revocation broadcast, because `server pods rotate` runs in another
+/// process. One session token may hold at most
+/// [`AppState::sse_streams_per_token`] streams; another one is 429
+/// `too_many_streams`.
 async fn events(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -949,6 +1030,19 @@ async fn events(
     if let (AuthPolicy::SignIn(_), Caller::Stale) = (app.auth, &caller) {
         return unauthorized();
     }
+    let slot = match caller.session() {
+        Some(session) => match state.sse_slot(&session.token_hash) {
+            Some(slot) => Some(slot),
+            None => {
+                tracing::warn!(workspace = %id, "events stream refused: too many open for this token");
+                return json_error(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    json!({ "error": "too_many_streams", "limit": state.sse_streams_per_token() }),
+                );
+            }
+        },
+        None => None,
+    };
     // Notifications (D52) are private: only a valid session hears them, for
     // every app of the pod. A device with a stream open gets no Web Push.
     let notify_rx = caller.session().map(|_| state.subscribe_notifications());
@@ -980,10 +1074,18 @@ async fn events(
         _live: Option<crate::notify::LiveDevice>,
         data_rx: broadcast::Receiver<DataEvent>,
         session_hash: Option<String>,
+        recheck: Option<tokio::time::Interval>,
+        _slot: Option<SseSlot>,
         shutdown: tokio::sync::watch::Receiver<bool>,
         state: Arc<AppState>,
         id: String,
     }
+    let recheck = session_hash.as_ref().map(|_| {
+        let every = state.sse_keepalive();
+        let mut i = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+        i.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        i
+    });
     let stream = futures_util::stream::unfold(
         S {
             first: true,
@@ -994,6 +1096,8 @@ async fn events(
             _live: live,
             data_rx,
             session_hash,
+            recheck,
+            _slot: slot,
             shutdown: state.shutdown_signal(),
             state: state.clone(),
             id,
@@ -1015,12 +1119,14 @@ async fn events(
                     Layout(Result<LayoutEvent, broadcast::error::RecvError>),
                     Notify(Option<NotifyEvent>),
                     Data(Result<DataEvent, broadcast::error::RecvError>),
+                    Recheck,
                     Stop,
                 }
                 let got = tokio::select! {
                     r = s.rx.recv() => Got::Layout(r),
                     n = recv_notify(&mut s.notify_rx) => Got::Notify(n),
                     d = s.data_rx.recv() => Got::Data(d),
+                    _ = tick(&mut s.recheck) => Got::Recheck,
                     // Server shutting down: end the stream so graceful
                     // shutdown is not held open by subscribers.
                     _ = s.shutdown.wait_for(|stop| *stop) => Got::Stop,
@@ -1028,7 +1134,18 @@ async fn events(
                 let received = match got {
                     Got::Stop => return None,
                     Got::Layout(r) => r,
-                    Got::Notify(Some(e)) => return Some((Ok(notify_event(&e)), s)),
+                    Got::Recheck => {
+                        if !session_still_valid(&s.state, s.session_hash.as_deref()).await {
+                            return None;
+                        }
+                        continue;
+                    }
+                    Got::Notify(Some(e)) => {
+                        if !session_still_valid(&s.state, s.session_hash.as_deref()).await {
+                            return None;
+                        }
+                        return Some((Ok(notify_event(&e)), s));
+                    }
                     Got::Notify(None) => continue,
                     Got::Data(d) => {
                         let mine = match &d {
@@ -1041,6 +1158,9 @@ async fn events(
                             Err(broadcast::error::RecvError::Closed) => return None,
                         };
                         if mine {
+                            if !session_still_valid(&s.state, s.session_hash.as_deref()).await {
+                                return None;
+                            }
                             let e = data_event(&s.id);
                             return Some((Ok(e), s));
                         }

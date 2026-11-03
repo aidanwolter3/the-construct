@@ -176,7 +176,7 @@ class ScreensTest {
         assertEquals(48, indentDp(Indent("depth", 24, max = 8), items[1]))
         assertEquals(0, indentDp(null, items[1]))
         assertEquals(0, indentDp(Indent("nope", 24), items[1]))
-        // Schema 10: the focused item, by entity URI.
+        // Schema 11: the focused item, by entity URI.
         assertEquals(1, focusIndex(items, ListFocus("x://1", background = "#FFF3CF")))
         assertEquals(-1, focusIndex(items, ListFocus("x://missing")))
         assertEquals(-1, focusIndex(null, ListFocus("x://1")), "not loaded yet")

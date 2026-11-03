@@ -543,6 +543,21 @@ object ServerUrls {
     /** Hint under the custom URL field when [check] says [ServerUrlCheck.NeedsHttps]. */
     const val NEEDS_HTTPS_HINT = "Use https:// for remote servers (http:// only for localhost, 127.0.0.1 or 10.0.2.2)"
 
+    /** Warning under the custom URL field for a URL [isCleartextRemote] says is unencrypted (allowed, not blocked). */
+    const val CLEARTEXT_WARNING = "Not encrypted: your pod code and data cross the network in the clear. Use https:// unless this is a network you trust."
+
+    /**
+     * Whether [url] is `http://` to a host other than this machine (`localhost`, 127.x.x.x, `[::1]`) or the Android
+     * emulator's alias for it (10.0.2.2): the pod token would cross a network unencrypted. The engine logs the same check.
+     */
+    fun isCleartextRemote(url: String): Boolean {
+        val m = URL.matchEntire(url.trim().trimEnd('/')) ?: return false
+        if (m.groupValues[1].lowercase() != "http") return false
+        val host = m.groupValues[2].lowercase()
+        return !(host == "localhost" || host == "10.0.2.2" || host == "[::1]" || host == "[0:0:0:0:0:0:0:1]" ||
+            Regex("""127(\.\d{1,3}){3}""").matches(host))
+    }
+
     /** Hint under the custom URL field for an [ServerUrlCheck.Invalid] URL. */
     const val FORMAT_HINT = "http(s)://host[:port]"
 

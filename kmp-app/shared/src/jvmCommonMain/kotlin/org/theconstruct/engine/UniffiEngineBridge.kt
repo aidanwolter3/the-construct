@@ -162,6 +162,23 @@ class UniffiEngineBridge(val handle: EngineHandle) : ConstructEngineBridge {
         handle.discardAttachment(id)
     }
 
+    override fun rememberedFormValues(scope: String): Map<String, String> = try {
+        if (closed) emptyMap() else handle.rememberedFormValues(scope)
+    } catch (e: IllegalStateException) {
+        // Closed by another thread meanwhile (UniFFI: "... object has already been destroyed").
+        if (!closed) throw e
+        emptyMap()
+    }
+
+    override fun rememberFormValue(scope: String, field: String, value: String?) {
+        if (closed) return
+        try {
+            handle.rememberFormValue(scope, field, value)
+        } catch (e: IllegalStateException) {
+            if (!closed) throw e
+        }
+    }
+
     /**
      * Frees the Rust engine now (its fetch, sync and events threads stop; no more snapshots), instead of waiting for
      * the cleaner. Idempotent. Calls already running finish first (UniFFI counts them); later calls do nothing

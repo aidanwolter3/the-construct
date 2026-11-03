@@ -1,4 +1,4 @@
-# `core://List` `focus`: scroll to one item and tint it (schema 10)
+# `core://List` `focus`: scroll to one item and tint it (schema 11)
 
 Date: 2026-11-03. Related: D34, D36, D43, [comment-threads-from-notifications](comment-threads-from-notifications.md).
 
@@ -14,5 +14,5 @@ after Back or rotation), and drawn on `background` with `content_color` (`#RRGGB
 `validate.rs`). No matching item: nothing happens. The highlight lives in the layout, so the shared entities stay
 untouched.
 
-Schema 10, additive: `protocol::SCHEMA_VERSION` 9 -> 10, no `RETIRED` entry. Schema 9 clients keep getting the
-newest schema 9 layout. Limits: one-column lists only (a grid ignores it); one focused item per list.
+Schema 11, additive: `protocol::SCHEMA_VERSION` 10 -> 11, no `RETIRED` entry. Schema 10 clients keep getting the
+newest schema 10 layout. Limits: one-column lists only (a grid ignores it); one focused item per list.

@@ -1085,6 +1085,7 @@
                 }
               ],
               "padding_h_dp": 16,
+              "remember": true,
               "type": "core://ChoiceChips"
             },
             {

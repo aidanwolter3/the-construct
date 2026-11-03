@@ -868,6 +868,10 @@ internal open class UniffiVTableCallbackInterfaceUrlOpener(
 
 
 
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -916,6 +920,10 @@ fun uniffi_client_ffi_checksum_method_enginehandle_push_public_key(
 fun uniffi_client_ffi_checksum_method_enginehandle_refresh(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_register_push(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_remember_form_value(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_remembered_form_values(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_set_channel_enabled(
 ): Short
@@ -1048,6 +1056,10 @@ fun uniffi_client_ffi_fn_method_enginehandle_refresh(`ptr`: Pointer,uniffi_out_e
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_register_push(`ptr`: Pointer,`endpoint`: RustBuffer.ByValue,`p256dh`: RustBuffer.ByValue,`auth`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_client_ffi_fn_method_enginehandle_remember_form_value(`ptr`: Pointer,`scope`: RustBuffer.ByValue,`field`: RustBuffer.ByValue,`value`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_client_ffi_fn_method_enginehandle_remembered_form_values(`ptr`: Pointer,`scope`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_set_channel_enabled(`ptr`: Pointer,`appId`: RustBuffer.ByValue,`channel`: RustBuffer.ByValue,`enabled`: Byte,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_set_device_info(`ptr`: Pointer,`platform`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1247,6 +1259,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_register_push() != 15603.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_remember_form_value() != 4872.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_remembered_form_values() != 21139.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_set_channel_enabled() != 57723.toShort()) {
@@ -1848,6 +1866,18 @@ public interface EngineHandleInterface {
     fun `registerPush`(`endpoint`: kotlin.String, `p256dh`: kotlin.String, `auth`: kotlin.String)
     
     /**
+     * Remember one form value of this app (`None` or "" forgets it). Local
+     * SQLite write.
+     */
+    fun `rememberFormValue`(`scope`: kotlin.String, `field`: kotlin.String, `value`: kotlin.String?)
+    
+    /**
+     * The form values this device remembers for this app's form `scope`
+     * (`""` = the app's layout, else a screen id). Local SQLite read.
+     */
+    fun `rememberedFormValues`(`scope`: kotlin.String): Map<kotlin.String, kotlin.String>
+    
+    /**
      * Turn one of an app's channels on or off for this device.
      */
     fun `setChannelEnabled`(`appId`: kotlin.String, `channel`: kotlin.String, `enabled`: kotlin.Boolean)
@@ -2258,6 +2288,37 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
 }
     }
     
+    
+
+    
+    /**
+     * Remember one form value of this app (`None` or "" forgets it). Local
+     * SQLite write.
+     */override fun `rememberFormValue`(`scope`: kotlin.String, `field`: kotlin.String, `value`: kotlin.String?)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_remember_form_value(
+        it, FfiConverterString.lower(`scope`),FfiConverterString.lower(`field`),FfiConverterOptionalString.lower(`value`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * The form values this device remembers for this app's form `scope`
+     * (`""` = the app's layout, else a screen id). Local SQLite read.
+     */override fun `rememberedFormValues`(`scope`: kotlin.String): Map<kotlin.String, kotlin.String> {
+            return FfiConverterMapStringString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_remembered_form_values(
+        it, FfiConverterString.lower(`scope`),_status)
+}
+    }
+    )
+    }
     
 
     
@@ -3185,6 +3246,45 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.String, kotlin.String>> {
+    override fun read(buf: ByteBuffer): Map<kotlin.String, kotlin.String> {
+        val len = buf.getInt()
+        return buildMap<kotlin.String, kotlin.String>(len) {
+            repeat(len) {
+                val k = FfiConverterString.read(buf)
+                val v = FfiConverterString.read(buf)
+                this[k] = v
+            }
+        }
+    }
+
+    override fun allocationSize(value: Map<kotlin.String, kotlin.String>): ULong {
+        val spaceForMapSize = 4UL
+        val spaceForChildren = value.map { (k, v) ->
+            FfiConverterString.allocationSize(k) +
+            FfiConverterString.allocationSize(v)
+        }.sum()
+        return spaceForMapSize + spaceForChildren
+    }
+
+    override fun write(value: Map<kotlin.String, kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        // The parens on `(k, v)` here ensure we're calling the right method,
+        // which is important for compatibility with older android devices.
+        // Ref https://blog.danlew.net/2017/03/16/kotlin-puzzler-whose-line-is-it-anyways/
+        value.forEach { (k, v) ->
+            FfiConverterString.write(k, buf)
+            FfiConverterString.write(v, buf)
         }
     }
 }

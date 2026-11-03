@@ -1973,6 +1973,7 @@ dependencies = [
 name = "pod-core"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm 0.10.3",
  "axum",
  "base64 0.22.1",
  "futures-util",
@@ -1982,6 +1983,7 @@ dependencies = [
  "protocol",
  "reqwest",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "sha2 0.10.9",

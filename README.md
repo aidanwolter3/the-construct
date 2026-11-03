@@ -86,6 +86,9 @@ Server details:
   defaults to `~/.construct-server` (created if missing). Bound to loopback (the default), the server serves
   callers without a pod token from its `dev` pod, so the commands here work as before; `CONSTRUCT_OPEN_POD=off`
   turns that off.
+- Every response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
+  `X-Frame-Options: DENY` and `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` unless the route
+  sets its own (uploads keep their `sandbox` CSP); behind Fly (`FLY_APP_NAME`) also `Strict-Transport-Security`.
 - `GET /v1/workspaces/pixelfed_demo` returns the static one-post demo bundle; its like and bookmark actions post to
   `POST /v1/demo/ack`, a stateless 200.
 - Test hook, only when started with `CONSTRUCT_TEST_HOOKS=1` (otherwise 404): `POST /v1/test/fault` with
@@ -118,7 +121,10 @@ endpoints always work. (The `home` "Counter" app was removed, D39.)
   (what a workspace GET serves it), so a version it can't draw sends nothing; without the header it is the app's
   latest (D38). New versions normally arrive with a deploy (the restart ends the stream, and the reconnect's first message
   carries the new number). No session is needed; for `pixelfed_home`, a bearer that is not a valid session gets 401
-  like the workspace GET.
+  like the workspace GET. A stream opened with a session ends once the session is revoked (logout, `server pods
+  rotate`, expiry): it is re-checked before each private event and every 15 s. One session token may hold 8
+  streams open; another gets 429 `{"error": "too_many_streams", "limit": 8}` (decision
+  [`sse-session-revocation`](docs/decisions/sse-session-revocation.md)).
 - Nothing changes a layout over HTTP. The agent, rollback, workspace versions and `/v1/layouts` routes are gone
   (404).
 
@@ -205,7 +211,8 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 |---|---|---|
 | `CONSTRUCT_ADDR` | `127.0.0.1:8080` | Listen address. Use `0.0.0.0:8080` to accept LAN connections. |
 | `CONSTRUCT_DATA_DIR` | `~/.construct-server` | `host.db` (pods, token hashes) and `pods/<id>/server.db` (each pod's apps, accounts, sessions, layout versions); created if missing. |
-| `CONSTRUCT_OPEN_POD` | `dev` on a loopback address, else unset | Callers without a pod token use this pod (created if missing). Development only; `off` disables it on loopback too. Never set it on a public server. |
+| `CONSTRUCT_OPEN_POD` | `dev` on a loopback address, else unset | Callers without a pod token use this pod (created if missing). Development only; `off` disables it on loopback too. The server refuses to start with it on a non-loopback address (unless `CONSTRUCT_INSECURE_OPEN_POD_ON_NETWORK=1`) and always behind Fly (`FLY_APP_NAME`). Only requests whose `Host` is `localhost`, `*.localhost` or an IP address use it, so a DNS-rebinding web page can't (403 `host_not_allowed`); pod tokens work with any `Host`. |
+| `CONSTRUCT_INSECURE_OPEN_POD_ON_NETWORK` | unset | `1`: allow `CONSTRUCT_OPEN_POD` on a non-loopback address. Everyone who can reach the server gets the whole pod and its sign-ins; only on a network you trust, never on a public server. Ignored behind Fly. |
 | `CONSTRUCT_TEMP_PODS` | unset | `1`: anyone may create a temporary pod (`POST /v1/pods/temporary`, the "Try a temporary pod" button). Staging sets it. |
 | `CONSTRUCT_TEMP_POD_HOURS` | `24` | Temporary pod lifetime (1..=720); the sweeper deletes it and its files afterwards. |
 | `CONSTRUCT_TEMP_POD_MAX` | `50` | Live temporary pods at most (then 503 `temporary_pods_full`). |
@@ -220,9 +227,13 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 | `PIXELFED_ALLOW_ACCOUNT_CHANGE` | unset | `1`/`true`: on the default and listed instances any account may sign in and replace the stored one (no pinning). Instances typed under `*` always keep their first account. |
 | `CONSTRUCT_SESSION_TTL_DAYS` | `90` | Lifetime of sessions other than pod tokens, in days (1..=36500; other values warn and use 90). Pod tokens don't expire. |
 | `CONSTRUCT_VAPID_PRIVATE_KEY` | generated | Web Push signing key for notifications (D52): base64url of a 32-byte P-256 private key. Unset: the server generates one on first start and keeps it in `host.db` (devices subscribed with its public key keep working across restarts). Staging/production should set it as a secret so a lost volume doesn't orphan subscriptions. |
+| `CONSTRUCT_SECRETS_KEY` | unset | Seals upstream credentials (Pixelfed access/refresh tokens, OAuth client secrets) in the pod databases with AES-256-GCM: base64 of 32 random bytes (`openssl rand -base64 32`). Comma-separated: key rotation (the first seals, all open; values are re-sealed under the first when a pod opens). Unset: stored in plaintext, with a startup warning (an error on Fly). Setting it later seals existing rows when each pod opens. A sealed row whose key is missing or wrong reads as signed out (logged); the right key restores it. Malformed: the server refuses to start. Staging/production must set it as a secret (decision [`upstream-credentials-sealed-at-rest`](docs/decisions/upstream-credentials-sealed-at-rest.md)). The data dir and pod dirs are 0700 and the databases 0600 either way. |
 | `CONSTRUCT_VAPID_SUBJECT` | the repo URL | Contact (`mailto:` or `https:`) that push services may use to reach the operator. |
 | `CONSTRUCT_PUSH` | on | `off`: no Web Push (notifications still reach the inbox and open apps). |
 | `CONSTRUCT_UPLOAD_MAX_BYTES` | `20971520` (20 MB) | Largest file a client may upload to `POST /v1/uploads` (photos for a post, D49); at least 1024. |
+| `CONSTRUCT_POD_UPLOAD_QUOTA_BYTES` | `524288000` (500 MiB) | Most bytes all of an admin pod's uploads may hold together (then 507 `upload_quota_exceeded`, retried by clients). |
+| `CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES` | `26214400` (25 MiB) | The same for a temporary pod. |
+| `CONSTRUCT_MIN_FREE_DISK_BYTES` | `104857600` (100 MiB) | Free space kept on the data volume: below it uploads get 507 `low_disk_space` and new temporary pods 503 `low_disk_space`, so the volume never fills and every pod's other writes keep working. |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
 
 The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PROVIDER`, `CONSTRUCT_LLM_MODEL`,
@@ -273,7 +284,8 @@ paths, e.g. the Pixelfed media proxy).
 - **Temporary pods** (`CONSTRUCT_TEMP_PODS=1`, staging): every app, but Pixelfed only on the default instance (the
   fake on staging; no typed-in servers, so a visitor can't make the server contact hosts of their choosing), no family
   recipes, deleted with everything in them after `CONSTRUCT_TEMP_POD_HOURS`. At most 5 per client address an hour
-  (IPv6 per /64) and `CONSTRUCT_TEMP_POD_MAX` live. Use an admin pod to try a real Pixelfed server. Testing staging
+  (IPv6 per /64; 10 per /48) and `CONSTRUCT_TEMP_POD_MAX` live, with a smaller upload quota
+  (`CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES`). Use an admin pod to try a real Pixelfed server. Testing staging
   from a script:
 
   ```bash
@@ -318,8 +330,10 @@ adapter wrote, and a navigation target in that app's own layout routes.
   | `DELETE /v1/devices/{id}` | forget the device (the engine calls it on sign-out) |
   | `GET /v1/push/key` | `{"vapid_public_key"}` (404 `push_unavailable` with `CONSTRUCT_PUSH=off`) |
 
-  Push endpoints must be `https://` on a public host (any local URL with `CONSTRUCT_TEST_HOOKS=1`, for test
-  receivers); deliveries resolve only public addresses. 404/410 from the push service drops the subscription, as do 5
+  Push endpoints must be `https://` on the default port (443) of a public host name (any local URL with
+  `CONSTRUCT_TEST_HOOKS=1`, for test receivers); deliveries resolve only public addresses and follow no redirects. A
+  port rule rather than a domain allowlist keeps self-hosted UnifiedPush distributors working. Endpoints stored
+  before this rule are dropped on their next delivery. 404/410 from the push service drops the subscription, as do 5
   failures in a row. At most 20 devices and 60 deliveries a minute per pod.
 - **Try it:** `server pods notify-test <name>` (or, against the fake upstream, inject one with its admin API; see
   "Fake Pixelfed upstream").
@@ -345,7 +359,7 @@ browser. "Sign in with Pixelfed" still goes to the fake. Your upstream token liv
    ```
 
 2. Make the pod reachable from the phone. Simplest is USB: `adb reverse tcp:8080 tcp:8080` and base URL
-   `http://localhost:8080`. A LAN address (`CONSTRUCT_ADDR=0.0.0.0:8080`, `http://<mac-ip>:8080`; not loopback, so create a pod with `server pods create` and enter its code, or set `CONSTRUCT_OPEN_POD=dev`) or an HTTPS URL also
+   `http://localhost:8080`. A LAN address (`CONSTRUCT_ADDR=0.0.0.0:8080`, `http://<mac-ip>:8080`; not loopback, so create a pod with `server pods create` and enter its code; the open `dev` pod is refused there, since anyone on the LAN would get it and its sign-ins) or an HTTPS URL also
    works for the engine, which talks through Rust and is not restricted by Android's network security config; but
    the app allows cleartext to `localhost`, `127.0.0.1` and `10.0.2.2` only, and only for Java/Kotlin traffic, and images
    load through Coil/OkHttp from the pod's media proxy, so over plain-HTTP LAN the feed images fail. Use `adb
@@ -461,15 +475,20 @@ client build. The engine and the clients know no app.
   layout switches between views with no new state. `layouts/pixelfed_home/0004.json` puts a List/Cards switch on
   the feed: two-column cards (cover photo, author, like count) that open a post screen
   (`pixelfed://posts/{id}`, data from `/v1/pixelfed/screens/post?id=`).
-- **Scroll to one item (schema 10, decision [`list-focus`](docs/decisions/list-focus.md)):** a `core://List` takes
+- **Remembered choices (schema 10, decision `remembered-form-values`):** `"remember": true` on a
+  `core://ChoiceChips` makes the device keep its value (engine `cache.db`, table `form_values`, per app and form:
+  `""` for the app's layout, else the screen id) and fill it in before the layout or screen first draws. Only a
+  value that is still one of the options comes back. Never sent to the pod; kept at sign-out.
+  `layouts/pixelfed_home/0006.json` remembers the List/Cards switch.
+- **Scroll to one item (schema 11, decision [`list-focus`](docs/decisions/list-focus.md)):** a `core://List` takes
   an optional `focus: {uri, background?, content_color?}`. The item whose entity URI is `uri` (usually built from a
   route parameter, e.g. `pixelfed://comments/$route.comment`) is scrolled into view once, the first time the list
-  draws it, and drawn on `background` (`#RRGGBB`). One-column lists only. `layouts/pixelfed_home/0006.json` uses it
+  draws it, and drawn on `background` (`#RRGGBB`). One-column lists only. `layouts/pixelfed_home/0007.json` uses it
   for the `comment_thread` screen (`pixelfed://posts/{id}/comments/{comment}`), which a comment notification opens.
-- **Schema versions (D36, D38):** the engine sends `X-Construct-Schema: 10` (workspace fetches, data loads, the
+- **Schema versions (D36, D38):** the engine sends `X-Construct-Schema: 11` (workspace fetches, data loads, the
   apps API and the events stream). Every version records the schema it was written for (`"schema"` in its file). The pod serves each client
   the newest version it can draw, so an older app (no header = 1) keeps getting the last version without screens
-  or the new nodes. Screens and List/Image/TextField need `"schema": 2`; the building blocks need 3; `core://Tappable` needs 4; a List `filter` or `group_by` needs 5; the schema-6 vocabulary above needs 6; `action.auth.session` needs 7; List `columns`/`spacing_dp`/`padding_h_dp` and a form-based or `equals` Conditional need 8; the schema-9 photo posting vocabulary needs 9; a List `focus` needs 10. `GET /v1/apps/{id}/versions[/{n}]` adds `schema`,
+  or the new nodes. Screens and List/Image/TextField need `"schema": 2`; the building blocks need 3; `core://Tappable` needs 4; a List `filter` or `group_by` needs 5; the schema-6 vocabulary above needs 6; `action.auth.session` needs 7; List `columns`/`spacing_dp`/`padding_h_dp` and a form-based or `equals` Conditional need 8; the photo-posting vocabulary (D49-D51) needs 9; a remembered `core://ChoiceChips` needs 10; a List `focus` needs 11. `GET /v1/apps/{id}/versions[/{n}]` adds `schema`,
   `compatible` and, when false, `incompatible` (`update_required`: written for a newer app; `retired`: written for
   a schema this app no longer draws) per version; the menu greys those rows out and won't pin them. "Latest" in the
   menu is always a version this app can draw; when the newest needs a newer app, the menu adds "Update the app to
@@ -485,7 +504,7 @@ client build. The engine and the clients know no app.
 `layouts/pixelfed_home/0003.json` builds the feed from these nodes. It (like 0002) uses the rest for comments: the feed's comment button (already
 `pixelfed://posts/$item.id/comments`) opens the `comments` screen, which loads
 `/v1/pixelfed/screens/comments?post_id=$route.id` into a `core://List` and posts new comments with a
-`core://TextField` and `action.mutation.create`. From `0006` the comments screen also shows its post above the
+`core://TextField` and `action.mutation.create`. From `0007` the comments screen also shows its post above the
 comments (the same data call returns it as `post:<id>`; given a comment id, the pod walks up to the post), and each
 comment has a like button (the posts' `/v1/pixelfed/posts/like` endpoint works on comments).
 

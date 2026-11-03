@@ -1254,7 +1254,7 @@ fn net_lock_for(db_path: Option<&Path>) -> Arc<Mutex<()>> {
 fn open_store(storage_path: &str) -> (Option<Store>, Arc<Mutex<()>>) {
     if !storage_path.is_empty() {
         let path = PathBuf::from(storage_path).join(CACHE_DB_FILE);
-        let opened = match fs::create_dir_all(storage_path) {
+        let opened = match store::make_private_dir(Path::new(storage_path)) {
             Ok(()) => {
                 Store::open(&path).map_err(|e| (store::is_read_only_error(&e), e.to_string()))
             }
@@ -1469,6 +1469,12 @@ impl ConstructEngine {
             secure_store.unwrap_or_else(|| Arc::from(auth::default_secure_store()));
         let base = base_url.trim_end_matches('/');
         let session_key = auth::session_key(base);
+        if is_cleartext_remote(base) {
+            eprintln!(
+                "[ConstructEngine] WARNING: {base} is plain http:// to a non-local host: the pod \
+                 token and all data travel unencrypted. Use https:// for remote servers."
+            );
+        }
 
         let (store, net) = open_store(storage_path);
         let attachments_dir = if storage_path.is_empty() {
@@ -1656,9 +1662,60 @@ impl ConstructEngine {
     pub fn discard_attachment(&self, id: &str) {
         self.inner.discard_attachment(id);
     }
+
+    /// The form values this device remembers for this engine's app in form
+    /// `scope` (`""` = the app's layout, else a screen id): field -> value.
+    /// Which fields are remembered is the layout's choice (`core://ChoiceChips`
+    /// `remember`, schema 10); the engine only stores them. Empty on any error.
+    pub fn remembered_form_values(&self, scope: &str) -> BTreeMap<String, String> {
+        self.inner.remembered_form_values(scope)
+    }
+
+    /// Remember a form value of this engine's app (`None` or "" forgets it).
+    /// Oversized scopes, fields or values are ignored.
+    pub fn remember_form_value(&self, scope: &str, field: &str, value: Option<&str>) {
+        self.inner.remember_form_value(scope, field, value);
+    }
 }
 
+/// Longest form scope or field name the engine remembers.
+const MAX_FORM_NAME: usize = 128;
+/// Longest form value the engine remembers.
+const MAX_FORM_VALUE: usize = 1024;
+
 impl Inner {
+    fn remembered_form_values(&self, scope: &str) -> BTreeMap<String, String> {
+        let st = lock(&self.state);
+        let Some(store) = st.store.as_ref() else {
+            return BTreeMap::new();
+        };
+        store
+            .form_values(&self.workspace_id, scope)
+            .unwrap_or_else(|e| {
+                eprintln!("[ConstructEngine] remembered form values: {e}");
+                BTreeMap::new()
+            })
+    }
+
+    fn remember_form_value(&self, scope: &str, field: &str, value: Option<&str>) {
+        let value = value.filter(|v| !v.is_empty());
+        if scope.len() > MAX_FORM_NAME
+            || field.is_empty()
+            || field.len() > MAX_FORM_NAME
+            || value.is_some_and(|v| v.len() > MAX_FORM_VALUE)
+        {
+            return;
+        }
+        let st = lock(&self.state);
+        if let Some(Err(e)) = st
+            .store
+            .as_ref()
+            .map(|s| s.set_form_value(&self.workspace_id, scope, field, value, unix_now()))
+        {
+            eprintln!("[ConstructEngine] remembering form value '{field}': {e}");
+        }
+    }
+
     fn stage_attachment(&self, path: &str) -> Result<AttachmentInfo, String> {
         let id = auth::random_token(16);
         let staged = attachments::stage(Path::new(path), &self.attachments_dir, &id)?;
@@ -3718,6 +3775,27 @@ fn sync_worker(engine: Weak<Inner>, signal: Arc<WorkerSignal>) {
 }
 
 /// Whether `url` has the same scheme, host and port as `base`.
+/// Whether `base_url` is `http://` to a host other than this machine (or
+/// the Android emulator's alias for it, 10.0.2.2): the bearer token would
+/// cross a network in cleartext. Only warned about, never refused.
+pub fn is_cleartext_remote(base_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(base_url) else {
+        return false;
+    };
+    if url.scheme() != "http" {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => !(ip.is_loopback() || ip.octets() == [10, 0, 2, 2]),
+        Ok(std::net::IpAddr::V6(ip)) => !ip.is_loopback(),
+        Err(_) => !host.eq_ignore_ascii_case("localhost"),
+    }
+}
+
 fn same_origin(base: &str, url: &str) -> bool {
     match (reqwest::Url::parse(base), reqwest::Url::parse(url)) {
         (Ok(a), Ok(b)) => a.origin() == b.origin() && a.origin().is_tuple(),
@@ -3825,6 +3903,30 @@ fn reachable(url: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn cleartext_remote_base_urls_are_flagged() {
+        for url in [
+            "http://example.com",
+            "http://192.168.1.5:8080",
+            "http://[2001:db8::1]:8080",
+            "http://pod.local",
+        ] {
+            assert!(is_cleartext_remote(url), "{url}");
+        }
+        for url in [
+            "https://example.com",
+            "http://localhost:8080",
+            "http://LOCALHOST",
+            "http://127.0.0.1:8080",
+            "http://127.1.2.3",
+            "http://[::1]:8080",
+            "http://10.0.2.2:8080",
+            "not a url",
+        ] {
+            assert!(!is_cleartext_remote(url), "{url}");
+        }
+    }
 
     #[test]
     fn backoff_doubles_and_is_capped() {

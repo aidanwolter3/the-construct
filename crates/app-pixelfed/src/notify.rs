@@ -247,7 +247,7 @@ pub fn comments_target(post_id: &str) -> String {
 
 /// One comment in the thread of its post (`pixelfed://posts/{id}/comments/{comment}`,
 /// the route of the `comment_thread` screen in the pixelfed_home layouts from
-/// 0006): the whole thread, scrolled to the comment and highlighted.
+/// 0007): the whole thread, scrolled to the comment and highlighted.
 pub fn comment_target(post_id: &str, comment_id: &str) -> String {
     format!("{}{post_id}/comments/{comment_id}", crate::POST_PREFIX)
 }

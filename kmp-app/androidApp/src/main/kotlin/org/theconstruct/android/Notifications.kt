@@ -22,6 +22,12 @@ internal const val EXTRA_NOTIFICATION_APP = "notificationApp"
 internal const val EXTRA_NOTIFICATION_TARGET = "notificationTarget"
 internal const val EXTRA_NOTIFICATION_ID = "notificationId"
 
+/** The push instance ([Push.instanceFor]) of the server that sent it: only that server's session opens the target. */
+internal const val EXTRA_NOTIFICATION_SERVER = "notificationServer"
+
+/** Proof that the extras came through [NotificationTapActivity] in this process ([NotificationTaps.trusted]). */
+internal const val EXTRA_NOTIFICATION_NONCE = "notificationNonce"
+
 /**
  * OS notifications for notifications from apps (DECISIONS D52). Generic: the pod declares the channels (one Android
  * channel per app channel, id `"<app_id>.<channel>"`, grouped per app) and writes the text; nothing here knows an app.
@@ -92,20 +98,24 @@ internal object AppNotifications {
         return id
     }
 
-    /** Post [n] (tag = its id, so a second arrival of the same notification replaces it). */
-    fun show(context: Context, n: AppNotification) {
+    /**
+     * Post [n] from the server whose push instance is [server] (tag = its id, so a second arrival of the same
+     * notification replaces it). A tap goes through the non-exported [NotificationTapActivity].
+     */
+    fun show(context: Context, n: AppNotification, server: String) {
         if (!permitted(context)) {
             Log.i(TAG, "notification ${n.id} not shown: no permission")
             return
         }
         val nm = manager(context) ?: return
-        val open = Intent(context, MainActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val open = Intent(context, NotificationTapActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             .putExtra(EXTRA_NOTIFICATION_APP, n.appId)
             .putExtra(EXTRA_NOTIFICATION_ID, n.id)
+            .putExtra(EXTRA_NOTIFICATION_SERVER, server)
             .apply { n.targetUri?.let { putExtra(EXTRA_NOTIFICATION_TARGET, it) } }
         val pending = PendingIntent.getActivity(
-            context, n.id.hashCode(), open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            context, "$server ${n.id}".hashCode(), open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val builder = Notification.Builder(context, ensureChannel(context, n))
             .setSmallIcon(R.drawable.ic_stat_notification)

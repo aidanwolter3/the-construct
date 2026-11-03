@@ -38,6 +38,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 run_suite() {
+  # The in-process pods seal upstream credentials, as staging does (a throwaway key).
+  CONSTRUCT_SECRETS_KEY="${CONSTRUCT_SECRETS_KEY:-$(head -c 32 /dev/urandom | base64)}" \
   cargo test -p e2e --test suite --test notifications -- --nocapture ${extra[@]+"${extra[@]}"}
 }
 

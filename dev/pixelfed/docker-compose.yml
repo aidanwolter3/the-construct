@@ -9,7 +9,11 @@ x-pixelfed: &pixelfed
   # v0.15.2 (2026-10-21), multi-arch (arm64 + amd64). Digest pinned for reproducibility.
   image: ghcr.io/pixelfed/pixelfed:v0.15.2@sha256:f1237913ef0d392a5afef1dab8e3dd01234435ea90314a3a7221a2ea00932132
   restart: unless-stopped
-  env_file: [pixelfed.env]
+  env_file:
+    - pixelfed.env
+    # Overrides (fresh APP_KEY) written by dev/hetzner/provision.sh --pixelfed-domain; gitignored.
+    - path: pixelfed.local.env
+      required: false
   volumes:
     - pf-storage:/var/www/html/storage
   depends_on:

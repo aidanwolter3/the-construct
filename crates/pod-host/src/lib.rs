@@ -41,7 +41,7 @@ use serde_json::json;
 use tower::ServiceExt;
 
 pub use db::{HostStore, PodKind, PodRow};
-use limits::RateLimit;
+use limits::{ClientKeys, RateLimit, TwoLevel};
 
 /// Builds a pod over its opened store: runs the adapters' migrations and the
 /// layout sync (the binary's [`AppState::try_new`] with its adapters).
@@ -65,7 +65,8 @@ pub fn vapid_private_key(dir: &FsPath, configured: Option<&str>) -> Result<Strin
     if let Some(k) = configured {
         return Ok(k.to_owned());
     }
-    std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+    pod_core::util::create_private_dir(dir)
+        .map_err(|e| format!("creating {}: {e}", dir.display()))?;
     let store = HostStore::open(&dir.join("host.db")).map_err(|e| e.to_string())?;
     store
         .secret_or(
@@ -82,6 +83,55 @@ pub struct TemporaryPods {
     pub hours: u64,
     /// Live temporary pods at most (`CONSTRUCT_TEMP_POD_MAX`, default 50).
     pub max_live: i64,
+}
+
+/// How much disk the pods may use (decision `pod-storage-limits`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StorageLimits {
+    /// Most bytes an admin pod's uploads hold together
+    /// (`CONSTRUCT_POD_UPLOAD_QUOTA_BYTES`, default 500 MiB).
+    pub pod_upload_quota_bytes: u64,
+    /// The same for a temporary pod (`CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES`,
+    /// default 25 MiB): anyone can make one.
+    pub temporary_upload_quota_bytes: u64,
+    /// Uploads and new temporary pods are refused when the data volume has
+    /// less free (`CONSTRUCT_MIN_FREE_DISK_BYTES`, default 100 MiB).
+    pub min_free_disk_bytes: u64,
+}
+
+impl Default for StorageLimits {
+    fn default() -> Self {
+        const MIB: u64 = 1024 * 1024;
+        Self {
+            pod_upload_quota_bytes: 500 * MIB,
+            temporary_upload_quota_bytes: 25 * MIB,
+            min_free_disk_bytes: pod_core::disk::DEFAULT_MIN_FREE_BYTES,
+        }
+    }
+}
+
+impl StorageLimits {
+    /// The defaults, overridden by the `CONSTRUCT_*` variables above.
+    pub fn from_env() -> Self {
+        let bytes = |k: &str, default: u64| {
+            std::env::var(k)
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .unwrap_or(default)
+        };
+        let d = Self::default();
+        Self {
+            pod_upload_quota_bytes: bytes(
+                "CONSTRUCT_POD_UPLOAD_QUOTA_BYTES",
+                d.pod_upload_quota_bytes,
+            ),
+            temporary_upload_quota_bytes: bytes(
+                "CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES",
+                d.temporary_upload_quota_bytes,
+            ),
+            min_free_disk_bytes: bytes("CONSTRUCT_MIN_FREE_DISK_BYTES", d.min_free_disk_bytes),
+        }
+    }
 }
 
 /// What the host allows besides admin pods.
@@ -102,11 +152,17 @@ pub struct HostConfig {
     /// instead of the connection's peer. Only behind Fly (`FLY_APP_NAME`):
     /// anywhere else a client could send any value.
     pub trust_fly_client_ip: bool,
+    /// Upload quotas and the low-disk guard.
+    pub storage: StorageLimits,
+    /// Send `Strict-Transport-Security` on every response. Only behind an
+    /// HTTPS proxy (Fly, `FLY_APP_NAME`): on plain HTTP it would be ignored,
+    /// and on `localhost` it would pin the name to HTTPS for other servers.
+    pub hsts: bool,
 }
 
 impl HostConfig {
     /// `CONSTRUCT_OPEN_POD`, `CONSTRUCT_TEMP_PODS`, `CONSTRUCT_TEMP_POD_HOURS`,
-    /// `CONSTRUCT_TEMP_POD_MAX`.
+    /// `CONSTRUCT_TEMP_POD_MAX`, and [`StorageLimits::from_env`].
     pub fn from_env() -> Self {
         let var = |k: &str| {
             std::env::var(k)
@@ -132,6 +188,8 @@ impl HostConfig {
             new_pod_settings: Vec::new(),
             temporary_pod_settings: Vec::new(),
             trust_fly_client_ip: var("FLY_APP_NAME").is_some(),
+            storage: StorageLimits::from_env(),
+            hsts: var("FLY_APP_NAME").is_some(),
         }
     }
 }
@@ -201,7 +259,7 @@ pub struct Host {
     opening: tokio::sync::Mutex<()>,
     open_pod_id: OnceLock<String>,
     code_tries: RateLimit,
-    temp_creates: RateLimit,
+    temp_creates: TwoLevel,
     /// Makes the temporary-pod cap check and the creation one step.
     temp_lock: Mutex<()>,
     /// The next wake last written to `host.db` per pod (skips rewrites).
@@ -209,10 +267,14 @@ pub struct Host {
 }
 
 impl Host {
-    /// The host over `<dir>/host.db` (created) and `<dir>/pods/`.
+    /// The host over `<dir>/host.db` (created) and `<dir>/pods/`. Both
+    /// directories are private to the server's user (0700), the databases
+    /// 0600.
     pub fn open(dir: &FsPath, factory: PodFactory, config: HostConfig) -> Result<Self, String> {
-        std::fs::create_dir_all(dir.join("pods"))
-            .map_err(|e| format!("creating {}: {e}", dir.display()))?;
+        for d in [dir.to_owned(), dir.join("pods")] {
+            pod_core::util::create_private_dir(&d)
+                .map_err(|e| format!("creating {}: {e}", d.display()))?;
+        }
         let store = HostStore::open(&dir.join("host.db"))
             .map_err(|e| format!("opening {}: {e}", dir.join("host.db").display()))?;
         let host = Self {
@@ -227,7 +289,13 @@ impl Host {
             // code can't be guessed, and a global one lets anyone lock
             // everyone out of entering their code.
             code_tries: RateLimit::new(10, Duration::from_secs(60)),
-            temp_creates: RateLimit::new(5, Duration::from_secs(3600)),
+            // Per IPv4 address or IPv6 /64, and per /48 (security audit #31,
+            // M2): a /48 holds 65536 /64s, and a few are enough to take
+            // every temporary pod.
+            temp_creates: TwoLevel {
+                narrow: RateLimit::new(5, Duration::from_secs(3600)),
+                wide: RateLimit::new(10, Duration::from_secs(3600)),
+            },
             temp_lock: Mutex::new(()),
             wakes: Mutex::new(HashMap::new()),
         };
@@ -305,7 +373,7 @@ impl Host {
         let id = new_pod_id();
         let dir = self.pod_dir(&id)?;
         let result = (|| {
-            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            pod_core::util::create_private_dir(&dir).map_err(|e| e.to_string())?;
             let store = Store::open(&dir.join("server.db")).map_err(|e| e.to_string())?;
             for (k, v) in settings {
                 store.set_pod_setting(k, v).map_err(|e| e.to_string())?;
@@ -372,7 +440,7 @@ impl Host {
         let dir = self.pod_dir(&id)?;
         let dest = dir.join("server.db");
         let result = (|| {
-            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            pod_core::util::create_private_dir(&dir).map_err(|e| e.to_string())?;
             {
                 let conn = rusqlite::Connection::open(src).map_err(|e| e.to_string())?;
                 conn.busy_timeout(Duration::from_secs(5))
@@ -659,6 +727,12 @@ impl Host {
         self.open.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// True when the data volume is nearly full.
+    fn low_on_disk(&self) -> bool {
+        pod_core::disk::DiskGuard::new(&self.dir, self.config.storage.min_free_disk_bytes)
+            .too_low_for(0)
+    }
+
     /// The open pod `id`, opening it on first use.
     async fn pod(self: &Arc<Self>, id: &str) -> Result<Arc<OpenPod>, Box<Response>> {
         if let Some(p) = self.cache().get(id) {
@@ -675,8 +749,22 @@ impl Host {
             if !path.is_file() {
                 return Err(format!("{} is missing", path.display()));
             }
+            // Unknown (expired meanwhile): the smaller quota.
+            let kind = host
+                .store
+                .live_pod(&pod_id)
+                .map_err(|e| e.to_string())?
+                .map_or(PodKind::Temporary, |p| p.kind);
+            let storage = host.config.storage;
+            let quota = match kind {
+                PodKind::Admin => storage.pod_upload_quota_bytes,
+                PodKind::Temporary => storage.temporary_upload_quota_bytes,
+            };
+            let guard = pod_core::disk::DiskGuard::new(&host.dir, storage.min_free_disk_bytes);
             let store = Store::open(&path).map_err(|e| e.to_string())?;
-            (host.factory)(store)
+            Ok((host.factory)(store)?
+                .with_upload_quota_bytes(Some(quota))
+                .with_disk_guard(Some(guard)))
         })
         .await
         .map_err(|e| e.to_string())
@@ -739,13 +827,86 @@ pub fn app(host: Arc<Host>) -> Router {
         .route(screen::TEMPORARY_PATH, post(temporary_pod))
         .route("/v1/p/{pod_id}/{*rest}", get(public_route))
         .fallback(dispatch)
-        .with_state(host)
+        .with_state(host.clone())
+        .layer(axum::middleware::map_response_with_state(
+            host.config.hsts,
+            security_headers,
+        ))
+}
+
+/// Headers on every response, unless the route set its own (an upload's
+/// `sandbox` CSP stays). Clients only fetch JSON, SSE and images, so a page
+/// that loads one of these in a browser gets nothing it could run or frame.
+async fn security_headers(State(hsts): State<bool>, mut resp: Response) -> Response {
+    let h = resp.headers_mut();
+    let defaults = [
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        (header::REFERRER_POLICY, "no-referrer"),
+        (header::X_FRAME_OPTIONS, "DENY"),
+        (
+            header::CONTENT_SECURITY_POLICY,
+            "default-src 'none'; frame-ancestors 'none'",
+        ),
+    ];
+    for (name, value) in defaults {
+        h.entry(name)
+            .or_insert_with(|| HeaderValue::from_static(value));
+    }
+    if hsts {
+        h.entry(header::STRICT_TRANSPORT_SECURITY)
+            .or_insert_with(|| HeaderValue::from_static("max-age=31536000"));
+    }
+    resp
+}
+
+/// Whether a request may use the open pod: its `Host` (or HTTP/2
+/// authority) must be `localhost`, a `*.localhost` name or an IP literal
+/// (`127.0.0.1`, `[::1]`, the emulator's `10.0.2.2`, a LAN address), any
+/// port. A DNS-rebinding page always sends its own domain name, so it never
+/// passes; a request without a Host (HTTP/1.0, in-process tests) does not
+/// come from a browser and passes.
+pub fn open_pod_host_allowed(headers: &HeaderMap, uri: &Uri) -> bool {
+    let host = match headers.get(header::HOST) {
+        Some(v) => match v.to_str() {
+            Ok(v) => v.trim().to_owned(),
+            Err(_) => return false,
+        },
+        None => match uri.authority() {
+            Some(a) => a.as_str().rsplit('@').next().unwrap_or_default().to_owned(),
+            None => return true,
+        },
+    };
+    let name = if let Some(rest) = host.strip_prefix('[') {
+        // `[v6]` or `[v6]:port`.
+        let Some((v6, port)) = rest.split_once(']') else {
+            return false;
+        };
+        if !(port.is_empty() || port.strip_prefix(':').is_some_and(valid_port)) {
+            return false;
+        }
+        return v6.parse::<std::net::Ipv6Addr>().is_ok();
+    } else {
+        match host.rsplit_once(':') {
+            Some((name, port)) if valid_port(port) => name,
+            Some(_) => return false,
+            None => host.as_str(),
+        }
+    };
+    let name = name.strip_suffix('.').unwrap_or(name).to_ascii_lowercase();
+    name == "localhost"
+        || name.ends_with(".localhost")
+        || name.parse::<std::net::Ipv4Addr>().is_ok()
+}
+
+fn valid_port(p: &str) -> bool {
+    !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// The caller's address for rate limits: Fly's `Fly-Client-IP` when the
 /// host runs behind Fly (its proxy sets it), else the connection's peer.
-/// IPv6 addresses count per /64 (one subscriber usually has a whole /64).
-fn client_key(req_headers: &HeaderMap, peer: Option<SocketAddr>, trust_fly: bool) -> String {
+/// IPv6 addresses count per /64 (one subscriber usually has a whole /64)
+/// and per /48 ([`ClientKeys`]).
+fn client_keys(req_headers: &HeaderMap, peer: Option<SocketAddr>, trust_fly: bool) -> ClientKeys {
     let ip = trust_fly
         .then(|| {
             req_headers
@@ -755,17 +916,7 @@ fn client_key(req_headers: &HeaderMap, peer: Option<SocketAddr>, trust_fly: bool
         })
         .flatten()
         .or_else(|| peer.map(|p| p.ip()));
-    match ip {
-        Some(std::net::IpAddr::V6(v6)) => match v6.to_ipv4_mapped() {
-            Some(v4) => v4.to_string(),
-            None => {
-                let s = v6.segments();
-                format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3])
-            }
-        },
-        Some(ip) => ip.to_string(),
-        None => "unknown".to_owned(),
-    }
+    ClientKeys::of(ip)
 }
 
 fn peer(req: &Request) -> Option<SocketAddr> {
@@ -800,8 +951,21 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
         },
         None => None,
     };
-    let Some(pod_id) = found.or_else(|| host.open_pod_id.get().cloned()) else {
-        return no_pod(&host, &req, token.is_some());
+    let pod_id = match (found, host.open_pod_id.get()) {
+        (Some(id), _) => id,
+        (None, Some(open)) if open_pod_host_allowed(req.headers(), req.uri()) => open.clone(),
+        (None, Some(_)) => {
+            // A DNS-rebinding page names its own domain: no open pod for it.
+            tracing::warn!(
+                host = ?req.headers().get(header::HOST),
+                "open pod refused for a Host that is not localhost or an IP address"
+            );
+            return json_error(
+                StatusCode::FORBIDDEN,
+                json!({ "error": "host_not_allowed" }),
+            );
+        }
+        (None, None) => return no_pod(&host, &req, token.is_some()),
     };
     let open = match host.pod(&pod_id).await {
         Ok(p) => p,
@@ -850,9 +1014,16 @@ fn no_pod(host: &Host, req: &Request, had_token: bool) -> Response {
 
 /// `POST /v1/pods/open {token}`: 200 `{session_token}` when `token` opens a
 /// live pod (the client then uses it as its session), 401 `pod_not_found`
-/// otherwise. Rate-limited per client and overall.
+/// otherwise. Rate-limited per client.
+///
+/// The limit keeps the code screen from being used to hammer `host.db`; it is
+/// not what stops guessing. Any route takes `Bearer cpod_…` without it
+/// (security audit #31, Info), and that is fine: a code is 256 random bits,
+/// so no rate of guesses finds one. Limiting failed bearers on every route
+/// would add nothing against guessing, but would let one client behind a
+/// shared address (CGNAT) lock its neighbours out of their pods.
 async fn open_with_token(State(host): State<Arc<Host>>, req: Request) -> Response {
-    let key = client_key(req.headers(), peer(&req), host.config.trust_fly_client_ip);
+    let key = client_keys(req.headers(), peer(&req), host.config.trust_fly_client_ip).narrow;
     if !host.code_tries.allow(&key) {
         tracing::warn!("pod code tries rate-limited");
         return rate_limited();
@@ -892,7 +1063,8 @@ async fn open_with_token(State(host): State<Arc<Host>>, req: Request) -> Respons
 
 /// `POST /v1/pods/temporary`: a new temporary pod (when enabled) ->
 /// `{session_token, expires_at, pod}`. 404 when disabled, 429 when this
-/// client made too many, 503 `temporary_pods_full` at the cap.
+/// client (or its IPv6 /48) made too many, 503 `temporary_pods_full` at the
+/// cap or `low_disk_space` when the data volume is nearly full.
 async fn temporary_pod(State(host): State<Arc<Host>>, req: Request) -> Response {
     let Some(temp) = host.config.temporary else {
         return json_error(
@@ -900,10 +1072,17 @@ async fn temporary_pod(State(host): State<Arc<Host>>, req: Request) -> Response 
             json!({ "error": "temporary_pods_disabled" }),
         );
     };
-    let key = client_key(req.headers(), peer(&req), host.config.trust_fly_client_ip);
-    if !host.temp_creates.allow(&key) {
+    let keys = client_keys(req.headers(), peer(&req), host.config.trust_fly_client_ip);
+    if !host.temp_creates.allow(&keys) {
         tracing::warn!("temporary pod creation rate-limited");
         return rate_limited();
+    }
+    if host.low_on_disk() {
+        tracing::warn!("temporary pod refused: low disk space");
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({ "error": "low_disk_space" }),
+        );
     }
     let made = host
         .blocking(move |h| {
@@ -1001,6 +1180,66 @@ async fn public_route(
 mod tests {
     use super::*;
 
+    /// A route's own headers (an upload's `sandbox` CSP) are kept.
+    #[tokio::test]
+    async fn security_headers_keep_a_routes_own() {
+        let mut resp = Response::new(axum::body::Body::empty());
+        resp.headers_mut().insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static("sandbox"),
+        );
+        let resp = security_headers(State(true), resp).await;
+        let h = resp.headers();
+        assert_eq!(h[header::CONTENT_SECURITY_POLICY], "sandbox");
+        assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(h[header::STRICT_TRANSPORT_SECURITY], "max-age=31536000");
+        assert_eq!(h.get_all(header::CONTENT_SECURITY_POLICY).iter().count(), 1);
+    }
+
+    /// Security audit #31 (L1): only names a DNS-rebinding page can't send.
+    #[test]
+    fn open_pod_hosts() {
+        let check = |host: Option<&str>, uri: &str| {
+            let mut h = HeaderMap::new();
+            if let Some(v) = host {
+                h.insert(header::HOST, HeaderValue::from_str(v).unwrap());
+            }
+            open_pod_host_allowed(&h, &uri.parse().unwrap())
+        };
+        for ok in [
+            "localhost",
+            "localhost:8080",
+            "LocalHost.:8080",
+            "app.localhost:1",
+            "127.0.0.1",
+            "127.0.0.1:8080",
+            "10.0.2.2:8080",
+            "192.168.1.20:8080",
+            "[::1]",
+            "[::1]:8080",
+        ] {
+            assert!(check(Some(ok), "/v1/apps"), "{ok}");
+        }
+        for bad in [
+            "evil.example",
+            "evil.example:8080",
+            "localhost.evil.example",
+            "127.0.0.1.nip.io:8080",
+            "localhost:80x",
+            "[::1]x",
+            "[nope]:8080",
+            "",
+        ] {
+            assert!(!check(Some(bad), "/v1/apps"), "{bad}");
+        }
+        assert!(check(None, "/v1/apps"), "no Host: not a browser");
+        assert!(
+            check(None, "http://localhost:8080/v1/apps"),
+            "HTTP/2 authority"
+        );
+        assert!(!check(None, "http://evil.example:8080/v1/apps"));
+    }
+
     #[test]
     fn tokens_and_names() {
         let t = new_pod_token();
@@ -1026,6 +1265,7 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert("fly-client-ip", HeaderValue::from_static("198.51.100.1"));
         // Not behind Fly: the header is ignored.
+        let client_key = |h: &HeaderMap, p, trust| super::client_keys(h, p, trust).narrow;
         assert_eq!(client_key(&h, Some(peer), false), "203.0.113.7");
         assert_eq!(client_key(&h, Some(peer), true), "198.51.100.1");
         // Garbage in the header: the peer.
@@ -1046,5 +1286,9 @@ mod tests {
         );
         assert_eq!(a, client_key(&h, None, true));
         assert_eq!(a, "2001:db8:1:2::/64");
+        assert_eq!(
+            super::client_keys(&h, None, true).wide.as_deref(),
+            Some("2001:db8:1::/48")
+        );
     }
 }
