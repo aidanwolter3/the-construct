@@ -17,6 +17,10 @@ pub const MAX_TITLE_CHARS: usize = 60;
 pub const MAX_OPTIONS: usize = 50;
 /// Longest choice option.
 pub const MAX_OPTION_CHARS: usize = 60;
+/// Longest `infer` hint.
+pub const MAX_HINT_CHARS: usize = 120;
+/// Most fields a collection is ordered by.
+pub const MAX_ORDER_KEYS: usize = 4;
 
 /// Names every row has (never a field's name): its id, its URI, whether it
 /// was deleted, when it was made and last changed, and the client's id of
@@ -82,6 +86,11 @@ pub struct Field {
     /// Names it had before: still accepted from writes and bindings.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
+    /// Where an empty value comes from (decision
+    /// `collection-inferred-fields`): a choice field the pod fills in from
+    /// another field's text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub infer: Option<Infer>,
     /// Soft-removed at (unix seconds): hidden, its data kept for the purge
     /// window and restorable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,6 +98,15 @@ pub struct Field {
     /// Its data was purged (after the window): it can't come back.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub purged: bool,
+}
+
+/// How a choice field's value is inferred: from the text of field `from`
+/// (a field id, so a rename keeps it), classified into one of the options
+/// with `hint` saying what the options are ("grocery store section").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Infer {
+    pub from: String,
+    pub hint: String,
 }
 
 impl Field {
@@ -132,9 +150,17 @@ pub struct Definition {
     pub title: String,
     /// In order, removed ones too.
     pub fields: Vec<Field>,
-    /// The field id rows are listed by (else oldest first).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub order_by: Option<String>,
+    /// The field ids rows are listed by, first key first (else oldest
+    /// first). Stored as a string when there is one (as before multi-key
+    /// sorting), else a list.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        serialize_with = "ser_order",
+        deserialize_with = "de_order"
+    )]
+    pub order_by: Vec<String>,
+    /// Every order key descending.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub descending: bool,
     /// The next field id's number.
@@ -174,6 +200,26 @@ impl Definition {
         out
     }
 
+    /// [`Field::describe`] plus its `infer` (`{from: <field name>, hint}`).
+    pub fn describe_field(&self, f: &Field) -> Value {
+        let mut v = f.describe();
+        if let Some(i) = &f.infer {
+            let from = self
+                .by_id(&i.from)
+                .map_or(i.from.as_str(), |s| s.name.as_str());
+            v["infer"] = json!({ "from": from, "hint": i.hint });
+        }
+        v
+    }
+
+    /// The live fields rows are ordered by.
+    pub fn order_fields(&self) -> impl Iterator<Item = &Field> {
+        self.order_by
+            .iter()
+            .filter_map(|id| self.by_id(id))
+            .filter(|f| f.live())
+    }
+
     /// `{name, title, fields, removed_fields, order_by}` for Claude.
     pub fn describe(&self, now: i64, window: i64) -> Value {
         let removed: Vec<Value> = self
@@ -181,7 +227,7 @@ impl Definition {
             .iter()
             .filter(|f| !f.live() && !f.purged)
             .map(|f| {
-                let mut v = f.describe();
+                let mut v = self.describe_field(f);
                 let left = (f.removed_at.unwrap_or(now) + window - now).max(0);
                 v["restorable_for_days"] = json!((left + 86_399) / 86_400);
                 v
@@ -190,12 +236,129 @@ impl Definition {
         json!({
             "name": self.name,
             "title": self.title,
-            "fields": self.live_fields().map(Field::describe).collect::<Vec<_>>(),
+            "fields": self.live_fields().map(|f| self.describe_field(f)).collect::<Vec<_>>(),
             "removed_fields": removed,
-            "order_by": self.order_by.as_deref().and_then(|id| self.by_id(id)).map(|f| f.name.clone()),
+            "order_by": order_json(self.order_fields().map(|f| f.name.clone()).collect()),
             "descending": self.descending,
         })
     }
+}
+
+/// An order as JSON: `null`, one name, or a list of names.
+pub fn order_json(names: Vec<String>) -> Value {
+    match names.len() {
+        0 => Value::Null,
+        1 => json!(names[0]),
+        _ => json!(names),
+    }
+}
+
+fn ser_order<S: serde::Serializer>(v: &[String], s: S) -> Result<S::Ok, S::Error> {
+    match v {
+        [one] => s.serialize_str(one),
+        _ => v.serialize(s),
+    }
+}
+
+fn de_order<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Order {
+        One(String),
+        Many(Vec<String>),
+        None(()),
+    }
+    Ok(match Order::deserialize(d)? {
+        Order::One(s) => vec![s],
+        Order::Many(v) => v,
+        Order::None(()) => Vec::new(),
+    })
+}
+
+/// The names an order spec gives: a name, a list of names, or empty
+/// (`null`, `""`, `[]`).
+pub fn order_names(v: Option<&Value>) -> Result<Vec<String>, String> {
+    match v {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::String(s)) if s.trim().is_empty() => Ok(Vec::new()),
+        Some(Value::String(s)) => Ok(vec![s.trim().to_owned()]),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|i| {
+                i.as_str()
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| "an order is a field name or a list of field names".to_owned())
+            })
+            .collect(),
+        Some(_) => Err("an order is a field name or a list of field names".into()),
+    }
+}
+
+/// Field ids for the order `names` (names or aliases of live fields).
+pub fn resolve_order(def: &Definition, names: &[String]) -> Result<Vec<String>, String> {
+    names
+        .iter()
+        .map(|n| {
+            def.field(n).map(|f| f.id.clone()).ok_or_else(|| {
+                format!(
+                    "order field '{n}' is not one of the fields ({})",
+                    def.live_fields()
+                        .map(|f| f.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
+        })
+        .collect()
+}
+
+/// Set field `id`'s `infer` from a spec `{from, hint?}` (`null`: no
+/// inference; `None`: unchanged). `from` names a field of `def`.
+pub fn set_infer(def: &mut Definition, id: &str, v: Option<&Value>) -> Result<(), String> {
+    let Some(v) = v else { return Ok(()) };
+    let name = def.by_id(id).map(|f| f.name.clone()).unwrap_or_default();
+    let infer = match v {
+        Value::Null => None,
+        Value::Object(o) => {
+            let from_name = o.get("from").and_then(Value::as_str).unwrap_or("").trim();
+            let from = def
+                .field(from_name)
+                .ok_or_else(|| {
+                    format!("field '{name}': infer.from '{from_name}' is not one of the fields")
+                })?
+                .id
+                .clone();
+            let hint = match o.get("hint") {
+                None | Some(Value::Null) => name.replace('_', " "),
+                Some(Value::String(h)) => h.trim().to_owned(),
+                Some(_) => return Err(format!("field '{name}': infer.hint is text")),
+            };
+            if hint.is_empty() || hint.chars().count() > MAX_HINT_CHARS {
+                return Err(format!(
+                    "field '{name}': infer.hint is 1..={MAX_HINT_CHARS} characters"
+                ));
+            }
+            Some(Infer { from, hint })
+        }
+        _ => {
+            return Err(format!(
+                "field '{name}': infer is {{from: <text field>, hint?}} or null"
+            ));
+        }
+    };
+    if let Some(f) = def.fields.iter_mut().find(|f| f.id == id) {
+        f.infer = infer;
+    }
+    Ok(())
+}
+
+/// The text `text` as a cache key: lowercase, inner spaces collapsed.
+pub fn infer_key(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Whether `s` is a valid collection or field name: `[a-z][a-z0-9_]*`, at
@@ -366,6 +529,7 @@ pub fn parse_field(spec: &Value, id: String, max_chars: usize) -> Result<Field, 
         optional: spec["optional"].as_bool().unwrap_or(false),
         default: None,
         aliases: Vec::new(),
+        infer: None,
         removed_at: None,
         purged: false,
     };
@@ -442,8 +606,8 @@ pub fn set_default(field: &mut Field, v: Option<&Value>, max_chars: usize) -> Re
     }
 }
 
-/// Check a whole definition: unique names (aliases included), a valid
-/// order field.
+/// Check a whole definition: unique names (aliases included), valid order
+/// fields, inferred fields that can be inferred.
 pub fn check_definition(def: &Definition, max_fields: usize) -> Result<(), String> {
     if !valid_name(&def.name) {
         return Err(format!(
@@ -475,10 +639,54 @@ pub fn check_definition(def: &Definition, max_fields: usize) -> Result<(), Strin
             }
         }
     }
-    if let Some(o) = &def.order_by
-        && !def.by_id(o).is_some_and(Field::live)
-    {
-        return Err("the order field is not a live field".into());
+    for (i, o) in def.order_by.iter().enumerate() {
+        if !def.by_id(o).is_some_and(Field::live) {
+            return Err("an order field is not a live field".into());
+        }
+        if def.order_by[..i].contains(o) {
+            return Err("a field is listed twice in the order".into());
+        }
+    }
+    if def.order_by.len() > MAX_ORDER_KEYS {
+        return Err(format!(
+            "rows are ordered by at most {MAX_ORDER_KEYS} fields"
+        ));
+    }
+    for f in &live {
+        let Some(infer) = &f.infer else { continue };
+        if f.kind != Kind::Choice {
+            return Err(format!(
+                "field '{}' infers its value, so it must be a choice (the answer is one of its options)",
+                f.name
+            ));
+        }
+        if !f.optional && f.default.is_none() {
+            return Err(format!(
+                "field '{}' infers its value, so it must be optional or have a default (what a row reads until it is inferred)",
+                f.name
+            ));
+        }
+        match def.by_id(&infer.from) {
+            Some(src) if src.live() && src.kind == Kind::Text && src.id != f.id => {}
+            Some(src) if src.live() && src.id != f.id => {
+                return Err(format!(
+                    "field '{}' infers from '{}', which must be a text field",
+                    f.name, src.name
+                ));
+            }
+            Some(src) if src.id != f.id => {
+                return Err(format!(
+                    "field '{}' infers from '{}', which is removed; change or drop its infer first",
+                    f.name, src.name
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "field '{}' must infer from another text field",
+                    f.name
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -607,7 +815,7 @@ mod tests {
                     ..field(json!({"name": "due", "type": "date", "optional": true}))
                 },
             ],
-            order_by: None,
+            order_by: Vec::new(),
             descending: false,
             next_field: 4,
         }
@@ -746,7 +954,81 @@ mod tests {
         assert!(check_definition(&def, 10).is_err());
         let mut def = todos();
         assert!(check_definition(&def, 2).is_err());
-        def.order_by = Some("f9".into());
+        def.order_by = vec!["f9".into()];
         assert!(check_definition(&def, 10).is_err());
+        def.order_by = vec!["f1".into(), "f1".into()];
+        assert!(check_definition(&def, 10).is_err());
+    }
+
+    #[test]
+    fn orders_read_old_single_strings_and_write_one_key_as_a_string() {
+        let mut def = todos();
+        def.order_by = vec!["f2".into()];
+        let text = serde_json::to_value(&def).unwrap();
+        assert_eq!(text["order_by"], json!("f2"), "one key stays a string");
+        let back: Definition = serde_json::from_value(text).unwrap();
+        assert_eq!(back.order_by, vec!["f2".to_owned()]);
+        def.order_by = vec!["f2".into(), "f1".into()];
+        let text = serde_json::to_value(&def).unwrap();
+        assert_eq!(text["order_by"], json!(["f2", "f1"]));
+        let back: Definition = serde_json::from_value(text).unwrap();
+        assert_eq!(back.order_by, def.order_by);
+        def.order_by.clear();
+        let text = serde_json::to_value(&def).unwrap();
+        assert!(text.get("order_by").is_none());
+        let mut with_null = text.clone();
+        with_null["order_by"] = Value::Null;
+        let back: Definition = serde_json::from_value(with_null).unwrap();
+        assert!(back.order_by.is_empty());
+        assert_eq!(
+            order_names(Some(&json!(["a", " b "]))),
+            Ok(vec!["a".to_owned(), "b".to_owned()])
+        );
+        assert!(order_names(Some(&json!([1]))).is_err());
+    }
+
+    #[test]
+    fn inferred_fields_are_choices_from_a_text_field() {
+        let mut def = todos();
+        let section = Field {
+            id: "f4".into(),
+            ..field(json!({"name": "section", "type": "choice",
+                           "options": ["Produce", "Other"], "default": "Other"}))
+        };
+        def.fields.push(section);
+        set_infer(&mut def, "f4", Some(&json!({"from": "title"}))).unwrap();
+        assert_eq!(
+            def.by_id("f4").unwrap().infer,
+            Some(Infer {
+                from: "f1".into(),
+                hint: "section".into()
+            })
+        );
+        assert_eq!(check_definition(&def, 10), Ok(()));
+        let d = def.describe_field(def.by_id("f4").unwrap());
+        assert_eq!(d["infer"], json!({"from": "title", "hint": "section"}));
+        // From a non-text field, or itself.
+        let mut bad = def.clone();
+        set_infer(&mut bad, "f4", Some(&json!({"from": "done"}))).unwrap();
+        assert!(check_definition(&bad, 10).is_err());
+        let mut bad = def.clone();
+        set_infer(&mut bad, "f4", Some(&json!({"from": "section"}))).unwrap();
+        assert!(check_definition(&bad, 10).is_err());
+        // Its source removed.
+        let mut bad = def.clone();
+        bad.fields[0].removed_at = Some(1);
+        assert!(check_definition(&bad, 10).is_err());
+        // Only a choice; never required without a default.
+        let mut bad = def.clone();
+        bad.fields[3].kind = Kind::Text;
+        assert!(check_definition(&bad, 10).is_err());
+        let mut bad = def.clone();
+        bad.fields[3].default = None;
+        assert!(check_definition(&bad, 10).is_err());
+        assert!(set_infer(&mut def.clone(), "f4", Some(&json!({"from": "nope"}))).is_err());
+        assert!(set_infer(&mut def.clone(), "f4", Some(&json!("title"))).is_err());
+        set_infer(&mut def, "f4", Some(&Value::Null)).unwrap();
+        assert!(def.by_id("f4").unwrap().infer.is_none());
+        assert_eq!(infer_key("  Oat   MILK "), "oat milk");
     }
 }

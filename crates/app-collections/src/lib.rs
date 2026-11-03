@@ -4,8 +4,10 @@
 //! Claude never writes a data source. It *declares* data over MCP: a
 //! collection is a name and typed fields (`todos {title: text, done: bool,
 //! due: date?}`), and this one built-in source stores and serves any
-//! collection the same way. There is no logic: no computed fields, triggers
-//! or upstream calls.
+//! collection the same way. There is no stored logic: no computed fields,
+//! triggers or upstream calls; the one exception is an inferred choice field
+//! ([`infer`], decision `collection-inferred-fields`), which the pod fills in
+//! from another field's text.
 //!
 //! What layouts use (the same for every collection `<c>`):
 //!
@@ -32,6 +34,7 @@
 pub mod bindings;
 pub mod changes;
 pub mod db;
+pub mod infer;
 mod mcp;
 pub mod model;
 
@@ -157,6 +160,8 @@ pub const MANIFEST: SourceManifest = SourceManifest {
 #[derive(Debug, Default)]
 pub struct CollectionsAdapter {
     caps: Caps,
+    /// What fills in inferred fields (none: they keep their default).
+    classifier: Option<Arc<dyn infer::Classifier>>,
 }
 
 impl CollectionsAdapter {
@@ -166,7 +171,17 @@ impl CollectionsAdapter {
 
     /// With other limits (tests).
     pub fn with_caps(caps: Caps) -> Self {
-        Self { caps }
+        Self {
+            caps,
+            ..Self::default()
+        }
+    }
+
+    /// With `classifier` filling in inferred fields
+    /// ([`infer::ModelClassifier::from_env`] in the server; a fake in tests).
+    pub fn with_classifier(mut self, classifier: Option<Arc<dyn infer::Classifier>>) -> Self {
+        self.classifier = classifier;
+        self
     }
 
     pub fn caps(&self) -> Caps {
@@ -445,9 +460,10 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
                 }
                 if let Some(r) = db::row_by_client(tx, &name, c)? {
                     // The outbox retried: the same row.
-                    return Ok(Ok(
+                    return Ok(Ok((
                         json!({ "ok": true, "id": r.id, "uri": db::row_uri(&name, &r.id) }),
-                    ));
+                        Vec::new(),
+                    )));
                 }
             }
             let mut values = Map::new();
@@ -460,10 +476,7 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
                     e,
                 )));
             }
-            if let Err(e) = check_usage(tx, caps, 1, bytes_of(&values))? {
-                return Ok(Err(e));
-            }
-            let row = Row {
+            let mut row = Row {
                 id: db::new_id("r"),
                 client_id,
                 values,
@@ -471,10 +484,15 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
                 updated_at: now,
                 deleted_at: None,
             };
+            let jobs = infer::after_write(tx, &def, None, &mut row, &body, now)?;
+            if let Err(e) = check_usage(tx, caps, 1, bytes_of(&row.values))? {
+                return Ok(Err(e));
+            }
             db::insert_row(tx, &name, &row)?;
-            return Ok(Ok(
+            return Ok(Ok((
                 json!({ "ok": true, "id": row.id, "uri": db::row_uri(&name, &row.id) }),
-            ));
+                jobs,
+            )));
         }
         let Some(id) = str_of("id") else {
             return Ok(Err(fail(
@@ -494,7 +512,7 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
                 row.updated_at = now;
                 db::save_row(tx, &name, &row)?;
             }
-            return Ok(Ok(json!({ "ok": true, "id": row.id })));
+            return Ok(Ok((json!({ "ok": true, "id": row.id }), Vec::new())));
         }
         if row.deleted_at.is_some() && body.get("deleted") != Some(&json!(false)) {
             return Ok(Err(
@@ -502,6 +520,7 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
             ));
         }
         let before = bytes_of(&row.values);
+        let before_values = row.values.clone();
         if let Err(e) =
             model::apply_write(&def, &mut row.values, &body, Write::Update, caps.text_chars)
         {
@@ -511,6 +530,7 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
                 e,
             )));
         }
+        let jobs = infer::after_write(tx, &def, Some(&before_values), &mut row, &body, now)?;
         match body.get("deleted") {
             Some(Value::Bool(true)) => row.deleted_at = row.deleted_at.or(Some(now)),
             Some(Value::Bool(false)) => {
@@ -528,10 +548,12 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
         }
         row.updated_at = now;
         db::save_row(tx, &name, &row)?;
-        Ok(Ok(json!({ "ok": true, "id": row.id })))
+        Ok(Ok((json!({ "ok": true, "id": row.id }), jobs)))
     })
     .await?;
     pod.publish_data_all(NAME);
+    let (out, jobs) = out;
+    infer::spawn(pod, collection, jobs);
     Ok(out)
 }
 

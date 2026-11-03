@@ -118,6 +118,7 @@ dependencies = [
  "http-body-util",
  "pod-core",
  "protocol",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",

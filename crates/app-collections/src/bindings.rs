@@ -371,7 +371,7 @@ mod tests {
                 .enumerate()
                 .map(|(i, s)| model::parse_field(s, format!("f{}", i + 1), 99).unwrap())
                 .collect(),
-            order_by: None,
+            order_by: Vec::new(),
             descending: false,
             next_field: 3,
         };

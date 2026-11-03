@@ -9,6 +9,10 @@
 //!   nothing is lost (and put back when a later change can read them).
 //! - `collections_edits` / `collections_edit_rows`: Claude's row edits,
 //!   each row's state before and after, so an edit undoes as one step.
+//! - `collections_inferred`: answers for inferred fields (decision
+//!   `collection-inferred-fields`), by collection, field id and normalized
+//!   source text, so each text is classified once; a person's edit of the
+//!   field replaces the answer.
 
 use std::cmp::Ordering;
 
@@ -22,7 +26,21 @@ use crate::model::{self, Definition, Field, Kind};
 pub static MIGRATIONS: &[Migration] = &[
     // 1: the schema.
     Migration::Sql(SCHEMA),
+    // 2: inferred field answers (decision `collection-inferred-fields`).
+    Migration::Sql(INFERRED),
 ];
+
+const INFERRED: &str = "
+CREATE TABLE collections_inferred (
+    collection TEXT NOT NULL,
+    field_id   TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (collection, field_id, key)
+);
+";
 
 const SCHEMA: &str = "
 CREATE TABLE collections_defs (
@@ -259,29 +277,47 @@ pub fn all_rows(conn: &Connection, collection: &str, deleted: bool) -> rusqlite:
         .collect()
 }
 
-/// The live rows of `def`'s collection in its order: by the order field
-/// (empty last), then oldest first.
+/// The live rows of `def`'s collection in its order: by each order field
+/// in turn (empty last), then oldest first.
 pub fn rows(conn: &Connection, def: &Definition) -> rusqlite::Result<Vec<Row>> {
     let mut rows = all_rows(conn, &def.name, false)?;
-    if let Some(field) = def.order_by.as_deref().and_then(|id| def.by_id(id)) {
+    let keys: Vec<&Field> = def.order_fields().collect();
+    if !keys.is_empty() {
+        // Stable: equal rows stay oldest first.
         rows.sort_by(|a, b| {
-            let (x, y) = (a.values.get(&field.id), b.values.get(&field.id));
-            let x = x.cloned().or_else(|| field.default.clone());
-            let y = y.cloned().or_else(|| field.default.clone());
-            match (x, y) {
-                (None, None) => Ordering::Equal,
-                (None, Some(_)) => Ordering::Greater,
-                (Some(_), None) => Ordering::Less,
-                (Some(x), Some(y)) => {
-                    let o = compare(field, &x, &y);
-                    if def.descending { o.reverse() } else { o }
-                }
-            }
+            keys.iter()
+                .map(|f| compare_rows(f, a, b, def.descending))
+                .find(|o| o.is_ne())
+                .unwrap_or(Ordering::Equal)
         });
     }
     Ok(rows)
 }
 
+fn compare_rows(field: &Field, a: &Row, b: &Row, descending: bool) -> Ordering {
+    let x = a
+        .values
+        .get(&field.id)
+        .cloned()
+        .or_else(|| field.default.clone());
+    let y = b
+        .values
+        .get(&field.id)
+        .cloned()
+        .or_else(|| field.default.clone());
+    match (x, y) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(x), Some(y)) => {
+            let o = compare(field, &x, &y);
+            if descending { o.reverse() } else { o }
+        }
+    }
+}
+
+/// Two values of `field`: a choice by the order of its options (a value
+/// that is no longer an option after them).
 fn compare(field: &Field, x: &Value, y: &Value) -> Ordering {
     match field.kind {
         Kind::Number => x
@@ -295,6 +331,7 @@ fn compare(field: &Field, x: &Value, y: &Value) -> Ordering {
                     .options
                     .iter()
                     .position(|o| Some(o.as_str()) == v.as_str())
+                    .unwrap_or(field.options.len())
             };
             pos(x).cmp(&pos(y))
         }
@@ -380,6 +417,66 @@ pub fn save_row(tx: &Connection, collection: &str, row: &Row) -> rusqlite::Resul
         ],
     )?;
     Ok(())
+}
+
+// ---------- inferred answers ----------
+
+/// Who gave an inferred answer.
+pub const SOURCE_MODEL: &str = "model";
+/// A person (or Claude's row edit) set the field by hand.
+pub const SOURCE_EDIT: &str = "edit";
+
+/// The cached answer for field `field_id` of `collection` and source text
+/// key `key` (see [`model::infer_key`]).
+pub fn inferred(
+    conn: &Connection,
+    collection: &str,
+    field_id: &str,
+    key: &str,
+) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT value FROM collections_inferred WHERE collection = ?1 AND field_id = ?2 AND key = ?3",
+        params![collection, field_id, key],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+/// Remember `value` as the answer for `key` (`source`: [`SOURCE_MODEL`] or
+/// [`SOURCE_EDIT`]). A model's answer never replaces a person's.
+pub fn remember_inferred(
+    conn: &Connection,
+    collection: &str,
+    field_id: &str,
+    key: &str,
+    value: &str,
+    source: &str,
+    now: i64,
+) -> rusqlite::Result<()> {
+    if key.is_empty() {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO collections_inferred (collection, field_id, key, value, source, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT (collection, field_id, key) DO UPDATE SET
+             value = excluded.value, source = excluded.source, updated_at = excluded.updated_at
+         WHERE excluded.source = 'edit' OR collections_inferred.source = 'model'",
+        params![collection, field_id, key, value, source, now],
+    )?;
+    Ok(())
+}
+
+/// Cached answers per field id of `collection`.
+pub fn inferred_counts(
+    conn: &Connection,
+    collection: &str,
+) -> rusqlite::Result<Vec<(String, i64)>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT field_id, COUNT(*) FROM collections_inferred WHERE collection = ?1 GROUP BY field_id",
+    )?;
+    stmt.query_map([collection], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect()
 }
 
 // ---------- type changes ----------
@@ -492,7 +589,7 @@ pub fn convert_field(
 
 /// Store a row's values without touching `updated_at` (a definition change
 /// is not an edit of the row).
-fn save_row_values(tx: &Connection, collection: &str, row: &Row) -> rusqlite::Result<()> {
+pub fn save_row_values(tx: &Connection, collection: &str, row: &Row) -> rusqlite::Result<()> {
     tx.execute(
         "UPDATE collections_rows SET values_json = ?1 WHERE collection = ?2 AND id = ?3",
         params![

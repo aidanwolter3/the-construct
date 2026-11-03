@@ -25,7 +25,10 @@ pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
         Arc::new(PixelfedAdapter::new(pixelfed)),
         Arc::new(app_recipes::RecipesAdapter::new()),
         app_pixelfed::apps::demo_adapter(),
-        Arc::new(app_collections::CollectionsAdapter::new()),
+        Arc::new(
+            app_collections::CollectionsAdapter::new()
+                .with_classifier(app_collections::infer::ModelClassifier::from_env()),
+        ),
     ]
 }
 

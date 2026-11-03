@@ -4,24 +4,26 @@
 //!
 //! | Op | Effect |
 //! |---|---|
-//! | `{op: add_field, name, type, options?, optional?, default?}` | a new field (optional or with a default: existing rows read empty or the default) |
+//! | `{op: add_field, name, type, options?, optional?, default?, infer?}` | a new field (optional or with a default: existing rows read empty or the default; an inferred one is then filled in) |
 //! | `{op: rename_field, field, to}` | a new name; the old one stays an alias |
 //! | `{op: remove_field, field}` | soft removal: hidden, data kept for the purge window |
 //! | `{op: restore_field, field}` | undo a removal (its data comes back) |
-//! | `{op: update_field, field, type?, options?, optional?, default?}` | values converted row by row; what doesn't fit is kept aside |
-//! | `{op: set_order, field?, descending?}` | the list order (no field: oldest first) |
+//! | `{op: update_field, field, type?, options?, optional?, default?, infer?}` | values converted row by row; what doesn't fit is kept aside (`infer: null` stops inferring) |
+//! | `{op: set_order, field?, descending?}` | the list order: a field or a list of fields, first key first (none: oldest first) |
 //! | `{op: set_title, title}` | the collection's title |
 
 use serde_json::Value;
 
 use crate::model::{self, Definition, Field};
 
-/// A new definition and the ids of the fields whose values must be
-/// converted (their type or options changed).
+/// A new definition, the ids of the fields whose values must be converted
+/// (their type or options changed) and of the fields whose empty values
+/// must be inferred (their `infer` is new or changed).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Planned {
     pub def: Definition,
     pub convert: Vec<String>,
+    pub infer: Vec<String>,
 }
 
 /// The field an op names (by name or alias, live or, for `restore_field`,
@@ -62,8 +64,22 @@ pub fn plan(
     model::check_definition(&def, max_fields).map_err(|e| (ops.len().saturating_sub(1), e))?;
     Ok(Planned {
         convert: to_convert(&before, &def),
+        infer: to_infer(&before, &def),
         def,
     })
+}
+
+fn to_infer(before: &Definition, after: &Definition) -> Vec<String> {
+    after
+        .live_fields()
+        .filter(|f| {
+            f.infer.is_some()
+                && before
+                    .by_id(&f.id)
+                    .is_none_or(|b| !b.live() || b.infer != f.infer)
+        })
+        .map(|f| f.id.clone())
+        .collect()
 }
 
 fn to_convert(before: &Definition, after: &Definition) -> Vec<String> {
@@ -96,7 +112,9 @@ fn apply_op(def: &mut Definition, op: &Value, now: i64, max_chars: usize) -> Res
                 return Err(format!("there is already a field '{}'", field.name));
             }
             def.next_field += 1;
+            let id = field.id.clone();
             def.fields.push(field);
+            model::set_infer(def, &id, op.get("infer"))?;
         }
         "rename_field" => {
             let to = arg("to").to_owned();
@@ -124,9 +142,7 @@ fn apply_op(def: &mut Definition, op: &Value, now: i64, max_chars: usize) -> Res
             let f = find(def, arg("field"), false)?;
             f.removed_at = Some(now);
             let id = f.id.clone();
-            if def.order_by.as_deref() == Some(id.as_str()) {
-                def.order_by = None;
-            }
+            def.order_by.retain(|o| *o != id);
         }
         "restore_field" => {
             let name = arg("field").to_owned();
@@ -170,14 +186,12 @@ fn apply_op(def: &mut Definition, op: &Value, now: i64, max_chars: usize) -> Res
                     f.name
                 ));
             }
+            let id = f.id.clone();
+            model::set_infer(def, &id, op.get("infer"))?;
         }
         "set_order" => {
-            let name = arg("field");
-            def.order_by = if name.is_empty() {
-                None
-            } else {
-                Some(find(def, name, false)?.id.clone())
-            };
+            let names = model::order_names(op.get("field"))?;
+            def.order_by = model::resolve_order(def, &names)?;
             def.descending = op["descending"].as_bool().unwrap_or(false);
         }
         "set_title" => {
@@ -233,16 +247,31 @@ pub fn restore(
             }
         })
         .collect();
-    if def
+    let order: Vec<String> = def
         .order_by
-        .as_deref()
-        .is_some_and(|id| !def.by_id(id).is_some_and(Field::live))
-    {
-        def.order_by = None;
+        .iter()
+        .filter(|id| def.by_id(id).is_some_and(Field::live))
+        .cloned()
+        .collect();
+    def.order_by = order;
+    // An inferred field whose source is gone again stops inferring.
+    let gone: Vec<String> = def
+        .fields
+        .iter()
+        .filter(|f| {
+            f.infer
+                .as_ref()
+                .is_some_and(|i| !def.by_id(&i.from).is_some_and(Field::live))
+        })
+        .map(|f| f.id.clone())
+        .collect();
+    for f in def.fields.iter_mut().filter(|f| gone.contains(&f.id)) {
+        f.infer = None;
     }
     model::check_definition(&def, max_fields)?;
     Ok(Planned {
         convert: to_convert(current, &def),
+        infer: to_infer(current, &def),
         def,
     })
 }
@@ -266,7 +295,7 @@ mod tests {
                 .enumerate()
                 .map(|(i, s)| model::parse_field(s, format!("f{}", i + 1), 99).unwrap())
                 .collect(),
-            order_by: None,
+            order_by: Vec::new(),
             descending: false,
             next_field: 4,
         }
@@ -297,7 +326,7 @@ mod tests {
             "the old name is an alias"
         );
         assert!(d.field("done").is_none() && d.is_removed_name("done"));
-        assert_eq!(d.order_by.as_deref(), Some("f3"));
+        assert_eq!(d.order_by, vec!["f3".to_owned()]);
         assert_eq!(p.convert, vec!["f1".to_owned()]);
         // Renaming back drops the alias.
         let back = plan(
@@ -312,6 +341,71 @@ mod tests {
             back.def.field("due").unwrap().aliases,
             vec!["deadline".to_owned()]
         );
+    }
+
+    #[test]
+    fn orders_take_several_fields_and_inferred_fields_are_reported() {
+        let p = plan(
+            &todos(),
+            &[
+                json!({"op": "add_field", "name": "kind", "type": "choice",
+                       "options": ["home", "work"], "default": "home",
+                       "infer": {"from": "title", "hint": "where the task is done"}}),
+                json!({"op": "set_order", "field": ["kind", "done"]}),
+            ],
+            1,
+            99,
+            10,
+        )
+        .unwrap();
+        assert_eq!(p.def.order_by, vec!["f4".to_owned(), "f2".to_owned()]);
+        assert_eq!(p.infer, vec!["f4".to_owned()]);
+        // Removing an order field drops it from the order; the rest stays.
+        let p2 = plan(
+            &p.def,
+            &[json!({"op": "remove_field", "field": "done"})],
+            2,
+            99,
+            10,
+        )
+        .unwrap();
+        assert_eq!(p2.def.order_by, vec!["f4".to_owned()]);
+        assert!(p2.infer.is_empty(), "unchanged infer is not reported again");
+        // The source of an inferred field can't be removed while it infers.
+        let err = plan(
+            &p.def,
+            &[json!({"op": "remove_field", "field": "title"})],
+            2,
+            99,
+            10,
+        )
+        .unwrap_err();
+        assert!(err.1.contains("infers from"), "{}", err.1);
+        // Stop inferring, then the order goes back to oldest first.
+        let p3 = plan(
+            &p.def,
+            &[
+                json!({"op": "update_field", "field": "kind", "infer": null}),
+                json!({"op": "set_order"}),
+            ],
+            3,
+            99,
+            10,
+        )
+        .unwrap();
+        assert!(p3.def.field("kind").unwrap().infer.is_none());
+        assert!(p3.def.order_by.is_empty());
+        for bad in [
+            json!({"op": "set_order", "field": ["done", "nope"]}),
+            json!({"op": "set_order", "field": ["done", "done"]}),
+            json!({"op": "add_field", "name": "x", "type": "text", "optional": true,
+                   "infer": {"from": "title"}}),
+        ] {
+            assert!(
+                plan(&todos(), std::slice::from_ref(&bad), 1, 99, 10).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

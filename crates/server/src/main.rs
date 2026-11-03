@@ -43,6 +43,9 @@
 //!   warning; a malformed value stops the server.
 //! - `CONSTRUCT_PUBLIC_URL`: the base URL clients use (OAuth metadata for
 //!   Claude); default: from each request's `Host`, `https` behind Fly.
+//! - `CONSTRUCT_INFER_API_KEY`, `CONSTRUCT_INFER_MODEL`, `CONSTRUCT_INFER_URL`:
+//!   the model Collections asks for inferred fields (unset: they keep their
+//!   default).
 //! - `PIXELFED_*`: see `PixelfedConfig::from_env` and README.
 //!
 //! A pod's layout files are synced into its database when the pod is first

@@ -1,5 +1,7 @@
 # Custom apps keep their own data in Collections, one generic data source that Claude declares data in
 
+Extended by [collection-inferred-fields](collection-inferred-fields.md) (inferred choice fields, multi-key order).
+
 Date: 2026-11-03. Related: D37, D41, D52, [custom-apps-and-data-sources](custom-apps-and-data-sources.md),
 [mcp-connector](mcp-connector.md), [layout-parts](layout-parts.md), issue #54.
 
