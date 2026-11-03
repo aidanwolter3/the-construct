@@ -215,6 +215,9 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
         ActionIntent::LocalSet { .. } => {
             out.insert(crate::feature::LOCAL_SET);
         }
+        ActionIntent::OpenLink { .. } => {
+            out.insert(crate::feature::OPEN_LINK);
+        }
         _ => {}
     }
 }

@@ -242,9 +242,7 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 | `CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES` | `26214400` (25 MiB) | The same for a temporary pod. |
 | `CONSTRUCT_MIN_FREE_DISK_BYTES` | `104857600` (100 MiB) | Free space kept on the data volume: below it uploads get 507 `low_disk_space` and new temporary pods 503 `low_disk_space`, so the volume never fills and every pod's other writes keep working. |
 | `CONSTRUCT_PUBLIC_URL` | from each request's `Host` | The base URL clients reach the server at, for the OAuth metadata Claude reads (decision `mcp-connector`), e.g. `https://the-construct-pod.fly.dev`. Unset: the request's `Host`, `https` behind Fly or with `X-Forwarded-Proto: https`. |
-| `CONSTRUCT_WATCHER_ANTHROPIC_API_KEY` | unset | Claude API key for the watcher's `llm` extractor (decision [`watcher`](docs/decisions/watcher.md)). Unset: `llm` is off (`auto` stops at `ics`/`jsonld`, and an `llm` target reports it in its health). Shared by every pod on the server; the model runs only when a watched page changed. |
-| `CONSTRUCT_WATCHER_LLM_MODEL` | `claude-opus-5-5` | The model of the `llm` extractor. |
-| `CONSTRUCT_WATCHER_LLM_URL` | `https://api.anthropic.com` | Base URL of the Messages API (tests point it at a fake). |
+| `CONSTRUCT_WATCHER_LLM_MODEL` | `CONSTRUCT_INFER_MODEL`, else `claude-opus-5-5` | The model of the watcher's `llm` extractor (decision [`watcher`](docs/decisions/watcher.md)). The extractor uses the same key and endpoint as Collections, `CONSTRUCT_INFER_API_KEY` and `CONSTRUCT_INFER_URL`; without the key, `llm` is off (`auto` stops at `ics`/`jsonld`, and an `llm` site reports it in its health). The model runs only when a watched page changed. |
 | `CONSTRUCT_WATCHER_PRIVATE_HOSTS` | unset | `1`: watched websites may be on private addresses (local development). Otherwise only public addresses are fetched. |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
 
@@ -397,34 +395,38 @@ a default) and the pod stores, validates and serves the rows. There is no logic:
 ## Watcher (events from websites)
 
 The **Watcher** app (decision `watcher`, issue #58, `crates/app-watcher`) checks websites for events and sends a
-notification when a new one matches a rule ("Improv Boulder lists a show with Budget Cuts"). A website (*target*) and
-a rule are rows of config, added in the app or by Claude over MCP; no deploy per site.
+notification when a new one matches one of its rules ("Improv Boulder lists a show with Budget Cuts"). Each website
+(*target*) has its own rules (decision `watcher-rules-per-site`). Both are rows of config that Claude adds over MCP;
+no deploy per site. The app shows them (Matches and Sites tabs; a site lists its rules and every event, matches
+highlighted) but doesn't edit them.
 
 - **Extractors:** `ics` (calendar feeds), `jsonld` (schema.org `Event` markup, which most event sites embed), `llm`
-  (Claude reads the page text; needs `CONSTRUCT_WATCHER_ANTHROPIC_API_KEY`), `auto` (the default: the first of those
+  (Claude reads the page text; needs `CONSTRUCT_INFER_API_KEY`), `auto` (the default: the first of those
   that applies). `details: true` fetches each new event's own page once for its full description (lineups).
 - **Checks:** conditional `GET` (`ETag`, `Last-Modified`) and a body hash: an unchanged page costs no extraction. Back
   off on errors, honour `Retry-After`. Each target shows its health (`4 upcoming events · checked 5 min ago`,
   failing, no events found). Checks run from the notification poller (while a device is registered) and when the app
   opens with a target overdue. Temporary pods don't fetch.
-- **Rules:** any of / all of / none of phrases, venue, days, a window in days, which sites. Each new match is one
-  notification (`watcher.matches`), opening the event in the app.
+- **Rules:** each belongs to one site: any of / all of / none of phrases, venue, days, a window in days (none: every
+  event of the site). Each new match is one notification (`watcher.matches`), opening the event in the app.
+- **Events** are served as plain text (Markdown descriptions converted) with `tickets_url`, a tickets link found in the
+  description; the layout opens it and the event page with `action.link.open` (layout feature `open_link`).
 
 | A layout uses | |
 |---|---|
 | feed `["watcher", "matches"]` | upcoming matched events `watcher://events/<id>` under `watcher:matches` |
 | feed `["watcher", "targets"]` | sites `watcher://targets/<id>` (with `health`, `health_text`, `failing`) under `watcher:targets`; rules `watcher://rules/<id>` under `watcher:rules` |
-| `GET /v1/watcher/screens/event?id=…` / `…/screens/target?id=…` | an event; a site and its events (`watcher:target:<id>:events`) |
+| `GET /v1/watcher/screens/event?id=…` / `…/screens/target?id=…` | an event (`watcher:event:<id>`); a site (`watcher:target:<id>`), its rules (`…:rules`) and events (`…:events`) |
 | `POST /v1/watcher/targets/create {url, title?, extractor?, interval_minutes?, hint?, details?, utc_offset?, client_id?}` | add a site |
 | `POST /v1/watcher/targets/update {id, …, archived?}` · `POST /v1/watcher/targets/refresh {id}` | change or archive a site; check it now |
-| `POST /v1/watcher/rules/create {title?, keywords, exclude?, venue?, days?, within_days?, targets?, client_id?}` · `…/rules/update {id, …}` | add, change or archive a rule |
+| `POST /v1/watcher/rules/create {target, title?, keywords, exclude?, venue?, days?, within_days?, client_id?}` · `…/rules/update {id, …}` | add a rule to a site, change or archive one |
 | `POST /v1/watcher/events/seen {id, seen}` | mark an event's matches seen |
 
 - **MCP tools:** `watcher_status`, `watcher_preview` (fetch and extract now, nothing saved), `watcher_set_target`,
   `watcher_set_rule`, `watcher_refresh`.
 - **Caps per pod:** 50 sites, 100 rules; events are kept 30 days after they are over.
 - **Try it locally:** `CONSTRUCT_WATCHER_PRIVATE_HOSTS=1 cargo run -p server`, serve a page with an `.ics` or JSON-LD
-  events, add it under "Sites & rules", and add a rule.
+  events, and add it and a rule with `POST /v1/watcher/targets/create` and `…/rules/create` (or Claude's MCP tools).
 
 ## Notifications
 
@@ -1202,6 +1204,7 @@ entries starting with `#` are comments. An argument cannot contain `;`, and sinc
 | `idle` | Waits until the UI is idle. |
 | `assert-text <text>` | Fails unless some node's text or content description contains `<text>`. Retries for up to 2 s. |
 | `assert-no-text <text>` | The inverse of `assert-text`. |
+| `assert-link <text>` | Fails unless an `action.link.open` opened a link containing `<text>` (no browser opens in the simulator); reports the link. Retries for up to 2 s. |
 | `wait-text <ms> <text>` | Like `assert-text` with a custom timeout (at most 600000), e.g. `wait-text 15000 Alice Lumen` while a live feed loads. |
 | `wait-images [ms]` | Waits until no image is loading (default 10000 ms, at most 600000). Works in both modes. |
 | `swipe-left <target>` / `swipe-right <target>` | Touch-swipes the selected node; `swipe-left` on a carousel shows the next page. |

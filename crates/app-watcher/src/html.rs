@@ -186,6 +186,109 @@ pub fn decode_entities(s: &str) -> String {
     out
 }
 
+/// Ticket sellers whose links count as a "Get tickets" link anywhere in a
+/// description.
+const TICKET_HOSTS: [&str; 10] = [
+    "eventbrite.",
+    "humanitix.",
+    "ticketmaster.",
+    "dice.fm",
+    "axs.com",
+    "etix.com",
+    "seetickets.",
+    "tixr.com",
+    "ticketweb.",
+    "comiccents.",
+];
+
+/// The tickets link of a description: a Markdown link whose text mentions
+/// tickets, else the first link to a ticket seller. `None` if neither.
+pub fn tickets_url(description: &str) -> Option<String> {
+    let mut first_seller: Option<String> = None;
+    let mut rest = description;
+    while let Some(i) = rest.find("](") {
+        let text_start = rest[..i].rfind('[').map_or(0, |j| j + 1);
+        let text = rest[text_start..i].to_lowercase();
+        let after = &rest[i + 2..];
+        let end = after.find(')').unwrap_or(after.len());
+        let url = after[..end].trim();
+        if url.starts_with("http://") || url.starts_with("https://") {
+            if text.contains("ticket") {
+                return Some(url.to_owned());
+            }
+            if first_seller.is_none() && TICKET_HOSTS.iter().any(|h| url.contains(h)) {
+                first_seller = Some(url.to_owned());
+            }
+        }
+        rest = &after[end.min(after.len())..];
+    }
+    if first_seller.is_none() {
+        for word in
+            description.split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == '"')
+        {
+            if (word.starts_with("https://") || word.starts_with("http://"))
+                && TICKET_HOSTS.iter().any(|h| word.contains(h))
+            {
+                return Some(word.trim_end_matches(['.', ',', ';']).to_owned());
+            }
+        }
+    }
+    first_seller
+}
+
+/// A title with whitespace runs as one space.
+pub fn clean_title(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Plain text from a description written in Markdown (Meetup's are):
+/// headings, bold and italics markers dropped, links as their text, at
+/// most one blank line in a row.
+pub fn markdown_to_text(s: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for line in s.lines() {
+        let mut l = line.trim_end().to_owned();
+        let t = l.trim_start();
+        if t.starts_with('#') {
+            l = t.trim_start_matches('#').trim_start().to_owned();
+        }
+        // `[text](url)` -> `text`.
+        let mut out = String::with_capacity(l.len());
+        let mut rest = l.as_str();
+        while let Some(i) = rest.find('[') {
+            let after = &rest[i + 1..];
+            match after.find("](") {
+                Some(j) if !after[..j].contains('[') => match after[j + 2..].find(')') {
+                    Some(k) => {
+                        out.push_str(&rest[..i]);
+                        out.push_str(&after[..j]);
+                        rest = &after[j + 2 + k + 1..];
+                    }
+                    None => {
+                        out.push_str(&rest[..=i]);
+                        rest = after;
+                    }
+                },
+                _ => {
+                    out.push_str(&rest[..=i]);
+                    rest = after;
+                }
+            }
+        }
+        out.push_str(rest);
+        let out = out.replace("**", "").replace("__", "");
+        let blank = out.trim().is_empty();
+        if blank && lines.last().is_none_or(|p| p.is_empty()) {
+            continue;
+        }
+        lines.push(if blank { String::new() } else { out });
+    }
+    while lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+    lines.join("\n")
+}
+
 /// At most `max` characters of `s` (on a character boundary).
 pub fn truncate(s: &str, max: usize) -> String {
     match s.char_indices().nth(max) {
@@ -214,6 +317,29 @@ mod tests {
         let html = r#"<script>x</script><SCRIPT type="application/ld+json">{"a":1}</SCRIPT>
             <script type='application/ld+json'>[2]</script>"#;
         assert_eq!(ld_json_blocks(html), vec![r#"{"a":1}"#, "[2]"]);
+    }
+
+    #[test]
+    fn markdown() {
+        let md = "Improv Boulder\n## Time & Location\n\n\n**[Get Tickets Here!](https://x.example/a)** now\nSee [a [b]](c) and [x]\n\n";
+        assert_eq!(
+            markdown_to_text(md),
+            "Improv Boulder\nTime & Location\n\nGet Tickets Here! now\nSee [a b] and [x]"
+        );
+        assert_eq!(clean_title(" Show:  Nov 6th "), "Show: Nov 6th");
+        assert_eq!(
+            tickets_url(
+                "Join! **[Get Tickets Here!](https://x.example/t)** or [map](https://m.example)"
+            )
+            .as_deref(),
+            Some("https://x.example/t")
+        );
+        assert_eq!(
+            tickets_url("[Info](https://a.example) then https://www.eventbrite.com/e/1.")
+                .as_deref(),
+            Some("https://www.eventbrite.com/e/1")
+        );
+        assert_eq!(tickets_url("[Info](https://a.example)"), None);
     }
 
     #[test]

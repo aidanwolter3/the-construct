@@ -262,7 +262,7 @@ pub async fn save_rule(pod: &Pod, body: Value) -> Result<Value, Refusal> {
     let id = text(&body, "id", 64)?.filter(|i| !i.is_empty());
     let client_id = text(&body, "client_id", 64)?.filter(|i| !i.is_empty());
     let (lookup_id, lookup_client) = (id.clone(), client_id.clone());
-    let (by_id, by_client, live) = pod
+    let (by_id, by_client, live, live_sites) = pod
         .blocking(move |s| {
             s.with_conn(|c| {
                 let by_id = match lookup_id.as_deref() {
@@ -276,14 +276,19 @@ pub async fn save_rule(pod: &Pod, body: Value) -> Result<Value, Refusal> {
                     Some(cl) => db::rule_by_client(c, cl)?,
                     None => None,
                 };
-                Ok((by_id, by_client, db::live_rule_count(c)?))
+                let live_sites: Vec<String> = db::targets(c)?
+                    .into_iter()
+                    .filter(|t| !t.archived)
+                    .map(|t| t.id)
+                    .collect();
+                Ok((by_id, by_client, db::live_rule_count(c)?, live_sites))
             })
         })
         .await
         .map_err(|_| store_failed())?;
     let creating = id.is_none();
     let mut r = match (id.as_deref(), by_id, by_client) {
-        (None, _, Some(made)) => return Ok(Value::Object(db::rule_entity(&made).0)),
+        (None, _, Some(made)) => return rule_answer(pod, made).await,
         (Some(i), None, _) => return Err(not_found("rule", i)),
         (Some(_), Some(r), _) => r,
         (None, _, None) => Rule {
@@ -298,6 +303,16 @@ pub async fn save_rule(pod: &Pod, body: Value) -> Result<Value, Refusal> {
         r.title = t;
     }
     rules::apply(&mut r.spec, &body).map_err(invalid)?;
+    // A rule belongs to one site (decision `watcher-rules-per-site`). A
+    // create that names none (an older layout's form) gets the only site.
+    if creating && r.spec.targets.is_empty() && live_sites.len() == 1 {
+        r.spec.targets = live_sites.clone();
+    }
+    if let Some(t) = r.spec.targets.iter().find(|t| !live_sites.contains(t))
+        && (creating || body.get("target").is_some() || body.get("targets").is_some())
+    {
+        return Err(invalid(format!("\"{t}\" is not a site this pod watches")));
+    }
     if let Some(a) = boolean(&body, "archived")? {
         r.archived = a;
     }
@@ -324,5 +339,16 @@ pub async fn save_rule(pod: &Pod, body: Value) -> Result<Value, Refusal> {
     // Matches of a new or changed rule are notified at once.
     let p = pod.clone();
     tokio::spawn(async move { crate::check::deliver(&p).await });
-    Ok(Value::Object(db::rule_entity(&r).0))
+    rule_answer(pod, r).await
+}
+
+/// A rule's entity, with its site's title.
+async fn rule_answer(pod: &Pod, r: Rule) -> Result<Value, Refusal> {
+    let site = {
+        let r = r.clone();
+        pod.blocking(move |s| s.with_conn(|c| db::rule_site(c, &r)))
+            .await
+            .map_err(|_| store_failed())?
+    };
+    Ok(Value::Object(db::rule_entity(&r, &site).0))
 }

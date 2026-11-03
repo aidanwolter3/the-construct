@@ -79,7 +79,7 @@ async fn calendar() -> Response {
     let d = day(5).replace('-', "");
     let body = format!(
         "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:show-9@improv\r\nSUMMARY:Budget Cuts Showcase\r\n\
-         DTSTART:{d}T020000Z\r\nLOCATION:Main stage\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+         DTSTART:{d}T020000Z\r\nLOCATION:Main stage\r\nDESCRIPTION:Calendar\\n## About\\n\\n**[Get Tickets Here!](ht\r\n tps://tix.example/9)** for Budget Cuts\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
     );
     ([(header::CONTENT_TYPE, "text/calendar")], body).into_response()
 }
@@ -127,7 +127,7 @@ fn pod(base: &str) -> Pod {
         llm: Some(LlmConfig {
             api_key: "test-key".into(),
             model: "test-model".into(),
-            base_url: base.into(),
+            url: format!("{base}/v1/messages"),
         }),
         allow_private_hosts: true,
     });
@@ -507,4 +507,117 @@ async fn mcp_tools() {
     )
     .await;
     assert!(err && e["error"] == "fetch_off", "{e}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rules_belong_to_sites() {
+    let (base, _site) = site().await;
+    let pod = pod(&base);
+    let mut ids = Vec::new();
+    for (url, title) in [("events", "Listing"), ("cal.ics", "Calendar")] {
+        let (status, t) = call(
+            &pod,
+            "POST",
+            "/v1/watcher/targets/create",
+            Some(json!({"url": format!("{base}/{url}"), "title": title, "details": true})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{t}");
+        let id = t["id"].as_str().unwrap().to_owned();
+        checked(&pod, &id).await;
+        ids.push(id);
+    }
+    let (listing, calendar) = (&ids[0], &ids[1]);
+
+    // A rule of the listing's only: the calendar's Budget Cuts show doesn't match.
+    let (status, rule) = call(
+        &pod,
+        "POST",
+        "/v1/watcher/rules/create",
+        Some(json!({"keywords": "Budget Cuts", "exclude": "class", "target": listing})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{rule}");
+    assert_eq!(
+        (&rule["target_id"], &rule["site"]),
+        (&json!(listing), &json!("Listing"))
+    );
+    assert_eq!(
+        titles(&workspace(&pod).await, "watcher:matches"),
+        ["Friday Improv"]
+    );
+
+    // The site screens list their own rules and every event, matched ones marked.
+    let (_, a) = call(
+        &pod,
+        "GET",
+        &format!("/v1/watcher/screens/target?id={listing}"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        titles(&a, &format!("watcher:target:{listing}:rules")),
+        ["Budget Cuts"]
+    );
+    assert_eq!(
+        a["entities"][format!("watcher://targets/{listing}")]["rules_text"],
+        "Watching for Budget Cuts"
+    );
+    let events = titles(&a, &format!("watcher:target:{listing}:events"));
+    assert_eq!(events, ["Friday Improv", "Improv class: scenes"]);
+    let (_, b) = call(
+        &pod,
+        "GET",
+        &format!("/v1/watcher/screens/target?id={calendar}"),
+        None,
+    )
+    .await;
+    assert!(titles(&b, &format!("watcher:target:{calendar}:rules")).is_empty());
+    assert_eq!(
+        b["entities"][format!("watcher://targets/{calendar}")]["rules_text"],
+        "No rules yet"
+    );
+    let show = &b["entities"][b["queries"][format!("watcher:target:{calendar}:events")][0]
+        .as_str()
+        .unwrap()];
+    assert_eq!(show["matched"], false);
+    // Plain text, without the first line repeating the site's name, and the tickets link.
+    assert_eq!(
+        show["description"],
+        "About\n\nGet Tickets Here! for Budget Cuts"
+    );
+    assert_eq!(show["tickets_url"], "https://tix.example/9");
+
+    // A rule for a site the pod doesn't watch is refused.
+    let (status, _) = call(
+        &pod,
+        "POST",
+        "/v1/watcher/rules/create",
+        Some(json!({"keywords": "x", "target": "tnope"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // A rule for every site (before rules had sites) becomes one per site.
+    let (_, all) = call(
+        &pod,
+        "POST",
+        "/v1/watcher/rules/create",
+        Some(json!({"keywords": "showcase"})),
+    )
+    .await;
+    assert_eq!(all["site"], "All sites");
+    pod.store()
+        .transaction(app_watcher::db::rules_per_site)
+        .unwrap();
+    let rules = pod.store().with_conn(app_watcher::db::rules).unwrap();
+    let mut showcase: Vec<_> = rules
+        .iter()
+        .filter(|r| r.title == "showcase")
+        .map(|r| r.spec.targets.clone())
+        .collect();
+    showcase.sort();
+    let mut want = vec![vec![listing.clone()], vec![calendar.clone()]];
+    want.sort();
+    assert_eq!(showcase, want);
 }

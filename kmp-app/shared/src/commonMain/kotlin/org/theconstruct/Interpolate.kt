@@ -183,6 +183,7 @@ fun bindIntent(intent: ActionIntent, item: JsonObject?): ActionIntent {
         )
         is ActionIntent.Sequence -> intent.copy(steps = intent.steps.map { bindIntent(it, item) })
         is ActionIntent.LocalSet -> intent.copy(entityUri = bindItemTokens(intent.entityUri, item))
+        is ActionIntent.OpenLink -> intent.copy(url = bindItemTokens(intent.url, item))
         ActionIntent.NavigateBack -> intent
         is ActionIntent.Unknown -> intent.copy(
             raw = JsonObject(intent.raw.mapValues { (k, v) -> if (k == "intent") v else bindJson(v, item) })

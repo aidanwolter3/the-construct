@@ -121,10 +121,6 @@ impl RuleSpec {
         if let Some(n) = self.within_days {
             parts.push(format!("within {n} days"));
         }
-        if !self.targets.is_empty() {
-            let n = self.targets.len();
-            parts.push(format!("{n} site{}", if n == 1 { "" } else { "s" }));
-        }
         if parts.is_empty() {
             "every event".to_owned()
         } else {
@@ -203,6 +199,12 @@ pub fn apply(spec: &mut RuleSpec, body: &Value) -> Result<(), String> {
     }
     if let Some(list) = phrases(&body["targets"], "targets")? {
         spec.targets = list;
+    }
+    // The site a rule belongs to (decision `watcher-rules-per-site`).
+    match body.get("target") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(t)) if !t.trim().is_empty() => spec.targets = vec![t.trim().to_owned()],
+        Some(_) => return Err("\"target\" is a site id".into()),
     }
     Ok(())
 }

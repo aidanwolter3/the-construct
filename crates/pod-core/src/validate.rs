@@ -739,6 +739,22 @@ impl<'a> Caps<'a> {
                     self.entity(&format!("{at}/entity_uri"), u)?;
                 }
             }
+            "action.link.open" => {
+                // A literal link must be http(s); a binding is checked by the client.
+                if let Some(u) = field("url") {
+                    let u = u.trim();
+                    if !(u.starts_with('$')
+                        || u.starts_with("https://")
+                        || u.starts_with("http://"))
+                    {
+                        return Err(LayoutError::new(
+                            &format!("{at}/url"),
+                            "a link is an http(s):// address or a binding such as $item.url"
+                                .to_owned(),
+                        ));
+                    }
+                }
+            }
             "action.data.load" => {
                 if let Some(p) = field("path") {
                     self.data_path(&format!("{at}/path"), p)?;

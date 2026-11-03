@@ -292,15 +292,18 @@ pub fn jsonld(page: &str, base: &str) -> Vec<RawEvent> {
 
 // ---------- LLM ----------
 
-/// How the pod calls the model (`CONSTRUCT_WATCHER_*`, README).
+/// How the pod calls the model (`CONSTRUCT_INFER_*`, shared with
+/// Collections; README).
 #[derive(Debug, Clone)]
 pub struct LlmConfig {
     pub api_key: String,
     pub model: String,
-    /// `https://api.anthropic.com` (tests point it at a local fake).
-    pub base_url: String,
+    /// The Messages API endpoint (tests point it at a local fake).
+    pub url: String,
 }
 
+/// The Messages API endpoint when `CONSTRUCT_INFER_URL` is unset.
+pub const DEFAULT_URL: &str = "https://api.anthropic.com/v1/messages";
 /// Default model of the `llm` extractor.
 pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
 /// Most page text sent to the model.
@@ -413,10 +416,7 @@ pub async fn llm(
 ) -> Result<Vec<RawEvent>, String> {
     let body = llm_request(&cfg.model, page_text, url, hint, today);
     let resp = client
-        .post(format!(
-            "{}/v1/messages",
-            cfg.base_url.trim_end_matches('/')
-        ))
+        .post(&cfg.url)
         .header("x-api-key", &cfg.api_key)
         .header("anthropic-version", "2026-10-21")
         .header("anthropic-beta", "server-side-fallback-2026-07-01")

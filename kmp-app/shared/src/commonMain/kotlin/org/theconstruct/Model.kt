@@ -458,6 +458,13 @@ sealed class ActionIntent {
     ) : ActionIntent()
 
     /**
+     * `action.link.open` (feature `open_link`): open [url] (`http(s)://` only) in the device's browser. Handled here,
+     * never sent to the engine.
+     */
+    @Serializable
+    data class OpenLink(val url: String) : ActionIntent()
+
+    /**
      * An intent whose `intent` tag this client does not know (e.g. the removed `action.agent.prompt`). [raw] is the full
      * original object; dispatching it forwards [raw] unchanged.
      */
@@ -589,6 +596,7 @@ object ActionIntentSerializer : TaggedUnionSerializer<ActionIntent>("org.thecons
         Variant("action.mutation.create", ActionIntent.Create::class, ActionIntent.Create.serializer()),
         Variant("action.sequence", ActionIntent.Sequence::class, ActionIntent.Sequence.serializer()),
         Variant("action.local.set", ActionIntent.LocalSet::class, ActionIntent.LocalSet.serializer()),
+        Variant("action.link.open", ActionIntent.OpenLink::class, ActionIntent.OpenLink.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): ActionIntent = ActionIntent.Unknown(tag, raw)

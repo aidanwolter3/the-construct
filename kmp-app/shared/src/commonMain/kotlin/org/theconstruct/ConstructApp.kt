@@ -1,5 +1,6 @@
 package org.theconstruct
 
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -282,11 +283,39 @@ class ConstructController internal constructor(
             bound.steps.forEach(::run)
             return
         }
+        if (bound is ActionIntent.OpenLink) {
+            openLink(bound.url)
+            return
+        }
         if (navigation.handle(bound)) return
         send(bound)
         if (bound is ActionIntent.Create) {
             attachments.consume(attachmentIds(bound.attachments))
             if (bound.dismiss) navigation.dismiss()
+        }
+    }
+
+    private val _openedLinks = MutableStateFlow<List<String>>(emptyList())
+
+    /** The links `action.link.open` opened, oldest first (the simulator's `assert-link` reads them). */
+    val openedLinks: StateFlow<List<String>> = _openedLinks.asStateFlow()
+
+    /** Opens a link in the platform's browser; [ConstructApp] sets it from `LocalUriHandler`. */
+    @Volatile
+    internal var linkOpener: (String) -> Unit = {}
+
+    /** `action.link.open`: an `http(s)://` [url] (a binding that came out blank or another scheme does nothing). */
+    private fun openLink(url: String) {
+        val u = url.trim()
+        if (!(u.startsWith("https://") || u.startsWith("http://"))) {
+            println("[Construct] action.link.open: not an http(s) link ($u); ignored")
+            return
+        }
+        _openedLinks.value = _openedLinks.value + u
+        try {
+            linkOpener(u)
+        } catch (t: Throwable) {
+            println("[Construct] opening $u failed: $t")
         }
     }
 
@@ -556,7 +585,11 @@ fun ConstructApp(
     server: ServerChoice? = null,
     mediaPicker: MediaPickerPlatform? = null,
     notificationSettingsExtra: (@Composable () -> Unit)? = null,
+    openLink: ((String) -> Unit)? = null,
 ) {
+    // `action.link.open` (feature `open_link`): the platform browser, unless the host opens links itself (simulator).
+    val uriHandler = LocalUriHandler.current
+    controller.linkOpener = openLink ?: { uriHandler.openUri(it) }
     val state by controller.state.collectAsState()
     val pin by controller.pinned.collectAsState()
     val unread by controller.unread.collectAsState()
