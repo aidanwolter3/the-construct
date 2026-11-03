@@ -662,7 +662,8 @@ async fn sse_announces_the_newest_version_the_client_can_draw() {
     let url = format!("{}/v1/workspaces/{app}/events", pod.url);
     // Files: 0001 schema 1, 0002 schema 2, 0003 schema 3 (which retires the
     // older ones for schema-3 clients), 0004 schema 8 (D48), 0005 schema 9 (photo posting, D51),
-    // 0006 schema 10 (remembered List/Cards), 0007 schema 11 (comment threads, list focus).
+    // 0006 schema 10 (remembered List/Cards), 0007 schema 12 (comment threads, list focus),
+    // 0008 schema 12 (one post screen with its comments).
     let mut s1 = SseReader::connect_as(&url, None, Some(1)).await;
     let mut s2 = SseReader::connect_as(&url, None, Some(2)).await;
     let mut s7 = SseReader::connect_as(&url, None, Some(7)).await;
@@ -677,10 +678,10 @@ async fn sse_announces_the_newest_version_the_client_can_draw() {
     assert_eq!(s8.next_event().await, layout_msg(app, 4));
     assert_eq!(s9.next_event().await, layout_msg(app, 5));
     assert_eq!(s10.next_event().await, layout_msg(app, 6));
-    assert_eq!(s11.next_event().await, layout_msg(app, 7));
+    assert_eq!(s11.next_event().await, layout_msg(app, 8));
     // No header: the app's latest, as before (engines from before this
     // change send no header on the events stream).
-    assert_eq!(legacy.next_event().await, layout_msg(app, 7));
+    assert_eq!(legacy.next_event().await, layout_msg(app, 8));
 
     // Publish a copy of the version a schema-`n` client is served.
     let publish = |schema: u32| {
@@ -696,18 +697,18 @@ async fn sse_announces_the_newest_version_the_client_can_draw() {
         pod.state.publish_layout(app, v);
         v
     };
-    assert_eq!(publish(protocol::SCHEMA_VERSION), 8);
-    assert_eq!(s11.next_event().await, layout_msg(app, 8));
-    assert_eq!(legacy.next_event().await, layout_msg(app, 8));
+    assert_eq!(publish(protocol::SCHEMA_VERSION), 9);
+    assert_eq!(s11.next_event().await, layout_msg(app, 9));
+    assert_eq!(legacy.next_event().await, layout_msg(app, 9));
     // A copy of 0001 (recorded as schema 1: it holds node types this build
     // doesn't know): schema 1 and 2 clients, not schema 3 (retired).
-    assert_eq!(publish(1), 9);
-    assert_eq!(s1.next_event().await, layout_msg(app, 9));
-    assert_eq!(s2.next_event().await, layout_msg(app, 9));
-    assert_eq!(legacy.next_event().await, layout_msg(app, 9));
+    assert_eq!(publish(1), 10);
+    assert_eq!(s1.next_event().await, layout_msg(app, 10));
+    assert_eq!(s2.next_event().await, layout_msg(app, 10));
+    assert_eq!(legacy.next_event().await, layout_msg(app, 10));
     // The current client's next event is the next version it can draw.
-    assert_eq!(publish(protocol::SCHEMA_VERSION), 10);
-    assert_eq!(s11.next_event().await, layout_msg(app, 10));
+    assert_eq!(publish(protocol::SCHEMA_VERSION), 11);
+    assert_eq!(s11.next_event().await, layout_msg(app, 11));
 }
 
 #[tokio::test]
@@ -824,12 +825,13 @@ async fn versions_say_whether_the_client_can_draw_them() {
             .collect()
     };
     // Schema 3 removed the pixelfed:// widgets (D37): current clients draw
-    // 0003 to 0007.
+    // 0003 to 0008.
     let retired = Some("retired".to_owned());
     let update = Some("update_required".to_owned());
     assert_eq!(
         rows(&page(Some(protocol::SCHEMA_VERSION)).await),
         [
+            (8, 12, None),
             (7, 12, None),
             (6, 10, None),
             (5, 9, None),
@@ -841,20 +843,21 @@ async fn versions_say_whether_the_client_can_draw_them() {
     );
     // A schema 10 client draws up to 0006, not 0007 (list focus).
     assert_eq!(
-        rows(&page(Some(10)).await)[..2],
+        rows(&page(Some(10)).await)[1..3],
         [(7, 12, update.clone()), (6, 10, None)]
     );
     // A schema 9 client draws up to 0005, not 0006 (remembered List/Cards).
     assert_eq!(
-        rows(&page(Some(9)).await)[1..3],
+        rows(&page(Some(9)).await)[2..4],
         [(6, 10, update.clone()), (5, 9, None)]
     );
     // A schema 8 client draws up to 0004, not 0005 (photo posting, D51).
-    assert_eq!(rows(&page(Some(8)).await)[2], (5, 9, update.clone()));
+    assert_eq!(rows(&page(Some(8)).await)[3], (5, 9, update.clone()));
     // A schema 7 client draws 0003, not 0004 (the cards view, D48).
     assert_eq!(
         rows(&page(Some(7)).await),
         [
+            (8, 12, update.clone()),
             (7, 12, update.clone()),
             (6, 10, update.clone()),
             (5, 9, update.clone()),
@@ -868,6 +871,7 @@ async fn versions_say_whether_the_client_can_draw_them() {
     assert_eq!(
         rows(&page(Some(2)).await),
         [
+            (8, 12, update.clone()),
             (7, 12, update.clone()),
             (6, 10, update.clone()),
             (5, 9, update.clone()),
@@ -882,6 +886,7 @@ async fn versions_say_whether_the_client_can_draw_them() {
     assert_eq!(
         rows(&body),
         [
+            (8, 12, update.clone()),
             (7, 12, update.clone()),
             (6, 10, update.clone()),
             (5, 9, update.clone()),
@@ -893,7 +898,7 @@ async fn versions_say_whether_the_client_can_draw_them() {
     );
     // `latest_compatible_version`: what opening the app serves each client.
     for (schema, want) in [
-        (Some(protocol::SCHEMA_VERSION), 7),
+        (Some(protocol::SCHEMA_VERSION), 8),
         (Some(10), 6),
         (Some(9), 5),
         (Some(8), 4),
@@ -904,7 +909,7 @@ async fn versions_say_whether_the_client_can_draw_them() {
         let body = page(schema).await;
         assert_eq!(
             (&body["latest_version"], &body["latest_compatible_version"]),
-            (&json!(7), &json!(want)),
+            (&json!(8), &json!(want)),
             "{schema:?}"
         );
     }
@@ -936,7 +941,7 @@ async fn apps_say_the_newest_version_the_client_can_draw() {
         async move { req.send().await.unwrap().json::<Value>().await.unwrap() }
     };
     for (schema, want) in [
-        (Some(protocol::SCHEMA_VERSION), 7),
+        (Some(protocol::SCHEMA_VERSION), 8),
         (Some(10), 6),
         (Some(9), 5),
         (Some(8), 4),
@@ -948,7 +953,7 @@ async fn apps_say_the_newest_version_the_client_can_draw() {
         let a = &body["apps"][0];
         assert_eq!(
             (&a["latest_version"], &a["latest_compatible_version"]),
-            (&json!(7), &json!(want)),
+            (&json!(8), &json!(want)),
             "{schema:?}"
         );
     }

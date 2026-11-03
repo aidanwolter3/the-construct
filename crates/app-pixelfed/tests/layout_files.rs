@@ -406,8 +406,8 @@ fn sync_appends_new_files_once_and_refuses_changes() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        v, 7,
-        "0007: comments under their post, notifications open the thread"
+        v, 8,
+        "0008: one post screen with the whole photo and its comments"
     );
     assert!(pod_core::validate::unknown_node_types(&layout).is_empty());
     // Each client gets the newest version it can draw.
@@ -419,7 +419,7 @@ fn sync_appends_new_files_once_and_refuses_changes() {
         (9, 5),
         (10, 6),
         (11, 6),
-        (protocol::SCHEMA_VERSION, 7),
+        (protocol::SCHEMA_VERSION, 8),
     ] {
         let served = active_for(
             &store,

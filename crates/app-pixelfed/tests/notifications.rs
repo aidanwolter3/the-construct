@@ -143,7 +143,7 @@ async fn first_poll_is_quiet_then_new_ones_alert() {
     assert!(n.body.starts_with("Sunrise over Boulder"), "{}", n.body);
     assert_eq!(
         n.target_uri.as_deref(),
-        Some(format!("pixelfed://posts/{CAROUSEL}/comments").as_str())
+        Some(format!("pixelfed://posts/{CAROUSEL}").as_str())
     );
     assert_eq!(
         n.group_key.as_deref(),
