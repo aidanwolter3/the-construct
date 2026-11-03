@@ -152,6 +152,7 @@ class ModelTest {
                 groupBy = GroupBy("category", UiNode.Text("\$item.category", TextStyle.Title)),
             ),
             UiNode.TextField("q", placeholder = "Search"),
+            UiNode.Sticky(UiNode.Column(listOf(UiNode.TextField("q"), UiNode.Divider))),
         )
         for (n in nodes) assertEquals(n, ConstructJson.decodeNode(ConstructJson.encodeNode(n)), n.toString())
         assertTrue(ConstructJson.encodeNode(UiNode.Divider) == "{\"type\":\"core://Divider\"}", ConstructJson.encodeNode(UiNode.Divider))

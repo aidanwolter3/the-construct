@@ -336,6 +336,13 @@ sealed class UiNode {
         val label: String? = null,
     ) : UiNode()
 
+    /**
+     * `core://Sticky` (schema 10): [content] scrolls with the page until it reaches the top of the scrolling view, then
+     * stays pinned there (on the page background) while the rest of its parent scrolls under it ([StickyScroll]).
+     */
+    @Serializable
+    data class Sticky(val content: UiNode) : UiNode()
+
     /** A node whose `type` this client does not know. [raw] is the full original object. */
     data class Unknown(val type: String, val raw: JsonObject) : UiNode()
 }
@@ -528,6 +535,7 @@ object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode
         Variant("core://Box", UiNode.Box::class, UiNode.Box.serializer()),
         Variant("core://ChoiceChips", UiNode.ChoiceChips::class, UiNode.ChoiceChips.serializer()),
         Variant("core://MediaPicker", UiNode.MediaPicker::class, UiNode.MediaPicker.serializer()),
+        Variant("core://Sticky", UiNode.Sticky::class, UiNode.Sticky.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): UiNode = UiNode.Unknown(tag, raw)

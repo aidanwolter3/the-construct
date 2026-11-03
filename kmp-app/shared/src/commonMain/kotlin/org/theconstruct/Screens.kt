@@ -318,8 +318,12 @@ internal fun ScreenHost(controller: ConstructController, state: ConstructState) 
                                 followEnd = false
                             }
                         }
-                        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll)) {
-                            RenderUiNode(entry.screen.content, state.entities, controller::dispatch, Modifier.fillMaxWidth())
+                        // The bar above does not scroll, so `core://Sticky` content pins right at the top.
+                        val sticky = remember(scroll) { StickyScroll(scroll) }
+                        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll).stickyContent(sticky)) {
+                            CompositionLocalProvider(LocalStickyScroll provides sticky) {
+                                RenderUiNode(entry.screen.content, state.entities, controller::dispatch, Modifier.fillMaxWidth())
+                            }
                         }
                         entry.screen.footer?.let { footer ->
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))

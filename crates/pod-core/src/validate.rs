@@ -93,6 +93,7 @@ pub fn validate_structure(expected_id: &str, doc: &Value) -> Result<UiNode, Stri
         check_values(n)?;
     }
     check_screens(&node)?;
+    check_sticky(&node, None)?;
     for intent in intents(&node) {
         let path = match intent {
             ActionIntent::OptimisticMutate { endpoint, .. }
@@ -370,6 +371,25 @@ fn check_values(node: &UiNode) -> Result<(), String> {
     }
 }
 
+/// `core://Sticky` (schema 10) pins to the top of a scrolling column, so it
+/// must not sit inside a `core://List` or `core://Carousel` template (each
+/// item would pin within itself) or inside another `core://Sticky`.
+/// `inside` names the enclosing node that rules it out.
+fn check_sticky(node: &UiNode, inside: Option<&str>) -> Result<(), String> {
+    if let (UiNode::Sticky { .. }, Some(outer)) = (node, inside) {
+        return Err(format!("core://Sticky cannot be inside a {outer}"));
+    }
+    let inside = match node {
+        UiNode::List { .. } => Some("core://List"),
+        UiNode::Carousel { .. } => Some("core://Carousel"),
+        UiNode::Sticky { .. } => Some("core://Sticky"),
+        _ => inside,
+    };
+    node.children()
+        .into_iter()
+        .try_for_each(|c| check_sticky(c, inside))
+}
+
 /// A create's `attachments` (schema 9, D49): each name `[a-z_]+` maps to a
 /// `$form.<field>` binding, and every `$attachments.<name>` the intent uses is
 /// one of them.
@@ -523,6 +543,23 @@ mod tests {
 
     fn node(v: Value) -> UiNode {
         serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn sticky_only_pins_in_a_scrolling_column() {
+        let sticky = json!({"type": "core://Sticky", "content": {"type": "core://Divider"}});
+        let ok = node(json!({"type": "core://Column", "children": [sticky.clone()]}));
+        assert_eq!(check_sticky(&ok, None), Ok(()));
+        for bad in [
+            json!({"type": "core://List", "query_key": "q", "item_template": sticky.clone()}),
+            json!({"type": "core://List", "query_key": "q", "item_template": {"type": "core://Divider"},
+                "group_by": {"field": "c", "header": sticky.clone()}}),
+            json!({"type": "core://Carousel", "items": "$item.m", "item_template": sticky.clone()}),
+            json!({"type": "core://Sticky", "content": {"type": "core://Column",
+                "children": [sticky.clone()]}}),
+        ] {
+            assert!(check_sticky(&node(bad.clone()), None).is_err(), "{bad}");
+        }
     }
 
     #[test]

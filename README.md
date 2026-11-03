@@ -468,10 +468,15 @@ client build. The engine and the clients know no app.
   layout switches between views with no new state. `layouts/pixelfed_home/0004.json` puts a List/Cards switch on
   the feed: two-column cards (cover photo, author, like count) that open a post screen
   (`pixelfed://posts/{id}`, data from `/v1/pixelfed/screens/post?id=`).
-- **Schema versions (D36, D38):** the engine sends `X-Construct-Schema: 8` (workspace fetches, data loads, the
+- **Sticky (schema 10, [sticky-nodes](docs/decisions/sticky-nodes.md)):** `core://Sticky` (`content` any node)
+  scrolls with the page until it reaches the top of the scrolling view, then stays pinned there while the rest of
+  its parent scrolls under it (like CSS `position: sticky`), and scrolls away with the end of its parent. In the
+  workspace it pins just below the menu and bell buttons; in a screen, right under the bar. It may not sit inside a
+  List or Carousel template or another Sticky. `layouts/recipes/0005.json` pins the search box and category chips.
+- **Schema versions (D36, D38):** the engine sends `X-Construct-Schema: 10` (workspace fetches, data loads, the
   apps API and the events stream). Every version records the schema it was written for (`"schema"` in its file). The pod serves each client
   the newest version it can draw, so an older app (no header = 1) keeps getting the last version without screens
-  or the new nodes. Screens and List/Image/TextField need `"schema": 2`; the building blocks need 3; `core://Tappable` needs 4; a List `filter` or `group_by` needs 5; the schema-6 vocabulary above needs 6; `action.auth.session` needs 7; List `columns`/`spacing_dp`/`padding_h_dp` and a form-based or `equals` Conditional need 8. `GET /v1/apps/{id}/versions[/{n}]` adds `schema`,
+  or the new nodes. Screens and List/Image/TextField need `"schema": 2`; the building blocks need 3; `core://Tappable` needs 4; a List `filter` or `group_by` needs 5; the schema-6 vocabulary above needs 6; `action.auth.session` needs 7; List `columns`/`spacing_dp`/`padding_h_dp` and a form-based or `equals` Conditional need 8; the media picker and multi-line fields need 9; `core://Sticky` needs 10. `GET /v1/apps/{id}/versions[/{n}]` adds `schema`,
   `compatible` and, when false, `incompatible` (`update_required`: written for a newer app; `retired`: written for
   a schema this app no longer draws) per version; the menu greys those rows out and won't pin them. "Latest" in the
   menu is always a version this app can draw; when the newest needs a newer app, the menu adds "Update the app to
