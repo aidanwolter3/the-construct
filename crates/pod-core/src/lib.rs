@@ -297,10 +297,12 @@ pub async fn blocking<T: Send + 'static>(
     match tokio::task::spawn_blocking(move || f(&state.store)).await {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => {
+            // The detail stays in the log: database errors can name tables,
+            // paths and values.
             tracing::error!(error = %e, "store error");
             Err(api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "error": "store_error", "detail": e.to_string() }),
+                json!({ "error": "store_error" }),
             ))
         }
         Err(e) => {

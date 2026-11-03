@@ -30,6 +30,12 @@ pub mod routes;
 pub mod upstream;
 
 pub use adapter::{PixelfedAdapter, SIGN_IN};
+
+/// Pod setting (D46): `"0"` keeps the pod on the default instance: no
+/// typed-in instances and no media from other hosts. A pod host sets it on
+/// temporary pods, which anyone can create, so they can't make the server
+/// contact hosts of their choosing.
+pub const OTHER_INSTANCES_SETTING: &str = "pixelfed.other_instances";
 pub use config::{DEFAULT_PIXELFED_URL, Instance, PixelfedConfig};
 
 use std::collections::{BTreeMap, HashSet};

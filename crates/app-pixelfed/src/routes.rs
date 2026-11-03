@@ -80,6 +80,22 @@ async fn signed_in_account(
     found.ok_or_else(|| Box::new(sign_in_required(&caller)))
 }
 
+/// Whether this pod may use instances other than the default
+/// ([`crate::OTHER_INSTANCES_SETTING`]; read once per pod).
+#[derive(Default)]
+struct PodRules(std::sync::OnceLock<bool>);
+
+async fn others_allowed(state: &Pod) -> Result<bool, ApiError> {
+    let rules = state.local::<PodRules>();
+    if let Some(v) = rules.0.get() {
+        return Ok(*v);
+    }
+    let setting = blocking(state, |s| s.pod_setting(crate::OTHER_INSTANCES_SETTING)).await?;
+    let others = setting.as_deref() != Some("0");
+    let _ = rules.0.set(others);
+    Ok(others)
+}
+
 /// Serializes one pod's upstream token refreshes (Passport rotates the
 /// refresh token, so two concurrent refreshes would revoke each other).
 #[derive(Default)]
@@ -96,11 +112,12 @@ async fn session_account(
         return Ok(None);
     }
     let rt = adapter(state).runtime();
+    let others = others_allowed(state).await?;
     let hash = session.token_hash.clone();
     let stored = blocking(state, move |s| s.session_instance(&hash)).await?;
     let instance = match stored {
         None => rt.config.default_instance(),
-        Some(url) => match rt.config.resolve(&url) {
+        Some(url) => match rt.resolve(&url, others) {
             Some(i) => i,
             None => {
                 tracing::warn!(instance = %url, "session's Pixelfed instance is no longer allowed");
@@ -262,7 +279,7 @@ async fn refresh_account(
             blocking(state, move |s| s.save_pixelfed_account(&i, &a))
                 .await
                 .map_err(store_err)?;
-            tracing::info!(username = %fresh.username, "upstream access token refreshed");
+            tracing::info!("upstream access token refreshed");
             Ok(Some(fresh))
         }
         Err(UpstreamError::Status(status, detail)) if status.is_client_error() => {
@@ -346,7 +363,11 @@ async fn register_app(State(state): State<Pod>, headers: HeaderMap, body: Bytes)
     ) else {
         return invalid_request(json!({ "instance_url": "string", "redirect_uri": "string" }));
     };
-    let Some(inst) = rt.config.resolve(instance_url) else {
+    let others = match others_allowed(&state).await {
+        Ok(o) => o,
+        Err(e) => return e.into_response(),
+    };
+    let Some(inst) = rt.resolve(instance_url, others) else {
         return instance_not_allowed(&rt, instance_url);
     };
     let upstream = rt.api(&inst);
@@ -454,7 +475,11 @@ async fn exchange_token(State(state): State<Pod>, headers: HeaderMap, body: Byte
             "instance_url": "string", "code": "string", "code_verifier": "string", "redirect_uri": "string"
         }));
     };
-    let Some(inst) = rt.config.resolve(instance_url) else {
+    let others = match others_allowed(&state).await {
+        Ok(o) => o,
+        Err(e) => return e.into_response(),
+    };
+    let Some(inst) = rt.resolve(instance_url, others) else {
         return instance_not_allowed(&rt, instance_url);
     };
     let upstream = rt.api(&inst);
@@ -516,14 +541,13 @@ async fn exchange_token(State(state): State<Pod>, headers: HeaderMap, body: Byte
         }
         Err(e) => return bad_gateway(&e),
     };
-    let mut media = MediaUrls::new(&proxy_base(&headers), &rt.media);
+    let mut media = MediaUrls::new(&proxy_base(&headers), rt.media_for(others));
     let user = normalize_account(&account, &mut media);
     // Owner pinning (D17): only the owner's account may sign in, so another
     // user of the instance cannot replace the stored account.
     let cfg = &rt.config;
     let not_owner = || {
-        tracing::warn!(account_id = %account.id, username = ?user.get_str("username"),
-            "Pixelfed sign-in by an account that does not own this pod rejected");
+        tracing::warn!("Pixelfed sign-in by an account that does not own this pod rejected");
         json_error(
             StatusCode::FORBIDDEN,
             json!({ "error": "account_not_owner",
@@ -569,8 +593,7 @@ async fn exchange_token(State(state): State<Pod>, headers: HeaderMap, body: Byte
     if let Err(e) = save_media_keys(&state, media).await {
         return e.into_response();
     }
-    tracing::info!(account_id = %account.id, username = ?user.get_str("username"),
-        instance = %inst.url, "Pixelfed sign-in: session signed in");
+    tracing::info!(instance = %inst.url, "Pixelfed sign-in: session signed in");
     Json(json!({
         "session_token": session,
         "instance_url": inst.url,
@@ -604,7 +627,6 @@ pub async fn home_feed(pf: &PixelfedAdapter, state: &Pod, req: &RequestCtx) -> H
         Ok(None) => return signed_out(),
         Err(e) => return Hydration::Error(e.into_response()),
     };
-    let username = account.username.clone();
     let upstream = rt.api(&instance);
     let (result, last_token) = with_token(state, &instance, account, |token| {
         let upstream = &upstream;
@@ -623,12 +645,16 @@ pub async fn home_feed(pf: &PixelfedAdapter, state: &Pod, req: &RequestCtx) -> H
             })
             .await
             .unwrap_or(false);
-            tracing::warn!(%username, deleted, "upstream rejected the stored token; signed out");
+            tracing::warn!(deleted, "upstream rejected the stored token; signed out");
             return signed_out();
         }
         Err(e) => return Hydration::Error(bad_gateway(&e)),
     };
-    let mut media = MediaUrls::new(&proxy_base(&req.headers), &rt.media);
+    let others = match others_allowed(state).await {
+        Ok(o) => o,
+        Err(e) => return Hydration::Error(e.into_response()),
+    };
+    let mut media = MediaUrls::new(&proxy_base(&req.headers), rt.media_for(others));
     let timeline = normalize_timeline(&statuses, &mut media);
     if let Err(e) = save_media_keys(state, media).await {
         return Hydration::Error(e.into_response());
@@ -794,7 +820,11 @@ async fn comments_screen(
         }
         Err(e) => return bad_gateway(&e),
     };
-    let mut media = MediaUrls::new(&proxy_base(&headers), &rt.media);
+    let others = match others_allowed(&state).await {
+        Ok(o) => o,
+        Err(e) => return e.into_response(),
+    };
+    let mut media = MediaUrls::new(&proxy_base(&headers), rt.media_for(others));
     let list = normalize_comments(&id, &context, &own, now_secs(), &mut media);
     if let Err(e) = save_media_keys(&state, media).await {
         return e.into_response();
@@ -880,7 +910,11 @@ async fn comment(State(state): State<Pod>, headers: HeaderMap, body: Bytes) -> R
             )));
         }
     };
-    let mut media = MediaUrls::new(&proxy_base(&headers), &rt.media);
+    let others = match others_allowed(&state).await {
+        Ok(o) => o,
+        Err(e) => return e.into_response(),
+    };
+    let mut media = MediaUrls::new(&proxy_base(&headers), rt.media_for(others));
     let comment = normalize_comment(&status, &id, 0, &own, now_secs(), &mut media);
     if let Err(e) = save_media_keys(&state, media).await {
         return e.into_response();
@@ -911,7 +945,11 @@ async fn media(State(state): State<Pod>, Path(key): Path<String>) -> Response {
     };
     // Normalization only emits keys for allowed URLs, but keys stored by
     // an older pod (or before the allowlist changed) are checked again here.
-    let Some(route) = rt.media.route(&url) else {
+    let others = match others_allowed(&state).await {
+        Ok(o) => o,
+        Err(e) => return e.into_response(),
+    };
+    let Some(route) = rt.media_for(others).route(&url) else {
         tracing::warn!(host = ?reqwest::Url::parse(&url).ok().and_then(|u| u.host_str().map(str::to_owned)),
             "media proxy refused a URL outside the allowlist");
         return json_error(

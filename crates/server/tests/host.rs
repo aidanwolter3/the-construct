@@ -62,11 +62,21 @@ struct Env {
 }
 
 async fn env_with(config: HostConfig) -> Env {
+    env_custom(config, Vec::new()).await
+}
+
+/// [`env_with`] whose Pixelfed adapter also accepts `allowed` instances.
+async fn env_custom(config: HostConfig, allowed: Vec<String>) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let fake = spawn_fake().await;
-    let factory = server::pod_factory(PixelfedConfig::new(&fake.url, None), false, 86_400, true);
+    let pixelfed = PixelfedConfig {
+        allowed_instances: allowed,
+        ..PixelfedConfig::new(&fake.url, None)
+    };
+    let factory = server::pod_factory(pixelfed, false, 86_400, true);
     let config = HostConfig {
         new_pod_settings: server::new_pod_settings(false),
+        temporary_pod_settings: server::temporary_pod_settings(),
         ..config
     };
     let path = dir.path().to_owned();
@@ -472,4 +482,72 @@ async fn the_open_pod_serves_callers_without_a_token() {
     let (status, _, _) = get(&env.url("/v1/workspaces/recipes"), Some(&token)).await;
     assert_eq!(status, StatusCode::OK);
     tokio::time::sleep(Duration::from_millis(1)).await;
+}
+
+/// Security review of D46: anyone can make a temporary pod, so it must not
+/// make the server contact hosts of the visitor's choosing. It is held to the
+/// default Pixelfed instance; an admin pod may use the other allowed ones.
+#[tokio::test]
+async fn temporary_pods_stay_on_the_default_instance() {
+    let other = spawn_fake().await;
+    let env = env_custom(
+        HostConfig {
+            temporary: Some(TemporaryPods {
+                hours: 1,
+                max_live: 5,
+            }),
+            ..HostConfig::default()
+        },
+        vec![other.url.clone()],
+    )
+    .await;
+    let (_, body) = post(&env.url("/v1/pods/temporary"), None, json!({})).await;
+    let temp = body["session_token"].as_str().unwrap().to_owned();
+    let admin = env.create("me", false).await;
+    let register = |token: String, instance: String| {
+        let url = env.url("/v1/auth/pixelfed/app");
+        async move {
+            post(
+                &url,
+                Some(&token),
+                json!({ "instance_url": instance, "redirect_uri": REDIRECT }),
+            )
+            .await
+        }
+    };
+    let (status, body) = register(temp.clone(), other.url.clone()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "instance_not_allowed");
+    let (status, _) = register(temp.clone(), env.fake.url.clone()).await;
+    assert_eq!(status, StatusCode::OK, "the default instance works");
+    let (status, body) = register(admin, other.url.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+/// Security review of D46: a burst of creations can't overshoot the cap.
+#[tokio::test]
+async fn concurrent_temporary_pods_respect_the_cap() {
+    let env = env_with(HostConfig {
+        temporary: Some(TemporaryPods {
+            hours: 1,
+            max_live: 2,
+        }),
+        ..HostConfig::default()
+    })
+    .await;
+    let url = env.url("/v1/pods/temporary");
+    let tries: Vec<_> = (0..5)
+        .map(|_| {
+            let url = url.clone();
+            tokio::spawn(async move { post(&url, None, json!({})).await.0 })
+        })
+        .collect();
+    let mut made = 0;
+    for t in tries {
+        if t.await.unwrap() == StatusCode::OK {
+            made += 1;
+        }
+    }
+    assert_eq!(made, 2);
+    assert_eq!(env.host.store().live_temporary_count().unwrap(), 2);
 }

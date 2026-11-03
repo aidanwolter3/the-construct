@@ -120,7 +120,10 @@ impl Clients {
             }))
             .build()
             .expect("reqwest client");
+        // The public clients never use a proxy (HTTPS_PROXY & co.): a proxy
+        // resolves names itself, past `PublicOnlyResolver`.
         let public_api = builder(API_TIMEOUT)
+            .no_proxy()
             .dns_resolver(Arc::new(PublicOnlyResolver))
             .redirect(redirect::Policy::custom(|attempt| {
                 if attempt.previous().len() >= MAX_REDIRECTS {
@@ -136,11 +139,14 @@ impl Clients {
             .expect("reqwest client");
         let p = policy.clone();
         let public_media = builder(MEDIA_TIMEOUT)
+            .no_proxy()
             .dns_resolver(Arc::new(PublicOnlyResolver))
             .redirect(redirect::Policy::custom(move |attempt| {
+                // Only to other public URLs: a trusted origin may be private
+                // (or an IP literal, which skips the resolver).
                 if attempt.previous().len() >= MAX_REDIRECTS {
                     attempt.error("too many media redirects")
-                } else if p.route_url(attempt.url()).is_some() {
+                } else if p.route_url(attempt.url()) == Some(MediaRoute::Public) {
                     attempt.follow()
                 } else {
                     tracing::warn!(host = ?attempt.url().host_str(), "media redirect to a host outside the allowlist refused");

@@ -250,7 +250,7 @@ paths, e.g. the Pixelfed media proxy).
   of the pod sees it; **Sign out** signs the pod out of the app and keeps the pod open; the menu's **Leave this pod**
   forgets the code on this device.
 - **API:** `POST /v1/pods/open {"token": "cpod_…"}` -> `{"session_token"}` (401 `pod_not_found`; 10 tries a minute
-  per client). `POST /v1/pods/temporary` -> `{"session_token", "expires_at", "pod"}` (404 when disabled, 429, 503
+  per client address; behind Fly the address is `Fly-Client-IP`, elsewhere the connection's peer). `POST /v1/pods/temporary` -> `{"session_token", "expires_at", "pod"}` (404 when disabled, 429, 503
   `temporary_pods_full`). Then send the token as `Authorization: Bearer` on every call.
 - **Admin** (on the server; on Fly `fly ssh console -a the-construct-pod -C "/server pods …"`):
 
@@ -263,8 +263,11 @@ paths, e.g. the Pixelfed media proxy).
   ```
 
   Pod codes never go into git or config files; keep yours in a password manager.
-- **Temporary pods** (`CONSTRUCT_TEMP_PODS=1`, staging): full features, including real Pixelfed servers, no family
-  recipes, deleted with everything in them after `CONSTRUCT_TEMP_POD_HOURS`. Testing staging from a script:
+- **Temporary pods** (`CONSTRUCT_TEMP_PODS=1`, staging): every app, but Pixelfed only on the default instance (the
+  fake on staging; no typed-in servers, so a visitor can't make the server contact hosts of their choosing), no family
+  recipes, deleted with everything in them after `CONSTRUCT_TEMP_POD_HOURS`. At most 5 per client address an hour
+  (IPv6 per /64) and `CONSTRUCT_TEMP_POD_MAX` live. Use an admin pod to try a real Pixelfed server. Testing staging
+  from a script:
 
   ```bash
   pod=https://the-construct-pod.fly.dev
@@ -277,6 +280,7 @@ paths, e.g. the Pixelfed media proxy).
   (`fly volumes snapshots create <volume id>`), then
   `fly ssh console -a the-construct-pod -C "/server pods adopt <name> /data/server.db"` and keep the printed code.
   Install the app build with the "Open your pod" screen and enter the code: the recipes and everything else are there.
+  Then delete `/data/server.db.adopted-*`: it still holds the old sessions and app tokens.
 
 ## Try it on your phone with a real Pixelfed instance
 

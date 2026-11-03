@@ -1572,7 +1572,8 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   `X-Construct-Session: invalid`, so the client forgets it), `{"apps": []}`, else 401 `pod_required`.
   `POST /v1/pods/open {token}` (rate-limited) answers `{session_token}`; `POST /v1/pods/temporary` (with
   `CONSTRUCT_TEMP_PODS=1`) makes a pod that a sweeper deletes after `CONSTRUCT_TEMP_POD_HOURS` (capped, rate-limited).
-  Temporary pods have every feature, including real Pixelfed servers, but not the family recipes.
+  Temporary pods have every app, but not the family recipes and (after the review below) only the default Pixelfed
+  instance.
 - **Keeping the token:** a valid session that lacks an app's sign-in now gets the signed-out screen with 200, a 403
   `sign_in_required` from adapter routes, and may listen to layout events; only an unknown or expired session gets
   401. An adapter's `Hydration::StaleSession` on a pinned session detaches that sign-in instead. Clients drop their
@@ -1600,5 +1601,18 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   origin anyway); subdomains (wildcard DNS and certificates); one shared database with a `pod_id` column (every query
   and adapter table would need it, and one bug leaks data); per-device codes (more admin work; the user chose one
   token for all their devices).
+- **Security review (before merge):** found no way to read or change another pod's data or to reach a pod without
+  its token; fixed what it did find:
+  - Temporary pods + `PIXELFED_ALLOWED_INSTANCES=*` made the server an anonymous fetcher of any public HTTPS URL
+    (instance content names media URLs the proxy then serves) and an OAuth-app registrar on any server. Temporary pods
+    now get the pod setting `pixelfed.other_instances = 0`: the default instance only, and no public media.
+  - Rate limits keyed on a client-sent `Fly-Client-IP` anywhere; now only behind Fly (`FLY_APP_NAME`), parsed as an
+    address, IPv6 per /64. The global `/v1/pods/open` limit (anyone could lock everyone out) is gone. The temporary pod
+    cap check and creation are one step (a burst overshot it). The limiter holds at most 10 000 keys.
+  - The public (user-chosen host) clients now ignore proxy environment variables, which bypassed the address filter,
+    and public media redirects only to other public URLs.
+  - Pod ids from `host.db` are validated before any filesystem operation; store errors no longer return SQLite
+    text; usernames and client addresses are out of the logs; `pods adopt` reminds to delete the renamed old file.
+  - Accepted: media URLs carry the pod id (128 random bits) and are readable without a token (public upstream media).
 - **Not yet:** self-service sign-up; per-device credentials and revoking one device; evicting idle pods from memory;
-  sample recipes for temporary pods; a pod quota on disk.
+  sample recipes for temporary pods; a pod quota on disk; a separate Fly app for anonymous demos.

@@ -136,6 +136,11 @@ fn pods(args: &[&str]) -> Result<(), String> {
                 "The original file was renamed to {path}.adopted-{}.",
                 pod.id
             );
+            println!(
+                "It still holds the old sessions and app tokens: once the pod works, delete it \
+                 (rm {path}.adopted-{}*).",
+                pod.id
+            );
         }
         ["rotate", name] => {
             let token = host.rotate(name)?;
@@ -182,6 +187,7 @@ async fn serve() -> Result<(), String> {
     let addr = std::env::var("CONSTRUCT_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_owned());
     let mut config = HostConfig {
         new_pod_settings: server::new_pod_settings(false),
+        temporary_pod_settings: server::temporary_pod_settings(),
         ..HostConfig::from_env()
     };
     // Only this machine can reach a loopback server: keep `cargo run -p

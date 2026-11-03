@@ -72,6 +72,13 @@ pub struct HostConfig {
     /// adapters' migrations run (e.g. turning a data import off), unless the
     /// admin asks otherwise.
     pub new_pod_settings: Vec<(String, String)>,
+    /// Extra settings for temporary pods (anyone can make one), e.g. keeping
+    /// an adapter from contacting hosts the visitor picks.
+    pub temporary_pod_settings: Vec<(String, String)>,
+    /// Rate limits key on the `Fly-Client-IP` header (set by Fly's proxy)
+    /// instead of the connection's peer. Only behind Fly (`FLY_APP_NAME`):
+    /// anywhere else a client could send any value.
+    pub trust_fly_client_ip: bool,
 }
 
 impl HostConfig {
@@ -100,6 +107,8 @@ impl HostConfig {
             open_pod: var("CONSTRUCT_OPEN_POD").filter(|v| v != "off"),
             temporary,
             new_pod_settings: Vec::new(),
+            temporary_pod_settings: Vec::new(),
+            trust_fly_client_ip: var("FLY_APP_NAME").is_some(),
         }
     }
 }
@@ -169,8 +178,9 @@ pub struct Host {
     opening: tokio::sync::Mutex<()>,
     open_pod_id: OnceLock<String>,
     code_tries: RateLimit,
-    code_tries_global: RateLimit,
     temp_creates: RateLimit,
+    /// Makes the temporary-pod cap check and the creation one step.
+    temp_lock: Mutex<()>,
 }
 
 impl Host {
@@ -188,9 +198,12 @@ impl Host {
             open: Mutex::new(HashMap::new()),
             opening: tokio::sync::Mutex::new(()),
             open_pod_id: OnceLock::new(),
+            // Per client address (IPv6 per /64). No global limit: a 256-bit
+            // code can't be guessed, and a global one lets anyone lock
+            // everyone out of entering their code.
             code_tries: RateLimit::new(10, Duration::from_secs(60)),
-            code_tries_global: RateLimit::new(120, Duration::from_secs(60)),
-            temp_creates: RateLimit::new(10, Duration::from_secs(3600)),
+            temp_creates: RateLimit::new(5, Duration::from_secs(3600)),
+            temp_lock: Mutex::new(()),
         };
         if let Some(name) = host.config.open_pod.clone() {
             let id = match host.store.pod_by_name(&name).map_err(|e| e.to_string())? {
@@ -216,8 +229,13 @@ impl Host {
         &self.store
     }
 
-    fn pod_dir(&self, id: &str) -> PathBuf {
-        self.dir.join("pods").join(id)
+    /// The directory of pod `id`. Ids come from `host.db`; anything that is
+    /// not a pod id (32 hex digits) is refused before touching the disk.
+    fn pod_dir(&self, id: &str) -> Result<PathBuf, String> {
+        if !valid_pod_id(id) {
+            return Err(format!("refusing the malformed pod id {id:?}"));
+        }
+        Ok(self.dir.join("pods").join(id))
     }
 
     /// Create a pod (blocking: opens its database and runs the migrations).
@@ -259,7 +277,7 @@ impl Host {
             return Err(format!("a pod named {name:?} exists"));
         }
         let id = new_pod_id();
-        let dir = self.pod_dir(&id);
+        let dir = self.pod_dir(&id)?;
         let result = (|| {
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             let store = Store::open(&dir.join("server.db")).map_err(|e| e.to_string())?;
@@ -325,7 +343,7 @@ impl Host {
             return Err(format!("invalid or taken pod name {name:?}"));
         }
         let id = new_pod_id();
-        let dir = self.pod_dir(&id);
+        let dir = self.pod_dir(&id)?;
         let dest = dir.join("server.db");
         let result = (|| {
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -368,7 +386,7 @@ impl Host {
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("no pod named {name:?}"))?;
         let store =
-            Store::open(&self.pod_dir(&pod.id).join("server.db")).map_err(|e| e.to_string())?;
+            Store::open(&self.pod_dir(&pod.id)?.join("server.db")).map_err(|e| e.to_string())?;
         let token = new_pod_token();
         let hash = session_hash(&token);
         store
@@ -406,7 +424,14 @@ impl Host {
             if let Some(open) = self.cache().remove(&pod.id) {
                 open.pod.shutdown();
             }
-            match std::fs::remove_dir_all(self.pod_dir(&pod.id)) {
+            let dir = match self.pod_dir(&pod.id) {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::error!(error = %e, "sweep: skipped");
+                    continue;
+                }
+            };
+            match std::fs::remove_dir_all(dir) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => {
@@ -460,7 +485,7 @@ impl Host {
         let host = self.clone();
         let pod_id = id.to_owned();
         let built = tokio::task::spawn_blocking(move || {
-            let path = host.pod_dir(&pod_id).join("server.db");
+            let path = host.pod_dir(&pod_id)?.join("server.db");
             if !path.is_file() {
                 return Err(format!("{} is missing", path.display()));
             }
@@ -530,15 +555,30 @@ pub fn app(host: Arc<Host>) -> Router {
         .with_state(host)
 }
 
-/// The caller's address for rate limits: Fly's `Fly-Client-IP` (set by its
-/// proxy), else the connection's peer.
-fn client_key(req_headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
-    req_headers
-        .get("fly-client-ip")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned)
-        .or_else(|| peer.map(|p| p.ip().to_string()))
-        .unwrap_or_else(|| "unknown".to_owned())
+/// The caller's address for rate limits: Fly's `Fly-Client-IP` when the
+/// host runs behind Fly (its proxy sets it), else the connection's peer.
+/// IPv6 addresses count per /64 (one subscriber usually has a whole /64).
+fn client_key(req_headers: &HeaderMap, peer: Option<SocketAddr>, trust_fly: bool) -> String {
+    let ip = trust_fly
+        .then(|| {
+            req_headers
+                .get("fly-client-ip")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<std::net::IpAddr>().ok())
+        })
+        .flatten()
+        .or_else(|| peer.map(|p| p.ip()));
+    match ip {
+        Some(std::net::IpAddr::V6(v6)) => match v6.to_ipv4_mapped() {
+            Some(v4) => v4.to_string(),
+            None => {
+                let s = v6.segments();
+                format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3])
+            }
+        },
+        Some(ip) => ip.to_string(),
+        None => "unknown".to_owned(),
+    }
 }
 
 fn peer(req: &Request) -> Option<SocketAddr> {
@@ -625,9 +665,9 @@ fn no_pod(host: &Host, req: &Request, had_token: bool) -> Response {
 /// live pod (the client then uses it as its session), 401 `pod_not_found`
 /// otherwise. Rate-limited per client and overall.
 async fn open_with_token(State(host): State<Arc<Host>>, req: Request) -> Response {
-    let key = client_key(req.headers(), peer(&req));
-    if !host.code_tries.allow(&key) || !host.code_tries_global.allow("all") {
-        tracing::warn!(client = %key, "pod code tries rate-limited");
+    let key = client_key(req.headers(), peer(&req), host.config.trust_fly_client_ip);
+    if !host.code_tries.allow(&key) {
+        tracing::warn!("pod code tries rate-limited");
         return rate_limited();
     }
     let headers = req.headers().clone();
@@ -653,7 +693,7 @@ async fn open_with_token(State(host): State<Arc<Host>>, req: Request) -> Respons
     match host.pod_for_token(&token).await {
         Ok(Some(_)) => Json(json!({ "session_token": token })).into_response(),
         Ok(None) => {
-            tracing::info!(client = %key, "pod code rejected");
+            tracing::info!("pod code rejected");
             json_error(
                 StatusCode::UNAUTHORIZED,
                 json!({ "error": "pod_not_found" }),
@@ -673,13 +713,16 @@ async fn temporary_pod(State(host): State<Arc<Host>>, req: Request) -> Response 
             json!({ "error": "temporary_pods_disabled" }),
         );
     };
-    let key = client_key(req.headers(), peer(&req));
+    let key = client_key(req.headers(), peer(&req), host.config.trust_fly_client_ip);
     if !host.temp_creates.allow(&key) {
-        tracing::warn!(client = %key, "temporary pod creation rate-limited");
+        tracing::warn!("temporary pod creation rate-limited");
         return rate_limited();
     }
     let made = host
         .blocking(move |h| {
+            // The cap check and the creation are one step, so a burst can't
+            // overshoot the cap.
+            let _one_at_a_time = h.temp_lock.lock().unwrap_or_else(|e| e.into_inner());
             if h.store.live_temporary_count().map_err(|e| e.to_string())? >= temp.max_live {
                 return Ok(None);
             }
@@ -690,14 +733,14 @@ async fn temporary_pod(State(host): State<Arc<Host>>, req: Request) -> Response 
                 &name,
                 PodKind::Temporary,
                 Some(Duration::from_secs(temp.hours * 3600)),
-                &[],
+                &h.config.temporary_pod_settings,
             )
             .map(Some)
         })
         .await;
     match made {
         Ok(Ok(Some(pod))) => {
-            tracing::info!(pod = %pod.name, client = %key, "temporary pod created");
+            tracing::info!(pod = %pod.name, "temporary pod created");
             Json(json!({
                 "session_token": pod.token,
                 "expires_at": pod.expires_at,
@@ -788,5 +831,33 @@ mod tests {
         for bad in ["", "-x", "Aidan", "a b", "a/b", &"x".repeat(41)] {
             assert!(!valid_pod_name(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn client_keys() {
+        let peer: SocketAddr = "203.0.113.7:4000".parse().unwrap();
+        let mut h = HeaderMap::new();
+        h.insert("fly-client-ip", HeaderValue::from_static("198.51.100.1"));
+        // Not behind Fly: the header is ignored.
+        assert_eq!(client_key(&h, Some(peer), false), "203.0.113.7");
+        assert_eq!(client_key(&h, Some(peer), true), "198.51.100.1");
+        // Garbage in the header: the peer.
+        h.insert(
+            "fly-client-ip",
+            HeaderValue::from_static("x".repeat(20).leak()),
+        );
+        assert_eq!(client_key(&h, Some(peer), true), "203.0.113.7");
+        // IPv6 per /64.
+        h.insert(
+            "fly-client-ip",
+            HeaderValue::from_static("2001:db8:1:2:aaaa::1"),
+        );
+        let a = client_key(&h, None, true);
+        h.insert(
+            "fly-client-ip",
+            HeaderValue::from_static("2001:db8:1:2:bbbb::9"),
+        );
+        assert_eq!(a, client_key(&h, None, true));
+        assert_eq!(a, "2001:db8:1:2::/64");
     }
 }

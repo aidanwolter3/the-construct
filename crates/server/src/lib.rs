@@ -34,6 +34,16 @@ pub fn new_pod_settings(import_recipes: bool) -> Vec<(String, String)> {
     )]
 }
 
+/// Extra settings of temporary pods (anyone can make one, D46): Pixelfed
+/// only on the default instance, so a visitor can't make the server contact
+/// hosts of their choosing (fetch URLs, register OAuth apps).
+pub fn temporary_pod_settings() -> Vec<(String, String)> {
+    vec![(
+        app_pixelfed::OTHER_INSTANCES_SETTING.to_owned(),
+        "0".to_owned(),
+    )]
+}
+
 /// Builds each pod of a host (D46): every pod gets the same adapters (shared
 /// objects; their data lives in each pod's store) and the same options.
 pub fn pod_factory(

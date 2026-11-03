@@ -41,6 +41,22 @@ impl Runtime {
     pub fn api(&self, instance: &Instance) -> Upstream {
         self.clients.api(instance)
     }
+
+    /// [`PixelfedConfig::resolve`] in a pod whose settings may forbid other
+    /// instances than the default (`others` false: temporary pods, D46).
+    pub fn resolve(&self, typed: &str, others: bool) -> Option<Instance> {
+        let instance = self.config.resolve(typed)?;
+        (others || instance.url == self.config.instance_url).then_some(instance)
+    }
+
+    /// The media policy of a pod: without other instances, only the
+    /// configured origins (no public HTTPS media from anywhere).
+    pub fn media_for(&self, others: bool) -> MediaPolicy {
+        MediaPolicy {
+            allow: self.media.allow.clone(),
+            any_public_https: others && self.media.any_public_https,
+        }
+    }
 }
 
 /// The Pixelfed adapter (one owner per instance; each session uses the
