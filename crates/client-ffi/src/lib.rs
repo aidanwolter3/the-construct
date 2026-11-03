@@ -24,11 +24,13 @@ fn platform_init() {
 /// when none); `auth_json` is `{"state":"signed_out"|"pending"|"signed_in"|
 /// "error","username"?,"error"?}`; `layout_json` is the layout on display,
 /// `{"app_id","version"}` (`"{}"` while unknown or unversioned).
+/// `is_online` is `None` until the engine has heard from the server or
+/// failed to (a new engine's cached snapshots don't mean offline).
 #[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
 pub struct FfiStateSnapshot {
     pub workspace_json: String,
     pub entities_json: String,
-    pub is_online: bool,
+    pub is_online: Option<bool>,
     pub seq: u64,
     pub pending_actions: u32,
     pub queries_json: String,
@@ -46,7 +48,7 @@ impl From<StateSnapshot> for FfiStateSnapshot {
         Self {
             workspace_json: s.workspace_json,
             entities_json: s.entities_json,
-            is_online: s.is_online,
+            is_online: s.online_known.then_some(s.is_online),
             seq: s.seq,
             pending_actions: s.pending_actions,
             queries_json: s.queries_json,
@@ -498,16 +500,16 @@ mod tests {
         let snap = rx
             .recv_timeout(Duration::from_secs(5))
             .expect("observer should receive a snapshot");
-        assert!(!snap.is_online);
+        assert_ne!(snap.is_online, Some(true));
 
         // Blocking refresh against an unreachable server must not panic.
         handle.refresh();
-        assert!(!handle.snapshot().is_online);
+        assert_eq!(handle.snapshot().is_online, Some(false));
 
         handle.dispatch("not json".to_string());
         handle.dispatch(r#"{"type":"bogus"}"#.to_string());
         handle.dispatch(String::new());
-        assert!(!handle.snapshot().is_online);
+        assert_eq!(handle.snapshot().is_online, Some(false));
 
         // Catalog calls against an unreachable pod report Offline.
         assert!(matches!(
@@ -553,7 +555,7 @@ mod tests {
             "other".to_string(),
         );
         let snap = handle.snapshot();
-        assert!(!snap.is_online);
+        assert_ne!(snap.is_online, Some(true));
     }
 
     #[test]
@@ -634,6 +636,7 @@ mod tests {
             workspace_json: "null".into(),
             entities_json: "{}".into(),
             is_online: true,
+            online_known: true,
             seq: 7,
             pending_actions: 2,
             queries_json: r#"{"timeline:home":["pixelfed://posts/1"]}"#.into(),
@@ -655,5 +658,12 @@ mod tests {
         assert_eq!(snap.layout_json, "{}");
         assert_eq!(snap.loads_json, "{}");
         assert_eq!((ffi.seq, ffi.pending_actions), (7, 2));
+        assert_eq!(ffi.is_online, Some(true));
+        let unknown: FfiStateSnapshot = StateSnapshot {
+            online_known: false,
+            ..core
+        }
+        .into();
+        assert_eq!(unknown.is_online, None, "not heard from the server yet");
     }
 }

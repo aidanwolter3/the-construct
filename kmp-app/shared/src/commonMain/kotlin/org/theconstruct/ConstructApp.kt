@@ -41,7 +41,8 @@ import kotlinx.serialization.json.JsonObject
  * [pendingActions] counts queued (unsent) outbox mutations. [seq] is the seq of the last applied
  * snapshot (-1 before the first). [queries] maps a FeedList `query_key` to ordered entity URIs (M6) and
  * [auth] is the sign-in status. [activeLayout] names the app on display and its latest version. [isOnline] is null
- * while connectivity is unknown (before the first snapshot; no offline badge then).
+ * while connectivity is unknown (before the engine first hears from the server; no offline badge then). After
+ * [ConstructController.openApp] the previous engine's answer stays until the new engine has one.
  * [engine] counts engine switches ([ConstructController.openApp]): a snapshot of a replaced engine is dropped.
  */
 data class ConstructState(
@@ -229,10 +230,11 @@ class ConstructController internal constructor(
         _state.update { cur ->
             when {
                 cur.engine != engine || snapshot.seq <= cur.seq -> cur
-                decoded != null -> decoded
+                // Unknown connectivity keeps the last answer (carried over by openApp): no offline flash on a switch.
+                decoded != null -> decoded.copy(isOnline = decoded.isOnline ?: cur.isOnline)
                 else -> cur.copy(
                     auth = AuthInfo.parse(snapshot.authJson),
-                    isOnline = snapshot.isOnline,
+                    isOnline = snapshot.isOnline ?: cur.isOnline,
                     pendingActions = snapshot.pendingActions,
                     error = decodeError,
                     seq = snapshot.seq,

@@ -312,7 +312,12 @@ enum FetchOutcome {
 ///   empty).
 /// - `is_online`: whether the server answered the most recent fetch or
 ///   reachability probe (a lone missed probe is ignored; see
-///   `PROBE_MISSES_BEFORE_OFFLINE`).
+///   `PROBE_MISSES_BEFORE_OFFLINE`). Meaningless (false) until
+///   `online_known`.
+/// - `online_known`: false until the engine has heard from the server or
+///   failed to (first fetch, data load or probe). A new engine's snapshots
+///   before that (cached workspace) don't mean offline: UIs show neither
+///   state then.
 /// - `seq`: the engine's state sequence number; strictly increases with
 ///   every change, so consumers can drop snapshots that arrive out of order.
 /// - `pending_actions`: number of PENDING `action_outbox` rows.
@@ -344,6 +349,7 @@ pub struct StateSnapshot {
     pub workspace_json: String,
     pub entities_json: String,
     pub is_online: bool,
+    pub online_known: bool,
     pub seq: u64,
     pub pending_actions: u32,
     pub queries_json: String,
@@ -459,6 +465,9 @@ struct State {
     /// versioned.
     layout_version: Option<u64>,
     is_online: bool,
+    /// Set by the first [`State::set_online`]: until then `is_online` is
+    /// only a default, not an answer from the server.
+    online_known: bool,
     /// Bumped on every change (cache load, fetch attempt, mutation). Used to
     /// drop stale out-of-order deliveries.
     seq: u64,
@@ -495,6 +504,13 @@ struct State {
 }
 
 impl State {
+    /// Records what the server's answer (or its absence) says about
+    /// connectivity.
+    fn set_online(&mut self, online: bool) {
+        self.is_online = online;
+        self.online_known = true;
+    }
+
     fn snapshot(&self) -> StateSnapshot {
         let workspace_json = match &self.workspace {
             Some(ws) => serde_json::to_string(ws).unwrap_or_else(|_| "null".into()),
@@ -527,6 +543,7 @@ impl State {
             workspace_json,
             entities_json,
             is_online: self.is_online,
+            online_known: self.online_known,
             seq: self.seq,
             pending_actions: self.pending_actions,
             queries_json,
@@ -1638,7 +1655,7 @@ impl ConstructEngine {
 
     /// The current snapshot. Before the first fetch (and with no cached
     /// workspace) this is `workspace_json: "null"`, `entities_json: "{}"`,
-    /// `is_online: false`.
+    /// `is_online: false`, `online_known: false`.
     pub fn snapshot(&self) -> StateSnapshot {
         lock(&self.inner.state).snapshot()
     }
@@ -1877,13 +1894,13 @@ impl Inner {
         }
         let snap = {
             let mut st = lock(&self.state);
-            if st.is_online == reachable {
+            if st.online_known && st.is_online == reachable {
                 return;
             }
             if !reachable && *misses < PROBE_MISSES_BEFORE_OFFLINE {
                 return;
             }
-            st.is_online = reachable;
+            st.set_online(reachable);
             if reachable {
                 println!("[ConstructEngine] server reachable again; online");
             } else {
@@ -2019,7 +2036,7 @@ impl Inner {
                          since changed",
                         self.workspace_id
                     );
-                    st.is_online = true;
+                    st.set_online(true);
                     outcome = FetchOutcome::Fetched;
                 }
                 Ok((mut spec, version)) => {
@@ -2058,7 +2075,7 @@ impl Inner {
                         _ => st.layout_version = version,
                     }
                     st.apply_fetched(&self.workspace_id, spec);
-                    st.is_online = true;
+                    st.set_online(true);
                     st.gone = false;
                     outcome = FetchOutcome::Fetched;
                 }
@@ -2077,7 +2094,7 @@ impl Inner {
                             self.workspace_url
                         );
                     }
-                    st.is_online = true;
+                    st.set_online(true);
                     outcome = FetchOutcome::HttpError;
                 }
                 Err(FetchError::Other(e)) => {
@@ -2098,7 +2115,7 @@ impl Inner {
                         );
                     }
                     st.last_fetch_error = Some(e);
-                    st.is_online = false;
+                    st.set_online(false);
                     outcome = FetchOutcome::Failed;
                 }
             }
@@ -2371,7 +2388,7 @@ impl Inner {
         );
         if network && st.is_online {
             eprintln!("[ConstructEngine] server unreachable ({url}); offline");
-            st.is_online = false;
+            st.set_online(false);
             st.seq += 1;
             return (Some(st.snapshot()), true);
         }
@@ -2825,7 +2842,7 @@ impl Inner {
                 }
                 Ok(bundle) => {
                     st.apply_data(path, bundle);
-                    st.is_online = true;
+                    st.set_online(true);
                 }
                 Err(FetchError::Status(401))
                     if st.session.as_ref().map(|s| &s.token) != token.as_ref() =>
