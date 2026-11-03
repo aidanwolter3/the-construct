@@ -1,0 +1,38 @@
+# cargo-deny configuration. CI runs `cargo deny check advisories` (the `audit` job in
+# .github/workflows/ci.yml), which fails on any RustSec advisory against Cargo.lock that is
+# not ignored below. Run it locally with:
+#
+#   cargo install cargo-deny --locked && cargo deny --all-features check advisories
+#
+# Every ignore needs a written reason, and should be removed as soon as an upgrade exists
+# (security audit #31, M3 and L13).
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# Yanked crates fail the check too.
+yanked = "deny"
+ignore = [
+    # rsa 0.9.10: Marvin timing attack on RSA decryption/signing. No fixed version exists.
+    # Path: pod-core -> web-push-native -> jwt-simple -> superboring -> rsa. web-push-native
+    # signs VAPID JWTs with ES256 (P-256) only, so the pod never holds an RSA key and never
+    # runs RSA private-key operations. Revisit when jwt-simple drops superboring/rsa or a
+    # fixed rsa release ships.
+    { id = "RUSTSEC-2023-0071", reason = "rsa is only linked through jwt-simple; VAPID uses ES256, the pod has no RSA keys" },
+    # crypto-bigint 0.5.5: timing variability in operations meant to be constant-time.
+    # Fixed only in 0.7.6+, which the RustCrypto 0.13 elliptic-curve stack (p256/k256/p384,
+    # pulled in by web-push-native and jwt-simple) cannot use. The pod's only use is
+    # VAPID ES256 signing and the aes128gcm ECDH for push payloads; an attacker would need
+    # fine-grained timing of those background sends. Upgrade when web-push-native and
+    # jwt-simple move to elliptic-curve 0.14 / crypto-bigint 0.6+.
+    { id = "RUSTSEC-2026-0387", reason = "only reached via web-push-native/jwt-simple ES256; no fixed version usable by elliptic-curve 0.13" },
+    # basic-toml: unmaintained (archived), not a vulnerability. Path:
+    # client-ffi -> uniffi (`bindgen` feature) -> uniffi_bindgen -> askama -> askama_derive
+    # -> basic-toml. It parses askama's own config at compile time inside the
+    # uniffi-bindgen tool that generates the Kotlin bindings; it is not in the pod or the
+    # client library and never sees untrusted input. Drops out when uniffi updates askama.
+    { id = "RUSTSEC-2026-0374", reason = "unmaintained, build-time only (uniffi-bindgen -> askama); never parses untrusted input" },
+]
