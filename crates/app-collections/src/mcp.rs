@@ -23,10 +23,12 @@ intents (describe_collection gives ready-made layout snippets). Change a collect
 sending the app layout changes that go with it in the same call: nothing applies if any app would \
 break. edit_rows changes rows directly (imports, backfills): it first answers a preview, which you \
 must show the user (the count and the sample) before calling again with its confirm token; every edit \
-can be undone with undo_edit. A choice field with infer: {from: <text field>, hint} is filled in by the pod \
-from that field's text (a grocery item's store section from its name): rows read the default until then, a \
-hand-set value teaches it, and order_by may list several fields ([\"section\", \"done\"]; a choice sorts \
-by the order of its options).";
+can be undone with undo_edit. Any field may be computed from the row's other fields \
+whenever they change: compute: {kind: \"expr\", expr} evaluates a small expression at once (entity.<field>, \
+literals, + joins text or adds numbers, -, !, c ? a : b, parentheses), and compute: {kind: \"model\", from: \
+[fields], prompt} has a model answer the prompt about those fields in the background (a choice answers one \
+of its options; each input is asked once, and a value set by hand is kept and remembered for that input). \
+order_by may list several fields ([\"section\", \"done\"]; a choice sorts by the order of its options).";
 
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({
@@ -39,13 +41,15 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
 pub fn tools() -> Vec<Value> {
     let collection = json!({ "type": "string", "description": "A collection's name" });
     let note = json!({ "type": "string", "description": "What changed, in the user's words (shown in the history)" });
-    let infer = json!({ "type": ["object", "null"],
-        "description": "A choice field only: the pod fills an empty value in from text field `from`, picking one of the options; `hint` says what the options are (e.g. \"grocery store section\"). Needs a default or optional (what the row reads until then). A value set by hand is remembered for that text. null: stop inferring.",
-        "properties": { "from": { "type": "string" }, "hint": { "type": "string" } }, "required": ["from"] });
-    let field = json!({ "type": "object", "description": "{name, type: text|number|bool|date|choice, options? (choice), optional?, default?, infer? (choice)}",
+    let compute = json!({ "type": ["object", "null"],
+        "description": "The pod computes the value from the row's other fields (not from other computed fields), again whenever they change; a value written by hand stays until they change. kind \"expr\": {kind, expr}, e.g. \"entity.quantity ? entity.name + \\\" (\\\" + entity.quantity + \\\")\\\" : entity.name\" (entity.<field>, JSON literals, + joins text or adds numbers, -, !, c ? a : b, parentheses; an empty value is \"\" or 0 and false in a condition), evaluated in the write. kind \"model\": {kind, from: field or [fields], prompt}, e.g. {from: \"name\", prompt: \"Which grocery store section is this item in?\"}: a model answers in the background (a choice: one of its options; text: trimmed), each input once; a value set by hand is remembered as the answer for that input. Needs optional or a default (what the row reads until computed). null: stop computing.",
+        "properties": { "kind": { "type": "string", "enum": ["expr", "model"] }, "expr": { "type": "string" },
+            "from": { "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
+            "prompt": { "type": "string" } }, "required": ["kind"] });
+    let field = json!({ "type": "object", "description": "{name, type: text|number|bool|date|choice, options? (choice), optional?, default?, compute?}",
         "properties": { "name": { "type": "string" }, "type": { "type": "string", "enum": model::Kind::ALL },
             "options": { "type": "array", "items": { "type": "string" } }, "optional": { "type": "boolean" }, "default": {},
-            "infer": infer },
+            "compute": compute },
         "required": ["name", "type"] });
     let order = json!({ "description": "A field, or a list of fields (first key first), rows are listed by (else oldest first). A choice sorts by the order of its options; empty values last.",
         "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] });
@@ -77,7 +81,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "apply_change",
-            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, optional?, default?, infer?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, optional?, default?, infer?} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title}]. infer: {from: <text field>, hint} on a choice field makes the pod fill empty values in from that field's text (existing rows too), or null to stop. Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
+            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, optional?, default?, compute?} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title}]. compute ({kind: \"expr\", expr} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
             json!({ "collection": collection, "base_version": { "type": "integer", "description": "The definition version you read" },
                     "changes": { "type": "array", "items": { "type": "object" } }, "apps": apps, "note": note }),
             &["collection", "changes"],
@@ -232,9 +236,9 @@ async fn define(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Val
         order_by: Vec::new(),
         descending: args["descending"].as_bool().unwrap_or(false),
     };
-    // After every field exists: `infer.from` may name a later one.
+    // After every field exists: a compute may read a later one.
     for (i, spec) in specs.iter().enumerate() {
-        model::set_infer(&mut def, &format!("f{}", i + 1), spec.get("infer"))
+        model::set_compute(&mut def, &format!("f{}", i + 1), spec.get("compute"))
             .map_err(|e| invalid(i, e))?;
     }
     let order = model::order_names(args.get("order_by")).map_err(bad)?;
@@ -366,15 +370,15 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
                     .into_iter()
                     .map(|(f, n)| json!({ "field": def.by_id(&f).map_or(f.clone(), |x| x.name.clone()), "values": n }))
                     .collect();
-                let inferred: Vec<Value> = db::inferred_counts(c, &lookup)?
+                let computed: Vec<Value> = db::computed_counts(c, &lookup)?
                     .into_iter()
-                    .filter_map(|(f, n)| def.by_id(&f).filter(|x| x.infer.is_some()).map(|x| json!({ "field": x.name, "answers": n })))
+                    .filter_map(|(f, n)| def.by_id(&f).filter(|x| x.compute.is_some()).map(|x| json!({ "field": x.name, "answers": n })))
                     .collect();
                 Ok(Some((
                     latest,
                     shown,
                     rows,
-                    (aside, inferred),
+                    (aside, computed),
                     db::def_history(c, &lookup, 20)?,
                     db::recent_edits(c, &lookup)?,
                     users(&apps, &lookup),
@@ -383,7 +387,7 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
         })
         .await
         .map_err(db_err)?;
-    let Some((latest, shown, rows, (aside, inferred), history, edits, used_by)) = found else {
+    let Some((latest, shown, rows, (aside, computed), history, edits, used_by)) = found else {
         return Err(missing(&name));
     };
     let Some((v, def)) = shown else {
@@ -396,7 +400,7 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
         "definition": def.describe(pod_core::util::now_secs(), KEEP_SECS),
         "rows": rows,
         "kept_aside": aside,
-        "inferred_answers": inferred,
+        "computed_answers": computed,
         "history": history,
         "recent_edits": edits,
         "used_by": used_by,
@@ -535,7 +539,7 @@ async fn commit(
     let pod2 = pod.clone();
     let def = planned.def.clone();
     let convert = planned.convert.clone();
-    let to_infer = planned.infer.clone();
+    let to_compute = planned.compute.clone();
     let coll = name.to_owned();
     let (version, conversions, versions, jobs) = refusable(pod, move |tx| {
         let current = db::latest_def(tx, &coll)?.map(|(v, _)| v);
@@ -552,8 +556,8 @@ async fn commit(
             }
         }
         let mut jobs = Vec::new();
-        for id in &to_infer {
-            jobs.extend(crate::infer::backfill(tx, &def, id, caps.rows)?);
+        for id in &to_compute {
+            jobs.extend(crate::compute::backfill(tx, &def, id, caps.rows, caps.text_chars)?);
         }
         let mut versions = Vec::new();
         for s in &staged {
@@ -572,14 +576,14 @@ async fn commit(
         pod.publish_layout(app, *v);
     }
     pod.publish_data_all(NAME);
-    let inferring = jobs.len();
-    crate::infer::spawn(pod, name, jobs);
+    let computing = jobs.len();
+    crate::compute::spawn(pod, name, jobs);
     Ok(json!({
         "ok": true, "collection": name, "version": version,
         "conversions": conversions.iter().map(|c| c.to_json(&planned.def.title)).collect::<Vec<_>>(),
         "apps": versions.iter().map(|(a, v)| json!({ "app": a, "version": v })).collect::<Vec<_>>(),
         "definition": planned.def.describe(pod_core::util::now_secs(), KEEP_SECS),
-        "inferring_rows": inferring,
+        "computing_rows": computing,
     }))
 }
 
@@ -760,13 +764,14 @@ async fn edit_rows(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, 
         let mut jobs = Vec::new();
         for ((op, id, before, after), write) in planned.iter_mut().zip(&writes) {
             if *op == "create" || *op == "update" {
-                jobs.extend(crate::infer::after_write(
+                jobs.extend(crate::compute::after_write(
                     tx,
                     &def,
                     before.as_ref().map(|b| &b.values),
                     after,
                     write,
                     now,
+                    caps.text_chars,
                 )?);
             }
             let after = &*after;
@@ -791,7 +796,7 @@ async fn edit_rows(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, 
     let (jobs, out) = out;
     if out["ok"] == true {
         pod.publish_data_all(NAME);
-        crate::infer::spawn(pod, &collection, jobs);
+        crate::compute::spawn(pod, &collection, jobs);
     }
     Ok(out)
 }

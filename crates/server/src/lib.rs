@@ -27,7 +27,7 @@ pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
         app_pixelfed::apps::demo_adapter(),
         Arc::new(
             app_collections::CollectionsAdapter::new()
-                .with_classifier(app_collections::infer::ModelClassifier::from_env()),
+                .with_model(app_collections::compute::MessagesModel::from_env()),
         ),
     ]
 }

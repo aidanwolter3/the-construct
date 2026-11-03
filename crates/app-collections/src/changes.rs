@@ -4,11 +4,11 @@
 //!
 //! | Op | Effect |
 //! |---|---|
-//! | `{op: add_field, name, type, options?, optional?, default?, infer?}` | a new field (optional or with a default: existing rows read empty or the default; an inferred one is then filled in) |
+//! | `{op: add_field, name, type, options?, optional?, default?, compute?}` | a new field (optional or with a default: existing rows read empty or the default; a computed one is then computed for them) |
 //! | `{op: rename_field, field, to}` | a new name; the old one stays an alias |
 //! | `{op: remove_field, field}` | soft removal: hidden, data kept for the purge window |
 //! | `{op: restore_field, field}` | undo a removal (its data comes back) |
-//! | `{op: update_field, field, type?, options?, optional?, default?, infer?}` | values converted row by row; what doesn't fit is kept aside (`infer: null` stops inferring) |
+//! | `{op: update_field, field, type?, options?, optional?, default?, compute?}` | values converted row by row; what doesn't fit is kept aside (`compute: null` stops computing; values stay) |
 //! | `{op: set_order, field?, descending?}` | the list order: a field or a list of fields, first key first (none: oldest first) |
 //! | `{op: set_title, title}` | the collection's title |
 
@@ -17,13 +17,13 @@ use serde_json::Value;
 use crate::model::{self, Definition, Field};
 
 /// A new definition, the ids of the fields whose values must be converted
-/// (their type or options changed) and of the fields whose empty values
-/// must be inferred (their `infer` is new or changed).
+/// (their type or options changed) and of the fields to compute for
+/// existing rows (their `compute` is new or changed).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Planned {
     pub def: Definition,
     pub convert: Vec<String>,
-    pub infer: Vec<String>,
+    pub compute: Vec<String>,
 }
 
 /// The field an op names (by name or alias, live or, for `restore_field`,
@@ -64,19 +64,22 @@ pub fn plan(
     model::check_definition(&def, max_fields).map_err(|e| (ops.len().saturating_sub(1), e))?;
     Ok(Planned {
         convert: to_convert(&before, &def),
-        infer: to_infer(&before, &def),
+        compute: to_compute(&before, &def),
         def,
     })
 }
 
-fn to_infer(before: &Definition, after: &Definition) -> Vec<String> {
+fn to_compute(before: &Definition, after: &Definition) -> Vec<String> {
     after
         .live_fields()
         .filter(|f| {
-            f.infer.is_some()
-                && before
-                    .by_id(&f.id)
-                    .is_none_or(|b| !b.live() || b.infer != f.infer)
+            f.compute.is_some()
+                && before.by_id(&f.id).is_none_or(|b| {
+                    !b.live()
+                        || b.compute != f.compute
+                        || b.kind != f.kind
+                        || b.options != f.options
+                })
         })
         .map(|f| f.id.clone())
         .collect()
@@ -114,7 +117,7 @@ fn apply_op(def: &mut Definition, op: &Value, now: i64, max_chars: usize) -> Res
             def.next_field += 1;
             let id = field.id.clone();
             def.fields.push(field);
-            model::set_infer(def, &id, op.get("infer"))?;
+            model::set_compute(def, &id, op.get("compute"))?;
         }
         "rename_field" => {
             let to = arg("to").to_owned();
@@ -187,7 +190,7 @@ fn apply_op(def: &mut Definition, op: &Value, now: i64, max_chars: usize) -> Res
                 ));
             }
             let id = f.id.clone();
-            model::set_infer(def, &id, op.get("infer"))?;
+            model::set_compute(def, &id, op.get("compute"))?;
         }
         "set_order" => {
             let names = model::order_names(op.get("field"))?;
@@ -254,24 +257,26 @@ pub fn restore(
         .cloned()
         .collect();
     def.order_by = order;
-    // An inferred field whose source is gone again stops inferring.
+    // A computed field whose source is gone again stops computing.
     let gone: Vec<String> = def
         .fields
         .iter()
         .filter(|f| {
-            f.infer
-                .as_ref()
-                .is_some_and(|i| !def.by_id(&i.from).is_some_and(Field::live))
+            f.compute.as_ref().is_some_and(|c| {
+                c.sources()
+                    .iter()
+                    .any(|id| !def.by_id(id).is_some_and(Field::live))
+            })
         })
         .map(|f| f.id.clone())
         .collect();
     for f in def.fields.iter_mut().filter(|f| gone.contains(&f.id)) {
-        f.infer = None;
+        f.compute = None;
     }
     model::check_definition(&def, max_fields)?;
     Ok(Planned {
         convert: to_convert(current, &def),
-        infer: to_infer(current, &def),
+        compute: to_compute(current, &def),
         def,
     })
 }
@@ -344,13 +349,31 @@ mod tests {
     }
 
     #[test]
-    fn orders_take_several_fields_and_inferred_fields_are_reported() {
+    fn orders_take_several_fields_and_computed_fields_are_reported() {
         let p = plan(
             &todos(),
             &[
                 json!({"op": "add_field", "name": "kind", "type": "choice",
                        "options": ["home", "work"], "default": "home",
-                       "infer": {"from": "title", "hint": "where the task is done"}}),
+                       "compute": {"kind": "model", "from": "title", "prompt": "Where is the task done?"}}),
+                json!({"op": "add_field", "name": "label", "type": "text", "optional": true,
+                       "compute": {"kind": "expr", "expr": "entity.title + \" (\" + entity.kind + \")\""}}),
+                json!({"op": "set_order", "field": ["kind", "done"]}),
+            ],
+            1,
+            99,
+            10,
+        );
+        // A computed field can't read another computed field (yet).
+        assert!(p.unwrap_err().1.contains("computed itself"));
+        let p = plan(
+            &todos(),
+            &[
+                json!({"op": "add_field", "name": "kind", "type": "choice",
+                       "options": ["home", "work"], "default": "home",
+                       "compute": {"kind": "model", "from": "title", "prompt": "Where is the task done?"}}),
+                json!({"op": "add_field", "name": "label", "type": "text", "optional": true,
+                       "compute": {"kind": "expr", "expr": "entity.done ? \"done: \" + entity.title : entity.title"}}),
                 json!({"op": "set_order", "field": ["kind", "done"]}),
             ],
             1,
@@ -359,33 +382,49 @@ mod tests {
         )
         .unwrap();
         assert_eq!(p.def.order_by, vec!["f4".to_owned(), "f2".to_owned()]);
-        assert_eq!(p.infer, vec!["f4".to_owned()]);
+        assert_eq!(p.compute, vec!["f4".to_owned(), "f5".to_owned()]);
         // Removing an order field drops it from the order; the rest stays.
         let p2 = plan(
             &p.def,
-            &[json!({"op": "remove_field", "field": "done"})],
+            &[
+                json!({"op": "set_order", "field": "done"}),
+                json!({"op": "remove_field", "field": "done"}),
+            ],
+            2,
+            99,
+            10,
+        );
+        assert!(
+            p2.unwrap_err().1.contains("which is removed"),
+            "a source can't be removed while a field computes from it"
+        );
+        let p2 = plan(
+            &p.def,
+            &[json!({"op": "remove_field", "field": "due"})],
             2,
             99,
             10,
         )
         .unwrap();
-        assert_eq!(p2.def.order_by, vec!["f4".to_owned()]);
-        assert!(p2.infer.is_empty(), "unchanged infer is not reported again");
-        // The source of an inferred field can't be removed while it infers.
-        let err = plan(
+        assert!(
+            p2.compute.is_empty(),
+            "unchanged computes are not reported again"
+        );
+        // Changing a choice's options recomputes it.
+        let p2 = plan(
             &p.def,
-            &[json!({"op": "remove_field", "field": "title"})],
+            &[json!({"op": "update_field", "field": "kind", "options": ["home", "work", "errand"]})],
             2,
             99,
             10,
         )
-        .unwrap_err();
-        assert!(err.1.contains("infers from"), "{}", err.1);
-        // Stop inferring, then the order goes back to oldest first.
+        .unwrap();
+        assert_eq!(p2.compute, vec!["f4".to_owned()]);
+        // Stop computing, then the order goes back to oldest first.
         let p3 = plan(
             &p.def,
             &[
-                json!({"op": "update_field", "field": "kind", "infer": null}),
+                json!({"op": "update_field", "field": "kind", "compute": null}),
                 json!({"op": "set_order"}),
             ],
             3,
@@ -393,13 +432,15 @@ mod tests {
             10,
         )
         .unwrap();
-        assert!(p3.def.field("kind").unwrap().infer.is_none());
+        assert!(p3.def.field("kind").unwrap().compute.is_none());
         assert!(p3.def.order_by.is_empty());
         for bad in [
             json!({"op": "set_order", "field": ["done", "nope"]}),
             json!({"op": "set_order", "field": ["done", "done"]}),
+            json!({"op": "add_field", "name": "x", "type": "text",
+                   "compute": {"kind": "expr", "expr": "entity.title"}}),
             json!({"op": "add_field", "name": "x", "type": "text", "optional": true,
-                   "infer": {"from": "title"}}),
+                   "compute": {"kind": "expr", "expr": "entity.title *"}}),
         ] {
             assert!(
                 plan(&todos(), std::slice::from_ref(&bad), 1, 99, 10).is_err(),

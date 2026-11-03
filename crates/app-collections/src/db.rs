@@ -9,10 +9,10 @@
 //!   nothing is lost (and put back when a later change can read them).
 //! - `collections_edits` / `collections_edit_rows`: Claude's row edits,
 //!   each row's state before and after, so an edit undoes as one step.
-//! - `collections_inferred`: answers for inferred fields (decision
-//!   `collection-inferred-fields`), by collection, field id and normalized
-//!   source text, so each text is classified once; a person's edit of the
-//!   field replaces the answer.
+//! - `collections_computed`: answers for `model`-computed fields (decision
+//!   `collection-computed-fields`) as JSON, by collection, field id and the
+//!   normalized source values, so each input is asked about once; a
+//!   person's edit of the field replaces the answer.
 
 use std::cmp::Ordering;
 
@@ -26,12 +26,12 @@ use crate::model::{self, Definition, Field, Kind};
 pub static MIGRATIONS: &[Migration] = &[
     // 1: the schema.
     Migration::Sql(SCHEMA),
-    // 2: inferred field answers (decision `collection-inferred-fields`).
-    Migration::Sql(INFERRED),
+    // 2: computed field answers (decision `collection-computed-fields`).
+    Migration::Sql(COMPUTED),
 ];
 
-const INFERRED: &str = "
-CREATE TABLE collections_inferred (
+const COMPUTED: &str = "
+CREATE TABLE collections_computed (
     collection TEXT NOT NULL,
     field_id   TEXT NOT NULL,
     key        TEXT NOT NULL,
@@ -419,37 +419,39 @@ pub fn save_row(tx: &Connection, collection: &str, row: &Row) -> rusqlite::Resul
     Ok(())
 }
 
-// ---------- inferred answers ----------
+// ---------- computed answers ----------
 
-/// Who gave an inferred answer.
+/// A model gave the answer.
 pub const SOURCE_MODEL: &str = "model";
 /// A person (or Claude's row edit) set the field by hand.
 pub const SOURCE_EDIT: &str = "edit";
 
-/// The cached answer for field `field_id` of `collection` and source text
-/// key `key` (see [`model::infer_key`]).
-pub fn inferred(
+/// The cached answer for field `field_id` of `collection` and inputs key
+/// `key` (normalized source values, see [`model::cache_key`]).
+pub fn computed(
     conn: &Connection,
     collection: &str,
     field_id: &str,
     key: &str,
-) -> rusqlite::Result<Option<String>> {
-    conn.query_row(
-        "SELECT value FROM collections_inferred WHERE collection = ?1 AND field_id = ?2 AND key = ?3",
-        params![collection, field_id, key],
-        |r| r.get(0),
-    )
-    .optional()
+) -> rusqlite::Result<Option<Value>> {
+    let text: Option<String> = conn
+        .query_row(
+            "SELECT value FROM collections_computed WHERE collection = ?1 AND field_id = ?2 AND key = ?3",
+            params![collection, field_id, key],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(text.and_then(|t| serde_json::from_str(&t).ok()))
 }
 
 /// Remember `value` as the answer for `key` (`source`: [`SOURCE_MODEL`] or
 /// [`SOURCE_EDIT`]). A model's answer never replaces a person's.
-pub fn remember_inferred(
+pub fn remember_computed(
     conn: &Connection,
     collection: &str,
     field_id: &str,
     key: &str,
-    value: &str,
+    value: &Value,
     source: &str,
     now: i64,
 ) -> rusqlite::Result<()> {
@@ -457,23 +459,23 @@ pub fn remember_inferred(
         return Ok(());
     }
     conn.execute(
-        "INSERT INTO collections_inferred (collection, field_id, key, value, source, updated_at)
+        "INSERT INTO collections_computed (collection, field_id, key, value, source, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT (collection, field_id, key) DO UPDATE SET
              value = excluded.value, source = excluded.source, updated_at = excluded.updated_at
-         WHERE excluded.source = 'edit' OR collections_inferred.source = 'model'",
-        params![collection, field_id, key, value, source, now],
+         WHERE excluded.source = 'edit' OR collections_computed.source = 'model'",
+        params![collection, field_id, key, value.to_string(), source, now],
     )?;
     Ok(())
 }
 
 /// Cached answers per field id of `collection`.
-pub fn inferred_counts(
+pub fn computed_counts(
     conn: &Connection,
     collection: &str,
 ) -> rusqlite::Result<Vec<(String, i64)>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT field_id, COUNT(*) FROM collections_inferred WHERE collection = ?1 GROUP BY field_id",
+        "SELECT field_id, COUNT(*) FROM collections_computed WHERE collection = ?1 GROUP BY field_id",
     )?;
     stmt.query_map([collection], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect()

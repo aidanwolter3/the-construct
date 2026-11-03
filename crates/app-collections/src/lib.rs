@@ -4,10 +4,10 @@
 //! Claude never writes a data source. It *declares* data over MCP: a
 //! collection is a name and typed fields (`todos {title: text, done: bool,
 //! due: date?}`), and this one built-in source stores and serves any
-//! collection the same way. There is no stored logic: no computed fields,
-//! triggers or upstream calls; the one exception is an inferred choice field
-//! ([`infer`], decision `collection-inferred-fields`), which the pod fills in
-//! from another field's text.
+//! collection the same way. There is no stored code: no triggers or upstream
+//! calls. A field may be computed from the row's other fields ([`compute`],
+//! decision `collection-computed-fields`): by a small expression, or by a
+//! model's answer to a prompt about them.
 //!
 //! What layouts use (the same for every collection `<c>`):
 //!
@@ -33,8 +33,9 @@
 
 pub mod bindings;
 pub mod changes;
+pub mod compute;
 pub mod db;
-pub mod infer;
+pub mod expr;
 mod mcp;
 pub mod model;
 
@@ -160,8 +161,9 @@ pub const MANIFEST: SourceManifest = SourceManifest {
 #[derive(Debug, Default)]
 pub struct CollectionsAdapter {
     caps: Caps,
-    /// What fills in inferred fields (none: they keep their default).
-    classifier: Option<Arc<dyn infer::Classifier>>,
+    /// What answers `model`-computed fields (none: they keep their
+    /// default).
+    model: Option<Arc<dyn compute::FieldModel>>,
 }
 
 impl CollectionsAdapter {
@@ -177,10 +179,10 @@ impl CollectionsAdapter {
         }
     }
 
-    /// With `classifier` filling in inferred fields
-    /// ([`infer::ModelClassifier::from_env`] in the server; a fake in tests).
-    pub fn with_classifier(mut self, classifier: Option<Arc<dyn infer::Classifier>>) -> Self {
-        self.classifier = classifier;
+    /// With `model` answering `model`-computed fields
+    /// ([`compute::MessagesModel::from_env`] in the server; a fake in tests).
+    pub fn with_model(mut self, model: Option<Arc<dyn compute::FieldModel>>) -> Self {
+        self.model = model;
         self
     }
 
@@ -484,7 +486,7 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
                 updated_at: now,
                 deleted_at: None,
             };
-            let jobs = infer::after_write(tx, &def, None, &mut row, &body, now)?;
+            let jobs = compute::after_write(tx, &def, None, &mut row, &body, now, caps.text_chars)?;
             if let Err(e) = check_usage(tx, caps, 1, bytes_of(&row.values))? {
                 return Ok(Err(e));
             }
@@ -530,7 +532,15 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
                 e,
             )));
         }
-        let jobs = infer::after_write(tx, &def, Some(&before_values), &mut row, &body, now)?;
+        let jobs = compute::after_write(
+            tx,
+            &def,
+            Some(&before_values),
+            &mut row,
+            &body,
+            now,
+            caps.text_chars,
+        )?;
         match body.get("deleted") {
             Some(Value::Bool(true)) => row.deleted_at = row.deleted_at.or(Some(now)),
             Some(Value::Bool(false)) => {
@@ -553,7 +563,7 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
     .await?;
     pod.publish_data_all(NAME);
     let (out, jobs) = out;
-    infer::spawn(pod, collection, jobs);
+    compute::spawn(pod, collection, jobs);
     Ok(out)
 }
 

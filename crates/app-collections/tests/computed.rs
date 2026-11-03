@@ -1,13 +1,14 @@
-//! Inferred fields and multi-key order (decision
-//! `collection-inferred-fields`, issue #62) on a real pod: a groceries
-//! collection whose `section` the pod fills in from the item's name with a
-//! fake classifier, cached per name and taught by a hand edit; rows listed
+//! Computed fields and multi-key order (decision
+//! `collection-computed-fields`, issue #62) on a real pod: a groceries
+//! collection whose `section` is a `model` compute over the item's name
+//! (a fake model, cached per name and taught by a hand edit), whose `label`
+//! is an `expr` compute over the name and quantity, and whose rows listed
 //! by `["section", "done"]` walk the store in the options' order.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use app_collections::infer::Classifier;
+use app_collections::compute::{FieldModel, Question};
 use app_collections::{Caps, CollectionsAdapter};
 use axum::{
     body::Body,
@@ -20,6 +21,9 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 const SECTIONS: [&str; 4] = ["Produce", "Bakery", "Dairy", "Other"];
+const PROMPT: &str = "Which grocery store section is this item in?";
+const LABEL: &str =
+    "entity.quantity ? entity.name + \" (\" + entity.quantity + \")\" : entity.name";
 
 /// Answers from a fixed table and records every text it was asked about.
 #[derive(Debug, Default)]
@@ -27,21 +31,19 @@ struct Fake {
     asked: Mutex<Vec<String>>,
 }
 
-impl Classifier for Fake {
-    fn classify<'a>(
-        &'a self,
-        text: &'a str,
-        hint: &'a str,
-        options: &'a [String],
-    ) -> BoxFuture<'a, Option<String>> {
+impl FieldModel for Fake {
+    fn answer<'a>(&'a self, q: Question<'a>) -> BoxFuture<'a, Option<String>> {
         Box::pin(async move {
-            assert_eq!(hint, "grocery store section");
-            assert_eq!(options, SECTIONS);
+            assert_eq!(q.prompt, PROMPT);
+            assert_eq!(q.options, SECTIONS);
+            assert_eq!(q.inputs.len(), 1);
+            assert_eq!(q.inputs[0].0, "name");
+            let text = &q.inputs[0].1;
             self.asked.lock().unwrap().push(text.to_owned());
             let t = text.to_lowercase();
             Some(
                 if t.contains("apple") || t.contains("banana") {
-                    "produce"
+                    " produce."
                 } else if t.contains("bread") || t.contains("bagel") {
                     "Bakery"
                 } else if t.contains("milk") {
@@ -59,7 +61,7 @@ impl Classifier for Fake {
 
 fn pod(fake: Option<Arc<Fake>>) -> Pod {
     let adapter = CollectionsAdapter::with_caps(Caps::default())
-        .with_classifier(fake.map(|f| f as Arc<dyn Classifier>));
+        .with_model(fake.map(|f| f as Arc<dyn FieldModel>));
     let pod: Pod = Arc::new(AppState::in_memory(vec![Arc::new(adapter)]));
     pod.store()
         .create_pinned_session(&session_hash("pod"))
@@ -140,7 +142,7 @@ async fn define_groceries(pod: &Pod) {
 fn section_change() -> Value {
     json!([
         {"op": "add_field", "name": "section", "type": "choice", "options": SECTIONS,
-         "default": "Other", "infer": {"from": "name", "hint": "grocery store section"}},
+         "default": "Other", "compute": {"kind": "model", "from": "name", "prompt": PROMPT}},
         {"op": "set_order", "field": ["section", "done"]}])
 }
 
@@ -208,7 +210,7 @@ async fn wait_section(pod: &Pod, name: &str, want: &str) {
 }
 
 #[tokio::test]
-async fn an_empty_inferred_field_is_classified_cached_and_learned() {
+async fn a_model_field_is_answered_cached_and_learned() {
     let fake = Arc::new(Fake::default());
     let pod = pod(Some(fake.clone()));
     define_groceries(&pod).await;
@@ -220,16 +222,16 @@ async fn an_empty_inferred_field_is_classified_cached_and_learned() {
         json!({"collection": "groceries", "changes": section_change()}),
     )
     .await;
-    assert_eq!(v["inferring_rows"], 1, "{v}");
+    assert_eq!(v["computing_rows"], 1, "{v}");
     assert_eq!(
-        v["definition"]["fields"][3]["infer"],
-        json!({"from": "name", "hint": "grocery store section"})
+        v["definition"]["fields"][3]["compute"],
+        json!({"kind": "model", "from": ["name"], "prompt": PROMPT})
     );
     assert_eq!(v["definition"]["order_by"], json!(["section", "done"]));
     wait_section(&pod, "Bagels", "Bakery").await;
 
     // A create (the recipe screen's too) reads the default, then the answer
-    // (the model's "produce" is matched to the option "Produce").
+    // (the model's " produce." is matched to the option "Produce").
     add(&pod, json!({"name": "Apples", "quantity": "6"})).await;
     wait_section(&pod, "Apples", "Produce").await;
     assert_eq!(fake.asked.lock().unwrap().clone(), vec!["Bagels", "Apples"]);
@@ -270,7 +272,7 @@ async fn an_empty_inferred_field_is_classified_cached_and_learned() {
     );
     assert_eq!(fake.asked.lock().unwrap().len(), 3);
 
-    // Renaming an item re-infers its section.
+    // Renaming an item computes its section again.
     let bread = add(&pod, json!({"name": "Bogus thing"})).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(
@@ -287,7 +289,10 @@ async fn an_empty_inferred_field_is_classified_cached_and_learned() {
         json!({"collection": "groceries"}),
     )
     .await;
-    assert_eq!(d["inferred_answers"][0]["field"], "section", "{d}");
+    assert_eq!(d["computed_answers"][0]["field"], "section", "{d}");
+    // Clearing a hand-set value computes it again (from the cache).
+    update(&pod, json!({"id": oat, "section": null})).await;
+    assert_eq!(section_of(&rows(&pod).await, "Oat milk"), "Other");
 }
 
 #[tokio::test]
@@ -328,7 +333,7 @@ async fn rows_walk_the_store_by_section_option_order_then_unbought_first() {
 }
 
 #[tokio::test]
-async fn without_a_classifier_the_field_keeps_its_default_and_an_app_groups_by_it() {
+async fn without_a_model_the_field_keeps_its_default_and_an_app_groups_by_it() {
     let pod = pod(None);
     define_groceries(&pod).await;
     let layout = json!({"type": "core://Workspace", "id": "x", "title": "Groceries", "slots": [
@@ -360,12 +365,16 @@ async fn without_a_classifier_the_field_keeps_its_default_and_an_app_groups_by_i
     assert_eq!(section_of(&rows(&pod).await, "Apples"), "Other");
     let (status, ws) = call(&pod, "GET", &format!("/v1/workspaces/{app}"), "phone", None).await;
     assert_eq!(status, StatusCode::OK, "{ws}");
-    // Bad infer specs are refused with the op's pointer.
+    // Bad computes are refused with the op's pointer.
     for bad in [
         json!({"op": "add_field", "name": "aisle", "type": "text", "optional": true,
-               "infer": {"from": "name"}}),
-        json!({"op": "add_field", "name": "aisle", "type": "choice", "options": ["A"],
-               "optional": true, "infer": {"from": "done"}}),
+               "compute": {"kind": "model", "from": "name"}}),
+        json!({"op": "add_field", "name": "aisle", "type": "text",
+               "compute": {"kind": "expr", "expr": "entity.name"}}),
+        json!({"op": "add_field", "name": "aisle", "type": "text", "optional": true,
+               "compute": {"kind": "expr", "expr": "upper(entity.name)"}}),
+        json!({"op": "add_field", "name": "aisle", "type": "text", "optional": true,
+               "compute": {"kind": "expr", "expr": "entity.section"}}),
         json!({"op": "remove_field", "field": "name"}),
     ] {
         let (err, v) = tool(
@@ -379,14 +388,14 @@ async fn without_a_classifier_the_field_keeps_its_default_and_an_app_groups_by_i
 }
 
 #[tokio::test]
-async fn define_collection_takes_infer_and_a_list_order() {
+async fn define_collection_takes_compute_and_a_list_order() {
     let pod = pod(Some(Arc::new(Fake::default())));
     let v = ok(
         &pod,
         "define_collection",
         json!({"name": "groceries", "fields": [
         {"name": "section", "type": "choice", "options": SECTIONS, "default": "Other",
-         "infer": {"from": "name", "hint": "grocery store section"}},
+         "compute": {"kind": "model", "from": ["name"], "prompt": PROMPT}},
         {"name": "name", "type": "text"},
         {"name": "done", "type": "bool", "default": false}],
         "order_by": ["section", "done"]}),
@@ -404,4 +413,105 @@ async fn define_collection_takes_infer_and_a_list_order() {
     )
     .await;
     assert_eq!(v["definition"]["order_by"], json!("title"));
+}
+
+/// The rows' `(name, label)` in order.
+async fn labels(pod: &Pod) -> Vec<(String, String)> {
+    let (status, b) = call(pod, "GET", "/v1/collections/groceries/rows", "phone", None).await;
+    assert_eq!(status, StatusCode::OK, "{b}");
+    b["queries"]["collection:groceries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| {
+            let e = &b["entities"][u.as_str().unwrap()];
+            (
+                e["name"].as_str().unwrap().to_owned(),
+                e["label"].as_str().unwrap_or("").to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn an_expr_field_is_computed_in_the_write_and_again_when_its_sources_change() {
+    let pod = pod(None);
+    define_groceries(&pod).await;
+    let apples = add(&pod, json!({"name": "Apples", "quantity": "6"})).await;
+    // Added with a compute: existing rows get it in the same change.
+    let v = ok(
+        &pod,
+        "apply_change",
+        json!({"collection": "groceries", "changes": [
+            {"op": "add_field", "name": "label", "type": "text", "optional": true,
+             "compute": {"kind": "expr", "expr": LABEL}}]}),
+    )
+    .await;
+    assert_eq!(v["computing_rows"], 0, "an expression needs no model: {v}");
+    assert_eq!(
+        v["definition"]["fields"][3]["compute"],
+        json!({"kind": "expr", "expr": LABEL})
+    );
+    assert_eq!(labels(&pod).await, [("Apples".into(), "Apples (6)".into())]);
+    // A create and an update compute it at once, no waiting.
+    let milk = add(&pod, json!({"name": "Milk"})).await;
+    update(&pod, json!({"id": apples, "quantity": "a dozen"})).await;
+    assert_eq!(
+        labels(&pod).await,
+        [
+            ("Apples".into(), "Apples (a dozen)".into()),
+            ("Milk".into(), "Milk".into())
+        ]
+    );
+    // A value written by hand stays until a source changes.
+    update(&pod, json!({"id": milk, "label": "Milk (oat, for coffee)"})).await;
+    update(&pod, json!({"id": milk, "done": true})).await;
+    assert_eq!(labels(&pod).await[1].1, "Milk (oat, for coffee)");
+    update(&pod, json!({"id": milk, "quantity": "2"})).await;
+    assert_eq!(labels(&pod).await[1].1, "Milk (2)");
+    // A rename of a source keeps the expression (stored by field id).
+    let v = ok(
+        &pod,
+        "apply_change",
+        json!({"collection": "groceries", "changes": [
+            {"op": "rename_field", "field": "quantity", "to": "amount"}]}),
+    )
+    .await;
+    assert_eq!(
+        v["definition"]["fields"][3]["compute"]["expr"],
+        LABEL.replace("quantity", "amount")
+    );
+    update(&pod, json!({"id": milk, "amount": "1"})).await;
+    assert_eq!(labels(&pod).await[1].1, "Milk (1)");
+    // Changing the expression recomputes every row.
+    ok(
+        &pod,
+        "apply_change",
+        json!({"collection": "groceries", "changes": [
+            {"op": "update_field", "field": "label",
+             "compute": {"kind": "expr", "expr": "entity.done ? \"✓ \" + entity.name : entity.name"}}]}),
+    )
+    .await;
+    assert_eq!(
+        labels(&pod).await,
+        [
+            ("Apples".into(), "Apples".into()),
+            ("Milk".into(), "✓ Milk".into())
+        ]
+    );
+    // edit_rows computes it too.
+    let edits = json!([{"op": "create", "values": {"name": "Bread"}}]);
+    let preview = ok(
+        &pod,
+        "edit_rows",
+        json!({"collection": "groceries", "edits": edits}),
+    )
+    .await;
+    ok(
+        &pod,
+        "edit_rows",
+        json!({"collection": "groceries", "edits": edits, "confirm": preview["confirm"]}),
+    )
+    .await;
+    assert_eq!(labels(&pod).await[2], ("Bread".into(), "Bread".into()));
 }

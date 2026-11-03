@@ -17,8 +17,10 @@ pub const MAX_TITLE_CHARS: usize = 60;
 pub const MAX_OPTIONS: usize = 50;
 /// Longest choice option.
 pub const MAX_OPTION_CHARS: usize = 60;
-/// Longest `infer` hint.
-pub const MAX_HINT_CHARS: usize = 120;
+/// Longest `compute` prompt.
+pub const MAX_PROMPT_CHARS: usize = 500;
+/// Most source fields of a `model` compute.
+pub const MAX_SOURCES: usize = 4;
 /// Most fields a collection is ordered by.
 pub const MAX_ORDER_KEYS: usize = 4;
 
@@ -86,11 +88,10 @@ pub struct Field {
     /// Names it had before: still accepted from writes and bindings.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
-    /// Where an empty value comes from (decision
-    /// `collection-inferred-fields`): a choice field the pod fills in from
-    /// another field's text.
+    /// How the pod computes its value from the row's other fields
+    /// (decision `collection-computed-fields`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub infer: Option<Infer>,
+    pub compute: Option<Compute>,
     /// Soft-removed at (unix seconds): hidden, its data kept for the purge
     /// window and restorable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -100,13 +101,44 @@ pub struct Field {
     pub purged: bool,
 }
 
-/// How a choice field's value is inferred: from the text of field `from`
-/// (a field id, so a rename keeps it), classified into one of the options
-/// with `hint` saying what the options are ("grocery store section").
+/// How a field's value is computed from the row's other fields (field
+/// ids, so a rename keeps it), whenever they change; a value written by
+/// hand is kept until they change again.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Infer {
-    pub from: String,
-    pub hint: String,
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Compute {
+    /// An expression ([`crate::expr`]) over the row, its field references
+    /// stored as ids; evaluated in the write itself.
+    Expr { expr: String },
+    /// A model's answer to `prompt` about the values of fields `from`,
+    /// coerced to the field's type (a choice: one of its options); asked
+    /// in the background, cached per input, and taught by hand edits.
+    Model { from: Vec<String>, prompt: String },
+}
+
+impl Compute {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Compute::Expr { .. } => "expr",
+            Compute::Model { .. } => "model",
+        }
+    }
+
+    /// The parsed expression of an `expr` compute (ids).
+    pub fn parsed(&self) -> Option<crate::expr::Expr> {
+        match self {
+            Compute::Expr { expr } => crate::expr::parse(expr).ok(),
+            Compute::Model { .. } => None,
+        }
+    }
+
+    /// The field ids it reads.
+    pub fn sources(&self) -> Vec<String> {
+        match self {
+            Compute::Expr { .. } => self.parsed().map(|e| e.fields()).unwrap_or_default(),
+            Compute::Model { from, .. } => from.clone(),
+        }
+    }
 }
 
 impl Field {
@@ -200,14 +232,28 @@ impl Definition {
         out
     }
 
-    /// [`Field::describe`] plus its `infer` (`{from: <field name>, hint}`).
+    /// The name of field id `id` (the id itself if there is none).
+    pub fn name_of(&self, id: &str) -> String {
+        self.by_id(id)
+            .map_or_else(|| id.to_owned(), |f| f.name.clone())
+    }
+
+    /// [`Field::describe`] plus its `compute`, with field names.
     pub fn describe_field(&self, f: &Field) -> Value {
         let mut v = f.describe();
-        if let Some(i) = &f.infer {
-            let from = self
-                .by_id(&i.from)
-                .map_or(i.from.as_str(), |s| s.name.as_str());
-            v["infer"] = json!({ "from": from, "hint": i.hint });
+        match &f.compute {
+            Some(c @ Compute::Expr { expr }) => {
+                let text = c
+                    .parsed()
+                    .and_then(|e| e.map_fields(&|id| Ok(self.name_of(id))).ok())
+                    .map_or_else(|| expr.clone(), |e| e.to_string());
+                v["compute"] = json!({ "kind": "expr", "expr": text });
+            }
+            Some(Compute::Model { from, prompt }) => {
+                let from: Vec<String> = from.iter().map(|id| self.name_of(id)).collect();
+                v["compute"] = json!({ "kind": "model", "from": from, "prompt": prompt });
+            }
+            None => {}
         }
         v
     }
@@ -313,48 +359,97 @@ pub fn resolve_order(def: &Definition, names: &[String]) -> Result<Vec<String>, 
         .collect()
 }
 
-/// Set field `id`'s `infer` from a spec `{from, hint?}` (`null`: no
-/// inference; `None`: unchanged). `from` names a field of `def`.
-pub fn set_infer(def: &mut Definition, id: &str, v: Option<&Value>) -> Result<(), String> {
+/// Set field `id`'s `compute` from a spec (`null`: not computed; `None`:
+/// unchanged): `{kind: "expr", expr: "<expression over entity.<field>>"}`
+/// or `{kind: "model", from: <field> | [<fields>], prompt}`. Field names
+/// resolve against `def` and are stored as ids.
+pub fn set_compute(def: &mut Definition, id: &str, v: Option<&Value>) -> Result<(), String> {
     let Some(v) = v else { return Ok(()) };
     let name = def.by_id(id).map(|f| f.name.clone()).unwrap_or_default();
-    let infer = match v {
+    let field_id = |n: &str| {
+        def.field(n).map(|f| f.id.clone()).ok_or_else(|| {
+            format!(
+                "field '{name}': compute reads '{n}', which is not one of the fields ({})",
+                def.live_fields()
+                    .map(|f| f.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+    };
+    let shape = || {
+        format!(
+            "field '{name}': compute is {{kind: \"expr\", expr}}, {{kind: \"model\", from, prompt}} or null"
+        )
+    };
+    let compute = match v {
         Value::Null => None,
-        Value::Object(o) => {
-            let from_name = o.get("from").and_then(Value::as_str).unwrap_or("").trim();
-            let from = def
-                .field(from_name)
-                .ok_or_else(|| {
-                    format!("field '{name}': infer.from '{from_name}' is not one of the fields")
-                })?
-                .id
-                .clone();
-            let hint = match o.get("hint") {
-                None | Some(Value::Null) => name.replace('_', " "),
-                Some(Value::String(h)) => h.trim().to_owned(),
-                Some(_) => return Err(format!("field '{name}': infer.hint is text")),
-            };
-            if hint.is_empty() || hint.chars().count() > MAX_HINT_CHARS {
-                return Err(format!(
-                    "field '{name}': infer.hint is 1..={MAX_HINT_CHARS} characters"
-                ));
+        Value::Object(o) => match o.get("kind").and_then(Value::as_str) {
+            Some("expr") => {
+                let text = o.get("expr").and_then(Value::as_str).unwrap_or("");
+                let parsed = crate::expr::parse(text)
+                    .map_err(|e| format!("field '{name}': compute.expr: {e}"))?;
+                let ids = parsed.map_fields(&|n| field_id(n))?;
+                Some(Compute::Expr {
+                    expr: ids.to_string(),
+                })
             }
-            Some(Infer { from, hint })
-        }
-        _ => {
-            return Err(format!(
-                "field '{name}': infer is {{from: <text field>, hint?}} or null"
-            ));
-        }
+            Some("model") => {
+                let names = match o.get("from") {
+                    Some(Value::String(s)) => vec![s.trim().to_owned()],
+                    Some(Value::Array(a)) => a
+                        .iter()
+                        .map(|x| x.as_str().map(|s| s.trim().to_owned()))
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or_else(|| {
+                            format!("field '{name}': compute.from is a field or a list of fields")
+                        })?,
+                    _ => {
+                        return Err(format!(
+                            "field '{name}': compute.from names the fields the model reads"
+                        ));
+                    }
+                };
+                if names.is_empty() || names.len() > MAX_SOURCES {
+                    return Err(format!(
+                        "field '{name}': compute.from is 1..={MAX_SOURCES} fields"
+                    ));
+                }
+                let mut from: Vec<String> = Vec::new();
+                for n in &names {
+                    let id = field_id(n)?;
+                    if from.contains(&id) {
+                        return Err(format!("field '{name}': compute.from lists '{n}' twice"));
+                    }
+                    from.push(id);
+                }
+                let prompt = o
+                    .get("prompt")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or("");
+                if prompt.is_empty() || prompt.chars().count() > MAX_PROMPT_CHARS {
+                    return Err(format!(
+                        "field '{name}': compute.prompt (what to answer about the fields) is 1..={MAX_PROMPT_CHARS} characters"
+                    ));
+                }
+                Some(Compute::Model {
+                    from,
+                    prompt: prompt.to_owned(),
+                })
+            }
+            _ => return Err(shape()),
+        },
+        _ => return Err(shape()),
     };
     if let Some(f) = def.fields.iter_mut().find(|f| f.id == id) {
-        f.infer = infer;
+        f.compute = compute;
     }
     Ok(())
 }
 
 /// The text `text` as a cache key: lowercase, inner spaces collapsed.
-pub fn infer_key(text: &str) -> String {
+pub fn cache_key(text: &str) -> String {
     text.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -529,7 +624,7 @@ pub fn parse_field(spec: &Value, id: String, max_chars: usize) -> Result<Field, 
         optional: spec["optional"].as_bool().unwrap_or(false),
         default: None,
         aliases: Vec::new(),
-        infer: None,
+        compute: None,
         removed_at: None,
         purged: false,
     };
@@ -607,7 +702,7 @@ pub fn set_default(field: &mut Field, v: Option<&Value>, max_chars: usize) -> Re
 }
 
 /// Check a whole definition: unique names (aliases included), valid order
-/// fields, inferred fields that can be inferred.
+/// fields, computed fields that can be computed.
 pub fn check_definition(def: &Definition, max_fields: usize) -> Result<(), String> {
     if !valid_name(&def.name) {
         return Err(format!(
@@ -653,38 +748,52 @@ pub fn check_definition(def: &Definition, max_fields: usize) -> Result<(), Strin
         ));
     }
     for f in &live {
-        let Some(infer) = &f.infer else { continue };
-        if f.kind != Kind::Choice {
-            return Err(format!(
-                "field '{}' infers its value, so it must be a choice (the answer is one of its options)",
-                f.name
-            ));
-        }
+        let Some(compute) = &f.compute else { continue };
         if !f.optional && f.default.is_none() {
             return Err(format!(
-                "field '{}' infers its value, so it must be optional or have a default (what a row reads until it is inferred)",
+                "field '{}' is computed, so it must be optional or have a default (what a row reads until it is computed)",
                 f.name
             ));
         }
-        match def.by_id(&infer.from) {
-            Some(src) if src.live() && src.kind == Kind::Text && src.id != f.id => {}
-            Some(src) if src.live() && src.id != f.id => {
-                return Err(format!(
-                    "field '{}' infers from '{}', which must be a text field",
-                    f.name, src.name
-                ));
-            }
-            Some(src) if src.id != f.id => {
-                return Err(format!(
-                    "field '{}' infers from '{}', which is removed; change or drop its infer first",
-                    f.name, src.name
-                ));
-            }
-            _ => {
-                return Err(format!(
-                    "field '{}' must infer from another text field",
-                    f.name
-                ));
+        if let Compute::Expr { expr } = compute
+            && compute.parsed().is_none()
+        {
+            return Err(format!(
+                "field '{}': compute.expr '{expr}' doesn't parse",
+                f.name
+            ));
+        }
+        let sources = compute.sources();
+        if sources.is_empty() {
+            return Err(format!(
+                "field '{}' is computed from no field (an expression reads entity.<field>)",
+                f.name
+            ));
+        }
+        for id in sources {
+            match def.by_id(&id) {
+                Some(src) if src.id == f.id => {
+                    return Err(format!("field '{}' can't be computed from itself", f.name));
+                }
+                Some(src) if !src.live() => {
+                    return Err(format!(
+                        "field '{}' is computed from '{}', which is removed; change or drop its compute first",
+                        f.name, src.name
+                    ));
+                }
+                Some(src) if src.compute.is_some() => {
+                    return Err(format!(
+                        "field '{}' is computed from '{}', which is computed itself (not supported yet)",
+                        f.name, src.name
+                    ));
+                }
+                Some(_) => {}
+                None => {
+                    return Err(format!(
+                        "field '{}' is computed from a field that doesn't exist",
+                        f.name
+                    ));
+                }
             }
         }
     }
@@ -988,47 +1097,111 @@ mod tests {
     }
 
     #[test]
-    fn inferred_fields_are_choices_from_a_text_field() {
+    fn computed_fields_read_other_live_fields_by_id() {
         let mut def = todos();
         let section = Field {
             id: "f4".into(),
             ..field(json!({"name": "section", "type": "choice",
                            "options": ["Produce", "Other"], "default": "Other"}))
         };
+        let label = Field {
+            id: "f5".into(),
+            ..field(json!({"name": "label", "type": "text", "optional": true}))
+        };
         def.fields.push(section);
-        set_infer(&mut def, "f4", Some(&json!({"from": "title"}))).unwrap();
+        def.fields.push(label);
+        set_compute(
+            &mut def,
+            "f4",
+            Some(&json!({"kind": "model", "from": "title", "prompt": "Which store section?"})),
+        )
+        .unwrap();
         assert_eq!(
-            def.by_id("f4").unwrap().infer,
-            Some(Infer {
-                from: "f1".into(),
-                hint: "section".into()
+            def.by_id("f4").unwrap().compute,
+            Some(Compute::Model {
+                from: vec!["f1".into()],
+                prompt: "Which store section?".into()
+            })
+        );
+        set_compute(
+            &mut def,
+            "f5",
+            Some(&json!({"kind": "expr", "expr": "entity.done ? \"✓ \" + entity.title : entity.title"})),
+        )
+        .unwrap();
+        assert_eq!(
+            def.by_id("f5").unwrap().compute,
+            Some(Compute::Expr {
+                expr: "entity.f2 ? \"✓ \" + entity.f1 : entity.f1".into()
             })
         );
         assert_eq!(check_definition(&def, 10), Ok(()));
+        let d = def.describe_field(def.by_id("f5").unwrap());
+        assert_eq!(
+            d["compute"],
+            json!({"kind": "expr", "expr": "entity.done ? \"✓ \" + entity.title : entity.title"})
+        );
         let d = def.describe_field(def.by_id("f4").unwrap());
-        assert_eq!(d["infer"], json!({"from": "title", "hint": "section"}));
-        // From a non-text field, or itself.
+        assert_eq!(
+            d["compute"],
+            json!({"kind": "model", "from": ["title"], "prompt": "Which store section?"})
+        );
+        // Any type can be computed; a rename keeps the sources.
+        def.fields[0].name = "name".into();
+        assert_eq!(
+            def.describe_field(def.by_id("f5").unwrap())["compute"]["expr"],
+            "entity.done ? \"✓ \" + entity.name : entity.name"
+        );
+        def.fields[0].name = "title".into();
+        // From itself, from a computed field, from a removed one.
         let mut bad = def.clone();
-        set_infer(&mut bad, "f4", Some(&json!({"from": "done"}))).unwrap();
+        set_compute(
+            &mut bad,
+            "f4",
+            Some(&json!({"kind": "model", "from": "section", "prompt": "x"})),
+        )
+        .unwrap();
         assert!(check_definition(&bad, 10).is_err());
         let mut bad = def.clone();
-        set_infer(&mut bad, "f4", Some(&json!({"from": "section"}))).unwrap();
+        set_compute(
+            &mut bad,
+            "f5",
+            Some(&json!({"kind": "expr", "expr": "entity.section"})),
+        )
+        .unwrap();
         assert!(check_definition(&bad, 10).is_err());
-        // Its source removed.
         let mut bad = def.clone();
         bad.fields[0].removed_at = Some(1);
         assert!(check_definition(&bad, 10).is_err());
-        // Only a choice; never required without a default.
-        let mut bad = def.clone();
-        bad.fields[3].kind = Kind::Text;
-        assert!(check_definition(&bad, 10).is_err());
+        // Never required without a default; never from nothing.
         let mut bad = def.clone();
         bad.fields[3].default = None;
         assert!(check_definition(&bad, 10).is_err());
-        assert!(set_infer(&mut def.clone(), "f4", Some(&json!({"from": "nope"}))).is_err());
-        assert!(set_infer(&mut def.clone(), "f4", Some(&json!("title"))).is_err());
-        set_infer(&mut def, "f4", Some(&Value::Null)).unwrap();
-        assert!(def.by_id("f4").unwrap().infer.is_none());
-        assert_eq!(infer_key("  Oat   MILK "), "oat milk");
+        let mut bad = def.clone();
+        set_compute(
+            &mut bad,
+            "f5",
+            Some(&json!({"kind": "expr", "expr": "\"x\""})),
+        )
+        .unwrap();
+        assert!(check_definition(&bad, 10).is_err());
+        for spec in [
+            json!({"kind": "model", "from": "nope", "prompt": "x"}),
+            json!({"kind": "model", "from": "title"}),
+            json!({"kind": "model", "from": [], "prompt": "x"}),
+            json!({"kind": "model", "from": ["title", "title"], "prompt": "x"}),
+            json!({"kind": "expr", "expr": "entity.nope"}),
+            json!({"kind": "expr", "expr": "size(entity.title)"}),
+            json!({"kind": "sql", "expr": "x"}),
+            json!("entity.title"),
+        ] {
+            assert!(
+                set_compute(&mut def.clone(), "f4", Some(&spec)).is_err(),
+                "{spec}"
+            );
+        }
+        set_compute(&mut def, "f4", Some(&Value::Null)).unwrap();
+        assert!(def.by_id("f4").unwrap().compute.is_none());
+        assert_eq!(cache_key("  Oat   MILK "), "oat milk");
     }
 }
