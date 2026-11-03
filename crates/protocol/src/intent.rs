@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "intent")]
@@ -69,6 +70,13 @@ pub enum ActionIntent {
     /// a `$nonce`) and appended to `queries[query_key]` until the pod answers;
     /// then every loaded path that produced `query_key` is reloaded (and the
     /// workspace too with `refresh_workspace`). A 4xx removes it again.
+    ///
+    /// Schema 8 (D47, D49): `attachments` maps a name to a form-bound list of
+    /// staged attachment ids (`{"photos": "$form.photos"}`). The engine
+    /// uploads them before the POST; `"$attachments.<name>"` is then the
+    /// local attachment entity URIs inside `entity` and the upload ids inside
+    /// `payload`. `position` puts the new entity at the start or end of its
+    /// list; `dismiss` closes the current screen once dispatched.
     #[serde(rename = "action.mutation.create")]
     Create {
         query_key: String,
@@ -78,6 +86,12 @@ pub enum ActionIntent {
         payload: Value,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         refresh_workspace: bool,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        attachments: BTreeMap<String, Value>,
+        #[serde(default, skip_serializing_if = "Position::is_end")]
+        position: Position,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        dismiss: bool,
     },
 
     /// Any intent tag this build does not know, e.g. the removed
@@ -103,4 +117,19 @@ pub enum PresentationMode {
     Push,
     Modal,
     Replace,
+}
+
+/// Where `action.mutation.create` puts its new entity in the list (schema 8).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Position {
+    Start,
+    #[default]
+    End,
+}
+
+impl Position {
+    fn is_end(&self) -> bool {
+        *self == Position::End
+    }
 }

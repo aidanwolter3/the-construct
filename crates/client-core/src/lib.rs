@@ -1947,6 +1947,7 @@ impl Inner {
                 endpoint,
                 payload,
                 refresh_workspace,
+                ..
             } => self.create(
                 started,
                 query_key,
