@@ -787,7 +787,7 @@ fn comment_rejected(id: &str, status: StatusCode, detail: &str) -> Response {
 /// `GET /v1/pixelfed/screens/comments?post_id=<id>`: the data of the comments screen
 /// (docs/DECISIONS.md D34), a `DataBundle`: one `pixelfed://comments/<id>` entity per
 /// comment ([`normalize_comment`]) and `queries["comments:<post_id>"]` in thread order
-/// ([`normalize_comments`]). No session: 401; upstream 4xx: same status (404
+/// ([`normalize_comments`]), replies to comments included ([`super::complete_comment_thread`]). No session: 401; upstream 4xx: same status (404
 /// `post_not_found`); 5xx / unreachable: 502.
 async fn comments_screen(
     State(state): State<Pod>,
@@ -808,7 +808,7 @@ async fn comments_screen(
         return invalid_request(json!({ "post_id": "status id" }));
     }
     let own = account.account_id.clone();
-    let (result, _) = with_token(&state, &instance, account, |token| {
+    let (result, token) = with_token(&state, &instance, account, |token| {
         let (upstream, id) = (&upstream, &id);
         async move { upstream.status_context(&token, id).await }
     })
@@ -820,6 +820,20 @@ async fn comments_screen(
         }
         Err(e) => return bad_gateway(&e),
     };
+    // Pixelfed lists only the direct replies; ask each comment for its own.
+    let context = super::complete_comment_thread(&id, context, |comment_id| {
+        let (upstream, token) = (&upstream, &token);
+        async move {
+            match upstream.status_context(token, &comment_id).await {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!(%comment_id, error = %e, "replies to a comment unavailable");
+                    None
+                }
+            }
+        }
+    })
+    .await;
     let others = match others_allowed(&state).await {
         Ok(o) => o,
         Err(e) => return e.into_response(),

@@ -444,6 +444,13 @@ from a client (D32, D33).
 - Needs a client build: Android device check on the developer's Mac.
 - **Not yet:** photos, ingredient tick boxes, a grid list.
 
+## Replies to comments (D47)
+
+- Replies to comments now show on real Pixelfed: its `context` lists only direct replies, so the pod also asks each
+  comment with replies for its own (capped, concurrent; a failure only loses that branch).
+- The fake Pixelfed answers `context` like Pixelfed (one level each way); `FAKE_PIXELFED_THREADS=mastodon` keeps the
+  whole-thread answer. Tests cover both, the call count, a reply to a reply and a failed branch.
+
 ## Sign in to any Pixelfed instance (D45)
 
 - The signed-out Pixelfed screen has a server box when `PIXELFED_ALLOWED_INSTANCES` is set; staging sets `*`, so

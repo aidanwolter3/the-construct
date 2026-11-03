@@ -234,6 +234,7 @@ The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PR
 | `FAKE_PIXELFED_AUTO_APPROVE` | unset | `1`: `GET /oauth/authorize` redirects straight back with a code (same as `auto=1` in the query); otherwise an HTML page with an **Authorize** button. |
 | `FAKE_PIXELFED_TOKEN` | unset | A pre-seeded valid access token, to skip OAuth in QA (survives resets). |
 | `FAKE_PIXELFED_FIXTURES` | embedded | Fixture directory to load instead of the embedded copies (e.g. `fixtures/pixelfed` while editing). |
+| `FAKE_PIXELFED_THREADS` | `pixelfed` | `mastodon`: `GET /api/v1/statuses/:id/context` returns the whole thread (Mastodon) instead of one level each way (Pixelfed). |
 | `FAKE_PIXELFED_ADMIN` | loopback only | `1` serves `/_admin` on any address, `0` never; unset, only when bound to loopback. |
 | `RUST_LOG` | `info` | `tracing` filter. |
 
@@ -509,11 +510,13 @@ Its environment variables are listed in [Server runtime configuration](#fake-pix
 comments as each post's `replies_count`, plus nested replies; authors are the timeline accounts and the signed-in
 `constructdemo`). Each entry is compact (`id`, `in_reply_to_id`, `account` username, `created_at`, plain `text`,
 optional `favourites_count`) and is expanded into a full status; parents must come before their replies. The API
-is Mastodon's:
+is Mastodon's, with Pixelfed's threads:
 
-- `GET /api/v1/statuses/:id/context`: `{"ancestors": [...], "descendants": [...]}` — the parent chain root first,
-  and every reply below depth first (siblings oldest first); thread them by `in_reply_to_id`. On a reblog, the
-  reblogged post's thread.
+- `GET /api/v1/statuses/:id/context`: `{"ancestors": [...], "descendants": [...]}`. Like Pixelfed, one level each
+  way: the direct parent only, and the direct replies only (oldest first, at most 100, none while `replies_count` is
+  0), so the replies to a comment come from that comment's own `context` (D47). With
+  `FAKE_PIXELFED_THREADS=mastodon`, Mastodon's whole thread instead: the parent chain root first, and every reply
+  below depth first. On a reblog, the reblogged post's thread.
 - `POST /api/v1/statuses` (form or JSON) with `status` and `in_reply_to_id`: adds a comment by the signed-in
   account and bumps the parent's `replies_count`. Optional `visibility`, `spoiler_text`, `sensitive`; the
   `Idempotency-Key` header replays the first result. 422 for blank text, more than 500 characters or no
@@ -523,7 +526,9 @@ is Mastodon's:
 
 ```bash
 curl -s -H 'Authorization: Bearer dev' http://127.0.0.1:8081/api/v1/statuses/781254316723458049/context \
-  | jq '.descendants[] | {id, in_reply_to_id, who: .account.username, content_text}'
+  | jq '.descendants[] | {id, in_reply_to_id, who: .account.username, content_text, replies_count}'
+curl -s -H 'Authorization: Bearer dev' http://127.0.0.1:8081/api/v1/statuses/781300000000000101/context \
+  | jq '.descendants[] | {id, in_reply_to_id, content_text}'     # the replies to a comment
 curl -s -H 'Authorization: Bearer dev' -d status='Lovely light!' -d in_reply_to_id=781254316723458049 \
   http://127.0.0.1:8081/api/v1/statuses | jq '{id, content}'
 ```
@@ -662,7 +667,9 @@ Endpoints:
   one `pixelfed://comments/<id>` entity per comment (`id, post_id, in_reply_to_id, depth, author_name,
   author_handle, avatar_url, text, created_at, meta ("@bob · 3 h"), like_count, is_liked, is_own`) and
   `queries["comments:<post_id>"]` in thread order (each comment followed by its replies, depth capped at 4), from
-  upstream `GET /api/v1/statuses/{id}/context`. A boost's id gives the boosted post's thread. Unknown post 404
+  upstream `GET /api/v1/statuses/{id}/context`, plus that call for each comment that reports more replies than
+  the pod has (Pixelfed lists only direct replies; at most 50 extra calls, 6 at a time; a failed one only loses
+  its branch, D47). A boost's id gives the boosted post's thread. Unknown post 404
   `post_not_found`; no session 401; upstream down 502.
 - `POST /v1/pixelfed/posts/comment {id, text, client_id?}` (bearer) -> `{ok, id, comment}`: posts `text` (1..500
   characters) as a reply to post or comment `id` (upstream `POST /api/v1/statuses` with `in_reply_to_id`).

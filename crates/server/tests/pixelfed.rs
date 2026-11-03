@@ -49,6 +49,12 @@ async fn serve(router: axum::Router) -> Server {
 }
 
 async fn spawn_fake() -> Server {
+    spawn_fake_with(false).await
+}
+
+/// `mastodon_threads`: `/context` answers with the whole thread (Mastodon), not one level
+/// (Pixelfed).
+async fn spawn_fake_with(mastodon_threads: bool) -> Server {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let state = fake_pixelfed::AppState::new(fake_pixelfed::Config {
@@ -57,7 +63,8 @@ async fn spawn_fake() -> Server {
         auto_approve: true,
         seed_token: Some(SEED.to_owned()),
     })
-    .unwrap();
+    .unwrap()
+    .with_mastodon_threads(mastodon_threads);
     let state = Arc::new(state);
     let router = fake_pixelfed::app(state.clone());
     let handle = tokio::spawn(async move {
@@ -1557,6 +1564,103 @@ async fn comments_screen_data_is_a_bundle_in_thread_order() {
         let (status, _) = get_comments_screen(&env.pod.url, bearer, CAROUSEL).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
+}
+
+/// The `/context` paths the fake was asked for, sorted.
+fn context_calls(fake: &fake_pixelfed::AppState) -> Vec<String> {
+    let mut calls: Vec<String> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.path.ends_with("/context"))
+        .map(|r| r.path)
+        .collect();
+    calls.sort();
+    calls
+}
+
+/// (comment id suffix, depth) of the comments screen's list.
+fn thread_shape(data: &Value, post: &str) -> Vec<(String, i64)> {
+    data["queries"][format!("comments:{post}")]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| {
+            let u = u.as_str().unwrap();
+            let id = u.rsplit('/').next().unwrap();
+            let depth = data["entities"][u]["depth"].as_i64().unwrap();
+            (id.trim_start_matches("781300000000000").to_owned(), depth)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn replies_to_comments_are_fetched_one_level_at_a_time() {
+    let want: Vec<(String, i64)> = [
+        ("101", 0),
+        ("102", 1),
+        ("103", 2),
+        ("104", 0),
+        ("105", 1),
+        ("106", 0),
+        ("107", 0),
+    ]
+    .map(|(id, d)| (id.to_owned(), d))
+    .to_vec();
+    let path = |id: &str| format!("/api/v1/statuses/{id}/context");
+    for mastodon in [false, true] {
+        let fake = spawn_fake_with(mastodon).await;
+        let pod = spawn_pod(
+            server::state_in_memory().with_pixelfed(PixelfedConfig::new(&fake.url, None)),
+        )
+        .await;
+        let env = Env { fake, pod };
+        let session = sign_in(&env).await;
+        let fake = env.fake.fake.as_ref().unwrap();
+        let (status, data) = get_comments_screen(&env.pod.url, Some(&session), CAROUSEL).await;
+        assert_eq!(status, StatusCode::OK, "{data}");
+        assert_eq!(thread_shape(&data, CAROUSEL), want, "mastodon: {mastodon}");
+        let calls = context_calls(fake);
+        if mastodon {
+            // The whole thread came at once: no extra calls.
+            assert_eq!(calls, [path(CAROUSEL)]);
+        } else {
+            // The post, then each comment with replies (101 -> 102 -> 103; 104 -> 105).
+            let mut expected = vec![
+                path(CAROUSEL),
+                path("781300000000000101"),
+                path("781300000000000102"),
+                path("781300000000000104"),
+            ];
+            expected.sort();
+            assert_eq!(calls, expected);
+        }
+    }
+
+    // A reply to a reply shows up under it; a failed call loses only that branch.
+    let env = env().await;
+    let session = sign_in(&env).await;
+    let fake = env.fake.fake.as_ref().unwrap();
+    let (status, reply) = post_json(
+        &format!("{}/v1/pixelfed/posts/comment", env.pod.url),
+        Some(&session),
+        json!({ "id": "781300000000000105", "text": "Agreed" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let new_id = reply["comment"]["id"].as_str().unwrap();
+    let new_id = new_id.trim_start_matches("781300000000000").to_owned();
+    let (_, data) = get_comments_screen(&env.pod.url, Some(&session), CAROUSEL).await;
+    let shape = thread_shape(&data, CAROUSEL);
+    let pos = shape.iter().position(|(id, _)| id == "105").unwrap();
+    assert_eq!(shape[pos + 1], (new_id.clone(), 2));
+    fake.add_faults([fake_pixelfed::FaultRule::status(503).path(&path("781300000000000101"))]);
+    let (status, data) = get_comments_screen(&env.pod.url, Some(&session), CAROUSEL).await;
+    assert_eq!(status, StatusCode::OK, "{data}");
+    let ids: Vec<String> = thread_shape(&data, CAROUSEL)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(ids, ["101", "104", "105", new_id.as_str(), "106", "107"]);
 }
 
 #[tokio::test]

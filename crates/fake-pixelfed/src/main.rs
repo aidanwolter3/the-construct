@@ -59,6 +59,15 @@ async fn main() -> std::io::Result<()> {
         None => local.ip().is_loopback(),
     };
 
+    let mastodon_threads = match env_nonempty("FAKE_PIXELFED_THREADS").as_deref() {
+        None | Some("pixelfed") => false,
+        Some("mastodon") => true,
+        Some(other) => {
+            return Err(std::io::Error::other(format!(
+                "FAKE_PIXELFED_THREADS={other:?}: expected pixelfed or mastodon"
+            )));
+        }
+    };
     let has_seed = seed_token.is_some();
     let state = fake_pixelfed::AppState::new(fake_pixelfed::Config {
         fixtures_dir: fixtures_dir.clone().unwrap_or_default(),
@@ -66,7 +75,8 @@ async fn main() -> std::io::Result<()> {
         auto_approve,
         seed_token,
     })?
-    .with_admin(admin);
+    .with_admin(admin)
+    .with_mastodon_threads(mastodon_threads);
     match &fixtures_dir {
         Some(dir) => tracing::info!(fixtures = %dir.display(), public_url, "fixtures loaded"),
         None => tracing::info!(public_url, "embedded fixtures loaded"),

@@ -1616,3 +1616,19 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   - Accepted: media URLs carry the pod id (128 random bits) and are readable without a token (public upstream media).
 - **Not yet:** self-service sign-up; per-device credentials and revoking one device; evicting idle pods from memory;
   sample recipes for temporary pods; a pod quota on disk; a separate Fly app for anonymous demos.
+
+## D47: Replies to comments come from each comment's own `context`
+
+- **Why:** replies to comments did not show on real Pixelfed. Its `GET /api/v1/statuses/{id}/context`
+  (`ApiV1Controller::statusContext`) lists only the direct parent and the direct replies (by id, at most 100, none
+  while `replies_count` is 0), unlike Mastodon's whole thread. The pod threaded whatever `descendants` held, and the
+  fake answered like Mastodon, so tests passed.
+- **Pod:** the comments screen asks the post for its `context`, then, level by level, each comment whose
+  `replies_count` is above the replies already present (`app_pixelfed::complete_comment_thread`): at most 50 extra
+  calls per screen, 6 at a time. A failed call loses only that comment's replies (logged). A Mastodon-style upstream
+  costs no extra call. Threading and the depth cap (4) are unchanged.
+- **Fake:** `context` answers like Pixelfed by default; `FAKE_PIXELFED_THREADS=mastodon` (`with_mastodon_threads`)
+  keeps the old whole-thread answer so both shapes are tested.
+- **Weighed:** Pixelfed's web endpoints (`/api/v2/comments/...`) return nested replies, but they are not part of the
+  OAuth API and are undocumented; fetching every comment's `context` regardless of its count costs a call per comment
+  and finds nothing Pixelfed would not list (it returns no replies while the count is 0).
