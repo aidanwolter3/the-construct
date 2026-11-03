@@ -404,8 +404,8 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
     assert_eq!(
         button("comment:$item.uri"),
         ActionIntent::Navigate {
-            target_uri: "pixelfed://posts/$item.id/comments".into(),
-            presentation: PresentationMode::Modal,
+            target_uri: "pixelfed://posts/$item.id".into(),
+            presentation: PresentationMode::Push,
         }
     );
 }
@@ -729,7 +729,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
         .send()
         .await
         .unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("7"));
+    assert_eq!(version(&resp).as_deref(), Some("8"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 4));
     // A newer version replaces the feed layout; entities still come upstream.
@@ -739,7 +739,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     }
     server::layouts::append_version(state.store(), "pixelfed_home", &node, None).unwrap();
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("8"));
+    assert_eq!(version(&resp).as_deref(), Some("9"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert_eq!(spec.workspace, node);
     assert_eq!(spec.queries["timeline:home"].len(), 5);

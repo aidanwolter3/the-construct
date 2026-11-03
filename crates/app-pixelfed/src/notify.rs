@@ -239,10 +239,10 @@ fn path_safe(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
 }
 
-/// The comments screen of a post (`pixelfed://posts/{id}/comments`, the
-/// route of the `comments` screen in the pixelfed_home layouts).
-pub fn comments_target(post_id: &str) -> String {
-    format!("{}{post_id}/comments", crate::POST_PREFIX)
+/// The screen of a post (`pixelfed://posts/{id}`, the route of the `post`
+/// screen in the pixelfed_home layouts; from 0008 it shows the comments too).
+pub fn post_target(post_id: &str) -> String {
+    format!("{}{post_id}", crate::POST_PREFIX)
 }
 
 /// One comment in the thread of its post (`pixelfed://posts/{id}/comments/{comment}`,
@@ -358,7 +358,7 @@ pub fn to_new(
             .as_deref()
             .map(|p| match comment_id.filter(|c| path_safe(c)) {
                 Some(c) => comment_target(p, &c),
-                None => comments_target(p),
+                None => post_target(p),
             }),
         group_key: post_id.map(|id| format!("{id}:{channel}")),
         created_at,
@@ -669,7 +669,7 @@ mod tests {
         );
         assert_eq!(
             n.target_uri.as_deref(),
-            Some("pixelfed://posts/781254316723458049/comments")
+            Some("pixelfed://posts/781254316723458049")
         );
         assert_eq!(n.group_key.as_deref(), Some("781254316723458049:likes"));
         assert_eq!(n.created_at, 1_793_527_200);
@@ -719,10 +719,7 @@ mod tests {
         );
         let n = map(json!({"id": "5", "type": "mention", "account": bob(),
             "status": {"id": "903", "account": bob(), "content": "hi"}}));
-        assert_eq!(
-            n.target_uri.as_deref(),
-            Some("pixelfed://posts/903/comments")
-        );
+        assert_eq!(n.target_uri.as_deref(), Some("pixelfed://posts/903"));
     }
 
     #[test]
@@ -795,7 +792,7 @@ mod tests {
         let n = map(json!({"id": "8", "type": "reblog", "account": bob(), "status": wrapper}));
         assert_eq!(
             n.target_uri.as_deref(),
-            Some("pixelfed://posts/781254316723458049/comments")
+            Some("pixelfed://posts/781254316723458049")
         );
 
         let n = map(json!({"id": "9", "type": "story:react", "account": bob()}));
@@ -842,9 +839,9 @@ mod tests {
         assert_eq!(excerpt("a\n\nb   c", 10), "a b c");
         assert_eq!(excerpt("abcdef ghij", 8), "abcdef…");
         assert_eq!(
-            comments_target("42"),
-            "pixelfed://posts/42/comments",
-            "the comments screen route of the pixelfed_home layouts"
+            post_target("42"),
+            "pixelfed://posts/42",
+            "the post screen route of the pixelfed_home layouts"
         );
     }
 }
