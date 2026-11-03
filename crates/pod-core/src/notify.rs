@@ -485,6 +485,28 @@ impl AppState {
         self: &Pod,
         items: Vec<NewNotification>,
     ) -> Result<Vec<Notification>, ApiError> {
+        Ok(self.notify_inner(items).await?.0)
+    }
+
+    /// [`Self::notify`], then wait until every Web Push delivery finished
+    /// (tooling that exits right after, such as `server pods notify-test`).
+    /// Returns the new rows and how many deliveries were attempted.
+    pub async fn notify_and_deliver(
+        self: &Pod,
+        items: Vec<NewNotification>,
+    ) -> Result<(Vec<Notification>, usize), ApiError> {
+        let (rows, deliveries) = self.notify_inner(items).await?;
+        let count = deliveries.len();
+        for d in deliveries {
+            let _ = d.await;
+        }
+        Ok((rows, count))
+    }
+
+    async fn notify_inner(
+        self: &Pod,
+        items: Vec<NewNotification>,
+    ) -> Result<(Vec<Notification>, Vec<tokio::task::JoinHandle<()>>), ApiError> {
         let mut items: Vec<NewNotification> = items
             .into_iter()
             .filter(|n| {
@@ -504,7 +526,7 @@ impl AppState {
             })
             .collect();
         if items.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
         items.sort_by_key(|n| n.created_at);
         let apps = self.app_ids();
@@ -526,22 +548,29 @@ impl AppState {
                 unread_total,
             }));
         }
-        if !fresh.is_empty() {
-            self.push(fresh, unread_total).await;
-        }
-        Ok(inserted.into_iter().map(|(n, _)| n).collect())
+        let deliveries = if fresh.is_empty() {
+            Vec::new()
+        } else {
+            self.push(fresh, unread_total).await
+        };
+        Ok((inserted.into_iter().map(|(n, _)| n).collect(), deliveries))
     }
 
     /// Send `fresh` to every device that wants it and has no stream open.
-    async fn push(self: &Pod, fresh: Vec<Notification>, unread_total: u32) {
+    async fn push(
+        self: &Pod,
+        fresh: Vec<Notification>,
+        unread_total: u32,
+    ) -> Vec<tokio::task::JoinHandle<()>> {
+        let mut deliveries = Vec::new();
         let Some(sender) = self.push_sender() else {
-            return;
+            return deliveries;
         };
         let ttl = self.session_ttl_secs();
         let targets = match blocking(self, move |s| s.with_conn(|c| push_targets_on(c, ttl))).await
         {
             Ok(t) => t,
-            Err(_) => return,
+            Err(_) => return deliveries,
         };
         let channels = self.notification_channels();
         for t in targets {
@@ -563,17 +592,18 @@ impl AppState {
                 }
                 if !self.take_push_budget() {
                     tracing::warn!("push budget for this minute used up; delivery skipped");
-                    return;
+                    return deliveries;
                 }
                 let payload = push_payload(n, unread_total);
                 let (pod, sender, target) = (self.clone(), sender.clone(), t.clone());
-                tokio::spawn(async move {
+                deliveries.push(tokio::spawn(async move {
                     let result = sender.send(&target.sub, &payload).await;
                     pod.record_delivery(&target.device, &target.sub.endpoint, result)
                         .await;
-                });
+                }));
             }
         }
+        deliveries
     }
 
     async fn record_delivery(

@@ -26,6 +26,14 @@ const MIGRATIONS: &[&str] = &[
          created_at INTEGER NOT NULL
      );
      CREATE INDEX credentials_pod ON credentials(pod_id);",
+    // 2 (D47): when each pod next wants its notification polls run (NULL:
+    // nothing to poll), so the scheduler opens only pods that need it; and
+    // server-wide secrets (the Web Push VAPID key when none is configured).
+    "ALTER TABLE pods ADD COLUMN next_wake_at INTEGER;
+     CREATE TABLE host_secrets (
+         key   TEXT PRIMARY KEY NOT NULL,
+         value TEXT NOT NULL
+     );",
 ];
 
 /// Who a pod is for.
@@ -219,6 +227,51 @@ impl HostStore {
              WHERE expires_at IS NOT NULL AND expires_at <= ?1",
         )?;
         stmt.query_map([now_secs()], Self::row)?.collect()
+    }
+
+    /// Record when pod `pod_id` next wants its polls run (`None`: never).
+    pub fn set_next_wake(&self, pod_id: &str, at: Option<i64>) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "UPDATE pods SET next_wake_at = ?2 WHERE id = ?1",
+            params![pod_id, at],
+        )?;
+        Ok(())
+    }
+
+    /// Live pods whose polls are due at `now`.
+    pub fn due_pods(&self, now: i64) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id FROM pods WHERE next_wake_at IS NOT NULL AND next_wake_at <= ?1
+             AND (expires_at IS NULL OR expires_at > ?1) ORDER BY next_wake_at",
+        )?;
+        stmt.query_map([now], |r| r.get(0))?.collect()
+    }
+
+    /// The server-wide secret `key`, made with `make` (and kept) on first use.
+    pub fn secret_or(&self, key: &str, make: impl FnOnce() -> String) -> rusqlite::Result<String> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let found: Option<String> = tx
+            .query_row(
+                "SELECT value FROM host_secrets WHERE key = ?1",
+                [key],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let value = match found {
+            Some(v) => v,
+            None => {
+                let v = make();
+                tx.execute(
+                    "INSERT INTO host_secrets (key, value) VALUES (?1, ?2)",
+                    params![key, v],
+                )?;
+                v
+            }
+        };
+        tx.commit()?;
+        Ok(value)
     }
 
     /// Forget a pod (after its files are gone).
