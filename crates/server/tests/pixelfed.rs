@@ -856,7 +856,7 @@ async fn a_session_from_before_v11_stays_signed_in() {
             .prepare(
                 "SELECT name FROM sqlite_master WHERE type = 'table'
                  AND (name LIKE 'recipes%' OR name = 'pixelfed_session_instance')
-                 OR (type = 'table' AND name = 'pod_settings')",
+                 OR (type = 'table' AND name IN ('pod_settings', 'uploads'))",
             )
             .unwrap()
             .query_map([], |r| r.get(0))

@@ -144,6 +144,24 @@ const MIGRATIONS: &[Migration] = &[
          value TEXT NOT NULL
      );",
     ),
+    // v13 (D47): uploads. Files a session sends before an action that needs
+    // them; `owner` is the adapter's claim (kept until it releases them).
+    Migration::Sql(
+        "CREATE TABLE uploads (
+         id           TEXT PRIMARY KEY NOT NULL,
+         token_hash   TEXT NOT NULL,
+         idem_key     TEXT NOT NULL,
+         content_type TEXT NOT NULL,
+         size         INTEGER NOT NULL,
+         sha256       TEXT NOT NULL,
+         data         BLOB NOT NULL,
+         owner        TEXT,
+         created_at   INTEGER NOT NULL,
+         released_at  INTEGER,
+         UNIQUE (token_hash, idem_key)
+     );
+     CREATE INDEX uploads_owner ON uploads(owner);",
+    ),
 ];
 
 /// A pod setting inside a transaction (an adapter migration reads its

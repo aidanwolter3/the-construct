@@ -16,6 +16,7 @@ pub mod layouts;
 pub mod session;
 pub mod static_app;
 pub mod store;
+pub mod uploads;
 pub mod util;
 pub mod validate;
 
@@ -86,6 +87,13 @@ pub struct AppState {
     show_dev_apps: bool,
     /// New app versions, fanned out to SSE subscribers.
     layout_tx: tokio::sync::broadcast::Sender<layouts::LayoutEvent>,
+    /// "Your data changed" (D48), fanned out to that session's subscribers.
+    data_tx: tokio::sync::broadcast::Sender<layouts::DataEvent>,
+    /// Largest upload (`CONSTRUCT_UPLOAD_MAX_BYTES`, D47).
+    upload_max_bytes: usize,
+    /// Set once the adapters' [`AppAdapter::resume`] and the upload sweeper
+    /// have been started for this pod.
+    started: std::sync::atomic::AtomicBool,
     /// SSE keepalive interval (15 s; shorter in tests).
     sse_keepalive: std::time::Duration,
     /// Set by [`AppState::shutdown`]: open SSE streams end.
@@ -132,6 +140,9 @@ impl AppState {
             session_ttl_secs: session::DEFAULT_SESSION_TTL_DAYS * 86_400,
             show_dev_apps: false,
             layout_tx: tokio::sync::broadcast::channel(layouts::CHANNEL_CAPACITY).0,
+            data_tx: tokio::sync::broadcast::channel(layouts::CHANNEL_CAPACITY).0,
+            upload_max_bytes: uploads::max_bytes_from_env(),
+            started: std::sync::atomic::AtomicBool::new(false),
             sse_keepalive: layouts::DEFAULT_KEEPALIVE,
             shutdown: tokio::sync::watch::channel(false).0,
         })
@@ -183,6 +194,61 @@ impl AppState {
 
     pub fn sse_keepalive(&self) -> std::time::Duration {
         self.sse_keepalive
+    }
+
+    /// Largest upload accepted (`CONSTRUCT_UPLOAD_MAX_BYTES`, D47).
+    pub fn with_upload_max_bytes(mut self, max: usize) -> Self {
+        self.upload_max_bytes = max;
+        self
+    }
+
+    /// The pod's uploads (D47), for adapters.
+    pub fn uploads<'a>(self: &'a Pod) -> uploads::Uploads<'a> {
+        uploads::Uploads { pod: self }
+    }
+
+    /// Tell `session`'s clients of `workspace_id` that its data changed
+    /// (`event: data`, D48): they reload. No-op without subscribers.
+    pub fn publish_data(&self, workspace_id: &str, session: &Session) {
+        let _ = self.data_tx.send(layouts::DataEvent {
+            workspace_id: workspace_id.to_owned(),
+            token_hash: session.token_hash.clone(),
+        });
+    }
+
+    pub fn subscribe_data(&self) -> tokio::sync::broadcast::Receiver<layouts::DataEvent> {
+        self.data_tx.subscribe()
+    }
+
+    /// Start this pod's background work once (called by [`app`]): every
+    /// adapter's [`AppAdapter::resume`] and the hourly upload sweeper. Needs a
+    /// Tokio runtime; without one (some sync tests) nothing starts.
+    fn start(self: &Pod) {
+        use std::sync::atomic::Ordering;
+        let Ok(rt) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        if self.started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        for a in self.catalog.adapters() {
+            let (a, pod) = (Arc::clone(a), Arc::clone(self));
+            rt.spawn(async move { a.resume(&pod).await });
+        }
+        let weak = Arc::downgrade(self);
+        rt.spawn(async move {
+            loop {
+                let Some(pod) = weak.upgrade() else { return };
+                let swept = blocking(&pod, |s| uploads::sweep(s, util::now_secs())).await;
+                if let Ok(n) = swept
+                    && n > 0
+                {
+                    tracing::info!(deleted = n, "old unclaimed uploads deleted");
+                }
+                drop(pod);
+                tokio::time::sleep(uploads::SWEEP_EVERY).await;
+            }
+        });
     }
 
     /// Enable `POST /v1/test/fault` (`CONSTRUCT_TEST_HOOKS=1`).
@@ -272,11 +338,13 @@ impl AppState {
 
 /// Build the HTTP router: the core's routes plus every adapter's.
 pub fn app(state: Pod) -> Router {
+    state.start();
     let mut router = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/workspaces/{id}", get(get_workspace))
         .merge(session::router())
-        .merge(layouts::router());
+        .merge(layouts::router())
+        .merge(uploads::router(state.upload_max_bytes));
     for a in state.catalog.adapters() {
         router = router.merge(a.router());
     }
