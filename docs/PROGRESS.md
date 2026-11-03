@@ -572,3 +572,19 @@ new layout files; diffs between versions.
 - Tests: pod-core adapters, server (`pixelfed.rs`, `host.rs`), client-core (`apps.rs`, `pod_host.rs`), simulator
   menu and feed tests.
 - Needs a device check (Android, macOS window): the drawer and Settings at real sizes and Back on Android.
+
+## Comment threads, comment likes, list focus (schema 10)
+
+- `layouts/pixelfed_home/0006.json`: the comments screen shows the post (author, a photo strip, like/bookmark,
+  caption) above the threaded comments, and each comment has a like button. A new `comment_thread` screen
+  (`pixelfed://posts/{id}/comments/{comment}`) scrolls to the comment and tints it.
+- Protocol: `core://List` `focus` (schema 10, decision `list-focus`). Shared UI scrolls it into view once.
+- Pixelfed adapter: comment notifications link to the post's thread at the comment (the poll walks up to the post;
+  "replied to your comment"); the comments data call returns the post too and walks up from a comment id
+  (decision `comment-threads-from-notifications`).
+- Simulator: the fake engine's server learns entities from screen data (comment likes no longer roll back);
+  `fixtures/notifications.json` fx-6 opens a comment thread.
+- Tests: protocol schema, validate, adapter unit tests (`thread_root`, reply links), server (`pixelfed.rs`,
+  `apps.rs`), notifications integration, client-core, shared `ScreensTest`, `NotificationsSimTest`.
+- Needs a device check (Android, macOS window): the scroll to the comment and the tint at real sizes.
+

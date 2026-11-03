@@ -125,7 +125,8 @@ into a generic `pod_core::net` module so both use it.
 - Mapping (all in the adapter): `favourite|like` → likes, "@bob liked your post"; `comment|mention` with a status
   in reply to ours → comments; `mention` → mentions; `follow` → follows; `reblog|share` → boosts; else `other`
   with the upstream's text. `dedupe_key = "<instance>:<notification id>"`. `target_uri`: post-related →
-  `pixelfed://posts/<status id>/comments` (route already in the comments screen of the current layouts); follow →
+  `pixelfed://posts/<status id>/comments` (route already in the comments screen of the current layouts; comments and
+  replies now open `pixelfed://posts/<post>/comments/<comment>`, see decision `comment-threads-from-notifications`); follow →
   none for now (no profile screen; tapping just opens the app). `image_url` = author avatar through the media proxy
   (`MediaPolicy`, public prefix). `group_key = "<status id>:<type>"` so Android can bundle "3 people liked…".
 - `crates/fake-pixelfed`: `GET /api/v1/notifications` (min_id/max_id/limit, Mastodon shape) backed by in-memory

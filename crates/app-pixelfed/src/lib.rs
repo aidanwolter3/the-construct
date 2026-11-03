@@ -790,7 +790,7 @@ pub const MAX_REPLY_FETCHES: usize = 50;
 const REPLY_FETCH_CONCURRENCY: usize = 6;
 
 /// A status id as text (Pixelfed sends strings, some servers numbers).
-fn raw_status_id(raw: &Value) -> Option<String> {
+pub(crate) fn raw_status_id(raw: &Value) -> Option<String> {
     match &raw["id"] {
         Value::String(s) => Some(s.clone()),
         Value::Number(n) => Some(n.to_string()),
@@ -873,6 +873,55 @@ where
     }
     obj.insert("descendants".to_owned(), Value::Array(all));
     context
+}
+
+/// Most parent lookups [`thread_root`] makes for one status.
+pub const MAX_THREAD_HOPS: usize = 10;
+
+/// A status's own id and the id of the status it replies to.
+#[derive(Deserialize)]
+struct ReplyLink {
+    #[serde(deserialize_with = "de_id")]
+    id: String,
+    #[serde(default, deserialize_with = "de_opt_id")]
+    in_reply_to_id: Option<String>,
+}
+
+/// The top of the thread `start` (a raw status) is in: following
+/// `in_reply_to_id` with `fetch` (a status by id; `None`: that call failed)
+/// until a status that replies to nothing, the post a comment is under. Stops
+/// early, at the highest status it reached, when a fetch fails, after
+/// [`MAX_THREAD_HOPS`] lookups, or on a cycle. Returns that status (raw) and
+/// whether it is the real top.
+pub async fn thread_root<F, Fut>(start: Value, fetch: F) -> (Value, bool)
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Option<Value>>,
+{
+    let mut current = start;
+    let mut seen = HashSet::new();
+    let mut hops = 0;
+    loop {
+        let Ok(link) = ReplyLink::deserialize(&current) else {
+            return (current, false);
+        };
+        let Some(parent) = link.in_reply_to_id.filter(|p| *p != link.id) else {
+            return (current, true);
+        };
+        if !seen.insert(link.id) || hops == MAX_THREAD_HOPS {
+            break;
+        }
+        hops += 1;
+        match fetch(parent.clone()).await {
+            Some(v) => current = v,
+            None => {
+                tracing::info!(%parent, "thread walk stopped: a parent is unavailable");
+                return (current, false);
+            }
+        }
+    }
+    tracing::info!("thread walk stopped: too deep or a cycle");
+    (current, false)
 }
 
 /// "CW: " + the warning, unless the author already wrote a "CW" word.
@@ -1719,5 +1768,42 @@ mod label_tests {
         assert_eq!(content_warning_label(" cw: spiders "), "cw: spiders");
         assert_eq!(content_warning_label("CW"), "CW");
         assert_eq!(content_warning_label("Cwtch"), "CW: Cwtch");
+    }
+}
+
+#[cfg(test)]
+mod thread_tests {
+    use super::*;
+
+    #[test]
+    fn thread_root_walks_up_to_the_post() {
+        let statuses: BTreeMap<&str, Value> = BTreeMap::from([
+            ("1", json!({"id": "1"})),
+            ("2", json!({"id": "2", "in_reply_to_id": "1"})),
+            ("3", json!({"id": 3, "in_reply_to_id": 2})),
+            ("8", json!({"id": "8", "in_reply_to_id": "9"})),
+            ("9", json!({"id": "9", "in_reply_to_id": "8"})),
+        ]);
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let fetch = |id: String| {
+            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let v = statuses.get(id.as_str()).cloned();
+            async move { v }
+        };
+        let run = |start: Value| {
+            futures_util::FutureExt::now_or_never(thread_root(start, fetch)).unwrap()
+        };
+        // A post is its own top: no lookup.
+        assert_eq!(run(json!({"id": "1"})), (json!({"id": "1"}), true));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+        // Two levels down, numeric ids too.
+        let (top, ok) = run(json!({"id": "4", "in_reply_to_id": "3"}));
+        assert_eq!((top["id"].clone(), ok), (json!("1"), true));
+        // A missing parent stops at the highest one reached.
+        let (top, ok) = run(json!({"id": "7", "in_reply_to_id": "6"}));
+        assert_eq!((top["id"].clone(), ok), (json!("7"), false));
+        // A cycle stops.
+        let (_, ok) = run(json!({"id": "10", "in_reply_to_id": "9"}));
+        assert!(!ok);
     }
 }

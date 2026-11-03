@@ -31,6 +31,8 @@
 //!   `action.mutation.create` `attachments` / `position` / `dismiss`, the
 //!   `$form?.<field>` binding and the `add_photo` / `add` / `refresh` icons
 //!   (D49, D51). Additive.
+//! - 10: `core://List` `focus` (scroll to one item and tint it,
+//!   docs/decisions/list-focus.md). Additive.
 //!
 //! # A breaking schema change
 //!
@@ -46,7 +48,7 @@ use crate::{ActionIntent, Align, Position, TextStyle, UiNode};
 /// Request header carrying the client's schema version.
 pub const SCHEMA_HEADER: &str = "x-construct-schema";
 /// The schema version this build draws.
-pub const SCHEMA_VERSION: u32 = 9;
+pub const SCHEMA_VERSION: u32 = 10;
 
 /// Breaking changes, oldest first: `(client schema, oldest layout schema it
 /// draws)`. A client of schema `c` draws layouts written for schemas
@@ -136,6 +138,7 @@ fn icon_schema(icon: &str) -> u32 {
 
 fn node_schema(node: &UiNode) -> u32 {
     match node {
+        UiNode::List { focus: Some(_), .. } => 10,
         UiNode::MediaPicker { .. } => 9,
         UiNode::TextField { lines: Some(_), .. } => 9,
         UiNode::Chip { icon: Some(i), .. } | UiNode::Badge { icon: i, .. } => icon_schema(i),
@@ -342,6 +345,13 @@ mod tests {
         // Round trip keeps the new fields.
         let back: UiNode = serde_json::from_value(serde_json::to_value(&attach).unwrap()).unwrap();
         assert_eq!(back, attach);
+        // Schema 10: a list that scrolls to and tints one item.
+        let focus = node(json!({"type": "core://List", "query_key": "q",
+            "item_template": {"type": "core://Divider"},
+            "focus": {"uri": "x://c/1", "background": "#FFF3CF"}}));
+        assert_eq!(required_schema(&focus), 10);
+        let back: UiNode = serde_json::from_value(serde_json::to_value(&focus).unwrap()).unwrap();
+        assert_eq!(back, focus);
     }
 
     #[test]

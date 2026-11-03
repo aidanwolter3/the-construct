@@ -479,7 +479,14 @@ class FakeEngineBridge(
             loads[path] = loadJson("error", "This isn't available anymore.")
             return
         }
-        (bundle["entities"] as? JsonObject)?.forEach { (uri, e) -> (e as? JsonObject)?.let { entities[uri] = it } }
+        // The server knows these entities from now on (a comment can be liked), and answers with what it changed.
+        (bundle["entities"] as? JsonObject)?.forEach { (uri, e) ->
+            (e as? JsonObject)?.let {
+                val known = JsonObject(it + server[uri].orEmpty())
+                server[uri] = known
+                entities[uri] = known
+            }
+        }
         loadedQueries[path] = (bundle["queries"] as? JsonObject).orEmpty().mapValues { (_, v) ->
             (v as? kotlinx.serialization.json.JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }.orEmpty()
         }

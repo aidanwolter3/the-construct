@@ -461,10 +461,15 @@ client build. The engine and the clients know no app.
   layout switches between views with no new state. `layouts/pixelfed_home/0004.json` puts a List/Cards switch on
   the feed: two-column cards (cover photo, author, like count) that open a post screen
   (`pixelfed://posts/{id}`, data from `/v1/pixelfed/screens/post?id=`).
-- **Schema versions (D36, D38):** the engine sends `X-Construct-Schema: 8` (workspace fetches, data loads, the
+- **Scroll to one item (schema 10, decision [`list-focus`](docs/decisions/list-focus.md)):** a `core://List` takes
+  an optional `focus: {uri, background?, content_color?}`. The item whose entity URI is `uri` (usually built from a
+  route parameter, e.g. `pixelfed://comments/$route.comment`) is scrolled into view once, the first time the list
+  draws it, and drawn on `background` (`#RRGGBB`). One-column lists only. `layouts/pixelfed_home/0006.json` uses it
+  for the `comment_thread` screen (`pixelfed://posts/{id}/comments/{comment}`), which a comment notification opens.
+- **Schema versions (D36, D38):** the engine sends `X-Construct-Schema: 10` (workspace fetches, data loads, the
   apps API and the events stream). Every version records the schema it was written for (`"schema"` in its file). The pod serves each client
   the newest version it can draw, so an older app (no header = 1) keeps getting the last version without screens
-  or the new nodes. Screens and List/Image/TextField need `"schema": 2`; the building blocks need 3; `core://Tappable` needs 4; a List `filter` or `group_by` needs 5; the schema-6 vocabulary above needs 6; `action.auth.session` needs 7; List `columns`/`spacing_dp`/`padding_h_dp` and a form-based or `equals` Conditional need 8. `GET /v1/apps/{id}/versions[/{n}]` adds `schema`,
+  or the new nodes. Screens and List/Image/TextField need `"schema": 2`; the building blocks need 3; `core://Tappable` needs 4; a List `filter` or `group_by` needs 5; the schema-6 vocabulary above needs 6; `action.auth.session` needs 7; List `columns`/`spacing_dp`/`padding_h_dp` and a form-based or `equals` Conditional need 8; the schema-9 photo posting vocabulary needs 9; a List `focus` needs 10. `GET /v1/apps/{id}/versions[/{n}]` adds `schema`,
   `compatible` and, when false, `incompatible` (`update_required`: written for a newer app; `retired`: written for
   a schema this app no longer draws) per version; the menu greys those rows out and won't pin them. "Latest" in the
   menu is always a version this app can draw; when the newest needs a newer app, the menu adds "Update the app to
@@ -480,7 +485,9 @@ client build. The engine and the clients know no app.
 `layouts/pixelfed_home/0003.json` builds the feed from these nodes. It (like 0002) uses the rest for comments: the feed's comment button (already
 `pixelfed://posts/$item.id/comments`) opens the `comments` screen, which loads
 `/v1/pixelfed/screens/comments?post_id=$route.id` into a `core://List` and posts new comments with a
-`core://TextField` and `action.mutation.create`.
+`core://TextField` and `action.mutation.create`. From `0006` the comments screen also shows its post above the
+comments (the same data call returns it as `post:<id>`; given a comment id, the pod walks up to the post), and each
+comment has a like button (the posts' `/v1/pixelfed/posts/like` endpoint works on comments).
 
 ## The menu (all surfaces)
 

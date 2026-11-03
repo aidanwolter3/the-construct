@@ -854,7 +854,10 @@ fn comment_rejected(id: &str, status: StatusCode, detail: &str) -> Response {
 /// `GET /v1/pixelfed/screens/comments?post_id=<id>`: the data of the comments screen
 /// (docs/DECISIONS.md D34), a `DataBundle`: one `pixelfed://comments/<id>` entity per
 /// comment ([`normalize_comment`]) and `queries["comments:<post_id>"]` in thread order
-/// ([`normalize_comments`]), replies to comments included ([`super::complete_comment_thread`]). No session: 401; upstream 4xx: same status (404
+/// ([`normalize_comments`]), replies to comments included ([`super::complete_comment_thread`]),
+/// plus the post itself, listed as `queries["post:<post_id>"]` ([`super::normalize_post_screen`]).
+/// When `post_id` is a comment, the post above it is used ([`super::thread_root`]), and
+/// both queries still use the id asked for. No session: 401; upstream 4xx: same status (404
 /// `post_not_found`); 5xx / unreachable: 502.
 async fn comments_screen(
     State(state): State<Pod>,
@@ -875,20 +878,53 @@ async fn comments_screen(
         return invalid_request(json!({ "post_id": "status id" }));
     }
     let own = account.account_id.clone();
+    // The post: `id` itself, or the post above it when `id` is a comment (an
+    // older notification links to the comment a reply answers).
     let (result, token) = with_token(&state, &instance, account, |token| {
         let (upstream, id) = (&upstream, &id);
-        async move { upstream.status_context(&token, id).await }
+        async move { upstream.status(&token, id).await }
     })
     .await;
-    let context = match result {
+    let raw = match result {
         Ok(v) => v,
         Err(UpstreamError::Status(status, detail)) if status.is_client_error() => {
             return comment_rejected(&id, status, &detail);
         }
         Err(e) => return bad_gateway(&e),
     };
+    let (root, _) = super::thread_root(raw, |parent| {
+        let (upstream, token) = (&upstream, &token);
+        async move {
+            match upstream.status(token, &parent).await {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!(%parent, error = %e, "a comment's parent is unavailable");
+                    None
+                }
+            }
+        }
+    })
+    .await;
+    let Some(post_id) = Status::deserialize(&root)
+        .ok()
+        .map(|s| s.target().id.clone())
+        .filter(|p| valid_status_id(p))
+    else {
+        return api_error(
+            StatusCode::BAD_GATEWAY,
+            json!({ "error": "upstream_unparseable" }),
+        )
+        .into_response();
+    };
+    let context = match upstream.status_context(&token, &post_id).await {
+        Ok(v) => v,
+        Err(UpstreamError::Status(status, detail)) if status.is_client_error() => {
+            return comment_rejected(&post_id, status, &detail);
+        }
+        Err(e) => return bad_gateway(&e),
+    };
     // Pixelfed lists only the direct replies; ask each comment for its own.
-    let context = super::complete_comment_thread(&id, context, |comment_id| {
+    let context = super::complete_comment_thread(&post_id, context, |comment_id| {
         let (upstream, token) = (&upstream, &token);
         async move {
             match upstream.status_context(token, &comment_id).await {
@@ -906,12 +942,14 @@ async fn comments_screen(
         Err(e) => return e.into_response(),
     };
     let mut media = MediaUrls::new(&proxy_base(&headers), rt.media_for(others));
-    let list = normalize_comments(&id, &context, &own, now_secs(), &mut media);
+    let list = normalize_comments(&post_id, &context, &own, now_secs(), &mut media);
+    // The post above the comments, listed as `post:<id>` (the id asked for).
+    let post = super::normalize_post_screen(&id, &root, &mut media);
     if let Err(e) = save_media_keys(&state, media).await {
         return e.into_response();
     }
-    tracing::info!(%id, comments = list.len(), "Pixelfed comments served");
-    let mut bundle = protocol::DataBundle::default();
+    tracing::info!(%id, %post_id, comments = list.len(), "Pixelfed comments served");
+    let mut bundle = post.unwrap_or_default();
     let mut order = Vec::with_capacity(list.len());
     for c in list {
         let uri = super::comment_uri(c.get_str("id").unwrap_or_default());

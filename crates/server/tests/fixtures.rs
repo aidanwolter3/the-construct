@@ -5,7 +5,7 @@
 //!   the pod makes from the fake upstream, with the newest
 //!   `layouts/pixelfed_home/NNNN.json` and the fake's own media URLs;
 //! - `fixtures/pixelfed_screen_data.json` holds the comments screen data of
-//!   every fixture post (`{path: DataBundle}`), made by the pod's own
+//!   every fixture post with the post itself (`{path: DataBundle}`), made by the pod's own
 //!   normalization from the fake upstream at a fixed "now", with avatar URLs
 //!   pointing at the fake's `/storage/` (which the simulator serves), and the
 //!   post screen data of every fixture post (D48).
@@ -186,16 +186,20 @@ async fn screen_data_fixture_is_the_pods_comments_data() {
         })
         .await;
         let allow = MediaAllowlist::new([FAKE_URL], []);
-        let mut media = MediaUrls::new("http://pod/v1/pixelfed/media", &allow);
+        // The post screen's data; the comments screen shows the post too.
+        let raw = get(format!("/api/v1/statuses/{id}")).await;
+        let mut media = MediaUrls::new(PROXY, &allow);
+        let mut post = normalize_post_screen(id, &raw, &mut media).unwrap();
+        for e in post.entities.values_mut() {
+            unproxy(e, &media);
+        }
+        let mut media = MediaUrls::new(PROXY, &allow);
         let comments = normalize_comments(id, &context, OWN_ACCOUNT, NOW, &mut media);
-        let mut bundle = DataBundle::default();
+        let mut bundle = post.clone();
         let mut order = Vec::new();
         for mut c in comments {
             // The simulator serves /storage/<file> from fixtures/pixelfed/media.
-            if let Some(proxied) = c.get_str("avatar_url").map(str::to_owned) {
-                let key = proxied.rsplit('/').next().unwrap();
-                c.set("avatar_url", media.keys[key].clone());
-            }
+            unproxy(&mut c, &media);
             let uri = comment_uri(c.get_str("id").unwrap());
             order.push(uri.clone());
             bundle.entities.insert(uri, c);
@@ -205,12 +209,6 @@ async fn screen_data_fixture_is_the_pods_comments_data() {
             format!("/v1/pixelfed/screens/comments?post_id={id}"),
             bundle,
         );
-        let raw = get(format!("/api/v1/statuses/{id}")).await;
-        let mut media = MediaUrls::new(PROXY, &allow);
-        let mut post = normalize_post_screen(id, &raw, &mut media).unwrap();
-        for e in post.entities.values_mut() {
-            unproxy(e, &media);
-        }
         out.insert(format!("/v1/pixelfed/screens/post?id={id}"), post);
     }
     assert_eq!(out.len(), 10);

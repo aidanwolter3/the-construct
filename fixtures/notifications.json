@@ -6,8 +6,8 @@
       "app_id": "pixelfed_home",
       "channel": "comments",
       "title": "@bob commented on your post",
-      "body": "Gorgeous light! Which lens was this?",
-      "target_uri": "pixelfed://posts/781254316723458049/comments",
+      "body": "Number 3 for me. That blue!",
+      "target_uri": "pixelfed://posts/781254316723458049/comments/781300000000000107",
       "group_key": "781254316723458049:comment",
       "age_seconds": 180,
       "read": false

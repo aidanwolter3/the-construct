@@ -1,6 +1,21 @@
 package org.theconstruct
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -301,6 +316,7 @@ fun matchesWhere(value: String, item: JsonObject, field: String): Boolean =
 fun formOrLiteral(value: String, form: Map<String, String>?): String =
     if (value.startsWith("\$form.")) form?.get(value.removePrefix("\$form.")).orEmpty() else value
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ItemList(
     node: UiNode.ItemList,
@@ -346,6 +362,21 @@ private fun ItemList(
             ItemGrid(node, columns, items, starts, counts, entities, onDispatch)
             return@Column
         }
+        val focus = node.focus
+        val focused = focusIndex(items, focus)
+        val focusRequester = remember(focus?.uri) { BringIntoViewRequester() }
+        // Scroll to the focused item once per screen (rememberSaveable: not again after Back or a rotation).
+        var focusScrolled by rememberSaveable(focus?.uri) { mutableStateOf(false) }
+        val density = LocalDensity.current
+        var focusHeight by remember(focus?.uri) { mutableStateOf(0) }
+        LaunchedEffect(focus?.uri, focused >= 0) {
+            if (focused < 0 || focusScrolled) return@LaunchedEffect
+            withFrameNanos { } // laid out first
+            // A little of the thread above and below stays in view.
+            val margin = with(density) { FOCUS_MARGIN.toPx() }
+            focusRequester.bringIntoView(Rect(0f, -margin, 1f, focusHeight + margin))
+            focusScrolled = true
+        }
         items?.forEachIndexed { i, item ->
             val header = node.groupBy?.header
             if (header != null && starts?.getOrNull(i) == true) {
@@ -358,16 +389,32 @@ private fun ItemList(
             // Keyed by entity URI, so per-item state follows the item when the list changes.
             key(item["uri"]) {
                 // Phone: full width. Wider screens: a centered, readable column.
-                RenderUiNode(
-                    node.itemTemplate, entities, onDispatch,
-                    Modifier.widthIn(max = FEED_MAX_WIDTH).fillMaxWidth()
-                        .padding(horizontal = node.paddingHDp.dp)
-                        .padding(start = indentDp(node.indent, item).dp),
-                    item,
-                )
+                var mod = Modifier.widthIn(max = FEED_MAX_WIDTH).fillMaxWidth()
+                val fg = if (i == focused) parseHexColor(focus?.contentColor) else null
+                if (i == focused) {
+                    mod = mod.bringIntoViewRequester(focusRequester).onSizeChanged { focusHeight = it.height }.testTag("list-focus")
+                    parseHexColor(focus?.background)?.let { mod = mod.background(it) }
+                }
+                mod = mod.padding(horizontal = node.paddingHDp.dp).padding(start = indentDp(node.indent, item).dp)
+                if (fg != null) {
+                    CompositionLocalProvider(LocalContentColor provides fg) {
+                        RenderUiNode(node.itemTemplate, entities, onDispatch, mod, item)
+                    }
+                } else {
+                    RenderUiNode(node.itemTemplate, entities, onDispatch, mod, item)
+                }
             }
         }
     }
+}
+
+/** Room kept above and below a list's focused item when it is scrolled into view. */
+private val FOCUS_MARGIN = 96.dp
+
+/** The index in [items] of the item [focus] names (its entity URI), or -1 (no focus, not loaded, or not listed). */
+fun focusIndex(items: List<JsonObject>?, focus: ListFocus?): Int {
+    if (focus == null || items == null) return -1
+    return items.indexOfFirst { (it["uri"] as? JsonPrimitive)?.content == focus.uri }
 }
 
 /**

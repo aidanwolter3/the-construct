@@ -8,6 +8,8 @@
 //! avatar through the media proxy. The mapping functions are pure.
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::Duration;
 
 use pod_core::util::now_secs;
@@ -39,6 +41,8 @@ pub const FIRST_POLL_LIMIT: u32 = 20;
 pub const CATCH_UP_IN: Duration = Duration::from_secs(30);
 /// Longest post excerpt in the body of a like or a boost.
 const EXCERPT_CHARS: usize = 140;
+/// Most status lookups one poll makes to find the posts replies are under.
+pub const MAX_ROOT_LOOKUPS: usize = 40;
 
 /// Channel ids (never change once shipped: devices store choices by id).
 pub const LIKES: &str = "likes";
@@ -241,9 +245,18 @@ pub fn comments_target(post_id: &str) -> String {
     format!("{}{post_id}/comments", crate::POST_PREFIX)
 }
 
+/// One comment in the thread of its post (`pixelfed://posts/{id}/comments/{comment}`,
+/// the route of the `comment_thread` screen in the pixelfed_home layouts from
+/// 0006): the whole thread, scrolled to the comment and highlighted.
+pub fn comment_target(post_id: &str, comment_id: &str) -> String {
+    format!("{}{post_id}/comments/{comment_id}", crate::POST_PREFIX)
+}
+
 /// Turn one upstream notification into what the pod stores.
 /// `instance`: the instance URL (part of the dedupe key); `now`: the time
-/// used when the notification carries none.
+/// used when the notification carries none; `root`: the post the
+/// notification's status is under when it is a reply ([`find_roots`]), if
+/// known.
 pub fn to_new(
     n: &UpstreamNotification,
     instance: &str,
@@ -251,11 +264,13 @@ pub fn to_new(
     media: &mut MediaUrls,
     now: i64,
     quiet: bool,
+    root: Option<&str>,
 ) -> NewNotification {
     let channel = channel_of(n, own_account_id);
     let kind = kind(n);
     let name = actor_name(n.account.as_ref());
     let status = n.status.as_ref();
+    let mut comment_id = None;
     let (title, body, post_id) = match channel {
         LIKES | BOOSTS => {
             let verb = if channel == LIKES { "liked" } else { "boosted" };
@@ -269,20 +284,29 @@ pub fn to_new(
             )
         }
         COMMENTS | MENTIONS => {
-            let title = if channel == COMMENTS {
+            let parent = status.and_then(|s| s.in_reply_to_id.clone());
+            // A reply to a comment, not to the post itself.
+            let to_comment = root.is_some() && parent.is_some() && root != parent.as_deref();
+            let title = if channel == COMMENTS && to_comment {
+                format!("{name} replied to your comment")
+            } else if channel == COMMENTS {
                 format!("{name} commented on your post")
             } else if kind == "tagged" {
                 format!("{name} tagged you in a post")
             } else {
                 format!("{name} mentioned you")
             };
-            // The thread the comment or mention is in: its parent, or the
-            // post itself when it is not a reply.
-            (
-                title,
-                status.map(status_text).unwrap_or_default(),
-                status.map(|s| s.in_reply_to_id.clone().unwrap_or_else(|| s.id.clone())),
-            )
+            // A reply opens its post's thread at the reply: the post it is
+            // under (else, not known, its parent). Not a reply: the post itself.
+            if parent.is_some() {
+                comment_id = status.map(|s| s.id.clone());
+            }
+            let post = match (root, parent) {
+                (_, None) => status.map(|s| s.id.clone()),
+                (Some(r), Some(_)) => Some(r.to_owned()),
+                (None, Some(p)) => Some(p),
+            };
+            (title, status.map(status_text).unwrap_or_default(), post)
         }
         FOLLOWS => {
             let title = if kind == "follow_request" {
@@ -330,7 +354,12 @@ pub fn to_new(
         title,
         body,
         image_url,
-        target_uri: post_id.as_deref().map(comments_target),
+        target_uri: post_id
+            .as_deref()
+            .map(|p| match comment_id.filter(|c| path_safe(c)) {
+                Some(c) => comment_target(p, &c),
+                None => comments_target(p),
+            }),
         group_key: post_id.map(|id| format!("{id}:{channel}")),
         created_at,
         quiet,
@@ -488,10 +517,18 @@ async fn poll_instance(
     let mut parsed = parse_notifications(&raw);
     parsed.sort_by(|a, b| id_cmp(&a.id, &b.id));
     parsed.dedup_by(|a, b| a.id == b.id);
+    let roots = find_roots(&api, &account.access_token, &parsed, &account.account_id).await;
     let now = now_secs();
     let new: Vec<NewNotification> = parsed
         .iter()
-        .map(|n| to_new(n, &url, &account.account_id, media, now, first))
+        .map(|n| {
+            let root = n
+                .status
+                .as_ref()
+                .and_then(|s| roots.get(&s.id))
+                .map(String::as_str);
+            to_new(n, &url, &account.account_id, media, now, first, root)
+        })
         .collect();
     let newest = min_id.clone();
     {
@@ -502,6 +539,62 @@ async fn poll_instance(
     }
     tracing::info!(instance = %url, count = new.len(), first, capped, "Pixelfed notifications polled");
     Ok(InstancePoll { new, capped })
+}
+
+/// The post each comment or mention reply in `parsed` is under (status id ->
+/// post id), found by walking up its parents ([`crate::thread_root`]). At most
+/// [`MAX_ROOT_LOOKUPS`] lookups per poll; a reply whose walk fails or runs out
+/// is left out (its notification then opens its parent's thread).
+async fn find_roots(
+    api: &crate::upstream::Upstream,
+    token: &str,
+    parsed: &[UpstreamNotification],
+    own_account_id: &str,
+) -> HashMap<String, String> {
+    let budget = AtomicUsize::new(MAX_ROOT_LOOKUPS);
+    // Parent id -> post id, shared by replies in the same thread.
+    let mut known: HashMap<String, String> = HashMap::new();
+    let mut out = HashMap::new();
+    for n in parsed {
+        if !matches!(channel_of(n, own_account_id), COMMENTS | MENTIONS) {
+            continue;
+        }
+        let Some(s) = n.status.as_ref() else { continue };
+        let Some(parent) = s.in_reply_to_id.clone().filter(|p| path_safe(p)) else {
+            continue;
+        };
+        if let Some(root) = known.get(&parent) {
+            out.insert(s.id.clone(), root.clone());
+            continue;
+        }
+        let start = serde_json::json!({"id": s.id, "in_reply_to_id": parent});
+        let (top, complete) = crate::thread_root(start, |id| {
+            let budget = &budget;
+            async move {
+                let left =
+                    budget.fetch_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |b| {
+                        b.checked_sub(1)
+                    });
+                if left.is_err() || !path_safe(&id) {
+                    return None;
+                }
+                match api.status(token, &id).await {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::info!(status = %id, error = %e, "a reply's parent is unavailable");
+                        None
+                    }
+                }
+            }
+        })
+        .await;
+        let top_id = crate::raw_status_id(&top).filter(|t| *t != s.id && complete);
+        if let Some(root) = top_id {
+            known.insert(parent, root.clone());
+            out.insert(s.id.clone(), root);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -532,7 +625,7 @@ mod tests {
     }
 
     fn map(v: Value) -> NewNotification {
-        to_new(&one(v), BASE, ME, &mut media(), 99, false)
+        to_new(&one(v), BASE, ME, &mut media(), 99, false, None)
     }
 
     fn our_post() -> Value {
@@ -602,14 +695,17 @@ mod tests {
         assert_eq!(n.body, "That second frame is unreal");
         assert_eq!(
             n.target_uri.as_deref(),
-            Some("pixelfed://posts/781254316723458049/comments")
+            Some("pixelfed://posts/781254316723458049/comments/900")
         );
         assert_eq!(n.group_key.as_deref(), Some("781254316723458049:comments"));
         // Pixelfed's "comment" type; a numeric reply-to account id.
         let n = map(json!({"id": "3", "type": "comment", "account": bob(),
             "status": {"id": 901, "in_reply_to_id": 5, "account": bob(), "content_text": "nice"}}));
         assert_eq!((n.channel.as_str(), n.body.as_str()), ("comments", "nice"));
-        assert_eq!(n.target_uri.as_deref(), Some("pixelfed://posts/5/comments"));
+        assert_eq!(
+            n.target_uri.as_deref(),
+            Some("pixelfed://posts/5/comments/901")
+        );
         // A mention in someone else's thread, or in a new post.
         let n = map(
             json!({"id": "4", "type": "mention", "account": {"id": "9", "acct": "carol@else.where"},
@@ -620,13 +716,67 @@ mod tests {
         assert_eq!(n.title, "@carol@else.where mentioned you");
         assert_eq!(
             n.target_uri.as_deref(),
-            Some("pixelfed://posts/77/comments")
+            Some("pixelfed://posts/77/comments/902")
         );
         let n = map(json!({"id": "5", "type": "mention", "account": bob(),
             "status": {"id": "903", "account": bob(), "content": "hi"}}));
         assert_eq!(
             n.target_uri.as_deref(),
             Some("pixelfed://posts/903/comments")
+        );
+    }
+
+    #[test]
+    fn replies_open_the_whole_thread_at_the_reply() {
+        // Bob replies to a comment two levels down; the poll found the post.
+        let reply = json!({"id": "903", "in_reply_to_id": "902", "in_reply_to_account_id": ME,
+            "account": bob(), "content": "<p>@constructdemo dedication</p>"});
+        let raw = json!({"id": "20", "type": "comment", "account": bob(), "status": reply});
+        let n = to_new(
+            &one(raw.clone()),
+            BASE,
+            ME,
+            &mut media(),
+            99,
+            false,
+            Some("781254316723458049"),
+        );
+        assert_eq!(n.channel, "comments");
+        assert_eq!(n.title, "Bob 🚲 replied to your comment");
+        assert_eq!(
+            n.target_uri.as_deref(),
+            Some("pixelfed://posts/781254316723458049/comments/903")
+        );
+        assert_eq!(n.group_key.as_deref(), Some("781254316723458049:comments"));
+        // The post not found: the parent's thread, still at the reply (the
+        // comments screen walks up to the post itself).
+        let n = to_new(&one(raw), BASE, ME, &mut media(), 99, false, None);
+        assert_eq!(n.title, "Bob 🚲 commented on your post");
+        assert_eq!(
+            n.target_uri.as_deref(),
+            Some("pixelfed://posts/902/comments/903")
+        );
+        // A comment straight on the post: its parent is the post.
+        let reply = json!({"id": "904", "in_reply_to_id": "781254316723458049",
+            "account": bob(), "content": "nice"});
+        let n = to_new(
+            &one(json!({"id": "21", "type": "comment", "account": bob(), "status": reply})),
+            BASE,
+            ME,
+            &mut media(),
+            99,
+            false,
+            Some("781254316723458049"),
+        );
+        assert_eq!(n.title, "Bob 🚲 commented on your post");
+        assert_eq!(
+            n.target_uri.as_deref(),
+            Some("pixelfed://posts/781254316723458049/comments/904")
+        );
+        assert_eq!(
+            comment_target("1", "2"),
+            "pixelfed://posts/1/comments/2",
+            "the comment_thread screen route of the pixelfed_home layouts"
         );
     }
 
@@ -671,11 +821,11 @@ mod tests {
                    "status": {"id": "../../x", "account": bob()}}),
         ]);
         assert_eq!(list.len(), 2);
-        let n = to_new(&list[0], BASE, ME, &mut media(), 5, true);
+        let n = to_new(&list[0], BASE, ME, &mut media(), 5, true, None);
         assert_eq!(n.channel, "other");
         assert!(n.quiet);
         // A status id that is not path-safe gets no target.
-        let n = to_new(&list[1], BASE, ME, &mut media(), 5, false);
+        let n = to_new(&list[1], BASE, ME, &mut media(), 5, false, None);
         assert_eq!((n.target_uri, n.group_key), (None, None));
         // An avatar outside the media policy: no image.
         let n = map(json!({"id": "13", "type": "follow",
