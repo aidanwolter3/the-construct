@@ -11,7 +11,8 @@ package org.theconstruct
 data class EngineSnapshot(
     val workspaceJson: String,
     val entitiesJson: String,
-    val isOnline: Boolean,
+    /** Null until the engine has heard from the server or failed to (its cached snapshots don't mean offline). */
+    val isOnline: Boolean?,
     val seq: Long,
     val pendingActions: Int,
     /** Workspace queries: `{query_key: [entity uri, ...]}` (M6); `"{}"` when none. */

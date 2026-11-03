@@ -2613,11 +2613,13 @@ public object FfiConverterTypeEngineHandle: FfiConverter<EngineHandle, Pointer> 
  * when none); `auth_json` is `{"state":"signed_out"|"pending"|"signed_in"|
  * "error","username"?,"error"?}`; `layout_json` is the layout on display,
  * `{"app_id","version"}` (`"{}"` while unknown or unversioned).
+ * `is_online` is `None` until the engine has heard from the server or
+ * failed to (a new engine's cached snapshots don't mean offline).
  */
 data class FfiStateSnapshot (
     var `workspaceJson`: kotlin.String, 
     var `entitiesJson`: kotlin.String, 
-    var `isOnline`: kotlin.Boolean, 
+    var `isOnline`: kotlin.Boolean?, 
     var `seq`: kotlin.ULong, 
     var `pendingActions`: kotlin.UInt, 
     var `queriesJson`: kotlin.String, 
@@ -2645,7 +2647,7 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
         return FfiStateSnapshot(
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
-            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalBoolean.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterString.read(buf),
@@ -2659,7 +2661,7 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
     override fun allocationSize(value: FfiStateSnapshot) = (
             FfiConverterString.allocationSize(value.`workspaceJson`) +
             FfiConverterString.allocationSize(value.`entitiesJson`) +
-            FfiConverterBoolean.allocationSize(value.`isOnline`) +
+            FfiConverterOptionalBoolean.allocationSize(value.`isOnline`) +
             FfiConverterULong.allocationSize(value.`seq`) +
             FfiConverterUInt.allocationSize(value.`pendingActions`) +
             FfiConverterString.allocationSize(value.`queriesJson`) +
@@ -2672,7 +2674,7 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
     override fun write(value: FfiStateSnapshot, buf: ByteBuffer) {
             FfiConverterString.write(value.`workspaceJson`, buf)
             FfiConverterString.write(value.`entitiesJson`, buf)
-            FfiConverterBoolean.write(value.`isOnline`, buf)
+            FfiConverterOptionalBoolean.write(value.`isOnline`, buf)
             FfiConverterULong.write(value.`seq`, buf)
             FfiConverterUInt.write(value.`pendingActions`, buf)
             FfiConverterString.write(value.`queriesJson`, buf)
@@ -3213,6 +3215,38 @@ public object FfiConverterOptionalLong: FfiConverterRustBuffer<kotlin.Long?> {
         } else {
             buf.put(1)
             FfiConverterLong.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalBoolean: FfiConverterRustBuffer<kotlin.Boolean?> {
+    override fun read(buf: ByteBuffer): kotlin.Boolean? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterBoolean.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Boolean?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterBoolean.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Boolean?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterBoolean.write(value, buf)
         }
     }
 }

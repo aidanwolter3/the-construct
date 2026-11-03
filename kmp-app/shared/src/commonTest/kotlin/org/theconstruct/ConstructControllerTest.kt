@@ -37,7 +37,7 @@ private class FakeBridge : ConstructEngineBridge {
     }
 
     /** Emits with an auto-incremented seq unless [seq] is given. */
-    fun emit(workspace: String, entities: String, online: Boolean, pending: Int = 0, seq: Long = nextSeq++) =
+    fun emit(workspace: String, entities: String, online: Boolean?, pending: Int = 0, seq: Long = nextSeq++) =
         listener!!(EngineSnapshot(workspace, entities, online, seq, pending))
 
     /** Emits a snapshot whose `layout_json` is [layout]. */
@@ -217,8 +217,23 @@ class ConstructControllerTest {
         assertTrue(controller.openApp("home"))
         assertEquals(true, controller.state.value.isOnline, "same server: connectivity carries over until the new engine reports")
         assertFalse(showMenuBadge(controller.state.value, null))
-        second.emit(ws, ents, false, seq = 1)
+        // The new engine's cached snapshot comes before its first fetch: still unknown, so no offline flash.
+        second.emit(ws, ents, null, seq = 1)
+        assertEquals(true, controller.state.value.isOnline)
+        assertFalse(showMenuBadge(controller.state.value, null), "no badge while the new engine connects")
+        second.emit(ws, ents, false, seq = 2)
         assertEquals(false, controller.state.value.isOnline)
+    }
+
+    @Test
+    fun unknownConnectivityAtColdStartShowsNoBadge() {
+        val bridge = FakeBridge()
+        val controller = ConstructController(bridge, "pixelfed_home")
+        val (ws, ents) = snapshotOf(COUNTER_BUNDLE_JSON)
+        bridge.emit(ws, ents, null)
+        assertNotNull(controller.state.value.workspace, "the cached layout shows at once")
+        assertNull(controller.state.value.isOnline)
+        assertFalse(showMenuBadge(controller.state.value, null))
     }
 
     @Test
