@@ -377,6 +377,43 @@ impl Host {
         }
     }
 
+    /// Delete the originals [`Self::adopt`] left in `dir` once their pod
+    /// works (they still hold the old sessions and app tokens): files named
+    /// `<anything>.adopted-<pod id>` plus its `-wal` / `-shm`, only for a pod
+    /// this host has. Returns the deleted paths. The server image has no
+    /// shell (`rm`), so this is the way to remove them on Fly.
+    pub fn remove_adopted(&self, dir: &FsPath) -> Result<Vec<PathBuf>, String> {
+        let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let mut removed = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some((_, rest)) = name.rsplit_once(".adopted-") else {
+                continue;
+            };
+            let id = rest
+                .strip_suffix("-wal")
+                .or_else(|| rest.strip_suffix("-shm"))
+                .unwrap_or(rest);
+            if !valid_pod_id(id) || !entry.file_type().is_ok_and(|t| t.is_file()) {
+                continue;
+            }
+            if self
+                .store
+                .pods()
+                .map_err(|e| e.to_string())?
+                .iter()
+                .all(|p| p.id != id)
+            {
+                tracing::warn!(file = %name, "not deleted: no pod with that id");
+                continue;
+            }
+            std::fs::remove_file(entry.path()).map_err(|e| format!("{name}: {e}"))?;
+            removed.push(entry.path());
+        }
+        Ok(removed)
+    }
+
     /// A new token for pod `name`; the old one stops working everywhere and
     /// the pod's sign-ins (made with it) end.
     pub fn rotate(&self, name: &str) -> Result<String, String> {
