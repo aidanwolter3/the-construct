@@ -7,7 +7,12 @@
 
     <!-- Cleartext HTTP only to the dev server (10.0.2.2 / localhost / 127.0.0.1), in all builds since the menu's
          server picker ships in release too: res/xml/network_security_config.xml (DECISIONS D11, D29). -->
+    <!-- No backups or device-to-device transfers (security audit #31, L10): cache.db and the `push` preferences
+         (Web Push endpoints and keys) are not encrypted. allowBackup covers Android 11 and older,
+         res/xml/data_extraction_rules.xml Android 12+ (where allowBackup no longer stops device transfers). -->
     <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:networkSecurityConfig="@xml/network_security_config"
         android:label="The Construct"
         android:icon="@mipmap/ic_launcher"
@@ -33,6 +38,16 @@
                 <data android:scheme="construct" android:host="oauth" />
             </intent-filter>
         </activity>
+        <!-- Notification taps (D52) come through this non-exported activity, which forwards them to MainActivity with
+             a per-process nonce: MainActivity is exported, so it ignores notification extras without one (#31, L11).
+             Own empty task affinity and no history: it finishes at once and never shows in recents. -->
+        <activity
+            android:name=".NotificationTapActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay" />
         <!-- Web Push messages from the pod, delivered by a UnifiedPush distributor (or the embedded FCM one), also
              while the app is closed (DECISIONS D52). -->
         <service
