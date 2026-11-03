@@ -16,7 +16,8 @@
 //! - `CONSTRUCT_ADDR`: listen address (default `127.0.0.1:8080`).
 //! - `CONSTRUCT_DATA_DIR`: `host.db` and `pods/` (default `~/.construct-server`).
 //! - `CONSTRUCT_OPEN_POD=<name>`: callers without a pod token use this pod
-//!   (created if missing). Development only.
+//!   (created if missing). Development only. Unset on a loopback address (the
+//!   default `127.0.0.1:8080`): the pod `dev`; `off` turns that off.
 //! - `CONSTRUCT_TEMP_PODS=1`, `CONSTRUCT_TEMP_POD_HOURS`, `CONSTRUCT_TEMP_POD_MAX`:
 //!   anyone may create a temporary pod.
 //! - `CONSTRUCT_TEST_HOOKS=1`: enables `POST /v1/test/fault` in every pod.
@@ -178,10 +179,20 @@ async fn serve() -> Result<(), String> {
         any_instance = pixelfed.any_instance,
         "Pixelfed adapter configured"
     );
-    let config = HostConfig {
+    let addr = std::env::var("CONSTRUCT_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_owned());
+    let mut config = HostConfig {
         new_pod_settings: server::new_pod_settings(false),
         ..HostConfig::from_env()
     };
+    // Only this machine can reach a loopback server: keep `cargo run -p
+    // server` working without a pod token, as before D46.
+    let loopback = addr
+        .parse::<SocketAddr>()
+        .is_ok_and(|a| a.ip().is_loopback())
+        || addr.starts_with("localhost:");
+    if config.open_pod.is_none() && loopback && std::env::var("CONSTRUCT_OPEN_POD").is_err() {
+        config.open_pod = Some("dev".to_owned());
+    }
     if let Some(t) = config.temporary {
         tracing::info!(hours = t.hours, max = t.max_live, "temporary pods enabled");
     }
@@ -204,7 +215,6 @@ async fn serve() -> Result<(), String> {
         tracing::info!("callers need a pod token (see `server pods`)");
     }
 
-    let addr = std::env::var("CONSTRUCT_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_owned());
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("failed to bind {addr}: {e}"))?;

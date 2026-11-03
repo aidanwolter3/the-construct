@@ -81,8 +81,11 @@ curl -s http://127.0.0.1:8080/v1/workspaces/pixelfed_demo | jq .
 
 Server details:
 
-- State lives in SQLite at `$CONSTRUCT_DATA_DIR/server.db`; `CONSTRUCT_DATA_DIR` defaults to `~/.construct-server`
-  (created if missing). The path is logged at startup.
+- One server hosts many pods, one per user (D46, see [Pods](#pods)). Each pod is a SQLite file,
+  `$CONSTRUCT_DATA_DIR/pods/<pod id>/server.db`, listed in `$CONSTRUCT_DATA_DIR/host.db`; `CONSTRUCT_DATA_DIR`
+  defaults to `~/.construct-server` (created if missing). Bound to loopback (the default), the server serves
+  callers without a pod token from its `dev` pod, so the commands here work as before; `CONSTRUCT_OPEN_POD=off`
+  turns that off.
 - `GET /v1/workspaces/pixelfed_demo` returns the static one-post demo bundle; its like and bookmark actions post to
   `POST /v1/demo/ack`, a stateless 200.
 - Test hook, only when started with `CONSTRUCT_TEST_HOOKS=1` (otherwise 404): `POST /v1/test/fault` with
@@ -194,15 +197,18 @@ deleted (0 pending)`.
 
 ## Server runtime configuration
 
-Everything the pod (`cargo run -p server`) reads from the environment. Empty values count as unset. The chosen
-Pixelfed instance, the database path and each app's served layout version (plus any layout file deployed as a new
-version) are logged at startup. `GET /healthz` answers 200 `ok`
-(no auth; the engine's 2 s reconnect probe uses it).
+Everything the server (`cargo run -p server`) reads from the environment. Empty values count as unset. The chosen
+Pixelfed instance and the host's settings are logged at startup; each pod logs its layout sync when it is first
+opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect probe uses it).
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `CONSTRUCT_ADDR` | `127.0.0.1:8080` | Listen address. Use `0.0.0.0:8080` to accept LAN connections. |
-| `CONSTRUCT_DATA_DIR` | `~/.construct-server` | Directory of `server.db` (Pixelfed app/account/sessions, media keys, layout versions); created if missing. |
+| `CONSTRUCT_DATA_DIR` | `~/.construct-server` | `host.db` (pods, token hashes) and `pods/<id>/server.db` (each pod's apps, accounts, sessions, layout versions); created if missing. |
+| `CONSTRUCT_OPEN_POD` | `dev` on a loopback address, else unset | Callers without a pod token use this pod (created if missing). Development only; `off` disables it on loopback too. Never set it on a public server. |
+| `CONSTRUCT_TEMP_PODS` | unset | `1`: anyone may create a temporary pod (`POST /v1/pods/temporary`, the "Try a temporary pod" button). Staging sets it. |
+| `CONSTRUCT_TEMP_POD_HOURS` | `24` | Temporary pod lifetime (1..=720); the sweeper deletes it and its files afterwards. |
+| `CONSTRUCT_TEMP_POD_MAX` | `50` | Live temporary pods at most (then 503 `temporary_pods_full`). |
 | `CONSTRUCT_TEST_HOOKS` | unset | `1` enables `POST /v1/test/fault` (fault injection; otherwise 404). |
 | `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: `GET /v1/apps` also lists the dev app `pixelfed_demo` (it works either way; this only makes it show up in the clients' menu). |
 | `PIXELFED_INSTANCE_URL` | `http://127.0.0.1:8081` (the fake) | The default Pixelfed instance: the "Sign in with Pixelfed" button uses it. `http://localhost:8090` for the local real Pixelfed, `https://<instance>` for a public one. |
@@ -212,7 +218,7 @@ version) are logged at startup. `GET /healthz` answers 200 `ok`
 | `PIXELFED_EXTRA_REDIRECTS` | unset | Comma-separated exact redirect URIs accepted by `/v1/auth/pixelfed/app`, besides `http://127.0.0.1:<port>/callback`, `http://localhost:<port>/callback` and `construct://oauth`. |
 | `PIXELFED_OWNER_ACCOUNT_ID` | unset | The only upstream account id allowed to sign in to the default instance (replaces a pinned owner). Unset, and on every other instance: the first account to sign in is pinned; others get 403 `account_not_owner`. |
 | `PIXELFED_ALLOW_ACCOUNT_CHANGE` | unset | `1`/`true`: on the default and listed instances any account may sign in and replace the stored one (no pinning). Instances typed under `*` always keep their first account. |
-| `CONSTRUCT_SESSION_TTL_DAYS` | `90` | Pod session lifetime in days (1..=36500; other values warn and use 90). |
+| `CONSTRUCT_SESSION_TTL_DAYS` | `90` | Lifetime of sessions other than pod tokens, in days (1..=36500; other values warn and use 90). Pod tokens don't expire. |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
 
 The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PROVIDER`, `CONSTRUCT_LLM_MODEL`,
@@ -231,20 +237,59 @@ The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PR
 | `FAKE_PIXELFED_ADMIN` | loopback only | `1` serves `/_admin` on any address, `0` never; unset, only when bound to loopback. |
 | `RUST_LOG` | `info` | `tracing` filter. |
 
+## Pods
+
+One server hosts many pods, one per user (D46). Every pod has all the apps; each pod's data is its own SQLite
+file. A request names its pod by its bearer: a **pod token** (`cpod_…`, 256 random bits). The server stores only its
+SHA-256; the code is shown once when it is made. Without a valid token a caller gets only `/healthz`, the "Open your
+pod" screen and the two calls below; images load without a bearer from `/v1/p/<pod id>/…` (only adapters' public
+paths, e.g. the Pixelfed media proxy).
+
+- **In the app:** the "Open your pod" screen takes the pod code (or, where enabled, **Try a temporary pod**). Any
+  number of devices can use the same code. Signing in to an app (Pixelfed) happens inside the pod, so every device
+  of the pod sees it; **Sign out** signs the pod out of the app and keeps the pod open; the menu's **Leave this pod**
+  forgets the code on this device.
+- **API:** `POST /v1/pods/open {"token": "cpod_…"}` -> `{"session_token"}` (401 `pod_not_found`; 10 tries a minute
+  per client). `POST /v1/pods/temporary` -> `{"session_token", "expires_at", "pod"}` (404 when disabled, 429, 503
+  `temporary_pods_full`). Then send the token as `Authorization: Bearer` on every call.
+- **Admin** (on the server; on Fly `fly ssh console -a the-construct-pod -C "/server pods …"`):
+
+  ```bash
+  server pods create <name> [--import-recipes]   # prints the pod code once; --import-recipes: the family collection
+  server pods adopt <name> <path/to/server.db>   # a pre-D46 single-pod database becomes a pod (copied, checked first)
+  server pods rotate <name>                      # new code; the old one stops working, app sign-ins end
+  server pods delete <name>                      # stops now; files deleted within 5 minutes
+  server pods list
+  ```
+
+  Pod codes never go into git or config files; keep yours in a password manager.
+- **Temporary pods** (`CONSTRUCT_TEMP_PODS=1`, staging): full features, including real Pixelfed servers, no family
+  recipes, deleted with everything in them after `CONSTRUCT_TEMP_POD_HOURS`. Testing staging from a script:
+
+  ```bash
+  pod=https://the-construct-pod.fly.dev
+  token=$(curl -fsS -X POST $pod/v1/pods/temporary | jq -r .session_token)
+  curl -fsS -H "Authorization: Bearer $token" $pod/v1/workspaces/recipes | jq '.queries'
+  ```
+
+  In the simulator: `-Pscript="click Try a temporary pod; wait-text 20000 Sign in with Pixelfed; …"`.
+- **Moving the pre-D46 staging data into a pod** (once, after the D46 deploy): take a volume snapshot
+  (`fly volumes snapshots create <volume id>`), then
+  `fly ssh console -a the-construct-pod -C "/server pods adopt <name> /data/server.db"` and keep the printed code.
+  Install the app build with the "Open your pod" screen and enter the code: the recipes and everything else are there.
+
 ## Try it on your phone with a real Pixelfed instance
 
 Nothing has to be registered by hand: the pod registers its own OAuth app on the instance (`POST /api/v1/apps`,
 redirect `construct://oauth`) on the first sign-in. The pod keeps the upstream token; the phone only gets a pod
 session (DECISIONS D17, D19).
 
-**On staging (no setup):** the staging pod runs with `PIXELFED_ALLOWED_INSTANCES=*` (D45). Open the Pixelfed app
-signed out, type your server (e.g. `pixelfed.social`) in the box under "Or sign in to another Pixelfed server", tap
-**Sign in to this server**, log in and approve in the browser. "Sign in with Pixelfed" still goes to the fake. Staging
-keeps your upstream token in its database; the first account to sign in on each typed-in server owns it there (others
-get "This pod belongs to a different Pixelfed account."). Sign out and ask for the row to be removed, or use your own
-pod, if that matters.
+**On staging:** open your pod (enter your pod code, or tap **Try a temporary pod**; see [Pods](#pods)). Staging
+runs with `PIXELFED_ALLOWED_INSTANCES=*` (D45): in the Pixelfed app type your server (e.g. `pixelfed.social`) in the
+box under "Or sign in to another Pixelfed server", tap **Sign in to this server**, log in and approve in the
+browser. "Sign in with Pixelfed" still goes to the fake. Your upstream token lives only in your pod's database.
 
-**On your own pod:**
+**On your own server:**
 
 1. Start the pod for the instance (any account on it; the first one to sign in becomes the pod's owner):
 
@@ -254,7 +299,7 @@ pod, if that matters.
    ```
 
 2. Make the pod reachable from the phone. Simplest is USB: `adb reverse tcp:8080 tcp:8080` and base URL
-   `http://localhost:8080`. A LAN address (`CONSTRUCT_ADDR=0.0.0.0:8080`, `http://<mac-ip>:8080`) or an HTTPS URL also
+   `http://localhost:8080`. A LAN address (`CONSTRUCT_ADDR=0.0.0.0:8080`, `http://<mac-ip>:8080`; not loopback, so create a pod with `server pods create` and enter its code, or set `CONSTRUCT_OPEN_POD=dev`) or an HTTPS URL also
    works for the engine, which talks through Rust and is not restricted by Android's network security config; but
    the app allows cleartext to `localhost`, `127.0.0.1` and `10.0.2.2` only, and only for Java/Kotlin traffic, and images
    load through Coil/OkHttp from the pod's media proxy, so over plain-HTTP LAN the feed images fail. Use `adb

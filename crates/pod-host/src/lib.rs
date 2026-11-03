@@ -96,7 +96,8 @@ impl HostConfig {
                     .unwrap_or(50),
             });
         Self {
-            open_pod: var("CONSTRUCT_OPEN_POD"),
+            // `off` locks even a loopback server (see the binary's default).
+            open_pod: var("CONSTRUCT_OPEN_POD").filter(|v| v != "off"),
             temporary,
             new_pod_settings: Vec::new(),
         }

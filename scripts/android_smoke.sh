@@ -145,8 +145,8 @@ elif [[ "$SERVER" == 1 ]]; then
   log "building server"
   (cd "$REPO_ROOT" && cargo build -q -p server)
   log "starting server (log: $OUT_DIR/server.log)"
-  # Open pod (D46): callers without a pod token use the "dev" pod, as before.
-  CONSTRUCT_OPEN_POD="${CONSTRUCT_OPEN_POD:-dev}" "$REPO_ROOT/target/debug/server" >"$OUT_DIR/server.log" 2>&1 &
+  # Bound to loopback, the server serves callers without a pod token from its "dev" pod (D46).
+  "$REPO_ROOT/target/debug/server" >"$OUT_DIR/server.log" 2>&1 &
   STARTED_SERVER_PID=$!
   deadline=$((SECONDS + 30))
   until server_up; do

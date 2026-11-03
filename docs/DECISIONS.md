@@ -344,6 +344,9 @@ contract test). Fast, deterministic, no containers, and it can inject faults the
 
 ## D17: Pixelfed token ownership and the pod adapter (`server::pixelfed`)
 
+**Amended (D46):** "the pod" is now one of many pods on a server, one per user; a pod token is its non-expiring
+session. The rules below hold inside each pod.
+
 - **Token ownership:** the pod holds the upstream access token; private data stays on the pod. The client runs
   PKCE against the instance's authorize page, then hands `code` + `code_verifier` to `POST
   /v1/auth/pixelfed/token`; the pod exchanges them with its `client_secret`, calls verify_credentials, stores the
@@ -1549,3 +1552,53 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   instance discovery via NodeInfo before registering (a typo now just fails as "Can't reach Pixelfed right now.").
 - **Not yet:** checked against a public instance (needs a device or the desktop app); a way to remove a stored
   account from a typed-in instance other than deleting the row; per-instance rate limits.
+
+## D46: One server, many pods: pod tokens, temporary pods
+
+- **Why:** a pod was one process for one person, and staging was one shared pod. Once staging accepted real Pixelfed
+  accounts (D45), anyone with the app could reach it and claim it. Now one server hosts many pods, one per user,
+  with isolated data; staging stays easy to test (temporary pods); self-service sign-up can be added later.
+- **Host (`crates/pod-host`, knows pods and tokens, not apps):** `host.db` has `pods(id, name, kind admin|temporary,
+  created_at, expires_at)` and `credentials(token_hash, pod_id, kind pod_token)`. Each pod is a full pod-core pod
+  (every adapter, shared adapter objects) over its own file `<data>/pods/<id>/server.db`, opened on first use through
+  a factory the binary provides (adapter migrations and layout sync then; an error answers 503 for that pod instead of
+  stopping the server). `kind` and credential `kind` leave room for self-service pods and other credentials.
+- **Pod token:** `cpod_` + 256 random bits (base32), shown once, stored as SHA-256. It is the request's bearer; the
+  host maps it to the pod and forwards the request to that pod's router. Clients keep one server URL. Inside the pod
+  the token is a **pinned session** (core migration v12: `sessions.pinned`): it never expires, and `POST
+  /v1/auth/logout` keeps it, dropping only its sign-ins (`{"session_kept": true}`). One token per user, usable on any
+  number of devices and surfaces; app sign-ins (Pixelfed) therefore belong to the pod.
+- **Callers without a pod:** `/healthz`, an "Open your pod" screen for any workspace (unknown token: 401 +
+  `X-Construct-Session: invalid`, so the client forgets it), `{"apps": []}`, else 401 `pod_required`.
+  `POST /v1/pods/open {token}` (rate-limited) answers `{session_token}`; `POST /v1/pods/temporary` (with
+  `CONSTRUCT_TEMP_PODS=1`) makes a pod that a sweeper deletes after `CONSTRUCT_TEMP_POD_HOURS` (capped, rate-limited).
+  Temporary pods have every feature, including real Pixelfed servers, but not the family recipes.
+- **Keeping the token:** a valid session that lacks an app's sign-in now gets the signed-out screen with 200, a 403
+  `sign_in_required` from adapter routes, and may listen to layout events; only an unknown or expired session gets
+  401. An adapter's `Hydration::StaleSession` on a pinned session detaches that sign-in instead. Clients drop their
+  session on any 401, so this is what keeps a pod token alive across app sign-outs and upstream failures.
+- **Public paths:** images load without a bearer, so `AppAdapter::public_paths` (Pixelfed: `/v1/pixelfed/media/`) are
+  served at `/v1/p/<pod id>/<path>`; nothing else is. The host sets `X-Construct-Public-Prefix` (stripping any client
+  copy) and adapters put it in absolute URLs (`pod_core::public_prefix`).
+- **Per-pod adapter state:** `AppState::local::<T>()` (e.g. Pixelfed's token-refresh lock, which was process-wide).
+- **Per-pod settings:** core table `pod_settings`, written before adapter migrations run. The recipes import (D41)
+  skips the family collection when `recipes.import_family = 0`; the host sets that for every new pod unless the admin
+  asks for it (`server pods create <name> --import-recipes`). Pods from before D46 (no setting) keep their recipes.
+- **Admin CLI:** `server pods create|adopt|rotate|delete|list`. `adopt` turns a pre-D46 `server.db` into a pod: a
+  `VACUUM INTO` copy is opened and migrated first; only then is the pod recorded and the original renamed
+  (`.adopted-<id>`). That is how staging's existing data (the developer's recipes) moves into their pod. Rotation
+  replaces the pinned session, so app sign-ins end with the old token.
+- **Development:** bound to loopback (the default), the server serves token-less callers from a `dev` pod
+  (`CONSTRUCT_OPEN_POD`, `off` to disable), so local runs, the simulator and the scripts work as before.
+- **Client (schema 7):** `action.auth.session {path, payload}`: the engine POSTs the (form-bound) payload and keeps
+  the returned `session_token` like a finished sign-in. The engine also sends its session on the sign-in `/app` and
+  `/token` calls and the apps catalog (the host must know the pod), keeps the token after a `session_kept` logout,
+  and reports an account-less session as `{"state": "signed_out", "session": true}`. `forget_session` / the menu's
+  "Leave this pod" forget it on one device.
+- **Amends** D17's single-tenant pod and owner pinning: pinning still applies per instance inside a pod.
+- **Weighed:** a path prefix per pod (`/p/<id>/…`: no client change, but users carry pod URLs and all pods share one
+  origin anyway); subdomains (wildcard DNS and certificates); one shared database with a `pod_id` column (every query
+  and adapter table would need it, and one bug leaks data); per-device codes (more admin work; the user chose one
+  token for all their devices).
+- **Not yet:** self-service sign-up; per-device credentials and revoking one device; evicting idle pods from memory;
+  sample recipes for temporary pods; a pod quota on disk.
