@@ -86,6 +86,9 @@ Server details:
   defaults to `~/.construct-server` (created if missing). Bound to loopback (the default), the server serves
   callers without a pod token from its `dev` pod, so the commands here work as before; `CONSTRUCT_OPEN_POD=off`
   turns that off.
+- Every response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
+  `X-Frame-Options: DENY` and `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` unless the route
+  sets its own (uploads keep their `sandbox` CSP); behind Fly (`FLY_APP_NAME`) also `Strict-Transport-Security`.
 - `GET /v1/workspaces/pixelfed_demo` returns the static one-post demo bundle; its like and bookmark actions post to
   `POST /v1/demo/ack`, a stateless 200.
 - Test hook, only when started with `CONSTRUCT_TEST_HOOKS=1` (otherwise 404): `POST /v1/test/fault` with
@@ -118,7 +121,10 @@ endpoints always work. (The `home` "Counter" app was removed, D39.)
   (what a workspace GET serves it), so a version it can't draw sends nothing; without the header it is the app's
   latest (D38). New versions normally arrive with a deploy (the restart ends the stream, and the reconnect's first message
   carries the new number). No session is needed; for `pixelfed_home`, a bearer that is not a valid session gets 401
-  like the workspace GET.
+  like the workspace GET. A stream opened with a session ends once the session is revoked (logout, `server pods
+  rotate`, expiry): it is re-checked before each private event and every 15 s. One session token may hold 8
+  streams open; another gets 429 `{"error": "too_many_streams", "limit": 8}` (decision
+  [`sse-session-revocation`](docs/decisions/sse-session-revocation.md)).
 - Nothing changes a layout over HTTP. The agent, rollback, workspace versions and `/v1/layouts` routes are gone
   (404).
 
@@ -205,7 +211,8 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 |---|---|---|
 | `CONSTRUCT_ADDR` | `127.0.0.1:8080` | Listen address. Use `0.0.0.0:8080` to accept LAN connections. |
 | `CONSTRUCT_DATA_DIR` | `~/.construct-server` | `host.db` (pods, token hashes) and `pods/<id>/server.db` (each pod's apps, accounts, sessions, layout versions); created if missing. |
-| `CONSTRUCT_OPEN_POD` | `dev` on a loopback address, else unset | Callers without a pod token use this pod (created if missing). Development only; `off` disables it on loopback too. Never set it on a public server. |
+| `CONSTRUCT_OPEN_POD` | `dev` on a loopback address, else unset | Callers without a pod token use this pod (created if missing). Development only; `off` disables it on loopback too. The server refuses to start with it on a non-loopback address (unless `CONSTRUCT_INSECURE_OPEN_POD_ON_NETWORK=1`) and always behind Fly (`FLY_APP_NAME`). Only requests whose `Host` is `localhost`, `*.localhost` or an IP address use it, so a DNS-rebinding web page can't (403 `host_not_allowed`); pod tokens work with any `Host`. |
+| `CONSTRUCT_INSECURE_OPEN_POD_ON_NETWORK` | unset | `1`: allow `CONSTRUCT_OPEN_POD` on a non-loopback address. Everyone who can reach the server gets the whole pod and its sign-ins; only on a network you trust, never on a public server. Ignored behind Fly. |
 | `CONSTRUCT_TEMP_PODS` | unset | `1`: anyone may create a temporary pod (`POST /v1/pods/temporary`, the "Try a temporary pod" button). Staging sets it. |
 | `CONSTRUCT_TEMP_POD_HOURS` | `24` | Temporary pod lifetime (1..=720); the sweeper deletes it and its files afterwards. |
 | `CONSTRUCT_TEMP_POD_MAX` | `50` | Live temporary pods at most (then 503 `temporary_pods_full`). |
@@ -347,7 +354,7 @@ browser. "Sign in with Pixelfed" still goes to the fake. Your upstream token liv
    ```
 
 2. Make the pod reachable from the phone. Simplest is USB: `adb reverse tcp:8080 tcp:8080` and base URL
-   `http://localhost:8080`. A LAN address (`CONSTRUCT_ADDR=0.0.0.0:8080`, `http://<mac-ip>:8080`; not loopback, so create a pod with `server pods create` and enter its code, or set `CONSTRUCT_OPEN_POD=dev`) or an HTTPS URL also
+   `http://localhost:8080`. A LAN address (`CONSTRUCT_ADDR=0.0.0.0:8080`, `http://<mac-ip>:8080`; not loopback, so create a pod with `server pods create` and enter its code; the open `dev` pod is refused there, since anyone on the LAN would get it and its sign-ins) or an HTTPS URL also
    works for the engine, which talks through Rust and is not restricted by Android's network security config; but
    the app allows cleartext to `localhost`, `127.0.0.1` and `10.0.2.2` only, and only for Java/Kotlin traffic, and images
    load through Coil/OkHttp from the pod's media proxy, so over plain-HTTP LAN the feed images fail. Use `adb
