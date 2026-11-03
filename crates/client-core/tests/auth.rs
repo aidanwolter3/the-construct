@@ -1477,6 +1477,83 @@ fn a_rejected_create_disappears() {
 }
 
 #[test]
+fn a_sequence_creates_and_sets_local_view_state() {
+    let env = Env::start();
+    let store = Arc::new(MemoryStore::new());
+    let engine = loopback_engine(&env, &store);
+    engine.dispatch(&env.login_intent());
+    wait_signed_in(&engine);
+    // The marked entity comes from a screen's data load (like a recipe's
+    // ingredients); the create goes to another post, whose comments are not
+    // loaded, so nothing reloads the marked entity.
+    let path = comments_path(CAROUSEL_ID);
+    engine.dispatch(&load_intent(&path));
+    wait_until("comments loaded", || {
+        loads(&engine.snapshot())[&path]["state"] == "ready"
+    });
+    let snap = engine.snapshot();
+    let target = queries(&snap)[format!("comments:{CAROUSEL_ID}")][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let likes = entities(&snap)[&target]["like_count"].as_i64().unwrap();
+    let post = queries(&snap)["timeline:home"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| {
+            entities(&snap)[u.as_str().unwrap()]["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .find(|id| id != CAROUSEL_ID)
+        .expect("another post");
+    let mut create: Value =
+        serde_json::from_str(&create_comment_intent(&post, "hi", "nonce00000010")).unwrap();
+    create["refresh_workspace"] = json!(false);
+    let set = |uri: &str, expr: &str| {
+        json!({ "intent": "action.local.set", "entity_uri": uri, "field": "added",
+                "value_expr": expr,
+                "also": [{ "field": "taps", "value_expr": "entity.like_count + 1" }] })
+    };
+
+    // One tap: the create and the local mark, in order; the unloaded entity
+    // and the failing expression change nothing.
+    engine.dispatch(
+        &json!({ "intent": "action.sequence", "steps": [
+            create,
+            set(&target, "true"),
+            set("pixelfed://comments/not-loaded", "true"),
+            { "intent": "action.local.set", "entity_uri": target, "field": "taps",
+              "value_expr": "entity.missing +" },
+        ]})
+        .to_string(),
+    );
+    let snap = engine.snapshot();
+    assert_eq!(
+        comment_texts(&snap, &post).last().map(String::as_str),
+        Some("hi")
+    );
+    assert_eq!(entities(&snap)[&target]["added"], true);
+    assert_eq!(entities(&snap)[&target]["taps"], likes + 1);
+    assert!(
+        entities(&snap)
+            .get("pixelfed://comments/not-loaded")
+            .is_none()
+    );
+    // Only the create is sent; the local set stays.
+    wait_until("sent", || engine.snapshot().pending_actions == 0);
+    assert_eq!(entities(&engine.snapshot())[&target]["added"], true);
+
+    // Reloading the entity from the pod replaces the local view state.
+    engine.dispatch(&load_intent(&path));
+    wait_until("reloaded without the mark", || {
+        entities(&engine.snapshot())[&target].get("added").is_none()
+    });
+}
+
+#[test]
 fn a_data_load_401_signs_out() {
     let env = Env::start();
     let store = Arc::new(MemoryStore::new());

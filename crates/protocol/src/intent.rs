@@ -94,6 +94,27 @@ pub enum ActionIntent {
         dismiss: bool,
     },
 
+    /// Feature `action_sequence`: run `steps` in order, as one tap. Each
+    /// step is any intent (another sequence too); one `$nonce` is bound for
+    /// the whole sequence, so steps can refer to the same new entity.
+    /// Navigation steps are resolved by the client, the rest by the engine.
+    #[serde(rename = "action.sequence")]
+    Sequence { steps: Vec<ActionIntent> },
+
+    /// Feature `local_set`: set `field` (and any `also` fields) of
+    /// `entity_uri` on this device only, from expressions evaluated against
+    /// the entity as it is. Nothing is sent; the next load of the entity
+    /// from the pod replaces it. For view state such as "added" or
+    /// "expanded", usually as a step of an `action.sequence`.
+    #[serde(rename = "action.local.set")]
+    LocalSet {
+        entity_uri: String,
+        field: String,
+        value_expr: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        also: Vec<FieldUpdate>,
+    },
+
     /// Any intent tag this build does not know, e.g. the removed
     /// `action.agent.prompt` (D32), which AI edits could put into layouts
     /// that legacy app versions still hold. Deserializing one drops its
@@ -104,7 +125,19 @@ pub enum ActionIntent {
     Unknown,
 }
 
-/// One extra field update carried by `ActionIntent::OptimisticMutate.also`.
+impl ActionIntent {
+    /// This intent and, for a sequence, every step inside it (depth first).
+    pub fn flatten(&self) -> Vec<&ActionIntent> {
+        let mut out = vec![self];
+        if let ActionIntent::Sequence { steps } = self {
+            out.extend(steps.iter().flat_map(ActionIntent::flatten));
+        }
+        out
+    }
+}
+
+/// One extra field update carried by `ActionIntent::OptimisticMutate.also`
+/// (and `ActionIntent::LocalSet.also`).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FieldUpdate {
     pub field: String,

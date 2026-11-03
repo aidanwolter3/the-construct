@@ -385,6 +385,28 @@ async fn layouts_may_only_use_their_sources() {
     assert_eq!(b["error"], "invalid_layout");
     assert_eq!(b["at"], "/slots/0/content/item_template/on_click/endpoint");
     assert_eq!(b["allowed"], json!(["/v1/a/act"]));
+    // Hidden inside an action.sequence: still checked, step by step.
+    let mut l = kitchen_a();
+    let tap = l["slots"][0]["content"]["item_template"]["on_click"].clone();
+    let mut bad = tap.clone();
+    bad["endpoint"] = json!("/v1/b/act");
+    l["slots"][0]["content"]["item_template"]["on_click"] =
+        json!({ "intent": "action.sequence", "steps": [tap, bad] });
+    let b = refused(l, json!([["a", "all"]])).await;
+    assert_eq!(
+        b["at"],
+        "/slots/0/content/item_template/on_click/steps/1/endpoint"
+    );
+    // A local set on another source's entity.
+    let mut l = kitchen_a();
+    l["slots"][0]["content"]["item_template"]["on_click"] = json!({
+        "intent": "action.local.set", "entity_uri": "b://things/1", "field": "seen",
+        "value_expr": "true" });
+    let b = refused(l, json!([["a", "all"]])).await;
+    assert_eq!(
+        b["at"],
+        "/slots/0/content/item_template/on_click/entity_uri"
+    );
     // A route no source declares, a core route.
     for endpoint in ["/v1/auth/logout", "/v1/pods/open", "/v1/a/act?x=1"] {
         let mut l = kitchen_a();
