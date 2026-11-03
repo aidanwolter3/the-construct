@@ -21,7 +21,8 @@ Collections: define_collection declares typed fields, and any custom app can the
 as a feed ([\"collections\", \"<name>\"]) and add, change and delete rows with the usual mutation \
 intents (describe_collection gives ready-made layout snippets). Change a collection with apply_change, \
 sending the app layout changes that go with it in the same call: nothing applies if any app would \
-break. edit_rows changes rows directly (imports, backfills): it first answers a preview, which you \
+break. add_row adds one row the user just asked for (\"log that I had the oil changed\") at once. \
+edit_rows changes rows directly (imports, backfills): it first answers a preview, which you \
 must show the user (the count and the sample) before calling again with its confirm token; every edit \
 can be undone with undo_edit. Any field may be computed from the row's other fields \
 whenever they change: compute: {kind: \"expr\", expr} evaluates a small expression at once (entity.<field>, \
@@ -100,8 +101,14 @@ pub fn tools() -> Vec<Value> {
             &["collection", "edits"],
         ),
         tool(
+            "add_row",
+            "Add one row the user just asked for in this conversation (\"log that I had the oil changed\", \"add milk\"): written at once, no preview, values as for a create in edit_rows (fields left out get their default; dates are YYYY-MM-DD). Answers the row id and an edit id for undo_edit. For several rows, imports or changes to existing rows, use edit_rows.",
+            json!({ "collection": collection, "values": { "type": "object", "description": "{field: value}" }, "note": note }),
+            &["collection", "values"],
+        ),
+        tool(
             "undo_edit",
-            "Undo one edit_rows edit as one step (rows changed since are left alone and reported).",
+            "Undo one edit_rows or add_row edit as one step (rows changed since are left alone and reported).",
             json!({ "edit": { "type": "string", "description": "The edit id edit_rows answered" } }),
             &["edit"],
         ),
@@ -128,6 +135,7 @@ pub fn call<'a>(
         "apply_change" => Box::pin(apply_change(pod, caps, args)),
         "restore_collection_version" => Box::pin(restore_version(pod, caps, args)),
         "edit_rows" => Box::pin(edit_rows(pod, caps, args)),
+        "add_row" => Box::pin(add_row(pod, caps, args)),
         "undo_edit" => Box::pin(undo_edit(pod, args)),
         "export_collection" => Box::pin(export(pod, args)),
         _ => return None,
@@ -643,6 +651,65 @@ async fn edit_rows(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, 
     let Some(edits) = args["edits"].as_array().cloned() else {
         return Err(bad("\"edits\" is a list of {op, id?, values?}"));
     };
+    let confirm = Confirm::Token(args["confirm"].as_str().map(str::to_owned));
+    edit(
+        pod,
+        caps,
+        name,
+        edits,
+        note_arg(args, "Edited rows"),
+        confirm,
+    )
+    .await
+}
+
+/// One row the user just asked for in the conversation ("log that I had
+/// the oil changed"): written at once, without edit_rows' preview, since
+/// the request itself is the confirmation. Still recorded as an edit, so
+/// undo_edit reverts it.
+async fn add_row(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Value> {
+    let name = str_arg(args, "collection")?.to_owned();
+    let Some(values) = args["values"].as_object().cloned() else {
+        return Err(bad("\"values\" is an object {field: value}"));
+    };
+    let edits = vec![json!({ "op": "create", "values": values })];
+    let mut out = edit(
+        pod,
+        caps,
+        name,
+        edits,
+        note_arg(args, "Added a row"),
+        Confirm::Skip,
+    )
+    .await
+    .map_err(|mut e| {
+        if e["at"] == "/edits/0" {
+            e["at"] = json!("/values");
+        }
+        e
+    })?;
+    if let Some(id) = out["created"][0].as_str() {
+        out["id"] = json!(id);
+    }
+    Ok(out)
+}
+
+/// Whether an edit waits for the user's agreement.
+enum Confirm {
+    /// edit_rows: applies only with the token of the preview the user saw.
+    Token(Option<String>),
+    /// add_row: the user's own request is the agreement.
+    Skip,
+}
+
+async fn edit(
+    pod: &Pod,
+    caps: crate::Caps,
+    name: String,
+    edits: Vec<Value>,
+    note: String,
+    confirm: Confirm,
+) -> Result<Value, Value> {
     if edits.is_empty() || edits.len() > caps.edit_rows {
         return Err(fail(
             StatusCode::BAD_REQUEST,
@@ -650,8 +717,6 @@ async fn edit_rows(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, 
             format!("an edit changes 1..={} rows", caps.edit_rows),
         ));
     }
-    let confirm = args["confirm"].as_str().map(str::to_owned);
-    let note = note_arg(args, "Edited rows");
     let collection = name.clone();
     let out = refusable(pod, move |tx| {
         let Some((version, def)) = db::latest_def(tx, &name)? else {
@@ -722,7 +787,13 @@ async fn edit_rows(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, 
             .map(|b| format!("{b:02x}"))
             .collect::<String>();
         let count = |op: &str| planned.iter().filter(|(o, ..)| *o == op).count();
-        if confirm.as_deref() != Some(token.as_str()) {
+        let confirm = match &confirm {
+            Confirm::Skip => None,
+            Confirm::Token(t) => Some(t.as_deref()),
+        };
+        if let Some(confirm) = confirm
+            && confirm != Some(token.as_str())
+        {
             let sample: Vec<Value> = planned
                 .iter()
                 .take(5)
