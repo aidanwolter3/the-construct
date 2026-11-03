@@ -84,6 +84,8 @@ class FakeEngineBridge(
     screenData: String? = null,
     /** The fake pod's notifications (null = this fake has none). */
     val notifications: FakeNotifications? = null,
+    /** The device's remembered form values (schema 10), shared by the run's bridges like an engine's cache.db. */
+    val formValues: FakeFormValues = FakeFormValues(),
 ) : ConstructEngineBridge {
     /** [prevValues]: field -> value before this row was applied (null = absent). */
     private class Row(val intent: ActionIntent.OptimisticMutate, var prevValues: Map<String, JsonElement?>)
@@ -316,6 +318,13 @@ class FakeEngineBridge(
         }
         println("[sim] discarded attachment $id")
         emit()
+    }
+
+    override fun rememberedFormValues(scope: String): Map<String, String> = formValues.get(appId, scope)
+
+    override fun rememberFormValue(scope: String, field: String, value: String?) {
+        println("[sim] remembered $appId form '$scope' $field=${value ?: "(default)"}")
+        formValues.set(appId, scope, field, value)
     }
 
     /** Ids of the attachments currently staged, for tests. */
@@ -756,5 +765,20 @@ class FakeEngineBridge(
             is JsonPrimitive -> v.isString || v is JsonNull || v.content == "true" || v.content == "false" ||
                 JSON_NUMBER.matches(v.content)
         }
+    }
+}
+
+/** The remembered form values of a simulator run (app, scope, field -> value), in memory like a fresh device. */
+class FakeFormValues {
+    private val values = LinkedHashMap<Triple<String, String, String>, String>()
+
+    @Synchronized
+    fun get(appId: String, scope: String): Map<String, String> =
+        values.filterKeys { it.first == appId && it.second == scope }.mapKeys { it.key.third }
+
+    @Synchronized
+    fun set(appId: String, scope: String, field: String, value: String?) {
+        val key = Triple(appId, scope, field)
+        if (value.isNullOrEmpty()) values.remove(key) else values[key] = value
     }
 }

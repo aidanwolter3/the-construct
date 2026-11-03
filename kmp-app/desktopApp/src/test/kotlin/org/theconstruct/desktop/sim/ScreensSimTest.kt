@@ -21,9 +21,10 @@ class ScreensSimTest {
         outDir.deleteRecursively()
     }
 
-    private fun fake(screenData: Boolean = true) = FakeEngineBridge(
+    private fun fake(screenData: Boolean = true, formValues: FakeFormValues = FakeFormValues()) = FakeEngineBridge(
         assertNotNull(findFixture("pixelfed_home_feed_bundle.json")).readText(),
         screenData = if (screenData) assertNotNull(findFixture("pixelfed_screen_data.json")).readText() else null,
+        formValues = formValues,
     )
 
     private fun run(fake: FakeEngineBridge, script: String): SimResult {
@@ -88,6 +89,23 @@ class ScreensSimTest {
                 "click tag:like:$CAROUSEL; assert-text Unlike; back; assert-text Open post by; " +
                 "click tag:choice:view:; assert-no-text Open post by; assert-text one coffee later",
         )
+    }
+
+    /**
+     * Schema 10: the List/Cards choice is remembered on the device. Each run is a fresh controller and engine (an app
+     * restart) over the same remembered values.
+     */
+    @Test
+    fun theChosenViewIsRememberedAcrossRestarts() {
+        val device = FakeFormValues()
+        run(fake(formValues = device), "assert-no-text Open post by; click tag:choice:view:cards; wait-text 3000 Open post by")
+        assertEquals(mapOf("view" to "cards"), device.get("pixelfed_home", ""))
+        run(fake(formValues = device), "assert-text Open post by Alice Lumen; assert-no-text one coffee later; click tag:choice:view:")
+        assertEquals(emptyMap<String, String>(), device.get("pixelfed_home", ""))
+        run(fake(formValues = device), "assert-no-text Open post by; assert-text one coffee later")
+        // A remembered value the layout no longer offers is ignored (the default view shows).
+        device.set("pixelfed_home", "", "view", "tiles")
+        run(fake(formValues = device), "assert-no-text Open post by; assert-text one coffee later")
     }
 
     companion object {

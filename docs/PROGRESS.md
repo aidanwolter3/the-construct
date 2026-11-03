@@ -572,3 +572,13 @@ new layout files; diffs between versions.
 - Tests: pod-core adapters, server (`pixelfed.rs`, `host.rs`), client-core (`apps.rs`, `pod_host.rs`), simulator
   menu and feed tests.
 - Needs a device check (Android, macOS window): the drawer and Settings at real sizes and Back on Android.
+
+## Remembered form values (schema 10)
+
+- `core://ChoiceChips` `remember` (decision `remembered-form-values`): the device keeps the choice per app and form
+  and restores it when the layout or a screen opens. `layouts/pixelfed_home/0006.json` remembers List/Cards.
+- Engine store v7 (`form_values`), engine/FFI `remembered_form_values` / `remember_form_value`; the shared UI fills
+  the root form in the snapshot callback (before the first draw) and a screen's form when it opens.
+- Tests: protocol schema, client-core store and engine (survives a restart, per app), shared `RememberedFormTest`,
+  simulator `theChosenViewIsRememberedAcrossRestarts`.
+- Needs a client build and a device check (Android: pick Cards, kill the app, reopen: Cards).

@@ -33,7 +33,7 @@ pub use rusqlite::Error as StoreError;
 pub type StoreResult<T> = Result<T, StoreError>;
 
 /// Current schema version (`PRAGMA user_version`).
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// Outbox row status for rows not yet accepted or rejected by the server.
 pub const STATUS_PENDING: &str = "PENDING";
@@ -135,6 +135,21 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 ";
 
+/// Schema v7 (docs/decisions/remembered-form-values.md): form values a
+/// layout asked the device to remember (`core://ChoiceChips` `remember`),
+/// per app and form scope (`""` for the app's layout, else a screen id).
+/// Device preferences, not private data: kept at sign-out.
+const MIGRATION_V7: &str = "
+CREATE TABLE IF NOT EXISTS form_values (
+    app_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    field TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (app_id, scope, field)
+);
+";
+
 /// `MIGRATIONS[i]` upgrades schema v`i` to v`i+1`, each in one transaction.
 const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [
     MIGRATION_V1,
@@ -143,6 +158,7 @@ const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [
     MIGRATION_V4,
     MIGRATION_V5,
     MIGRATION_V6,
+    MIGRATION_V7,
 ];
 
 /// Notifications kept in the cache (the newest ids).
@@ -752,6 +768,47 @@ pub trait StoreOps {
         self.conn()
             .prepare_cached("DELETE FROM engine_kv WHERE key = ?1")?
             .execute([key])?;
+        Ok(())
+    }
+
+    // ---- form_values ----
+
+    /// The remembered form values of one app's form `scope` (field -> value).
+    fn form_values(&self, app_id: &str, scope: &str) -> StoreResult<BTreeMap<String, String>> {
+        self.conn()
+            .prepare_cached(
+                "SELECT field, value FROM form_values WHERE app_id = ?1 AND scope = ?2",
+            )?
+            .query_map(params![app_id, scope], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect()
+    }
+
+    /// Remember a form value (`None` forgets it).
+    fn set_form_value(
+        &self,
+        app_id: &str,
+        scope: &str,
+        field: &str,
+        value: Option<&str>,
+        updated_at: i64,
+    ) -> StoreResult<()> {
+        match value {
+            Some(v) => self
+                .conn()
+                .prepare_cached(
+                    "INSERT INTO form_values (app_id, scope, field, value, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(app_id, scope, field) DO UPDATE SET value = excluded.value,
+                         updated_at = excluded.updated_at",
+                )?
+                .execute(params![app_id, scope, field, v, updated_at])?,
+            None => self
+                .conn()
+                .prepare_cached(
+                    "DELETE FROM form_values WHERE app_id = ?1 AND scope = ?2 AND field = ?3",
+                )?
+                .execute(params![app_id, scope, field])?,
+        };
         Ok(())
     }
 
@@ -1488,6 +1545,28 @@ mod tests {
             created_at: 1,
             read: false,
         }
+    }
+
+    #[test]
+    fn form_values_are_kept_per_app_and_scope() {
+        let s = Store::open_in_memory().unwrap();
+        assert!(s.form_values("a", "").unwrap().is_empty());
+        s.set_form_value("a", "", "view", Some("cards"), 1).unwrap();
+        s.set_form_value("a", "post", "view", Some("grid"), 1)
+            .unwrap();
+        s.set_form_value("b", "", "view", Some("list"), 1).unwrap();
+        s.set_form_value("a", "", "view", Some("tiles"), 2).unwrap();
+        s.set_form_value("a", "", "sort", Some("new"), 2).unwrap();
+        let a = s.form_values("a", "").unwrap();
+        assert_eq!(a.get("view").map(String::as_str), Some("tiles"));
+        assert_eq!(a.get("sort").map(String::as_str), Some("new"));
+        assert_eq!(a.len(), 2);
+        assert_eq!(s.form_values("a", "post").unwrap().len(), 1);
+        assert_eq!(s.form_values("b", "").unwrap()["view"], "list");
+        s.set_form_value("a", "", "view", None, 3).unwrap();
+        assert_eq!(s.form_values("a", "").unwrap().len(), 1);
+        // Forgetting what was never stored is fine.
+        s.set_form_value("c", "", "x", None, 3).unwrap();
     }
 
     #[test]

@@ -1656,9 +1656,60 @@ impl ConstructEngine {
     pub fn discard_attachment(&self, id: &str) {
         self.inner.discard_attachment(id);
     }
+
+    /// The form values this device remembers for this engine's app in form
+    /// `scope` (`""` = the app's layout, else a screen id): field -> value.
+    /// Which fields are remembered is the layout's choice (`core://ChoiceChips`
+    /// `remember`, schema 10); the engine only stores them. Empty on any error.
+    pub fn remembered_form_values(&self, scope: &str) -> BTreeMap<String, String> {
+        self.inner.remembered_form_values(scope)
+    }
+
+    /// Remember a form value of this engine's app (`None` or "" forgets it).
+    /// Oversized scopes, fields or values are ignored.
+    pub fn remember_form_value(&self, scope: &str, field: &str, value: Option<&str>) {
+        self.inner.remember_form_value(scope, field, value);
+    }
 }
 
+/// Longest form scope or field name the engine remembers.
+const MAX_FORM_NAME: usize = 128;
+/// Longest form value the engine remembers.
+const MAX_FORM_VALUE: usize = 1024;
+
 impl Inner {
+    fn remembered_form_values(&self, scope: &str) -> BTreeMap<String, String> {
+        let st = lock(&self.state);
+        let Some(store) = st.store.as_ref() else {
+            return BTreeMap::new();
+        };
+        store
+            .form_values(&self.workspace_id, scope)
+            .unwrap_or_else(|e| {
+                eprintln!("[ConstructEngine] remembered form values: {e}");
+                BTreeMap::new()
+            })
+    }
+
+    fn remember_form_value(&self, scope: &str, field: &str, value: Option<&str>) {
+        let value = value.filter(|v| !v.is_empty());
+        if scope.len() > MAX_FORM_NAME
+            || field.is_empty()
+            || field.len() > MAX_FORM_NAME
+            || value.is_some_and(|v| v.len() > MAX_FORM_VALUE)
+        {
+            return;
+        }
+        let st = lock(&self.state);
+        if let Some(Err(e)) = st
+            .store
+            .as_ref()
+            .map(|s| s.set_form_value(&self.workspace_id, scope, field, value, unix_now()))
+        {
+            eprintln!("[ConstructEngine] remembering form value '{field}': {e}");
+        }
+    }
+
     fn stage_attachment(&self, path: &str) -> Result<AttachmentInfo, String> {
         let id = auth::random_token(16);
         let staged = attachments::stage(Path::new(path), &self.attachments_dir, &id)?;
