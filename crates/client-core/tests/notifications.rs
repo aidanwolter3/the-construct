@@ -552,24 +552,30 @@ fn mark_read_is_optimistic_then_posted_and_resent_after_a_failure() {
     let read: Vec<bool> = list.notifications.iter().map(|n| n.read).collect();
     assert_eq!(read, vec![false, true]);
 
-    // Sent again when the stream reconnects.
+    // Sent again when the stream reconnects, before the catch-up fetch,
+    // which brings "3" (it arrived while the stream was down).
     stub.st.read_status.store(200, Ordering::SeqCst);
     stub.st.list_status.store(200, Ordering::SeqCst);
     *stub.st.read_answer.lock().unwrap() =
         json!({ "unread_total": 1, "unread_by_app": { "a": 1 } });
     stub.set_list(
-        vec![notification("2", "a", false), notification("1", "a", true)],
-        1,
-        json!({ "a": 1 }),
+        vec![
+            notification("3", "a", false),
+            notification("2", "a", false),
+            notification("1", "a", true),
+        ],
+        2,
+        json!({ "a": 2 }),
     );
     stub.close_streams();
-    wait_until("the resend", || {
-        stub.find("POST", "/v1/notifications/read").len() == 2
-    });
-    assert_eq!(
-        stub.find("POST", "/v1/notifications/read")[1].json(),
-        json!({ "ids": ["1"] })
-    );
+    // The catch-up is the last thing the events thread does on a
+    // reconnect: once its counts are in, nothing else is in flight that
+    // could overwrite the mark-all below. (Waiting only for the resend's
+    // request raced with applying its answer and with the catch-up.)
+    wait_until("the catch-up", || total(&engine) == 2);
+    let posts = stub.find("POST", "/v1/notifications/read");
+    assert_eq!(posts.len(), 2);
+    assert_eq!(posts[1].json(), json!({ "ids": ["1"] }));
 
     // Mark all: the pod's answer comes back.
     *stub.st.read_answer.lock().unwrap() = json!({ "unread_total": 0, "unread_by_app": {} });

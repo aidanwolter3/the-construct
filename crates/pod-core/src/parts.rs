@@ -17,6 +17,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{Value, json};
 
+use protocol::ClientCaps;
+
 use crate::adapter::Catalog;
 use crate::store::Store;
 use crate::validate::LayoutError;
@@ -98,15 +100,15 @@ pub fn may_hold_refs(json: &str) -> bool {
     json.contains(REF_TYPE)
 }
 
-/// A built-in version's parts: version `version`, else the newest one a
-/// client of `schema` can draw, else the latest. Blocking.
+/// A built-in version's parts: version `version`, else the newest one
+/// `client` can draw, else the latest. Blocking.
 pub fn load(
     store: &Store,
     app: &str,
     version: Option<i64>,
-    schema: Option<u32>,
+    client: Option<&ClientCaps>,
 ) -> rusqlite::Result<Option<Parts>> {
-    let v = match (version, schema) {
+    let v = match (version, client) {
         (Some(n), _) => store.app_version(app, n)?.map(|(v, _)| v),
         (None, Some(s)) => crate::layouts::newest_compatible(store, app, s)?,
         (None, None) => store.app_latest_meta(app)?,
@@ -140,7 +142,7 @@ fn placeholder() -> Value {
 struct Expander<'a> {
     store: &'a Store,
     catalog: &'a Catalog,
-    schema: Option<u32>,
+    client: Option<&'a ClientCaps>,
     mode: Mode,
     cache: HashMap<(String, Option<i64>), Option<Parts>>,
 }
@@ -150,7 +152,7 @@ impl Expander<'_> {
         let key = (r.app.clone(), r.version);
         if !self.cache.contains_key(&key) {
             let parts = if self.catalog.is_app(&r.app) {
-                load(self.store, &r.app, r.version, self.schema)?
+                load(self.store, &r.app, r.version, self.client)?
             } else {
                 None
             };
@@ -241,34 +243,34 @@ impl Expander<'_> {
 }
 
 /// `doc` with every reference replaced by its part (from the newest version
-/// a client of `schema` can draw; `None`: the latest). Blocking.
+/// `client` can draw; `None`: the latest). Blocking.
 pub fn expand(
     store: &Store,
     catalog: &Catalog,
     doc: &Value,
-    schema: Option<u32>,
+    client: Option<&ClientCaps>,
     mode: Mode,
 ) -> Result<Value, LayoutError> {
     let mut e = Expander {
         store,
         catalog,
-        schema,
+        client,
         mode,
         cache: HashMap::new(),
     };
     Ok(e.walk(doc, "", false, 0)?.unwrap_or(Value::Null))
 }
 
-/// A stored layout as served to a client of `schema`: refs expanded
-/// leniently (a JSON text in, a JSON text out). Blocking.
-pub fn serve(store: &Store, catalog: &Catalog, json: &str, schema: Option<u32>) -> String {
+/// A stored layout as served to `client`: refs expanded leniently (a JSON
+/// text in, a JSON text out). Blocking.
+pub fn serve(store: &Store, catalog: &Catalog, json: &str, client: Option<&ClientCaps>) -> String {
     if !may_hold_refs(json) {
         return json.to_owned();
     }
     let Ok(doc) = serde_json::from_str::<Value>(json) else {
         return json.to_owned();
     };
-    match expand(store, catalog, &doc, schema, Mode::Lenient) {
+    match expand(store, catalog, &doc, client, Mode::Lenient) {
         Ok(v) => v.to_string(),
         Err(_) => json.to_owned(),
     }

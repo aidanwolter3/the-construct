@@ -98,8 +98,10 @@ pub enum RedirectMode {
     /// redirect URI `http://127.0.0.1:<port>/callback`.
     #[default]
     Loopback,
-    /// A registered custom-scheme URI (Android: `construct://oauth`); the app
-    /// passes the redirect to `handle_auth_redirect`.
+    /// A URI the app receives itself (Android: its App Link
+    /// `https://<pod host>/oauth/android`, or `construct://oauth`); the app
+    /// passes the redirect to `handle_auth_redirect`, which matches it by
+    /// `state` only, so its form may differ from this URI.
     Custom(String),
 }
 

@@ -91,10 +91,7 @@ fn a_like_on_the_upstream_becomes_an_unread_notification() {
     assert_eq!(n["app_id"], "pixelfed_home");
     assert_eq!(n["channel"], "likes");
     assert_eq!(n["title"], "Alice Lumen liked your post");
-    assert_eq!(
-        n["target_uri"],
-        format!("pixelfed://posts/{CAROUSEL}/comments")
-    );
+    assert_eq!(n["target_uri"], format!("pixelfed://posts/{CAROUSEL}"));
     assert_eq!(n["read"], false);
     let image = n["image_url"].as_str().unwrap();
     assert!(image.starts_with("/v1/pixelfed/media/"), "{image}");

@@ -144,6 +144,9 @@ pub enum UiNode {
         /// Schema 8 (D48): space left and right of the items.
         #[serde(default, skip_serializing_if = "is_zero")]
         padding_h_dp: u16,
+        /// Schema 12: one item to scroll to and tint ([`ListFocus`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        focus: Option<ListFocus>,
     },
     /// An image from a URL (a literal or a binding such as
     /// `"$item.avatar_url"`). `size_dp` makes it a square of that size;
@@ -556,6 +559,20 @@ pub struct GroupBy {
 pub struct ListWhere {
     pub field: String,
     pub equals: String,
+}
+
+/// `core://List` `focus` (schema 12, docs/decisions/list-focus.md): the item
+/// whose entity URI equals `uri` (usually built from a route parameter, e.g.
+/// `pixelfed://comments/$route.comment`) is scrolled into view the first time
+/// the list draws it, and drawn on `background` with `content_color` (both
+/// `#RRGGBB`, the full item width). No item with that URI: nothing happens.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListFocus {
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_color: Option<String>,
 }
 
 /// One `core://ChoiceChips` option: `label` is drawn, `value` is stored.

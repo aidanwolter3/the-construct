@@ -130,25 +130,8 @@ pub const MANIFEST: SourceManifest = SourceManifest {
     dev: false,
 };
 
-/// `layout_file!("NNNN")` embeds `layouts/recipes/NNNN.json`.
-macro_rules! layout_file {
-    ($name:literal) => {
-        LayoutSource {
-            app_id: "recipes",
-            name: $name,
-            text: include_str!(concat!("../../../layouts/recipes/", $name, ".json")),
-        }
-    };
-}
-
-/// The recipes app's layout files, in number order.
-pub static FILES: &[LayoutSource] = &[
-    layout_file!("0001"),
-    layout_file!("0002"),
-    layout_file!("0003"),
-    layout_file!("0004"),
-    layout_file!("0005"),
-];
+// `FILES`: every `layouts/recipes/*.json`, in number order (`build.rs`).
+include!(concat!(env!("OUT_DIR"), "/layout_files.rs"));
 
 /// The recipes adapter.
 #[derive(Debug, Default)]

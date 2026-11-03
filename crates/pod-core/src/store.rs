@@ -213,7 +213,11 @@ const MIGRATIONS: &[Migration] = &[
          PRIMARY KEY (device_id, app_id, channel)
      );",
     ),
-    // v15 (decision `custom-apps-and-data-sources`): custom apps, owned by
+    // v15 (docs/decisions/layout-features.md): `features`, the layout
+    // features a version uses (comma-separated, sorted; worked out from the
+    // layout when it is appended). Every earlier version uses none.
+    Migration::Sql("ALTER TABLE app_versions ADD COLUMN features TEXT NOT NULL DEFAULT '';"),
+    // v16 (decision `custom-apps-and-data-sources`): custom apps, owned by
     // the pod's user. `feeds_json` is the app's root feeds, `[[source,
     // feed], ...]`; `deleted_at` marks a soft delete (purged after 30 days).
     // Their versions are `app_versions` rows like a built-in app's;
@@ -268,6 +272,15 @@ fn migrate_v9(tx: &Transaction<'_>) -> rusqlite::Result<()> {
 /// read.
 fn schema_of_json(json: &str) -> u32 {
     serde_json::from_str::<protocol::UiNode>(json).map_or(1, |n| protocol::required_schema(&n))
+}
+
+/// The layout features a stored layout uses ([`protocol::required_features`]),
+/// as stored: comma-separated, sorted; empty for a legacy layout this build
+/// cannot read.
+fn features_of_json(json: &str) -> String {
+    serde_json::from_str::<protocol::UiNode>(json)
+        .map(|n| protocol::required_features(&n).join(","))
+        .unwrap_or_default()
 }
 
 /// v6 schema. `layout_versions` (v5) is renamed, converted and dropped.
@@ -608,8 +621,10 @@ pub struct AppVersion {
     /// a file version recorded before v9 whose file is missing from this
     /// build (see [`AppVersion::schema`]).
     pub schema: Option<u32>,
+    /// The layout features the version uses ([`protocol::required_features`]).
+    pub features: Vec<String>,
     /// Who wrote it: `user` or `claude` for a custom app's version, `None`
-    /// for a layout file's (store v15).
+    /// for a layout file's (store v16).
     pub author: Option<String>,
     /// Extra facts about the version as a JSON object, e.g. `copied_from`.
     pub meta_json: Option<String>,
@@ -619,6 +634,11 @@ impl AppVersion {
     /// [`AppVersion::schema`], or 1 when unknown.
     pub fn schema(&self) -> u32 {
         self.schema.unwrap_or(1)
+    }
+
+    /// Whether `client` can draw this version, and why not.
+    pub fn compatibility(&self, client: &protocol::ClientCaps) -> protocol::Compatibility {
+        client.can_draw(self.schema(), &self.features)
     }
 }
 
@@ -722,8 +742,7 @@ pub fn open_session_on(
     attach_sign_in_on(tx, token_hash, sign_in)
 }
 
-const APP_VERSION_COLS: &str =
-    "app_id, version, created_at, source, note, file_key, hash, schema, author, meta_json";
+const APP_VERSION_COLS: &str = "app_id, version, created_at, source, note, file_key, hash, schema, features, author, meta_json";
 
 fn app_version_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AppVersion> {
     Ok(AppVersion {
@@ -735,8 +754,11 @@ fn app_version_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AppVersion> {
         file_key: r.get(5)?,
         hash: r.get(6)?,
         schema: r.get(7)?,
-        author: r.get(8)?,
-        meta_json: r.get(9)?,
+        features: protocol::parse_features(&r.get::<_, String>(8)?)
+            .into_iter()
+            .collect(),
+        author: r.get(9)?,
+        meta_json: r.get(10)?,
     })
 }
 
@@ -785,6 +807,7 @@ pub(crate) fn append_authored_version_on(
 
 /// Append `json` as version `MAX + 1` of the app (blob stored once by hash);
 /// `file` = `(file_key, file_hash)`; `schema` = the schema it was written for.
+/// Its features are worked out from `json`.
 fn append_app_version_on(
     conn: &Connection,
     app_id: &str,
@@ -797,8 +820,9 @@ fn append_app_version_on(
     let hash = put_blob(conn, json)?;
     conn.query_row(
         "INSERT INTO app_versions
-             (app_id, version, hash, source, note, file_key, file_hash, created_at, schema)
-         SELECT ?1, COALESCE(MAX(version), 0) + 1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
+             (app_id, version, hash, source, note, file_key, file_hash, created_at, schema,
+              features)
+         SELECT ?1, COALESCE(MAX(version), 0) + 1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
          FROM app_versions WHERE app_id = ?1
          RETURNING version",
         params![
@@ -809,7 +833,8 @@ fn append_app_version_on(
             file.map(|f| f.0),
             file.map(|f| f.1),
             now_secs(),
-            schema
+            schema,
+            features_of_json(json)
         ],
         |r| r.get(0),
     )
@@ -1415,6 +1440,40 @@ mod tests {
             .unwrap();
         assert_eq!(v, MIGRATIONS.len() as i64);
         assert!(s.session_exists("h").unwrap(), "data survives reopening");
+    }
+
+    /// A version that uses a layout feature is served only to clients that
+    /// send it; older clients get the newest version they can draw.
+    #[test]
+    fn versions_with_features_need_clients_that_draw_them() {
+        let s = Store::open_in_memory().unwrap();
+        let layout = r#"{"type":"core://Workspace","id":"a","title":"A","slots":[]}"#;
+        for _ in 0..3 {
+            s.append_app_version("a", layout, SOURCE_MANUAL, None)
+                .unwrap();
+        }
+        // No layout before features uses one.
+        let v1 = s.app_versions("a", None, 10).unwrap();
+        assert!(v1.iter().all(|v| v.features.is_empty()));
+        // Stand in for a layout using vocabulary that is a feature.
+        s.conn()
+            .execute(
+                "UPDATE app_versions SET features = 'foo,zap' WHERE app_id = 'a' AND version = 3",
+                [],
+            )
+            .unwrap();
+        let newest = |header: &str| {
+            let client =
+                protocol::ClientCaps::schema(protocol::SCHEMA_VERSION).with_features_header(header);
+            crate::layouts::newest_compatible(&s, "a", &client)
+                .unwrap()
+                .map(|v| v.version)
+        };
+        assert_eq!(newest(""), Some(2));
+        assert_eq!(newest("foo"), Some(2));
+        assert_eq!(newest("zap,foo,other"), Some(3));
+        let (v3, _) = s.app_version("a", 3).unwrap().unwrap();
+        assert_eq!(v3.features, ["foo", "zap"]);
     }
 
     #[test]

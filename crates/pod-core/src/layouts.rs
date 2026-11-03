@@ -22,9 +22,10 @@
 //!    [`protocol::SCHEMA_VERSION`] (at least what its vocabulary needs,
 //!    [`protocol::required_schema`]); clients of other schemas are served the
 //!    newest version they can draw ([`protocol::compatibility`], D36).
-//! 2. Add one line to the adapter's file list (for Pixelfed, `HOME_FILES` in
-//!    `crates/app-pixelfed/src/apps.rs`): `layout_file!("pixelfed_home", "0002"),`
-//!    (a test fails if a file in `layouts/` is not listed).
+//! 2. Nothing to list: the adapter's `build.rs` embeds every
+//!    `layouts/<app_id>/*.json` (`crates/pod-core/build_support/`). The
+//!    layout features a file uses are worked out, not declared
+//!    ([`protocol::required_features`], recorded per version).
 //! 3. `cargo test --workspace` (validates every file), deploy. On start the pod
 //!    appends it as the app's next version and pushes it to connected clients
 //!    on their next fetch.
@@ -502,13 +503,23 @@ pub fn client_schema(headers: &HeaderMap) -> u32 {
         .unwrap_or(1)
 }
 
-/// The newest version of an app a client of schema `schema` can draw (by the
-/// version's declared schema, [`protocol::compatibility`]): metadata only.
-/// `None` if the app has no version that fits. Blocking.
+/// What the client draws: its schema ([`client_schema`]) and the features in
+/// [`protocol::FEATURES_HEADER`] (none when absent).
+pub fn client_caps(headers: &HeaderMap) -> protocol::ClientCaps {
+    let features = headers
+        .get(protocol::FEATURES_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    protocol::ClientCaps::schema(client_schema(headers)).with_features_header(features)
+}
+
+/// The newest version of an app `client` can draw (by the version's declared
+/// schema and the features it uses, [`AppVersion::compatibility`]): metadata
+/// only. `None` if the app has no version that fits. Blocking.
 pub fn newest_compatible(
     store: &Store,
     app_id: &str,
-    schema: u32,
+    client: &protocol::ClientCaps,
 ) -> rusqlite::Result<Option<AppVersion>> {
     let mut before = None;
     loop {
@@ -517,22 +528,23 @@ pub fn newest_compatible(
             return Ok(None);
         };
         before = Some(last.version);
-        if let Some(v) = page.into_iter().find(|v| {
-            protocol::compatibility(v.schema(), schema) == protocol::Compatibility::Compatible
-        }) {
+        if let Some(v) = page
+            .into_iter()
+            .find(|v| v.compatibility(client) == protocol::Compatibility::Compatible)
+        {
             return Ok(Some(v));
         }
     }
 }
 
-/// The newest version of an app a client of schema `schema` can draw
-/// ([`newest_compatible`]) with its layout; `None` if the workspace is not an
-/// app or no version fits. Blocking.
+/// The newest version of an app `client` can draw ([`newest_compatible`])
+/// with its layout; `None` if the workspace is not an app or no version fits.
+/// Blocking.
 pub fn active_for(
     store: &Store,
     catalog: &Catalog,
     workspace_id: &str,
-    schema: u32,
+    client: &protocol::ClientCaps,
 ) -> rusqlite::Result<Option<Served>> {
     if !catalog.is_app(workspace_id) && !crate::custom::is_custom_id(workspace_id) {
         return Ok(None);
@@ -540,7 +552,7 @@ pub fn active_for(
     let Some(latest) = store.app_latest_meta(workspace_id)? else {
         return Ok(None);
     };
-    let Some(v) = newest_compatible(store, workspace_id, schema)? else {
+    let Some(v) = newest_compatible(store, workspace_id, client)? else {
         return Ok(None);
     };
     let Some((_, json)) = store.app_version(workspace_id, v.version)? else {
@@ -551,26 +563,27 @@ pub fn active_for(
             app = workspace_id,
             latest = latest.version,
             served = v.version,
-            schema,
+            schema = client.schema,
+            features = ?client.features,
             "served an older layout version the client can draw"
         );
     }
     Ok(Some(Served {
         version: v.version,
-        layout: from_json(&crate::parts::serve(store, catalog, &json, Some(schema)))?,
+        layout: from_json(&crate::parts::serve(store, catalog, &json, Some(client)))?,
     }))
 }
 
-/// Async [`active_for`] with the schema read from the request headers.
+/// Async [`active_for`] with the client read from the request headers.
 pub async fn active_for_client(
     state: &Arc<AppState>,
     workspace_id: &str,
     headers: &HeaderMap,
 ) -> Result<Option<Served>, ApiError> {
     let ws = workspace_id.to_owned();
-    let schema = client_schema(headers);
+    let client = client_caps(headers);
     let st = state.clone();
-    blocking(state, move |s| active_for(s, st.catalog(), &ws, schema)).await
+    blocking(state, move |s| active_for(s, st.catalog(), &ws, &client)).await
 }
 
 /// `(version, layout)`; see [`active`]. Blocking.
@@ -690,11 +703,12 @@ async fn known_app(state: &Arc<AppState>, id: &str) -> Result<String, Response> 
     }
 }
 
-/// One version's metadata for a client of schema `client`: `schema` (what it
-/// was written for), `compatible`, and `incompatible`
-/// (`update_required` | `retired`) when the client cannot draw it.
-fn version_json(v: &AppVersion, client: u32) -> Value {
-    let compat = protocol::compatibility(v.schema(), client);
+/// One version's metadata for `client`: `schema` (what it was written for),
+/// `features` (the layout features it uses, when any), `compatible`, and
+/// `incompatible` (`update_required` | `retired`) when the client cannot draw
+/// it.
+fn version_json(v: &AppVersion, client: &protocol::ClientCaps) -> Value {
+    let compat = v.compatibility(client);
     let mut out = json!({
         "version": v.version,
         "created_at": rfc3339(v.created_at),
@@ -708,6 +722,9 @@ fn version_json(v: &AppVersion, client: u32) -> Value {
     if let Some(a) = &v.author {
         out["author"] = json!(a);
     }
+    if !v.features.is_empty() {
+        out["features"] = json!(v.features);
+    }
     if let Some(r) = compat.reason() {
         out["incompatible"] = json!(r);
     }
@@ -715,19 +732,19 @@ fn version_json(v: &AppVersion, client: u32) -> Value {
 }
 
 /// `GET /v1/apps[?all=1]` -> `{"apps": [{id, title, icon, kind, hidden,
-/// latest_version, latest_compatible_version, updated_at}]}` (public):
-/// built-in apps, then custom ones (`kind` `builtin` | `custom`) oldest
-/// first. Hidden apps (`PUT /v1/apps/:id/hidden`) are listed only with
-/// `?all=1`. Dev apps only with `CONSTRUCT_SHOW_DEV_APPS=1`.
+/// latest_version, latest_compatible_version, updated_at, updates_from?}]}`
+/// (public): built-in apps, then custom ones (`kind` `builtin` | `custom`)
+/// oldest first. Hidden apps (`PUT /v1/apps/:id/hidden`) are listed only
+/// with `?all=1`. Dev apps only with `CONSTRUCT_SHOW_DEV_APPS=1`.
 /// `latest_compatible_version` is the newest version the client
-/// ([`protocol::SCHEMA_HEADER`]) can draw, i.e. what opening the app serves
-/// it (null if none fits).
+/// ([`protocol::SCHEMA_HEADER`], [`protocol::FEATURES_HEADER`]) can draw,
+/// i.e. what opening the app serves it (null if none fits).
 async fn list_apps(
     State(state): State<Arc<AppState>>,
     Query(query): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Response {
-    let schema = client_schema(&headers);
+    let client = client_caps(&headers);
     let all = query.get("all").is_some_and(|v| v == "1" || v == "true");
     let builtin: Vec<AppInfo> = state
         .catalog()
@@ -751,11 +768,11 @@ async fn list_apps(
         apps.into_iter()
             .map(|a| {
                 let latest = s.app_latest_meta(a.id())?;
-                let compatible = newest_compatible(s, a.id(), schema)?.map(|v| v.version);
+                let compatible = newest_compatible(s, a.id(), &client)?.map(|v| v.version);
                 let is_hidden = hidden.iter().any(|h| h == a.id());
                 let updates = match &a {
                     crate::custom::AppRef::Custom(c) => {
-                        crate::custom::updates_from(s, st.catalog(), &c.id, schema, &dismissed)?
+                        crate::custom::updates_from(s, st.catalog(), &c.id, &client, &dismissed)?
                     }
                     crate::custom::AppRef::Builtin(_) => None,
                 };
@@ -800,11 +817,11 @@ fn bad_query() -> Response {
 
 /// `GET /v1/apps/:id/versions[?limit=1..=100 (20)&before=N]` ->
 /// `{app_id, latest_version, latest_compatible_version, versions: [{version,
-/// created_at, source, note?, schema, compatible, incompatible?}],
+/// created_at, source, note?, schema, features?, compatible, incompatible?}],
 /// next_before?}` newest first; `next_before` iff older versions exist (pass
 /// it as `before` for the next page). `compatible` and
 /// `latest_compatible_version` are for the client's
-/// [`protocol::SCHEMA_HEADER`].
+/// [`protocol::SCHEMA_HEADER`] and [`protocol::FEATURES_HEADER`].
 async fn app_versions(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -830,13 +847,16 @@ async fn app_versions(
         Some(Some(n)) => Some(n),
         Some(None) => return bad_query(),
     };
-    let schema = client_schema(&headers);
+    let client = client_caps(&headers);
     let lookup = app_id.clone();
-    let result = blocking(&state, move |s| {
-        let latest = s.app_latest_meta(&lookup)?.map(|v| v.version);
-        let compatible = newest_compatible(s, &lookup, schema)?.map(|v| v.version);
-        let rows = s.app_versions(&lookup, before, limit + 1)?;
-        Ok((latest, compatible, rows))
+    let result = blocking(&state, {
+        let client = client.clone();
+        move |s| {
+            let latest = s.app_latest_meta(&lookup)?.map(|v| v.version);
+            let compatible = newest_compatible(s, &lookup, &client)?.map(|v| v.version);
+            let rows = s.app_versions(&lookup, before, limit + 1)?;
+            Ok((latest, compatible, rows))
+        }
     })
     .await;
     let (latest, compatible, rows) = match result {
@@ -851,7 +871,7 @@ async fn app_versions(
         "latest_compatible_version": compatible,
         "versions": page
             .iter()
-            .map(|v| version_json(v, schema))
+            .map(|v| version_json(v, &client))
             .collect::<Vec<_>>(),
     });
     if more && let Some(last) = page.last() {
@@ -861,7 +881,7 @@ async fn app_versions(
 }
 
 /// `GET /v1/apps/:id/versions/:n` -> `{app_id, version, created_at, source,
-/// note?, schema, compatible, incompatible?, layout}` (the layout is served
+/// note?, schema, features?, compatible, incompatible?, layout}` (the layout is served
 /// even when incompatible: it is history to look at).
 async fn app_version(
     State(state): State<Arc<AppState>>,
@@ -879,19 +899,19 @@ async fn app_version(
         );
     };
     let lookup = app_id.clone();
-    let schema = client_schema(&headers);
+    let client = client_caps(&headers);
     let st = state.clone();
     let found = blocking(&state, move |s| {
         // A custom version's built-in parts, as this client would be served them.
         Ok(s.app_version(&lookup, n)?.map(|(v, json)| {
-            let served = crate::parts::serve(s, st.catalog(), &json, Some(schema));
+            let served = crate::parts::serve(s, st.catalog(), &json, Some(&client));
             (v, served)
         }))
     })
     .await;
     match found {
         Ok(Some((v, stored))) => {
-            let mut body = version_json(&v, client_schema(&headers));
+            let mut body = version_json(&v, &client_caps(&headers));
             body["app_id"] = json!(app_id);
             body["layout"] = match from_json(&stored) {
                 Ok(layout) => node_value(&layout),
@@ -1071,18 +1091,18 @@ fn workspace_not_found(id: &str) -> Response {
     )
 }
 
-/// The version a layout event announces to a subscriber: the newest one a
-/// client of `schema` can draw ([`newest_compatible`]), or the app's latest
-/// when the subscriber sent no [`protocol::SCHEMA_HEADER`] (engines from before
-/// D38 send none on the events channel but draw schema 2 or 3, so treating
-/// them as schema 1 would hide new versions from them). Blocking.
+/// The version a layout event announces to a subscriber: the newest one
+/// `client` can draw ([`newest_compatible`]), or the app's latest when the
+/// subscriber sent no [`protocol::SCHEMA_HEADER`] (engines from before D38
+/// send none on the events channel but draw schema 2 or 3, so treating them as
+/// schema 1 would hide new versions from them). Blocking.
 fn announced_version(
     store: &Store,
     app_id: &str,
-    schema: Option<u32>,
+    client: Option<&protocol::ClientCaps>,
 ) -> rusqlite::Result<Option<i64>> {
-    Ok(match schema {
-        Some(schema) => newest_compatible(store, app_id, schema)?,
+    Ok(match client {
+        Some(client) => newest_compatible(store, app_id, client)?,
         None => store.app_latest_meta(app_id)?,
     }
     .map(|v| v.version))
@@ -1091,10 +1111,10 @@ fn announced_version(
 async fn announced_async(
     state: &Arc<AppState>,
     app_id: &str,
-    schema: Option<u32>,
+    client: Option<protocol::ClientCaps>,
 ) -> Result<Option<i64>, ApiError> {
     let id = app_id.to_owned();
-    blocking(state, move |s| announced_version(s, &id, schema)).await
+    blocking(state, move |s| announced_version(s, &id, client.as_ref())).await
 }
 
 /// `GET /v1/workspaces/:id/events` (SSE). First message: the current
@@ -1165,25 +1185,25 @@ async fn events(
     // which sources this app draws on.
     let session_hash = caller.session().map(|s| s.token_hash.clone());
     let sources = state.sources_of(&app);
-    let schema = headers
+    let client = headers
         .contains_key(protocol::SCHEMA_HEADER)
-        .then(|| client_schema(&headers));
+        .then(|| client_caps(&headers));
     // Subscribe before reading the current version so nothing published in
     // between is missed (a duplicate version is harmless to clients).
     let rx = state.subscribe_layouts();
     let data_rx = state.subscribe_data();
-    let current = match announced_async(&state, &id, schema).await {
+    let current = match announced_async(&state, &id, client.clone()).await {
         Ok(Some(v)) => v,
         Ok(None) => return workspace_not_found(&id),
         Err(e) => return e.into_response(),
     };
-    tracing::info!(workspace = %id, version = current, ?schema, "layout events subscriber connected");
+    tracing::info!(workspace = %id, version = current, ?client, "layout events subscriber connected");
     struct S {
         first: bool,
         /// The app was deleted: the `deleted` event went out, end.
         done: bool,
         sent: i64,
-        schema: Option<u32>,
+        client: Option<protocol::ClientCaps>,
         rx: broadcast::Receiver<LayoutEvent>,
         notify_rx: Option<broadcast::Receiver<NotifyEvent>>,
         _live: Option<crate::notify::LiveDevice>,
@@ -1207,7 +1227,7 @@ async fn events(
             first: true,
             done: false,
             sent: current,
-            schema,
+            client,
             rx,
             notify_rx,
             _live: live,
@@ -1306,7 +1326,7 @@ async fn events(
                 };
                 // Re-read what this subscriber would be served now; only a
                 // change is announced (always after a lag).
-                let Ok(Some(v)) = announced_async(&s.state, &s.id, s.schema).await else {
+                let Ok(Some(v)) = announced_async(&s.state, &s.id, s.client.clone()).await else {
                     continue;
                 };
                 if v == s.sent && !lagged {

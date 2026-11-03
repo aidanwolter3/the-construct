@@ -222,7 +222,9 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 | `PIXELFED_PUBLIC_URL` | = instance URL | Base for the default instance's browser-facing links (the authorize page), e.g. `http://10.0.2.2:8081` for the emulator while the pod calls `127.0.0.1:8081`. Also accepted in auth calls. |
 | `PIXELFED_ALLOWED_INSTANCES` | unset | Other instances users may sign in to (D45): comma-separated base URLs (trusted like the default, may be private), and/or `*` for any public `https://` instance typed on the sign-in screen (only public IP addresses are contacted for those, and their media may come from any public HTTPS host). Set: the signed-out screen adds a server box. Unset: only the default instance. |
 | `PIXELFED_MEDIA_HOSTS` | unset | Comma-separated `host`, `host:port` or `scheme://host[:port]`: extra origins the media proxy may fetch (CDN/S3) besides the configured instances. Media elsewhere become placeholders (except public HTTPS media under `*`). |
-| `PIXELFED_EXTRA_REDIRECTS` | unset | Comma-separated exact redirect URIs accepted by `/v1/auth/pixelfed/app`, besides `http://127.0.0.1:<port>/callback`, `http://localhost:<port>/callback` and `construct://oauth`. |
+| `PIXELFED_EXTRA_REDIRECTS` | unset | Comma-separated exact redirect URIs accepted by `/v1/auth/pixelfed/app`, besides `http://127.0.0.1:<port>/callback`, `http://localhost:<port>/callback` and `construct://oauth`. A pod that serves the Android App Link lists `https://<its host>/oauth/android` here (staging does). |
+| `CONSTRUCT_ANDROID_CERT_SHA256` | unset | Comma-separated SHA-256 fingerprints (`AA:BB:…` or 64 hex digits) of the Android signing certificates whose builds may open this server's `https://<host>/oauth/android` sign-in redirect (App Links; decision [`android-app-link-sign-in-redirect`](docs/decisions/android-app-link-sign-in-redirect.md)). Served at `GET /.well-known/assetlinks.json` (no auth); unset: 404 there, and Android 12+ builds keep `construct://oauth`. List the release key and any debug keys that should verify. Not secret (every APK carries its certificate). |
+| `CONSTRUCT_ANDROID_PACKAGE` | `org.theconstruct.android` | The Android package `assetlinks.json` names, and the one the `/oauth/android` fallback page opens. |
 | `PIXELFED_OWNER_ACCOUNT_ID` | unset | The only upstream account id allowed to sign in to the default instance (replaces a pinned owner). Unset, and on every other instance: the first account to sign in is pinned; others get 403 `account_not_owner`. |
 | `PIXELFED_ALLOW_ACCOUNT_CHANGE` | unset | `1`/`true`: on the default and listed instances any account may sign in and replace the stored one (no pinning). Instances typed under `*` always keep their first account. |
 | `CONSTRUCT_SESSION_TTL_DAYS` | `90` | Lifetime of sessions other than pod tokens, in days (1..=36500; other values warn and use 90). Pod tokens don't expire. |
@@ -391,7 +393,8 @@ adapter wrote, and a navigation target in that app's own layout routes.
 ## Try it on your phone with a real Pixelfed instance
 
 Nothing has to be registered by hand: the pod registers its own OAuth app on the instance (`POST /api/v1/apps`,
-redirect `construct://oauth`) on the first sign-in. The pod keeps the upstream token; the phone only gets a pod
+redirect `construct://oauth`, or on staging the App Link `https://the-construct-pod.fly.dev/oauth/android`) on the
+first sign-in. The pod keeps the upstream token; the phone only gets a pod
 session (DECISIONS D17, D19).
 
 **On staging:** open your pod (enter your pod code, or tap **Try a temporary pod**; see [Pods](#pods)). Staging
@@ -427,7 +430,7 @@ browser. "Sign in with Pixelfed" still goes to the fake. Your upstream token liv
    (A release build has no extras: pick **Local USB** in Settings' server picker instead.)
 
 4. Tap **Sign in with Pixelfed**: the browser opens the instance's authorize page; log in and approve; the
-   `construct://oauth` redirect returns to the app, which shows your home timeline (Settings lists
+   `construct://oauth` redirect (a local pod has no App Link) returns to the app, which shows your home timeline (Settings lists
    "Pixelfed · @you · <instance>"). Like and bookmark are applied at once and go through the outbox to the instance (queued while
    offline, flushed on reconnect). **Sign out** deletes the session and the cached private feed.
 
@@ -454,12 +457,13 @@ The only way to change what the app looks like is a new layout file plus a deplo
    (4 digits, the next number, no gaps), and edit it. The format is `{"note": "short changelog line", "schema": N,
    "layout": <UiNode>}`. The note is what the menu's version history shows. `schema` is the client schema the
    layout is written for: normally the current `protocol::SCHEMA_VERSION` (the pod refuses a value below what the
-   layout's vocabulary needs, or above the current one). The layout root is the app's `core://Workspace`, and its
-   id is the app id.
-2. Add one line to the app's file list in `crates/app-pixelfed/src/apps.rs` (`HOME_FILES` or `DEMO_FILES`):
-   `layout_file!("pixelfed_home", "0002"),` (recipes: `FILES` in `crates/app-recipes/src/lib.rs`).
+   layout's vocabulary needs, or above the current one). The layout features it uses are worked out by the pod,
+   not declared (docs/decisions/layout-features.md). The layout root is the app's `core://Workspace`, and its id
+   is the app id. If another PR adds the same number first (git reports an add/add conflict), merge both changes
+   into the next number: each file is a whole snapshot of the layout.
+2. There is no list to edit: the adapter's `build.rs` embeds every `layouts/<app>/*.json`.
 3. Run `cargo test` (`-p app-pixelfed` is enough). It validates every file (structure, size, slots, aspect ratios,
-   endpoints) and fails if a file in `layouts/` is not listed.
+   endpoints).
 4. Push to `main`. CI runs the checks and deploys the pod to staging. On start, the pod appends the file as the
    app's next version (logged as `layout file deployed as a new version`). Connected clients reconnect their SSE
    stream, see the newer version and refetch. Clients that follow the latest version show it live. A client pinned
@@ -535,14 +539,24 @@ client build. The engine and the clients know no app.
   its parent scrolls under it (like CSS `position: sticky`), and scrolls away with the end of its parent. In the
   workspace it pins just below the menu and bell buttons; in a screen, right under the bar. It may not sit inside a
   List or Carousel template or another Sticky. `layouts/recipes/0005.json` pins the search box and category chips.
-- **Schema versions (D36, D38):** the engine sends `X-Construct-Schema: 11` (workspace fetches, data loads, the
+- **Scroll to one item (schema 12, decision [`list-focus`](docs/decisions/list-focus.md)):** a `core://List` takes
+  an optional `focus: {uri, background?, content_color?}`. The item whose entity URI is `uri` (usually built from a
+  route parameter, e.g. `pixelfed://comments/$route.comment`) is scrolled into view once, the first time the list
+  draws it, and drawn on `background` (`#RRGGBB`). One-column lists only. `layouts/pixelfed_home/0007.json` uses it
+  for the `comment_thread` screen (`pixelfed://posts/{id}/comments/{comment}`), which a comment notification opens.
+- **Schema versions (D36, D38):** the engine sends `X-Construct-Schema: 12` (workspace fetches, data loads, the
   apps API and the events stream). Every version records the schema it was written for (`"schema"` in its file). The pod serves each client
   the newest version it can draw, so an older app (no header = 1) keeps getting the last version without screens
-  or the new nodes. Screens and List/Image/TextField need `"schema": 2`; the building blocks need 3; `core://Tappable` needs 4; a List `filter` or `group_by` needs 5; the schema-6 vocabulary above needs 6; `action.auth.session` needs 7; List `columns`/`spacing_dp`/`padding_h_dp` and a form-based or `equals` Conditional need 8; the photo-posting vocabulary (D49-D51) needs 9; a remembered `core://ChoiceChips` needs 10; `core://Sticky` needs 11. `GET /v1/apps/{id}/versions[/{n}]` adds `schema`,
+  or the new nodes. Screens and List/Image/TextField need `"schema": 2`; the building blocks need 3; `core://Tappable` needs 4; a List `filter` or `group_by` needs 5; the schema-6 vocabulary above needs 6; `action.auth.session` needs 7; List `columns`/`spacing_dp`/`padding_h_dp` and a form-based or `equals` Conditional need 8; the photo-posting vocabulary (D49-D51) needs 9; a remembered `core://ChoiceChips` needs 10; `core://Sticky` needs 11; a List `focus` needs 12. `GET /v1/apps/{id}/versions[/{n}]` adds `schema`,
   `compatible` and, when false, `incompatible` (`update_required`: written for a newer app; `retired`: written for
   a schema this app no longer draws) per version; the menu greys those rows out and won't pin them. "Latest" in the
   menu is always a version this app can draw; when the newest needs a newer app, the menu adds "Update the app to
   see vN" instead of "Newer version available".
+- **Layout features (additive vocabulary after schema 12):** new nodes and attributes no longer bump
+  `SCHEMA_VERSION`. Each is a named feature, one file `crates/protocol/features/<name>.md`, mapped from the
+  vocabulary in `protocol::required_features` (docs/decisions/layout-features.md). Clients send the features they
+  draw in `X-Construct-Features`; the pod serves a version only to clients that have every feature it uses (else
+  `update_required`) and lists them as `features` in `GET /v1/apps/{id}/versions[/{n}]`.
 - **A breaking schema change:** bump `protocol::SCHEMA_VERSION` and add `(new schema, oldest layout schema it still
   draws)` to `protocol::RETIRED`. Older versions then show as incompatible to new clients and are never served to
   them; the old files are not edited. `RETIRED` is `[(3, 3)]`: schema 3 removed the `pixelfed://` widgets (D37),
@@ -554,7 +568,9 @@ client build. The engine and the clients know no app.
 `layouts/pixelfed_home/0003.json` builds the feed from these nodes. It (like 0002) uses the rest for comments: the feed's comment button (already
 `pixelfed://posts/$item.id/comments`) opens the `comments` screen, which loads
 `/v1/pixelfed/screens/comments?post_id=$route.id` into a `core://List` and posts new comments with a
-`core://TextField` and `action.mutation.create`.
+`core://TextField` and `action.mutation.create`. From `0007` the comments screen also shows its post above the
+comments (the same data call returns it as `post:<id>`; given a comment id, the pod walks up to the post), and each
+comment has a like button (the posts' `/v1/pixelfed/posts/like` endpoint works on comments).
 
 ## The menu (all surfaces)
 
@@ -774,7 +790,8 @@ Endpoints:
   (registers an app upstream once per redirect_uri; a cached app is re-checked with a `client_credentials` grant
   and re-registered if the instance no longer knows it). Another instance -> 400 `instance_not_allowed`.
   `redirect_uri` must be `http://127.0.0.1:<port>/callback`, `http://localhost:<port>/callback`, `construct://oauth`
-  or a `PIXELFED_EXTRA_REDIRECTS` entry, else 400 `redirect_uri_not_allowed`.
+  or a `PIXELFED_EXTRA_REDIRECTS` entry (e.g. the Android App Link `https://<pod host>/oauth/android`), else 400
+  `redirect_uri_not_allowed`.
 - `POST /v1/auth/pixelfed/token {instance_url, code, code_verifier, redirect_uri}` -> `{session_token,
   account:{id, username, display_name, avatar_url}}`. Upstream rejection -> 400 `oauth_exchange_failed`. An
   account other than the pinned owner -> 403 `account_not_owner` (the stored account is untouched).
@@ -844,7 +861,8 @@ thread; `auth_json` in every snapshot goes `pending` -> `signed_in` (username, d
   are Kotlin callback interfaces; exceptions in them are contained.
 - `redirectUri = null`: loopback (desktop). The engine listens once on `http://127.0.0.1:47823/callback` for 5
   minutes (a fixed port so the pod reuses one upstream OAuth app; if 47823 is busy, a random port, which registers
-  another app). A custom URI (Android: `construct://oauth`): the app forwards the redirect to `handleAuthRedirect`.
+  another app). A custom URI (Android: the App Link `https://<pod host>/oauth/android` or `construct://oauth`, see
+  below): the app forwards the redirect to `handleAuthRedirect`, which matches it by `state` whatever its form.
   The custom-scheme flow is also kept in the secure store (`pending_auth:<baseUrl>`, 10 minutes), so a redirect
   that cold-starts the app after its process was killed still signs in; one that matches nothing shows "Sign-in
   was interrupted; please try again".
@@ -870,8 +888,17 @@ Per platform (DECISIONS D21):
 - **Desktop** (`desktopApp` Main.kt): no store (Keychain), loopback redirect, and the default browser via
   `java.awt.Desktop.browse` (else `open <url>`). Clicking "Sign in with Pixelfed" opens the browser; after approving,
   the browser lands on the "Signed in" page and the window shows the feed.
-- **Android**: `construct://oauth` intent filter on `MainActivity` (`launchMode="singleTask"`, so the redirect returns to
-  the same activity and engine through `onNewIntent`); the session is encrypted with an AndroidKeyStore AES/GCM key
+- **Android**: the redirect is a verified App Link when the server is the build's App Link host (default the staging
+  pod; `-PconstructAppLinkHost`) and the device has verified it (Android 12+ is asked through
+  `DomainVerificationManager`; 8-11 verify at install), else `construct://oauth` (decision
+  [`android-app-link-sign-in-redirect`](docs/decisions/android-app-link-sign-in-redirect.md); the custom scheme can
+  be claimed by any app). Both intent filters are on `MainActivity` (`launchMode="singleTask"`, so the redirect
+  returns to the same activity and engine through `onNewIntent`). The App Link's filter has `autoVerify`: Android
+  fetches `https://<host>/.well-known/assetlinks.json`, which must list the build's signing certificate
+  (`CONSTRUCT_ANDROID_CERT_SHA256`). If the browser keeps the redirect anyway, the pod's `/oauth/android` page has an
+  **Open The Construct** button that opens this package only (an `intent:` link carrying the query on
+  `construct://oauth`). Check with `adb shell pm get-app-links org.theconstruct.android` (`verified`) and the log
+  line `opening engine for workspace=… redirect=…`. The session is encrypted with an AndroidKeyStore AES/GCM key
   (`construct_session_key`) and kept in SharedPreferences `construct_secure`; the authorize page opens with `ACTION_VIEW`.
   For the emulator, start the pod with `PIXELFED_PUBLIC_URL=http://10.0.2.2:8081` (and the fake with
   `FAKE_PIXELFED_PUBLIC_URL=http://10.0.2.2:8081`) so the browser can reach the authorize page. If the browser is not

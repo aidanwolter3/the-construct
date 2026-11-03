@@ -45,7 +45,7 @@ fn every_file_in_layouts_is_embedded() {
     embedded.sort();
     assert_eq!(
         on_disk, embedded,
-        "every file in layouts/pixelfed_* must be listed in app_pixelfed::apps (and vice versa)"
+        "build.rs embeds every file in layouts/pixelfed_* (and nothing else)"
     );
     for f in files() {
         let text =
@@ -413,7 +413,10 @@ fn sync_appends_new_files_once_and_refuses_changes() {
     let (v, layout) = latest(&store, &catalog(), "pixelfed_home")
         .unwrap()
         .unwrap();
-    assert_eq!(v, 6, "0006: the feed remembering List/Cards");
+    assert_eq!(
+        v, 8,
+        "0008: one post screen with the whole photo and its comments"
+    );
     assert!(pod_core::validate::unknown_node_types(&layout).is_empty());
     // Each client gets the newest version it can draw.
     for (schema, version) in [
@@ -422,11 +425,18 @@ fn sync_appends_new_files_once_and_refuses_changes() {
         (7, 3),
         (8, 4),
         (9, 5),
-        (protocol::SCHEMA_VERSION, 6),
+        (10, 6),
+        (11, 6),
+        (protocol::SCHEMA_VERSION, 8),
     ] {
-        let served = active_for(&store, &catalog(), "pixelfed_home", schema)
-            .unwrap()
-            .unwrap();
+        let served = active_for(
+            &store,
+            &catalog(),
+            "pixelfed_home",
+            &protocol::ClientCaps::schema(schema),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(served.version, version, "schema {schema}");
         assert!(protocol::required_schema(&served.layout) <= schema);
     }

@@ -646,7 +646,7 @@ async fn get_workspace(
     // token's session must survive every app's sign-out).
     let stale = caller == Caller::Stale;
     let req = RequestCtx {
-        schema: layouts::client_schema(&headers),
+        client: layouts::client_caps(&headers),
         headers,
         session: caller.clone().into_session(),
     };

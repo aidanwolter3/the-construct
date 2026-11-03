@@ -176,6 +176,24 @@ class ScreensTest {
         assertEquals(48, indentDp(Indent("depth", 24, max = 8), items[1]))
         assertEquals(0, indentDp(null, items[1]))
         assertEquals(0, indentDp(Indent("nope", 24), items[1]))
+        // Schema 12: the focused item, by entity URI.
+        assertEquals(1, focusIndex(items, ListFocus("x://1", background = "#FFF3CF")))
+        assertEquals(-1, focusIndex(items, ListFocus("x://missing")))
+        assertEquals(-1, focusIndex(null, ListFocus("x://1")), "not loaded yet")
+        assertEquals(-1, focusIndex(items, null))
+    }
+
+    @Test
+    fun listFocusParsesAndRouteParamsFillIt() {
+        val node = ConstructJson.decodeNode(
+            """{"type":"core://List","query_key":"q","item_template":{"type":"core://Divider"},
+               "focus":{"uri":"x://c/${'$'}route.comment","background":"#FFF3CF","content_color":"#1B1E24"}}""",
+        )
+        val list = assertIs<UiNode.ItemList>(node)
+        assertEquals(ListFocus("x://c/${'$'}route.comment", "#FFF3CF", "#1B1E24"), list.focus)
+        val screen = Screen(id = "t", route = "x://p/{id}/c/{comment}", title = "T", content = list)
+        val bound = assertIs<UiNode.ItemList>(bindRoute(screen, mapOf("comment" to "7")).content)
+        assertEquals("x://c/7", bound.focus?.uri)
     }
 
     @Test

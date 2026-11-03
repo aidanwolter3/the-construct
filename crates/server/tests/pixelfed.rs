@@ -156,10 +156,15 @@ async fn authorize(env: &Env) -> (String, String) {
 
 /// [`authorize`] on pod `pod` for the fake at `instance`.
 async fn authorize_at(pod: &str, instance: &str) -> (String, String) {
+    authorize_with(pod, instance, REDIRECT).await
+}
+
+/// [`authorize_at`] with the client's `redirect` URI.
+async fn authorize_with(pod: &str, instance: &str, redirect: &str) -> (String, String) {
     let (status, app) = post_json(
         &format!("{pod}/v1/auth/pixelfed/app"),
         None,
-        json!({ "instance_url": instance, "redirect_uri": REDIRECT }),
+        json!({ "instance_url": instance, "redirect_uri": redirect }),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{app}");
@@ -174,7 +179,7 @@ async fn authorize_at(pod: &str, instance: &str) -> (String, String) {
         .query(&[
             ("response_type", "code"),
             ("client_id", app["client_id"].as_str().unwrap()),
-            ("redirect_uri", REDIRECT),
+            ("redirect_uri", redirect),
             ("scope", "read write"),
             ("state", "st4te"),
             ("code_challenge", &challenge),
@@ -185,7 +190,10 @@ async fn authorize_at(pod: &str, instance: &str) -> (String, String) {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FOUND);
     let location = reqwest::Url::parse(resp.headers()["location"].to_str().unwrap()).unwrap();
-    assert!(location.as_str().starts_with(REDIRECT));
+    assert!(
+        location.as_str().starts_with(&format!("{redirect}?")),
+        "{location}"
+    );
     let q: std::collections::HashMap<_, _> = location.query_pairs().into_owned().collect();
     assert_eq!(q["state"], "st4te");
     (q["code"].clone(), verifier)
@@ -404,8 +412,8 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
     assert_eq!(
         button("comment:$item.uri"),
         ActionIntent::Navigate {
-            target_uri: "pixelfed://posts/$item.id/comments".into(),
-            presentation: PresentationMode::Modal,
+            target_uri: "pixelfed://posts/$item.id".into(),
+            presentation: PresentationMode::Push,
         }
     );
 }
@@ -745,9 +753,9 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
         .send()
         .await
         .unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("6"));
+    assert_eq!(version(&resp).as_deref(), Some("8"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
-    assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 3));
+    assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 4));
     // A newer version replaces the feed layout; entities still come upstream.
     let mut node = server::layouts::builtin(&server::catalog(), "pixelfed_home").unwrap();
     if let UiNode::Workspace { title, .. } = &mut node {
@@ -755,7 +763,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     }
     server::layouts::append_version(state.store(), "pixelfed_home", &node, None).unwrap();
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("7"));
+    assert_eq!(version(&resp).as_deref(), Some("9"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert_eq!(spec.workspace, node);
     assert_eq!(spec.queries["timeline:home"].len(), 5);
@@ -922,7 +930,7 @@ async fn a_session_from_before_v11_stays_signed_in() {
         let conn = rusqlite::Connection::open(dir.path().join("server.db")).unwrap();
         conn.execute_batch(
             "DROP TABLE session_sign_ins; DROP TABLE adapter_migrations;
-             ALTER TABLE sessions DROP COLUMN pinned;
+             ALTER TABLE sessions DROP COLUMN pinned; ALTER TABLE app_versions DROP COLUMN features;
              ALTER TABLE app_versions DROP COLUMN author;
              ALTER TABLE app_versions DROP COLUMN meta_json; PRAGMA user_version = 10;",
         )
@@ -1373,7 +1381,12 @@ async fn sessions_expire_after_the_ttl() {
 async fn app_registration_only_for_allowed_redirect_uris() {
     let env = env_custom(
         server::state_in_memory(),
-        |c| c.extra_redirects = vec!["myapp://signed-in".into()],
+        |c| {
+            c.extra_redirects = vec![
+                "myapp://signed-in".into(),
+                "https://pod.example/oauth/android".into(),
+            ]
+        },
         |_, _| {},
     )
     .await;
@@ -1390,6 +1403,10 @@ async fn app_registration_only_for_allowed_redirect_uris() {
         "http://localhost:9@evil.example/callback",
         "construct://oauth/x",
         "myapp://signed-in/x",
+        "https://pod.example/oauth/android/x",
+        "https://pod.example/oauth/android?x=1",
+        "https://evil.example/oauth/android",
+        "http://pod.example/oauth/android",
     ] {
         let (status, body) = post_json(
             &app_url,
@@ -1405,6 +1422,7 @@ async fn app_registration_only_for_allowed_redirect_uris() {
         "http://localhost:65535/callback",
         "construct://oauth",
         "myapp://signed-in",
+        "https://pod.example/oauth/android",
     ] {
         let (status, body) = post_json(
             &app_url,
@@ -1414,6 +1432,41 @@ async fn app_registration_only_for_allowed_redirect_uris() {
         .await;
         assert_eq!(status, StatusCode::OK, "{ok}: {body}");
     }
+}
+
+/// The Android app's App Link redirect (decision
+/// `android-app-link-sign-in-redirect`): an https URI the deployment lists in
+/// `PIXELFED_EXTRA_REDIRECTS` signs in end to end, and the code is bound to
+/// it (the token call must name the same redirect).
+#[tokio::test]
+async fn sign_in_with_an_app_link_redirect() {
+    const APP_LINK: &str = "https://pod.example/oauth/android";
+    let env = env_custom(
+        server::state_in_memory(),
+        |c| c.extra_redirects = vec![APP_LINK.into()],
+        |_, _| {},
+    )
+    .await;
+    let token_url = format!("{}/v1/auth/pixelfed/token", env.pod.url);
+    let (code, verifier) = authorize_with(&env.pod.url, &env.fake.url, APP_LINK).await;
+    let (status, body) = post_json(
+        &token_url,
+        None,
+        json!({ "instance_url": env.fake.url, "code": code, "code_verifier": verifier,
+                "redirect_uri": "construct://oauth" }),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK, "{body}");
+    let (code, verifier) = authorize_with(&env.pod.url, &env.fake.url, APP_LINK).await;
+    let (status, body) = post_json(
+        &token_url,
+        None,
+        json!({ "instance_url": env.fake.url, "code": code, "code_verifier": verifier,
+                "redirect_uri": APP_LINK }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["account"]["username"], "constructdemo");
 }
 
 #[tokio::test]
@@ -1649,7 +1702,13 @@ async fn comments_screen_data_is_a_bundle_in_thread_order() {
     ]
     .map(|(id, d)| (format!("pixelfed://comments/781300000000000{id}"), d));
     assert_eq!(shape, want);
-    assert_eq!(bundle.entities.len(), 7);
+    // The comments, plus the post, its author and its media (shown above them).
+    let comments = bundle
+        .entities
+        .keys()
+        .filter(|u| u.starts_with("pixelfed://comments/"))
+        .count();
+    assert_eq!(comments, 7);
     let first = &bundle.entities[&order[0]];
     assert_eq!(
         first.get_str("text"),
@@ -1694,6 +1753,60 @@ async fn comments_screen_data_is_a_bundle_in_thread_order() {
         let (status, _) = get_comments_screen(&env.pod.url, bearer, CAROUSEL).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
+}
+
+/// The comments screen shows its post; asked for a comment (an older
+/// notification's link), it shows the whole thread of the comment's post.
+#[tokio::test]
+async fn comments_screen_data_has_the_post_even_from_a_comment() {
+    let env = env().await;
+    let session = sign_in(&env).await;
+    let post_uri = format!("pixelfed://posts/{CAROUSEL}");
+    let (status, data) = get_comments_screen(&env.pod.url, Some(&session), CAROUSEL).await;
+    assert_eq!(status, StatusCode::OK, "{data}");
+    assert_eq!(
+        data["queries"][format!("post:{CAROUSEL}")],
+        json!([post_uri])
+    );
+    assert!(
+        data["entities"][&post_uri]["caption"]
+            .as_str()
+            .unwrap()
+            .starts_with("Sunrise over Boulder"),
+        "{data}"
+    );
+    let whole = thread_shape(&data, CAROUSEL);
+    assert_eq!(whole.len(), 7);
+
+    // 103 replies to 102, which replies to 101, a comment on the post.
+    let reply = "781300000000000103";
+    let (status, data) = get_comments_screen(&env.pod.url, Some(&session), reply).await;
+    assert_eq!(status, StatusCode::OK, "{data}");
+    assert_eq!(data["queries"][format!("post:{reply}")], json!([post_uri]));
+    assert_eq!(thread_shape(&data, reply), whole);
+    let first = data["queries"][format!("comments:{reply}")][0]
+        .as_str()
+        .unwrap();
+    assert_eq!(data["entities"][first]["post_id"], CAROUSEL);
+
+    // Liking a comment uses the posts' like endpoint.
+    let (status, body) = post_json(
+        &format!("{}/v1/pixelfed/posts/like", env.pod.url),
+        Some(&session),
+        json!({ "id": "781300000000000101", "liked": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        (&body["is_liked"], &body["like_count"]),
+        (&json!(true), &json!(4))
+    );
+    let (_, data) = get_comments_screen(&env.pod.url, Some(&session), CAROUSEL).await;
+    let liked = &data["entities"]["pixelfed://comments/781300000000000101"];
+    assert_eq!(
+        (&liked["is_liked"], &liked["like_count"]),
+        (&json!(true), &json!(4))
+    );
 }
 
 /// The `/context` paths the fake was asked for, sorted.

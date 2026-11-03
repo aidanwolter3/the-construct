@@ -61,6 +61,12 @@ struct Env {
 
 impl Env {
     fn start() -> Self {
+        Self::start_with(Vec::new())
+    }
+
+    /// [`Env::start`] whose pod also accepts these exact redirect URIs
+    /// (`PIXELFED_EXTRA_REDIRECTS`).
+    fn start_with(extra_redirects: Vec<String>) -> Self {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -76,8 +82,11 @@ impl Env {
         })
         .unwrap();
         spawn_serve(&rt, fl, fake_pixelfed::app(Arc::new(fake_state)));
-        let pod_state =
-            Arc::new(server::state_in_memory().with_pixelfed(PixelfedConfig::new(&fake, None)));
+        let pixelfed = PixelfedConfig {
+            extra_redirects,
+            ..PixelfedConfig::new(&fake, None)
+        };
+        let pod_state = Arc::new(server::state_in_memory().with_pixelfed(pixelfed));
         let (pl, paddr) = bind();
         spawn_serve(&rt, pl, server::app(Arc::clone(&pod_state)));
         Self {
@@ -396,6 +405,45 @@ fn custom_scheme_sign_in_rejects_a_wrong_state() {
     engine.handle_auth_redirect(&location);
     thread::sleep(Duration::from_millis(300));
     assert_eq!(auth(&engine.snapshot())["state"], "signed_in");
+    assert_eq!(auth(&engine.snapshot())["username"], "constructdemo");
+}
+
+/// Android App Link redirect (decision `android-app-link-sign-in-redirect`):
+/// the engine registers and exchanges the https URI. When the browser keeps
+/// the redirect, the pod's fallback page hands the same query to the app as
+/// `construct://oauth?…`; the engine matches it by `state` alone, so that
+/// completes the sign-in too (the token call still names the https URI).
+#[test]
+fn app_link_sign_in_completes_from_the_fallback_page() {
+    const APP_LINK: &str = "https://pod.example/oauth/android";
+    let env = Env::start_with(vec![APP_LINK.into()]);
+    let store = Arc::new(MemoryStore::new());
+    let (tx, rx) = mpsc::channel();
+    let engine = engine(
+        &env.pod,
+        &store,
+        Some(Arc::new(CapturingOpener(Mutex::new(tx)))),
+        RedirectMode::Custom(APP_LINK.into()),
+    );
+    engine.dispatch(&env.login_intent());
+    let url = rx.recv_timeout(TIMEOUT).unwrap();
+    let parsed = reqwest::Url::parse(&url).unwrap();
+    let q: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+    assert_eq!(q["redirect_uri"], APP_LINK);
+    let resp = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+        .get(format!("{url}&auto=1"))
+        .send()
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 302);
+    let location = resp.headers()["location"].to_str().unwrap().to_owned();
+    let query = location
+        .strip_prefix(&format!("{APP_LINK}?"))
+        .unwrap_or_else(|| panic!("redirect to the App Link: {location}"));
+    assert!(engine.handle_auth_redirect(&format!("construct://oauth?{query}")));
+    wait_signed_in(&engine);
     assert_eq!(auth(&engine.snapshot())["username"], "constructdemo");
 }
 
@@ -1238,7 +1286,7 @@ fn the_engine_fetches_the_newest_layout_its_schema_draws() {
     wait_signed_in(&engine);
     let snap = engine.snapshot();
     let layout: Value = serde_json::from_str(&snap.layout_json).unwrap();
-    assert_eq!(layout["version"], 6);
+    assert_eq!(layout["version"], 8);
     let ws: Value = serde_json::from_str(&snap.workspace_json).unwrap();
     let routes: Vec<&str> = ws["screens"]
         .as_array()
@@ -1251,6 +1299,7 @@ fn the_engine_fetches_the_newest_layout_its_schema_draws() {
         [
             "pixelfed://posts/{id}",
             "pixelfed://posts/{id}/comments",
+            "pixelfed://posts/{id}/comments/{comment}",
             "pixelfed://compose"
         ]
     );

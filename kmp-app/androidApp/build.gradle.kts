@@ -13,9 +13,17 @@ plugins {
 //   -PskipRustBuild              don't run scripts/build_android.sh (use the existing jniLibs)
 //   -PnoFcmFallback              leave out the embedded FCM distributor (D52): closed-app notifications then need a
 //                                UnifiedPush distributor app (e.g. ntfy) on the phone
+//   -PconstructAppLinkHost=<host>  the pod whose https://<host>/oauth/android App Link carries the sign-in redirect
+//                                (default: the staging pod's host). That pod must list this build's signing cert in
+//                                CONSTRUCT_ANDROID_CERT_SHA256 (decision android-app-link-sign-in-redirect)
 val stagingBaseUrl = "https://the-construct-pod.fly.dev"
 val constructBaseUrl = providers.gradleProperty("constructBaseUrl").getOrElse(stagingBaseUrl)
 val constructWorkspace = providers.gradleProperty("constructWorkspace").getOrElse("pixelfed_home")
+val constructAppLinkHost = providers.gradleProperty("constructAppLinkHost")
+    .getOrElse(stagingBaseUrl.removePrefix("https://")).trim().lowercase()
+require(Regex("[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+").matches(constructAppLinkHost)) {
+    "-PconstructAppLinkHost must be a host name like pod.example.org, got '$constructAppLinkHost'"
+}
 val androidAbis: List<String> = providers.gradleProperty("androidAbis").getOrElse("arm64-v8a,x86_64")
     .split(',', ' ').map { it.trim() }.filter { it.isNotEmpty() }
 val skipRustBuild = providers.gradleProperty("skipRustBuild").isPresent
@@ -35,6 +43,8 @@ android {
         buildConfigField("String", "CONSTRUCT_BASE_URL", "\"$constructBaseUrl\"")
         buildConfigField("String", "STAGING_BASE_URL", "\"$stagingBaseUrl\"")
         buildConfigField("String", "CONSTRUCT_WORKSPACE", "\"$constructWorkspace\"")
+        buildConfigField("String", "APP_LINK_HOST", "\"$constructAppLinkHost\"")
+        manifestPlaceholders["constructAppLinkHost"] = constructAppLinkHost
 
         // Package only the ABIs libclient_ffi.so is built for. The JNA aar ships more (armeabi-v7a, x86,
         // ...); without this filter such a device would install the app and then fail to load the engine.

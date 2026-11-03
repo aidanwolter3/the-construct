@@ -632,7 +632,7 @@ async fn sample_data(pod: &Pod, headers: &HeaderMap, args: &Value) -> Result<Val
         }
         let req = RequestCtx {
             headers: forwarded,
-            schema: protocol::SCHEMA_VERSION,
+            client: protocol::ClientCaps::this_build(),
             session: owner,
         };
         match adapter.feed(pod, feed, &req).await {

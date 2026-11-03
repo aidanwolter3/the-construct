@@ -1,7 +1,7 @@
 //! The Pixelfed apps' layout files and the `pixelfed_demo` dev app.
 //!
-//! To add a layout version, add `layouts/<app>/NNNN.json` and one
-//! `layout_file!` line to [`FILES`] (see `pod_core::layouts`).
+//! To add a layout version, add `layouts/<app>/NNNN.json` (see
+//! `pod_core::layouts`); `build.rs` embeds every file there.
 
 use std::sync::{Arc, LazyLock};
 
@@ -11,32 +11,9 @@ use pod_core::{AppInfo, AuthPolicy, FeedSpec, PathSpec, Pod, SourceManifest, Sta
 use protocol::WorkspaceSpec;
 use serde_json::json;
 
-/// `layout_file!("app", "NNNN")` embeds `layouts/app/NNNN.json`.
-macro_rules! layout_file {
-    ($app:literal, $name:literal) => {
-        LayoutSource {
-            app_id: $app,
-            name: $name,
-            text: include_str!(concat!("../../../layouts/", $app, "/", $name, ".json")),
-        }
-    };
-}
-
-/// `pixelfed_home`'s layout files, in number order.
-pub static HOME_FILES: &[LayoutSource] = &[
-    layout_file!("pixelfed_home", "0001"),
-    layout_file!("pixelfed_home", "0002"),
-    layout_file!("pixelfed_home", "0003"),
-    layout_file!("pixelfed_home", "0004"),
-    layout_file!("pixelfed_home", "0005"),
-    layout_file!("pixelfed_home", "0006"),
-];
-
-/// `pixelfed_demo`'s layout files, in number order.
-pub static DEMO_FILES: &[LayoutSource] = &[
-    layout_file!("pixelfed_demo", "0001"),
-    layout_file!("pixelfed_demo", "0002"),
-];
+// `HOME_FILES` and `DEMO_FILES`: every `layouts/pixelfed_home/*.json` and
+// `layouts/pixelfed_demo/*.json`, in number order (`build.rs`).
+include!(concat!(env!("OUT_DIR"), "/layout_files.rs"));
 
 /// Every layout file of the Pixelfed apps (a test checks it matches
 /// `layouts/`).

@@ -13,8 +13,8 @@ pub mod notify;
 pub mod schema;
 
 pub use ast::{
-    Align, ChoiceOption, GroupBy, ICONS, ImageShape, Indent, ListBinding, ListFilter, ListWhere,
-    NODE_TYPES, Orientation, Screen, SlotSpec, TextStyle, Tone, UiNode,
+    Align, ChoiceOption, GroupBy, ICONS, ImageShape, Indent, ListBinding, ListFilter, ListFocus,
+    ListWhere, NODE_TYPES, Orientation, Screen, SlotSpec, TextStyle, Tone, UiNode,
 };
 pub use bundle::{DataBundle, EntityRecord, WorkspaceSpec};
 pub use intent::{ActionIntent, FieldUpdate, Position, PresentationMode};
@@ -23,6 +23,7 @@ pub use notify::{
     NotificationList, PushPayload, ReadEvent, channel_key,
 };
 pub use schema::{
-    Compatibility, RETIRED, SCHEMA_HEADER, SCHEMA_VERSION, compatibility, oldest_layout_schema,
-    required_schema,
+    ClientCaps, Compatibility, FEATURES, FEATURES_HEADER, RETIRED, SCHEMA_HEADER, SCHEMA_VERSION,
+    compatibility, feature, features_header, oldest_layout_schema, parse_features,
+    required_features, required_schema,
 };

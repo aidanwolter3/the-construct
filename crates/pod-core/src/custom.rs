@@ -1008,18 +1008,18 @@ pub fn copied_from(store: &Store, id: &str) -> rusqlite::Result<Option<(String, 
 
 /// `GET /v1/apps` `updates_from` of a custom app copied from a built-in:
 /// `{app, title, from_version, to_version}` when that app has a newer
-/// version a client of `schema` can draw, not dismissed. Blocking.
+/// version `client` can draw, not dismissed. Blocking.
 pub fn updates_from(
     store: &Store,
     catalog: &crate::Catalog,
     id: &str,
-    schema: u32,
+    client: &protocol::ClientCaps,
     dismissed: &HashMap<String, i64>,
 ) -> rusqlite::Result<Option<Value>> {
     let Some((app, from)) = copied_from(store, id)? else {
         return Ok(None);
     };
-    let Some(newest) = crate::layouts::newest_compatible(store, &app, schema)? else {
+    let Some(newest) = crate::layouts::newest_compatible(store, &app, client)? else {
         return Ok(None);
     };
     let seen = dismissed.get(id).copied().unwrap_or(0).max(from);

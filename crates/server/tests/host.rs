@@ -573,6 +573,89 @@ async fn responses_carry_security_headers() {
     }
 }
 
+/// Security audit #31 (Info, custom scheme): the Android sign-in redirect is
+/// an App Link on the host. `assetlinks.json` lists the configured app (404
+/// with no fingerprint), and `/oauth/android`, which the browser shows when
+/// it keeps the redirect, sends the query on to that package only. Neither
+/// needs a pod token.
+#[tokio::test]
+async fn android_app_link_routes() {
+    let env = env().await;
+    let resp = reqwest::get(env.url("/.well-known/assetlinks.json"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    let release = "AA:".repeat(31) + "AA";
+    let env = env_with(HostConfig {
+        android: server::host::app_links::AndroidAppLinks {
+            package: "org.example.app".into(),
+            cert_sha256: vec![release.clone()],
+        },
+        ..HostConfig::default()
+    })
+    .await;
+    let resp = client()
+        .get(env.url("/.well-known/assetlinks.json"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(
+        resp.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("application/json")
+    );
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body,
+        json!([{
+            "relation": ["delegate_permission/common.handle_all_urls"],
+            "target": {
+                "namespace": "android_app",
+                "package_name": "org.example.app",
+                "sha256_cert_fingerprints": [release],
+            },
+        }])
+    );
+
+    let resp = client()
+        .get(env.url("/oauth/android?code=a%2Fb&state=xyz"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let h = resp.headers();
+    assert_eq!(h["cache-control"], "no-store");
+    assert_eq!(h["referrer-policy"], "no-referrer");
+    assert!(h["content-type"].to_str().unwrap().starts_with("text/html"));
+    assert!(
+        !h["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("script")
+    );
+    let page = resp.text().await.unwrap();
+    assert!(
+        page.contains(
+            "href=\"intent://oauth?code=a%2Fb&amp;state=xyz#Intent;scheme=construct;package=org.example.app;end\""
+        ),
+        "{page}"
+    );
+
+    for bad in [
+        "/oauth/android",
+        "/oauth/android?code=a{b}&state=x",
+        "/oauth/android?code=a;package=evil",
+    ] {
+        let resp = client().get(env.url(bad)).send().await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{bad}");
+        let page = resp.text().await.unwrap();
+        assert!(!page.contains("intent:"), "{bad}: {page}");
+    }
+}
+
 /// Security review of D46: anyone can make a temporary pod, so it must not
 /// make the server contact hosts of the visitor's choosing. It is held to the
 /// default Pixelfed instance; an admin pod may use the other allowed ones.

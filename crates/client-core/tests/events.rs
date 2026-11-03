@@ -46,6 +46,8 @@ struct StubState {
     event_auth: Mutex<Vec<String>>,
     /// `X-Construct-Schema` header per events connection ("" if absent).
     event_schema: Mutex<Vec<String>>,
+    /// `X-Construct-Features` header per events connection (`None` if absent).
+    event_features: Mutex<Vec<Option<String>>>,
     /// Workspace fetches answer an unversioned "Signed out" screen (no
     /// version header), like the signed-out `pixelfed_home`.
     unversioned: std::sync::atomic::AtomicBool,
@@ -125,6 +127,7 @@ fn handle(mut stream: TcpStream, st: &StubState) {
     }
     let mut auth = String::new();
     let mut schema = String::new();
+    let mut features = None;
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line) {
@@ -139,6 +142,10 @@ fn handle(mut stream: TcpStream, st: &StubState) {
                     && k.eq_ignore_ascii_case(protocol::SCHEMA_HEADER)
                 {
                     schema = v.trim().to_owned();
+                } else if let Some((k, v)) = line.split_once(':')
+                    && k.eq_ignore_ascii_case(protocol::FEATURES_HEADER)
+                {
+                    features = Some(v.trim().to_owned());
                 }
             }
         }
@@ -171,6 +178,7 @@ fn handle(mut stream: TcpStream, st: &StubState) {
         }
         (true, "/v1/workspaces/home/events") => {
             st.event_schema.lock().unwrap().push(schema);
+            st.event_features.lock().unwrap().push(features);
             serve_events(stream, st, auth)
         }
         // Outbox POSTs stay PENDING.
@@ -294,6 +302,11 @@ fn snapshot_layout_json_names_the_app_and_its_version() {
     assert_eq!(
         stub.st.event_schema.lock().unwrap()[0],
         protocol::SCHEMA_VERSION.to_string()
+    );
+    // And the layout features it draws.
+    assert_eq!(
+        stub.st.event_features.lock().unwrap()[0],
+        Some(protocol::features_header())
     );
     stub.set_version(2);
     stub.push_layout(2);

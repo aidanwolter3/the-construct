@@ -3347,6 +3347,7 @@ fn fetch(
             protocol::SCHEMA_HEADER,
             protocol::SCHEMA_VERSION.to_string(),
         )
+        .header(protocol::FEATURES_HEADER, protocol::features_header())
         .header(protocol::DEVICE_HEADER, device);
     if let Some(t) = token {
         req = req.bearer_auth(t);
@@ -3380,6 +3381,7 @@ fn fetch_data(url: &str, token: Option<&str>, device: &str) -> Result<DataBundle
             protocol::SCHEMA_HEADER,
             protocol::SCHEMA_VERSION.to_string(),
         )
+        .header(protocol::FEATURES_HEADER, protocol::features_header())
         .header(protocol::DEVICE_HEADER, device);
     if let Some(t) = token {
         req = req.bearer_auth(t);

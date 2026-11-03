@@ -390,9 +390,15 @@ async fn public_fake_only_registers_client_redirect_uris() {
             seed_token: None,
         })
         .expect("fixtures load")
-        .with_admin(false),
+        .with_admin(false)
+        .with_extra_redirects(vec!["https://pod.test/oauth/android".into()]),
     ));
-    for bad in ["https://evil.test", "construct://oauth https://evil.test"] {
+    for bad in [
+        "https://evil.test",
+        "construct://oauth https://evil.test",
+        "https://pod.test/oauth/android/x",
+        "https://pod.test/oauth/androidx",
+    ] {
         let r = post_form(
             &router,
             "/api/v1/apps",
@@ -404,6 +410,17 @@ async fn public_fake_only_registers_client_redirect_uris() {
     let (client_id, _) = register(&router).await;
     let code = authorize(&router, &client_id, VERIFIER).await;
     assert!(!code.is_empty());
+    // The configured App Link is accepted exactly.
+    let r = post_form(
+        &router,
+        "/api/v1/apps",
+        &[
+            ("client_name", "x"),
+            ("redirect_uris", "https://pod.test/oauth/android"),
+        ],
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
 }
 
 #[tokio::test]

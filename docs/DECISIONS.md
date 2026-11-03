@@ -444,6 +444,8 @@ session. The rules below hold inside each pod.
 
 ## D19: Client sign-in (OAuth2 PKCE in client-core, session store, 401 policy)
 
+Android redirect superseded by [android-app-link-sign-in-redirect](decisions/android-app-link-sign-in-redirect.md).
+
 - **Flow** (`client_core::auth` + engine, on a `construct-engine-auth` thread; dispatch never blocks):
   `ActionIntent::AuthLogin{instance_url}` -> `auth_json` pending -> redirect URI (loopback: bind
   `127.0.0.1:0`, `http://127.0.0.1:<port>/callback`; custom: e.g. `construct://oauth`) -> `POST /v1/auth/pixelfed/app`
