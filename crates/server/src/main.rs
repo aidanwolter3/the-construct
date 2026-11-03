@@ -21,7 +21,10 @@
 //! - `CONSTRUCT_DATA_DIR`: `host.db` and `pods/` (default `~/.construct-server`).
 //! - `CONSTRUCT_OPEN_POD=<name>`: callers without a pod token use this pod
 //!   (created if missing). Development only. Unset on a loopback address (the
-//!   default `127.0.0.1:8080`): the pod `dev`; `off` turns that off.
+//!   default `127.0.0.1:8080`): the pod `dev`; `off` turns that off. Refused
+//!   on a non-loopback address unless `CONSTRUCT_INSECURE_OPEN_POD_ON_NETWORK=1`,
+//!   and always behind Fly (`FLY_APP_NAME`). Only requests whose `Host` is
+//!   `localhost` or an IP address use it (no DNS rebinding).
 //! - `CONSTRUCT_TEMP_PODS=1`, `CONSTRUCT_TEMP_POD_HOURS`, `CONSTRUCT_TEMP_POD_MAX`:
 //!   anyone may create a temporary pod.
 //! - `CONSTRUCT_TEST_HOOKS=1`: enables `POST /v1/test/fault` in every pod.
@@ -257,14 +260,26 @@ async fn serve() -> Result<(), String> {
         temporary_pod_settings: server::temporary_pod_settings(),
         ..HostConfig::from_env()
     };
+    let on_fly = std::env::var_os("FLY_APP_NAME").is_some_and(|v| !v.is_empty());
     // Only this machine can reach a loopback server: keep `cargo run -p
     // server` working without a pod token, as before D46.
-    let loopback = addr
-        .parse::<SocketAddr>()
-        .is_ok_and(|a| a.ip().is_loopback())
-        || addr.starts_with("localhost:");
-    if config.open_pod.is_none() && loopback && std::env::var("CONSTRUCT_OPEN_POD").is_err() {
+    if config.open_pod.is_none()
+        && !on_fly
+        && server::is_loopback_addr(&addr)
+        && std::env::var("CONSTRUCT_OPEN_POD").is_err()
+    {
         config.open_pod = Some("dev".to_owned());
+    }
+    if config.open_pod.is_some() {
+        let opt_in = std::env::var(server::INSECURE_OPEN_POD_VAR).is_ok_and(|v| v == "1");
+        server::check_open_pod(&addr, on_fly, opt_in)?;
+        if opt_in && !server::is_loopback_addr(&addr) {
+            tracing::warn!(
+                %addr,
+                "{}=1: anyone on this network can use the open pod",
+                server::INSECURE_OPEN_POD_VAR
+            );
+        }
     }
     if let Some(t) = config.temporary {
         tracing::info!(hours = t.hours, max = t.max_live, "temporary pods enabled");

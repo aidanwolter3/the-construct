@@ -1088,7 +1088,9 @@ async fn bad_code_verifier_is_oauth_exchange_failed() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"], "oauth_exchange_failed");
-    assert!(body["detail"].as_str().unwrap().contains("code_verifier"));
+    // The upstream's error body stays in the pod's log (L4, #31).
+    assert!(body.get("detail").is_none(), "{body}");
+    assert!(!body.to_string().contains("code_verifier"), "{body}");
     // Token exchange for an unregistered redirect_uri.
     let (status, body) = post_json(
         &format!("{}/v1/auth/pixelfed/token", env.pod.url),

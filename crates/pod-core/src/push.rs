@@ -3,6 +3,15 @@
 //! deliveries go through the public-only client ([`crate::net`]) unless the
 //! server runs with test hooks (local test receivers).
 //!
+//! Endpoints must be `https://` on the default port (443) of a public host
+//! name. Any pod (temporary ones included) registers endpoints, so without
+//! the port rule the server would POST to any public host and port on a
+//! stranger's behalf. A domain allowlist would break self-hosted UnifiedPush
+//! distributors (ntfy, NextPush, ...), which run on arbitrary domains but
+//! behind ordinary HTTPS; the push services we know (FCM, Mozilla, Apple,
+//! ntfy.sh) all use 443. Deliveries don't follow redirects either: a push
+//! service answers a POST directly, and a 307/308 would resend the body.
+//!
 //! One VAPID key pair serves the whole server: `CONSTRUCT_VAPID_PRIVATE_KEY`
 //! (base64url of the 32-byte P-256 scalar) or one the host generated and keeps.
 
@@ -93,6 +102,7 @@ impl PushSender {
         } else {
             crate::net::public_builder(SEND_TIMEOUT)
         }
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| e.to_string())?;
         Ok(Self {
@@ -114,8 +124,9 @@ impl PushSender {
         &self.public_key
     }
 
-    /// Whether `endpoint` may be registered: an `https://` URL on a public
-    /// host (any `http(s)` URL with test hooks).
+    /// Whether `endpoint` may be registered or sent to: an `https://` URL on
+    /// the default port of a public host name (any `http(s)` URL with test
+    /// hooks).
     pub fn endpoint_allowed(&self, endpoint: &str) -> bool {
         let Ok(url) = reqwest::Url::parse(endpoint) else {
             return false;
@@ -126,7 +137,7 @@ impl PushSender {
         if self.allow_private {
             matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
         } else {
-            url.scheme() == "https" && url.host_str().is_some_and(crate::net::is_public_host)
+            crate::net::is_public_https(&url)
         }
     }
 
@@ -143,6 +154,10 @@ impl PushSender {
     /// Encrypt `plaintext` for `sub` and POST it to the push service.
     pub async fn send(&self, sub: &Subscription, plaintext: &[u8]) -> Result<(), PushError> {
         let bad = |e: String| PushError::BadSubscription(e);
+        // Endpoints registered before the port rule are dropped, not sent to.
+        if !self.endpoint_allowed(&sub.endpoint) {
+            return Err(bad("endpoint not allowed".into()));
+        }
         let ua_public = p256::PublicKey::from_sec1_bytes(&b64(&sub.p256dh).map_err(bad)?)
             .map_err(|_| bad("p256dh is not a P-256 key".into()))?;
         let auth = b64(&sub.auth).map_err(bad)?;
@@ -208,13 +223,18 @@ mod tests {
             PushSender::new(&PushSender::generate_private_key(), "mailto:a@b.c", false).unwrap();
         assert!(s.endpoint_allowed("https://fcm.googleapis.com/fcm/send/abc"));
         assert!(s.endpoint_allowed("https://ntfy.sh/upAbc?up=1"));
+        assert!(s.endpoint_allowed("https://ntfy.sh:443/up"));
         assert!(!s.endpoint_allowed("http://ntfy.sh/up"));
+        assert!(!s.endpoint_allowed("https://ntfy.sh:8443/up"));
+        assert!(!s.endpoint_allowed("https://example.com:25/x"));
+        assert!(!s.endpoint_allowed("https://example.com:22/x"));
         assert!(!s.endpoint_allowed("https://127.0.0.1/x"));
         assert!(!s.endpoint_allowed("https://localhost/x"));
         assert!(!s.endpoint_allowed("https://u:p@ntfy.sh/x"));
         assert!(!s.endpoint_allowed("nonsense"));
         let t = PushSender::new(&PushSender::generate_private_key(), "mailto:a@b.c", true).unwrap();
         assert!(t.endpoint_allowed("http://127.0.0.1:9/x"));
+        assert!(t.endpoint_allowed("https://ntfy.sh:8443/x"));
         assert_eq!(b64(t.public_key()).unwrap().len(), 65);
     }
 
@@ -232,5 +252,21 @@ mod tests {
             ..ok.clone()
         };
         assert!(PushSender::check_subscription(&bad).is_err());
+    }
+
+    #[tokio::test]
+    async fn disallowed_stored_endpoints_are_dropped() {
+        let s =
+            PushSender::new(&PushSender::generate_private_key(), "mailto:a@b.c", false).unwrap();
+        let (_, p256dh, auth) = test_device_keys();
+        let sub = Subscription {
+            endpoint: "https://ntfy.sh:8443/up".into(),
+            p256dh,
+            auth,
+        };
+        assert!(matches!(
+            s.send(&sub, b"hi").await,
+            Err(PushError::BadSubscription(_))
+        ));
     }
 }
