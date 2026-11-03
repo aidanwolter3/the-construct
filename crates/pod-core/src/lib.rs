@@ -12,6 +12,7 @@
 //! app; adapters supply each app's data, routes, sign-ins and tables.
 
 pub mod adapter;
+pub mod disk;
 pub mod layouts;
 pub mod net;
 pub mod notify;
@@ -96,6 +97,11 @@ pub struct AppState {
     data_tx: tokio::sync::broadcast::Sender<layouts::DataEvent>,
     /// Largest upload (`CONSTRUCT_UPLOAD_MAX_BYTES`, D49).
     upload_max_bytes: usize,
+    /// Most bytes all of this pod's uploads may take together; `None`: no
+    /// quota (the host sets one for every pod it serves).
+    upload_quota_bytes: Option<u64>,
+    /// Uploads are refused when the data volume is nearly full.
+    disk_guard: Option<disk::DiskGuard>,
     /// Set once the adapters' [`AppAdapter::resume`] and the upload sweeper
     /// have been started for this pod.
     started: std::sync::atomic::AtomicBool,
@@ -154,6 +160,8 @@ impl AppState {
             layout_tx: tokio::sync::broadcast::channel(layouts::CHANNEL_CAPACITY).0,
             data_tx: tokio::sync::broadcast::channel(layouts::CHANNEL_CAPACITY).0,
             upload_max_bytes: uploads::max_bytes_from_env(),
+            upload_quota_bytes: None,
+            disk_guard: None,
             started: std::sync::atomic::AtomicBool::new(false),
             sse_keepalive: layouts::DEFAULT_KEEPALIVE,
             shutdown: tokio::sync::watch::channel(false).0,
@@ -236,6 +244,27 @@ impl AppState {
     pub fn with_upload_max_bytes(mut self, max: usize) -> Self {
         self.upload_max_bytes = max;
         self
+    }
+
+    /// Most bytes this pod's uploads may hold together (decision
+    /// `pod-storage-limits`).
+    pub fn with_upload_quota_bytes(mut self, quota: Option<u64>) -> Self {
+        self.upload_quota_bytes = quota;
+        self
+    }
+
+    pub fn upload_quota_bytes(&self) -> Option<u64> {
+        self.upload_quota_bytes
+    }
+
+    /// Refuse uploads when the filesystem of `guard.dir` runs low.
+    pub fn with_disk_guard(mut self, guard: Option<disk::DiskGuard>) -> Self {
+        self.disk_guard = guard;
+        self
+    }
+
+    pub fn disk_guard(&self) -> Option<&disk::DiskGuard> {
+        self.disk_guard.as_ref()
     }
 
     /// The pod's uploads (D49), for adapters.

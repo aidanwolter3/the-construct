@@ -14,6 +14,14 @@
 //!
 //! Bytes live in the pod's own database (deleted with the pod). Unclaimed
 //! uploads go after [`UNCLAIMED_TTL_SECS`], released ones at the next sweep.
+//!
+//! Limits (decision `pod-storage-limits`): a session holds at most
+//! [`MAX_UNCLAIMED_PER_SESSION`] unclaimed uploads (429 `too_many_uploads`);
+//! all of a pod's uploads together stay under its quota
+//! ([`crate::AppState::with_upload_quota_bytes`]) and none is stored when the
+//! data volume is nearly full ([`crate::AppState::with_disk_guard`]); both
+//! answer 507, which clients retry like any 5xx (space frees as posts finish
+//! and the sweeper runs).
 
 use axum::{
     Json, Router,
@@ -53,6 +61,12 @@ pub const UNCLAIMED_TTL_SECS: i64 = 24 * 3600;
 pub const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(3600);
 /// Longest idempotency key.
 const MAX_KEY_LEN: usize = 128;
+
+/// Why an upload was not stored.
+enum Refused {
+    TooMany,
+    Quota,
+}
 
 /// An upload's metadata, for an adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,6 +156,17 @@ async fn create_upload(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) 
             json!({ "error": "content_type_mismatch", "detected": kind }),
         );
     }
+    let size = body.len() as u64;
+    if let Some(guard) = pod.disk_guard()
+        && guard.too_low_for(size)
+    {
+        tracing::warn!(dir = %guard.dir.display(), "upload refused: low disk space");
+        return json_error(
+            StatusCode::INSUFFICIENT_STORAGE,
+            json!({ "error": "low_disk_space" }),
+        );
+    }
+    let quota = pod.upload_quota_bytes();
     let sha = hex(&Sha256::digest(&body));
     let hash = session.token_hash.clone();
     let result =
@@ -163,7 +188,16 @@ async fn create_upload(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) 
                     |r| r.get(0),
                 )?;
                 if unclaimed >= MAX_UNCLAIMED_PER_SESSION {
-                    return Ok(Err(()));
+                    return Ok(Err(Refused::TooMany));
+                }
+                if let Some(quota) = quota {
+                    let used: i64 =
+                        c.query_row("SELECT COALESCE(SUM(size), 0) FROM uploads", [], |r| {
+                            r.get(0)
+                        })?;
+                    if (used.max(0) as u64).saturating_add(size) > quota {
+                        return Ok(Err(Refused::Quota));
+                    }
                 }
                 let id = new_id();
                 c.execute(
@@ -179,9 +213,13 @@ async fn create_upload(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) 
     match result {
         Ok(Ok(id)) => Json(json!({ "upload_id": id })).into_response(),
         // Transient for the client (429 is retried), not a rollback.
-        Ok(Err(())) => json_error(
+        Ok(Err(Refused::TooMany)) => json_error(
             StatusCode::TOO_MANY_REQUESTS,
             json!({ "error": "too_many_uploads" }),
+        ),
+        Ok(Err(Refused::Quota)) => json_error(
+            StatusCode::INSUFFICIENT_STORAGE,
+            json!({ "error": "upload_quota_exceeded" }),
         ),
         Err(e) => e.into_response(),
     }

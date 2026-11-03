@@ -223,6 +223,9 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 | `CONSTRUCT_VAPID_SUBJECT` | the repo URL | Contact (`mailto:` or `https:`) that push services may use to reach the operator. |
 | `CONSTRUCT_PUSH` | on | `off`: no Web Push (notifications still reach the inbox and open apps). |
 | `CONSTRUCT_UPLOAD_MAX_BYTES` | `20971520` (20 MB) | Largest file a client may upload to `POST /v1/uploads` (photos for a post, D49); at least 1024. |
+| `CONSTRUCT_POD_UPLOAD_QUOTA_BYTES` | `524288000` (500 MiB) | Most bytes all of an admin pod's uploads may hold together (then 507 `upload_quota_exceeded`, retried by clients). |
+| `CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES` | `26214400` (25 MiB) | The same for a temporary pod. |
+| `CONSTRUCT_MIN_FREE_DISK_BYTES` | `104857600` (100 MiB) | Free space kept on the data volume: below it uploads get 507 `low_disk_space` and new temporary pods 503 `low_disk_space`, so the volume never fills and every pod's other writes keep working. |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
 
 The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PROVIDER`, `CONSTRUCT_LLM_MODEL`,
@@ -273,7 +276,8 @@ paths, e.g. the Pixelfed media proxy).
 - **Temporary pods** (`CONSTRUCT_TEMP_PODS=1`, staging): every app, but Pixelfed only on the default instance (the
   fake on staging; no typed-in servers, so a visitor can't make the server contact hosts of their choosing), no family
   recipes, deleted with everything in them after `CONSTRUCT_TEMP_POD_HOURS`. At most 5 per client address an hour
-  (IPv6 per /64) and `CONSTRUCT_TEMP_POD_MAX` live. Use an admin pod to try a real Pixelfed server. Testing staging
+  (IPv6 per /64; 10 per /48) and `CONSTRUCT_TEMP_POD_MAX` live, with a smaller upload quota
+  (`CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES`). Use an admin pod to try a real Pixelfed server. Testing staging
   from a script:
 
   ```bash

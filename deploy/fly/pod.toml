@@ -21,6 +21,16 @@ primary_region = "dfw"
   # visitors try staging. Temporary pods only reach the fake Pixelfed; real use
   # (and real Pixelfed servers) goes in admin pods (D46).
   CONSTRUCT_TEMP_PODS = "1"
+  # Storage on the 1 GB volume below (decision `pod-storage-limits`; these are
+  # the defaults, spelled out). Each temporary pod's uploads stay under 25 MiB
+  # and an admin pod's under 500 MiB; whatever the total, uploads and new
+  # temporary pods stop while less than 100 MiB is free, so SQLite writes
+  # (sessions, sign-ins) keep working. 50 temporary pods at most.
+  CONSTRUCT_TEMP_POD_MAX = "50"
+  CONSTRUCT_UPLOAD_MAX_BYTES = "20971520"
+  CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES = "26214400"
+  CONSTRUCT_POD_UPLOAD_QUOTA_BYTES = "524288000"
+  CONSTRUCT_MIN_FREE_DISK_BYTES = "104857600"
   CONSTRUCT_LLM_PROVIDER = "auto"
 
 [mounts]
