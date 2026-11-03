@@ -25,6 +25,8 @@ getrandom = "0.3"
 aes-gcm = "0.10"
 # `stream::unfold` for the SSE stream.
 futures-util = { version = "0.3", default-features = false }
+# mcp.rs: data samples run through the pod's own router.
+tower = { version = "0.5", features = ["util"] }
 # Content-addressed layout blobs.
 zstd = "0.13"
 # Outbound HTTP: Web Push deliveries (D52) and adapters' upstreams, through

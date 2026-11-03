@@ -17,6 +17,7 @@ pub mod adapter;
 pub mod custom;
 pub mod disk;
 pub mod layouts;
+pub mod mcp;
 pub mod net;
 pub mod notify;
 pub mod push;
@@ -131,7 +132,17 @@ pub struct AppState {
     public_prefix: std::sync::OnceLock<String>,
     /// Custom apps: caps and the write-rate window.
     pub(crate) custom: custom::CustomState,
+    /// Served by a pod host (D46), which sets [`CREDENTIAL_HEADER`] (and
+    /// removes any a client sent): only then is that header trusted.
+    hosted: std::sync::atomic::AtomicBool,
+    /// Per-process secret of internal requests ([`session::INTERNAL_HEADER`]).
+    internal_secret: String,
 }
+
+/// Request header a pod host sets on a request whose bearer was an MCP
+/// credential (`mcp`, decision `mcp-connector`); the host removes any value
+/// a client sent. Trusted only by a hosted pod ([`AppState::set_hosted`]).
+pub const CREDENTIAL_HEADER: &str = "x-construct-credential";
 
 impl AppState {
     /// State over `store` serving `adapters`, after running their migrations
@@ -188,6 +199,12 @@ impl AppState {
             push: None,
             public_prefix: std::sync::OnceLock::new(),
             custom: custom::CustomState::default(),
+            hosted: std::sync::atomic::AtomicBool::new(false),
+            internal_secret: {
+                let mut buf = [0u8; 32];
+                getrandom::fill(&mut buf).expect("OS random number generator");
+                util::hex(&buf)
+            },
         })
     }
 
@@ -355,6 +372,41 @@ impl AppState {
         });
     }
 
+    /// This pod is served by a pod host, which owns [`CREDENTIAL_HEADER`].
+    pub fn set_hosted(&self) {
+        self.hosted.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The credential kind a pod host vouched for (`mcp`), if hosted.
+    pub fn host_credential(&self, headers: &HeaderMap) -> Option<String> {
+        if !self.hosted.load(std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
+        headers
+            .get(CREDENTIAL_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    }
+
+    /// The `[`session::INTERNAL_HEADER`]` value that makes an internal request
+    /// act as session `token_hash`.
+    pub(crate) fn internal_as(&self, token_hash: &str) -> String {
+        format!("{}:{token_hash}", self.internal_secret)
+    }
+
+    /// The session hash of an internal request ([`Self::internal_as`]).
+    pub(crate) fn internal_caller(&self, headers: &HeaderMap) -> Option<String> {
+        let v = headers.get(session::INTERNAL_HEADER)?.to_str().ok()?;
+        let (secret, hash) = v.split_once(':')?;
+        let ok = secret.len() == self.internal_secret.len()
+            && secret
+                .bytes()
+                .zip(self.internal_secret.bytes())
+                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                == 0;
+        ok.then(|| hash.to_owned())
+    }
+
     /// Limits on custom apps ([`custom::Caps`]).
     pub fn with_custom_app_caps(mut self, caps: custom::Caps) -> Self {
         self.custom = custom::CustomState::new(caps);
@@ -498,6 +550,7 @@ pub fn app(state: Pod) -> Router {
         .merge(layouts::router())
         .merge(notify::router())
         .merge(custom::router())
+        .merge(mcp::router())
         .merge(uploads::router(state.upload_max_bytes));
     for a in state.catalog.adapters() {
         router = router.merge(a.router());

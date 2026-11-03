@@ -34,7 +34,75 @@ const MIGRATIONS: &[&str] = &[
          key   TEXT PRIMARY KEY NOT NULL,
          value TEXT NOT NULL
      );",
+    // 3 (decision `mcp-connector`): a second credential kind, `mcp`: what
+    // Claude holds after the OAuth flow (or `server pods mcp`), good only for
+    // its pod's `/v1/mcp`; `label` says whose it is. SQLite can't change a
+    // CHECK, so the table is rebuilt. `oauth_clients` are the dynamically
+    // registered OAuth clients (RFC 7591) and `oauth_codes` the pending
+    // authorization codes (hashed, single use, minutes long).
+    "CREATE TABLE credentials_v3 (
+         token_hash TEXT PRIMARY KEY NOT NULL,
+         pod_id     TEXT NOT NULL REFERENCES pods(id),
+         kind       TEXT NOT NULL CHECK (kind IN ('pod_token', 'mcp')),
+         created_at INTEGER NOT NULL,
+         label      TEXT
+     );
+     INSERT INTO credentials_v3 (token_hash, pod_id, kind, created_at)
+         SELECT token_hash, pod_id, kind, created_at FROM credentials;
+     DROP TABLE credentials;
+     ALTER TABLE credentials_v3 RENAME TO credentials;
+     CREATE INDEX credentials_pod ON credentials(pod_id);
+     CREATE TABLE oauth_clients (
+         client_id     TEXT PRIMARY KEY NOT NULL,
+         name          TEXT NOT NULL,
+         redirect_uris TEXT NOT NULL,
+         created_at    INTEGER NOT NULL
+     );
+     CREATE TABLE oauth_codes (
+         code_hash    TEXT PRIMARY KEY NOT NULL,
+         client_id    TEXT NOT NULL,
+         pod_id       TEXT NOT NULL,
+         redirect_uri TEXT NOT NULL,
+         challenge    TEXT NOT NULL,
+         expires_at   INTEGER NOT NULL
+     );",
 ];
+
+/// What a credential is for (`credentials.kind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialKind {
+    /// The pod's own token (D46): every route of the pod.
+    PodToken,
+    /// Claude's (decision `mcp-connector`): only the pod's `/v1/mcp`.
+    Mcp,
+}
+
+impl CredentialKind {
+    fn parse(s: &str) -> Self {
+        if s == "mcp" {
+            CredentialKind::Mcp
+        } else {
+            CredentialKind::PodToken
+        }
+    }
+}
+
+/// A registered OAuth client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthClient {
+    pub client_id: String,
+    pub name: String,
+    pub redirect_uris: Vec<String>,
+}
+
+/// A pending authorization code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthCode {
+    pub client_id: String,
+    pub pod_id: String,
+    pub redirect_uri: String,
+    pub challenge: String,
+}
 
 /// Who a pod is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,16 +210,143 @@ impl HostStore {
         tx.commit()
     }
 
-    /// The live pod a token hash opens (not expired).
+    /// The live pod a pod token's hash opens (not expired). An MCP
+    /// credential opens nothing here: see [`Self::credential`].
     pub fn pod_for_token(&self, token_hash: &str) -> rusqlite::Result<Option<String>> {
+        Ok(self
+            .credential(token_hash)?
+            .filter(|(_, k)| *k == CredentialKind::PodToken)
+            .map(|(id, _)| id))
+    }
+
+    /// The live pod a credential's hash belongs to, and its kind.
+    pub fn credential(
+        &self,
+        token_hash: &str,
+    ) -> rusqlite::Result<Option<(String, CredentialKind)>> {
         self.conn()
             .query_row(
-                "SELECT p.id FROM credentials c JOIN pods p ON p.id = c.pod_id
+                "SELECT p.id, c.kind FROM credentials c JOIN pods p ON p.id = c.pod_id
                  WHERE c.token_hash = ?1 AND (p.expires_at IS NULL OR p.expires_at > ?2)",
                 params![token_hash, now_secs()],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, CredentialKind::parse(&r.get::<_, String>(1)?))),
             )
             .optional()
+    }
+
+    /// Add an MCP credential to a pod.
+    pub fn insert_mcp_credential(
+        &self,
+        pod_id: &str,
+        token_hash: &str,
+        label: &str,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO credentials (token_hash, pod_id, kind, created_at, label)
+             VALUES (?1, ?2, 'mcp', ?3, ?4)",
+            params![token_hash, pod_id, now_secs(), label],
+        )?;
+        Ok(())
+    }
+
+    /// Revoke every MCP credential of a pod; how many went.
+    pub fn revoke_mcp(&self, pod_id: &str) -> rusqlite::Result<usize> {
+        self.conn().execute(
+            "DELETE FROM credentials WHERE pod_id = ?1 AND kind = 'mcp'",
+            [pod_id],
+        )
+    }
+
+    /// `(label, created_at)` of a pod's MCP credentials.
+    pub fn mcp_credentials(&self, pod_id: &str) -> rusqlite::Result<Vec<(String, i64)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(label, ''), created_at FROM credentials
+             WHERE pod_id = ?1 AND kind = 'mcp' ORDER BY created_at",
+        )?;
+        stmt.query_map([pod_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect()
+    }
+
+    /// Register an OAuth client.
+    pub fn insert_client(&self, c: &OAuthClient) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO oauth_clients (client_id, name, redirect_uris, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                c.client_id,
+                c.name,
+                serde_json::to_string(&c.redirect_uris).unwrap_or_default(),
+                now_secs()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn client(&self, client_id: &str) -> rusqlite::Result<Option<OAuthClient>> {
+        self.conn()
+            .query_row(
+                "SELECT client_id, name, redirect_uris FROM oauth_clients WHERE client_id = ?1",
+                [client_id],
+                |r| {
+                    let uris: String = r.get(2)?;
+                    Ok(OAuthClient {
+                        client_id: r.get(0)?,
+                        name: r.get(1)?,
+                        redirect_uris: serde_json::from_str(&uris).unwrap_or_default(),
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// Store an authorization code (by hash) valid for `ttl_secs`.
+    pub fn insert_code(
+        &self,
+        code_hash: &str,
+        c: &OAuthCode,
+        ttl_secs: i64,
+    ) -> rusqlite::Result<()> {
+        let now = now_secs();
+        let conn = self.conn();
+        conn.execute("DELETE FROM oauth_codes WHERE expires_at <= ?1", [now])?;
+        conn.execute(
+            "INSERT INTO oauth_codes (code_hash, client_id, pod_id, redirect_uri, challenge, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                code_hash,
+                c.client_id,
+                c.pod_id,
+                c.redirect_uri,
+                c.challenge,
+                now + ttl_secs
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Take (and delete) a live authorization code: single use.
+    pub fn take_code(&self, code_hash: &str) -> rusqlite::Result<Option<OAuthCode>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let found = tx
+            .query_row(
+                "SELECT client_id, pod_id, redirect_uri, challenge FROM oauth_codes
+                 WHERE code_hash = ?1 AND expires_at > ?2",
+                params![code_hash, now_secs()],
+                |r| {
+                    Ok(OAuthCode {
+                        client_id: r.get(0)?,
+                        pod_id: r.get(1)?,
+                        redirect_uri: r.get(2)?,
+                        challenge: r.get(3)?,
+                    })
+                },
+            )
+            .optional()?;
+        tx.execute("DELETE FROM oauth_codes WHERE code_hash = ?1", [code_hash])?;
+        tx.commit()?;
+        Ok(found)
     }
 
     fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<PodRow> {
@@ -208,7 +403,12 @@ impl HostStore {
     pub fn replace_token(&self, pod_id: &str, token_hash: &str) -> rusqlite::Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM credentials WHERE pod_id = ?1", [pod_id])?;
+        // Only the pod token: Claude's MCP credentials stay (revoke them
+        // with `server pods revoke-mcp`).
+        tx.execute(
+            "DELETE FROM credentials WHERE pod_id = ?1 AND kind = 'pod_token'",
+            [pod_id],
+        )?;
         tx.execute(
             "INSERT INTO credentials (token_hash, pod_id, kind, created_at)
              VALUES (?1, ?2, 'pod_token', ?3)",
@@ -222,6 +422,7 @@ impl HostStore {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM credentials WHERE pod_id = ?1", [pod_id])?;
+        tx.execute("DELETE FROM oauth_codes WHERE pod_id = ?1", [pod_id])?;
         tx.execute(
             "UPDATE pods SET expires_at = ?2 WHERE id = ?1",
             params![pod_id, now_secs()],
@@ -289,6 +490,7 @@ impl HostStore {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM credentials WHERE pod_id = ?1", [pod_id])?;
+        tx.execute("DELETE FROM oauth_codes WHERE pod_id = ?1", [pod_id])?;
         tx.execute("DELETE FROM pods WHERE id = ?1", [pod_id])?;
         tx.commit()
     }
@@ -337,5 +539,42 @@ mod tests {
         assert!(s.live_pod("a").unwrap().is_none());
         s.delete_pod("a").unwrap();
         assert!(s.pod_by_name("n-a").unwrap().is_none());
+    }
+
+    #[test]
+    fn migration_3_keeps_pod_tokens_and_adds_mcp_credentials() {
+        // A host.db as staging has it: migrations 1 and 2, one pod token.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.execute_batch(MIGRATIONS[1]).unwrap();
+        conn.pragma_update(None, "user_version", 2).unwrap();
+        conn.execute(
+            "INSERT INTO pods (id, name, kind, created_at) VALUES ('p1', 'mine', 'admin', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO credentials (token_hash, pod_id, kind, created_at) VALUES ('h1', 'p1', 'pod_token', 1)",
+            [],
+        )
+        .unwrap();
+        let store = HostStore::init(conn).unwrap();
+        assert_eq!(store.pod_for_token("h1").unwrap().as_deref(), Some("p1"));
+        store.insert_mcp_credential("p1", "m1", "Claude").unwrap();
+        assert_eq!(
+            store.credential("m1").unwrap(),
+            Some(("p1".to_owned(), CredentialKind::Mcp))
+        );
+        assert_eq!(
+            store.pod_for_token("m1").unwrap(),
+            None,
+            "an MCP credential is no pod token"
+        );
+        // Rotation replaces only the pod token.
+        store.replace_token("p1", "h2").unwrap();
+        assert_eq!(store.pod_for_token("h1").unwrap(), None);
+        assert!(store.credential("m1").unwrap().is_some());
+        assert_eq!(store.revoke_mcp("p1").unwrap(), 1);
+        assert!(store.credential("m1").unwrap().is_none());
     }
 }

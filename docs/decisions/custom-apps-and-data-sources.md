@@ -95,9 +95,11 @@ same token could do. A misleading button label is an accepted risk.
 - `SCHEMA_VERSION` is unchanged (no new node or intent), but the app needs a new build for the menu changes; older
   builds keep working (they see custom apps as ordinary apps and can't delete them).
 
+Claude edits custom apps through `POST /v1/mcp` with a host-issued, pod-scoped credential: decision
+[mcp-connector](mcp-connector.md) (P2).
+
 Not done yet (later commits of issue #45):
 
-- **P2:** `POST /v1/mcp` for Claude with a host-issued, scoped credential (decision `mcp-connector`).
 - **P3:** layout `parts` and `core://Ref`, `ref_update` versions, copies with an update notice (decision
   `layout-parts`).
 - `action.auth.login` paths in built-in layout files are not checked against a manifest; none uses one today (the

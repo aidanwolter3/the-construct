@@ -1159,6 +1159,18 @@ impl Store {
         tx.commit()
     }
 
+    /// The pod owner's session: the newest pinned one (a pod token's,
+    /// D46), if any.
+    pub fn owner_session(&self) -> rusqlite::Result<Option<String>> {
+        self.conn()
+            .query_row(
+                "SELECT token_hash FROM sessions WHERE pinned = 1 ORDER BY created_at DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+    }
+
     /// Whether the session is pinned (a pod token's).
     pub fn session_pinned(&self, token_hash: &str) -> rusqlite::Result<bool> {
         Ok(self

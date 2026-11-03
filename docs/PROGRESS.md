@@ -603,3 +603,8 @@ new layout files; diffs between versions.
   and popup screenshots. Tests: client-core `apps.rs`, shared `AppCatalogTest`/`ConstructControllerTest`,
   simulator `MenuTest`. Needs a device check: the row menu, the dialog and the notice on Android and the macOS
   window.
+- P2, Claude through MCP (decision `mcp-connector`): `POST /v1/mcp` with 12 tools (`pod_core::mcp`), the host's
+  OAuth 2.1 server (`pod_host::oauth`: discovery, DCR, a pod-code page, PKCE), `mcp` credentials (host.db migration
+  3) that reach only `/v1/mcp`, `server pods mcp` / `revoke-mcp`. Tests: `server/tests/mcp.rs` (the OAuth flow, the
+  scope, every tool, rotation and revocation), host-db migration, JSON Patch and vocabulary unit tests. Needs one
+  manual run with Claude (a custom connector against staging) to confirm the connector flow.

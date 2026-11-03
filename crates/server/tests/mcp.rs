@@ -1,0 +1,696 @@
+//! Claude through MCP (decision `mcp-connector`), through the real host: OAuth
+//! discovery, registration, the pod-code page, the code exchange with PKCE, the
+//! scoped credential (only `/v1/mcp`), every tool against a pod with the
+//! recipes, and that rotation keeps and revocation ends the connection.
+
+use std::sync::Arc;
+
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use reqwest::StatusCode;
+use serde_json::{Value, json};
+use server::PixelfedConfig;
+use server::host::{Host, HostConfig, PodKind};
+use sha2::{Digest, Sha256};
+use tokio::task::JoinHandle;
+
+struct Env {
+    _dir: tempfile::TempDir,
+    host: Arc<Host>,
+    url: String,
+    handle: JoinHandle<()>,
+}
+
+impl Drop for Env {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+async fn env() -> Env {
+    let dir = tempfile::tempdir().unwrap();
+    let factory = server::pod_factory(
+        PixelfedConfig::new("http://127.0.0.1:9", None),
+        false,
+        86_400,
+        false,
+    );
+    let config = HostConfig {
+        new_pod_settings: server::new_pod_settings(false),
+        ..HostConfig::default()
+    };
+    let path = dir.path().to_owned();
+    let host = tokio::task::spawn_blocking(move || Host::open(&path, factory, config))
+        .await
+        .unwrap()
+        .unwrap();
+    let host = Arc::new(host);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let router = server::host::app(host.clone());
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    Env {
+        _dir: dir,
+        host,
+        url,
+        handle,
+    }
+}
+
+fn client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+}
+
+impl Env {
+    /// An admin pod with the family recipes; its pod token.
+    async fn pod(&self, name: &str) -> String {
+        let host = self.host.clone();
+        let name = name.to_owned();
+        tokio::task::spawn_blocking(move || {
+            host.create_pod(&name, PodKind::Admin, None, &server::new_pod_settings(true))
+                .unwrap()
+                .token
+        })
+        .await
+        .unwrap()
+    }
+
+    /// One JSON-RPC call to `/v1/mcp`: `(status, body)`.
+    async fn rpc(&self, bearer: Option<&str>, method: &str, params: Value) -> (StatusCode, Value) {
+        let mut req = client()
+            .post(format!("{}/v1/mcp", self.url))
+            .json(&json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}));
+        if let Some(b) = bearer {
+            req = req.bearer_auth(b);
+        }
+        let resp = req.send().await.unwrap();
+        let status = resp.status();
+        (status, resp.json().await.unwrap_or(Value::Null))
+    }
+
+    /// `tools/call`: `(is_error, structured result)`.
+    async fn tool(&self, bearer: &str, name: &str, args: Value) -> (bool, Value) {
+        let (status, body) = self
+            .rpc(
+                Some(bearer),
+                "tools/call",
+                json!({"name": name, "arguments": args}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let r = &body["result"];
+        let text = r["content"][0]["text"].as_str().unwrap_or("null");
+        (
+            r["isError"] == true,
+            serde_json::from_str(text).unwrap_or(Value::Null),
+        )
+    }
+
+    async fn get(&self, path: &str, bearer: &str) -> (StatusCode, Value) {
+        let resp = client()
+            .get(format!("{}{path}", self.url))
+            .bearer_auth(bearer)
+            .header(
+                protocol::SCHEMA_HEADER,
+                protocol::SCHEMA_VERSION.to_string(),
+            )
+            .send()
+            .await
+            .unwrap();
+        let status = resp.status();
+        (status, resp.json().await.unwrap_or(Value::Null))
+    }
+
+    /// The whole OAuth flow for a client redirecting to `redirect`, typing
+    /// `pod_code`: the access token.
+    async fn connect(&self, pod_code: &str) -> String {
+        let redirect = "http://localhost:9999/cb";
+        let reg: Value = client()
+            .post(format!("{}/oauth/register", self.url))
+            .json(&json!({"client_name": "Claude", "redirect_uris": [redirect]}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let client_id = reg["client_id"].as_str().unwrap().to_owned();
+        let verifier = "a".repeat(64);
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        let resp = client()
+            .post(format!("{}/oauth/authorize", self.url))
+            .form(&[
+                ("client_id", client_id.as_str()),
+                ("redirect_uri", redirect),
+                ("response_type", "code"),
+                ("code_challenge", challenge.as_str()),
+                ("code_challenge_method", "S256"),
+                ("state", "st"),
+                ("pod_code", pod_code),
+                ("decision", "allow"),
+            ])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FOUND);
+        let location = resp.headers()["location"].to_str().unwrap().to_owned();
+        let code = location
+            .split(['?', '&'])
+            .find_map(|kv| kv.strip_prefix("code="))
+            .unwrap()
+            .to_owned();
+        let tok: Value = client()
+            .post(format!("{}/oauth/token", self.url))
+            .form(&[
+                ("grant_type", "authorization_code"),
+                ("code", code.as_str()),
+                ("redirect_uri", redirect),
+                ("client_id", client_id.as_str()),
+                ("code_verifier", verifier.as_str()),
+            ])
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        tok["access_token"].as_str().unwrap().to_owned()
+    }
+}
+
+#[tokio::test]
+async fn claude_connects_with_oauth_and_the_pod_code() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+
+    // Discovery: the 401 points at the resource metadata, which names this
+    // server as the authorization server.
+    let resp = client()
+        .post(format!("{}/v1/mcp", env.url))
+        .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let www = resp.headers()["www-authenticate"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        www,
+        format!(
+            "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource\", scope=\"mcp\"",
+            env.url
+        )
+    );
+    let prm: Value = client()
+        .get(format!("{}/.well-known/oauth-protected-resource", env.url))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(prm["resource"], format!("{}/v1/mcp", env.url));
+    assert_eq!(prm["authorization_servers"], json!([env.url]));
+    let asm: Value = client()
+        .get(format!(
+            "{}/.well-known/oauth-authorization-server",
+            env.url
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(asm["issuer"], env.url.as_str());
+    assert_eq!(asm["code_challenge_methods_supported"], json!(["S256"]));
+    assert_eq!(
+        asm["registration_endpoint"],
+        format!("{}/oauth/register", env.url)
+    );
+
+    // Registration refuses redirect URIs a page could abuse.
+    for bad in ["http://evil.example/cb", "https://x/cb#f"] {
+        let resp = client()
+            .post(format!("{}/oauth/register", env.url))
+            .json(&json!({"client_name": "x", "redirect_uris": [bad]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let reg: Value = client()
+        .post(format!("{}/oauth/register", env.url))
+        .json(&json!({"client_name": "Claude <script>", "redirect_uris": ["https://claude.example/cb"]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let client_id = reg["client_id"].as_str().unwrap().to_owned();
+    let verifier = "v".repeat(60);
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    let query = [
+        ("client_id", client_id.as_str()),
+        ("redirect_uri", "https://claude.example/cb"),
+        ("response_type", "code"),
+        ("code_challenge", challenge.as_str()),
+        ("code_challenge_method", "S256"),
+        ("state", "xyz"),
+        ("resource", &format!("{}/v1/mcp", env.url)),
+    ];
+    // The page: the client's name (escaped), a code field, and a CSP that
+    // lets the form go back to the client.
+    let resp = client()
+        .get(format!("{}/oauth/authorize", env.url))
+        .query(&query)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let csp = resp.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        csp.contains("form-action 'self' https://claude.example"),
+        "{csp}"
+    );
+    let html = resp.text().await.unwrap();
+    assert!(
+        html.contains("Claude &lt;script&gt;") && html.contains("name=\"pod_code\""),
+        "{html}"
+    );
+    // An unregistered redirect gets no redirect.
+    let resp = client()
+        .get(format!("{}/oauth/authorize", env.url))
+        .query(&[
+            ("client_id", client_id.as_str()),
+            ("redirect_uri", "https://evil.example/cb"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.text().await.unwrap().contains("isn&#39;t registered"));
+
+    let submit = |code: &'static str| {
+        let mut form: Vec<(&str, String)> =
+            query.iter().map(|(k, v)| (*k, v.to_string())).collect();
+        form.push(("pod_code", code.to_owned()));
+        form.push(("decision", "allow".to_owned()));
+        let url = env.url.clone();
+        async move {
+            client()
+                .post(format!("{url}/oauth/authorize"))
+                .form(&form)
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+    let resp = submit("cpod_wrong").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.text().await.unwrap().contains("didn&#39;t work"));
+    let code_static: &'static str = Box::leak(pod_code.clone().into_boxed_str());
+    let resp = submit(code_static).await;
+    assert_eq!(resp.status(), StatusCode::FOUND);
+    let location = resp.headers()["location"].to_str().unwrap().to_owned();
+    assert!(
+        location.starts_with("https://claude.example/cb?code="),
+        "{location}"
+    );
+    assert!(location.contains("&state=xyz&iss="), "{location}");
+    let code = location
+        .split(['?', '&'])
+        .find_map(|kv| kv.strip_prefix("code="))
+        .unwrap()
+        .to_owned();
+    let exchange = |verifier: String, code: String| {
+        let url = env.url.clone();
+        let client_id = client_id.clone();
+        async move {
+            let resp = client()
+                .post(format!("{url}/oauth/token"))
+                .form(&[
+                    ("grant_type", "authorization_code".to_owned()),
+                    ("code", code),
+                    ("redirect_uri", "https://claude.example/cb".to_owned()),
+                    ("client_id", client_id),
+                    ("code_verifier", verifier),
+                ])
+                .send()
+                .await
+                .unwrap();
+            (
+                resp.status(),
+                resp.json::<Value>().await.unwrap_or(Value::Null),
+            )
+        }
+    };
+    let (status, tok) = exchange(verifier.clone(), code.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{tok}");
+    let access = tok["access_token"].as_str().unwrap().to_owned();
+    assert!(access.starts_with("cmcp_"));
+    assert_eq!(tok["token_type"], "Bearer");
+    // A code works once.
+    let (status, again) = exchange(verifier.clone(), code).await;
+    assert_eq!(
+        (status, again["error"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("invalid_grant"))
+    );
+    // A wrong verifier fails (and burns the code).
+    let resp = submit(code_static).await;
+    let location = resp.headers()["location"].to_str().unwrap().to_owned();
+    let code2 = location
+        .split(['?', '&'])
+        .find_map(|kv| kv.strip_prefix("code="))
+        .unwrap()
+        .to_owned();
+    let (status, _) = exchange("w".repeat(60), code2).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // The credential speaks MCP, and nothing else.
+    let (status, init) = env
+        .rpc(
+            Some(&access),
+            "initialize",
+            json!({"protocolVersion": "2025-06-18", "capabilities": {}}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{init}");
+    assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
+    assert!(init["result"]["capabilities"]["tools"].is_object());
+    let (status, list) = env.rpc(Some(&access), "tools/list", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    let names: Vec<&str> = list["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    for want in [
+        "list_apps",
+        "list_data_sources",
+        "describe_vocabulary",
+        "get_layout",
+        "sample_data",
+        "validate_layout",
+        "create_app",
+        "update_layout",
+        "restore_version",
+        "rename_app",
+        "delete_app",
+        "set_hidden",
+    ] {
+        assert!(names.contains(&want), "{want}: {names:?}");
+    }
+    for path in ["/v1/workspaces/recipes", "/v1/apps", "/v1/auth/sign-ins"] {
+        let (status, body) = env.get(path, &access).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(body["error"], "mcp_credential_scope");
+    }
+    // A notification is accepted without an answer; GET has no stream.
+    let resp = client()
+        .post(format!("{}/v1/mcp", env.url))
+        .bearer_auth(&access)
+        .json(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let resp = client()
+        .get(format!("{}/v1/mcp", env.url))
+        .bearer_auth(&access)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+    // A header claiming an MCP credential means nothing from outside.
+    let resp = client()
+        .post(format!("{}/v1/mcp", env.url))
+        .header("x-construct-credential", "mcp")
+        .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Rotating the pod code keeps Claude connected; revoking disconnects it.
+    let host = env.host.clone();
+    let new_code = tokio::task::spawn_blocking(move || host.rotate("mine").unwrap())
+        .await
+        .unwrap();
+    let (status, _) = env.rpc(Some(&access), "ping", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = env.get("/v1/apps", &pod_code).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "the old pod code is gone");
+    // The pod code itself also reaches the MCP endpoint.
+    let (status, _) = env.rpc(Some(&new_code), "ping", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    let host = env.host.clone();
+    let listed = tokio::task::spawn_blocking(move || host.mcp_credentials("mine").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].0, "Claude <script>");
+    let host = env.host.clone();
+    let revoked = tokio::task::spawn_blocking(move || host.revoke_mcp("mine").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(revoked, 1);
+    let (status, _) = env.rpc(Some(&access), "ping", json!({})).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// The Kitchen-style layout over the recipes.
+fn recipes_layout(title: &str) -> Value {
+    json!({"type": "core://Workspace", "id": "x", "title": title,
+        "slots": [{"slot_id": "r", "provider_uri": "core://custom",
+          "content": {"type": "core://List", "query_key": "recipes:all",
+            "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}}]})
+}
+
+#[tokio::test]
+async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+
+    let (err, sources) = env.tool(&access, "list_data_sources", json!({})).await;
+    assert!(!err, "{sources}");
+    let recipes = sources["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "recipes")
+        .unwrap()
+        .clone();
+    assert_eq!(recipes["feeds"][0]["name"], "all");
+    assert_eq!(recipes["signed_in"], true);
+    assert!(recipes["entities"][0]["fields"].as_array().unwrap().len() > 5);
+    let pixelfed = sources["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "pixelfed")
+        .unwrap();
+    assert_eq!(pixelfed["signed_in"], false);
+    assert!(
+        !sources["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == "pixelfed_demo"),
+        "dev sources are not offered"
+    );
+
+    let (err, vocab) = env.tool(&access, "describe_vocabulary", json!({})).await;
+    assert!(!err);
+    assert_eq!(
+        vocab["nodes"].as_array().unwrap().len(),
+        protocol::NODE_TYPES.len()
+    );
+
+    let (err, layout) = env
+        .tool(&access, "get_layout", json!({"app": "recipes"}))
+        .await;
+    assert!(!err, "{layout}");
+    assert_eq!(layout["kind"], "builtin");
+    assert_eq!(layout["layout"]["type"], "core://Workspace");
+
+    // Samples: the feed, then a recipe screen's data path with a real id.
+    let (err, sample) = env
+        .tool(
+            &access,
+            "sample_data",
+            json!({"source": "recipes", "feed": "all", "limit": 3}),
+        )
+        .await;
+    assert!(!err, "{sample}");
+    let listed = sample["queries"]["recipes:all"].as_array().unwrap();
+    assert_eq!(listed.len(), 3);
+    let first = listed[0]
+        .as_str()
+        .unwrap()
+        .strip_prefix("recipes://recipes/")
+        .unwrap()
+        .to_owned();
+    let (err, screen) = env
+        .tool(
+            &access,
+            "sample_data",
+            json!({"source": "recipes", "path": format!("/v1/recipes/screens/recipe?id={first}")}),
+        )
+        .await;
+    assert!(!err, "{screen}");
+    assert!(
+        screen["queries"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .any(|k| k.ends_with(":steps")),
+        "{screen}"
+    );
+    let (err, bad) = env
+        .tool(
+            &access,
+            "sample_data",
+            json!({"source": "recipes", "path": "/v1/auth/sign-ins"}),
+        )
+        .await;
+    assert!(err);
+    assert_eq!(bad["error"], "unknown_path");
+    let (err, signed_out) = env
+        .tool(&access, "sample_data", json!({"source": "pixelfed"}))
+        .await;
+    assert!(err);
+    assert_eq!(signed_out["error"], "signed_out");
+
+    // Validation errors are something Claude can act on.
+    let mut wrong = recipes_layout("K");
+    wrong["slots"][0]["content"]["query_key"] = json!("timeline:home");
+    let (err, v) = env
+        .tool(
+            &access,
+            "validate_layout",
+            json!({"feeds": [["recipes", "all"]], "layout": wrong}),
+        )
+        .await;
+    assert!(err);
+    assert_eq!(v["at"], "/slots/0/content/query_key");
+    assert!(
+        v["allowed"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("recipes:all"))
+    );
+
+    // Create, patch, restore, rename, hide, delete.
+    let (err, created) = env
+        .tool(
+            &access,
+            "create_app",
+            json!({"title": "Dinner", "icon": "recipe", "feeds": [["recipes", "all"]],
+            "layout": recipes_layout("Dinner"), "note": "Just the recipes, please"}),
+        )
+        .await;
+    assert!(!err, "{created}");
+    let id = created["id"].as_str().unwrap().to_owned();
+    let (err, patched) = env
+        .tool(
+            &access,
+            "update_layout",
+            json!({"app": id, "base_version": 1, "note": "Rename",
+            "json_patch": [{"op": "replace", "path": "/title", "value": "Dinner tonight"}]}),
+        )
+        .await;
+    assert!(!err, "{patched}");
+    assert_eq!(patched["version"], 2);
+    let (err, stale) = env
+        .tool(
+            &access,
+            "update_layout",
+            json!({"app": id, "base_version": 1, "layout": recipes_layout("x")}),
+        )
+        .await;
+    assert!(err);
+    assert_eq!(stale["error"], "stale_base");
+    let (err, bad_patch) = env
+        .tool(
+            &access,
+            "update_layout",
+            json!({"app": id, "json_patch": [{"op": "remove", "path": "/nope"}]}),
+        )
+        .await;
+    assert!(err);
+    assert_eq!(bad_patch["error"], "invalid_patch");
+    let (err, restored) = env
+        .tool(&access, "restore_version", json!({"app": id, "version": 1}))
+        .await;
+    assert!(!err, "{restored}");
+    assert_eq!(restored["version"], 3);
+    let (err, _) = env
+        .tool(&access, "rename_app", json!({"app": id, "title": "Supper"}))
+        .await;
+    assert!(!err);
+    let (err, _) = env
+        .tool(
+            &access,
+            "set_hidden",
+            json!({"app": "recipes", "hidden": true}),
+        )
+        .await;
+    assert!(!err);
+    let (err, apps) = env.tool(&access, "list_apps", json!({})).await;
+    assert!(!err);
+    let rows = apps["apps"].as_array().unwrap();
+    assert!(
+        rows.iter()
+            .any(|a| a["id"] == "recipes" && a["hidden"] == true)
+    );
+    assert!(
+        rows.iter()
+            .any(|a| a["id"] == id.as_str() && a["kind"] == "custom" && a["title"] == "Supper")
+    );
+    // The history says Claude wrote it; the pod's clients see the app.
+    let host_token = &pod_code;
+    let (status, history) = env
+        .get(&format!("/v1/apps/{id}/versions"), host_token)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let versions = history["versions"].as_array().unwrap();
+    assert!(
+        versions.iter().all(|v| v["author"] == "claude"),
+        "{history}"
+    );
+    assert_eq!(versions[2]["note"], "Just the recipes, please");
+    let (status, ws) = env.get(&format!("/v1/workspaces/{id}"), host_token).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ws["workspace"]["title"], "Dinner");
+    // Built-ins can't be edited or deleted.
+    let (err, _) = env
+        .tool(
+            &access,
+            "update_layout",
+            json!({"app": "recipes", "layout": recipes_layout("x")}),
+        )
+        .await;
+    assert!(err);
+    let (err, _) = env.tool(&access, "delete_app", json!({"app": id})).await;
+    assert!(!err);
+    let (status, _) = env.get(&format!("/v1/workspaces/{id}"), host_token).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // An unknown tool is an error result, not a protocol error.
+    let (err, unknown) = env.tool(&access, "drop_tables", json!({})).await;
+    assert!(err);
+    assert_eq!(unknown["error"], "unknown_tool");
+}

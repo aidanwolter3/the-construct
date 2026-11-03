@@ -28,6 +28,10 @@ use crate::{ApiError, AppState, AuthPolicy, Pod, blocking};
 /// clears its session and refetches without the bearer.
 pub const SESSION_HEADER: &str = "x-construct-session";
 
+/// Request header of an internal request made on a session's behalf
+/// ([`AppState::internal_caller`]).
+pub const INTERNAL_HEADER: &str = "x-construct-internal-as";
+
 /// Default pod session lifetime (`CONSTRUCT_SESSION_TTL_DAYS`).
 pub const DEFAULT_SESSION_TTL_DAYS: i64 = 90;
 
@@ -152,10 +156,19 @@ impl AppState {
     /// The caller of a request: no bearer, a stale one, or a valid session
     /// with its sign-ins.
     pub async fn caller(self: &Pod, headers: &HeaderMap) -> Result<Caller, ApiError> {
+        // An internal request on the owner's behalf (the MCP endpoint's data
+        // samples): `<per-process secret>:<session hash>`, never from outside.
+        if let Some(hash) = self.internal_caller(headers) {
+            return self.caller_for_hash(hash).await;
+        }
         let Some(token) = bearer(headers) else {
             return Ok(Caller::Anonymous);
         };
-        let hash = session_hash(token);
+        self.caller_for_hash(session_hash(token)).await
+    }
+
+    /// The caller whose session hash is `hash`.
+    pub(crate) async fn caller_for_hash(self: &Pod, hash: String) -> Result<Caller, ApiError> {
         let ttl = self.session_ttl_secs();
         blocking(self, move |s| {
             if !s.session_valid(&hash, ttl)? {

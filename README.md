@@ -234,6 +234,7 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 | `CONSTRUCT_POD_UPLOAD_QUOTA_BYTES` | `524288000` (500 MiB) | Most bytes all of an admin pod's uploads may hold together (then 507 `upload_quota_exceeded`, retried by clients). |
 | `CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES` | `26214400` (25 MiB) | The same for a temporary pod. |
 | `CONSTRUCT_MIN_FREE_DISK_BYTES` | `104857600` (100 MiB) | Free space kept on the data volume: below it uploads get 507 `low_disk_space` and new temporary pods 503 `low_disk_space`, so the volume never fills and every pod's other writes keep working. |
+| `CONSTRUCT_PUBLIC_URL` | from each request's `Host` | The base URL clients reach the server at, for the OAuth metadata Claude reads (decision `mcp-connector`), e.g. `https://the-construct-pod.fly.dev`. Unset: the request's `Host`, `https` behind Fly or with `X-Forwarded-Proto: https`. |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
 
 The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PROVIDER`, `CONSTRUCT_LLM_MODEL`,
@@ -277,6 +278,8 @@ paths, e.g. the Pixelfed media proxy).
   server pods rotate <name>                      # new code; the old one stops working, app sign-ins end
   server pods delete <name>                      # stops now; files deleted within 5 minutes
   server pods notify-test <name>                 # a test notification: inbox + Web Push to the pod's devices
+  server pods mcp <name> [label]                 # a credential for Claude Code (reaches only /v1/mcp); printed once
+  server pods revoke-mcp <name>                  # disconnect Claude (every MCP credential of the pod)
   server pods list
   ```
 
@@ -327,6 +330,23 @@ curl -fsS -H "Authorization: Bearer $token" -H 'content-type: application/json' 
   failing source shows no data, and the layout can say so (`${core://sources/pixelfed#signed_in}`). Sign-ins start
   from Settings; custom layouts can't hold sign-in buttons.
 - Caps per pod: 50 apps, 500 versions per app (the oldest are pruned), 256 KiB per layout, 60 writes a minute.
+
+### Claude (MCP)
+
+Each pod has an MCP endpoint, `POST /v1/mcp` (decision `mcp-connector`), so Claude can build and edit your custom
+apps. Its tools: `list_apps`, `list_data_sources`, `describe_vocabulary`, `get_layout`, `sample_data`,
+`validate_layout`, `create_app`, `update_layout` (a layout or a JSON Patch, with `base_version`), `restore_version`,
+`rename_app`, `delete_app`, `set_hidden`. Writes go through the same validation as the API above and show in the
+version history as written by Claude.
+
+- **Claude (web, desktop, mobile):** add a custom connector with the URL `https://<server>/v1/mcp`. Claude finds the
+  server's OAuth endpoints, registers itself and opens a page where you type your pod code. It then holds a
+  credential that reaches only this pod's `/v1/mcp`: no app routes, no sign-ins, no pod settings.
+- **Claude Code:** `server pods mcp <name>` prints a credential, then
+  `claude mcp add --transport http construct https://<server>/v1/mcp --header "Authorization: Bearer cmcp_…"`
+  (OAuth works too).
+- **Disconnect:** `server pods revoke-mcp <name>`. Rotating the pod code (`server pods rotate`) keeps Claude
+  connected.
 
 ## Notifications
 
