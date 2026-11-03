@@ -225,7 +225,15 @@ pub fn parse_import(json: &str) -> serde_json::Result<ImportFile> {
     serde_json::from_str(json)
 }
 
+/// The pod setting that turns the family import off (`"0"`, D46): a pod
+/// host sets it for every pod except those created to hold the collection.
+/// Unset (a pod from before D46, a single-pod server, tests): imported.
+pub const IMPORT_FAMILY_SETTING: &str = "recipes.import_family";
+
 fn import_0001(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    if pod_core::store::pod_setting_on(tx, IMPORT_FAMILY_SETTING)?.as_deref() == Some("0") {
+        return Ok(());
+    }
     let file = parse_import(IMPORT_0001)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
     import(tx, &file)

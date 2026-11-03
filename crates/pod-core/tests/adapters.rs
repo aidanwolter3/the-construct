@@ -229,12 +229,17 @@ async fn an_app_that_requires_a_sign_in_is_served_only_with_it() {
     assert_eq!(body["workspace"]["id"], "gated");
     assert!(body["entities"].as_object().is_none_or(|e| e.is_empty()));
     assert!(!headers.contains_key("x-construct-layout-version"));
-    // A stale bearer, or a session without the sign-in: 401 + the screen.
+    // A stale bearer: 401 + the screen, so the client drops it.
+    let (status, body, headers) = get_json(&state, "/v1/workspaces/gated", Some("stale")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(headers["x-construct-session"], "invalid");
+    assert_eq!(body["workspace"]["id"], "gated");
+    // A valid session without the sign-in keeps its session (D46): 200 + the screen.
+    let (status, body, headers) = get_json(&state, "/v1/workspaces/gated", Some("bare")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!headers.contains_key("x-construct-session"));
+    assert_eq!(body["workspace"]["id"], "gated");
     for bearer in ["stale", "bare"] {
-        let (status, body, headers) = get_json(&state, "/v1/workspaces/gated", Some(bearer)).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED, "{bearer}");
-        assert_eq!(headers["x-construct-session"], "invalid");
-        assert_eq!(body["workspace"]["id"], "gated");
         let (status, _, _) = get_json(&state, "/v1/workspaces/gated/events", Some(bearer)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{bearer} events");
     }

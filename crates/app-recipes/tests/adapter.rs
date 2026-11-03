@@ -41,7 +41,8 @@ fn layout_files_parse_and_validate() {
     let files = parse_files(&catalog, FILES).unwrap();
     assert_eq!(files.len(), FILES.len());
     assert_eq!(files[0].schema, 3);
-    assert_eq!(files.last().unwrap().schema, protocol::SCHEMA_VERSION);
+    // The newest recipes layout (0004) is written for schema 6 (D44).
+    assert_eq!(files.last().unwrap().schema, 6);
 }
 
 async fn get(state: &Arc<AppState>, path: &str) -> (StatusCode, serde_json::Value) {
@@ -105,7 +106,7 @@ async fn the_workspace_lists_every_recipe_and_a_screen_loads_one() {
 async fn each_schema_gets_the_newest_layout_it_draws() {
     let state = Arc::new(AppState::in_memory(adapters()));
     for (schema, search, tappable) in [
-        (protocol::SCHEMA_VERSION, true, true),
+        (6, true, true),
         (5, true, true),
         (4, false, true),
         (3, false, false),

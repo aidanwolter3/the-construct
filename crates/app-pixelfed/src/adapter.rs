@@ -49,16 +49,12 @@ impl Runtime {
 /// media proxy.
 pub struct PixelfedAdapter {
     runtime: RwLock<Arc<Runtime>>,
-    /// Serializes upstream token refreshes (Passport rotates the refresh
-    /// token, so two concurrent refreshes would revoke each other).
-    pub(crate) refresh: tokio::sync::Mutex<()>,
 }
 
 impl PixelfedAdapter {
     pub fn new(config: PixelfedConfig) -> Self {
         Self {
             runtime: RwLock::new(Arc::new(Runtime::new(config))),
-            refresh: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -105,6 +101,12 @@ impl AppAdapter for PixelfedAdapter {
 
     fn migrations(&self) -> &'static [pod_core::store::Migration] {
         crate::db::MIGRATIONS
+    }
+
+    fn public_paths(&self) -> &'static [&'static str] {
+        // Images load without the bearer; keys are opaque hashes of public
+        // upstream media (D17).
+        &["/v1/pixelfed/media/"]
     }
 
     fn sign_ins(&self) -> Vec<SignInProvider> {

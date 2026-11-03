@@ -52,8 +52,30 @@ struct Fault {
     remaining: u32,
 }
 
+/// Request header the pod host (D46) sets to the path prefix under which this
+/// pod's public routes ([`AppAdapter::public_paths`]) are reachable without a
+/// bearer, e.g. `/v1/p/<pod id>`. Absent when the pod is served on its own.
+pub const PUBLIC_PREFIX_HEADER: &str = "x-construct-public-prefix";
+
+/// The public path prefix of this pod ([`PUBLIC_PREFIX_HEADER`]), `""` when
+/// served on its own. Adapters put it in front of absolute URLs a client
+/// loads without its bearer (media).
+pub fn public_prefix(headers: &HeaderMap) -> &str {
+    headers
+        .get(PUBLIC_PREFIX_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .filter(|p| {
+            p.starts_with('/')
+                && p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'_'))
+        })
+        .unwrap_or("")
+}
+
 /// Shared server state; adapters reach it as [`Pod`].
 pub struct AppState {
+    /// Per-pod values adapters keep beside the store ([`AppState::local`]).
+    locals: Mutex<Vec<Arc<dyn std::any::Any + Send + Sync>>>,
     store: Store,
     catalog: Catalog,
     test_hooks: bool,
@@ -102,6 +124,7 @@ impl AppState {
             tracing::info!(file = %path, version, "layout file deployed as a new version");
         }
         Ok(Self {
+            locals: Mutex::new(Vec::new()),
             store,
             catalog,
             test_hooks: false,
@@ -184,6 +207,22 @@ impl AppState {
             let any: &dyn std::any::Any = a.as_ref();
             any.downcast_ref::<T>()
         })
+    }
+
+    /// This pod's value of type `T`, created with `T::default()` on first
+    /// use. For adapter state that must not be shared between the pods of one
+    /// host (D46), e.g. a lock around one pod's token refresh.
+    pub fn local<T: Default + Send + Sync + 'static>(&self) -> Arc<T> {
+        let mut locals = self.locals.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(v) = locals
+            .iter()
+            .find_map(|v| Arc::clone(v).downcast::<T>().ok())
+        {
+            return v;
+        }
+        let v = Arc::new(T::default());
+        locals.push(v.clone());
+        v
     }
 
     /// Run a blocking store operation off the async workers.
@@ -310,7 +349,10 @@ async fn get_workspace(
         Ok(c) => c,
         Err(e) => return e.into_response(),
     };
-    let had_bearer = caller != Caller::Anonymous;
+    // Only a session the pod no longer knows is told to go away; a valid one
+    // that lacks the app's sign-in gets the signed-out screen (D46: a pod
+    // token's session must survive every app's sign-out).
+    let stale = caller == Caller::Stale;
     let req = RequestCtx {
         schema: layouts::client_schema(&headers),
         headers,
@@ -320,7 +362,7 @@ async fn get_workspace(
         && !caller.has(sign_in)
     {
         let screen = signed_out(&state, sign_in, &app, &req);
-        return if had_bearer {
+        return if stale {
             session::stale_session(screen)
         } else {
             Json(screen).into_response()
@@ -329,7 +371,19 @@ async fn get_workspace(
     let bundle = match adapter.hydrate(&state, &id, &req).await {
         Hydration::Data(bundle) => bundle,
         Hydration::Screen(screen) => return Json(screen).into_response(),
-        Hydration::StaleSession(screen) => return session::stale_session(screen),
+        Hydration::StaleSession(screen) => {
+            // A pinned session stays; only the unusable sign-in goes.
+            if let (Some(session), AuthPolicy::SignIn(sign_in)) = (&req.session, app.auth)
+                && session.pinned
+            {
+                let (hash, sign_in) = (session.token_hash.clone(), sign_in.to_owned());
+                if let Err(e) = blocking(&state, move |s| s.detach_sign_in(&hash, &sign_in)).await {
+                    return e.into_response();
+                }
+                return Json(screen).into_response();
+            }
+            return session::stale_session(screen);
+        }
         Hydration::Error(r) => return r,
     };
     let served = match layouts::active_for_client(&state, &id, &req.headers).await {

@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 pod-core = { path = "../pod-core" }
+pod-host = { path = "../pod-host" }
 app-pixelfed = { path = "../app-pixelfed" }
 app-recipes = { path = "../app-recipes" }
 protocol = { workspace = true }

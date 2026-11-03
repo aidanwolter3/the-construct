@@ -45,6 +45,18 @@ pub enum ActionIntent {
         token_path: String,
     },
 
+    /// Open a session (schema 7, D46): POST `payload` (form values bound) to
+    /// the server path `path`; a 2xx answer's `session_token` becomes the
+    /// client's session (like a finished sign-in) and the workspace is
+    /// fetched again. How a device enters a pod code
+    /// (`/v1/pods/open {token}`) or asks for a temporary pod.
+    #[serde(rename = "action.auth.session")]
+    OpenSession {
+        path: String,
+        #[serde(default)]
+        payload: Value,
+    },
+
     /// Load a pod path (a screen's `data`) whose answer is a
     /// [`crate::DataBundle`]: its entities are merged and its queries
     /// replace the same keys. The engine caches the result (shown offline)

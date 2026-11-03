@@ -105,6 +105,8 @@ pub struct Session {
     pub token_hash: String,
     /// The sign-ins completed on it, sorted.
     pub sign_ins: Vec<String>,
+    /// A pod token's session (D46): never expires, a logout keeps it.
+    pub pinned: bool,
 }
 
 impl Session {
@@ -159,9 +161,11 @@ impl AppState {
                 return Ok(Caller::Stale);
             }
             let sign_ins = s.session_sign_ins(&hash)?;
+            let pinned = s.session_pinned(&hash)?;
             Ok(Caller::Signed(Session {
                 token_hash: hash,
                 sign_ins,
+                pinned,
             }))
         })
         .await
@@ -173,18 +177,56 @@ pub(crate) fn router() -> Router<Pod> {
 }
 
 /// `POST /v1/auth/logout` (bearer): deletes the pod session and its sign-ins.
-/// Upstream accounts are kept (single tenant; other sessions may use them).
+/// A pinned session (a pod token's, D46) is kept and loses only its sign-ins:
+/// `{"ok": true, "session_kept": true}`, so the client keeps the token.
+/// Upstream accounts are kept (other sessions may use them).
 async fn logout(State(state): State<Pod>, headers: HeaderMap) -> Response {
     let Some(token) = bearer(&headers) else {
         return unauthorized();
     };
     let hash = session_hash(token);
-    match blocking(&state, move |s| s.delete_session(&hash)).await {
-        Ok(true) => {
+    let result = blocking(&state, move |s| {
+        if s.session_pinned(&hash)? {
+            s.clear_sign_ins(&hash)?;
+            Ok(Some(true))
+        } else {
+            Ok(s.delete_session(&hash)?.then_some(false))
+        }
+    })
+    .await;
+    match result {
+        Ok(Some(true)) => {
+            tracing::info!("signed out of every app; the pod token's session stays");
+            Json(json!({ "ok": true, "session_kept": true })).into_response()
+        }
+        Ok(Some(false)) => {
             tracing::info!("pod session deleted (logout)");
             Json(json!({ "ok": true })).into_response()
         }
-        Ok(false) => unauthorized(),
+        Ok(None) => unauthorized(),
         Err(e) => e.into_response(),
+    }
+}
+
+/// The answer to a caller that lacks a sign-in: a valid session gets 403
+/// `sign_in_required` (the client keeps its session, D46), anything else
+/// 401 (a stale session also gets [`SESSION_HEADER`]`: invalid`).
+pub fn sign_in_required(caller: &Caller) -> Response {
+    match caller {
+        Caller::Signed(_) => (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "sign_in_required" })),
+        )
+            .into_response(),
+        Caller::Stale => (
+            StatusCode::UNAUTHORIZED,
+            [
+                (header::WWW_AUTHENTICATE, "Bearer"),
+                (header::HeaderName::from_static(SESSION_HEADER), "invalid"),
+            ],
+            Json(json!({ "error": "unauthorized" })),
+        )
+            .into_response(),
+        Caller::Anonymous => unauthorized(),
     }
 }

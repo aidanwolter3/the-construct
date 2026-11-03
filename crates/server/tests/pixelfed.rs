@@ -622,14 +622,16 @@ async fn upstream_401_means_signed_out() {
     assert_eq!(header.as_deref(), Some("invalid"));
     let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
     signed_out_button(&spec);
-    // The dead upstream token was dropped, so actions are now 401.
-    let (status, _) = post_json(
+    // The dead upstream token was dropped, so actions now need a sign-in:
+    // 403 for the (still valid) pod session, which the client keeps (D46).
+    let (status, body) = post_json(
         &format!("{}/v1/pixelfed/posts/like", pod.url),
         Some("tok"),
         json!({ "id": CAROUSEL, "liked": true }),
     )
     .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "sign_in_required");
 }
 
 #[tokio::test]
@@ -846,13 +848,15 @@ async fn a_session_from_before_v11_stays_signed_in() {
         // none of the tables adapters added later.
         let conn = rusqlite::Connection::open(dir.path().join("server.db")).unwrap();
         conn.execute_batch(
-            "DROP TABLE session_sign_ins; DROP TABLE adapter_migrations; PRAGMA user_version = 10;",
+            "DROP TABLE session_sign_ins; DROP TABLE adapter_migrations;
+             ALTER TABLE sessions DROP COLUMN pinned; PRAGMA user_version = 10;",
         )
         .unwrap();
         let later: Vec<String> = conn
             .prepare(
                 "SELECT name FROM sqlite_master WHERE type = 'table'
-                 AND (name LIKE 'recipes%' OR name = 'pixelfed_session_instance')",
+                 AND (name LIKE 'recipes%' OR name = 'pixelfed_session_instance')
+                 OR (type = 'table' AND name = 'pod_settings')",
             )
             .unwrap()
             .query_map([], |r| r.get(0))

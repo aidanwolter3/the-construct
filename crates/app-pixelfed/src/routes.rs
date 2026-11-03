@@ -14,7 +14,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use pod_core::session::{Caller, Session, bearer, new_session_token, session_hash, unauthorized};
+use pod_core::session::{
+    Caller, Session, bearer, new_session_token, session_hash, sign_in_required,
+};
 use pod_core::util::now_secs;
 use pod_core::{
     ApiError, Hydration, Pod, RequestCtx, api_error, blocking, json_error, parse_json_body,
@@ -58,17 +60,30 @@ fn adapter(state: &Pod) -> &PixelfedAdapter {
         .expect("the Pixelfed routes are mounted by the Pixelfed adapter")
 }
 
-/// The instance and stored upstream account of the request's pod session,
-/// if it is valid and has the `pixelfed` sign-in.
+/// The instance and stored upstream account of the request's pod session.
+/// Without one: 401 for no or a stale session, 403 `sign_in_required` for a
+/// valid session that lacks the `pixelfed` sign-in (the client keeps it, D46).
 async fn signed_in_account(
     state: &Pod,
     headers: &HeaderMap,
-) -> Result<Option<(Instance, PixelfedAccount)>, ApiError> {
-    let Some(session) = state.caller(headers).await?.into_session() else {
-        return Ok(None);
+) -> Result<(Instance, PixelfedAccount), Response> {
+    let caller = state
+        .caller(headers)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    let found = match caller.session() {
+        Some(session) => session_account(state, session)
+            .await
+            .map_err(IntoResponse::into_response)?,
+        None => None,
     };
-    session_account(state, &session).await
+    found.ok_or_else(|| sign_in_required(&caller))
 }
+
+/// Serializes one pod's upstream token refreshes (Passport rotates the
+/// refresh token, so two concurrent refreshes would revoke each other).
+#[derive(Default)]
+struct RefreshLock(tokio::sync::Mutex<()>);
 
 /// The instance `session` signed in to and its stored account. A session
 /// from before D45 uses the default instance; one whose instance this pod no
@@ -107,8 +122,9 @@ async fn stored_account(
     blocking(state, move |s| s.pixelfed_account(&url)).await
 }
 
-/// `<scheme>://<Host>/v1/pixelfed/media`, from the request so that clients
-/// reaching the pod as e.g. 10.0.2.2 get URLs they can load.
+/// `<scheme>://<Host><public prefix>/v1/pixelfed/media`, from the request so
+/// that clients reaching the pod as e.g. 10.0.2.2 get URLs they can load (the
+/// prefix: a pod host's public route for this pod, D46).
 fn proxy_base(headers: &HeaderMap) -> String {
     let host = headers
         .get(header::HOST)
@@ -127,7 +143,8 @@ fn proxy_base(headers: &HeaderMap) -> String {
         Some(p) if p.eq_ignore_ascii_case("https") => "https",
         _ => "http",
     };
-    format!("{scheme}://{host}{MEDIA_PATH}")
+    let prefix = pod_core::public_prefix(headers);
+    format!("{scheme}://{host}{prefix}{MEDIA_PATH}")
 }
 
 async fn save_media_keys(state: &Pod, media: MediaUrls) -> Result<(), ApiError> {
@@ -197,7 +214,8 @@ async fn refresh_account(
     stale: &PixelfedAccount,
 ) -> Result<Option<PixelfedAccount>, UpstreamError> {
     let pf = adapter(state);
-    let _guard = pf.refresh.lock().await;
+    let lock = state.local::<RefreshLock>();
+    let _guard = lock.0.lock().await;
     let rt = pf.runtime();
     let instance = inst.url.clone();
     let store_err = |e: ApiError| UpstreamError::Unreachable(format!("pod store: {e:?}"));
@@ -654,9 +672,8 @@ fn valid_status_id(id: &str) -> bool {
 async fn toggle(state: Pod, headers: HeaderMap, body: Bytes, kind: Toggle) -> Response {
     let rt = adapter(&state).runtime();
     let (instance, account) = match signed_in_account(&state, &headers).await {
-        Ok(Some(found)) => found,
-        Ok(None) => return unauthorized(),
-        Err(e) => return e.into_response(),
+        Ok(found) => found,
+        Err(r) => return r,
     };
     let upstream = rt.api(&instance);
     let payload = match parse_json_body(&headers, &body) {
@@ -753,9 +770,8 @@ async fn comments_screen(
 ) -> Response {
     let rt = adapter(&state).runtime();
     let (instance, account) = match signed_in_account(&state, &headers).await {
-        Ok(Some(found)) => found,
-        Ok(None) => return unauthorized(),
-        Err(e) => return e.into_response(),
+        Ok(found) => found,
+        Err(r) => return r,
     };
     let upstream = rt.api(&instance);
     let id = params
@@ -805,9 +821,8 @@ async fn comments_screen(
 async fn comment(State(state): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
     let rt = adapter(&state).runtime();
     let (instance, account) = match signed_in_account(&state, &headers).await {
-        Ok(Some(found)) => found,
-        Ok(None) => return unauthorized(),
-        Err(e) => return e.into_response(),
+        Ok(found) => found,
+        Err(r) => return r,
     };
     let upstream = rt.api(&instance);
     let payload = match parse_json_body(&headers, &body) {
