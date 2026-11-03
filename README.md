@@ -34,6 +34,8 @@ crates/pod-core      the generic pod (Axum + SQLite, D40): GET /v1/workspaces/:i
                      push; knows apps only through the `AppAdapter` trait (and `StaticAdapter` for layout-only apps)
 crates/app-pixelfed  the Pixelfed adapter: pixelfed_home (auth, feed normalization, actions, comments, media proxy,
                      its tables) and the pixelfed_demo dev app
+crates/app-recipes   the recipes adapter (D41): the family recipe collection in recipes_* tables, imported by
+                     migration from data/import-0001.json (made by scripts/recipes_from_pdf.py)
 crates/server        "the pod" binary: pod-core serving the compile-time adapters (`server::adapters`)
 crates/client-core   ConstructEngine: fetches the workspace, holds state, applies optimistic mutations (SQLite cache +
                      outbox sync worker), OAuth2 PKCE sign-in (pod session in a secure store), read-only apps
@@ -288,7 +290,7 @@ The only way to change what the app looks like is a new layout file plus a deplo
    layout's vocabulary needs, or above the current one). The layout root is the app's `core://Workspace`, and its
    id is the app id.
 2. Add one line to the app's file list in `crates/app-pixelfed/src/apps.rs` (`HOME_FILES` or `DEMO_FILES`):
-   `layout_file!("pixelfed_home", "0002"),`.
+   `layout_file!("pixelfed_home", "0002"),` (recipes: `FILES` in `crates/app-recipes/src/lib.rs`).
 3. Run `cargo test` (`-p app-pixelfed` is enough). It validates every file (structure, size, slots, aspect ratios,
    endpoints) and fails if a file in `layouts/` is not listed.
 4. Push to `main`. CI runs the checks and deploys the pod to staging. On start, the pod appends the file as the

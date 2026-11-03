@@ -831,12 +831,24 @@ async fn a_session_from_before_v11_stays_signed_in() {
     let session = sign_in(&env).await;
     env.pod.handle.abort();
     {
-        // Back to the v10 shape: no sign-in rows, no adapter versions.
+        // Back to the v10 shape: no sign-in rows, no adapter versions, and
+        // none of the tables adapters added later.
         let conn = rusqlite::Connection::open(dir.path().join("server.db")).unwrap();
         conn.execute_batch(
             "DROP TABLE session_sign_ins; DROP TABLE adapter_migrations; PRAGMA user_version = 10;",
         )
         .unwrap();
+        let later: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'recipes%'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        for t in later {
+            conn.execute_batch(&format!("DROP TABLE {t}")).unwrap();
+        }
     }
     let state = server::open_dir(dir.path())
         .unwrap()

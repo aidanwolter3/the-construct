@@ -44,6 +44,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "app-recipes"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "pod-core",
+ "protocol",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+]
+
+[[package]]
 name = "askama"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1541,6 +1557,7 @@ name = "server"
 version = "0.1.0"
 dependencies = [
  "app-pixelfed",
+ "app-recipes",
  "axum",
  "base64 0.22.1",
  "fake-pixelfed",

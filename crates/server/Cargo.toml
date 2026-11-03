@@ -18,6 +18,7 @@ path = "src/main.rs"
 [dependencies]
 pod-core = { path = "../pod-core" }
 app-pixelfed = { path = "../app-pixelfed" }
+app-recipes = { path = "../app-recipes" }
 protocol = { workspace = true }
 axum = { version = "0.8", features = ["http2"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }

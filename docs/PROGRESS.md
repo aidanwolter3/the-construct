@@ -416,6 +416,16 @@ from a client (D32, D33).
 - No wire, layout or schema change: no client build or device check needed.
 - **Not yet:** a second adapter; the media proxy is still Pixelfed-only.
 
+## Recipes app (D41, issue #13)
+- `crates/app-recipes`: a second adapter with typed `recipes_*` tables in the pod's SQLite. Its migration imports
+  the family collection (81 recipes, 8 categories) from `data/import-0001.json`, generated from the recipe PDF by
+  `scripts/recipes_from_pdf.py`.
+- `layouts/recipes/0001.json`: recipes by category, each opening a screen with ingredients (grouped), numbered
+  steps (grouped), notes and the source.
+- Existing vocabulary only: no client build. Checked with the simulator against a local pod.
+- **Not yet:** editing, search, serving scaling, sign-in to read; tappable list rows instead of the View button
+  (issue #15, schema 4).
+
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
   bookmarks are idempotent upstream, comments are not).
