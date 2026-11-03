@@ -1191,7 +1191,8 @@ e.g. `click tag:like:pixelfed://posts/781254316723458049` or `swipe-left tag:car
 The menu's test tags are listed in [The menu](#the-menu-all-surfaces).
 
 **Screens (D34).** Screens carry the tags `screen:<id>`, `screen-back`, `screen-loading`, `screen-error` and
-`screen-retry`; generic nodes carry `textfield:<field>`, `textfield-send:<field>` and `list-empty`. In fixture
+`screen-retry` (`screen-loading` is the spinner in the title bar, so the content doesn't move when the load
+ends); generic nodes carry `textfield:<field>`, `textfield-send:<field>` and `list-empty`. In fixture
 mode the fake engine answers data paths from `fixtures/pixelfed_screen_data.json`, and sends creates through its
 fake outbox (`offline` keeps them "Sending…" until `online`). That file and the feed fixture's layout are generated
 from the pod: `UPDATE_FIXTURES=1 cargo test -p server --test fixtures` (the test fails when they are stale).
