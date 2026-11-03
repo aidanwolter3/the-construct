@@ -30,7 +30,13 @@ pub mod routes;
 pub mod upstream;
 
 pub use adapter::{PixelfedAdapter, SIGN_IN};
-pub use config::{DEFAULT_PIXELFED_URL, PixelfedConfig};
+
+/// Pod setting (D46): `"0"` keeps the pod on the default instance: no
+/// typed-in instances and no media from other hosts. A pod host sets it on
+/// temporary pods, which anyone can create, so they can't make the server
+/// contact hosts of their choosing.
+pub const OTHER_INSTANCES_SETTING: &str = "pixelfed.other_instances";
+pub use config::{DEFAULT_PIXELFED_URL, Instance, PixelfedConfig};
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -322,6 +328,66 @@ impl MediaAllowlist {
     }
 }
 
+/// How the pod may fetch a media URL ([`MediaPolicy::route`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaRoute {
+    /// An origin in the [`MediaAllowlist`] (configured by the operator).
+    Trusted,
+    /// Any other public HTTPS URL, allowed when users may sign in to any
+    /// instance (D45): fetched only from public IP addresses.
+    Public,
+}
+
+/// Which media URLs the pod rewrites and proxies: the [`MediaAllowlist`],
+/// plus (with `any_public_https`) every `https://<public host>` URL, since
+/// a user-chosen instance may serve media from any CDN.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MediaPolicy {
+    pub allow: MediaAllowlist,
+    pub any_public_https: bool,
+}
+
+impl From<&MediaAllowlist> for MediaPolicy {
+    fn from(allow: &MediaAllowlist) -> Self {
+        Self {
+            allow: allow.clone(),
+            any_public_https: false,
+        }
+    }
+}
+
+impl From<&MediaPolicy> for MediaPolicy {
+    fn from(p: &MediaPolicy) -> Self {
+        p.clone()
+    }
+}
+
+impl MediaPolicy {
+    pub fn route_url(&self, url: &reqwest::Url) -> Option<MediaRoute> {
+        if self.allow.allows_url(url) {
+            Some(MediaRoute::Trusted)
+        } else if self.any_public_https
+            && url.scheme() == "https"
+            && url.port().is_none()
+            && url.host_str().is_some_and(config::is_public_host)
+        {
+            Some(MediaRoute::Public)
+        } else {
+            None
+        }
+    }
+
+    pub fn route(&self, url: &str) -> Option<MediaRoute> {
+        reqwest::Url::parse(url)
+            .ok()
+            .and_then(|u| self.route_url(&u))
+    }
+
+    pub fn allows(&self, url: &str) -> bool {
+        self.route(url).is_some()
+    }
+}
+
 /// Warn once per host (per process) about media URLs outside the allowlist.
 fn log_dropped_media_host(url: &str) {
     static LOGGED: std::sync::Mutex<Option<HashSet<String>>> = std::sync::Mutex::new(None);
@@ -340,20 +406,20 @@ fn log_dropped_media_host(url: &str) {
 
 /// Rewrites upstream image URLs to `<proxy_base>/<key>` and remembers
 /// key -> upstream URL for the URLs it has emitted. URLs outside the
-/// [`MediaAllowlist`] are dropped (null), so the client shows a placeholder.
+/// [`MediaPolicy`] are dropped (null), so the client shows a placeholder.
 #[derive(Debug, Clone)]
 pub struct MediaUrls {
     proxy_base: String,
-    allow: MediaAllowlist,
+    allow: MediaPolicy,
     pub keys: BTreeMap<String, String>,
 }
 
 impl MediaUrls {
     /// `proxy_base` like `http://10.0.2.2:8080/v1/pixelfed/media` (no trailing slash).
-    pub fn new(proxy_base: &str, allow: &MediaAllowlist) -> Self {
+    pub fn new(proxy_base: &str, policy: impl Into<MediaPolicy>) -> Self {
         Self {
             proxy_base: proxy_base.trim_end_matches('/').to_owned(),
-            allow: allow.clone(),
+            allow: policy.into(),
             keys: BTreeMap::new(),
         }
     }
@@ -968,6 +1034,31 @@ mod tests {
             "not a url",
         ] {
             assert!(!a.allows(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn media_policy_routes() {
+        let closed = MediaPolicy::from(&allow());
+        let open = MediaPolicy {
+            any_public_https: true,
+            ..closed.clone()
+        };
+        let ok = format!("{BASE}/storage/a.jpg");
+        assert_eq!(closed.route(&ok), Some(MediaRoute::Trusted));
+        assert_eq!(open.route(&ok), Some(MediaRoute::Trusted));
+        let cdn = "https://cdn.pixelfed.example/m/a.jpg";
+        assert_eq!(closed.route(cdn), None);
+        assert_eq!(open.route(cdn), Some(MediaRoute::Public));
+        for bad in [
+            "http://cdn.pixelfed.example/a.jpg",
+            "https://cdn.pixelfed.example:8443/a.jpg",
+            "https://169.254.169.254/latest/meta-data",
+            "https://[::1]/a",
+            "https://localhost/a",
+            "file:///etc/passwd",
+        ] {
+            assert_eq!(open.route(bad), None, "{bad}");
         }
     }
 

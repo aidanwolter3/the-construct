@@ -7,9 +7,9 @@ use pod_core::layouts::LayoutSource;
 use pod_core::{AppAdapter, AppInfo, BoxFuture, Hydration, Pod, RequestCtx, SignInProvider};
 use protocol::WorkspaceSpec;
 
-use crate::config::PixelfedConfig;
-use crate::upstream::Upstream;
-use crate::{MediaAllowlist, apps};
+use crate::config::{Instance, PixelfedConfig};
+use crate::upstream::{Clients, Upstream};
+use crate::{MediaPolicy, apps};
 
 /// The sign-in this adapter provides (recorded on sessions).
 pub const SIGN_IN: &str = "pixelfed";
@@ -18,37 +18,59 @@ pub const SIGN_IN: &str = "pixelfed";
 /// built from it.
 pub struct Runtime {
     pub config: PixelfedConfig,
-    /// [`PixelfedConfig::media_allowlist`], parsed once.
-    pub media_allow: MediaAllowlist,
-    pub upstream: Upstream,
+    /// [`PixelfedConfig::media_allowlist`], parsed once, plus any public
+    /// HTTPS media when users may sign in to any instance.
+    pub media: MediaPolicy,
+    pub clients: Clients,
 }
 
 impl Runtime {
     fn new(config: PixelfedConfig) -> Self {
-        let media_allow = config.media_allowlist();
+        let media = MediaPolicy {
+            allow: config.media_allowlist(),
+            any_public_https: config.any_instance,
+        };
         Self {
-            upstream: Upstream::new(&config.instance_url, media_allow.clone()),
-            media_allow,
+            clients: Clients::new(media.clone()),
+            media,
             config,
+        }
+    }
+
+    /// The API client for `instance`.
+    pub fn api(&self, instance: &Instance) -> Upstream {
+        self.clients.api(instance)
+    }
+
+    /// [`PixelfedConfig::resolve`] in a pod whose settings may forbid other
+    /// instances than the default (`others` false: temporary pods, D46).
+    pub fn resolve(&self, typed: &str, others: bool) -> Option<Instance> {
+        let instance = self.config.resolve(typed)?;
+        (others || instance.url == self.config.instance_url).then_some(instance)
+    }
+
+    /// The media policy of a pod: without other instances, only the
+    /// configured origins (no public HTTPS media from anywhere).
+    pub fn media_for(&self, others: bool) -> MediaPolicy {
+        MediaPolicy {
+            allow: self.media.allow.clone(),
+            any_public_https: others && self.media.any_public_https,
         }
     }
 }
 
-/// The Pixelfed adapter (single tenant): sign-in with PKCE (the pod keeps the
+/// The Pixelfed adapter (one owner per instance; each session uses the
+/// instance it signed in to, D45): sign-in with PKCE (the pod keeps the
 /// upstream token, D17), the home feed, likes, bookmarks, comments and the
 /// media proxy.
 pub struct PixelfedAdapter {
     runtime: RwLock<Arc<Runtime>>,
-    /// Serializes upstream token refreshes (Passport rotates the refresh
-    /// token, so two concurrent refreshes would revoke each other).
-    pub(crate) refresh: tokio::sync::Mutex<()>,
 }
 
 impl PixelfedAdapter {
     pub fn new(config: PixelfedConfig) -> Self {
         Self {
             runtime: RwLock::new(Arc::new(Runtime::new(config))),
-            refresh: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -93,12 +115,22 @@ impl AppAdapter for PixelfedAdapter {
         crate::routes::router()
     }
 
+    fn migrations(&self) -> &'static [pod_core::store::Migration] {
+        crate::db::MIGRATIONS
+    }
+
+    fn public_paths(&self) -> &'static [&'static str] {
+        // Images load without the bearer; keys are opaque hashes of public
+        // upstream media (D17).
+        &["/v1/pixelfed/media/"]
+    }
+
     fn sign_ins(&self) -> Vec<SignInProvider> {
         vec![SignInProvider { id: SIGN_IN }]
     }
 
     fn signed_out(&self, _sign_in: &str, app: &AppInfo, _req: &RequestCtx) -> WorkspaceSpec {
-        crate::layout::signed_out(&self.runtime().config.instance_url, app.id, app.title)
+        crate::layout::signed_out(&self.runtime().config, app.id, app.title)
     }
 
     fn hydrate<'a>(

@@ -13,6 +13,7 @@ pub use app_pixelfed as pixelfed;
 pub use app_pixelfed::{DEFAULT_PIXELFED_URL, PixelfedAdapter, PixelfedConfig};
 pub use app_recipes as recipes;
 pub use pod_core::*;
+pub use pod_host as host;
 
 /// The pod's adapters, in `GET /v1/apps` order: the Pixelfed feed (with the
 /// `pixelfed` sign-in), the recipes, then the `pixelfed_demo` dev app.
@@ -22,6 +23,42 @@ pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
         Arc::new(app_recipes::RecipesAdapter::new()),
         app_pixelfed::apps::demo_adapter(),
     ]
+}
+
+/// The per-pod settings for a new pod (D46): the recipes family collection
+/// is imported only into pods made with `import_recipes`.
+pub fn new_pod_settings(import_recipes: bool) -> Vec<(String, String)> {
+    vec![(
+        app_recipes::db::IMPORT_FAMILY_SETTING.to_owned(),
+        if import_recipes { "1" } else { "0" }.to_owned(),
+    )]
+}
+
+/// Extra settings of temporary pods (anyone can make one, D46): Pixelfed
+/// only on the default instance, so a visitor can't make the server contact
+/// hosts of their choosing (fetch URLs, register OAuth apps).
+pub fn temporary_pod_settings() -> Vec<(String, String)> {
+    vec![(
+        app_pixelfed::OTHER_INSTANCES_SETTING.to_owned(),
+        "0".to_owned(),
+    )]
+}
+
+/// Builds each pod of a host (D46): every pod gets the same adapters (shared
+/// objects; their data lives in each pod's store) and the same options.
+pub fn pod_factory(
+    pixelfed: PixelfedConfig,
+    test_hooks: bool,
+    session_ttl_secs: i64,
+    show_dev_apps: bool,
+) -> pod_host::PodFactory {
+    let adapters = adapters(pixelfed);
+    Arc::new(move |store| {
+        Ok(AppState::try_new(store, adapters.clone())?
+            .with_test_hooks(test_hooks)
+            .with_session_ttl_secs(session_ttl_secs)
+            .with_dev_apps(show_dev_apps))
+    })
 }
 
 /// Every layout file the pod ships, per app in number order.

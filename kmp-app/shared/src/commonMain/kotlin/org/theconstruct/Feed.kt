@@ -4,6 +4,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
@@ -47,19 +48,27 @@ fun blurhashAverageRgb(hash: String?): Int? {
 /**
  * Sign-in status from the engine snapshot's `auth_json` (M6). [state]: signed_out, pending, signed_in, error.
  * [message]: optional progress text while pending (e.g. "Loading your feed…" after the code exchange).
+ * [session]: the engine holds a session (a pod token, D46), with or without an app sign-in.
  */
 data class AuthInfo(
     val state: String = "signed_out",
     val username: String? = null,
     val error: String? = null,
     val message: String? = null,
+    val session: Boolean = false,
 ) {
     companion object {
         /** Lenient: anything unparsable reads as signed out. */
         fun parse(json: String): AuthInfo = try {
             val o = ConstructJson.json.parseToJsonElement(json).jsonObject
             fun str(k: String) = (o[k] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull
-            AuthInfo(str("state") ?: "signed_out", str("username"), str("error"), str("message"))
+            AuthInfo(
+                str("state") ?: "signed_out",
+                str("username"),
+                str("error"),
+                str("message"),
+                session = (o["session"] as? JsonPrimitive)?.booleanOrNull == true,
+            )
         } catch (t: Exception) {
             AuthInfo()
         }

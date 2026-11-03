@@ -444,6 +444,26 @@ from a client (D32, D33).
 - Needs a client build: Android device check on the developer's Mac.
 - **Not yet:** photos, ingredient tick boxes, a grid list.
 
+## Sign in to any Pixelfed instance (D45)
+
+- The signed-out Pixelfed screen has a server box when `PIXELFED_ALLOWED_INSTANCES` is set; staging sets `*`, so
+  any public HTTPS Pixelfed works there. Each session uses the instance it signed in to
+  (`pixelfed_session_instance`, the adapter's first own migration).
+- Typed-in instances are contacted only on public IP addresses (guarded resolver, no IP literals, redirects only to
+  public HTTPS names); their media may come from any public HTTPS host.
+- No client build needed (the box is a `core://TextField` + `$form.instance`).
+- Needs a check: sign-in against a public instance from the Android app or the macOS window.
+
+## One server, many pods (D46)
+
+- `crates/pod-host`: pods with their own SQLite files, pod tokens (shown once, stored hashed), temporary pods with a
+  sweeper, the "Open your pod" screen, public media paths per pod. `server pods create|adopt|rotate|delete|list`.
+- Pod tokens are pinned sessions; a valid session without an app's sign-in gets 200/403 instead of 401, so clients
+  keep their token. Sign-out keeps the pod; "Leave this pod" forgets it on one device.
+- Schema 7: `action.auth.session`. The engine sends its session on sign-in and catalog calls.
+- Staging: `CONSTRUCT_TEMP_PODS=1`; existing data moves into an admin pod with `server pods adopt` (README "Pods").
+- Needs a client build and a device check (Android: open a pod with a code, Pixelfed sign-in, sign out, leave).
+
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
   bookmarks are idempotent upstream, comments are not).
@@ -458,7 +478,7 @@ from a client (D32, D33).
   the caller's thread; writes are already off the UI thread (D19).
 - Single tenant: one pinned Pixelfed account per pod; one timeline page (no pagination).
 - Engine traffic is not HTTPS-enforced on Android release builds (D11).
-- Not yet exercised: sign-in against a public Pixelfed instance.
+- Not yet exercised: sign-in against a public Pixelfed instance (staging now accepts one, D45).
 
 ## Fully generic protocol, engine and clients (D37)
 

@@ -1,6 +1,9 @@
 # Staging pod on Fly.io. Deployed by .github/workflows/deploy.yml on push to main; by hand, from the repo root:
 #   flyctl deploy . --config deploy/fly/pod.toml --dockerfile deploy/pod.Dockerfile --remote-only
 # Secrets (never in this file): `flyctl secrets set -a the-construct-pod ANTHROPIC_API_KEY=...`
+# Pods (D46): one server, a pod per user. Admin pods and their codes are made on the machine, never in git:
+#   fly ssh console -a the-construct-pod -C "/server pods create <name>"     (prints the pod code once)
+#   fly ssh console -a the-construct-pod -C "/server pods list"
 
 app = "the-construct-pod"
 primary_region = "dfw"
@@ -9,10 +12,15 @@ primary_region = "dfw"
   CONSTRUCT_ADDR = "0.0.0.0:8080"
   CONSTRUCT_DATA_DIR = "/data"
   RUST_LOG = "info"
-  # Staging talks to the fake Pixelfed app (deploy/fly/fake-pixelfed.toml), never a real instance.
+  # The default instance ("Sign in with Pixelfed") is the fake Pixelfed app
+  # (deploy/fly/fake-pixelfed.toml).
   PIXELFED_INSTANCE_URL = "https://the-construct-fake-pixelfed.fly.dev"
-  # Test environment: any fake account may sign in and replace the stored one.
-  PIXELFED_ALLOW_ACCOUNT_CHANGE = "1"
+  # The sign-in screen's server box accepts any public HTTPS Pixelfed instance (D45).
+  PIXELFED_ALLOWED_INSTANCES = "*"
+  # Anyone may make a temporary pod (24 h, then deleted): how Claude sessions and
+  # visitors try staging. Temporary pods only reach the fake Pixelfed; real use
+  # (and real Pixelfed servers) goes in admin pods (D46).
+  CONSTRUCT_TEMP_PODS = "1"
   CONSTRUCT_LLM_PROVIDER = "auto"
 
 [mounts]

@@ -1,0 +1,26 @@
+[package]
+name = "pod-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# One server, many pods (D46): the pod registry (`host.db`), pod tokens,
+# temporary pods, and routing each request to its pod by bearer token. Knows
+# pods and tokens, not apps: the binary passes a factory that builds a pod.
+
+[dependencies]
+pod-core = { path = "../pod-core" }
+protocol = { workspace = true }
+serde_json.workspace = true
+rusqlite.workspace = true
+axum = { version = "0.8", features = ["http2"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "fs"] }
+tower = { version = "0.5", features = ["util"] }
+tracing = "0.1"
+sha2 = "0.10"
+getrandom = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

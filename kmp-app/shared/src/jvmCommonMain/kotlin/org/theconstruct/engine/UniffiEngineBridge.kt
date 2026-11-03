@@ -55,6 +55,12 @@ class UniffiEngineBridge(val handle: EngineHandle) : ConstructEngineBridge {
         handle.logout()
     }
 
+    override fun forgetSession() {
+        if (closed) return
+        engineLog("forget session")
+        handle.forgetSession()
+    }
+
     override fun listApps(): String = catalog("list apps") { handle.listApps() }
 
     override fun appVersions(appId: String, before: Long?, limit: Int?): String =

@@ -22,6 +22,8 @@
 //!   (chips editing a form value), `core://List` `where` (exact-match
 //!   filter), `core://Column` and `core://Row` `align`, the `Display` text style, and the `flame` / `timer` icons
 //!   (D44). Additive: schema 6 clients still draw schema 3 to 5 layouts.
+//! - 7: `action.auth.session` (open a session from a server path: a pod code
+//!   or a temporary pod, D46). Additive.
 //!
 //! # A breaking schema change
 //!
@@ -37,7 +39,7 @@ use crate::{ActionIntent, Align, TextStyle, UiNode};
 /// Request header carrying the client's schema version.
 pub const SCHEMA_HEADER: &str = "x-construct-schema";
 /// The schema version this build draws.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// Breaking changes, oldest first: `(client schema, oldest layout schema it
 /// draws)`. A client of schema `c` draws layouts written for schemas
@@ -96,6 +98,7 @@ pub fn compatibility(layout: u32, client: u32) -> Compatibility {
 fn intent_schema(i: &ActionIntent) -> u32 {
     match i {
         ActionIntent::LoadData { .. } | ActionIntent::Create { .. } => 2,
+        ActionIntent::OpenSession { .. } => 7,
         _ => 1,
     }
 }

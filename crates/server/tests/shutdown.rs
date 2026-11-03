@@ -36,6 +36,8 @@ fn sse_ends_cleanly_on(signal: &str) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_server"))
         .env("CONSTRUCT_ADDR", format!("127.0.0.1:{port}"))
         .env("CONSTRUCT_DATA_DIR", dir.path())
+        // A caller without a pod token uses this pod (D46).
+        .env("CONSTRUCT_OPEN_POD", "dev")
         .env_remove("ANTHROPIC_API_KEY")
         .stdout(Stdio::null())
         .stderr(Stdio::null())

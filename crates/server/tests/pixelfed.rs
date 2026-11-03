@@ -144,17 +144,22 @@ fn pkce() -> (String, String) {
 
 /// app -> authorize (auto-approved by the fake) -> returns (code, verifier).
 async fn authorize(env: &Env) -> (String, String) {
+    authorize_at(&env.pod.url, &env.fake.url).await
+}
+
+/// [`authorize`] on pod `pod` for the fake at `instance`.
+async fn authorize_at(pod: &str, instance: &str) -> (String, String) {
     let (status, app) = post_json(
-        &format!("{}/v1/auth/pixelfed/app", env.pod.url),
+        &format!("{pod}/v1/auth/pixelfed/app"),
         None,
-        json!({ "instance_url": env.fake.url, "redirect_uri": REDIRECT }),
+        json!({ "instance_url": instance, "redirect_uri": REDIRECT }),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{app}");
     assert_eq!(app["scopes"], "read write");
     assert_eq!(
         app["authorize_endpoint"],
-        format!("{}/oauth/authorize", env.fake.url)
+        format!("{instance}/oauth/authorize")
     );
     let (verifier, challenge) = pkce();
     let resp = client()
@@ -180,15 +185,21 @@ async fn authorize(env: &Env) -> (String, String) {
 }
 
 async fn sign_in(env: &Env) -> String {
-    let (code, verifier) = authorize(env).await;
+    sign_in_at(&env.pod.url, &env.fake.url).await
+}
+
+/// [`sign_in`] on pod `pod` with the fake at `instance`.
+async fn sign_in_at(pod: &str, instance: &str) -> String {
+    let (code, verifier) = authorize_at(pod, instance).await;
     let (status, body) = post_json(
-        &format!("{}/v1/auth/pixelfed/token", env.pod.url),
+        &format!("{pod}/v1/auth/pixelfed/token"),
         None,
-        json!({ "instance_url": env.fake.url, "code": code, "code_verifier": verifier,
+        json!({ "instance_url": instance, "code": code, "code_verifier": verifier,
                 "redirect_uri": REDIRECT }),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["instance_url"], instance);
     assert_eq!(body["account"]["id"], "703641122334455667");
     assert_eq!(body["account"]["username"], "constructdemo");
     assert_eq!(body["account"]["display_name"], "Construct Demo");
@@ -196,7 +207,7 @@ async fn sign_in(env: &Env) -> String {
         body["account"]["avatar_url"]
             .as_str()
             .unwrap()
-            .starts_with(&format!("{}/v1/pixelfed/media/", env.pod.url))
+            .starts_with(&format!("{pod}/v1/pixelfed/media/"))
     );
     body["session_token"].as_str().unwrap().to_owned()
 }
@@ -611,14 +622,16 @@ async fn upstream_401_means_signed_out() {
     assert_eq!(header.as_deref(), Some("invalid"));
     let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
     signed_out_button(&spec);
-    // The dead upstream token was dropped, so actions are now 401.
-    let (status, _) = post_json(
+    // The dead upstream token was dropped, so actions now need a sign-in:
+    // 403 for the (still valid) pod session, which the client keeps (D46).
+    let (status, body) = post_json(
         &format!("{}/v1/pixelfed/posts/like", pod.url),
         Some("tok"),
         json!({ "id": CAROUSEL, "liked": true }),
     )
     .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "sign_in_required");
 }
 
 #[tokio::test]
@@ -835,11 +848,16 @@ async fn a_session_from_before_v11_stays_signed_in() {
         // none of the tables adapters added later.
         let conn = rusqlite::Connection::open(dir.path().join("server.db")).unwrap();
         conn.execute_batch(
-            "DROP TABLE session_sign_ins; DROP TABLE adapter_migrations; PRAGMA user_version = 10;",
+            "DROP TABLE session_sign_ins; DROP TABLE adapter_migrations;
+             ALTER TABLE sessions DROP COLUMN pinned; PRAGMA user_version = 10;",
         )
         .unwrap();
         let later: Vec<String> = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'recipes%'")
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table'
+                 AND (name LIKE 'recipes%' OR name = 'pixelfed_session_instance')
+                 OR (type = 'table' AND name = 'pod_settings')",
+            )
             .unwrap()
             .query_map([], |r| r.get(0))
             .unwrap()
@@ -1639,4 +1657,132 @@ async fn comments_with_the_upstream_down_are_502() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
+}
+
+/// The `url` of the carousel post in a signed-in feed (it names the instance).
+fn carousel_url(feed: &Value) -> String {
+    feed["entities"][format!("pixelfed://posts/{CAROUSEL}")]["url"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// Whether the fake at `url` has the carousel post favourited.
+async fn carousel_favourited(url: &str) -> Value {
+    let list: Vec<Value> = client()
+        .get(format!("{url}/api/v1/timelines/home"))
+        .bearer_auth(SEED)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    list.into_iter()
+        .find(|s| s["id"] == CAROUSEL)
+        .map(|s| s["favourited"].clone())
+        .unwrap()
+}
+
+/// D45: two sessions on one pod, each on its own instance (the default and a
+/// listed one): feeds and likes stay apart.
+#[tokio::test]
+async fn sessions_use_the_instance_they_signed_in_to() {
+    let (a, b) = (spawn_fake().await, spawn_fake().await);
+    let pod = spawn_pod(server::state_in_memory().with_pixelfed(PixelfedConfig {
+        allowed_instances: vec![b.url.clone()],
+        ..PixelfedConfig::new(&a.url, None)
+    }))
+    .await;
+    let on_a = sign_in_at(&pod.url, &a.url).await;
+    let on_b = sign_in_at(&pod.url, &b.url).await;
+    for (session, fake) in [(&on_a, &a), (&on_b, &b)] {
+        let (status, feed) = get_home(&pod.url, Some(session)).await;
+        assert_eq!(status, StatusCode::OK, "{feed}");
+        let url = carousel_url(&feed);
+        assert!(url.starts_with(&fake.url), "{url} is not from {}", fake.url);
+    }
+    // A like through the session on B reaches B only.
+    let (status, body) = post_json(
+        &format!("{}/v1/pixelfed/posts/like", pod.url),
+        Some(&on_b),
+        json!({ "id": CAROUSEL, "liked": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(carousel_favourited(&b.url).await, true);
+    assert_eq!(carousel_favourited(&a.url).await, false);
+}
+
+#[tokio::test]
+async fn signed_out_screen_offers_a_server_box_only_when_allowed() {
+    let fake = spawn_fake().await;
+    let children = |spec: &WorkspaceSpec| -> Vec<UiNode> {
+        let UiNode::Workspace { slots, .. } = &spec.workspace else {
+            panic!("not a workspace");
+        };
+        let UiNode::Container { children, .. } = &slots[0].content else {
+            panic!("signed-out slot is not a Container");
+        };
+        children.clone()
+    };
+    let closed =
+        spawn_pod(server::state_in_memory().with_pixelfed(PixelfedConfig::new(&fake.url, None)))
+            .await;
+    let (_, body) = get_home(&closed.url, None).await;
+    let nodes = children(&serde_json::from_value(body).unwrap());
+    assert!(
+        !nodes.iter().any(|c| matches!(c, UiNode::TextField { .. })),
+        "a pod for one instance has no server box"
+    );
+    let open = spawn_pod(server::state_in_memory().with_pixelfed(PixelfedConfig {
+        any_instance: true,
+        ..PixelfedConfig::new(&fake.url, None)
+    }))
+    .await;
+    let (_, body) = get_home(&open.url, None).await;
+    let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
+    // The default button still comes first.
+    let (label, _) = signed_out_button(&spec);
+    assert_eq!(label, "Sign in with Pixelfed");
+    let nodes = children(&spec);
+    assert!(nodes.iter().any(|c| matches!(c,
+        UiNode::TextField { field, placeholder, .. }
+            if field == "instance" && placeholder.contains("pixelfed.social"))));
+    assert!(nodes.iter().any(|c| matches!(c,
+        UiNode::Button { on_click: ActionIntent::AuthLogin { instance_url, .. }, .. }
+            if instance_url == "$form.instance")));
+}
+
+/// D45: under `*` the pod accepts only public HTTPS names; private hosts,
+/// IP literals and plain HTTP are refused before any upstream call.
+#[tokio::test]
+async fn any_instance_refuses_private_and_plain_http_hosts() {
+    let fake = spawn_fake().await;
+    let pod = spawn_pod(server::state_in_memory().with_pixelfed(PixelfedConfig {
+        any_instance: true,
+        ..PixelfedConfig::new(&fake.url, None)
+    }))
+    .await;
+    for instance in [
+        "localhost:8090",
+        "https://127.0.0.1",
+        "https://10.0.0.2",
+        "https://[::1]",
+        "http://pixelfed.social",
+        "https://metadata.google.internal",
+        "https://pixelfed.social/some/path",
+        "not a host",
+    ] {
+        let (status, body) = post_json(
+            &format!("{}/v1/auth/pixelfed/app", pod.url),
+            None,
+            json!({ "instance_url": instance, "redirect_uri": REDIRECT }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{instance}: {body}");
+        assert_eq!(body["error"], "instance_not_allowed", "{instance}");
+    }
+    // The default instance still works.
+    sign_in_at(&pod.url, &fake.url).await;
 }

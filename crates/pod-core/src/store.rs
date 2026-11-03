@@ -133,7 +133,29 @@ const MIGRATIONS: &[Migration] = &[
      INSERT INTO session_sign_ins (token_hash, provider, created_at)
          SELECT token_hash, 'pixelfed', created_at FROM sessions;",
     ),
+    // v12 (D46): a pinned session is a pod token's session: it never expires
+    // and a logout keeps it (only its sign-ins go). `pod_settings` are the
+    // host's per-pod choices (e.g. whether an adapter seeds data), written
+    // before the adapters' migrations run.
+    Migration::Sql(
+        "ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+     CREATE TABLE pod_settings (
+         key   TEXT PRIMARY KEY NOT NULL,
+         value TEXT NOT NULL
+     );",
+    ),
 ];
+
+/// A pod setting inside a transaction (an adapter migration reads its
+/// choices here, D46). `None`: not set (a pod made before D46, tests).
+pub fn pod_setting_on(tx: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
+    tx.query_row(
+        "SELECT value FROM pod_settings WHERE key = ?1",
+        [key],
+        |r| r.get(0),
+    )
+    .optional()
+}
 
 fn migrate_v9(tx: &Transaction<'_>) -> rusqlite::Result<()> {
     tx.execute_batch("ALTER TABLE app_versions ADD COLUMN schema INTEGER;")?;
@@ -585,10 +607,13 @@ pub fn open_session_on(
     let cutoff = now.saturating_sub(session_ttl_secs);
     tx.execute(
         "DELETE FROM session_sign_ins WHERE token_hash IN
-             (SELECT token_hash FROM sessions WHERE created_at <= ?1)",
+             (SELECT token_hash FROM sessions WHERE created_at <= ?1 AND pinned = 0)",
         [cutoff],
     )?;
-    tx.execute("DELETE FROM sessions WHERE created_at <= ?1", [cutoff])?;
+    tx.execute(
+        "DELETE FROM sessions WHERE created_at <= ?1 AND pinned = 0",
+        [cutoff],
+    )?;
     tx.execute(
         "INSERT OR IGNORE INTO sessions (token_hash, created_at) VALUES (?1, ?2)",
         params![token_hash, now],
@@ -953,6 +978,80 @@ impl Store {
         Ok(())
     }
 
+    /// Create (or keep) the pinned session of a pod token (D46): it never
+    /// expires and a logout keeps it.
+    pub fn create_pinned_session(&self, token_hash: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT INTO sessions (token_hash, created_at, pinned) VALUES (?1, ?2, 1)
+             ON CONFLICT(token_hash) DO UPDATE SET pinned = 1",
+            params![token_hash, now_secs()],
+        )?;
+        Ok(())
+    }
+
+    /// Replace the pinned session(s) with one for `token_hash` (a pod token
+    /// rotation): the old token's session and its sign-ins go.
+    pub fn replace_pinned_session(&self, token_hash: &str) -> rusqlite::Result<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM session_sign_ins WHERE token_hash IN
+                 (SELECT token_hash FROM sessions WHERE pinned = 1)",
+            [],
+        )?;
+        tx.execute("DELETE FROM sessions WHERE pinned = 1", [])?;
+        tx.execute(
+            "INSERT INTO sessions (token_hash, created_at, pinned) VALUES (?1, ?2, 1)",
+            params![token_hash, now_secs()],
+        )?;
+        tx.commit()
+    }
+
+    /// Whether the session is pinned (a pod token's).
+    pub fn session_pinned(&self, token_hash: &str) -> rusqlite::Result<bool> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT pinned FROM sessions WHERE token_hash = ?1",
+                [token_hash],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_some_and(|p| p != 0))
+    }
+
+    /// Remove every sign-in of a session, keeping the session (logout of a
+    /// pinned session).
+    pub fn clear_sign_ins(&self, token_hash: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "DELETE FROM session_sign_ins WHERE token_hash = ?1",
+            [token_hash],
+        )?;
+        Ok(())
+    }
+
+    /// Remove one sign-in from a session (an adapter found it unusable).
+    pub fn detach_sign_in(&self, token_hash: &str, sign_in: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "DELETE FROM session_sign_ins WHERE token_hash = ?1 AND provider = ?2",
+            [token_hash, sign_in],
+        )?;
+        Ok(())
+    }
+
+    /// A pod setting (D46); `None` when not set.
+    pub fn pod_setting(&self, key: &str) -> rusqlite::Result<Option<String>> {
+        pod_setting_on(&self.conn(), key)
+    }
+
+    pub fn set_pod_setting(&self, key: &str, value: &str) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR REPLACE INTO pod_settings (key, value) VALUES (?1, ?2)",
+            [key, value],
+        )?;
+        Ok(())
+    }
+
     /// Record that `sign_in` completed on an existing session (tests and
     /// tooling; see [`open_session_on`]).
     pub fn attach_sign_in(&self, token_hash: &str, sign_in: &str) -> rusqlite::Result<()> {
@@ -968,12 +1067,12 @@ impl Store {
         stmt.query_map([token_hash], |r| r.get(0))?.collect()
     }
 
-    /// Whether the session exists and is younger than `ttl_secs`.
+    /// Whether the session exists and is younger than `ttl_secs` (or pinned).
     pub fn session_valid(&self, token_hash: &str, ttl_secs: i64) -> rusqlite::Result<bool> {
         Ok(self
             .conn()
             .query_row(
-                "SELECT 1 FROM sessions WHERE token_hash = ?1 AND created_at > ?2",
+                "SELECT 1 FROM sessions WHERE token_hash = ?1 AND (created_at > ?2 OR pinned = 1)",
                 params![token_hash, now_secs().saturating_sub(ttl_secs)],
                 |_| Ok(()),
             )

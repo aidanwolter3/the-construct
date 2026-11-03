@@ -2,7 +2,7 @@
 
 Server-driven UI: a Rust "pod" serves app layouts (JSON `UiNode` trees) plus normalized entities; native clients
 (macOS desktop, Android, headless simulator) render them with shared Compose code and a shared Rust engine.
-Apps today: Pixelfed (`pixelfed_home`) and Recipes (`recipes`). Read `README.md` for details and `docs/DECISIONS.md` (D1–D41) before
+Apps today: Pixelfed (`pixelfed_home`) and Recipes (`recipes`). Read `README.md` for details and `docs/DECISIONS.md` (D1–D46) before
 changing architecture; `docs/PROGRESS.md` has history and next steps. `DESIGN.md` is the original design doc
 (product renamed from "Project Canvas"; AI layout editing was built, then shelved — see D32/D33).
 
@@ -13,7 +13,9 @@ changing architecture; `docs/PROGRESS.md` has history and next steps. `DESIGN.md
 - `crates/app-pixelfed` — the Pixelfed adapter (OAuth, feed, likes, comments, media proxy, `pixelfed_*` tables) and
   the `pixelfed_demo` dev app (a `StaticAdapter`).
 - `crates/app-recipes` — the recipes adapter (`recipes_*` tables, the recipe import migration, D41).
-- `crates/server` — the pod binary: `pod-core` + the compile-time adapters (`server::adapters`).
+- `crates/pod-host` — one server, many pods (D46): `host.db`, pod tokens, temporary pods, routing by bearer token.
+- `crates/server` — the server binary: `pod-host` over pods built from `pod-core` + the compile-time adapters
+  (`server::adapters`); `server pods …` is the admin CLI.
 - `crates/client-core` — engine: SQLite cache, outbox sync, PKCE sign-in, SSE subscriber.
 - `crates/client-ffi` — UniFFI bridge (Kotlin bindings live in `kmp-app/shared/src/jvmCommonMain`).
 - `crates/fake-pixelfed` — fake upstream (primary test target); `crates/e2e` — end-to-end suite.
@@ -24,7 +26,7 @@ changing architecture; `docs/PROGRESS.md` has history and next steps. `DESIGN.md
 ## Commands
 ```bash
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
-cargo run -p server                      # pod on 127.0.0.1:8080 (fake Pixelfed expected on :8081)
+cargo run -p server                      # 127.0.0.1:8080; on loopback, callers without a pod token use the "dev" pod
 cargo run -p fake-pixelfed               # fake upstream on 127.0.0.1:8081
 scripts/e2e.sh                           # e2e suite against the fake binary
 
@@ -64,6 +66,11 @@ The warm-up (~2-3 min) runs in the background so sessions start immediately; bui
 Gradle's cache lock. `~/.construct-cloud-warmup.status` reads `running`, `done` or `failed` (log:
 `~/.construct-cloud-warmup.log`). If the environment has no setup script or the warm-up failed, run
 `CONSTRUCT_SETUP_WARM=foreground bash scripts/cloud_setup.sh` once.
+
+### Testing on staging
+Staging needs a pod token (D46). Make a temporary one (24 h, deleted afterwards; no secrets needed):
+`curl -fsS -X POST https://the-construct-pod.fly.dev/v1/pods/temporary | jq -r .session_token`, then send it as
+`Authorization: Bearer <token>`; in the simulator click "Try a temporary pod". Never put pod codes in git or files.
 
 ## Deploys and CI
 - Every PR/push: clippy + Rust tests, JVM tests, simulator screenshots (artifact).

@@ -518,47 +518,41 @@ fn a_sync_error_stops_the_start() {
     assert!(store.app_latest_meta("pixelfed_home").unwrap().is_none());
 }
 
+/// D46: `server pods adopt` checks the database (migrations and layout sync)
+/// before it becomes a pod; a sync error stops it with the error and leaves
+/// the original file where it was.
 #[test]
-fn the_server_binary_exits_non_zero_on_a_sync_error() {
-    use std::io::Read;
-    use std::process::{Command, Stdio};
-    let dir = tempfile::tempdir().unwrap();
-    db_with_a_changed_file(dir.path());
-    let mut child = Command::new(env!("CARGO_BIN_EXE_server"))
-        .env("CONSTRUCT_DATA_DIR", dir.path())
-        .env("CONSTRUCT_ADDR", "127.0.0.1:0")
-        .env("RUST_LOG", "info")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+fn adopting_a_database_with_a_sync_error_fails_and_changes_nothing() {
+    use std::process::Command;
+    let old = tempfile::tempdir().unwrap();
+    db_with_a_changed_file(old.path());
+    let data = tempfile::tempdir().unwrap();
+    let src = old.path().join("server.db");
+    let out = Command::new(env!("CARGO_BIN_EXE_server"))
+        .args(["pods", "adopt", "me", src.to_str().unwrap()])
+        .env("CONSTRUCT_DATA_DIR", data.path())
+        .output()
         .unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if std::time::Instant::now() > deadline {
-            child.kill().unwrap();
-            panic!("the server started despite a changed layout file");
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    let mut out = String::new();
-    child
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_string(&mut out)
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains(CHANGED), "{text}");
+    assert!(src.is_file(), "the original stays");
+    let list = Command::new(env!("CARGO_BIN_EXE_server"))
+        .args(["pods", "list"])
+        .env("CONSTRUCT_DATA_DIR", data.path())
+        .output()
         .unwrap();
-    child
-        .stderr
-        .take()
-        .unwrap()
-        .read_to_string(&mut out)
-        .unwrap();
-    assert_eq!(status.code(), Some(1), "{out}");
-    assert!(out.contains("cannot start"), "{out}");
-    assert!(out.contains(CHANGED), "{out}");
+    assert!(list.status.success());
+    assert!(list.stdout.is_empty(), "no pod was recorded");
+    assert_eq!(
+        std::fs::read_dir(data.path().join("pods")).unwrap().count(),
+        0,
+        "no pod files were left"
+    );
 }
 
 // ---------- SSE ----------
@@ -745,12 +739,21 @@ async fn sse_auth_matches_the_workspace_get() {
         signed_in.next_event().await,
         layout_msg("pixelfed_home", files("pixelfed_home"))
     );
-    // Stale bearer, or a session without the `pixelfed` sign-in: 401, like
-    // GET /v1/workspaces/pixelfed_home.
-    for bearer in ["stale", "other"] {
-        let resp = client().get(&url).bearer_auth(bearer).send().await.unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "{bearer}");
-    }
+    // A valid session without the `pixelfed` sign-in keeps its session
+    // (D46), like GET /v1/workspaces/pixelfed_home: allowed.
+    let mut other = SseReader::connect(&url, Some("other")).await;
+    assert_eq!(
+        other.next_event().await,
+        layout_msg("pixelfed_home", files("pixelfed_home"))
+    );
+    // A stale bearer: 401, like the workspace GET.
+    let resp = client()
+        .get(&url)
+        .bearer_auth("stale")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     // Unknown workspace: 404; malformed: 400.
     let resp = client()
         .get(format!("{}/v1/workspaces/nope/events", pod.url))

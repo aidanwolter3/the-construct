@@ -10,6 +10,7 @@ use protocol::{
 };
 
 use super::HOME_QUERY;
+use crate::config::PixelfedConfig;
 
 pub const WORKSPACE_ID: &str = "pixelfed_home";
 pub const LIKE_ENDPOINT: &str = "/v1/pixelfed/posts/like";
@@ -27,9 +28,70 @@ pub fn home_feed(entities: BTreeMap<String, EntityRecord>, order: Vec<String>) -
     }
 }
 
-/// Signed-out screen of app `app_id` (titled `title`) with a "Sign in with
-/// Pixelfed" button.
-pub fn signed_out(instance_url: &str, app_id: &str, title: &str) -> WorkspaceSpec {
+/// The form field the signed-out screen's server box edits.
+pub const INSTANCE_FIELD: &str = "instance";
+
+/// The host (and port) of a base URL, for labels.
+fn host_label(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    rest.trim_end_matches('/').to_owned()
+}
+
+fn sign_in_intent(instance_url: &str) -> ActionIntent {
+    ActionIntent::AuthLogin {
+        instance_url: instance_url.into(),
+        app_path: AUTH_APP_PATH.into(),
+        token_path: AUTH_TOKEN_PATH.into(),
+    }
+}
+
+/// Signed-out screen of app `app_id` (titled `title`): a "Sign in with
+/// Pixelfed" button for the default instance, and when users may pick
+/// another instance (D45) a server box (`$form.instance`) with its own
+/// button. The box needs no new client vocabulary: the client binds the
+/// typed value into the intent and sends nothing while it is blank.
+pub fn signed_out(config: &PixelfedConfig, app_id: &str, title: &str) -> WorkspaceSpec {
+    let default = host_label(&config.public_url);
+    let mut children = vec![
+        // No title Text: the workspace title already says "Pixelfed".
+        UiNode::Text {
+            value_expr: format!(
+                "Sign in to {default} to see your home feed. Your Pixelfed token stays on your pod."
+            ),
+            style: TextStyle::Body,
+        },
+        UiNode::Button {
+            label: "Sign in with Pixelfed".into(),
+            on_click: sign_in_intent(&config.instance_url),
+        },
+    ];
+    if config.other_instances() {
+        let example = if config.any_instance {
+            "pixelfed.social".to_owned()
+        } else {
+            config
+                .allowed_instances
+                .first()
+                .map(|u| host_label(u))
+                .unwrap_or_default()
+        };
+        children.extend([
+            UiNode::Text {
+                value_expr: "Or sign in to another Pixelfed server:".into(),
+                style: TextStyle::Body,
+            },
+            UiNode::TextField {
+                field: INSTANCE_FIELD.into(),
+                placeholder: format!("Server, e.g. {example}"),
+                max_length: Some(253),
+                on_submit: None,
+            },
+            UiNode::Button {
+                label: "Sign in to this server".into(),
+                on_click: sign_in_intent(&format!("$form.{INSTANCE_FIELD}")),
+            },
+        ]);
+    }
     WorkspaceSpec {
         version: pod_core::BUNDLE_VERSION.into(),
         workspace: UiNode::Workspace {
@@ -42,24 +104,7 @@ pub fn signed_out(instance_url: &str, app_id: &str, title: &str) -> WorkspaceSpe
                 content: UiNode::Container {
                     orientation: Orientation::Vertical,
                     padding_dp: 16,
-                    // No title Text: the workspace title already says "Pixelfed".
-                    children: vec![
-                        UiNode::Text {
-                            value_expr: format!(
-                                "Sign in to {instance_url} to see your home feed. Your Pixelfed \
-                                 token stays on your pod."
-                            ),
-                            style: TextStyle::Body,
-                        },
-                        UiNode::Button {
-                            label: "Sign in with Pixelfed".into(),
-                            on_click: ActionIntent::AuthLogin {
-                                instance_url: instance_url.into(),
-                                app_path: AUTH_APP_PATH.into(),
-                                token_path: AUTH_TOKEN_PATH.into(),
-                            },
-                        },
-                    ],
+                    children,
                 },
             }],
         },

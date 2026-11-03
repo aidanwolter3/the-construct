@@ -1,14 +1,28 @@
-//! The Pixelfed adapter's tables (core migrations v2-v4, which predate
-//! per-adapter migrations; D40): registered OAuth apps, the stored upstream
-//! account and its pinned owner, and the media proxy's keys.
+//! The Pixelfed adapter's tables: registered OAuth apps, the stored upstream
+//! account and its pinned owner per instance, and the media proxy's keys
+//! (core migrations v2-v4, which predate per-adapter migrations; D40); and
+//! which instance each session signed in to ([`MIGRATIONS`], D45).
 //!
 //! [`PixelfedStore`] adds these queries to the core's [`Store`].
 
-use pod_core::store::{Store, open_session_on};
+use pod_core::store::{Migration, Store, open_session_on};
 use pod_core::util::now_secs;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::adapter::SIGN_IN;
+
+/// The adapter's own migrations (append-only; staging has run them).
+pub static MIGRATIONS: &[Migration] = &[
+    // 1 (D45): the instance each session signed in to. A session without a
+    // row (one from before D45) uses the default instance. Rows of sessions
+    // that are gone are pruned at the next sign-in.
+    Migration::Sql(
+        "CREATE TABLE pixelfed_session_instance (
+             token_hash TEXT PRIMARY KEY NOT NULL,
+             instance   TEXT NOT NULL
+         );",
+    ),
+];
 
 /// Outcome of [`PixelfedStore::sign_in_pixelfed`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,11 +103,12 @@ pub trait PixelfedStore {
     ) -> rusqlite::Result<()>;
     /// The pinned owner's upstream account id, if anyone has signed in.
     fn pixelfed_owner(&self, instance: &str) -> rusqlite::Result<Option<String>>;
-    /// Sign-in, atomically: if no owner is pinned (or `replace_owner`),
-    /// `account` becomes the owner; if another account is pinned, nothing
-    /// changes and [`SignIn::NotOwner`] is returned. Otherwise the account is
-    /// stored and the session `token_hash` gets the `pixelfed` sign-in (it is
-    /// created if new; sessions older than `session_ttl_secs` are pruned).
+    /// Sign-in, atomically: if no owner is pinned on `instance` (or
+    /// `replace_owner`), `account` becomes its owner; if another account is
+    /// pinned, nothing changes and [`SignIn::NotOwner`] is returned.
+    /// Otherwise the account is stored, the session `token_hash` gets the
+    /// `pixelfed` sign-in (it is created if new; sessions older than
+    /// `session_ttl_secs` are pruned) and now uses `instance`.
     fn sign_in_pixelfed(
         &self,
         instance: &str,
@@ -102,6 +117,8 @@ pub trait PixelfedStore {
         replace_owner: bool,
         session_ttl_secs: i64,
     ) -> rusqlite::Result<SignIn>;
+    /// The instance session `token_hash` signed in to (None: from before D45).
+    fn session_instance(&self, token_hash: &str) -> rusqlite::Result<Option<String>>;
     fn delete_pixelfed_account(&self, instance: &str) -> rusqlite::Result<()>;
     /// Compare-and-delete: forget the stored account only if it still holds
     /// `access_token` (a concurrent sign-in or refresh may have replaced it).
@@ -238,7 +255,28 @@ impl PixelfedStore for Store {
             )?;
             save_account_on(tx, instance, account)?;
             open_session_on(tx, token_hash, SIGN_IN, session_ttl_secs)?;
+            tx.execute(
+                "DELETE FROM pixelfed_session_instance
+                 WHERE token_hash NOT IN (SELECT token_hash FROM sessions)",
+                [],
+            )?;
+            tx.execute(
+                "INSERT OR REPLACE INTO pixelfed_session_instance (token_hash, instance)
+                 VALUES (?1, ?2)",
+                params![token_hash, instance],
+            )?;
             Ok(SignIn::Ok)
+        })
+    }
+
+    fn session_instance(&self, token_hash: &str) -> rusqlite::Result<Option<String>> {
+        self.with_conn(|c| {
+            c.query_row(
+                "SELECT instance FROM pixelfed_session_instance WHERE token_hash = ?1",
+                [token_hash],
+                |r| r.get(0),
+            )
+            .optional()
         })
     }
 
@@ -296,6 +334,12 @@ impl PixelfedStore for Store {
 mod tests {
     use super::*;
 
+    fn store() -> Store {
+        let s = Store::open_in_memory().unwrap();
+        s.migrate_adapter("pixelfed", MIGRATIONS).unwrap();
+        s
+    }
+
     fn account(id: &str, token: &str) -> PixelfedAccount {
         PixelfedAccount {
             access_token: token.into(),
@@ -321,7 +365,7 @@ mod tests {
 
     #[test]
     fn sign_in_pins_the_first_owner() {
-        let s = Store::open_in_memory().unwrap();
+        let s = store();
         let ttl = 86_400;
         assert_eq!(
             s.sign_in_pixelfed("i", &account("1", "a"), "h1", false, ttl)
@@ -354,8 +398,29 @@ mod tests {
     }
 
     #[test]
+    fn sign_in_records_the_session_instance() {
+        let s = store();
+        let ttl = 86_400;
+        s.sign_in_pixelfed("a", &account("1", "x"), "h", false, ttl)
+            .unwrap();
+        assert_eq!(s.session_instance("h").unwrap().as_deref(), Some("a"));
+        // Another instance: its own owner, and the session moves there.
+        s.sign_in_pixelfed("b", &account("9", "y"), "h", false, ttl)
+            .unwrap();
+        assert_eq!(s.session_instance("h").unwrap().as_deref(), Some("b"));
+        assert_eq!(s.pixelfed_owner("a").unwrap().as_deref(), Some("1"));
+        assert_eq!(s.pixelfed_owner("b").unwrap().as_deref(), Some("9"));
+        // A session from before D45 has no row; rows of deleted sessions go at the next sign-in.
+        assert_eq!(s.session_instance("never").unwrap(), None);
+        assert!(s.delete_session("h").unwrap());
+        s.sign_in_pixelfed("a", &account("1", "z"), "h2", false, ttl)
+            .unwrap();
+        assert_eq!(s.session_instance("h").unwrap(), None);
+    }
+
+    #[test]
     fn sign_in_adds_pixelfed_to_an_existing_session() {
-        let s = Store::open_in_memory().unwrap();
+        let s = store();
         s.create_session("h").unwrap();
         s.attach_sign_in("h", "other").unwrap();
         s.sign_in_pixelfed("i", &account("1", "a"), "h", false, 86_400)
@@ -365,7 +430,7 @@ mod tests {
 
     #[test]
     fn sign_in_prunes_expired_sessions() {
-        let s = Store::open_in_memory().unwrap();
+        let s = store();
         s.create_session("old").unwrap();
         s.with_conn(|c| c.execute("UPDATE sessions SET created_at = created_at - 1000", []))
             .unwrap();
@@ -377,7 +442,7 @@ mod tests {
 
     #[test]
     fn account_compare_and_delete() {
-        let s = Store::open_in_memory().unwrap();
+        let s = store();
         s.save_pixelfed_account("i", &account("1", "new")).unwrap();
         assert!(!s.delete_pixelfed_account_if_token("i", "old").unwrap());
         assert!(s.pixelfed_account("i").unwrap().is_some());
@@ -387,7 +452,7 @@ mod tests {
 
     #[test]
     fn media_keys_round_trip() {
-        let s = Store::open_in_memory().unwrap();
+        let s = store();
         let (k, u) = ("k".to_owned(), "https://x/a.jpg".to_owned());
         s.save_media_keys([(&k, &u)]).unwrap();
         s.save_media_keys([(&k, &u)]).unwrap();

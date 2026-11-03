@@ -5,6 +5,7 @@ members = [
     "crates/client-core",
     "crates/client-ffi",
     "crates/pod-core",
+    "crates/pod-host",
     "crates/app-pixelfed",
     "crates/app-recipes",
     "crates/server",

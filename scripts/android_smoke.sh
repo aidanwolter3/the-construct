@@ -145,6 +145,7 @@ elif [[ "$SERVER" == 1 ]]; then
   log "building server"
   (cd "$REPO_ROOT" && cargo build -q -p server)
   log "starting server (log: $OUT_DIR/server.log)"
+  # Bound to loopback, the server serves callers without a pod token from its "dev" pod (D46).
   "$REPO_ROOT/target/debug/server" >"$OUT_DIR/server.log" 2>&1 &
   STARTED_SERVER_PID=$!
   deadline=$((SECONDS + 30))

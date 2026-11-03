@@ -891,11 +891,13 @@ async fn events(
     let Some(app) = state.catalog().app(&id).copied() else {
         return workspace_not_found(&id);
     };
-    if let AuthPolicy::SignIn(sign_in) = app.auth {
+    // Events carry only version numbers, so anyone may listen; only a
+    // session the pod no longer knows is told so (a valid one lacking the
+    // app's sign-in, e.g. a pod token's, D46, must not be dropped).
+    if let AuthPolicy::SignIn(_) = app.auth {
         match state.caller(&headers).await {
-            Ok(Caller::Anonymous) => {}
-            Ok(c) if c.has(sign_in) => {}
-            Ok(_) => return unauthorized(),
+            Ok(Caller::Stale) => return unauthorized(),
+            Ok(_) => {}
             Err(e) => return e.into_response(),
         }
     }

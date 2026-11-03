@@ -121,7 +121,13 @@ jobs:
             sleep 3
           done
           [ "$code" = 200 ] || { echo "healthz returned $code"; exit 1; }
-          curl -fsS https://the-construct-pod.fly.dev/v1/workspaces/pixelfed_demo | jq -e '.workspace.id == "pixelfed_demo"'
+          pod=https://the-construct-pod.fly.dev
+          # Without a pod token: only the "Open your pod" screen (D46).
+          curl -fsS "$pod/v1/workspaces/pixelfed_demo" | jq -e '.workspace.title == "The Construct"'
+          # A temporary pod (deleted when it expires) serves the apps.
+          token=$(curl -fsS -X POST "$pod/v1/pods/temporary" | jq -er '.session_token')
+          curl -fsS -H "Authorization: Bearer $token" "$pod/v1/workspaces/pixelfed_demo" \
+            | jq -e '.workspace.id == "pixelfed_demo" and (.entities | length) > 0'
       - name: Note skipped deploy
         if: env.FLY_TOKEN_POD == '' || env.FLY_TOKEN_FAKE == ''
         run: echo "::warning::FLY_API_TOKEN_POD / FLY_API_TOKEN_FAKE secrets missing; some deploy steps were skipped."

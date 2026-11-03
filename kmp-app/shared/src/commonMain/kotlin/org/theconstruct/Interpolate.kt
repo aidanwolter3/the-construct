@@ -150,6 +150,7 @@ fun bindIntent(intent: ActionIntent, item: JsonObject?): ActionIntent {
         )
         is ActionIntent.AuthLogin -> intent.copy(instanceUrl = bindItemTokens(intent.instanceUrl, item))
         is ActionIntent.LoadData -> intent.copy(path = bindItemTokens(intent.path, item))
+        is ActionIntent.OpenSession -> intent.copy(payload = bindJson(intent.payload, item))
         is ActionIntent.Create -> intent.copy(
             queryKey = bindItemTokens(intent.queryKey, item),
             entityUri = bindItemTokens(intent.entityUri, item),

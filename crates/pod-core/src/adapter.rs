@@ -90,6 +90,15 @@ pub trait AppAdapter: Any + Send + Sync {
         Router::new()
     }
 
+    /// Path prefixes of [`Self::router`] routes a client loads without its
+    /// bearer, such as image URLs handed to an image loader (e.g.
+    /// `/v1/pixelfed/media/`). A pod host (D46) serves only these under the
+    /// pod's public prefix ([`crate::public_prefix`]); every other route needs
+    /// the pod's token. Keep them to data that is public anyway.
+    fn public_paths(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// The sign-ins this adapter provides, such as `pixelfed`.
     ///
     /// Called once at startup. Each provider has an id that is unique across
@@ -344,6 +353,17 @@ impl Catalog {
     pub fn sign_in_adapter(&self, id: &str) -> Option<&Arc<dyn AppAdapter>> {
         let (_, i) = self.sign_ins.iter().find(|(s, _)| *s == id)?;
         self.adapters.get(*i)
+    }
+
+    /// Whether `path` is under an adapter's [`AppAdapter::public_paths`]
+    /// (and has no `..` segment).
+    pub fn is_public_path(&self, path: &str) -> bool {
+        !path.split('/').any(|seg| seg == ".." || seg == ".")
+            && self
+                .adapters
+                .iter()
+                .flat_map(|a| a.public_paths())
+                .any(|p| path.starts_with(p))
     }
 
     /// Every adapter's layout files.

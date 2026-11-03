@@ -185,6 +185,16 @@ class ConstructController(
         }
     }
 
+    /** Leaves the pod on this device (the menu's "Leave this pod", D46): the engine forgets its session and refetches. */
+    fun leavePod() {
+        try {
+            bridge.forgetSession()
+        } catch (t: Throwable) {
+            println("[Construct] leaving the pod failed: $t")
+            _state.update { it.copy(error = "Leaving the pod failed: ${t.message}") }
+        }
+    }
+
     /** Forwards an OAuth redirect to the current engine ([ConstructEngineBridge.handleAuthRedirect]). */
     fun handleAuthRedirect(url: String): Boolean = bridge.handleAuthRedirect(url)
 
