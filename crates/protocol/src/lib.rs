@@ -9,6 +9,7 @@
 pub mod ast;
 pub mod bundle;
 pub mod intent;
+pub mod notify;
 pub mod schema;
 
 pub use ast::{
@@ -17,6 +18,10 @@ pub use ast::{
 };
 pub use bundle::{DataBundle, EntityRecord, WorkspaceSpec};
 pub use intent::{ActionIntent, FieldUpdate, PresentationMode};
+pub use notify::{
+    DEVICE_HEADER, Importance, Notification, NotificationChannel, NotificationEvent,
+    NotificationList, PushPayload, ReadEvent, channel_key,
+};
 pub use schema::{
     Compatibility, RETIRED, SCHEMA_HEADER, SCHEMA_VERSION, compatibility, oldest_layout_schema,
     required_schema,

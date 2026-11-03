@@ -1,15 +1,13 @@
 //! HTTP clients for Pixelfed (Mastodon API) instances and their media.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::{StatusCode, redirect};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::config::{Instance, is_public_host};
+use crate::config::Instance;
 use crate::{MediaPolicy, MediaRoute};
 
 /// Total timeout for API calls.
@@ -98,10 +96,7 @@ fn builder(timeout: Duration) -> reqwest::ClientBuilder {
         .user_agent(USER_AGENT)
 }
 
-/// An `https://<public host>` URL (default port; no IP literal).
-fn public_https(url: &reqwest::Url) -> bool {
-    url.scheme() == "https" && url.port().is_none() && url.host_str().is_some_and(is_public_host)
-}
+use pod_core::net::is_public_https as public_https;
 
 impl Clients {
     pub fn new(policy: MediaPolicy) -> Self {
@@ -218,66 +213,8 @@ impl Clients {
     }
 }
 
-/// The system resolver, keeping only public addresses: a name a user typed
-/// (or a federated post's media host) must not reach the pod's own network.
-struct PublicOnlyResolver;
-
-impl Resolve for PublicOnlyResolver {
-    fn resolve(&self, name: Name) -> Resolving {
-        let host = name.as_str().to_owned();
-        Box::pin(async move {
-            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
-                .await?
-                .filter(|a| is_public_ip(a.ip()))
-                .collect();
-            if addrs.is_empty() {
-                tracing::warn!(%host, "refused: the name has no public address");
-                return Err(format!("{host} has no public address").into());
-            }
-            Ok(Box::new(addrs.into_iter()) as Addrs)
-        })
-    }
-}
-
-/// A globally routable unicast address (not private, loopback, link-local,
-/// CGNAT, ULA, documentation, multicast, ...).
-pub fn is_public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => is_public_v4(v4),
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_public_v4(v4);
-            }
-            let s = v6.segments();
-            !(v6.is_unspecified()
-                || v6.is_loopback()
-                || v6.is_multicast()
-                || (s[0] & 0xfe00) == 0xfc00 // unique local (fc00::/7, e.g. Fly's fdaa::)
-                || (s[0] & 0xffc0) == 0xfe80 // link-local
-                || (s[0] & 0xffc0) == 0xfec0 // site-local (deprecated)
-                || (s[0] == 0x2001 && s[1] == 0x0db8) // documentation
-                || (s[0] == 0x0064 && s[1] == 0xff9b) // NAT64: embeds an IPv4 address
-                || s[0] == 0 // ::/16 (IPv4-compatible and other reserved)
-                || s[0] == 0x2002) // 6to4: embeds an IPv4 address
-        }
-    }
-}
-
-fn is_public_v4(ip: Ipv4Addr) -> bool {
-    let [a, b, c, _] = ip.octets();
-    !(ip.is_unspecified()
-        || ip.is_private()
-        || ip.is_loopback()
-        || ip.is_link_local()
-        || ip.is_broadcast()
-        || ip.is_documentation()
-        || ip.is_multicast()
-        || a == 0
-        || (a == 100 && (64..128).contains(&b)) // CGNAT 100.64/10
-        || (a == 192 && b == 0 && c == 0) // 192.0.0/24
-        || (a == 198 && (b == 18 || b == 19)) // benchmarking 198.18/15
-        || a >= 240) // reserved
-}
+use pod_core::net::PublicOnlyResolver;
+pub use pod_core::net::is_public_ip;
 
 /// API client for one instance ([`Clients::api`]).
 #[derive(Debug, Clone)]

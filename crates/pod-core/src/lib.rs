@@ -13,6 +13,9 @@
 
 pub mod adapter;
 pub mod layouts;
+pub mod net;
+pub mod notify;
+pub mod push;
 pub mod session;
 pub mod static_app;
 pub mod store;
@@ -38,6 +41,7 @@ use store::Store;
 pub use adapter::{
     AppAdapter, AppInfo, AuthPolicy, BoxFuture, Catalog, Hydration, Pod, RequestCtx, SignInProvider,
 };
+pub use notify::{NewNotification, PollCtx, PollOutcome, PollStatus};
 pub use session::{Caller, Session};
 pub use static_app::StaticAdapter;
 
@@ -90,6 +94,13 @@ pub struct AppState {
     sse_keepalive: std::time::Duration,
     /// Set by [`AppState::shutdown`]: open SSE streams end.
     shutdown: tokio::sync::watch::Sender<bool>,
+    /// Notifications: the events fan-out, open device streams, polls (D47).
+    pub(crate) notifier: notify::Notifier,
+    /// Web Push sender shared by the server's pods; `None`: no Web Push.
+    push: Option<notify::SharedPush>,
+    /// This pod's public path prefix, set by the host (D46), for work done
+    /// outside a request (notification polls).
+    public_prefix: std::sync::OnceLock<String>,
 }
 
 impl AppState {
@@ -134,6 +145,9 @@ impl AppState {
             layout_tx: tokio::sync::broadcast::channel(layouts::CHANNEL_CAPACITY).0,
             sse_keepalive: layouts::DEFAULT_KEEPALIVE,
             shutdown: tokio::sync::watch::channel(false).0,
+            notifier: notify::Notifier::default(),
+            push: None,
+            public_prefix: std::sync::OnceLock::new(),
         })
     }
 
@@ -183,6 +197,27 @@ impl AppState {
 
     pub fn sse_keepalive(&self) -> std::time::Duration {
         self.sse_keepalive
+    }
+
+    /// Send notifications by Web Push with `sender` (D47).
+    pub fn with_push(mut self, sender: Option<notify::SharedPush>) -> Self {
+        self.push = sender;
+        self
+    }
+
+    pub fn push_sender(&self) -> Option<notify::SharedPush> {
+        self.push.clone()
+    }
+
+    /// The pod's public path prefix ([`PUBLIC_PREFIX_HEADER`]) for work done
+    /// outside a request; the host sets it once when it opens the pod.
+    pub fn set_public_prefix(&self, prefix: &str) {
+        let _ = self.public_prefix.set(prefix.to_owned());
+    }
+
+    /// See [`Self::set_public_prefix`]; `""` when unset.
+    pub fn public_prefix(&self) -> &str {
+        self.public_prefix.get().map_or("", String::as_str)
     }
 
     /// Enable `POST /v1/test/fault` (`CONSTRUCT_TEST_HOOKS=1`).
@@ -276,7 +311,8 @@ pub fn app(state: Pod) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/workspaces/{id}", get(get_workspace))
         .merge(session::router())
-        .merge(layouts::router());
+        .merge(layouts::router())
+        .merge(notify::router());
     for a in state.catalog.adapters() {
         router = router.merge(a.router());
     }
