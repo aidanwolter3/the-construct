@@ -1425,9 +1425,28 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   `GET /v1/workspaces/recipes` lists every recipe by category (the first of each carries `category_header`);
   `GET /v1/recipes/screens/recipe?id=<slug>` is the `recipes://recipes/{id}` screen's data (three lists whose first
   item carries `section`, and whose first item of a named group carries `group`).
-- **No client build:** only existing vocabulary (schema 3). Each list row is one line: a "View" button, then the
+- **No client build:** only existing vocabulary (schema 3; rows made tappable in D42). Each list row is one line: a "View" button, then the
   title (button first: a `core://Row` gives its first children their full width, so a long title after the button
   wraps instead of squeezing it). Tapping the row itself needs new vocabulary (a `core://Tappable` wrapper node that
   makes any node tappable, schema 4): issue #15.
 - **Not yet:** editing recipes, search, scaling servings (the fields support it), access control (anyone who can
   reach the pod can read the recipes).
+
+## D42: `core://Tappable` makes any node tappable (schema 4)
+
+- **Why:** issue #15: only `core://Button` / `IconButton` (and `TextField`'s submit) took an intent, so each recipes
+  list row needed a "View" button (D41) that took the room a phone list needs. Rows should be thin titles that open
+  the recipe when tapped, and the fix should work for any node, not only rows.
+- **What:** one generic wrapper node, `core://Tappable {on_click, content, content_description?, tag?}`, in the style
+  of `core://Conditional`. Clients put the click on the content's own modifier, so the whole drawn area (padding
+  included) is the target, and dispatch `on_click` with `$item` bound like a button's. A button inside keeps its own
+  taps (the innermost clickable wins). `content_description` is read by screen readers; `tag` (bindable) names it
+  for tests. The pod checks its intent like a button's (`own_intents`).
+- **Why a wrapper rather than `on_click` on every node:** one node type instead of a new field on each (and on each
+  future one); no overlap with Button / IconButton / TextField, which keep their own look and semantics; and room for
+  more gestures on the same node later (`on_long_press`).
+- **Schema 4, additive:** `SCHEMA_VERSION` is 4 and `RETIRED` is unchanged, so schema-4 clients still draw schema-3
+  layouts. `layouts/recipes/0002.json` (schema 4) makes each recipe row a `core://Tappable` around a `core://Row`
+  holding only the title; schema-3 clients keep getting `recipes/0001` (the "View" buttons). This supersedes D41's
+  "Each list row is one line: a View button, then the title" for schema-4 clients.
+- **Not yet:** `on_long_press`; a pressed/ripple style choice per node (clients draw their platform default).

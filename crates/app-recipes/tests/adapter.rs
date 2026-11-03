@@ -40,15 +40,17 @@ fn layout_files_parse_and_validate() {
     let catalog = Catalog::new(adapters()).unwrap();
     let files = parse_files(&catalog, FILES).unwrap();
     assert_eq!(files.len(), FILES.len());
-    assert_eq!(files[0].schema, protocol::SCHEMA_VERSION);
+    assert_eq!(files[0].schema, 3);
+    assert_eq!(files.last().unwrap().schema, protocol::SCHEMA_VERSION);
 }
 
 async fn get(state: &Arc<AppState>, path: &str) -> (StatusCode, serde_json::Value) {
+    get_as(state, path, protocol::SCHEMA_VERSION).await
+}
+
+async fn get_as(state: &Arc<AppState>, path: &str, schema: u32) -> (StatusCode, serde_json::Value) {
     let req = Request::get(path)
-        .header(
-            protocol::SCHEMA_HEADER,
-            protocol::SCHEMA_VERSION.to_string(),
-        )
+        .header(protocol::SCHEMA_HEADER, schema.to_string())
         .body(Body::empty())
         .unwrap();
     let resp = pod_core::app(state.clone()).oneshot(req).await.unwrap();
@@ -94,6 +96,29 @@ async fn the_workspace_lists_every_recipe_and_a_screen_loads_one() {
     );
     let (status, _) = get(&state, "/v1/recipes/screens/recipe?id=..%2Fx").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// Schema 4 clients get tappable rows (0002, D42); schema 3 clients keep the
+/// "View" buttons (0001).
+#[tokio::test]
+async fn each_schema_gets_the_newest_layout_it_draws() {
+    let state = Arc::new(AppState::in_memory(adapters()));
+    for (schema, tappable) in [(protocol::SCHEMA_VERSION, true), (3, false)] {
+        let (status, body) = get_as(&state, "/v1/workspaces/recipes", schema).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
+        let types: Vec<String> = spec.workspace.walk().iter().map(|n| n.type_tag()).collect();
+        assert_eq!(
+            types.iter().any(|t| t == "core://Tappable"),
+            tappable,
+            "schema {schema}"
+        );
+        assert_eq!(
+            types.iter().any(|t| t == "core://Button"),
+            !tappable,
+            "schema {schema}"
+        );
+    }
 }
 
 #[tokio::test]

@@ -31,6 +31,7 @@ class BindingTest {
             is UiNode.ItemList -> all(n.itemTemplate)
             is UiNode.Carousel -> all(n.itemTemplate)
             is UiNode.Conditional -> all(n.content)
+            is UiNode.Tappable -> all(n.content)
             else -> emptyList()
         }
         val ws = ConstructJson.decodeBundle(PIXELFED_BUNDLE_JSON).workspace

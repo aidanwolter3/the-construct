@@ -214,6 +214,18 @@ sealed class UiNode {
     @Serializable
     data class Badge(val text: String, val icon: String) : UiNode()
 
+    /**
+     * [content] made tappable (schema 4, D42): a tap anywhere on it dispatches [onClick]; a button inside keeps its own
+     * tap. [contentDescription] is for screen readers; [tag] (bindable) names it for tests.
+     */
+    @Serializable
+    data class Tappable(
+        @SerialName("on_click") val onClick: ActionIntent,
+        val content: UiNode,
+        @SerialName("content_description") val contentDescription: String? = null,
+        val tag: String? = null,
+    ) : UiNode()
+
     /** A node whose `type` this client does not know. [raw] is the full original object. */
     data class Unknown(val type: String, val raw: JsonObject) : UiNode()
 }
@@ -384,6 +396,7 @@ object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode
         Variant("core://IconButton", UiNode.IconButton::class, UiNode.IconButton.serializer()),
         Variant("core://Chip", UiNode.Chip::class, UiNode.Chip.serializer()),
         Variant("core://Badge", UiNode.Badge::class, UiNode.Badge.serializer()),
+        Variant("core://Tappable", UiNode.Tappable::class, UiNode.Tappable.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): UiNode = UiNode.Unknown(tag, raw)

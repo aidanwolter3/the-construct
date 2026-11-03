@@ -137,9 +137,30 @@ class ModelTest {
             UiNode.Badge("b", "repeat"),
             UiNode.IconButton("send", "Send", ActionIntent.NavigateBack, active = "\$item.on", activeTint = "#112233", tag = "t"),
             UiNode.Image("u", blurhash = "LEHV6nWB2yk8"),
+            UiNode.Tappable(
+                ActionIntent.Navigate("recipes://recipes/\$item.id", PresentationMode.Push),
+                UiNode.Row(listOf(UiNode.Text("\$item.title", TextStyle.Label))),
+                contentDescription = "Open \$item.title",
+                tag = "row:\$item.id",
+            ),
+            UiNode.Tappable(ActionIntent.NavigateBack, UiNode.Divider),
         )
         for (n in nodes) assertEquals(n, ConstructJson.decodeNode(ConstructJson.encodeNode(n)), n.toString())
         assertTrue(ConstructJson.encodeNode(UiNode.Divider) == "{\"type\":\"core://Divider\"}", ConstructJson.encodeNode(UiNode.Divider))
+    }
+
+    @Test
+    fun tappableDecodesFromTheWireAndItsIntentBindsItem() {
+        val raw = """{"type":"core://Tappable","on_click":{"intent":"action.navigation.open",
+            "target_uri":"recipes://recipes/${'$'}item.id","presentation":"Push"},
+            "content":{"type":"core://Text","value_expr":"${'$'}item.title","style":"Label"}}"""
+        val t = assertIs<UiNode.Tappable>(ConstructJson.decodeNode(raw))
+        assertIs<UiNode.Text>(t.content)
+        assertEquals(null, t.contentDescription)
+        val item = buildJsonObject { put("id", "7") }
+        val bound = assertIs<ActionIntent.Navigate>(bindIntent(t.onClick, item))
+        assertEquals("recipes://recipes/7", bound.targetUri)
+        assertTrue(!ConstructJson.encodeNode(t).contains("content_description"), "null optional fields are omitted")
     }
 
     @Test

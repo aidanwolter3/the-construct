@@ -49,7 +49,7 @@ macro_rules! layout_file {
 }
 
 /// The recipes app's layout files, in number order.
-pub static FILES: &[LayoutSource] = &[layout_file!("0001")];
+pub static FILES: &[LayoutSource] = &[layout_file!("0001"), layout_file!("0002")];
 
 /// The recipes adapter.
 #[derive(Debug, Default)]
