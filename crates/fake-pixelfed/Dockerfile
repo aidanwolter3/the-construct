@@ -8,8 +8,9 @@
 # The admin/fault endpoints are off by default inside the container (it binds 0.0.0.0,
 # not loopback); FAKE_PIXELFED_ADMIN=1 turns them on.
 
-ARG RUST_IMAGE=rust:1-slim-bookworm
-ARG RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot
+# Base images are pinned by digest (reproducible builds); bump the digest to take updates.
+ARG RUST_IMAGE=rust:1-slim-bookworm@sha256:24707e70a4f1e23d9a7b25202ec43126d28a52294b96aad5c670df1fd1f1d400
+ARG RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
 
 # Dependencies are compiled in their own layer (cargo-chef), rebuilt only when Cargo.toml / Cargo.lock change.
 FROM ${RUST_IMAGE} AS chef
