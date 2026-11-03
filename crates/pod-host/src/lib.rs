@@ -449,7 +449,7 @@ impl Host {
     }
 
     /// The open pod `id`, opening it on first use.
-    async fn pod(self: &Arc<Self>, id: &str) -> Result<Arc<OpenPod>, Response> {
+    async fn pod(self: &Arc<Self>, id: &str) -> Result<Arc<OpenPod>, Box<Response>> {
         if let Some(p) = self.cache().get(id) {
             return Ok(p.clone());
         }
@@ -472,10 +472,10 @@ impl Host {
         .and_then(|r| r);
         let state = built.map_err(|e| {
             tracing::error!(pod = id, error = %e, "cannot open pod");
-            json_error(
+            Box::new(json_error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 json!({ "error": "pod_unavailable" }),
-            )
+            ))
         })?;
         let pod: Pod = Arc::new(state);
         let open = Arc::new(OpenPod {
@@ -489,30 +489,30 @@ impl Host {
     async fn blocking<T: Send + 'static>(
         self: &Arc<Self>,
         f: impl FnOnce(&Host) -> T + Send + 'static,
-    ) -> Result<T, Response> {
+    ) -> Result<T, Box<Response>> {
         let host = self.clone();
         tokio::task::spawn_blocking(move || f(&host))
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, "host task failed");
-                json_error(
+                Box::new(json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     json!({ "error": "host_error" }),
-                )
+                ))
             })
     }
 
     /// The live pod `token` opens.
-    async fn pod_for_token(self: &Arc<Self>, token: &str) -> Result<Option<String>, Response> {
+    async fn pod_for_token(self: &Arc<Self>, token: &str) -> Result<Option<String>, Box<Response>> {
         let hash = session_hash(token);
         match self.blocking(move |h| h.store.pod_for_token(&hash)).await? {
             Ok(id) => Ok(id),
             Err(e) => {
                 tracing::error!(error = %e, "host store error");
-                Err(json_error(
+                Err(Box::new(json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     json!({ "error": "host_error" }),
-                ))
+                )))
             }
         }
     }
@@ -569,7 +569,7 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
     let found = match &token {
         Some(t) => match host.pod_for_token(t).await {
             Ok(found) => found,
-            Err(r) => return r,
+            Err(r) => return *r,
         },
         None => None,
     };
@@ -578,7 +578,7 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
     };
     let open = match host.pod(&pod_id).await {
         Ok(p) => p,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     set_prefix(req.headers_mut(), &pod_id);
     match open.router.clone().oneshot(req).await {
@@ -659,7 +659,7 @@ async fn open_with_token(State(host): State<Arc<Host>>, req: Request) -> Respons
                 json!({ "error": "pod_not_found" }),
             )
         }
-        Err(r) => r,
+        Err(r) => *r,
     }
 }
 
@@ -716,7 +716,7 @@ async fn temporary_pod(State(host): State<Arc<Host>>, req: Request) -> Response 
                 json!({ "error": "host_error" }),
             )
         }
-        Err(r) => r,
+        Err(r) => *r,
     }
 }
 
@@ -739,12 +739,12 @@ async fn public_route(
             tracing::error!(error = %e, "host store error");
             return not_found();
         }
-        Err(r) => return r,
+        Err(r) => return *r,
     }
     let path = format!("/{rest}");
     let open = match host.pod(&pod_id).await {
         Ok(p) => p,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if !open.pod.catalog().is_public_path(&path) {
         return not_found();

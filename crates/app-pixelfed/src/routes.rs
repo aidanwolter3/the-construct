@@ -66,18 +66,18 @@ fn adapter(state: &Pod) -> &PixelfedAdapter {
 async fn signed_in_account(
     state: &Pod,
     headers: &HeaderMap,
-) -> Result<(Instance, PixelfedAccount), Response> {
+) -> Result<(Instance, PixelfedAccount), Box<Response>> {
     let caller = state
         .caller(headers)
         .await
-        .map_err(IntoResponse::into_response)?;
+        .map_err(|e| Box::new(e.into_response()))?;
     let found = match caller.session() {
         Some(session) => session_account(state, session)
             .await
-            .map_err(IntoResponse::into_response)?,
+            .map_err(|e| Box::new(e.into_response()))?,
         None => None,
     };
-    found.ok_or_else(|| sign_in_required(&caller))
+    found.ok_or_else(|| Box::new(sign_in_required(&caller)))
 }
 
 /// Serializes one pod's upstream token refreshes (Passport rotates the
@@ -673,7 +673,7 @@ async fn toggle(state: Pod, headers: HeaderMap, body: Bytes, kind: Toggle) -> Re
     let rt = adapter(&state).runtime();
     let (instance, account) = match signed_in_account(&state, &headers).await {
         Ok(found) => found,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let upstream = rt.api(&instance);
     let payload = match parse_json_body(&headers, &body) {
@@ -771,7 +771,7 @@ async fn comments_screen(
     let rt = adapter(&state).runtime();
     let (instance, account) = match signed_in_account(&state, &headers).await {
         Ok(found) => found,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let upstream = rt.api(&instance);
     let id = params
@@ -822,7 +822,7 @@ async fn comment(State(state): State<Pod>, headers: HeaderMap, body: Bytes) -> R
     let rt = adapter(&state).runtime();
     let (instance, account) = match signed_in_account(&state, &headers).await {
         Ok(found) => found,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let upstream = rt.api(&instance);
     let payload = match parse_json_body(&headers, &body) {
