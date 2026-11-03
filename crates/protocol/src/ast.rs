@@ -474,13 +474,16 @@ impl UiNode {
 
     /// The intents this node itself holds (not its children's).
     pub fn own_intents(&self) -> Vec<&ActionIntent> {
-        match self {
+        let direct: Vec<&ActionIntent> = match self {
             UiNode::Button { on_click, .. }
             | UiNode::IconButton { on_click, .. }
             | UiNode::Tappable { on_click, .. } => vec![on_click],
             UiNode::TextField { on_submit, .. } => on_submit.iter().collect(),
             _ => Vec::new(),
-        }
+        };
+        // The steps of an `action.sequence` count as the node's intents too,
+        // so features, schema checks and the pod's validation see them.
+        direct.into_iter().flat_map(ActionIntent::flatten).collect()
     }
 
     /// Every node of the tree, depth first (this one first).

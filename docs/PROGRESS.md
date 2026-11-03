@@ -650,3 +650,22 @@ new layout files; diffs between versions.
   preview/confirm/undo, caps); e2e `collections.rs` (two engines: add and tick through the outbox, live sync, a todo
   added offline before a rename arrives under the new name, delete). Needs a device check: the todo app on Android
   and in the macOS window.
+
+## Watcher: events from websites, matched and notified (issue #58)
+
+- Decision `watcher`: a built-in adapter (`crates/app-watcher`, source and app `watcher`). Websites (targets) and
+  rules are rows in its own tables, edited from the app's routes or by Claude over MCP, so a new site needs no deploy.
+  No pod-core change.
+- Pipeline: conditional `GET` (public addresses only) with a body hash, so unchanged pages skip extraction; `ics`,
+  `jsonld` and `llm` extractors plus `auto`; optional per-event detail fetch for lineups; stable event ids (source id,
+  else normalized title + date + venue); declarative rules (any/all/none phrases, venue, days, window, sites); one
+  notification per matched event through the D52 pipeline; backoff with `Retry-After`; per-site health.
+- Checks run in the background from the notification poll and when the app opens with a site overdue (a model call
+  outlives the 20 s poll limit). Temporary pods get `watcher.fetch = 0`.
+- App: `layouts/watcher/0001.json` (existing vocabulary): matches, event screen, sites & rules, site screen.
+- MCP: `watcher_status`, `watcher_preview`, `watcher_set_target`, `watcher_set_rule`, `watcher_refresh`.
+- Tests: unit tests (dates, HTML text, ics/JSON-LD/LLM parsing, rules, ids); `app-watcher/tests/watcher.rs` against a
+  fake site and a fake Messages API (rule and site from the app's routes, JSON-LD + detail pages, notified once, 304
+  re-check, ics and llm sites, seen, archive, failing health, refusals, MCP tools, fetching off). Server tests list
+  the new app. Needs a device check: the Watcher app on Android and in the macOS window, and a real notification.
+- Not yet (decision file): an open-URL intent, more extractors and headless fetch, named time zones, in-place edits.

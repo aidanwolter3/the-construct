@@ -1,0 +1,28 @@
+[package]
+name = "app-watcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The watcher adapter (issue #58): polls websites for events, matches them
+# against rules and notifies on new matches. Targets and rules are rows of
+# config in its own `watcher_*` tables, edited from the app or over MCP.
+
+[dependencies]
+pod-core = { path = "../pod-core" }
+protocol = { workspace = true }
+serde_json.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+axum = { version = "0.8", features = ["http2"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
+tracing = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sha2 = "0.10"
+getrandom = "0.3"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }

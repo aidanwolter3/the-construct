@@ -137,4 +137,32 @@ class BindingTest {
         )
         assertEquals("${d}value", encoded["payload"]!!.jsonObject["liked"]!!.jsonPrimitive.content)
     }
+
+    @Test
+    fun aSequenceBindsEveryStepWithOneNonceAndRoundTrips() {
+        val d = '$'
+        val wire = """{"intent":"action.sequence","steps":[""" +
+            """{"intent":"action.mutation.create","query_key":"collection:groceries",""" +
+            """"entity_uri":"collections://groceries/pending-${d}nonce","entity":{"name":"${d}item.id"},""" +
+            """"endpoint":"/v1/collections/groceries/create","payload":{"client_id":"${d}nonce","name":"${d}item.id"}},""" +
+            """{"intent":"action.local.set","entity_uri":"${d}item.uri","field":"added","value_expr":"!entity.added"},""" +
+            """{"intent":"action.navigation.back"}]}"""
+        val intent = assertIs<ActionIntent.Sequence>(ConstructJson.decodeIntent(wire))
+        val bound = assertIs<ActionIntent.Sequence>(bindIntent(intent, post))
+        val set = assertIs<ActionIntent.LocalSet>(bound.steps[1])
+        assertEquals("pixelfed://posts/101", set.entityUri)
+        assertEquals("!entity.added", set.valueExpr)
+        assertSame(ActionIntent.NavigateBack, bound.steps[2])
+
+        // One nonce for the whole sequence, in every step.
+        val formed = assertIs<ActionIntent.Sequence>(bindForm(bound, emptyMap()) { "n1" })
+        val create = assertIs<ActionIntent.Create>(formed.steps[0])
+        assertEquals("collections://groceries/pending-n1", create.entityUri)
+        assertEquals("n1", create.payload.jsonObject["client_id"]!!.jsonPrimitive.content)
+        assertEquals("101", create.payload.jsonObject["name"]!!.jsonPrimitive.content)
+
+        // Re-encoding for the engine keeps every step and the expression.
+        val again = assertIs<ActionIntent.Sequence>(ConstructJson.decodeIntent(ConstructJson.encodeIntent(formed)))
+        assertEquals(formed, again)
+    }
 }

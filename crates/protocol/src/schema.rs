@@ -208,7 +208,15 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
 
 /// The features one action intent uses; see [`node_features`].
 fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
-    let _ = (intent, out);
+    match intent {
+        ActionIntent::Sequence { .. } => {
+            out.insert(crate::feature::ACTION_SEQUENCE);
+        }
+        ActionIntent::LocalSet { .. } => {
+            out.insert(crate::feature::LOCAL_SET);
+        }
+        _ => {}
+    }
 }
 
 fn intent_schema(i: &ActionIntent) -> u32 {

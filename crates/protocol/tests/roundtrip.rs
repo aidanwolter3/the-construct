@@ -624,3 +624,56 @@ fn fixture_queries_list_their_entities() {
     assert!(!posts.is_empty());
     assert!(posts.iter().all(|uri| demo.entities.contains_key(uri)));
 }
+
+#[test]
+fn sequences_and_local_sets_round_trip_and_need_their_features() {
+    let wire = r#"{"intent":"action.sequence","steps":[{"intent":"action.mutation.create","query_key":"collection:groceries","entity_uri":"collections://groceries/pending-$nonce","entity":{"name":"$item.thing"},"endpoint":"/v1/collections/groceries/create","payload":{"name":"$item.thing"}},{"intent":"action.local.set","entity_uri":"$item.uri","field":"added","value_expr":"true"}]}"#;
+    let parsed: ActionIntent = serde_json::from_str(wire).unwrap();
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
+    let ActionIntent::Sequence { steps } = &parsed else {
+        panic!("not a sequence");
+    };
+    assert!(matches!(steps[0], ActionIntent::Create { .. }));
+    assert_eq!(
+        steps[1],
+        ActionIntent::LocalSet {
+            entity_uri: "$item.uri".into(),
+            field: "added".into(),
+            value_expr: "true".into(),
+            also: Vec::new(),
+        }
+    );
+    let button = |on_click: &ActionIntent| -> UiNode {
+        serde_json::from_value(json!({
+            "type": "core://IconButton", "icon": "add", "content_description": "Add",
+            "on_click": on_click,
+        }))
+        .unwrap()
+    };
+    // The steps count as the node's intents (validation and schema see them).
+    let node = button(&parsed);
+    let kinds: Vec<&str> = node
+        .own_intents()
+        .iter()
+        .map(|i| match i {
+            ActionIntent::Sequence { .. } => "sequence",
+            ActionIntent::Create { .. } => "create",
+            ActionIntent::LocalSet { .. } => "local",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(kinds, ["sequence", "create", "local"]);
+    assert_eq!(
+        protocol::required_features(&node),
+        ["action_sequence", "local_set"]
+    );
+    // A nested sequence is walked too; a lone local set needs only its own feature.
+    let nested = ActionIntent::Sequence {
+        steps: vec![parsed.clone()],
+    };
+    assert_eq!(nested.flatten().len(), 4);
+    assert_eq!(
+        protocol::required_features(&button(&steps[1])),
+        ["local_set"]
+    );
+}
