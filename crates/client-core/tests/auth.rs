@@ -1436,8 +1436,15 @@ fn a_data_load_401_signs_out() {
         auth(&engine.snapshot())["state"] == "signed_out"
     });
     wait_signed_out_bundle(&engine);
-    // Sign-out forgets load states.
-    assert_eq!(loads(&engine.snapshot()), json!({}));
+    // Sign-out forgets load states. The events stream may notice the revoked
+    // session first: the load then runs signed out and says so.
+    let loads = loads(&engine.snapshot());
+    assert!(
+        loads == json!({})
+            || loads
+                == json!({ path.clone(): { "state": "error", "error": client_core::LOAD_SIGNED_OUT } }),
+        "{loads}"
+    );
 }
 
 #[test]
