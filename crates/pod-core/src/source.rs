@@ -59,8 +59,17 @@ impl SourceManifest {
         }
     }
 
+    /// Feed `name`: a feed of that name, else the source's pattern feed
+    /// (`{name}`) when `name` is a valid id ([`FeedSpec::name`]).
     pub fn feed(&self, name: &str) -> Option<&FeedSpec> {
-        self.feeds.iter().find(|f| f.name == name)
+        self.feeds
+            .iter()
+            .find(|f| f.name == name && !f.is_pattern())
+            .or_else(|| {
+                is_valid_id(name)
+                    .then(|| self.feeds.iter().find(|f| f.is_pattern()))
+                    .flatten()
+            })
     }
 
     /// Every query-key pattern its feeds and data paths fill.
@@ -77,12 +86,23 @@ impl SourceManifest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FeedSpec {
     /// `[a-z0-9_]+`, unique in its source, e.g. `home`. Apps name it, so
-    /// never rename one that ships.
+    /// never rename one that ships. Or one whole placeholder, `{name}`: a
+    /// pattern feed, which an app lists by any `[a-z0-9_]+` name (the
+    /// Collections source: one feed per collection, `["collections",
+    /// "todos"]`). At most one per source; its query keys may use the
+    /// placeholder (`collection:{collection}`), which the feed's name fills.
     pub name: &'static str,
     /// The query keys it fills, e.g. `["timeline:home"]`.
     pub query_keys: &'static [&'static str],
     /// One line for people (and Claude).
     pub doc: &'static str,
+}
+
+impl FeedSpec {
+    /// Whether this is a pattern feed (`{name}`).
+    pub fn is_pattern(&self) -> bool {
+        self.name.starts_with('{')
+    }
 }
 
 /// A data path or action a layout may use.
@@ -282,8 +302,15 @@ pub fn check_manifest(source: &str, m: &SourceManifest) -> Result<(), String> {
         }
     }
     for (i, f) in m.feeds.iter().enumerate() {
-        if !is_valid_id(f.name) {
-            return fail(format!("feed name '{}' is not [a-z0-9_]+", f.name));
+        let pattern = f.is_pattern() && matches!(pattern_part(f.name), Ok(Part::Var));
+        if !is_valid_id(f.name) && !pattern {
+            return fail(format!(
+                "feed name '{}' is not [a-z0-9_]+ or one {{name}} placeholder",
+                f.name
+            ));
+        }
+        if pattern && m.feeds[..i].iter().any(FeedSpec::is_pattern) {
+            return fail("a source has at most one pattern feed".into());
         }
         if m.feeds[..i].iter().any(|o| o.name == f.name) {
             return fail(format!("feed '{}' is declared twice", f.name));
@@ -420,6 +447,46 @@ mod tests {
             assert!(check_key_pattern(bad).is_err(), "{bad}");
         }
         assert_eq!(check_key_pattern("thing:{id}:steps"), Ok(()));
+    }
+
+    #[test]
+    fn a_pattern_feed_answers_to_any_name() {
+        let m = SourceManifest {
+            feeds: &[
+                FeedSpec {
+                    name: "all",
+                    query_keys: &["c:all"],
+                    doc: "",
+                },
+                FeedSpec {
+                    name: "{collection}",
+                    query_keys: &["collection:{collection}"],
+                    doc: "",
+                },
+            ],
+            ..SourceManifest::new("C")
+        };
+        assert_eq!(check_manifest("c", &m), Ok(()));
+        assert_eq!(m.feed("all").map(|f| f.name), Some("all"));
+        assert_eq!(m.feed("todos").map(|f| f.name), Some("{collection}"));
+        assert!(m.feed("Todos!").is_none());
+        assert!(m.feed("{collection}").is_none());
+        let two = SourceManifest {
+            feeds: &[
+                FeedSpec {
+                    name: "{a}",
+                    query_keys: &[],
+                    doc: "",
+                },
+                FeedSpec {
+                    name: "{b}",
+                    query_keys: &[],
+                    doc: "",
+                },
+            ],
+            ..SourceManifest::new("C")
+        };
+        assert!(check_manifest("c", &two).is_err());
     }
 
     #[test]

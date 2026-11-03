@@ -110,6 +110,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "app-collections"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "getrandom 0.3.4",
+ "http-body-util",
+ "pod-core",
+ "protocol",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "app-pixelfed"
 version = "0.1.0"
 dependencies = [
@@ -2578,6 +2596,7 @@ dependencies = [
 name = "server"
 version = "0.1.0"
 dependencies = [
+ "app-collections",
  "app-pixelfed",
  "app-recipes",
  "axum",

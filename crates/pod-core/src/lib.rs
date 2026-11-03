@@ -341,7 +341,17 @@ impl AppState {
     pub fn publish_data(&self, source: &str, session: &Session) {
         let _ = self.data_tx.send(layouts::DataEvent {
             source: source.to_owned(),
-            token_hash: session.token_hash.clone(),
+            token_hash: Some(session.token_hash.clone()),
+        });
+    }
+
+    /// Tell every session's clients that the pod's own data of `source`
+    /// changed (data that isn't any one account's, such as Collections):
+    /// every app that draws on `source` reloads. No-op without subscribers.
+    pub fn publish_data_all(&self, source: &str) {
+        let _ = self.data_tx.send(layouts::DataEvent {
+            source: source.to_owned(),
+            token_hash: None,
         });
     }
 

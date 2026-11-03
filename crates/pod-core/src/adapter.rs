@@ -247,6 +247,49 @@ pub trait AppAdapter: Any + Send + Sync {
         let _ = (pod, sign_in, session);
         Box::pin(async { None })
     }
+
+    /// Checks of a custom app's layout against this source's own data, run
+    /// on every custom-app write whose feeds name this source, after the
+    /// core's checks pass (decision `collections`): e.g. that the bindings
+    /// name fields its stored definitions have. `feeds`: the app's feeds of
+    /// this source; `layout`: the layout as validated (parts expanded).
+    /// Blocking reads of the pod's store are fine. Default: nothing more.
+    fn check_custom_layout(
+        &self,
+        pod: &Pod,
+        feeds: &[String],
+        layout: &serde_json::Value,
+    ) -> Result<(), crate::validate::LayoutError> {
+        let _ = (pod, feeds, layout);
+        Ok(())
+    }
+
+    /// Extra MCP tools this source offers Claude (decision `collections`),
+    /// as MCP tool definitions (`{name, description, inputSchema}`). Names
+    /// must not clash with the core's tools or another adapter's (checked
+    /// at startup). Default: none.
+    fn mcp_tools(&self) -> Vec<serde_json::Value> {
+        Vec::new()
+    }
+
+    /// One more paragraph for the MCP `instructions` (how to use
+    /// [`Self::mcp_tools`]). Default: none.
+    fn mcp_instructions(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Run MCP tool `tool` (one of [`Self::mcp_tools`]) with `args`: the
+    /// result, or an error body (`{"error": ..., "detail": ...}`) that
+    /// becomes an `isError` tool result. `None` for a tool it doesn't have.
+    fn mcp_call<'a>(
+        &'a self,
+        pod: &'a Pod,
+        tool: &'a str,
+        args: &'a serde_json::Value,
+    ) -> Option<BoxFuture<'a, Result<serde_json::Value, serde_json::Value>>> {
+        let _ = (pod, tool, args);
+        None
+    }
 }
 
 /// How a client starts a sign-in from its Settings
@@ -478,6 +521,19 @@ impl Catalog {
         }
         let manifests: Vec<SourceManifest> = adapters.iter().map(|a| a.manifest()).collect();
         check_sources(&adapters, &manifests, &apps, &sign_ins)?;
+        let mut tool_names: Vec<String> = crate::mcp::core_tool_names();
+        for a in &adapters {
+            for t in a.mcp_tools() {
+                let name = t["name"].as_str().unwrap_or("").to_owned();
+                if name.is_empty() || tool_names.contains(&name) {
+                    return Err(format!(
+                        "adapter '{}' declares MCP tool '{name}', which is empty or taken",
+                        a.name()
+                    ));
+                }
+                tool_names.push(name);
+            }
+        }
         for f in &files {
             if !apps.iter().any(|(a, _)| a.id == f.app_id) {
                 return Err(format!(
@@ -637,6 +693,12 @@ fn check_sources(
     }
     for (app, _) in apps {
         for (n, (src, feed)) in app.feeds.iter().enumerate() {
+            if feed.starts_with('{') {
+                return Err(format!(
+                    "app '{}' lists the pattern feed '{src}/{feed}': name one of its feeds",
+                    app.id
+                ));
+            }
             let Some(i) = adapters.iter().position(|a| a.name() == *src) else {
                 return Err(format!(
                     "app '{}' lists feed '{src}/{feed}', but there is no source '{src}'",
