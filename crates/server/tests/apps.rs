@@ -685,7 +685,8 @@ async fn sse_announces_the_newest_version_the_client_can_draw() {
 
     // Publish a copy of the version a schema-`n` client is served.
     let publish = |schema: u32| {
-        let mut layout = layouts::active_for(pod.state.store(), pod.state.catalog(), app, schema)
+        let client = protocol::ClientCaps::schema(schema);
+        let mut layout = layouts::active_for(pod.state.store(), pod.state.catalog(), app, &client)
             .unwrap()
             .unwrap()
             .layout;

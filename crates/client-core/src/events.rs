@@ -236,6 +236,7 @@ pub(crate) fn events_thread(
                     protocol::SCHEMA_HEADER,
                     protocol::SCHEMA_VERSION.to_string(),
                 )
+                .header(protocol::FEATURES_HEADER, protocol::features_header())
                 // Marks this device live: the pod sends it no Web Push
                 // while the stream is open (D52).
                 .header(protocol::DEVICE_HEADER, &device);

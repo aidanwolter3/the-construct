@@ -27,7 +27,7 @@ fn every_file_in_layouts_recipes_is_embedded() {
     let embedded: Vec<String> = FILES.iter().map(|f| format!("{}.json", f.name)).collect();
     assert_eq!(
         on_disk, embedded,
-        "list every layouts/recipes file in app_recipes::FILES"
+        "build.rs embeds every layouts/recipes file"
     );
     for f in FILES {
         let text = std::fs::read_to_string(dir.join(format!("{}.json", f.name))).unwrap();

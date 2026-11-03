@@ -914,7 +914,8 @@ async fn a_session_from_before_v11_stays_signed_in() {
         let conn = rusqlite::Connection::open(dir.path().join("server.db")).unwrap();
         conn.execute_batch(
             "DROP TABLE session_sign_ins; DROP TABLE adapter_migrations;
-             ALTER TABLE sessions DROP COLUMN pinned; PRAGMA user_version = 10;",
+             ALTER TABLE sessions DROP COLUMN pinned; ALTER TABLE app_versions DROP COLUMN features;
+             PRAGMA user_version = 10;",
         )
         .unwrap();
         let later: Vec<String> = conn

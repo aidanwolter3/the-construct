@@ -407,12 +407,13 @@ The only way to change what the app looks like is a new layout file plus a deplo
    (4 digits, the next number, no gaps), and edit it. The format is `{"note": "short changelog line", "schema": N,
    "layout": <UiNode>}`. The note is what the menu's version history shows. `schema` is the client schema the
    layout is written for: normally the current `protocol::SCHEMA_VERSION` (the pod refuses a value below what the
-   layout's vocabulary needs, or above the current one). The layout root is the app's `core://Workspace`, and its
-   id is the app id.
-2. Add one line to the app's file list in `crates/app-pixelfed/src/apps.rs` (`HOME_FILES` or `DEMO_FILES`):
-   `layout_file!("pixelfed_home", "0002"),` (recipes: `FILES` in `crates/app-recipes/src/lib.rs`).
+   layout's vocabulary needs, or above the current one). The layout features it uses are worked out by the pod,
+   not declared (docs/decisions/layout-features.md). The layout root is the app's `core://Workspace`, and its id
+   is the app id. If another PR adds the same number first (git reports an add/add conflict), merge both changes
+   into the next number: each file is a whole snapshot of the layout.
+2. There is no list to edit: the adapter's `build.rs` embeds every `layouts/<app>/*.json`.
 3. Run `cargo test` (`-p app-pixelfed` is enough). It validates every file (structure, size, slots, aspect ratios,
-   endpoints) and fails if a file in `layouts/` is not listed.
+   endpoints).
 4. Push to `main`. CI runs the checks and deploys the pod to staging. On start, the pod appends the file as the
    app's next version (logged as `layout file deployed as a new version`). Connected clients reconnect their SSE
    stream, see the newer version and refetch. Clients that follow the latest version show it live. A client pinned
@@ -501,6 +502,11 @@ client build. The engine and the clients know no app.
   a schema this app no longer draws) per version; the menu greys those rows out and won't pin them. "Latest" in the
   menu is always a version this app can draw; when the newest needs a newer app, the menu adds "Update the app to
   see vN" instead of "Newer version available".
+- **Layout features (additive vocabulary after schema 12):** new nodes and attributes no longer bump
+  `SCHEMA_VERSION`. Each is a named feature, one file `crates/protocol/features/<name>.md`, mapped from the
+  vocabulary in `protocol::required_features` (docs/decisions/layout-features.md). Clients send the features they
+  draw in `X-Construct-Features`; the pod serves a version only to clients that have every feature it uses (else
+  `update_required`) and lists them as `features` in `GET /v1/apps/{id}/versions[/{n}]`.
 - **A breaking schema change:** bump `protocol::SCHEMA_VERSION` and add `(new schema, oldest layout schema it still
   draws)` to `protocol::RETIRED`. Older versions then show as incompatible to new clients and are never served to
   them; the old files are not edited. `RETIRED` is `[(3, 3)]`: schema 3 removed the `pixelfed://` widgets (D37),
