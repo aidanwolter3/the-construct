@@ -389,7 +389,6 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
             }],
         }
     );
-    assert_eq!(button("card-like:$item.uri"), button("like:$item.uri"));
     assert_eq!(
         button("bookmark:$item.uri"),
         ActionIntent::OptimisticMutate {

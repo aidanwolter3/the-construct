@@ -215,6 +215,8 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
         private fun mapCards(node: UiNode, f: (UiNode.Column) -> UiNode.Column): UiNode = when (node) {
             is UiNode.Workspace -> node.copy(slots = node.slots.map { it.copy(content = mapCards(it.content, f)) })
             is UiNode.Container -> node.copy(children = node.children.map { mapCards(it, f) })
+            is UiNode.Column -> node.copy(children = node.children.map { mapCards(it, f) })
+            is UiNode.Conditional -> node.copy(content = mapCards(node.content, f))
             is UiNode.ItemList -> (node.itemTemplate as? UiNode.Column)?.let { node.copy(itemTemplate = f(it)) } ?: node
             else -> node
         }

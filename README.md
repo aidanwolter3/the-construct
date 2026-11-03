@@ -421,7 +421,7 @@ client build. The engine and the clients know no app.
   `core://Conditional` reads a form value (`"value": "$form.view"`, "" while unset) and takes an optional `equals`:
   the content shows only when the value, as text, equals it. With `core://ChoiceChips` editing that form value, a
   layout switches between views with no new state. `layouts/pixelfed_home/0004.json` puts a List/Cards switch on
-  the feed: two-column cards (cover photo, author, like button) that open a post screen
+  the feed: two-column cards (cover photo, author, like count) that open a post screen
   (`pixelfed://posts/{id}`, data from `/v1/pixelfed/screens/post?id=`).
 - **Schema versions (D36, D38):** the engine sends `X-Construct-Schema: 8` (workspace fetches, data loads, the
   apps API and the events stream). Every version records the schema it was written for (`"schema"` in its file). The pod serves each client
