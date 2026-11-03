@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Turn the family recipe PDF into the recipes adapter's import file.
 
+The source is the Google Doc "All Recipes (Formatted)" (Drive folder
+"Recipes"), exported as PDF. Its text matched the PDF word for word when
+import-0001.json was made.
+
     pdftotext -layout All_Recipes_Formatted.pdf recipes.txt
     python3 -I scripts/recipes_from_pdf.py recipes.txt crates/app-recipes/data/import-0001.json
 
