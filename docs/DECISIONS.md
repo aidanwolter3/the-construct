@@ -2,6 +2,10 @@
 
 Short records of places where the implementation resolves ambiguity or deviates from DESIGN.md.
 
+**This file is closed at D52.** New decisions go in [`decisions/`](decisions/), one file each, named by topic
+and not numbered, so parallel PRs no longer fight over the next number (see [decisions/README.md](decisions/README.md)).
+The entries below keep their numbers; only a "Superseded by …" line may be added to one.
+
 ## D1: `MediaCarousel.media_refs` accepts a binding expression or a literal list
 
 DESIGN.md §2.2A types `media_refs` as `Vec<String>`, but the hydration bundle in §2.2C sends

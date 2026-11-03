@@ -2,7 +2,7 @@
 
 A server-driven UI shell: a Rust protocol, server and client core, rendered by a Compose
 Multiplatform desktop app through UniFFI. The design is in [DESIGN.md](DESIGN.md), decisions
-are in [docs/DECISIONS.md](docs/DECISIONS.md), and status is in [docs/PROGRESS.md](docs/PROGRESS.md).
+are in [docs/DECISIONS.md](docs/DECISIONS.md) (D1–D52) and [docs/decisions/](docs/decisions/) (newer), and status is in [docs/PROGRESS.md](docs/PROGRESS.md).
 
 > Renamed from Project Canvas (D31). There is no migration: the desktop cache moved from `~/.canvas` to
 > `~/.construct`, the local server's data dir default from `~/.canvas-server` to `~/.construct-server`, env vars

@@ -2,8 +2,8 @@
 
 Server-driven UI: a Rust "pod" serves app layouts (JSON `UiNode` trees) plus normalized entities; native clients
 (macOS desktop, Android, headless simulator) render them with shared Compose code and a shared Rust engine.
-Apps today: Pixelfed (`pixelfed_home`) and Recipes (`recipes`). Read `README.md` for details and `docs/DECISIONS.md` (D1–D52) before
-changing architecture; `docs/PROGRESS.md` has history and next steps; `docs/NOTIFICATIONS.md` is the notifications design (D52). `DESIGN.md` is the original design doc
+Apps today: Pixelfed (`pixelfed_home`) and Recipes (`recipes`). Read `README.md` for details and `docs/DECISIONS.md` (D1–D52) and
+`docs/decisions/` (newer ones, one file each) before changing architecture; `docs/PROGRESS.md` has history and next steps; `docs/NOTIFICATIONS.md` is the notifications design (D52). `DESIGN.md` is the original design doc
 (product renamed from "Project Canvas"; AI layout editing was built, then shelved — see D32/D33).
 
 ## Repo map
@@ -106,7 +106,9 @@ layout state.
 - Clients default to staging; override with `CONSTRUCT_BASE_URL` / `-Dconstruct.baseUrl` (desktop),
   `-PconstructBaseUrl` or the in-app server picker (Android).
 - Shared UI goes in `kmp-app/shared/src/commonMain`; keep Compose keys stable (state must survive layout updates).
-- Record architecture decisions as new `docs/DECISIONS.md` entries (don't rewrite old ones; mark superseded).
+- Record architecture decisions as new files `docs/decisions/<topic-name>.md`, not numbered and not in
+  `docs/DECISIONS.md` (closed at D52; numbers made parallel PRs conflict). Rules and template:
+  `docs/decisions/README.md`. Don't rewrite old ones; mark superseded. CI runs `scripts/check_decisions.sh`.
 - Read files with the Read tool — never `cat`, `head`, `tail`, `sed` or `awk` to read files (developer's rule).
 - No model names in commit messages or docs prose.
 - Commit messages follow standard git style: an imperative subject line of at most 70 characters, a blank line,
