@@ -46,6 +46,9 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
+/** The most lines a `core://TextField` grows to (its `lines` is clamped to this). */
+private const val MAX_TEXT_FIELD_LINES = 12
+
 /** Maximum width of a list item on wide screens (a readable column, like Instagram/Pixelfed web). */
 val FEED_MAX_WIDTH = 560.dp
 
@@ -175,7 +178,7 @@ fun RenderUiNode(
 
         UiNode.Divider -> HorizontalDivider(modifier, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-        is UiNode.Conditional -> if (isTruthy(node.value, item)) {
+        is UiNode.Conditional -> if (conditionShows(node.value, node.equals, item, LocalForm.current)) {
             RenderUiNode(node.content, entities, onDispatch, modifier, item)
         }
 
@@ -201,6 +204,8 @@ fun RenderUiNode(
         is UiNode.Box -> NodeBox(node, entities, onDispatch, item, modifier)
 
         is UiNode.ChoiceChips -> NodeChoiceChips(node, modifier)
+
+        is UiNode.MediaPicker -> NodeMediaPicker(node, entities, modifier)
 
         is UiNode.Unknown -> Text(
             "Unsupported component: ${node.type.ifEmpty { "<missing type>" }}",
@@ -318,7 +323,12 @@ private fun ItemList(
     }
     val starts = remember(items, node.groupBy) { node.groupBy?.let { g -> items?.let { groupStarts(it, g.field) } } }
     val counts = remember(starts) { starts?.let(::groupCounts) }
-    Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+    val columns = node.columns.coerceAtLeast(1)
+    Column(
+        modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(node.spacingDp.dp),
+    ) {
         val message = when {
             items == null || items.isNotEmpty() -> null
             all.isNullOrEmpty() -> node.emptyText
@@ -331,6 +341,10 @@ private fun ItemList(
                 color = Color.Gray,
                 modifier = Modifier.padding(16.dp).testTag("list-empty"),
             )
+        }
+        if (columns > 1 && items != null) {
+            ItemGrid(node, columns, items, starts, counts, entities, onDispatch)
+            return@Column
         }
         items?.forEachIndexed { i, item ->
             val header = node.groupBy?.header
@@ -346,7 +360,9 @@ private fun ItemList(
                 // Phone: full width. Wider screens: a centered, readable column.
                 RenderUiNode(
                     node.itemTemplate, entities, onDispatch,
-                    Modifier.widthIn(max = FEED_MAX_WIDTH).fillMaxWidth().padding(start = indentDp(node.indent, item).dp),
+                    Modifier.widthIn(max = FEED_MAX_WIDTH).fillMaxWidth()
+                        .padding(horizontal = node.paddingHDp.dp)
+                        .padding(start = indentDp(node.indent, item).dp),
                     item,
                 )
             }
@@ -355,22 +371,79 @@ private fun ItemList(
 }
 
 /**
+ * The rows of a [columns]-column grid over [count] items (D48): item indexes, at most [columns] per row; an item that
+ * starts a group ([starts]) starts a new row, so its header can span the width above it.
+ */
+fun gridRows(count: Int, starts: List<Boolean>?, columns: Int): List<List<Int>> {
+    val rows = mutableListOf<MutableList<Int>>()
+    for (i in 0 until count) {
+        if (rows.isEmpty() || rows.last().size >= columns || starts?.getOrNull(i) == true) rows.add(mutableListOf())
+        rows.last().add(i)
+    }
+    return rows
+}
+
+/** A `core://List` with `columns` > 1 (D48): rows of equal cells, top-aligned, a short last row left-aligned. */
+@Composable
+private fun ItemGrid(
+    node: UiNode.ItemList,
+    columns: Int,
+    items: List<JsonObject>,
+    starts: List<Boolean>?,
+    counts: List<Int>?,
+    entities: Map<String, JsonObject>,
+    onDispatch: (ActionIntent) -> Unit,
+) {
+    val rows = remember(items.size, starts, columns) { gridRows(items.size, starts, columns) }
+    val gap = node.spacingDp.dp
+    rows.forEach { row ->
+        val first = items[row.first()]
+        val header = node.groupBy?.header
+        if (header != null && starts?.getOrNull(row.first()) == true) {
+            key("group-header", first["uri"]) {
+                val headed = JsonObject(first + ("group_count" to JsonPrimitive(counts?.getOrNull(row.first()) ?: 0)))
+                RenderUiNode(header, entities, onDispatch, Modifier.widthIn(max = FEED_MAX_WIDTH).fillMaxWidth(), headed)
+            }
+        }
+        // Keyed by the row's first entity; cells by their own URI.
+        key("grid-row", first["uri"]) {
+            Row(
+                Modifier.widthIn(max = FEED_MAX_WIDTH).fillMaxWidth().padding(horizontal = node.paddingHDp.dp),
+                horizontalArrangement = Arrangement.spacedBy(gap),
+                verticalAlignment = Alignment.Top,
+            ) {
+                row.forEach { i ->
+                    key(items[i]["uri"]) {
+                        RenderUiNode(node.itemTemplate, entities, onDispatch, Modifier.weight(1f), items[i])
+                    }
+                }
+                repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+/**
  * A text field bound to the form value [UiNode.TextField.field]; Send dispatches `on_submit` and clears it. Without
- * `on_submit` (a search box) it is one line and a Clear button empties it.
+ * `on_submit` it is one line with a Clear button (a search box), or with `lines` (schema 9) a field of up to that many
+ * lines (a caption).
  */
 @Composable
 private fun FormTextField(node: UiNode.TextField, dispatch: (ActionIntent) -> Unit, modifier: Modifier) {
     val form = LocalForm.current
     val value = form?.get(node.field).orEmpty()
     val submit = node.onSubmit
+    val lines = node.lines?.coerceIn(1, MAX_TEXT_FIELD_LINES)
+    val singleLine = submit == null && (lines == null || lines == 1)
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
             value = value,
             onValueChange = { v -> form?.set(node.field, node.maxLength?.let { v.take(it) } ?: v) },
             placeholder = { Text(node.placeholder) },
-            maxLines = if (submit == null) 1 else 4,
-            singleLine = submit == null,
-            trailingIcon = if (submit == null && value.isNotEmpty()) {
+            minLines = if (submit == null && lines != null) minOf(lines, 3) else 1,
+            maxLines = if (singleLine) 1 else lines ?: 4,
+            singleLine = singleLine,
+            trailingIcon = if (singleLine && value.isNotEmpty()) {
                 {
                     IconButton(
                         onClick = { form?.remove(node.field) },

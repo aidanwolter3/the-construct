@@ -12,11 +12,17 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
 import org.theconstruct.ActionIntent
 import org.theconstruct.AppNotification
+import org.theconstruct.AttachmentException
+import org.theconstruct.AttachmentInfo
 import org.theconstruct.ConstructEngineBridge
+import org.theconstruct.CreatePosition
 import org.theconstruct.ConstructJson
 import org.theconstruct.EngineSnapshot
 import org.theconstruct.LayoutApiException
 import org.theconstruct.UiNode
+import org.theconstruct.attachmentUri
+import java.io.File
+import javax.imageio.ImageIO
 
 /**
  * In-memory [ConstructEngineBridge] for simulation mode and tests: no Rust, no server.
@@ -48,7 +54,15 @@ import org.theconstruct.UiNode
  * `fixtures/pixelfed_screen_data.json`). `action.data.load` answers from it at once (offline: an error, cached data
  * kept); an unknown path is "not found". `action.mutation.create` lists its entity at once and queues it; when sent,
  * the fake pod accepts it if some data path lists its query (the entity is added there, with a `meta` field, if it has
- * one, set to "just now") and the client reloads those paths; otherwise it is rejected and removed.
+ * one, set to "just now") and the client reloads those paths; otherwise it is rejected and removed. A create with
+ * `position: start` is listed first while pending.
+ *
+ * Attachments (schema 9, D49): [stageAttachment] accepts any image file ImageIO can read and lists its local entity
+ * `construct://attachments/sim-<n>` (`url` = the file itself). A create with `attachments` (a new post) replaces
+ * `"$attachments.<name>"` in its entity with those entity URIs and stays a pending placeholder (as the layout drew it,
+ * e.g. its `pending_label` "Posting…") until [settle] (the simulator's `wait` / `idle` steps) while online; it then
+ * becomes a finished post at the same URI and place: without `pending_label` / `failed`, with a fake `id`,
+ * `like_count` 0, `reply_count` 0 and `is_liked` false.
  *
  * Notifications (D52): with [notifications] (shared by the run's bridges) the notification calls answer from it, the
  * snapshot carries its unread counts, and [FakeNotifications.inject] fires this bridge's listener (live arrival) while
@@ -91,6 +105,15 @@ class FakeEngineBridge(
     private class CreateRow(val intent: ActionIntent.Create)
 
     private val createRows = ArrayDeque<CreateRow>()
+
+    /** Creates with attachments still "posting" (see the class docs), oldest first. */
+    private val postRows = ArrayDeque<CreateRow>()
+
+    /** Finished posts: query_key -> URIs listed first (newest first) or last. */
+    private val postedFirst: MutableMap<String, List<String>> = LinkedHashMap()
+    private val postedLast: MutableMap<String, List<String>> = LinkedHashMap()
+    private var attachmentCount = 0
+    private var postCount = 0
 
     /** The fake pod's data path answers. */
     private val serverData: MutableMap<String, JsonObject> = LinkedHashMap()
@@ -199,6 +222,14 @@ class FakeEngineBridge(
             emit()
             return
         }
+        if (intent is ActionIntent.Create && intent.attachments.isNotEmpty()) {
+            synchronized(lock) {
+                if (!createPostLocked(intent)) return
+                seq++
+            }
+            emit()
+            return
+        }
         if (intent is ActionIntent.Create) {
             synchronized(lock) {
                 if (entities.containsKey(intent.entityUri) || intent.entity !is JsonObject) {
@@ -237,6 +268,114 @@ class FakeEngineBridge(
             seq++
         }
         emit()
+    }
+
+    /**
+     * Stages [path] like the engine (D49), without re-encoding: any image ImageIO reads is accepted; its local entity
+     * points at the file itself.
+     */
+    override fun stageAttachment(path: String): Result<AttachmentInfo> {
+        val file = File(path)
+        if (!file.isFile) return Result.failure(AttachmentException("Couldn't read that photo."))
+        val image = try {
+            ImageIO.read(file)
+        } catch (e: Exception) {
+            null
+        } ?: return Result.failure(AttachmentException("That file isn't a photo this app can read."))
+        val info = synchronized(lock) {
+            val id = "sim-${++attachmentCount}"
+            val url = "file://${file.absolutePath}"
+            entities[attachmentUri(id)] = JsonObject(
+                mapOf(
+                    "url" to JsonPrimitive(url),
+                    "preview_url" to JsonPrimitive(url),
+                    "aspect_ratio" to JsonPrimitive(image.width.toDouble() / image.height.coerceAtLeast(1)),
+                    "width" to JsonPrimitive(image.width),
+                    "height" to JsonPrimitive(image.height),
+                ),
+            )
+            seq++
+            AttachmentInfo(id, attachmentUri(id), url, image.width, image.height)
+        }
+        println("[sim] staged ${file.name} as ${info.id} (${info.width}x${info.height})")
+        emit()
+        return Result.success(info)
+    }
+
+    override fun discardAttachment(id: String) {
+        synchronized(lock) {
+            if (entities.remove(attachmentUri(id)) == null) return
+            seq++
+        }
+        println("[sim] discarded attachment $id")
+        emit()
+    }
+
+    /** Ids of the attachments currently staged, for tests. */
+    val stagedAttachments: List<String>
+        get() = synchronized(lock) {
+            entities.keys.filter { it.startsWith("construct://attachments/") }.map { it.removePrefix("construct://attachments/") }
+        }
+
+    /**
+     * Lists a create with attachments as a pending placeholder (see the class docs). False (nothing changed) when its
+     * entity URI is taken, its entity is not an object, or it names attachments that are not staged.
+     */
+    private fun createPostLocked(intent: ActionIntent.Create): Boolean {
+        if (entities.containsKey(intent.entityUri) || intent.entity !is JsonObject) {
+            println("[sim] create ${intent.entityUri} ignored")
+            return false
+        }
+        val ids = intent.attachments.mapValues { (_, v) ->
+            (v as? kotlinx.serialization.json.JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }.orEmpty()
+        }
+        val missing = ids.values.flatten().filter { attachmentUri(it) !in entities }
+        if (missing.isNotEmpty()) {
+            println("[sim] create ${intent.entityUri} ignored: attachments $missing are not staged")
+            return false
+        }
+        val uris = ids.mapValues { (_, list) -> kotlinx.serialization.json.JsonArray(list.map { JsonPrimitive(attachmentUri(it)) }) }
+        val entity = substituteAttachments(intent.entity, uris) as JsonObject
+        val payload = substituteAttachments(intent.payload, ids.mapValues { (_, list) -> kotlinx.serialization.json.JsonArray(list.map(::JsonPrimitive)) })
+        entities[intent.entityUri] = entity
+        postRows.addLast(CreateRow(intent.copy(entity = entity, payload = payload)))
+        println("[sim] post ${intent.entityUri} in ${intent.queryKey} with ${ids.values.sumOf { it.size }} attachment(s) (posting; $pendingCount pending)")
+        return true
+    }
+
+    /**
+     * The fake pod finishes the posts in flight (the simulator's `wait` / `idle`): while online, each pending
+     * placeholder becomes a finished post at the same URI and place (see the class docs). Returns how many.
+     */
+    fun settle(): Int {
+        val n = synchronized(lock) {
+            if (!isOnline || postRows.isEmpty()) return 0
+            var n = 0
+            while (postRows.isNotEmpty()) {
+                val i = postRows.removeFirst().intent
+                val finished = JsonObject(
+                    i.entity.jsonObject - "pending_label" - "failed" + mapOf(
+                        "id" to JsonPrimitive("sim-post-${++postCount}"),
+                        "like_count" to JsonPrimitive(0),
+                        "reply_count" to JsonPrimitive(0),
+                        "is_liked" to JsonPrimitive(false),
+                    ),
+                )
+                entities[i.entityUri] = finished
+                server[i.entityUri] = finished
+                if (i.position == CreatePosition.Start) {
+                    postedFirst[i.queryKey] = listOf(i.entityUri) + postedFirst[i.queryKey].orEmpty()
+                } else {
+                    postedLast[i.queryKey] = postedLast[i.queryKey].orEmpty() + i.entityUri
+                }
+                println("[sim] sent ${i.endpoint}: ${i.payload}; ${i.entityUri} posted")
+                n++
+            }
+            seq++
+            n
+        }
+        emit()
+        return n
     }
 
     override fun close() {
@@ -303,7 +442,7 @@ class FakeEngineBridge(
     /** Number of queued (unsent) mutations and creates. */
     val pendingActions: Int get() = synchronized(lock) { pendingCount }
 
-    private val pendingCount: Int get() = outbox.size + createRows.size
+    private val pendingCount: Int get() = outbox.size + createRows.size + postRows.size
 
     /** The fake pod's answer for [path], for tests. */
     fun serverDataJson(path: String): String? = synchronized(lock) { serverData[path]?.toString() }
@@ -429,9 +568,17 @@ class FakeEngineBridge(
             ConstructJson.json.decodeFromString(queriesSerializer, queriesJson),
         )
         loadedQueries.values.forEach { out.putAll(it) }
-        for (r in createRows) {
+        for ((key, uris) in postedFirst) out[key] = uris + out[key].orEmpty()
+        for ((key, uris) in postedLast) out[key] = out[key].orEmpty() + uris
+        // Pending rows: in dispatch order, so the newest `start` one ends up first.
+        for (r in createRows + postRows) {
             val list = out[r.intent.queryKey].orEmpty()
-            if (r.intent.entityUri !in list) out[r.intent.queryKey] = list + r.intent.entityUri
+            if (r.intent.entityUri in list) continue
+            out[r.intent.queryKey] = if (r.intent.position == CreatePosition.Start) {
+                listOf(r.intent.entityUri) + list
+            } else {
+                list + r.intent.entityUri
+            }
         }
         return ConstructJson.json.encodeToString(queriesSerializer, out)
     }
@@ -457,6 +604,19 @@ class FakeEngineBridge(
     companion object {
         private const val NO_UNREAD = "{\"unread_total\":0,\"unread_by_app\":{}}"
         private val queriesSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
+
+        /** [e] with every string exactly `$attachments.<name>` replaced by [values]`[name]` (others kept as they are). */
+        fun substituteAttachments(e: JsonElement, values: Map<String, JsonElement>): JsonElement = when (e) {
+            is JsonObject -> JsonObject(e.mapValues { (_, v) -> substituteAttachments(v, values) })
+            is kotlinx.serialization.json.JsonArray -> kotlinx.serialization.json.JsonArray(e.map { substituteAttachments(it, values) })
+            is JsonPrimitive -> if (e.isString && e.content.startsWith(ATTACHMENTS_PREFIX)) {
+                values[e.content.removePrefix(ATTACHMENTS_PREFIX)] ?: e
+            } else {
+                e
+            }
+        }
+
+        private const val ATTACHMENTS_PREFIX = "\$attachments."
         private val FIELD = Regex("""entity\.([A-Za-z0-9_]+)""")
 
         /**

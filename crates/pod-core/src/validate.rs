@@ -20,6 +20,12 @@ pub const MAX_PADDING_DP: u16 = 64;
 pub const MAX_SIZE_DP: u16 = 512;
 /// Most options in one `core://ChoiceChips`.
 pub const MAX_CHOICES: usize = 50;
+/// Most columns of a `core://List` grid.
+pub const MAX_COLUMNS: u16 = 6;
+/// Most items a `core://MediaPicker` may hold, and most lines of a
+/// multi-line `core://TextField` (schema 9, D51).
+pub const MAX_MEDIA_ITEMS: u32 = 10;
+pub const MAX_TEXT_LINES: u32 = 12;
 
 /// Nesting depth of objects/arrays (a scalar root is 0). Iterative, so a deep
 /// document cannot overflow the stack here.
@@ -90,7 +96,10 @@ pub fn validate_structure(expected_id: &str, doc: &Value) -> Result<UiNode, Stri
     for intent in intents(&node) {
         let path = match intent {
             ActionIntent::OptimisticMutate { endpoint, .. }
-            | ActionIntent::Create { endpoint, .. } => endpoint,
+            | ActionIntent::Create { endpoint, .. } => {
+                check_attachments(intent)?;
+                endpoint
+            }
             ActionIntent::LoadData { path } => path,
             ActionIntent::AuthLogin {
                 app_path,
@@ -205,8 +214,16 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             filter,
             group_by,
             where_,
+            columns,
+            spacing_dp,
+            padding_h_dp,
             ..
         } => {
+            if *columns > MAX_COLUMNS {
+                return Err(format!("list columns {columns} (max {MAX_COLUMNS})"));
+            }
+            check_dp("list spacing_dp", *spacing_dp, MAX_PADDING_DP)?;
+            check_dp("list padding_h_dp", *padding_h_dp, MAX_PADDING_DP)?;
             if let Some(i) = indent
                 && (i.step_dp > MAX_PADDING_DP || i.max.unwrap_or(4) > 8)
             {
@@ -333,8 +350,66 @@ fn check_values(node: &UiNode) -> Result<(), String> {
         }
         UiNode::Chip { icon: Some(i), .. } => check_icon(i),
         UiNode::Badge { icon, .. } => check_icon(icon),
+        UiNode::MediaPicker {
+            field, max_items, ..
+        } => {
+            if field.trim().is_empty() {
+                return Err("media picker needs a field".into());
+            }
+            if *max_items == 0 || *max_items > MAX_MEDIA_ITEMS {
+                return Err(format!(
+                    "media picker max_items {max_items} (1..={MAX_MEDIA_ITEMS})"
+                ));
+            }
+            Ok(())
+        }
+        UiNode::TextField { lines: Some(l), .. } if *l == 0 || *l > MAX_TEXT_LINES => {
+            Err(format!("text field lines {l} (1..={MAX_TEXT_LINES})"))
+        }
         _ => Ok(()),
     }
+}
+
+/// A create's `attachments` (schema 9, D49): each name `[a-z_]+` maps to a
+/// `$form.<field>` binding, and every `$attachments.<name>` the intent uses is
+/// one of them.
+fn check_attachments(intent: &ActionIntent) -> Result<(), String> {
+    let ActionIntent::Create {
+        attachments,
+        entity,
+        payload,
+        ..
+    } = intent
+    else {
+        return Ok(());
+    };
+    for (name, binding) in attachments {
+        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
+            return Err(format!("attachment name '{name}' must be [a-z_]+"));
+        }
+        let ok = binding
+            .as_str()
+            .and_then(|b| b.strip_prefix("$form."))
+            .is_some_and(|f| !f.is_empty());
+        if !ok {
+            return Err(format!(
+                "attachment '{name}' must be bound to \"$form.<field>\""
+            ));
+        }
+    }
+    let text = format!("{entity}{payload}");
+    for used in text.split("$attachments.").skip(1) {
+        let name: String = used
+            .chars()
+            .take_while(|c| c.is_ascii_lowercase() || *c == '_')
+            .collect();
+        if !attachments.contains_key(&name) {
+            return Err(format!(
+                "'$attachments.{name}' is not one of the create's attachments"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Screens (docs/DECISIONS.md D34): unique ids, a route like
@@ -487,5 +562,55 @@ mod tests {
         assert!(check_values(&chips(json!([]))).is_err());
         assert!(check_values(&chips(json!([{"label": "A"}, {"label": "B"}]))).is_err());
         assert!(check_values(&chips(json!([{"label": " ", "value": "a"}]))).is_err());
+    }
+
+    #[test]
+    fn schema_9_nodes_and_attachments_are_checked() {
+        let picker =
+            |n: u32| node(json!({"type": "core://MediaPicker", "field": "p", "max_items": n}));
+        assert_eq!(check_values(&picker(4)), Ok(()));
+        assert!(check_values(&picker(0)).is_err());
+        assert!(check_values(&picker(11)).is_err());
+        let lines = |n: u32| node(json!({"type": "core://TextField", "field": "c", "lines": n}));
+        assert_eq!(check_values(&lines(4)), Ok(()));
+        assert!(check_values(&lines(0)).is_err());
+        let create = |attachments: Value, payload: Value| -> ActionIntent {
+            serde_json::from_value(json!({"intent": "action.mutation.create", "query_key": "q",
+                "entity_uri": "x://p/$nonce", "entity": {}, "endpoint": "/v1/x",
+                "payload": payload, "attachments": attachments}))
+            .unwrap()
+        };
+        let ok = create(
+            json!({"photos": "$form.photos"}),
+            json!({"m": "$attachments.photos"}),
+        );
+        assert_eq!(check_attachments(&ok), Ok(()));
+        for (a, p) in [
+            (json!({"photos": "photos"}), json!({})),
+            (json!({"Photos": "$form.p"}), json!({})),
+            (
+                json!({"photos": "$form.photos"}),
+                json!({"m": "$attachments.other"}),
+            ),
+            (json!({}), json!({"m": "$attachments.photos"})),
+        ] {
+            assert!(
+                check_attachments(&create(a.clone(), p.clone())).is_err(),
+                "{a} {p}"
+            );
+        }
+    }
+
+    #[test]
+    fn list_grids_are_checked() {
+        let ok = list(json!({"columns": 2, "spacing_dp": 12, "padding_h_dp": 12}));
+        assert_eq!(check_values(&ok), Ok(()));
+        for bad in [
+            json!({"columns": 40}),
+            json!({"spacing_dp": 500}),
+            json!({"padding_h_dp": 500}),
+        ] {
+            assert!(check_values(&list(bad.clone())).is_err(), "{bad}");
+        }
     }
 }

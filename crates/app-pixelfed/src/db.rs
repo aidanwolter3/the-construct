@@ -23,7 +23,9 @@ pub static MIGRATIONS: &[Migration] = &[
              instance   TEXT NOT NULL
          );",
     ),
-    // 2 (D52): the notification poll's position per instance: the newest
+    // 2 (D50): posts on their way to Pixelfed (crate::posting).
+    Migration::Sql(crate::posting::MIGRATION),
+    // 3 (D52): the notification poll's position per instance: the newest
     // upstream notification id seen (`last_id`, None while there were none)
     // and when the first poll ran (its backlog was stored quietly).
     Migration::Sql(

@@ -829,6 +829,20 @@ pub struct LayoutEvent {
     pub version: i64,
 }
 
+/// A session's data changed (D50): `event: data` to that session's
+/// subscribers of `workspace_id` only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataEvent {
+    pub workspace_id: String,
+    pub token_hash: String,
+}
+
+fn data_event(workspace_id: &str) -> Event {
+    Event::default()
+        .event("data")
+        .data(json!({ "workspace_id": workspace_id }).to_string())
+}
+
 fn layout_event(ev: &LayoutEvent) -> Event {
     Event::default()
         .event("layout")
@@ -942,12 +956,15 @@ async fn events(
         (Caller::Signed(_), Some(device)) => Some(state.device_live(&device)),
         _ => None,
     };
+    // The session's own `data` events (D50) need to know who listens.
+    let session_hash = caller.session().map(|s| s.token_hash.clone());
     let schema = headers
         .contains_key(protocol::SCHEMA_HEADER)
         .then(|| client_schema(&headers));
     // Subscribe before reading the current version so nothing published in
     // between is missed (a duplicate version is harmless to clients).
     let rx = state.subscribe_layouts();
+    let data_rx = state.subscribe_data();
     let current = match announced_async(&state, &id, schema).await {
         Ok(Some(v)) => v,
         Ok(None) => return workspace_not_found(&id),
@@ -961,6 +978,8 @@ async fn events(
         rx: broadcast::Receiver<LayoutEvent>,
         notify_rx: Option<broadcast::Receiver<NotifyEvent>>,
         _live: Option<crate::notify::LiveDevice>,
+        data_rx: broadcast::Receiver<DataEvent>,
+        session_hash: Option<String>,
         shutdown: tokio::sync::watch::Receiver<bool>,
         state: Arc<AppState>,
         id: String,
@@ -973,6 +992,8 @@ async fn events(
             rx,
             notify_rx,
             _live: live,
+            data_rx,
+            session_hash,
             shutdown: state.shutdown_signal(),
             state: state.clone(),
             id,
@@ -993,20 +1014,38 @@ async fn events(
                 enum Got {
                     Layout(Result<LayoutEvent, broadcast::error::RecvError>),
                     Notify(Option<NotifyEvent>),
+                    Data(Result<DataEvent, broadcast::error::RecvError>),
                     Stop,
                 }
                 let got = tokio::select! {
                     r = s.rx.recv() => Got::Layout(r),
                     n = recv_notify(&mut s.notify_rx) => Got::Notify(n),
+                    d = s.data_rx.recv() => Got::Data(d),
                     // Server shutting down: end the stream so graceful
                     // shutdown is not held open by subscribers.
                     _ = s.shutdown.wait_for(|stop| *stop) => Got::Stop,
                 };
                 let received = match got {
+                    Got::Stop => return None,
                     Got::Layout(r) => r,
                     Got::Notify(Some(e)) => return Some((Ok(notify_event(&e)), s)),
                     Got::Notify(None) => continue,
-                    Got::Stop => return None,
+                    Got::Data(d) => {
+                        let mine = match &d {
+                            Ok(d) => {
+                                d.workspace_id == s.id
+                                    && s.session_hash.as_deref() == Some(d.token_hash.as_str())
+                            }
+                            // Lagged: a reload is never wrong.
+                            Err(broadcast::error::RecvError::Lagged(_)) => s.session_hash.is_some(),
+                            Err(broadcast::error::RecvError::Closed) => return None,
+                        };
+                        if mine {
+                            let e = data_event(&s.id);
+                            return Some((Ok(e), s));
+                        }
+                        continue;
+                    }
                 };
                 let lagged = match received {
                     Ok(ev) if ev.workspace_id == s.id => false,

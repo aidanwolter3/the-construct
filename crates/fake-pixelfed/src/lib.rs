@@ -54,8 +54,15 @@ const REQUEST_LOG_CAP: usize = 500;
 /// Longest comment accepted (Pixelfed's default caption / comment limit).
 pub const MAX_STATUS_CHARS: usize = 500;
 
+/// Most replies `GET /api/v1/statuses/:id/context` lists (Pixelfed's limit).
+pub const CONTEXT_REPLY_LIMIT: usize = 100;
+
 /// Idempotency keys remembered for `POST /api/v1/statuses` (oldest dropped first).
 const IDEMPOTENCY_CAP: usize = 1000;
+/// Most media attachments on one post (Pixelfed's default album size).
+pub const MAX_MEDIA_PER_POST: usize = 4;
+/// Largest media upload the fake takes.
+pub const MAX_MEDIA_BYTES: usize = 20 * 1024 * 1024;
 
 /// Notifications kept (the oldest go first).
 const NOTIFICATION_CAP: usize = 1000;
@@ -237,8 +244,28 @@ struct AuthCode {
     issued: Instant,
 }
 
+/// A media attachment uploaded through `POST /api/v{1,2}/media`.
+#[derive(Debug, Clone)]
+struct Media {
+    bytes: Vec<u8>,
+    content_type: String,
+    ext: &'static str,
+    width: u32,
+    height: u32,
+    description: String,
+    /// `GET /api/v1/media/:id` answers "still processing" this many more times.
+    polls_left: u32,
+    /// Used by a post (can't be attached again).
+    attached: bool,
+}
+
 #[derive(Debug, Default)]
 struct Inner {
+    /// Uploaded media by id.
+    media: HashMap<String, Media>,
+    next_media_id: u64,
+    /// How many polls new v2 uploads stay "processing" (`/_admin/media`).
+    media_processing_polls: u32,
     apps: HashMap<String, OAuthApp>,
     next_app_id: u64,
     codes: HashMap<String, AuthCode>,
@@ -368,6 +395,24 @@ impl Inner {
         chain
     }
 
+    /// Pixelfed's `context`: the direct parent only, and the direct replies only (oldest
+    /// first, at most [`CONTEXT_REPLY_LIMIT`]), and none at all while `replies_count` is 0.
+    fn pixelfed_context(&self, id: &str) -> (Vec<String>, Vec<String>) {
+        let Some(status) = self.statuses.get(id) else {
+            return (Vec::new(), Vec::new());
+        };
+        let parent = status["in_reply_to_id"]
+            .as_str()
+            .filter(|p| self.statuses.contains_key(*p))
+            .map(str::to_owned);
+        let mut replies = Vec::new();
+        if status["replies_count"].as_i64().unwrap_or(0) > 0 {
+            replies = self.reply_ids(id);
+            replies.truncate(CONTEXT_REPLY_LIMIT);
+        }
+        (parent.into_iter().collect(), replies)
+    }
+
     /// Every reply below `id`, depth first, siblings oldest first (Mastodon `descendants`).
     fn descendants(&self, id: &str) -> Vec<String> {
         let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
@@ -447,6 +492,7 @@ pub struct AppState {
     /// Accounts by username: the timeline authors and the signed-in account (comment and
     /// notification authors).
     accounts: HashMap<String, Value>,
+    mastodon_threads: bool,
 }
 
 impl AppState {
@@ -589,6 +635,7 @@ impl AppState {
             pristine: content,
             admin: true,
             accounts,
+            mastodon_threads: false,
         };
         state.reset(false);
         Ok(state)
@@ -604,6 +651,14 @@ impl AppState {
 
     pub fn admin_enabled(&self) -> bool {
         self.admin
+    }
+
+    /// Answer `GET /api/v1/statuses/:id/context` like Mastodon (the whole parent chain and
+    /// every reply below, depth first) instead of like Pixelfed (the parent and the direct
+    /// replies only; the default). `FAKE_PIXELFED_THREADS=mastodon` in the binary.
+    pub fn with_mastodon_threads(mut self, enabled: bool) -> Self {
+        self.mastodon_threads = enabled;
+        self
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -630,6 +685,9 @@ impl AppState {
         inner.notifications = notifications;
         inner.created.clear();
         inner.idempotency.clear();
+        inner.media.clear();
+        inner.next_media_id = 1;
+        inner.media_processing_polls = 1;
         inner.faults.clear();
         inner.requests.clear();
         inner.requests_total = 0;
@@ -699,6 +757,24 @@ impl AppState {
     /// Ids of the direct replies (comments) to a status, oldest first.
     pub fn reply_ids(&self, id: &str) -> Vec<String> {
         self.lock().reply_ids(id)
+    }
+
+    /// How many `GET /api/v1/media/:id` polls a new `POST /api/v2/media` upload
+    /// stays "processing" (default 1; 0: ready at once).
+    pub fn set_media_processing_polls(&self, polls: u32) {
+        self.lock().media_processing_polls = polls;
+    }
+
+    /// Ids of the uploaded media, sorted.
+    pub fn media_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.lock().media.keys().cloned().collect();
+        ids.sort_by(|a, b| id_order(a, b));
+        ids
+    }
+
+    /// The home timeline's ids, newest first.
+    pub fn timeline_ids(&self) -> Vec<String> {
+        self.lock().timeline.clone()
     }
 
     /// Ids of the statuses created through `POST /api/v1/statuses` since the last reset,
@@ -857,6 +933,7 @@ impl AppState {
                 "requests": inner.requests_total,
             },
             "created": inner.created,
+            "media": inner.media.len(),
             "grants": {
                 "authorization_code": inner.authorization_code_grants,
                 "refresh_token": inner.refresh_token_grants,
@@ -1127,6 +1204,15 @@ pub fn app(state: Arc<AppState>) -> Router {
         .route("/api/v1/notifications", get(notifications))
         .route("/api/v1/statuses", post(create_status))
         .route(
+            "/api/v2/media",
+            post(upload_media_v2).layer(axum::extract::DefaultBodyLimit::max(MAX_MEDIA_BYTES)),
+        )
+        .route(
+            "/api/v1/media",
+            post(upload_media_v1).layer(axum::extract::DefaultBodyLimit::max(MAX_MEDIA_BYTES)),
+        )
+        .route("/api/v1/media/{id}", get(get_media))
+        .route(
             "/api/v1/statuses/{id}",
             get(get_status).delete(delete_status),
         )
@@ -1143,6 +1229,7 @@ pub fn app(state: Arc<AppState>) -> Router {
         router = router
             .route("/_admin/state", get(admin_state))
             .route("/_admin/reset", post(admin_reset))
+            .route("/_admin/media", post(admin_media))
             .route(
                 "/_admin/faults",
                 post(admin_add_faults).delete(admin_clear_faults),
@@ -1984,8 +2071,10 @@ async fn get_status(
     }
 }
 
-/// `GET /api/v1/statuses/:id/context`: the thread around a status. On a reblog, the
-/// reblogged status's thread.
+/// `GET /api/v1/statuses/:id/context`: the thread around a status. Like Pixelfed, only one
+/// level each way (the parent; the direct replies), so a client must ask again for the
+/// replies to a reply; Mastodon's whole thread with [`AppState::with_mastodon_threads`]. On
+/// a reblog, the reblogged status's thread.
 async fn status_context(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -2001,18 +2090,213 @@ async fn status_context(
     let Some(target) = inner.target_id(&id) else {
         return not_found();
     };
+    let (ancestors, descendants) = if state.mastodon_threads {
+        (inner.ancestors(&target), inner.descendants(&target))
+    } else {
+        inner.pixelfed_context(&target)
+    };
     let render =
         |ids: Vec<String>| -> Vec<Value> { ids.iter().filter_map(|id| inner.render(id)).collect() };
     Json(json!({
-        "ancestors": render(inner.ancestors(&target)),
-        "descendants": render(inner.descendants(&target)),
+        "ancestors": render(ancestors),
+        "descendants": render(descendants),
     }))
     .into_response()
 }
 
-/// `POST /api/v1/statuses`: comments only (`in_reply_to_id` required; Pixelfed wants media
-/// for a new post, which the fake does not take). Form or JSON body; honours
-/// `Idempotency-Key`.
+/// Width and height from a JPEG's SOF or a PNG's IHDR (0x0 if unknown).
+fn image_size(bytes: &[u8]) -> (u32, u32) {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.len() >= 24 {
+        let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+        let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+        return (w, h);
+    }
+    let mut i = 2;
+    while i + 9 < bytes.len() && bytes[i] == 0xFF {
+        let marker = bytes[i + 1];
+        let len = usize::from(u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]));
+        if matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF) {
+            let h = u32::from(u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]));
+            let w = u32::from(u16::from_be_bytes([bytes[i + 7], bytes[i + 8]]));
+            return (w, h);
+        }
+        i += 2 + len;
+    }
+    (0, 0)
+}
+
+/// A media attachment as the API shows it (`url` null while processing).
+fn media_json(public_url: &str, id: &str, m: &Media) -> Value {
+    let ready = m.polls_left == 0;
+    let url = format!("{public_url}/storage/uploads/{id}.{}", m.ext);
+    let aspect = if m.height > 0 {
+        f64::from(m.width) / f64::from(m.height)
+    } else {
+        1.0
+    };
+    json!({
+        "id": id,
+        "type": "image",
+        "url": if ready { json!(url) } else { Value::Null },
+        "preview_url": if ready { json!(url) } else { Value::Null },
+        "remote_url": null,
+        "text_url": null,
+        "description": if m.description.is_empty() { Value::Null } else { json!(m.description) },
+        "blurhash": "U5Ss50j[fQj[~qj[fQj[fQfQfQfQ~qj[fQj[",
+        "meta": { "original": { "width": m.width, "height": m.height, "aspect": aspect } },
+        "mime": m.content_type,
+    })
+}
+
+/// `POST /api/v{1,2}/media` (multipart `file`, optional `description`).
+async fn upload_media(
+    state: Arc<AppState>,
+    headers: HeaderMap,
+    mut form: axum::extract::Multipart,
+    v2: bool,
+) -> Response {
+    if let Err(r) = require_token(&state, &headers) {
+        return r;
+    }
+    let (mut file, mut description) = (None, String::new());
+    loop {
+        match form.next_field().await {
+            Ok(Some(field)) => match field.name() {
+                Some("file") => {
+                    let ct = field.content_type().unwrap_or("").to_ascii_lowercase();
+                    match field.bytes().await {
+                        Ok(b) => file = Some((ct, b.to_vec())),
+                        Err(_) => return unprocessable("Validation failed: File is invalid"),
+                    }
+                }
+                Some("description") => description = field.text().await.unwrap_or_default(),
+                _ => {}
+            },
+            Ok(None) => break,
+            Err(_) => return unprocessable("Validation failed: invalid multipart body"),
+        }
+    }
+    let Some((ct, bytes)) = file else {
+        return unprocessable("Validation failed: File can't be blank");
+    };
+    let ext = match ct.as_str() {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/webp" => "webp",
+        _ => return unprocessable("Validation failed: File content type is invalid"),
+    };
+    let (width, height) = image_size(&bytes);
+    let mut inner = state.lock();
+    let id = inner.next_media_id.to_string();
+    inner.next_media_id += 1;
+    let polls_left = if v2 { inner.media_processing_polls } else { 0 };
+    let media = Media {
+        bytes,
+        content_type: ct,
+        ext,
+        width,
+        height,
+        description,
+        polls_left,
+        attached: false,
+    };
+    let body = media_json(&state.public_url, &id, &media);
+    tracing::info!(media_id = %id, v2, processing = polls_left > 0, "media uploaded");
+    inner.media.insert(id, media);
+    let status = if polls_left > 0 {
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::OK
+    };
+    (status, Json(body)).into_response()
+}
+
+async fn upload_media_v2(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    form: axum::extract::Multipart,
+) -> Response {
+    upload_media(state, headers, form, true).await
+}
+
+async fn upload_media_v1(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    form: axum::extract::Multipart,
+) -> Response {
+    upload_media(state, headers, form, false).await
+}
+
+/// `GET /api/v1/media/:id`: 206 with `url: null` while processing, then 200.
+async fn get_media(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    UrlPath(id): UrlPath<String>,
+) -> Response {
+    if let Err(r) = require_token(&state, &headers) {
+        return r;
+    }
+    let mut inner = state.lock();
+    let Some(m) = inner.media.get_mut(&id) else {
+        return not_found();
+    };
+    let processing = m.polls_left > 0;
+    m.polls_left = m.polls_left.saturating_sub(1);
+    let mut shown = m.clone();
+    if processing {
+        shown.polls_left = 1;
+    }
+    let body = media_json(&state.public_url, &id, &shown);
+    let status = if processing {
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::OK
+    };
+    (status, Json(body)).into_response()
+}
+
+/// `POST /_admin/media {"processing_polls": n}`.
+async fn admin_media(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+    let polls = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .and_then(|v| v["processing_polls"].as_u64())
+        .and_then(|n| u32::try_from(n).ok());
+    let Some(polls) = polls else {
+        return error_json(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "expected {\"processing_polls\": n}",
+        );
+    };
+    state.set_media_processing_polls(polls);
+    Json(json!({ "processing_polls": polls })).into_response()
+}
+
+/// A new top-level post with media, shaped like the fixture statuses.
+fn post_status(
+    public_url: &str,
+    id: &str,
+    account: &Value,
+    text: &str,
+    created_at: &str,
+    media: Vec<Value>,
+) -> Value {
+    let mut status = comment_status(public_url, id, account, &json!({}), text, created_at);
+    status["in_reply_to_id"] = Value::Null;
+    status["in_reply_to_account_id"] = Value::Null;
+    status["pf_type"] = json!(if media.len() > 1 {
+        "photo:album"
+    } else {
+        "photo"
+    });
+    status["media_attachments"] = Value::Array(media);
+    status
+}
+
+/// `POST /api/v1/statuses`: a comment (`in_reply_to_id`) or a post with
+/// `media_ids[]` (processed uploads, at most [`MAX_MEDIA_PER_POST`]; Pixelfed
+/// takes no post without media). A new post goes to the top of the home
+/// timeline. Form or JSON body; honours `Idempotency-Key`.
 async fn create_status(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -2050,9 +2334,65 @@ async fn create_status(
         return Json(existing).into_response();
     }
     if reply_to.is_empty() {
-        return unprocessable(
-            "Validation failed: in_reply_to_id is required (the fake only creates comments)",
+        let media_ids: Vec<String> = param(&params, "media_ids")
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect();
+        if media_ids.is_empty() {
+            return unprocessable("Validation failed: a post needs at least one photo");
+        }
+        if media_ids.len() > MAX_MEDIA_PER_POST {
+            return unprocessable(&format!(
+                "Validation failed: at most {MAX_MEDIA_PER_POST} photos per post"
+            ));
+        }
+        if text.chars().count() > MAX_STATUS_CHARS {
+            return unprocessable(&format!(
+                "Validation failed: Text is too long (maximum is {MAX_STATUS_CHARS} characters)"
+            ));
+        }
+        let mut media = Vec::new();
+        for mid in &media_ids {
+            match inner.media.get(mid) {
+                Some(m) if m.attached => {
+                    return unprocessable("Validation failed: media is already attached");
+                }
+                Some(m) if m.polls_left > 0 => {
+                    return unprocessable("Validation failed: media is still processing");
+                }
+                Some(m) => media.push(media_json(&state.public_url, mid, m)),
+                None => return unprocessable("Validation failed: unknown media"),
+            }
+        }
+        for mid in &media_ids {
+            if let Some(m) = inner.media.get_mut(mid) {
+                m.attached = true;
+            }
+        }
+        let id = inner.next_status_id.to_string();
+        inner.next_status_id += 1;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let status = post_status(
+            &state.public_url,
+            &id,
+            &state.self_account,
+            text,
+            &status_time(now),
+            media,
         );
+        inner.statuses.insert(id.clone(), status);
+        inner.timeline.insert(0, id.clone());
+        inner.created.push(id.clone());
+        if let Some(key) = idempotency_key {
+            if inner.idempotency.len() == IDEMPOTENCY_CAP {
+                inner.idempotency.pop_front();
+            }
+            inner.idempotency.push_back((key, id.clone()));
+        }
+        tracing::info!(status_id = %id, photos = media_ids.len(), "post created");
+        return Json(inner.render(&id)).into_response();
     }
     if text.is_empty() {
         return unprocessable("Validation failed: Text can't be blank");
@@ -2136,6 +2476,19 @@ async fn delete_status(
 }
 
 async fn media(State(state): State<Arc<AppState>>, UrlPath(path): UrlPath<String>) -> Response {
+    if let Some(name) = path.strip_prefix("uploads/") {
+        let id = name.split('.').next().unwrap_or("");
+        let found = state
+            .lock()
+            .media
+            .get(id)
+            .filter(|m| m.polls_left == 0)
+            .map(|m| (m.content_type.clone(), m.bytes.clone()));
+        return match found {
+            Some((ct, bytes)) => ([(header::CONTENT_TYPE, ct)], bytes).into_response(),
+            None => StatusCode::NOT_FOUND.into_response(),
+        };
+    }
     let rel = Path::new(&path);
     if path.contains('\\') || !rel.components().all(|c| matches!(c, Component::Normal(_))) {
         return StatusCode::NOT_FOUND.into_response();

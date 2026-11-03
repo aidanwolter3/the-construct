@@ -222,6 +222,7 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 | `CONSTRUCT_VAPID_PRIVATE_KEY` | generated | Web Push signing key for notifications (D52): base64url of a 32-byte P-256 private key. Unset: the server generates one on first start and keeps it in `host.db` (devices subscribed with its public key keep working across restarts). Staging/production should set it as a secret so a lost volume doesn't orphan subscriptions. |
 | `CONSTRUCT_VAPID_SUBJECT` | the repo URL | Contact (`mailto:` or `https:`) that push services may use to reach the operator. |
 | `CONSTRUCT_PUSH` | on | `off`: no Web Push (notifications still reach the inbox and open apps). |
+| `CONSTRUCT_UPLOAD_MAX_BYTES` | `20971520` (20 MB) | Largest file a client may upload to `POST /v1/uploads` (photos for a post, D49); at least 1024. |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
 
 The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PROVIDER`, `CONSTRUCT_LLM_MODEL`,
@@ -237,6 +238,7 @@ The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PR
 | `FAKE_PIXELFED_AUTO_APPROVE` | unset | `1`: `GET /oauth/authorize` redirects straight back with a code (same as `auto=1` in the query); otherwise an HTML page with an **Authorize** button. |
 | `FAKE_PIXELFED_TOKEN` | unset | A pre-seeded valid access token, to skip OAuth in QA (survives resets). |
 | `FAKE_PIXELFED_FIXTURES` | embedded | Fixture directory to load instead of the embedded copies (e.g. `fixtures/pixelfed` while editing). |
+| `FAKE_PIXELFED_THREADS` | `pixelfed` | `mastodon`: `GET /api/v1/statuses/:id/context` returns the whole thread (Mastodon) instead of one level each way (Pixelfed). |
 | `FAKE_PIXELFED_ADMIN` | loopback only | `1` serves `/_admin` on any address, `0` never; unset, only when bound to loopback. |
 | `RUST_LOG` | `info` | `tracing` filter. |
 
@@ -452,10 +454,17 @@ client build. The engine and the clients know no app.
   `$item.group_count`. `core://Column` and `core://Row` take `align`; `Display` is a large serif text style; `flame`
   and `timer` are icons. `layouts/recipes/0004.json` uses them for colour tiles, category chips and the recipe
   card.
-- **Schema versions (D36, D38):** the engine sends `X-Construct-Schema: 6` (workspace fetches, data loads, the
+- **Grids and switches (schema 8, D48):** a `core://List` with `columns` (2..6) lays its items out in rows of equal
+  cells (`spacing_dp` between items both ways, `padding_h_dp` at the sides; a group header starts a new row).
+  `core://Conditional` reads a form value (`"value": "$form.view"`, "" while unset) and takes an optional `equals`:
+  the content shows only when the value, as text, equals it. With `core://ChoiceChips` editing that form value, a
+  layout switches between views with no new state. `layouts/pixelfed_home/0004.json` puts a List/Cards switch on
+  the feed: two-column cards (cover photo, author, like count) that open a post screen
+  (`pixelfed://posts/{id}`, data from `/v1/pixelfed/screens/post?id=`).
+- **Schema versions (D36, D38):** the engine sends `X-Construct-Schema: 8` (workspace fetches, data loads, the
   apps API and the events stream). Every version records the schema it was written for (`"schema"` in its file). The pod serves each client
   the newest version it can draw, so an older app (no header = 1) keeps getting the last version without screens
-  or the new nodes. Screens and List/Image/TextField need `"schema": 2`; the building blocks need 3; `core://Tappable` needs 4; a List `filter` or `group_by` needs 5; the schema-6 vocabulary above needs 6. `GET /v1/apps/{id}/versions[/{n}]` adds `schema`,
+  or the new nodes. Screens and List/Image/TextField need `"schema": 2`; the building blocks need 3; `core://Tappable` needs 4; a List `filter` or `group_by` needs 5; the schema-6 vocabulary above needs 6; `action.auth.session` needs 7; List `columns`/`spacing_dp`/`padding_h_dp` and a form-based or `equals` Conditional need 8. `GET /v1/apps/{id}/versions[/{n}]` adds `schema`,
   `compatible` and, when false, `incompatible` (`update_required`: written for a newer app; `retired`: written for
   a schema this app no longer draws) per version; the menu greys those rows out and won't pin them. "Latest" in the
   menu is always a version this app can draw; when the newest needs a newer app, the menu adds "Update the app to
@@ -546,11 +555,13 @@ Its environment variables are listed in [Server runtime configuration](#fake-pix
 comments as each post's `replies_count`, plus nested replies; authors are the timeline accounts and the signed-in
 `constructdemo`). Each entry is compact (`id`, `in_reply_to_id`, `account` username, `created_at`, plain `text`,
 optional `favourites_count`) and is expanded into a full status; parents must come before their replies. The API
-is Mastodon's:
+is Mastodon's, with Pixelfed's threads:
 
-- `GET /api/v1/statuses/:id/context`: `{"ancestors": [...], "descendants": [...]}` — the parent chain root first,
-  and every reply below depth first (siblings oldest first); thread them by `in_reply_to_id`. On a reblog, the
-  reblogged post's thread.
+- `GET /api/v1/statuses/:id/context`: `{"ancestors": [...], "descendants": [...]}`. Like Pixelfed, one level each
+  way: the direct parent only, and the direct replies only (oldest first, at most 100, none while `replies_count` is
+  0), so the replies to a comment come from that comment's own `context` (D47). With
+  `FAKE_PIXELFED_THREADS=mastodon`, Mastodon's whole thread instead: the parent chain root first, and every reply
+  below depth first. On a reblog, the reblogged post's thread.
 - `POST /api/v1/statuses` (form or JSON) with `status` and `in_reply_to_id`: adds a comment by the signed-in
   account and bumps the parent's `replies_count`. Optional `visibility`, `spoiler_text`, `sensitive`; the
   `Idempotency-Key` header replays the first result. 422 for blank text, more than 500 characters or no
@@ -560,7 +571,9 @@ is Mastodon's:
 
 ```bash
 curl -s -H 'Authorization: Bearer dev' http://127.0.0.1:8081/api/v1/statuses/781254316723458049/context \
-  | jq '.descendants[] | {id, in_reply_to_id, who: .account.username, content_text}'
+  | jq '.descendants[] | {id, in_reply_to_id, who: .account.username, content_text, replies_count}'
+curl -s -H 'Authorization: Bearer dev' http://127.0.0.1:8081/api/v1/statuses/781300000000000101/context \
+  | jq '.descendants[] | {id, in_reply_to_id, content_text}'     # the replies to a comment
 curl -s -H 'Authorization: Bearer dev' -d status='Lovely light!' -d in_reply_to_id=781254316723458049 \
   http://127.0.0.1:8081/api/v1/statuses | jq '{id, content}'
 ```
@@ -699,7 +712,9 @@ Endpoints:
   one `pixelfed://comments/<id>` entity per comment (`id, post_id, in_reply_to_id, depth, author_name,
   author_handle, avatar_url, text, created_at, meta ("@bob · 3 h"), like_count, is_liked, is_own`) and
   `queries["comments:<post_id>"]` in thread order (each comment followed by its replies, depth capped at 4), from
-  upstream `GET /api/v1/statuses/{id}/context`. A boost's id gives the boosted post's thread. Unknown post 404
+  upstream `GET /api/v1/statuses/{id}/context`, plus that call for each comment that reports more replies than
+  the pod has (Pixelfed lists only direct replies; at most 50 extra calls, 6 at a time; a failed one only loses
+  its branch, D47). A boost's id gives the boosted post's thread. Unknown post 404
   `post_not_found`; no session 401; upstream down 502.
 - `POST /v1/pixelfed/posts/comment {id, text, client_id?}` (bearer) -> `{ok, id, comment}`: posts `text` (1..500
   characters) as a reply to post or comment `id` (upstream `POST /api/v1/statuses` with `in_reply_to_id`).
@@ -1001,6 +1016,7 @@ entries starting with `#` are comments. An argument cannot contain `;`, and sinc
 | `swipe-left <target>` / `swipe-right <target>` | Touch-swipes the selected node; `swipe-left` on a carousel shows the next page. |
 | `scroll-to <target>` | Scrolls the feed until the selected node is visible (e.g. `scroll-to Kept my distance`). |
 | `type <target> <text>` | Replaces the text of the selected text field with `<text>` (clear, then type), e.g. `type tag:server-custom-url http://127.0.0.1:8080`. The target is `tag:<testTag>`, a single word, or `"quoted text"` (may contain spaces); the text is the rest of the command. |
+| `pick <path> [<path>…]` | Queues files the next photo picker (`core://MediaPicker`'s add tile) returns; relative paths resolve against the working directory, `"quoted paths"` may contain spaces. E.g. `click tag:new-post; pick fixtures/pixelfed/media/carousel-1.png; click tag:media-picker-add:photos; click Share`. In fixture mode a shared post shows "Posting…" until the next `wait` / `idle`. |
 | `offline` / `online` | Fixture mode only: flips the engine's connectivity. |
 | `publish-version <note>` | Fixture mode only: the fake pod publishes a new newest version of the app on screen (its layout with a "What's new: <note>" banner); followers see it at once. |
 | `screen <WxH or preset>` | Restarts the renderer at the new size. Engine state carries over; UI state such as scroll position does not. |

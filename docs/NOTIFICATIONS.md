@@ -58,7 +58,7 @@ fn poll_interval(&self) -> Option<Duration> { None }                        // N
 - `Catalog::new` checks: channel `app_id` is one of the adapter's apps; channel ids unique per app; an adapter with
   `poll_interval` declares ≥1 channel.
 
-## 3. Pod core (`crates/pod-core`, new `notify.rs` + `devices.rs`; core migration v13)
+## 3. Pod core (`crates/pod-core`, new `notify.rs` + `devices.rs`; core migration v14)
 Tables (one SQLite per pod, so no pod id column):
 - `notifications(id PK, app_id, channel, dedupe_key, title, body, image_url, target_uri, group_key, created_at,
   read_at, UNIQUE(app_id, dedupe_key))` — insert-or-ignore makes polling idempotent. Retention: keep 500 / 30 days,
@@ -133,9 +133,9 @@ into a generic `pod_core::net` module so both use it.
   injects one (type, from, status) for tests; faults apply as for other routes.
 
 ## 6. Client engine (`crates/client-core`, `crates/client-ffi`)
-- Device identity: engine generates a UUID on first run, stored in `cache.db` (`device` table, store v5), sent as
+- Device identity: engine generates a UUID on first run, stored in `cache.db` (`device` table, store v6), sent as
   `X-Construct-Device` on all calls and the SSE stream.
-- Store v5 `notifications` cache (last 200) + `notification_channels` cache, so the inbox works offline.
+- Store v6 `notifications` cache (last 200) + `notification_channels` cache, so the inbox works offline.
 - `events.rs`: handle `notification` / `notifications_read` events → update cache → `notify()` observers, and call a
   new `NotificationListener::on_notification(FfiNotification)` (live arrivals only, never replays) so platform code
   can post an OS notification.
@@ -195,11 +195,11 @@ into a generic `pod_core::net` module so both use it.
   24 h; the scheduler skips pods marked for deletion.
 
 ## 10. Phasing (each phase shippable, `main` stays green)
-1. **Core pipeline**: protocol types, adapter methods, core migration v13, Notifier + `notify`, routes, SSE event,
+1. **Core pipeline**: protocol types, adapter methods, core migration v14, Notifier + `notify`, routes, SSE event,
    host scheduler + `next_wake_at`, `server pods notify-test`. Tests with a test adapter in pod-core.
-2. **Pixelfed source**: fake-pixelfed endpoint + admin injection, `Upstream::notifications`, adapter migration 2,
+2. **Pixelfed source**: fake-pixelfed endpoint + admin injection, `Upstream::notifications`, adapter migration 3,
    mapping, channels; e2e: inject on fake → appears in `GET /v1/notifications` and on SSE.
-3. **Engine + inbox UI**: store v5, device id, events, FFI, bell + inbox + settings, simulator fixture/commands.
+3. **Engine + inbox UI**: store v6, device id, events, FFI, bell + inbox + settings, simulator fixture/commands.
 4. **OS notifications while running**: Android channels/permission/posting from SSE; desktop tray + badge.
 5. **Web Push**: `pod_core::net` extraction, VAPID config, `push` sender, device push subscriptions, skip-if-SSE;
    Android UnifiedPush connector; then the FCM embedded distributor behind a build property.
@@ -210,7 +210,7 @@ a PROGRESS.md note; README gets the routes, env vars and sim commands.
 ## Files to touch (representative)
 - `crates/protocol/src/notify.rs` (new), `lib.rs`
 - `crates/pod-core/src/adapter.rs` (methods + Catalog checks), `notify.rs`, `devices.rs`, `push.rs`, `net.rs` (new),
-  `store.rs` (migration v13), `layouts.rs` (SSE event in `events` handler), `lib.rs` (`AppState` fields, `notify`,
+  `store.rs` (migration v14), `layouts.rs` (SSE event in `events` handler), `lib.rs` (`AppState` fields, `notify`,
   `poll_due`, `next_wake`, `WakeHook`)
 - `crates/pod-host/src/lib.rs` (`spawn_scheduler`, host.db `next_wake_at`, VAPID keys), `crates/server/src/main.rs`,
   `crates/server/src/lib.rs` (`pod_factory` wiring, `pods notify-test`)

@@ -1617,6 +1617,103 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
 - **Not yet:** self-service sign-up; per-device credentials and revoking one device; evicting idle pods from memory;
   sample recipes for temporary pods; a pod quota on disk; a separate Fly app for anonymous demos.
 
+## D47: Replies to comments come from each comment's own `context`
+
+- **Why:** replies to comments did not show on real Pixelfed. Its `GET /api/v1/statuses/{id}/context`
+  (`ApiV1Controller::statusContext`) lists only the direct parent and the direct replies (by id, at most 100, none
+  while `replies_count` is 0), unlike Mastodon's whole thread. The pod threaded whatever `descendants` held, and the
+  fake answered like Mastodon, so tests passed.
+- **Pod:** the comments screen asks the post for its `context`, then, level by level, each comment whose
+  `replies_count` is above the replies already present (`app_pixelfed::complete_comment_thread`): at most 50 extra
+  calls per screen, 6 at a time. A failed call loses only that comment's replies (logged). A Mastodon-style upstream
+  costs no extra call. Threading and the depth cap (4) are unchanged.
+- **Fake:** `context` answers like Pixelfed by default; `FAKE_PIXELFED_THREADS=mastodon` (`with_mastodon_threads`)
+  keeps the old whole-thread answer so both shapes are tested.
+- **Weighed:** Pixelfed's web endpoints (`/api/v2/comments/...`) return nested replies, but they are not part of the
+  OAuth API and are undocumented; fetching every comment's `context` regardless of its count costs a call per comment
+  and finds nothing Pixelfed would not list (it returns no replies while the count is 0).
+
+## D48: A cards view for Pixelfed: list grids and form-driven conditionals (schema 8)
+
+- **Why:** the user asked for a grid view of the Pixelfed feed and picked, from mockups, a List/Cards switch above the
+  feed with two-column cards (cover photo, author, like count) that open the post. The shared UI could not draw it:
+  a `core://List` stacks full-width items, and nothing could show part of a layout based on a switch.
+- **Generic vocabulary (additive schema 8):** `core://List` `columns` (0/1 = one item per row, at most 6),
+  `spacing_dp` (between items, both ways) and `padding_h_dp`. A grid row is a `Row` of equal-weight cells, top-aligned,
+  a short last row left-aligned; a group header starts a new row; `indent` is ignored in a grid. `core://Conditional`
+  reads `$form.<field>` ("" while unset) and takes `equals`: show the content only when the value, as text (null and
+  missing are ""), equals it. A switch is then a `core://ChoiceChips` over a form value plus one `Conditional` per
+  view; the empty option is the default view.
+- **Pixelfed (`layouts/pixelfed_home/0004.json`, adapter only):** the feed slot is a Column of the chips and two
+  Conditionals (the old post list, and a two-column `core://List` of `Tappable` cards over the same
+  `timeline:home` query, so both views share entities and likes). A card opens the new post screen
+  (`pixelfed://posts/{id}`, Push), whose data `GET /v1/pixelfed/screens/post?id=<id>` returns the post (the inner one
+  of a boost), its author and media and `queries["post:<id>"]`; it reuses the feed's post card. Posts gain
+  `cover_url` (first media's preview, else its image, proxied), `cover_blurhash` and `media_count`. Text-only posts
+  show their caption on a tinted box instead of a photo.
+- **Compatibility:** 0004 declares schema 8, so apps of schema 7 and older keep 0003; the switch value is per
+  screen form state, so it resets when the app restarts.
+- **Weighed:** a server-only grid (the adapter grouping posts into row entities with fixed-size tiles on a separate
+  screen) needed no client build but could not fill the screen width or switch in place; a dedicated
+  `core://Grid` node (the List already has the query, filter, `where` and groups a grid needs); a three-column
+  photo-only grid and a server-side view setting (the user chose cards; a form value needs no endpoint).
+- **Not yet:** remembering the chosen view across restarts; a multi-photo marker on cards (needs a numeric
+  comparison or a server-made flag); more columns on wide screens.
+
+## D49: Attachments: the client stages files, the outbox uploads them, the pod stores them
+
+- **Why:** posting photos (docs/POSTING.md) needs files to travel from the user's device to an adapter. The outbox
+  and pod only moved JSON. Doing it generically means any app can take photos with a layout change and an adapter
+  route.
+- **Client:** `core://MediaPicker` puts staged attachment ids in the form. `stage_attachment(path)` (engine, FFI)
+  re-encodes to JPEG at most 2048 px on the long side, drops all metadata (GPS), stores the file under
+  `<storage>/attachments/` and registers `construct://attachments/<id>` (`url: file://…`). A create's `attachments`
+  map names the form lists; `$attachments.<name>` is the local entity URIs in `entity` and the upload ids in
+  `payload`. Engine store v5: `attachments` table; a row's attachment refs and upload ids live in its `create_json`.
+- **Outbox:** before a row's POST, each attachment without an upload id goes to `POST /v1/uploads` (raw body,
+  `Idempotency-Key`, 60 s timeout, the usual response classes). Upload ids are saved per attachment, so a retry
+  resumes. Files are deleted with their row (accepted, refused, or dropped at sign-out); unused staged files after
+  24 h.
+- **Pod:** `uploads` table (core migration v13) holding the bytes too: the pod's own database, so uploads go with
+  the pod and in-memory test pods work. Signed-in callers only; jpeg, png
+  and webp, checked by magic bytes; `CONSTRUCT_UPLOAD_MAX_BYTES` (default 20 MB); a cap on unclaimed uploads per
+  session; same key and session give the same id. Adapters `get` (same session only), `claim` and `release`;
+  unclaimed uploads go after 24 h, released ones at once.
+- **Public URL:** `GET /v1/uploads/{id}` is public under the pod's public prefix (D46), like the media proxy: images
+  load without a bearer. The id is 128 random bits; it only lives until the post is done.
+- **Trade-off:** rows still flush strictly in order, so a like made while photos upload waits behind them. Kept for
+  now: ordering is what makes rollback correct (D35).
+- **Weighed:** multipart on the create POST (one request, but the outbox would hold or re-read files per retry and
+  every adapter would parse multipart); uploading at pick time (fast Share, but uploads for posts never sent, and no
+  offline picking); base64 in JSON (a third larger, hits the 2 MB body limit).
+
+## D50: Creates can stay pending on the server; the pod can say "your data changed"
+
+- **Why:** Pixelfed processes media after upload, so a post isn't there when the create returns. The client's
+  placeholder is dropped on the first reload after a 2xx (D35), so the server has to keep showing it, and tell the
+  client when the real thing exists.
+- **Pending on the server:** an adapter may answer a create with 202 and list its own placeholder under the URI the
+  client used (`…/pending-<client_id>`), with whatever state fields the layout shows. The Pixelfed adapter does so
+  from `pixelfed_pending_posts`; failed rows stay listed with Retry and Discard until the user acts.
+- **`event: data`:** `AppState::publish_data(workspace_id, session_id)` sends `event: data` `{workspace_id}` on the
+  workspace's SSE stream, only to subscribers of that session. It carries no data: the engine reloads the workspace
+  and its loaded data (debounced). Older engines ignore unknown events. Clients also reload when brought to the
+  foreground.
+- **`AppAdapter::resume(pod)`:** runs once when a pod opens, so adapters restart jobs a restart interrupted.
+- **Weighed:** answering the create only when Pixelfed is done (requests of a minute or more, and the outbox timeout
+  is 10 s); the client polling (traffic for every open client, and still a delay); putting data in the event (the
+  fetch paths already do auth and normalising).
+
+## D51: Schema 9: media picker, multi-line fields, richer creates
+
+- `core://MediaPicker {field, max_items, label?}` (D49).
+- `core://TextField.lines`: a multi-line field without `on_submit` (amends D43's single-line rule).
+- `action.mutation.create` gains `attachments`, `position` (`start` | `end`, default `end`: where the placeholder goes
+  in its list) and `dismiss` (close the screen after dispatch).
+- `$form?.<field>` binds a blank field to `""` instead of blocking the send (a caption is optional).
+- Icons `add_photo`, `add`, `refresh`.
+- Additive: `RETIRED` is unchanged; schema-7 clients get the newest layout they can draw.
+
 ## D52: Notifications from apps are a generic pod pipeline; only adapters know their source
 
 Design: `docs/NOTIFICATIONS.md`. README "Notifications" has the API and configuration.
@@ -1629,13 +1726,13 @@ Design: `docs/NOTIFICATIONS.md`. README "Notifications" has the API and configur
   against that app's own layout routes like any `action.navigation.open`. `the_core_names_no_app` still passes.
 - **Source:** adapters either poll (`poll_notifications` + `poll_interval`, cursor in their own tables) or report from
   their own routes (`AppState::notify`). One pipeline: insert with `UNIQUE(app_id, dedupe_key)` (idempotent; core
-  migration v13 adds `notifications`, `notification_polls`, `devices`, `device_channel_prefs`), broadcast, push.
+  migration v14 adds `notifications`, `notification_polls`, `devices`, `device_channel_prefs`), broadcast, push.
   Retention: the newest 500 for 30 days. A failed poll backs off (1 min doubling to 1 h, never below the interval);
   `PollStatus::SignInGone` stops polls until any session completes that sign-in again (`attach_sign_in_on` resumes
   them).
 - **Pixelfed:** polls `GET /api/v1/notifications` every 2 minutes (scope `read`, already granted) for each stored
   account the config still accepts. The first poll of an instance stores the newest 20 quietly (already read, never
-  pushed); later ones page from the cursor (`pixelfed_notify_cursor`, adapter migration 2), at most 3 pages. Channels
+  pushed); later ones page from the cursor (`pixelfed_notify_cursor`, adapter migration 3), at most 3 pages. Channels
   `likes`, `comments`, `mentions`, `follows`, `boosts`, `other` (off by default). Post-related ones open
   `pixelfed://posts/<id>/comments` (the comments screen route); follows open the app. Avatars go through the media
   proxy as pod paths (`<public prefix>/v1/pixelfed/media/<key>`), which clients prefix with their base URL. A token
@@ -1658,7 +1755,7 @@ Design: `docs/NOTIFICATIONS.md`. README "Notifications" has the API and configur
   test hooks allow local receivers. 404/410 drops a subscription, as do 5 failures in a row. At most 20 devices and
   60 deliveries a minute per pod. Payloads are end-to-end encrypted, so push services and gateways see no text.
   Devices of a deleted or rotated session stop getting pushes (joined on a valid session, pruned on registration).
-- **Engine (store v5):** a device id (32 hex, kept in cache.db, survives sign-out) on every call and the events
+- **Engine (store v6):** a device id (32 hex, kept in cache.db, survives sign-out) on every call and the events
   stream; the device registers when the stream connects with a session, after a sign-in, and when its info or push
   subscription changes. The newest 200 notifications, the channel list and the unread counts are cached, so the inbox
   and badge work offline; mark-read is optimistic and queued while offline. The snapshot's `notifications_json` holds

@@ -444,6 +444,13 @@ from a client (D32, D33).
 - Needs a client build: Android device check on the developer's Mac.
 - **Not yet:** photos, ingredient tick boxes, a grid list.
 
+## Replies to comments (D47)
+
+- Replies to comments now show on real Pixelfed: its `context` lists only direct replies, so the pod also asks each
+  comment with replies for its own (capped, concurrent; a failure only loses that branch).
+- The fake Pixelfed answers `context` like Pixelfed (one level each way); `FAKE_PIXELFED_THREADS=mastodon` keeps the
+  whole-thread answer. Tests cover both, the call count, a reply to a reply and a failed branch.
+
 ## Sign in to any Pixelfed instance (D45)
 
 - The signed-out Pixelfed screen has a server box when `PIXELFED_ALLOWED_INSTANCES` is set; staging sets `*`, so
@@ -463,6 +470,30 @@ from a client (D32, D33).
 - Schema 7: `action.auth.session`. The engine sends its session on sign-in and catalog calls.
 - Staging: `CONSTRUCT_TEMP_PODS=1`; existing data moves into an admin pod with `server pods adopt` (README "Pods").
 - Needs a client build and a device check (Android: open a pod with a code, Pixelfed sign-in, sign out, leave).
+
+## Pixelfed cards view (D48)
+
+- Schema 8: `core://List` `columns`, `spacing_dp`, `padding_h_dp` (a grid); `core://Conditional` on `$form.<field>`
+  and with `equals`.
+- `layouts/pixelfed_home/0004.json`: a List/Cards switch over the feed; two-column cards (cover, author, like count) open a
+  new post screen (`pixelfed://posts/{id}`, `GET /v1/pixelfed/screens/post?id=`). Posts carry `cover_url`,
+  `cover_blurhash` and `media_count`. Schema-7 apps keep `0003`.
+- Needs a client build and a device check (Android: switch to Cards, tap a card, like on the post screen, back).
+
+## Posting photos (D49-D51, docs/POSTING.md)
+
+- Schema 9: `core://MediaPicker`, `TextField.lines`, `action.mutation.create` `attachments` / `position` /
+  `dismiss`, `$form?.<field>`, icons `add_photo` / `add` / `refresh`.
+- Engine: `stage_attachment` (FFI too) re-encodes a picked photo upright as a metadata-free JPEG (at most 2048 px);
+  the outbox uploads a create's photos to `POST /v1/uploads` (once each, resumable) before its POST.
+- Pod: uploads in the pod's database (`GET /v1/uploads/{id}` is a public path), `event: data` per session,
+  `AppAdapter::resume`.
+- Pixelfed: `POST /v1/pixelfed/posts/create` answers 202; a job uploads to Pixelfed (v2 media, v1 fallback), waits
+  for processing and posts (idempotent). The feed shows "Posting…" placeholders, or the refusal with Retry/Discard.
+  The fake takes media and photo posts. Layout `pixelfed_home/0004.json`: a New post screen.
+- Client: picker on desktop (file dialog), Android (photo picker, HEIC converted) and the simulator (`pick`).
+- Needs a device check: the Android photo picker and the macOS file dialog; posting to a real Pixelfed instance
+  (v2 media processing is modelled on Mastodon's API).
 
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
@@ -519,9 +550,9 @@ new layout files; diffs between versions.
 
 - Design in `docs/NOTIFICATIONS.md`, built in one PR: protocol notification types; pod-core pipeline (store once,
   SSE `notification` / `notifications_read` events, Web Push with a server-wide VAPID key, devices and per-device
-  channel choices, polling with backoff; core migration v13); the host scheduler (`host.db` migration 2); the
-  Pixelfed source (polls `/api/v1/notifications`, adapter migration 2) and the fake upstream's notifications; engine
-  store v5 (device id, notification cache, listener, FFI); the shared inbox, bell badge and channel settings; desktop
+  channel choices, polling with backoff; core migration v14); the host scheduler (`host.db` migration 2); the
+  Pixelfed source (polls `/api/v1/notifications`, adapter migration 3) and the fake upstream's notifications; engine
+  store v6 (device id, notification cache, listener, FFI); the shared inbox, bell badge and channel settings; desktop
   tray notifications; Android channels, permission and closed-app push via UnifiedPush with the embedded FCM
   distributor as fallback.
 - Tests: pod-core (`tests/notifications.rs`, including encrypted delivery to a local push receiver), the Pixelfed

@@ -122,6 +122,7 @@ private fun runCli(args: Array<String>): Int {
     var setOnline: ((Boolean) -> Unit)? = null
     var publishVersion: ((String) -> Long)? = null
     var notify: ((String, String, String) -> Unit)? = null
+    var settle: (() -> Int)? = null
     if (mode == "fixture") {
         val fixture = opts["fixture"]?.let(::path) ?: defaultFixture(workspace, cwd)
         if (!fixture.isFile) throw UsageException("fixture not found: $fixture")
@@ -141,6 +142,7 @@ private fun runCli(args: Array<String>): Int {
         setOnline = { current.setOnline(it) }
         publishVersion = { current.publishVersion(it) }
         notify = { app, channel, title -> notifications.inject(app, channel, title) }
+        settle = { current.settle() }
         // open-app: a new fake engine on the app's default fixture, sharing the apps catalog and the connectivity.
         val openBridge = { id: String ->
             FakeEngineBridge(
@@ -195,6 +197,7 @@ private fun runCli(args: Array<String>): Int {
         modeName = mode,
         publishVersion = publishVersion,
         notify = notify,
+        settle = settle,
         server = if (mode == "live") opts["baseUrl"] ?: LIVE_DEFAULT_BASE_URL else SimRunner.SIM_SERVERS.first().url,
     ).run(steps)
     if (result.ok) {

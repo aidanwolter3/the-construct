@@ -144,7 +144,25 @@ const MIGRATIONS: &[Migration] = &[
          value TEXT NOT NULL
      );",
     ),
-    // v13 (D52): notifications from apps. `notifications` holds what adapters
+    // v13 (D49): uploads. Files a session sends before an action that needs
+    // them; `owner` is the adapter's claim (kept until it releases them).
+    Migration::Sql(
+        "CREATE TABLE uploads (
+         id           TEXT PRIMARY KEY NOT NULL,
+         token_hash   TEXT NOT NULL,
+         idem_key     TEXT NOT NULL,
+         content_type TEXT NOT NULL,
+         size         INTEGER NOT NULL,
+         sha256       TEXT NOT NULL,
+         data         BLOB NOT NULL,
+         owner        TEXT,
+         created_at   INTEGER NOT NULL,
+         released_at  INTEGER,
+         UNIQUE (token_hash, idem_key)
+     );
+     CREATE INDEX uploads_owner ON uploads(owner);",
+    ),
+    // v14 (D52): notifications from apps. `notifications` holds what adapters
     // reported (`UNIQUE(app_id, dedupe_key)` makes reporting idempotent);
     // `notification_polls` is each polling adapter's schedule and backoff
     // (`stopped_for` = the sign-in it lost; a new sign-in resumes it);

@@ -95,6 +95,21 @@ impl From<client_core::LayoutApiError> for LayoutApiError {
     }
 }
 
+/// A photo could not be staged (`reason` is a short sentence for the user).
+#[derive(Debug, uniffi::Error)]
+pub enum AttachmentError {
+    Failed { reason: String },
+}
+
+impl std::fmt::Display for AttachmentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self::Failed { reason } = self;
+        f.write_str(reason)
+    }
+}
+
+impl std::error::Error for AttachmentError {}
+
 /// Implemented on the Kotlin side. Called possibly from a background thread.
 #[uniffi::export(callback_interface)]
 pub trait StateObserver: Send + Sync {
@@ -265,6 +280,22 @@ impl EngineHandle {
         self.inner.refresh();
     }
 
+    /// Stage a picked photo (D49): blocking (call off the UI thread). Returns
+    /// JSON `{"id", "uri", "url", "width", "height"}`; the attachment's local
+    /// entity (`uri`) is in the next snapshots.
+    pub fn stage_attachment(&self, path: String) -> Result<String, AttachmentError> {
+        let info = self
+            .inner
+            .stage_attachment(&path)
+            .map_err(|reason| AttachmentError::Failed { reason })?;
+        serde_json_string(&info).map_err(|reason| AttachmentError::Failed { reason })
+    }
+
+    /// Forget a staged photo the user removed before sending.
+    pub fn discard_attachment(&self, id: String) {
+        self.inner.discard_attachment(&id);
+    }
+
     // App catalog (D27, D32). All blocking (call off the UI thread) and
     // read-only; each returns the pod's JSON body.
 
@@ -390,6 +421,10 @@ impl EngineHandle {
             .handle_push_message(&payload_json)
             .map(|n| serde_json::to_string(&n).unwrap_or_default())
     }
+}
+
+fn serde_json_string(info: &client_core::AttachmentInfo) -> Result<String, String> {
+    client_core::attachment_info_json(info)
 }
 
 uniffi::setup_scaffolding!();

@@ -49,6 +49,12 @@ async fn serve(router: axum::Router) -> Server {
 }
 
 async fn spawn_fake() -> Server {
+    spawn_fake_with(false).await
+}
+
+/// `mastodon_threads`: `/context` answers with the whole thread (Mastodon), not one level
+/// (Pixelfed).
+async fn spawn_fake_with(mastodon_threads: bool) -> Server {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let state = fake_pixelfed::AppState::new(fake_pixelfed::Config {
@@ -57,7 +63,8 @@ async fn spawn_fake() -> Server {
         auto_approve: true,
         seed_token: Some(SEED.to_owned()),
     })
-    .unwrap();
+    .unwrap()
+    .with_mastodon_threads(mastodon_threads);
     let state = Arc::new(state);
     let router = fake_pixelfed::app(state.clone());
     let handle = tokio::spawn(async move {
@@ -328,15 +335,24 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
         .unwrap();
     assert_eq!(cw.get_str("content_warning_label"), Some("CW: Snake photo"));
 
-    // The layout is generic: a core://List of posts whose buttons hold the actions.
-    let UiNode::Workspace { id, slots, .. } = &spec.workspace else {
+    // The layout is generic: core://Lists of posts (one per row, and the
+    // two-column cards, D48) whose buttons hold the actions.
+    let UiNode::Workspace { id, .. } = &spec.workspace else {
         panic!("not a workspace");
     };
     assert_eq!(id, "pixelfed_home");
-    let UiNode::List { query_key, .. } = &slots[0].content else {
-        panic!("not a core://List");
-    };
-    assert_eq!(query_key, "timeline:home");
+    let feeds: Vec<u16> = spec
+        .workspace
+        .walk()
+        .into_iter()
+        .filter_map(|n| match n {
+            UiNode::List {
+                query_key, columns, ..
+            } if query_key == "timeline:home" => Some(*columns),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(feeds, [0, 2]);
     assert!(
         spec.workspace
             .walk()
@@ -660,7 +676,8 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     // No schema header: a client from before screens gets the newest version it can
-    // draw (0001; 0002 adds the comments screen, 0003 the generic nodes).
+    // draw (0001; 0002 adds the comments screen, 0003 the generic nodes, 0004
+    // the cards view and the post screen).
     assert_eq!(version(&resp).as_deref(), Some("1"));
     let resp = client()
         .get(&url)
@@ -672,9 +689,9 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
         .send()
         .await
         .unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("3"));
+    assert_eq!(version(&resp).as_deref(), Some("5"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
-    assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 1));
+    assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 3));
     // A newer version replaces the feed layout; entities still come upstream.
     let mut node = server::layouts::builtin(&server::catalog(), "pixelfed_home").unwrap();
     if let UiNode::Workspace { title, .. } = &mut node {
@@ -682,7 +699,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     }
     server::layouts::append_version(state.store(), "pixelfed_home", &node, None).unwrap();
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("4"));
+    assert_eq!(version(&resp).as_deref(), Some("6"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert_eq!(spec.workspace, node);
     assert_eq!(spec.queries["timeline:home"].len(), 5);
@@ -855,8 +872,8 @@ async fn a_session_from_before_v11_stays_signed_in() {
         let later: Vec<String> = conn
             .prepare(
                 "SELECT name FROM sqlite_master WHERE type = 'table'
-                 AND (name LIKE 'recipes%' OR name = 'pixelfed_session_instance')
-                 OR (type = 'table' AND name IN ('pod_settings', 'notifications',
+                 AND (name LIKE 'recipes%' OR name IN ('pixelfed_session_instance', 'pixelfed_pending_posts'))
+                 OR (type = 'table' AND name IN ('pod_settings', 'uploads', 'notifications',
                      'notification_polls', 'devices', 'device_channel_prefs',
                      'pixelfed_notify_cursor'))",
             )
@@ -1561,6 +1578,103 @@ async fn comments_screen_data_is_a_bundle_in_thread_order() {
     }
 }
 
+/// The `/context` paths the fake was asked for, sorted.
+fn context_calls(fake: &fake_pixelfed::AppState) -> Vec<String> {
+    let mut calls: Vec<String> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.path.ends_with("/context"))
+        .map(|r| r.path)
+        .collect();
+    calls.sort();
+    calls
+}
+
+/// (comment id suffix, depth) of the comments screen's list.
+fn thread_shape(data: &Value, post: &str) -> Vec<(String, i64)> {
+    data["queries"][format!("comments:{post}")]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| {
+            let u = u.as_str().unwrap();
+            let id = u.rsplit('/').next().unwrap();
+            let depth = data["entities"][u]["depth"].as_i64().unwrap();
+            (id.trim_start_matches("781300000000000").to_owned(), depth)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn replies_to_comments_are_fetched_one_level_at_a_time() {
+    let want: Vec<(String, i64)> = [
+        ("101", 0),
+        ("102", 1),
+        ("103", 2),
+        ("104", 0),
+        ("105", 1),
+        ("106", 0),
+        ("107", 0),
+    ]
+    .map(|(id, d)| (id.to_owned(), d))
+    .to_vec();
+    let path = |id: &str| format!("/api/v1/statuses/{id}/context");
+    for mastodon in [false, true] {
+        let fake = spawn_fake_with(mastodon).await;
+        let pod = spawn_pod(
+            server::state_in_memory().with_pixelfed(PixelfedConfig::new(&fake.url, None)),
+        )
+        .await;
+        let env = Env { fake, pod };
+        let session = sign_in(&env).await;
+        let fake = env.fake.fake.as_ref().unwrap();
+        let (status, data) = get_comments_screen(&env.pod.url, Some(&session), CAROUSEL).await;
+        assert_eq!(status, StatusCode::OK, "{data}");
+        assert_eq!(thread_shape(&data, CAROUSEL), want, "mastodon: {mastodon}");
+        let calls = context_calls(fake);
+        if mastodon {
+            // The whole thread came at once: no extra calls.
+            assert_eq!(calls, [path(CAROUSEL)]);
+        } else {
+            // The post, then each comment with replies (101 -> 102 -> 103; 104 -> 105).
+            let mut expected = vec![
+                path(CAROUSEL),
+                path("781300000000000101"),
+                path("781300000000000102"),
+                path("781300000000000104"),
+            ];
+            expected.sort();
+            assert_eq!(calls, expected);
+        }
+    }
+
+    // A reply to a reply shows up under it; a failed call loses only that branch.
+    let env = env().await;
+    let session = sign_in(&env).await;
+    let fake = env.fake.fake.as_ref().unwrap();
+    let (status, reply) = post_json(
+        &format!("{}/v1/pixelfed/posts/comment", env.pod.url),
+        Some(&session),
+        json!({ "id": "781300000000000105", "text": "Agreed" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let new_id = reply["comment"]["id"].as_str().unwrap();
+    let new_id = new_id.trim_start_matches("781300000000000").to_owned();
+    let (_, data) = get_comments_screen(&env.pod.url, Some(&session), CAROUSEL).await;
+    let shape = thread_shape(&data, CAROUSEL);
+    let pos = shape.iter().position(|(id, _)| id == "105").unwrap();
+    assert_eq!(shape[pos + 1], (new_id.clone(), 2));
+    fake.add_faults([fake_pixelfed::FaultRule::status(503).path(&path("781300000000000101"))]);
+    let (status, data) = get_comments_screen(&env.pod.url, Some(&session), CAROUSEL).await;
+    assert_eq!(status, StatusCode::OK, "{data}");
+    let ids: Vec<String> = thread_shape(&data, CAROUSEL)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(ids, ["101", "104", "105", new_id.as_str(), "106", "107"]);
+}
+
 #[tokio::test]
 async fn posting_a_comment_reaches_the_upstream() {
     let env = env().await;
@@ -1787,4 +1901,308 @@ async fn any_instance_refuses_private_and_plain_http_hosts() {
     }
     // The default instance still works.
     sign_in_at(&pod.url, &fake.url).await;
+}
+
+async fn get_post_screen(pod: &str, bearer: Option<&str>, id: &str) -> (StatusCode, Value) {
+    let mut req = client().get(format!("{pod}/v1/pixelfed/screens/post?id={id}"));
+    if let Some(t) = bearer {
+        req = req.bearer_auth(t);
+    }
+    let resp = req.send().await.unwrap();
+    let status = resp.status();
+    (status, resp.json().await.unwrap_or(Value::Null))
+}
+
+#[tokio::test]
+async fn post_screen_data_is_the_post_with_its_cover() {
+    let env = env().await;
+    let session = sign_in(&env).await;
+    let (status, body) = get_post_screen(&env.pod.url, Some(&session), CAROUSEL).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let bundle: protocol::DataBundle = serde_json::from_value(body).unwrap();
+    let uri = format!("pixelfed://posts/{CAROUSEL}");
+    assert_eq!(
+        bundle.queries[&format!("post:{CAROUSEL}")],
+        vec![uri.clone()]
+    );
+    let post = &bundle.entities[&uri];
+    let media = post.get_str_list("media_uris").unwrap();
+    assert!(media.len() > 1);
+    assert_eq!(post.get_i64("media_count"), Some(media.len() as i64));
+    // The cover is the first media's preview (else its image), proxied.
+    let first = &bundle.entities[media[0]];
+    let want = first
+        .get_str("preview_url")
+        .or(first.get_str("url"))
+        .unwrap();
+    assert_eq!(post.get_str("cover_url"), Some(want));
+    assert!(want.starts_with(&format!("{}/v1/pixelfed/media/", env.pod.url)));
+    assert!(
+        bundle
+            .entities
+            .contains_key(post.get_str("author_uri").unwrap())
+    );
+    // A boost's id gives the boosted post, listed under the asked id.
+    let (status, boosted) = get_post_screen(&env.pod.url, Some(&session), REBLOG_OUTER).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        boosted["queries"][format!("post:{REBLOG_OUTER}")][0],
+        format!("pixelfed://posts/{REBLOG_INNER}")
+    );
+    // Unknown post: 404; bad id: 400; no session: 401.
+    let (status, body) = get_post_screen(&env.pod.url, Some(&session), "999").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "post_not_found");
+    for bad in ["a.b", ""] {
+        let (status, _) = get_post_screen(&env.pod.url, Some(&session), bad).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    for bearer in [None, Some("bogus")] {
+        let (status, _) = get_post_screen(&env.pod.url, bearer, CAROUSEL).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+}
+
+// ---------- posting (D49, D50) ----------
+
+/// The first bytes of a 3x2 PNG (all the pod and the fake look at).
+fn png() -> Vec<u8> {
+    let mut b = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    b.extend_from_slice(&3u32.to_be_bytes());
+    b.extend_from_slice(&2u32.to_be_bytes());
+    b.extend_from_slice(&[8, 2, 0, 0, 0]);
+    b
+}
+
+async fn upload_png(pod: &str, session: &str, key: &str) -> String {
+    let resp = client()
+        .post(format!("{pod}/v1/uploads"))
+        .bearer_auth(session)
+        .header("content-type", "image/png")
+        .header("idempotency-key", key)
+        .body(png())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    resp.json::<Value>().await.unwrap()["upload_id"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+async fn wait_for(what: &str, mut f: impl AsyncFnMut() -> bool) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !f().await {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// The workspace's SSE stream, read in the background into a shared string.
+fn listen(pod: &str, session: &str) -> Arc<std::sync::Mutex<String>> {
+    let seen = Arc::new(std::sync::Mutex::new(String::new()));
+    let (url, session, out) = (
+        format!("{pod}/v1/workspaces/pixelfed_home/events"),
+        session.to_owned(),
+        seen.clone(),
+    );
+    tokio::spawn(async move {
+        let mut resp = client().get(url).bearer_auth(session).send().await.unwrap();
+        while let Ok(Some(chunk)) = resp.chunk().await {
+            out.lock()
+                .unwrap()
+                .push_str(&String::from_utf8_lossy(&chunk));
+        }
+    });
+    seen
+}
+
+#[tokio::test]
+async fn posting_photos_reaches_pixelfed_and_the_feed() {
+    let env = env().await;
+    let session = sign_in(&env).await;
+    let fake = env.fake.fake.as_ref().unwrap();
+    fake.set_media_processing_polls(2);
+    let events = listen(&env.pod.url, &session);
+    let a = upload_png(&env.pod.url, &session, "photo-a").await;
+    let b = upload_png(&env.pod.url, &session, "photo-b").await;
+    let url = format!("{}/v1/pixelfed/posts/create", env.pod.url);
+    let body =
+        json!({ "caption": "  Hello there ", "media": [a, b], "client_id": "post-nonce-01" });
+    let (status, answer) = post_json(&url, Some(&session), body.clone()).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{answer}");
+    assert_eq!(answer["id"], "pixelfed://posts/pending-post-nonce-01");
+
+    // Right away the feed starts with the placeholder, its photos served by the pod.
+    let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+    let first = home["queries"]["timeline:home"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    if first == "pixelfed://posts/pending-post-nonce-01" {
+        let p = &home["entities"][&first];
+        assert_eq!(p["pending_label"], "Posting…");
+        assert_eq!(p["caption"], "Hello there");
+        assert!(p.get("id").is_none(), "placeholders have no id");
+        let m = p["media_uris"][0].as_str().unwrap();
+        let photo = home["entities"][m]["url"].as_str().unwrap();
+        assert!(photo.ends_with(&format!("/v1/uploads/{a}")), "{photo}");
+        let resp = client().get(photo).send().await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // The job uploads, waits for processing, posts once; the session hears of it.
+    wait_for("the post", async || !fake.created_ids().is_empty()).await;
+    wait_for("the data event", async || {
+        events.lock().unwrap().contains("event: data")
+    })
+    .await;
+    let id = fake.created_ids()[0].clone();
+    let upstream = upstream_status(&env, &id).await;
+    assert_eq!(upstream["content_text"], "Hello there");
+    assert_eq!(upstream["media_attachments"].as_array().unwrap().len(), 2);
+    let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+    let order = home["queries"]["timeline:home"].as_array().unwrap();
+    assert_eq!(order[0], json!(format!("pixelfed://posts/{id}")));
+    assert!(
+        !order
+            .iter()
+            .any(|u| u.as_str().unwrap().contains("pending-"))
+    );
+    let post = &home["entities"][format!("pixelfed://posts/{id}")];
+    assert_eq!(post["caption"], "Hello there");
+    assert_eq!(post["media_uris"].as_array().unwrap().len(), 2);
+    // The photos are released; the same client_id doesn't post again.
+    let resp = client()
+        .get(format!("{}/v1/uploads/{a}", env.pod.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let (status, _) = post_json(&url, Some(&session), body).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(fake.created_ids().len(), 1);
+}
+
+#[tokio::test]
+async fn refused_posts_can_be_retried_or_discarded() {
+    let env = env().await;
+    let session = sign_in(&env).await;
+    let other = sign_in(&env).await;
+    let fake = env.fake.fake.as_ref().unwrap();
+    fake.set_media_processing_polls(0);
+    let url = format!("{}/v1/pixelfed/posts/create", env.pod.url);
+    let mine = upload_png(&env.pod.url, &session, "p1").await;
+    let theirs = upload_png(&env.pod.url, &other, "p1").await;
+    // Bad input 400, someone else's or unknown uploads 422, no session 401.
+    for bad in [
+        json!({ "media": [], "client_id": "nonce-0000" }),
+        json!({ "media": [mine, mine], "client_id": "nonce-0000" }),
+        json!({ "media": ["a", "b", "c", "d", "e"], "client_id": "nonce-0000" }),
+        json!({ "media": [mine], "client_id": "x" }),
+        json!({ "media": [mine], "caption": "x".repeat(501), "client_id": "nonce-0000" }),
+    ] {
+        let (status, _) = post_json(&url, Some(&session), bad.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    for media in [json!([theirs]), json!(["0".repeat(32)])] {
+        let (status, body) = post_json(
+            &url,
+            Some(&session),
+            json!({ "media": media, "client_id": "nonce-0000" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    }
+    let (status, _) = post_json(
+        &url,
+        None,
+        json!({ "media": [mine], "client_id": "nonce-0000" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Pixelfed refuses the post once: the placeholder says so.
+    fake.add_faults([fake_pixelfed::FaultRule::status(422)
+        .path("/api/v1/statuses")
+        .method("POST")
+        .times(1)]);
+    let (status, _) = post_json(
+        &url,
+        Some(&session),
+        json!({ "media": [mine], "client_id": "nonce-0001" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let pending = "pixelfed://posts/pending-nonce-0001";
+    wait_for("the refusal", async || {
+        let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+        home["entities"][pending]["failed"] == true
+    })
+    .await;
+    let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+    assert!(
+        home["entities"][pending]["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("Couldn't post")
+    );
+    assert!(home["entities"][pending].get("pending_label").is_none());
+    // Not in the other session's feed.
+    let (_, theirs_home) = get_home(&env.pod.url, Some(&other)).await;
+    assert!(theirs_home["entities"].get(pending).is_none());
+
+    // Retry: posted (Pixelfed kept the uploaded media).
+    let retry = format!("{}/v1/pixelfed/posts/pending/retry", env.pod.url);
+    let (status, _) = post_json(&retry, Some(&session), json!({ "client_id": "nonce-0001" })).await;
+    assert_eq!(status, StatusCode::OK);
+    wait_for("the retried post", async || fake.created_ids().len() == 1).await;
+    assert_eq!(fake.media_ids().len(), 1, "the photo was uploaded once");
+
+    // Discard a refused one: gone, with its photos.
+    fake.add_faults([fake_pixelfed::FaultRule::status(422)
+        .path("/api/v1/statuses")
+        .method("POST")
+        .times(1)]);
+    let again = upload_png(&env.pod.url, &session, "p2").await;
+    post_json(
+        &url,
+        Some(&session),
+        json!({ "media": [again], "client_id": "nonce-0002" }),
+    )
+    .await;
+    let pending = "pixelfed://posts/pending-nonce-0002";
+    wait_for("the second refusal", async || {
+        let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+        home["entities"][pending]["failed"] == true
+    })
+    .await;
+    let discard = format!("{}/v1/pixelfed/posts/pending/discard", env.pod.url);
+    let (status, _) = post_json(
+        &discard,
+        Some(&session),
+        json!({ "client_id": "nonce-0002" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+    assert!(home["entities"].get(pending).is_none());
+    let resp = client()
+        .get(format!("{}/v1/uploads/{again}", env.pod.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let (status, _) = post_json(
+        &discard,
+        Some(&session),
+        json!({ "client_id": "nonce-0002" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

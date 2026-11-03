@@ -17,7 +17,7 @@ pub use ast::{
     NODE_TYPES, Orientation, Screen, SlotSpec, TextStyle, Tone, UiNode,
 };
 pub use bundle::{DataBundle, EntityRecord, WorkspaceSpec};
-pub use intent::{ActionIntent, FieldUpdate, PresentationMode};
+pub use intent::{ActionIntent, FieldUpdate, Position, PresentationMode};
 pub use notify::{
     DEVICE_HEADER, Importance, Notification, NotificationChannel, NotificationEvent,
     NotificationList, PushPayload, ReadEvent, channel_key,

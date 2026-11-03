@@ -62,11 +62,14 @@
       "caption": "Tram lines, Lisbon. #streetphotography",
       "content_warning": null,
       "content_warning_label": null,
+      "cover_blurhash": "002nL7",
+      "cover_url": "http://127.0.0.1:8081/storage/reblog-6_thumb.png",
       "created_at": 1793277000,
       "id": "781101134560870401",
       "is_bookmarked": false,
       "is_liked": false,
       "like_count": 318,
+      "media_count": 1,
       "media_uris": [
         "pixelfed://media/781101134401234945"
       ],
@@ -84,11 +87,14 @@
       "caption": "Rattlesnake on the trail this morning. Kept my distance!",
       "content_warning": "Snake photo",
       "content_warning_label": "CW: Snake photo",
+      "cover_blurhash": "00GPYs",
+      "cover_url": "http://127.0.0.1:8081/storage/portrait-5_thumb.png",
       "created_at": 1793373619,
       "id": "781198765432109057",
       "is_bookmarked": false,
       "is_liked": false,
       "like_count": 19,
+      "media_count": 1,
       "media_uris": [
         "pixelfed://media/781198765301987329"
       ],
@@ -104,11 +110,14 @@
       "caption": "Thanks @alice for the tips on night shooting!\nNotes are up at https://example.com/night-notes\n\nSettings: f/1.8 & 1/60s, ISO 3200 <3 #nightphotography",
       "content_warning": null,
       "content_warning_label": null,
+      "cover_blurhash": null,
+      "cover_url": null,
       "created_at": 1793400482,
       "id": "781220014433221633",
       "is_bookmarked": true,
       "is_liked": false,
       "like_count": 15,
+      "media_count": 0,
       "media_uris": [],
       "reply_count": 3,
       "sensitive": false,
@@ -122,11 +131,14 @@
       "caption": "Golden hour ride.\nLegs are toast.",
       "content_warning": null,
       "content_warning_label": null,
+      "cover_blurhash": "00R]e.",
+      "cover_url": "http://127.0.0.1:8081/storage/landscape-4_thumb.png",
       "created_at": 1793437967,
       "id": "781233309876543489",
       "is_bookmarked": false,
       "is_liked": true,
       "like_count": 8,
+      "media_count": 1,
       "media_uris": [
         "pixelfed://media/781233309701234689"
       ],
@@ -142,11 +154,14 @@
       "caption": "Sunrise over Boulder, three ways & one coffee later #sunrise #colorado",
       "content_warning": null,
       "content_warning_label": null,
+      "cover_blurhash": "00Ojn}",
+      "cover_url": "http://127.0.0.1:8081/storage/carousel-1_thumb.png",
       "created_at": 1793472130,
       "id": "781254316723458049",
       "is_bookmarked": false,
       "is_liked": false,
       "like_count": 27,
+      "media_count": 3,
       "media_uris": [
         "pixelfed://media/781254316501123073",
         "pixelfed://media/781254316501123074",
@@ -190,85 +205,7 @@
     "screens": [
       {
         "content": {
-          "empty_text": "No comments yet. Be the first!",
-          "indent": {
-            "field": "depth",
-            "max": 4,
-            "step_dp": 24
-          },
-          "item_template": {
-            "children": [
-              {
-                "children": [
-                  {
-                    "content_description": "$item.author_name",
-                    "shape": "Circle",
-                    "size_dp": 28,
-                    "type": "core://Image",
-                    "url": "$item.avatar_url"
-                  },
-                  {
-                    "style": "Body",
-                    "type": "core://Text",
-                    "value_expr": "$item.author_name"
-                  }
-                ],
-                "orientation": "Horizontal",
-                "padding_dp": 0,
-                "type": "core://Container"
-              },
-              {
-                "style": "Body",
-                "type": "core://Text",
-                "value_expr": "$item.text"
-              },
-              {
-                "style": "Caption",
-                "type": "core://Text",
-                "value_expr": "$item.meta"
-              }
-            ],
-            "orientation": "Vertical",
-            "padding_dp": 8,
-            "type": "core://Container"
-          },
-          "query_key": "comments:$route.id",
-          "type": "core://List"
-        },
-        "data": "/v1/pixelfed/screens/comments?post_id=$route.id",
-        "footer": {
-          "field": "comment",
-          "max_length": 500,
-          "on_submit": {
-            "endpoint": "/v1/pixelfed/posts/comment",
-            "entity": {
-              "author_name": "You",
-              "depth": 0,
-              "meta": "Sending…",
-              "text": "$form.comment"
-            },
-            "entity_uri": "pixelfed://comments/pending-$nonce",
-            "intent": "action.mutation.create",
-            "payload": {
-              "client_id": "$nonce",
-              "id": "$route.id",
-              "text": "$form.comment"
-            },
-            "query_key": "comments:$route.id",
-            "refresh_workspace": true
-          },
-          "placeholder": "Add a comment…",
-          "type": "core://TextField"
-        },
-        "id": "comments",
-        "route": "pixelfed://posts/{id}/comments",
-        "title": "Comments"
-      }
-    ],
-    "slots": [
-      {
-        "content": {
-          "empty_text": "No posts",
+          "empty_text": "Post not found",
           "item_template": {
             "children": [
               {
@@ -453,8 +390,568 @@
             ],
             "type": "core://Column"
           },
-          "query_key": "timeline:home",
+          "query_key": "post:$route.id",
           "type": "core://List"
+        },
+        "data": "/v1/pixelfed/screens/post?id=$route.id",
+        "id": "post",
+        "route": "pixelfed://posts/{id}",
+        "title": "Post"
+      },
+      {
+        "content": {
+          "empty_text": "No comments yet. Be the first!",
+          "indent": {
+            "field": "depth",
+            "max": 4,
+            "step_dp": 24
+          },
+          "item_template": {
+            "children": [
+              {
+                "children": [
+                  {
+                    "content_description": "$item.author_name",
+                    "shape": "Circle",
+                    "size_dp": 28,
+                    "type": "core://Image",
+                    "url": "$item.avatar_url"
+                  },
+                  {
+                    "style": "Body",
+                    "type": "core://Text",
+                    "value_expr": "$item.author_name"
+                  }
+                ],
+                "orientation": "Horizontal",
+                "padding_dp": 0,
+                "type": "core://Container"
+              },
+              {
+                "style": "Body",
+                "type": "core://Text",
+                "value_expr": "$item.text"
+              },
+              {
+                "style": "Caption",
+                "type": "core://Text",
+                "value_expr": "$item.meta"
+              }
+            ],
+            "orientation": "Vertical",
+            "padding_dp": 8,
+            "type": "core://Container"
+          },
+          "query_key": "comments:$route.id",
+          "type": "core://List"
+        },
+        "data": "/v1/pixelfed/screens/comments?post_id=$route.id",
+        "footer": {
+          "field": "comment",
+          "max_length": 500,
+          "on_submit": {
+            "endpoint": "/v1/pixelfed/posts/comment",
+            "entity": {
+              "author_name": "You",
+              "depth": 0,
+              "meta": "Sending…",
+              "text": "$form.comment"
+            },
+            "entity_uri": "pixelfed://comments/pending-$nonce",
+            "intent": "action.mutation.create",
+            "payload": {
+              "client_id": "$nonce",
+              "id": "$route.id",
+              "text": "$form.comment"
+            },
+            "query_key": "comments:$route.id",
+            "refresh_workspace": true
+          },
+          "placeholder": "Add a comment…",
+          "type": "core://TextField"
+        },
+        "id": "comments",
+        "route": "pixelfed://posts/{id}/comments",
+        "title": "Comments"
+      },
+      {
+        "content": {
+          "children": [
+            {
+              "field": "photos",
+              "label": "Add photos",
+              "max_items": 4,
+              "type": "core://MediaPicker"
+            },
+            {
+              "field": "caption",
+              "lines": 4,
+              "max_length": 500,
+              "placeholder": "Write a caption…",
+              "type": "core://TextField"
+            }
+          ],
+          "padding_h_dp": 16,
+          "padding_v_dp": 12,
+          "spacing_dp": 12,
+          "type": "core://Column"
+        },
+        "footer": {
+          "label": "Share",
+          "on_click": {
+            "attachments": {
+              "photos": "$form.photos"
+            },
+            "dismiss": true,
+            "endpoint": "/v1/pixelfed/posts/create",
+            "entity": {
+              "author_name": "You",
+              "caption": "$form?.caption",
+              "media_uris": "$attachments.photos",
+              "pending_label": "Posting…"
+            },
+            "entity_uri": "pixelfed://posts/pending-$nonce",
+            "intent": "action.mutation.create",
+            "payload": {
+              "caption": "$form?.caption",
+              "client_id": "$nonce",
+              "media": "$attachments.photos"
+            },
+            "position": "start",
+            "query_key": "timeline:home",
+            "refresh_workspace": true
+          },
+          "type": "core://Button"
+        },
+        "id": "compose",
+        "route": "pixelfed://compose",
+        "title": "New post"
+      }
+    ],
+    "slots": [
+      {
+        "content": {
+          "children": [
+            {
+              "children": [
+                {
+                  "style": "Title",
+                  "type": "core://Text",
+                  "value_expr": "Home"
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "content_description": "New post",
+                  "icon": "add_photo",
+                  "on_click": {
+                    "intent": "action.navigation.open",
+                    "presentation": "Modal",
+                    "target_uri": "pixelfed://compose"
+                  },
+                  "tag": "new-post",
+                  "type": "core://IconButton"
+                }
+              ],
+              "padding_h_dp": 12,
+              "padding_v_dp": 4,
+              "type": "core://Row"
+            },
+            {
+              "field": "view",
+              "options": [
+                {
+                  "label": "List",
+                  "value": ""
+                },
+                {
+                  "label": "Cards",
+                  "value": "cards"
+                }
+              ],
+              "padding_h_dp": 16,
+              "type": "core://ChoiceChips"
+            },
+            {
+              "content": {
+                "empty_text": "No posts",
+                "item_template": {
+                  "children": [
+                    {
+                      "content": {
+                        "icon": "repeat",
+                        "text": "$item.reblogged_by_name boosted",
+                        "type": "core://Badge"
+                      },
+                      "type": "core://Conditional",
+                      "value": "$item.reblogged_by_name"
+                    },
+                    {
+                      "children": [
+                        {
+                          "shape": "Circle",
+                          "size_dp": 36,
+                          "type": "core://Image",
+                          "url": "$item.author_avatar_url"
+                        },
+                        {
+                          "children": [
+                            {
+                              "style": "Label",
+                              "type": "core://Text",
+                              "value_expr": "$item.author_name"
+                            },
+                            {
+                              "style": "Secondary",
+                              "type": "core://Text",
+                              "value_expr": "$item.author_handle"
+                            }
+                          ],
+                          "type": "core://Column"
+                        }
+                      ],
+                      "padding_h_dp": 12,
+                      "padding_v_dp": 10,
+                      "spacing_dp": 10,
+                      "type": "core://Row"
+                    },
+                    {
+                      "aspect_field": "aspect_ratio",
+                      "aspect_ratio": 1.0,
+                      "item_template": {
+                        "blurhash": "$item.blurhash",
+                        "content_description": "$item.alt_text",
+                        "type": "core://Image",
+                        "url": "$item.url"
+                      },
+                      "items": "$item.media_uris",
+                      "max_aspect": 1.91,
+                      "min_aspect": 0.8,
+                      "tag": "carousel:$item.uri",
+                      "type": "core://Carousel"
+                    },
+                    {
+                      "content": {
+                        "children": [
+                          {
+                            "style": "Secondary",
+                            "type": "core://Text",
+                            "value_expr": "$item.pending_label"
+                          }
+                        ],
+                        "padding_h_dp": 14,
+                        "padding_v_dp": 6,
+                        "spacing_dp": 8,
+                        "type": "core://Row"
+                      },
+                      "type": "core://Conditional",
+                      "value": "$item.pending_label"
+                    },
+                    {
+                      "content": {
+                        "children": [
+                          {
+                            "icon": "warning",
+                            "text": "$item.error",
+                            "tone": "Warning",
+                            "type": "core://Chip"
+                          },
+                          {
+                            "children": [
+                              {
+                                "label": "Retry",
+                                "on_click": {
+                                  "also": [
+                                    {
+                                      "field": "pending_label",
+                                      "value_expr": "\"Posting…\""
+                                    }
+                                  ],
+                                  "endpoint": "/v1/pixelfed/posts/pending/retry",
+                                  "entity_uri": "$item.uri",
+                                  "field": "failed",
+                                  "intent": "action.mutation.optimistic",
+                                  "payload": {
+                                    "client_id": "$item.client_id"
+                                  },
+                                  "rollback_value": true,
+                                  "value_expr": "false"
+                                },
+                                "type": "core://Button"
+                              },
+                              {
+                                "label": "Discard",
+                                "on_click": {
+                                  "also": [
+                                    {
+                                      "field": "pending_label",
+                                      "value_expr": "\"Removing…\""
+                                    }
+                                  ],
+                                  "endpoint": "/v1/pixelfed/posts/pending/discard",
+                                  "entity_uri": "$item.uri",
+                                  "field": "failed",
+                                  "intent": "action.mutation.optimistic",
+                                  "payload": {
+                                    "client_id": "$item.client_id"
+                                  },
+                                  "rollback_value": true,
+                                  "value_expr": "false"
+                                },
+                                "type": "core://Button"
+                              }
+                            ],
+                            "spacing_dp": 8,
+                            "type": "core://Row"
+                          }
+                        ],
+                        "padding_h_dp": 14,
+                        "padding_v_dp": 6,
+                        "spacing_dp": 6,
+                        "type": "core://Column"
+                      },
+                      "type": "core://Conditional",
+                      "value": "$item.failed"
+                    },
+                    {
+                      "content": {
+                        "children": [
+                          {
+                            "active": "$item.is_liked",
+                            "active_content_description": "Unlike",
+                            "active_icon": "favorite",
+                            "active_tint": "#ED4956",
+                            "content_description": "Like",
+                            "icon": "favorite_border",
+                            "on_click": {
+                              "also": [
+                                {
+                                  "field": "like_count",
+                                  "value_expr": "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1"
+                                }
+                              ],
+                              "endpoint": "/v1/pixelfed/posts/like",
+                              "entity_uri": "$item.uri",
+                              "field": "is_liked",
+                              "intent": "action.mutation.optimistic",
+                              "payload": {
+                                "id": "$item.id",
+                                "liked": "$value"
+                              },
+                              "rollback_value": false,
+                              "value_expr": "!entity.is_liked"
+                            },
+                            "tag": "like:$item.uri",
+                            "type": "core://IconButton"
+                          },
+                          {
+                            "style": "Label",
+                            "type": "core://Text",
+                            "value_expr": "$item.like_count"
+                          },
+                          {
+                            "size_dp": 8,
+                            "type": "core://Spacer"
+                          },
+                          {
+                            "content_description": "Comment",
+                            "icon": "chat_bubble",
+                            "on_click": {
+                              "intent": "action.navigation.open",
+                              "presentation": "Modal",
+                              "target_uri": "pixelfed://posts/$item.id/comments"
+                            },
+                            "tag": "comment:$item.uri",
+                            "type": "core://IconButton"
+                          },
+                          {
+                            "content": {
+                              "style": "Label",
+                              "type": "core://Text",
+                              "value_expr": "$item.reply_count"
+                            },
+                            "type": "core://Conditional",
+                            "value": "$item.reply_count"
+                          },
+                          {
+                            "type": "core://Spacer"
+                          },
+                          {
+                            "active": "$item.is_bookmarked",
+                            "active_content_description": "Remove bookmark",
+                            "active_icon": "bookmark",
+                            "content_description": "Bookmark",
+                            "icon": "bookmark_border",
+                            "on_click": {
+                              "endpoint": "/v1/pixelfed/posts/bookmark",
+                              "entity_uri": "$item.uri",
+                              "field": "is_bookmarked",
+                              "intent": "action.mutation.optimistic",
+                              "payload": {
+                                "bookmarked": "$value",
+                                "id": "$item.id"
+                              },
+                              "rollback_value": false,
+                              "value_expr": "!entity.is_bookmarked"
+                            },
+                            "tag": "bookmark:$item.uri",
+                            "type": "core://IconButton"
+                          }
+                        ],
+                        "padding_h_dp": 4,
+                        "type": "core://Row"
+                      },
+                      "type": "core://Conditional",
+                      "value": "$item.id"
+                    },
+                    {
+                      "content": {
+                        "children": [
+                          {
+                            "icon": "warning",
+                            "text": "$item.content_warning_label",
+                            "tone": "Warning",
+                            "type": "core://Chip"
+                          }
+                        ],
+                        "padding_h_dp": 14,
+                        "padding_v_dp": 4,
+                        "type": "core://Column"
+                      },
+                      "type": "core://Conditional",
+                      "value": "$item.content_warning"
+                    },
+                    {
+                      "content": {
+                        "children": [
+                          {
+                            "style": "Body",
+                            "type": "core://Text",
+                            "value_expr": "$item.caption"
+                          }
+                        ],
+                        "padding_h_dp": 14,
+                        "type": "core://Column"
+                      },
+                      "type": "core://Conditional",
+                      "value": "$item.caption"
+                    },
+                    {
+                      "size_dp": 12,
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "type": "core://Divider"
+                    }
+                  ],
+                  "type": "core://Column"
+                },
+                "query_key": "timeline:home",
+                "type": "core://List"
+              },
+              "equals": "",
+              "type": "core://Conditional",
+              "value": "$form.view"
+            },
+            {
+              "content": {
+                "columns": 2,
+                "empty_text": "No posts",
+                "item_template": {
+                  "content": {
+                    "children": [
+                      {
+                        "content": {
+                          "aspect_ratio": 0.8,
+                          "blurhash": "$item.cover_blurhash",
+                          "content_description": "Photo by $item.author_name",
+                          "shape": "Rounded",
+                          "type": "core://Image",
+                          "url": "$item.cover_url"
+                        },
+                        "type": "core://Conditional",
+                        "value": "$item.cover_url"
+                      },
+                      {
+                        "content": {
+                          "background": "#EEF0F4",
+                          "content": {
+                            "children": [
+                              {
+                                "style": "Body",
+                                "type": "core://Text",
+                                "value_expr": "$item.caption"
+                              }
+                            ],
+                            "type": "core://Column"
+                          },
+                          "corner_dp": 8,
+                          "padding_h_dp": 12,
+                          "padding_v_dp": 12,
+                          "type": "core://Box"
+                        },
+                        "equals": "",
+                        "type": "core://Conditional",
+                        "value": "$item.cover_url"
+                      },
+                      {
+                        "content": {
+                          "icon": "warning",
+                          "text": "$item.content_warning_label",
+                          "tone": "Warning",
+                          "type": "core://Chip"
+                        },
+                        "type": "core://Conditional",
+                        "value": "$item.content_warning"
+                      },
+                      {
+                        "children": [
+                          {
+                            "shape": "Circle",
+                            "size_dp": 20,
+                            "type": "core://Image",
+                            "url": "$item.author_avatar_url"
+                          },
+                          {
+                            "style": "Label",
+                            "type": "core://Text",
+                            "value_expr": "$item.author_name"
+                          }
+                        ],
+                        "spacing_dp": 6,
+                        "type": "core://Row"
+                      },
+                      {
+                        "style": "Secondary",
+                        "type": "core://Text",
+                        "value_expr": "♥ $item.like_count"
+                      }
+                    ],
+                    "spacing_dp": 6,
+                    "type": "core://Column"
+                  },
+                  "content_description": "Open post by $item.author_name",
+                  "on_click": {
+                    "intent": "action.navigation.open",
+                    "presentation": "Push",
+                    "target_uri": "pixelfed://posts/$item.id"
+                  },
+                  "tag": "card:$item.uri",
+                  "type": "core://Tappable"
+                },
+                "padding_h_dp": 12,
+                "query_key": "timeline:home",
+                "spacing_dp": 16,
+                "type": "core://List"
+              },
+              "equals": "cards",
+              "type": "core://Conditional",
+              "value": "$form.view"
+            }
+          ],
+          "spacing_dp": 4,
+          "type": "core://Column"
         },
         "provider_uri": "pixelfed://home_timeline",
         "slot_id": "feed"

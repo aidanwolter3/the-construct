@@ -1,5 +1,7 @@
 package org.theconstruct.engine
 
+import org.theconstruct.AttachmentException
+import org.theconstruct.AttachmentInfo
 import org.theconstruct.ConstructEngineBridge
 import org.theconstruct.EngineSnapshot
 import org.theconstruct.LayoutApiException
@@ -133,6 +135,30 @@ class UniffiEngineBridge(val handle: EngineHandle) : ConstructEngineBridge {
     }
 
     override fun handlePushMessage(payloadJson: String): String? = if (closed) null else handle.handlePushMessage(payloadJson)
+
+    override fun stageAttachment(path: String): Result<AttachmentInfo> {
+        if (closed) return Result.failure(AttachmentException(CLOSED))
+        return try {
+            val info = AttachmentInfo.parse(handle.stageAttachment(path))
+            engineLog("attachment ${info.id} staged (${info.width}x${info.height})")
+            Result.success(info)
+        } catch (e: uniffi.client_ffi.AttachmentException.Failed) {
+            engineLog("staging an attachment failed: ${e.reason}")
+            Result.failure(AttachmentException(e.reason))
+        } catch (e: AttachmentException) {
+            Result.failure(e)
+        } catch (e: IllegalStateException) {
+            // Closed by another thread meanwhile (UniFFI: "... object has already been destroyed").
+            if (!closed) throw e
+            Result.failure(AttachmentException(CLOSED))
+        }
+    }
+
+    override fun discardAttachment(id: String) {
+        if (closed) return
+        engineLog("attachment $id discarded")
+        handle.discardAttachment(id)
+    }
 
     /**
      * Frees the Rust engine now (its fetch, sync and events threads stop; no more snapshots), instead of waiting for

@@ -130,6 +130,19 @@ interface ConstructEngineBridge {
      * not a notification. Never calls the [setNotificationListener] listener.
      */
     fun handlePushMessage(payloadJson: String): String? = null
+
+    // Attachments (schema 9, D49): photos picked by `core://MediaPicker`.
+
+    /**
+     * Stages the image file at [path] for a later create's `attachments` (BLOCKING: decodes, scales and re-encodes it;
+     * call it off the UI thread). Its local entity `construct://attachments/<id>` then appears in the snapshots. The
+     * failure is an [AttachmentException] with a readable reason. Default: not available.
+     */
+    fun stageAttachment(path: String): Result<AttachmentInfo> =
+        Result.failure(AttachmentException("Photos can't be added here."))
+
+    /** Forgets a staged attachment no create took (its file and entity go). Default: nothing to forget. */
+    fun discardAttachment(id: String) {}
 }
 
 private fun appsUnavailable() = LayoutApiException("Apps aren't available here.")

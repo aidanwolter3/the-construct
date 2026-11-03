@@ -47,14 +47,24 @@ pub fn router() -> Router<Pod> {
         .route("/v1/pixelfed/posts/like", post(like))
         .route("/v1/pixelfed/posts/bookmark", post(bookmark))
         .route("/v1/pixelfed/posts/comment", post(comment))
+        .route("/v1/pixelfed/posts/create", post(crate::posting::create))
+        .route(
+            "/v1/pixelfed/posts/pending/retry",
+            post(crate::posting::retry),
+        )
+        .route(
+            "/v1/pixelfed/posts/pending/discard",
+            post(crate::posting::discard),
+        )
         .route("/v1/pixelfed/screens/comments", get(comments_screen))
+        .route("/v1/pixelfed/screens/post", get(post_screen))
         .route("/v1/pixelfed/media/{key}", get(media))
 }
 
 // ---------- helpers ----------
 
 /// The Pixelfed adapter of this pod (registered by the `server` binary).
-fn adapter(state: &Pod) -> &PixelfedAdapter {
+pub(crate) fn adapter(state: &Pod) -> &PixelfedAdapter {
     state
         .adapter::<PixelfedAdapter>()
         .expect("the Pixelfed routes are mounted by the Pixelfed adapter")
@@ -104,7 +114,7 @@ struct RefreshLock(tokio::sync::Mutex<()>);
 /// The instance `session` signed in to and its stored account. A session
 /// from before D45 uses the default instance; one whose instance this pod no
 /// longer accepts (the configuration changed) has none.
-async fn session_account(
+pub(crate) async fn session_account(
     state: &Pod,
     session: &Session,
 ) -> Result<Option<(Instance, PixelfedAccount)>, ApiError> {
@@ -142,7 +152,7 @@ async fn stored_account(
 /// `<scheme>://<Host><public prefix>/v1/pixelfed/media`, from the request so
 /// that clients reaching the pod as e.g. 10.0.2.2 get URLs they can load (the
 /// prefix: a pod host's public route for this pod, D46).
-fn proxy_base(headers: &HeaderMap) -> String {
+pub(crate) fn proxy_base(headers: &HeaderMap) -> String {
     let host = headers
         .get(header::HOST)
         .and_then(|h| h.to_str().ok())
@@ -178,7 +188,7 @@ fn str_field<'a>(payload: &'a Value, key: &str) -> Option<&'a str> {
         .filter(|s| !s.is_empty())
 }
 
-fn invalid_request(expected: Value) -> Response {
+pub(crate) fn invalid_request(expected: Value) -> Response {
     json_error(
         StatusCode::BAD_REQUEST,
         json!({ "error": "invalid_request", "expected": expected }),
@@ -655,7 +665,54 @@ pub async fn home_feed(pf: &PixelfedAdapter, state: &Pod, req: &RequestCtx) -> H
         Err(e) => return Hydration::Error(e.into_response()),
     };
     let mut media = MediaUrls::new(&proxy_base(&req.headers), rt.media_for(others));
-    let timeline = normalize_timeline(&statuses, &mut media);
+    let mut timeline = normalize_timeline(&statuses, &mut media);
+    // Posts on their way (D50) go first: placeholders, then finished posts
+    // the timeline does not list yet.
+    if let Some(session) = &req.session {
+        let listed: std::collections::HashSet<String> = statuses
+            .iter()
+            .flat_map(|s| [s["id"].as_str(), s["reblog"]["id"].as_str()])
+            .flatten()
+            .map(str::to_owned)
+            .collect();
+        let (placeholders, missing) =
+            match crate::posting::placeholders(state, session, req, &listed).await {
+                Ok(p) => p,
+                Err(e) => return Hydration::Error(e.into_response()),
+            };
+        let mut first = Vec::new();
+        for (uri, post, media_entities) in placeholders {
+            timeline.entities.extend(media_entities);
+            timeline.entities.insert(uri.clone(), post);
+            first.push(uri);
+        }
+        for id in missing.iter().filter(|id| valid_status_id(id)) {
+            let (result, _) = with_token(
+                state,
+                &instance,
+                account_again(state, &instance).await,
+                |token| {
+                    let (upstream, id) = (&upstream, id);
+                    async move { upstream.get_status(&token, id).await }
+                },
+            )
+            .await;
+            match result.ok().and_then(|v| Status::deserialize(&v).ok()) {
+                Some(status) => {
+                    let post = super::normalize_post(&status, &mut media, &mut timeline.entities);
+                    let uri = super::post_uri(&status.id);
+                    timeline.entities.insert(uri.clone(), post);
+                    first.push(uri);
+                }
+                None => tracing::info!(%id, "a new post is not readable yet"),
+            }
+        }
+        if !first.is_empty() {
+            timeline.order.retain(|u| !first.contains(u));
+            first.append(&mut timeline.order);
+            timeline.order = first;
+        }
+    }
     if let Err(e) = save_media_keys(state, media).await {
         return Hydration::Error(e.into_response());
     }
@@ -666,6 +723,16 @@ pub async fn home_feed(pf: &PixelfedAdapter, state: &Pod, req: &RequestCtx) -> H
         "pixelfed_home served"
     );
     Hydration::Data(layout::home_feed(timeline.entities, timeline.order))
+}
+
+/// The stored account of `instance` again (after `with_token` consumed it;
+/// a refresh may have replaced its token).
+async fn account_again(state: &Pod, instance: &Instance) -> PixelfedAccount {
+    stored_account(state, instance)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 // ---------- actions ----------
@@ -684,7 +751,7 @@ async fn bookmark(State(state): State<Pod>, headers: HeaderMap, body: Bytes) -> 
     toggle(state, headers, body, Toggle::Bookmark).await
 }
 
-fn valid_status_id(id: &str) -> bool {
+pub(crate) fn valid_status_id(id: &str) -> bool {
     (1..=64).contains(&id.len())
         && id
             .bytes()
@@ -787,7 +854,7 @@ fn comment_rejected(id: &str, status: StatusCode, detail: &str) -> Response {
 /// `GET /v1/pixelfed/screens/comments?post_id=<id>`: the data of the comments screen
 /// (docs/DECISIONS.md D34), a `DataBundle`: one `pixelfed://comments/<id>` entity per
 /// comment ([`normalize_comment`]) and `queries["comments:<post_id>"]` in thread order
-/// ([`normalize_comments`]). No session: 401; upstream 4xx: same status (404
+/// ([`normalize_comments`]), replies to comments included ([`super::complete_comment_thread`]). No session: 401; upstream 4xx: same status (404
 /// `post_not_found`); 5xx / unreachable: 502.
 async fn comments_screen(
     State(state): State<Pod>,
@@ -808,7 +875,7 @@ async fn comments_screen(
         return invalid_request(json!({ "post_id": "status id" }));
     }
     let own = account.account_id.clone();
-    let (result, _) = with_token(&state, &instance, account, |token| {
+    let (result, token) = with_token(&state, &instance, account, |token| {
         let (upstream, id) = (&upstream, &id);
         async move { upstream.status_context(&token, id).await }
     })
@@ -820,6 +887,20 @@ async fn comments_screen(
         }
         Err(e) => return bad_gateway(&e),
     };
+    // Pixelfed lists only the direct replies; ask each comment for its own.
+    let context = super::complete_comment_thread(&id, context, |comment_id| {
+        let (upstream, token) = (&upstream, &token);
+        async move {
+            match upstream.status_context(token, &comment_id).await {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!(%comment_id, error = %e, "replies to a comment unavailable");
+                    None
+                }
+            }
+        }
+    })
+    .await;
     let others = match others_allowed(&state).await {
         Ok(o) => o,
         Err(e) => return e.into_response(),
@@ -838,6 +919,59 @@ async fn comments_screen(
         bundle.entities.insert(uri, c);
     }
     bundle.queries.insert(super::comments_query(&id), order);
+    Json(bundle).into_response()
+}
+
+/// `GET /v1/pixelfed/screens/post?id=<id>`: the data of the post screen (D48), a
+/// `DataBundle` with the post, its author and media, and `queries["post:<id>"]`
+/// ([`normalize_post_screen`]). No session: 401; upstream 4xx: same status (404
+/// `post_not_found`); 5xx / unreachable or not a status: 502.
+async fn post_screen(
+    State(state): State<Pod>,
+    headers: HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let rt = adapter(&state).runtime();
+    let (instance, account) = match signed_in_account(&state, &headers).await {
+        Ok(found) => found,
+        Err(r) => return *r,
+    };
+    let upstream = rt.api(&instance);
+    let id = params
+        .get("id")
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_default();
+    if !valid_status_id(&id) {
+        return invalid_request(json!({ "id": "status id" }));
+    }
+    let (result, _) = with_token(&state, &instance, account, |token| {
+        let (upstream, id) = (&upstream, &id);
+        async move { upstream.status(&token, id).await }
+    })
+    .await;
+    let raw = match result {
+        Ok(v) => v,
+        Err(UpstreamError::Status(status, detail)) if status.is_client_error() => {
+            return comment_rejected(&id, status, &detail);
+        }
+        Err(e) => return bad_gateway(&e),
+    };
+    let others = match others_allowed(&state).await {
+        Ok(o) => o,
+        Err(e) => return e.into_response(),
+    };
+    let mut media = MediaUrls::new(&proxy_base(&headers), rt.media_for(others));
+    let Some(bundle) = super::normalize_post_screen(&id, &raw, &mut media) else {
+        return api_error(
+            StatusCode::BAD_GATEWAY,
+            json!({ "error": "upstream_unparseable" }),
+        )
+        .into_response();
+    };
+    if let Err(e) = save_media_keys(&state, media).await {
+        return e.into_response();
+    }
+    tracing::info!(%id, "Pixelfed post served");
     Json(bundle).into_response()
 }
 

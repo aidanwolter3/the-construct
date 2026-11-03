@@ -6,6 +6,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.awt.ComposeWindow
@@ -172,7 +173,9 @@ fun main() {
             val unread by current.controller.unread.collectAsState()
             LaunchedEffect(unread.total) { setDockBadge(unread.total) }
             val server = ServerChoice(current.baseUrl, DESKTOP_SERVERS, error = switchError) { url -> switchServer(root, current, url, workspace) }
-            key(current) { ConstructApp(current.controller, server = server) }
+            val frame = window
+            val picker = remember(frame) { DesktopMediaPicker { frame } }
+            key(current) { ConstructApp(current.controller, server = server, mediaPicker = picker) }
         }
     }
 }

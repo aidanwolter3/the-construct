@@ -862,6 +862,10 @@ internal open class UniffiVTableCallbackInterfaceUrlOpener(
 
 
 
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -882,6 +886,8 @@ internal interface IntegrityCheckingUniffiLib : Library {
 fun uniffi_client_ffi_checksum_method_enginehandle_app_versions(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_device_id(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_discard_attachment(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_dispatch(
 ): Short
@@ -916,6 +922,8 @@ fun uniffi_client_ffi_checksum_method_enginehandle_set_device_info(
 fun uniffi_client_ffi_checksum_method_enginehandle_set_notification_listener(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_snapshot(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_stage_attachment(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_subscribe(
 ): Short
@@ -1008,6 +1016,8 @@ fun uniffi_client_ffi_fn_method_enginehandle_app_versions(`ptr`: Pointer,`appId`
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_device_id(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_client_ffi_fn_method_enginehandle_discard_attachment(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_dispatch(`ptr`: Pointer,`intentJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_forget_session(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -1041,6 +1051,8 @@ fun uniffi_client_ffi_fn_method_enginehandle_set_device_info(`ptr`: Pointer,`pla
 fun uniffi_client_ffi_fn_method_enginehandle_set_notification_listener(`ptr`: Pointer,`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_snapshot(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_client_ffi_fn_method_enginehandle_stage_attachment(`ptr`: Pointer,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_subscribe(`ptr`: Pointer,`observer`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
@@ -1189,6 +1201,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_device_id() != 26780.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_discard_attachment() != 46768.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_dispatch() != 57352.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1238,6 +1253,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_snapshot() != 50695.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_stage_attachment() != 3099.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_subscribe() != 32106.toShort()) {
@@ -1737,6 +1755,11 @@ public interface EngineHandleInterface {
     fun `deviceId`(): kotlin.String
     
     /**
+     * Forget a staged photo the user removed before sending.
+     */
+    fun `discardAttachment`(`id`: kotlin.String)
+    
+    /**
      * Handle an `ActionIntent` JSON string. Never panics.
      */
     fun `dispatch`(`intentJson`: kotlin.String)
@@ -1835,6 +1858,13 @@ public interface EngineHandleInterface {
      * The current snapshot.
      */
     fun `snapshot`(): FfiStateSnapshot
+    
+    /**
+     * Stage a picked photo (D49): blocking (call off the UI thread). Returns
+     * JSON `{"id", "uri", "url", "width", "height"}`; the attachment's local
+     * entity (`uri`) is in the next snapshots.
+     */
+    fun `stageAttachment`(`path`: kotlin.String): kotlin.String
     
     /**
      * Register an observer; it immediately receives the current snapshot.
@@ -1988,6 +2018,20 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
     }
     )
     }
+    
+
+    
+    /**
+     * Forget a staged photo the user removed before sending.
+     */override fun `discardAttachment`(`id`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_discard_attachment(
+        it, FfiConverterString.lower(`id`),_status)
+}
+    }
+    
     
 
     
@@ -2262,6 +2306,24 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
 
     
     /**
+     * Stage a picked photo (D49): blocking (call off the UI thread). Returns
+     * JSON `{"id", "uri", "url", "width", "height"}`; the attachment's local
+     * entity (`uri`) is in the next snapshots.
+     */
+    @Throws(AttachmentException::class)override fun `stageAttachment`(`path`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(AttachmentException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_stage_attachment(
+        it, FfiConverterString.lower(`path`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Register an observer; it immediately receives the current snapshot.
      */override fun `subscribe`(`observer`: StateObserver)
         = 
@@ -2435,6 +2497,68 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterString.write(value.`loadsJson`, buf)
             FfiConverterString.write(value.`notificationsJson`, buf)
     }
+}
+
+
+
+
+
+/**
+ * A photo could not be staged (`reason` is a short sentence for the user).
+ */
+sealed class AttachmentException: kotlin.Exception() {
+    
+    class Failed(
+        
+        val `reason`: kotlin.String
+        ) : AttachmentException() {
+        override val message
+            get() = "reason=${ `reason` }"
+    }
+    
+
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<AttachmentException> {
+        override fun lift(error_buf: RustBuffer.ByValue): AttachmentException = FfiConverterTypeAttachmentError.lift(error_buf)
+    }
+
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAttachmentError : FfiConverterRustBuffer<AttachmentException> {
+    override fun read(buf: ByteBuffer): AttachmentException {
+        
+
+        return when(buf.getInt()) {
+            1 -> AttachmentException.Failed(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: AttachmentException): ULong {
+        return when(value) {
+            is AttachmentException.Failed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+    }
+
+    override fun write(value: AttachmentException, buf: ByteBuffer) {
+        when(value) {
+            is AttachmentException.Failed -> {
+                buf.putInt(1)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+
 }
 
 

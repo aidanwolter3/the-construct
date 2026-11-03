@@ -161,4 +161,8 @@ impl AppAdapter for PixelfedAdapter {
     ) -> BoxFuture<'a, PollOutcome> {
         Box::pin(crate::notify::poll(self, pod, ctx))
     }
+
+    fn resume<'a>(&'a self, pod: &'a Pod) -> BoxFuture<'a, ()> {
+        Box::pin(crate::posting::resume(pod))
+    }
 }

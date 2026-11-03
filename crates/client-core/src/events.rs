@@ -394,6 +394,21 @@ impl Inner {
         if self.on_notification_event(ev) {
             return;
         }
+        if ev.event == "data" {
+            // D50: the pod's data changed (e.g. a post finished): reload the
+            // workspace and every loaded data path.
+            let ws = serde_json::from_str::<Value>(&ev.data)
+                .ok()
+                .and_then(|v| v.get("workspace_id")?.as_str().map(str::to_owned));
+            if ws.as_deref().is_some_and(|w| w != self.workspace_id) {
+                return;
+            }
+            println!("[ConstructEngine] events: data changed; reloading");
+            if !self.signal.is_shut_down() {
+                self.reload_all();
+            }
+            return;
+        }
         let Some((ws, version)) = parse_layout_event(ev) else {
             if ev.event == "layout" {
                 eprintln!(

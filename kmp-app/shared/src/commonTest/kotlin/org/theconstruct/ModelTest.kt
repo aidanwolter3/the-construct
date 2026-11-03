@@ -1,5 +1,6 @@
 package org.theconstruct
 
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -181,6 +182,60 @@ class ModelTest {
             assertEquals(n, ConstructJson.decodeNode(ConstructJson.encodeNode(n)), n.toString())
         }
         assertTrue(!ConstructJson.encodeNode(UiNode.Column(emptyList())).contains("align"), "default align is omitted")
+    }
+
+    @Test
+    fun schema8GridsAndConditionalsDecodeFromTheWire() {
+        val grid = assertIs<UiNode.ItemList>(ConstructJson.decodeNode(
+            """{"type":"core://List","query_key":"q","item_template":{"type":"core://Divider"},
+               "columns":2,"spacing_dp":16,"padding_h_dp":12}"""
+        ))
+        assertEquals(Triple(2, 16, 12), Triple(grid.columns, grid.spacingDp, grid.paddingHDp))
+        val plain = assertIs<UiNode.ItemList>(ConstructJson.decodeNode(
+            """{"type":"core://List","query_key":"q","item_template":{"type":"core://Divider"}}"""
+        ))
+        assertEquals(0, plain.columns)
+        val cond = assertIs<UiNode.Conditional>(ConstructJson.decodeNode(
+            """{"type":"core://Conditional","value":"${'$'}form.view","equals":"cards","content":{"type":"core://Divider"}}"""
+        ))
+        assertEquals("cards", cond.equals)
+        for (n in listOf(grid, plain, cond)) {
+            assertEquals(n, ConstructJson.decodeNode(ConstructJson.encodeNode(n)), n.toString())
+        }
+    }
+
+    @Test
+    fun gridRowsBreakAtColumnsAndGroups() {
+        assertEquals(listOf(listOf(0, 1), listOf(2, 3), listOf(4)), gridRows(5, null, 2))
+        assertEquals(emptyList(), gridRows(0, null, 2))
+        // A new group starts a new row, so its header spans the width.
+        assertEquals(
+            listOf(listOf(0, 1), listOf(2), listOf(3, 4), listOf(5)),
+            gridRows(6, listOf(true, false, false, true, false, false), 2),
+        )
+        assertEquals(listOf(listOf(0), listOf(1), listOf(2)), gridRows(3, null, 1))
+    }
+
+    @Test
+    fun conditionalsOnFormValuesAndEquals() {
+        val item = JsonObject(mapOf("kind" to JsonPrimitive("photo"), "gone" to JsonNull, "n" to JsonPrimitive(0)))
+        val form = mapOf("view" to "cards")
+        // A form value: truthy, or equal to `equals`; unset is "".
+        assertTrue(conditionShows("\$form.view", null, item, form))
+        assertTrue(!conditionShows("\$form.view", null, item, emptyMap()))
+        assertTrue(conditionShows("\$form.view", "cards", item, form))
+        assertTrue(!conditionShows("\$form.view", "", item, form))
+        assertTrue(conditionShows("\$form.view", "", item, emptyMap()))
+        assertTrue(conditionShows("\$form.view", "", item, null))
+        // An item field with `equals`: missing and null are "".
+        assertTrue(conditionShows("\$item.kind", "photo", item, null))
+        assertTrue(!conditionShows("\$item.kind", "video", item, null))
+        assertTrue(conditionShows("\$item.gone", "", item, null))
+        assertTrue(conditionShows("\$item.missing", "", item, null))
+        assertTrue(conditionShows("\$item.n", "0", item, null))
+        // Without `equals`, as before (truthiness).
+        assertTrue(conditionShows("\$item.kind", null, item, null))
+        assertTrue(!conditionShows("\$item.n", null, item, null))
     }
 
     @Test

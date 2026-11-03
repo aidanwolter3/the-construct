@@ -67,6 +67,13 @@ enum class PresentationMode { Push, Modal, Replace }
 @Serializable
 enum class ImageShape { Square, Rounded, Circle }
 
+/** Where `action.mutation.create` lists its new entity (schema 9): at the start or (default) the end of its query. */
+@Serializable
+enum class CreatePosition {
+    @SerialName("start") Start,
+    @SerialName("end") End,
+}
+
 /**
  * A screen an app can open (DECISIONS D34; protocol `ast::Screen`). [route] is a URI pattern with `{name}` segments;
  * `$route.<name>` in the other fields is replaced by the captured value. [data] is a pod path loaded when the screen
@@ -153,7 +160,7 @@ sealed class UiNode {
 
     /**
      * `core://List` (D34): the entities of `queries[queryKey]`, each rendered with [itemTemplate]. [filter] and
-     * [groupBy] are schema 5 (D43).
+     * [groupBy] are schema 5 (D43); [columns], [spacingDp] and [paddingHDp] schema 8 (D48).
      */
     @Serializable
     data class ItemList(
@@ -164,6 +171,12 @@ sealed class UiNode {
         val filter: ListFilter? = null,
         @SerialName("group_by") val groupBy: GroupBy? = null,
         @SerialName("where") val where: ListWhere? = null,
+        /** Schema 8 (D48): items in this many equal columns (a grid); 0 and 1 mean one per row. */
+        val columns: Int = 0,
+        /** Schema 8 (D48): space between items (both ways in a grid). */
+        @SerialName("spacing_dp") val spacingDp: Int = 0,
+        /** Schema 8 (D48): space left and right of the items. */
+        @SerialName("padding_h_dp") val paddingHDp: Int = 0,
     ) : UiNode()
 
     /**
@@ -191,6 +204,8 @@ sealed class UiNode {
         val placeholder: String = "",
         @SerialName("max_length") val maxLength: Int? = null,
         @SerialName("on_submit") val onSubmit: ActionIntent? = null,
+        /** Schema 9 (D51): without [onSubmit], a field of up to this many lines (e.g. a caption). */
+        val lines: Int? = null,
     ) : UiNode()
 
     // Schema 3 (DECISIONS D36): generic building blocks for composing any app on the pod.
@@ -226,9 +241,12 @@ sealed class UiNode {
     @Serializable
     data object Divider : UiNode()
 
-    /** [content] only when [value] (e.g. `$item.caption`) is truthy ([isTruthy]). */
+    /**
+     * [content] only when [value] (e.g. `$item.caption`, or `$form.<field>` from schema 8) is truthy ([isTruthy]), or
+     * with [equals] (schema 8, D48) when the value as text equals it ([conditionShows]).
+     */
     @Serializable
-    data class Conditional(val value: String, val content: UiNode) : UiNode()
+    data class Conditional(val value: String, val content: UiNode, val equals: String? = null) : UiNode()
 
     /** A pager over the entities [items] names, each drawn with [itemTemplate]; see protocol `core://Carousel`. */
     @Serializable
@@ -306,6 +324,18 @@ sealed class UiNode {
         @SerialName("padding_h_dp") val paddingHDp: Int = 0,
     ) : UiNode()
 
+    /**
+     * `core://MediaPicker` (schema 9, D49/D51): thumbnails of the photos picked into the form value `$form.<field>`
+     * (a JSON array of staged attachment ids, see [parseFormList]) with a remove button each, and an add tile
+     * ([label], default "Add photo") while fewer than [maxItems] are picked.
+     */
+    @Serializable
+    data class MediaPicker(
+        val field: String,
+        @SerialName("max_items") val maxItems: Int,
+        val label: String? = null,
+    ) : UiNode()
+
     /** A node whose `type` this client does not know. [raw] is the full original object. */
     data class Unknown(val type: String, val raw: JsonObject) : UiNode()
 }
@@ -365,6 +395,11 @@ sealed class ActionIntent {
     /**
      * `action.mutation.create` (D34): the engine lists [entity] at [entityUri] in `queries[queryKey]` at once and sends
      * [payload] to [endpoint] through the outbox.
+     *
+     * Schema 9 (D49, D51): [attachments] maps a name to a form-bound list of staged attachment ids (`{"photos":
+     * "$form.photos"}`, bound by [bindForm] to a JSON array); the engine uploads them first and replaces
+     * `"$attachments.<name>"` in [entity] (local attachment URIs) and [payload] (upload ids) itself. [position] puts the
+     * entity at the start or end of the list; [dismiss] closes the current screen once dispatched.
      */
     @Serializable
     data class Create(
@@ -374,6 +409,9 @@ sealed class ActionIntent {
         val endpoint: String,
         val payload: JsonElement,
         @SerialName("refresh_workspace") val refreshWorkspace: Boolean = false,
+        val attachments: Map<String, JsonElement> = emptyMap(),
+        val position: CreatePosition = CreatePosition.End,
+        val dismiss: Boolean = false,
     ) : ActionIntent()
 
     /**
@@ -489,6 +527,7 @@ object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode
         Variant("core://Tappable", UiNode.Tappable::class, UiNode.Tappable.serializer()),
         Variant("core://Box", UiNode.Box::class, UiNode.Box.serializer()),
         Variant("core://ChoiceChips", UiNode.ChoiceChips::class, UiNode.ChoiceChips.serializer()),
+        Variant("core://MediaPicker", UiNode.MediaPicker::class, UiNode.MediaPicker.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): UiNode = UiNode.Unknown(tag, raw)

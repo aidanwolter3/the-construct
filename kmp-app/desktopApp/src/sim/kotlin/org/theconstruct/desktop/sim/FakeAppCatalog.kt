@@ -215,11 +215,18 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
         private fun mapCards(node: UiNode, f: (UiNode.Column) -> UiNode.Column): UiNode = when (node) {
             is UiNode.Workspace -> node.copy(slots = node.slots.map { it.copy(content = mapCards(it.content, f)) })
             is UiNode.Container -> node.copy(children = node.children.map { mapCards(it, f) })
+            is UiNode.Column -> node.copy(children = node.children.map { mapCards(it, f) })
+            is UiNode.Conditional -> node.copy(content = mapCards(node.content, f))
             is UiNode.ItemList -> (node.itemTemplate as? UiNode.Column)?.let { node.copy(itemTemplate = f(it)) } ?: node
             else -> node
         }
 
-        private fun isActionBar(n: UiNode) = n is UiNode.Row && n.children.any { it is UiNode.IconButton }
+        /** A row of icon buttons, also when shown only for some posts (a [UiNode.Conditional] around it). */
+        private fun isActionBar(n: UiNode): Boolean = when (n) {
+            is UiNode.Row -> n.children.any { it is UiNode.IconButton }
+            is UiNode.Conditional -> isActionBar(n.content)
+            else -> false
+        }
 
         fun withoutActionBar(base: UiNode): UiNode = mapCards(base) { c -> c.copy(children = c.children.filterNot(::isActionBar)) }
 
