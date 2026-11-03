@@ -50,7 +50,7 @@ async fn no_stream() -> Response {
 
 /// Whether the caller may use the MCP endpoint: an MCP credential vouched
 /// for by the host, or the pod token's session.
-async fn authorized(pod: &Pod, headers: &HeaderMap) -> Result<(), Response> {
+async fn authorized(pod: &Pod, headers: &HeaderMap) -> Result<(), Box<Response>> {
     if pod.host_credential(headers).as_deref() == Some("mcp") {
         return Ok(());
     }
@@ -64,9 +64,9 @@ async fn authorized(pod: &Pod, headers: &HeaderMap) -> Result<(), Response> {
             );
             r.headers_mut()
                 .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
-            Err(r)
+            Err(Box::new(r))
         }
-        Err(e) => Err(e.into_response()),
+        Err(e) => Err(Box::new(e.into_response())),
     }
 }
 
@@ -93,7 +93,7 @@ async fn handle(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Resp
         );
     }
     if let Err(r) = authorized(&pod, &headers).await {
-        return r;
+        return *r;
     }
     let msg = match parse_json_body(&headers, &body) {
         Ok(v) => v,

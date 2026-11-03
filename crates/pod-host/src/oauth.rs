@@ -252,19 +252,19 @@ struct AuthRequest {
     state: Option<String>,
 }
 
-/// Check an authorization request. `Err(Ok(r))`: show `r` (the redirect URI
-/// can't be trusted); `Err(Err(r))`: same, as a redirect error.
+/// Check an authorization request. `Err(r)`: answer with `r` (an error page
+/// when the redirect URI can't be trusted, else a redirect error).
 async fn check_request(
     host: &Arc<Host>,
     headers: &HeaderMap,
     p: &HashMap<String, String>,
-) -> Result<AuthRequest, Response> {
+) -> Result<AuthRequest, Box<Response>> {
     let page_error = |msg: &str| {
-        page(
+        Box::new(page(
             None,
             &format!("This link can't connect to your pod: {msg}."),
             None,
-        )
+        ))
     };
     let Some(client_id) = p.get("client_id").cloned() else {
         return Err(page_error("no client_id"));
@@ -282,12 +282,12 @@ async fn check_request(
     };
     let state = p.get("state").cloned();
     let back = |error: &str| {
-        redirect_with(
+        Box::new(redirect_with(
             &redirect_uri,
             &[("error", error)],
             state.as_deref(),
             &base_url(host, headers),
-        )
+        ))
     };
     if p.get("response_type").map(String::as_str) != Some("code") {
         return Err(back("unsupported_response_type"));
@@ -446,7 +446,7 @@ pub(crate) async fn authorize_page(
             "Connect Claude to your pod",
             None,
         ),
-        Err(r) => r,
+        Err(r) => *r,
     }
 }
 
@@ -461,7 +461,7 @@ pub(crate) async fn authorize_submit(State(host): State<Arc<Host>>, req: Request
     };
     let r = match check_request(&host, &headers, &p).await {
         Ok(r) => r,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let issuer = base_url(&host, &headers);
     if p.get("decision").map(String::as_str) == Some("deny") {

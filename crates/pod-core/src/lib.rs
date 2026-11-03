@@ -668,7 +668,7 @@ async fn get_workspace(
         .collect();
     let bundle = match compose(&state, &feeds, &caller, &req, app.is_custom()).await {
         Ok(bundle) => bundle,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let served = match layouts::active_for_client(&state, &id, &req.headers).await {
         Ok(Some(v)) => v,
@@ -711,7 +711,7 @@ async fn compose(
     caller: &Caller,
     req: &RequestCtx,
     lenient: bool,
-) -> Result<protocol::DataBundle, Response> {
+) -> Result<protocol::DataBundle, Box<Response>> {
     let runs = feeds.iter().map(|(source, feed)| async move {
         let (adapter, manifest) = state.catalog.source(source)?;
         if let Some(sign_in) = manifest.sign_in
@@ -739,7 +739,9 @@ async fn compose(
                 bundle.entities.extend(data.entities);
                 bundle.queries.extend(data.queries);
             }
-            Hydration::Screen(screen) if !lenient => return Err(Json(screen).into_response()),
+            Hydration::Screen(screen) if !lenient => {
+                return Err(Box::new(Json(screen).into_response()));
+            }
             Hydration::Screen(_) => errors.push((source, "unavailable".into())),
             Hydration::StaleSession(screen) => {
                 // A pinned session stays; only the unusable sign-in goes.
@@ -750,17 +752,17 @@ async fn compose(
                     if let Err(e) =
                         blocking(state, move |s| s.detach_sign_in(&hash, &sign_in)).await
                     {
-                        return Err(e.into_response());
+                        return Err(Box::new(e.into_response()));
                     }
                     if !lenient {
-                        return Err(Json(screen).into_response());
+                        return Err(Box::new(Json(screen).into_response()));
                     }
                     detached.push(source);
                     continue;
                 }
-                return Err(session::stale_session(screen));
+                return Err(Box::new(session::stale_session(screen)));
             }
-            Hydration::Error(r) if !lenient => return Err(r),
+            Hydration::Error(r) if !lenient => return Err(Box::new(r)),
             Hydration::Error(r) => {
                 let status = r.status();
                 tracing::warn!(source, %status, "a custom app's feed failed; served without it");
