@@ -19,13 +19,14 @@ use crate::AppState;
 use crate::layouts::LayoutSource;
 use crate::notify::{PollCtx, PollOutcome};
 use crate::session::Session;
+use crate::source::{self, SourceManifest};
 use crate::store::Migration;
 
 /// The handle adapters get: the shared pod state. It is also the axum state
 /// of every route, the adapter's included.
 pub type Pod = Arc<AppState>;
 
-/// A boxed, `Send` future: what [`AppAdapter::hydrate`] returns (keeps the
+/// A boxed, `Send` future: what [`AppAdapter::feed`] returns (keeps the
 /// trait usable as `dyn AppAdapter`).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -38,8 +39,9 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// adapter supplies only data, its own routes and its own tables.
 ///
 /// Rules for implementors:
-/// - Never serve a layout yourself. Return data from `hydrate`, and the core
-///   picks the layout version this client can draw and merges it in.
+/// - Never serve a layout yourself. Return data from your feeds
+///   ([`Self::feed`]), and the core picks the layout version this client
+///   can draw and merges it in.
 /// - Keep the engine and clients app-agnostic (D34). A new screen or action
 ///   ships as a layout file plus adapter code, never as a client change.
 /// - Upstream credentials stay on the pod. Clients only ever hold a pod
@@ -148,20 +150,32 @@ pub trait AppAdapter: Any + Send + Sync {
         Ok(())
     }
 
-    /// The data for `GET /v1/workspaces/:id`, for one of this adapter's apps.
+    /// What this adapter offers layouts as a data source (decision
+    /// `custom-apps-and-data-sources`): its feeds, screen data paths,
+    /// actions and entities. The source's id is [`Self::name`]. Called once
+    /// at startup; the pod refuses to start when a layout file uses a pod
+    /// path its app's sources don't declare. Declare every path a deployed
+    /// layout uses, and never remove one.
+    fn manifest(&self) -> SourceManifest;
+
+    /// The data of feed `feed` (one of [`Self::manifest`]'s feeds) for an
+    /// app's root, `GET /v1/workspaces/:id`: the core runs the feeds the app
+    /// lists ([`AppInfo::feeds`]) and merges their data under the layout.
     ///
     /// Called on every workspace fetch, including each refetch after an SSE
-    /// layout event, so keep it to as few upstream calls as you can. `app_id`
-    /// is always one of `apps()`. `req` carries the request headers, the
-    /// client's schema and the caller's session. For an app with
-    /// `AuthPolicy::SignIn`, the core has already checked that the session
-    /// has that sign-in. Return `Hydration::Data` in the normal case (see
-    /// `Hydration` for the others). Don't panic: an upstream failure becomes
-    /// `Hydration::Error`, usually a 502 so the client retries.
-    fn hydrate<'a>(
+    /// layout or data event, so keep it to as few upstream calls as you can.
+    /// `req` carries the request headers, the client's schema and the
+    /// caller's session. When the source has a sign-in
+    /// ([`SourceManifest::sign_in`]), the core calls this only for a session
+    /// that has it. Return `Hydration::Data` in the normal case (see
+    /// `Hydration` for the others), with entities under your own schemes
+    /// and only the query keys your manifest declares. Don't panic: an
+    /// upstream failure becomes `Hydration::Error`, usually a 502 so the
+    /// client retries.
+    fn feed<'a>(
         &'a self,
         pod: &'a Pod,
-        app_id: &'a str,
+        feed: &'a str,
         req: &'a RequestCtx,
     ) -> BoxFuture<'a, Hydration>;
 
@@ -231,7 +245,7 @@ pub struct SignInAccount {
     pub username: Option<String>,
 }
 
-/// What [`AppAdapter::hydrate`] returns.
+/// What [`AppAdapter::feed`] returns.
 pub enum Hydration {
     /// The normal case: entities and queries for the app's layout. The core
     /// adds the newest layout version this client can draw and sets
@@ -270,6 +284,12 @@ pub struct AppInfo {
     /// stream, so the client learns it is stale.
     /// `AuthPolicy::Public`: the app needs no sign-in.
     pub auth: AuthPolicy,
+    /// The feeds that fill its root, as `(source, feed)`: a source is an
+    /// adapter's [`AppAdapter::name`], a feed one of its manifest's, e.g.
+    /// `[("pixelfed", "home")]`. Usually its own adapter's, but any
+    /// source's may be listed; the core merges them in this order. A feed
+    /// whose source needs a sign-in the caller lacks is skipped.
+    pub feeds: &'static [(&'static str, &'static str)],
 }
 
 /// Whether an app needs a sign-in; see [`AppInfo::auth`].
@@ -335,6 +355,8 @@ fn default_signed_out(sign_in: &str, app: &AppInfo) -> WorkspaceSpec {
 /// Every adapter's apps, layout files and sign-ins, checked once at startup.
 pub struct Catalog {
     adapters: Vec<Arc<dyn AppAdapter>>,
+    /// Each adapter's manifest, by index into `adapters`.
+    manifests: Vec<SourceManifest>,
     /// `(app, index into adapters)`, in `GET /v1/apps` order.
     apps: Vec<(AppInfo, usize)>,
     files: Vec<LayoutSource>,
@@ -345,8 +367,10 @@ pub struct Catalog {
 
 impl Catalog {
     /// Collect `adapters`. `Err` (the message to stop the start with) for a
-    /// duplicate adapter name, app id or sign-in id, or an app that requires
-    /// a sign-in no adapter provides.
+    /// duplicate adapter name, app id or sign-in id, an app that requires a
+    /// sign-in no adapter provides, or a bad set of data sources: an invalid
+    /// manifest, an entity scheme or query key two sources claim, a sign-in
+    /// no adapter provides, or an app feed no source declares.
     pub fn new(adapters: Vec<Arc<dyn AppAdapter>>) -> Result<Self, String> {
         let mut apps: Vec<(AppInfo, usize)> = Vec::new();
         let mut files = Vec::new();
@@ -415,6 +439,8 @@ impl Catalog {
                 ));
             }
         }
+        let manifests: Vec<SourceManifest> = adapters.iter().map(|a| a.manifest()).collect();
+        check_sources(&adapters, &manifests, &apps, &sign_ins)?;
         for f in &files {
             if !apps.iter().any(|(a, _)| a.id == f.app_id) {
                 return Err(format!(
@@ -425,6 +451,7 @@ impl Catalog {
         }
         Ok(Self {
             adapters,
+            manifests,
             apps,
             files,
             legacy,
@@ -459,6 +486,39 @@ impl Catalog {
     pub fn adapter_for(&self, id: &str) -> Option<&Arc<dyn AppAdapter>> {
         let (_, i) = self.apps.iter().find(|(a, _)| a.id == id)?;
         self.adapters.get(*i)
+    }
+
+    /// Data source `id` (an adapter name) and its manifest.
+    pub fn source(&self, id: &str) -> Option<(&Arc<dyn AppAdapter>, &SourceManifest)> {
+        let i = self.adapters.iter().position(|a| a.name() == id)?;
+        Some((&self.adapters[i], &self.manifests[i]))
+    }
+
+    /// Every data source: `(id, manifest)`, in adapter order.
+    pub fn sources(&self) -> impl Iterator<Item = (&'static str, &SourceManifest)> {
+        self.adapters
+            .iter()
+            .zip(&self.manifests)
+            .map(|(a, m)| (a.name(), m))
+    }
+
+    /// The data sources app `id` draws on: those of its feeds, then the
+    /// adapter serving it (whose routes its layouts may always use). Empty
+    /// for an unknown app.
+    pub fn app_sources(&self, id: &str) -> Vec<(&'static str, &SourceManifest)> {
+        let Some((app, i)) = self.apps.iter().find(|(a, _)| a.id == id) else {
+            return Vec::new();
+        };
+        let mut out: Vec<(&'static str, &SourceManifest)> = Vec::new();
+        let own = self.adapters[*i].name();
+        for name in app.feeds.iter().map(|(s, _)| *s).chain([own]) {
+            if !out.iter().any(|(n, _)| *n == name)
+                && let Some((_, m)) = self.source(name)
+            {
+                out.push((name, m));
+            }
+        }
+        out
     }
 
     /// The adapter providing sign-in `id`.
@@ -498,4 +558,64 @@ impl Catalog {
             .iter()
             .any(|(a, n)| *a == app_id && *n == number)
     }
+}
+
+/// The startup checks of the data sources (see [`Catalog::new`]).
+fn check_sources(
+    adapters: &[Arc<dyn AppAdapter>],
+    manifests: &[SourceManifest],
+    apps: &[(AppInfo, usize)],
+    sign_ins: &[(SignInProvider, usize)],
+) -> Result<(), String> {
+    for (i, (a, m)) in adapters.iter().zip(manifests).enumerate() {
+        let name = a.name();
+        source::check_manifest(name, m)?;
+        if let Some(id) = m.sign_in
+            && !sign_ins.iter().any(|(s, _)| s.id == id)
+        {
+            return Err(format!(
+                "source '{name}' needs sign-in '{id}', which no adapter provides"
+            ));
+        }
+        for (b, n) in adapters[..i].iter().zip(&manifests[..i]) {
+            if let Some(s) = m
+                .entity_schemes
+                .iter()
+                .find(|s| n.entity_schemes.contains(s))
+            {
+                return Err(format!(
+                    "sources '{}' and '{name}' both claim the entity scheme '{s}'",
+                    b.name()
+                ));
+            }
+            for k in m.query_keys() {
+                if let Some(o) = n.query_keys().find(|o| source::keys_overlap(k, o)) {
+                    return Err(format!(
+                        "query key '{k}' of source '{name}' overlaps '{o}' of source '{}'",
+                        b.name()
+                    ));
+                }
+            }
+        }
+    }
+    for (app, _) in apps {
+        for (n, (src, feed)) in app.feeds.iter().enumerate() {
+            let Some(i) = adapters.iter().position(|a| a.name() == *src) else {
+                return Err(format!(
+                    "app '{}' lists feed '{src}/{feed}', but there is no source '{src}'",
+                    app.id
+                ));
+            };
+            if manifests[i].feed(feed).is_none() {
+                return Err(format!(
+                    "app '{}' lists feed '{src}/{feed}', which source '{src}' does not declare",
+                    app.id
+                ));
+            }
+            if app.feeds[..n].contains(&(*src, *feed)) {
+                return Err(format!("app '{}' lists feed '{src}/{feed}' twice", app.id));
+            }
+        }
+    }
+    Ok(())
 }

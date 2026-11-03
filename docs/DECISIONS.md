@@ -1377,6 +1377,9 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
 
 ## D40: The pod core knows apps only through adapters
 
+Superseded in part (`hydrate` became a manifest plus named feeds) by
+[custom-apps-and-data-sources](decisions/custom-apps-and-data-sources.md).
+
 - **Why:** the pod (`crates/server`) was generic in name only. `AppState` held the Pixelfed config and client,
   `get_workspace` and the SSE handler special-cased `pixelfed_home`, `layouts::APPS`/`FILES` hard-coded the apps,
   and sessions lived in the Pixelfed routes. D34 made the clients app-agnostic; this does the same for the server.

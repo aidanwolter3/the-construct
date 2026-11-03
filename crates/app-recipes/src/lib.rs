@@ -2,7 +2,7 @@
 //! kept in the pod's own SQLite (`recipes_*` tables), served as the `recipes`
 //! app. There is no upstream and no sign-in.
 //!
-//! - `GET /v1/workspaces/recipes`: every recipe by category
+//! - `GET /v1/workspaces/recipes`: the `all` feed, every recipe by category
 //!   (`queries["recipes:all"]`, `recipes://recipes/<slug>` entities).
 //! - `GET /v1/recipes/screens/recipe?id=<slug>`: one recipe's screen data
 //!   ([`db::recipe_screen`]).
@@ -21,7 +21,10 @@ use axum::{
 };
 use pod_core::layouts::LayoutSource;
 use pod_core::store::Migration;
-use pod_core::{AppAdapter, AppInfo, AuthPolicy, BoxFuture, Hydration, Pod, RequestCtx};
+use pod_core::{
+    AppAdapter, AppInfo, AuthPolicy, BoxFuture, EntityDoc, FeedSpec, Hydration, PathSpec, Pod,
+    RequestCtx, SourceManifest,
+};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -35,6 +38,95 @@ pub const APP: AppInfo = AppInfo {
     icon: "recipe",
     dev: false,
     auth: AuthPolicy::Public,
+    feeds: &[(NAME, ALL_FEED)],
+};
+
+/// Every recipe, by category (`AppInfo::feeds` entry `("recipes", "all")`).
+pub const ALL_FEED: &str = "all";
+
+/// What layouts may use of the recipes (decision
+/// `custom-apps-and-data-sources`).
+pub const MANIFEST: SourceManifest = SourceManifest {
+    title: "Recipes",
+    sign_in: None,
+    entity_schemes: &["recipes"],
+    feeds: &[FeedSpec {
+        name: ALL_FEED,
+        query_keys: &[db::ALL_QUERY],
+        doc: "Every recipe, by category then title.",
+    }],
+    data_paths: &[PathSpec {
+        pattern: "/v1/recipes/screens/recipe?id={id}",
+        query_keys: &[
+            "recipe:{id}:ingredients",
+            "recipe:{id}:steps",
+            "recipe:{id}:notes",
+        ],
+        doc: "One recipe: its ingredients, steps and notes.",
+    }],
+    actions: &[],
+    entities: &[
+        EntityDoc {
+            uri: "recipes://recipes/{id}",
+            doc: "A recipe (the list's and the recipe screen's).",
+            fields: &[
+                ("id", "the recipe slug"),
+                ("title", "name"),
+                ("category", "category name"),
+                ("category_short", "category name without its examples"),
+                ("category_header", "set on the first recipe of a category"),
+                ("summary", "category · yield"),
+                ("meta", "one line: ingredients, oven, time or yield"),
+                ("source", "who it is from"),
+                ("yield_text", "e.g. 4-6 servings"),
+                ("search_text", "title, category and ingredient names"),
+                ("color", "the category's fill, #RRGGBB"),
+                ("ink", "text colour on that fill, #RRGGBB"),
+                ("initial", "first letter of the title"),
+                ("ingredient_count", "number of ingredients"),
+                ("step_count", "number of steps"),
+                ("oven_short", "hottest oven temperature, or –"),
+                ("time_short", "main method's time, or –"),
+            ],
+        },
+        EntityDoc {
+            uri: "recipes://ingredients/{id}",
+            doc: "An ingredient line of a recipe.",
+            fields: &[
+                ("text", "the whole line"),
+                ("name", "the ingredient"),
+                ("amount", "quantity and unit"),
+                ("thing", "what to use"),
+                ("details", "preparation notes"),
+                ("section", "\"Ingredients\" on the first line"),
+                ("group", "group name on a group's first line"),
+            ],
+        },
+        EntityDoc {
+            uri: "recipes://steps/{id}",
+            doc: "An instruction step of a recipe.",
+            fields: &[
+                ("number", "step number"),
+                ("text", "the instruction"),
+                ("section", "\"Instructions\" on the first step"),
+                ("group", "group name on a group's first step"),
+                ("has_cues", "it names a temperature or a time"),
+                ("temp_text", "e.g. 350°F"),
+                ("time_text", "e.g. 25-30 min"),
+                ("temp_f", "temperature, °F"),
+                ("time_min", "minutes, lower bound"),
+                ("time_max", "minutes, upper bound"),
+            ],
+        },
+        EntityDoc {
+            uri: "recipes://notes/{id}",
+            doc: "A note of a recipe.",
+            fields: &[
+                ("text", "the note"),
+                ("section", "\"Notes\" on the first note"),
+            ],
+        },
+    ],
 };
 
 /// `layout_file!("NNNN")` embeds `layouts/recipes/NNNN.json`.
@@ -88,13 +180,20 @@ impl AppAdapter for RecipesAdapter {
         db::MIGRATIONS
     }
 
-    fn hydrate<'a>(
+    fn manifest(&self) -> SourceManifest {
+        MANIFEST
+    }
+
+    fn feed<'a>(
         &'a self,
         pod: &'a Pod,
-        _app_id: &'a str,
+        feed: &'a str,
         _req: &'a RequestCtx,
     ) -> BoxFuture<'a, Hydration> {
         Box::pin(async move {
+            if feed != ALL_FEED {
+                return pod_core::unknown_feed(NAME, feed);
+            }
             match pod.blocking(|s| s.with_conn(db::all_recipes)).await {
                 Ok(bundle) => Hydration::Data(bundle),
                 Err(e) => Hydration::Error(e.into_response()),

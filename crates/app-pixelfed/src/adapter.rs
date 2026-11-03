@@ -6,8 +6,8 @@ use std::sync::{Arc, RwLock};
 use axum::Router;
 use pod_core::layouts::LayoutSource;
 use pod_core::{
-    AppAdapter, AppInfo, BoxFuture, Hydration, Pod, PollCtx, PollOutcome, RequestCtx, Session,
-    SignInAccount, SignInProvider,
+    AppAdapter, AppInfo, BoxFuture, EntityDoc, FeedSpec, Hydration, PathSpec, Pod, PollCtx,
+    PollOutcome, RequestCtx, Session, SignInAccount, SignInProvider, SourceManifest,
 };
 use protocol::{NotificationChannel, WorkspaceSpec};
 
@@ -17,6 +17,142 @@ use crate::{MediaPolicy, apps};
 
 /// The sign-in this adapter provides (recorded on sessions).
 pub const SIGN_IN: &str = "pixelfed";
+
+/// The adapter's name: its data source id, and the prefix of its tables
+/// and routes.
+pub const NAME: &str = "pixelfed";
+
+/// The home timeline feed (`AppInfo::feeds` entry `("pixelfed", "home")`).
+pub const HOME_FEED: &str = "home";
+
+/// What layouts may use of Pixelfed (decision
+/// `custom-apps-and-data-sources`). Every path a deployed layout uses stays
+/// here.
+pub const MANIFEST: SourceManifest = SourceManifest {
+    title: "Pixelfed",
+    sign_in: Some(SIGN_IN),
+    entity_schemes: &["pixelfed"],
+    feeds: &[FeedSpec {
+        name: HOME_FEED,
+        query_keys: &["timeline:home"],
+        doc: "The signed-in account's home timeline, newest first; posts on their way first.",
+    }],
+    data_paths: &[
+        PathSpec {
+            pattern: "/v1/pixelfed/screens/post?id={id}",
+            query_keys: &["post:{id}"],
+            doc: "One post, with its author and media.",
+        },
+        PathSpec {
+            pattern: "/v1/pixelfed/screens/comments?post_id={post_id}",
+            query_keys: &["comments:{post_id}"],
+            doc: "A post's comments as a thread (each with a depth).",
+        },
+    ],
+    actions: &[
+        PathSpec {
+            pattern: "/v1/pixelfed/posts/like",
+            query_keys: &[],
+            doc: "Like or unlike: {id, liked}.",
+        },
+        PathSpec {
+            pattern: "/v1/pixelfed/posts/bookmark",
+            query_keys: &[],
+            doc: "Bookmark or unbookmark: {id, bookmarked}.",
+        },
+        PathSpec {
+            pattern: "/v1/pixelfed/posts/comment",
+            query_keys: &[],
+            doc: "Comment on a post: {id, text, client_id}.",
+        },
+        PathSpec {
+            pattern: "/v1/pixelfed/posts/create",
+            query_keys: &[],
+            doc: "Post photos: {caption, media (attachments), client_id}.",
+        },
+        PathSpec {
+            pattern: "/v1/pixelfed/posts/pending/retry",
+            query_keys: &[],
+            doc: "Retry a post that failed on its way: {client_id}.",
+        },
+        PathSpec {
+            pattern: "/v1/pixelfed/posts/pending/discard",
+            query_keys: &[],
+            doc: "Drop a post that failed on its way: {client_id}.",
+        },
+    ],
+    entities: &[
+        EntityDoc {
+            uri: "pixelfed://posts/{id}",
+            doc: "A post (a reblog is shown as the original, with reblogged_by_*).",
+            fields: &[
+                ("id", "the post id"),
+                ("caption", "plain-text caption"),
+                ("created_at", "RFC 3339 time"),
+                ("author_name", "display name"),
+                ("author_handle", "@user@instance"),
+                ("author_avatar_url", "avatar image URL"),
+                ("author_uri", "pixelfed://users/{id}"),
+                ("media_uris", "pixelfed://media/{id} URIs, in order"),
+                ("media_count", "how many media"),
+                ("cover_url", "the first image's URL"),
+                ("cover_blurhash", "the first image's blurhash"),
+                ("like_count", "likes"),
+                ("reply_count", "comments"),
+                ("is_liked", "liked by the signed-in account"),
+                ("is_bookmarked", "bookmarked by the signed-in account"),
+                ("sensitive", "marked sensitive"),
+                ("content_warning", "content warning text, if any"),
+                ("content_warning_label", "what to show over sensitive media"),
+                ("reblogged_by_name", "who reblogged it, if a reblog"),
+                ("reblogged_by_uri", "pixelfed://users/{id} of the reblogger"),
+                ("url", "the post's web page"),
+            ],
+        },
+        EntityDoc {
+            uri: "pixelfed://users/{id}",
+            doc: "An account.",
+            fields: &[
+                ("id", "the account id"),
+                ("username", "user name, without @"),
+                ("display_name", "display name"),
+                ("avatar_url", "avatar image URL"),
+            ],
+        },
+        EntityDoc {
+            uri: "pixelfed://media/{id}",
+            doc: "A photo or video of a post.",
+            fields: &[
+                ("id", "the media id"),
+                ("type", "image, video, ..."),
+                ("url", "full-size URL (proxied by the pod)"),
+                ("preview_url", "small URL"),
+                ("alt_text", "description"),
+                ("aspect_ratio", "width / height"),
+                ("blurhash", "placeholder hash"),
+            ],
+        },
+        EntityDoc {
+            uri: "pixelfed://comments/{id}",
+            doc: "A comment of a post's thread.",
+            fields: &[
+                ("id", "the comment id"),
+                ("post_id", "the post it belongs to"),
+                ("in_reply_to_id", "the comment or post it answers"),
+                ("depth", "thread depth, 0 for a direct reply"),
+                ("text", "plain text"),
+                ("author_name", "display name"),
+                ("author_handle", "@user@instance"),
+                ("avatar_url", "avatar image URL"),
+                ("created_at", "RFC 3339 time"),
+                ("like_count", "likes"),
+                ("is_liked", "liked by the signed-in account"),
+                ("is_own", "written by the signed-in account"),
+                ("meta", "one line: handle and time"),
+            ],
+        },
+    ],
+};
 
 /// What the adapter's handlers read per request: the config and what is
 /// built from it.
@@ -100,7 +236,7 @@ impl PixelfedAdapter {
 
 impl AppAdapter for PixelfedAdapter {
     fn name(&self) -> &'static str {
-        "pixelfed"
+        NAME
     }
 
     fn apps(&self) -> Vec<AppInfo> {
@@ -152,13 +288,22 @@ impl AppAdapter for PixelfedAdapter {
         crate::layout::signed_out(&self.runtime().config, app.id, app.title)
     }
 
-    fn hydrate<'a>(
+    fn manifest(&self) -> SourceManifest {
+        MANIFEST
+    }
+
+    fn feed<'a>(
         &'a self,
         pod: &'a Pod,
-        _app_id: &'a str,
+        feed: &'a str,
         req: &'a RequestCtx,
     ) -> BoxFuture<'a, Hydration> {
-        Box::pin(crate::routes::home_feed(self, pod, req))
+        Box::pin(async move {
+            match feed {
+                HOME_FEED => crate::routes::home_feed(self, pod, req).await,
+                _ => pod_core::unknown_feed(NAME, feed),
+            }
+        })
     }
 
     fn notification_channels(&self) -> Vec<NotificationChannel> {

@@ -254,10 +254,18 @@ fn invalid_files_are_refused_with_their_path() {
         err.contains("must be a pod path starting with /v1/"),
         "{err}"
     );
-    // New intents are fine in developer-authored files.
-    let new_intent = ok.replace("/v1/demo/ack", "/v1/demo/other");
-    let new_intent: &'static str = Box::leak(new_intent.into_boxed_str());
-    parse_files(&catalog(), &[src("pixelfed_demo", "0001", new_intent)]).unwrap();
+    // An endpoint the app's data sources don't declare is refused (decision
+    // `custom-apps-and-data-sources`), naming what they offer.
+    let undeclared = ok.replace("/v1/demo/ack", "/v1/demo/other");
+    let undeclared: &'static str = Box::leak(undeclared.into_boxed_str());
+    let err = parse_files(&catalog(), &[src("pixelfed_demo", "0001", undeclared)]).unwrap_err();
+    assert!(
+        err.contains(
+            "a mutation's endpoint '/v1/demo/other' is not an action of its data sources \
+             (pixelfed_demo); they offer: /v1/demo/ack"
+        ),
+        "{err}"
+    );
 }
 
 #[test]

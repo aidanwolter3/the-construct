@@ -36,7 +36,7 @@ use protocol::EntityRecord;
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
-use crate::layout::WORKSPACE_ID;
+use crate::adapter::NAME as SOURCE;
 use crate::routes::{adapter, invalid_request, session_account, with_token};
 use crate::upstream::UpstreamError;
 
@@ -370,7 +370,7 @@ async fn pending_action(pod: Pod, headers: HeaderMap, body: Bytes, retry: bool) 
             }
             let _ = pod.uploads().release(&owner(&hash, &client_id)).await;
         }
-        pod.publish_data(WORKSPACE_ID, &session);
+        pod.publish_data(SOURCE, &session);
     }
     Json(json!({ "ok": true, "id": pending_uri(&client_id) })).into_response()
 }
@@ -484,7 +484,7 @@ async fn run(pod: &Pod, hash: &str, client_id: &str) {
                 tracing::info!(status = ?p.status_id, "Pixelfed post published");
                 let _ = pod.uploads().release(&owner(hash, client_id)).await;
                 if let Some(s) = &session {
-                    pod.publish_data(WORKSPACE_ID, s);
+                    pod.publish_data(SOURCE, s);
                 }
                 return;
             }
@@ -494,7 +494,7 @@ async fn run(pod: &Pod, hash: &str, client_id: &str) {
                 p.error = Some(why);
                 let _ = update(pod, &p).await;
                 if let Some(s) = &session {
-                    pod.publish_data(WORKSPACE_ID, s);
+                    pod.publish_data(SOURCE, s);
                 }
                 return;
             }
@@ -506,7 +506,7 @@ async fn run(pod: &Pod, hash: &str, client_id: &str) {
                     p.error = Some("Pixelfed didn't answer. Try again later.".into());
                     let _ = update(pod, &p).await;
                     if let Some(s) = &session {
-                        pod.publish_data(WORKSPACE_ID, s);
+                        pod.publish_data(SOURCE, s);
                     }
                     return;
                 }

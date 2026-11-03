@@ -13,7 +13,8 @@ use http_body_util::BodyExt;
 use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::{
-    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, Hydration, Pod, RequestCtx, Session,
+    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, FeedSpec, Hydration, Pod, RequestCtx,
+    Session, SourceManifest,
 };
 use protocol::DataBundle;
 use serde_json::Value;
@@ -40,17 +41,23 @@ impl AppAdapter for Up {
             icon: "photo",
             dev: false,
             auth: AuthPolicy::Public,
+            feeds: &[("up", "all")],
         }]
     }
     fn layout_files(&self) -> &'static [LayoutSource] {
         FILES
     }
-    fn hydrate<'a>(
-        &'a self,
-        _: &'a Pod,
-        _: &'a str,
-        _: &'a RequestCtx,
-    ) -> BoxFuture<'a, Hydration> {
+    fn manifest(&self) -> SourceManifest {
+        SourceManifest {
+            feeds: &[FeedSpec {
+                name: "all",
+                query_keys: &[],
+                doc: "",
+            }],
+            ..SourceManifest::new("T")
+        }
+    }
+    fn feed<'a>(&'a self, _: &'a Pod, _: &'a str, _: &'a RequestCtx) -> BoxFuture<'a, Hydration> {
         Box::pin(async { Hydration::Data(DataBundle::default()) })
     }
     fn resume<'a>(&'a self, _pod: &'a Pod) -> BoxFuture<'a, ()> {

@@ -9,7 +9,9 @@
 //!
 //! Apps plug in through [`AppAdapter`]: the `server` binary builds the
 //! adapters and passes them to [`AppState::try_new`]. The core never names an
-//! app; adapters supply each app's data, routes, sign-ins and tables.
+//! app; adapters supply each app's data, routes, sign-ins and tables. Each
+//! adapter is also a data source ([`source`]): an app is a layout plus a
+//! list of feeds, which the core runs and merges.
 
 pub mod adapter;
 pub mod disk;
@@ -19,6 +21,7 @@ pub mod notify;
 pub mod push;
 pub mod secrets;
 pub mod session;
+pub mod source;
 pub mod static_app;
 pub mod store;
 pub mod uploads;
@@ -48,6 +51,7 @@ pub use adapter::{
 };
 pub use notify::{NewNotification, PollCtx, PollOutcome, PollStatus};
 pub use session::{Caller, Session};
+pub use source::{EntityDoc, FeedSpec, PathSpec, SourceManifest};
 pub use static_app::StaticAdapter;
 
 /// `WorkspaceSpec::version` of the bundles the pod builds.
@@ -294,11 +298,13 @@ impl AppState {
         uploads::Uploads { pod: self }
     }
 
-    /// Tell `session`'s clients of `workspace_id` that its data changed
-    /// (`event: data`, D50): they reload. No-op without subscribers.
-    pub fn publish_data(&self, workspace_id: &str, session: &Session) {
+    /// Tell `session`'s clients that data of `source` (an adapter's
+    /// [`AppAdapter::name`]) changed (`event: data`, D50): every app that
+    /// draws on that source ([`Catalog::app_sources`]) reloads. No-op
+    /// without subscribers.
+    pub fn publish_data(&self, source: &str, session: &Session) {
         let _ = self.data_tx.send(layouts::DataEvent {
-            workspace_id: workspace_id.to_owned(),
+            source: source.to_owned(),
             token_hash: session.token_hash.clone(),
         });
     }
@@ -480,9 +486,9 @@ fn signed_out(state: &Pod, sign_in: &str, app: &AppInfo, req: &RequestCtx) -> Wo
     adapter.signed_out(sign_in, app, req)
 }
 
-/// `GET /v1/workspaces/:id`: the app's data from its adapter
-/// ([`AppAdapter::hydrate`]) with the newest layout version the client can
-/// draw (`X-Construct-Layout-Version`). An app that requires a sign-in
+/// `GET /v1/workspaces/:id`: the app's data, its feeds' merged
+/// ([`compose`]), with the newest layout version the client can draw
+/// (`X-Construct-Layout-Version`). An app that requires a sign-in
 /// ([`AuthPolicy::SignIn`]) gets its signed-out screen instead when the
 /// caller lacks it: 200 without a bearer, 401 + `X-Construct-Session: invalid`
 /// with one, so the client learns its session is stale.
@@ -494,10 +500,7 @@ async fn get_workspace(
     if let Some(r) = layouts::reject_invalid_workspace_id(&id) {
         return r;
     }
-    let (Some(app), Some(adapter)) = (
-        state.catalog.app(&id).copied(),
-        state.catalog.adapter_for(&id).cloned(),
-    ) else {
+    let Some(app) = state.catalog.app(&id).copied() else {
         return json_error(
             StatusCode::NOT_FOUND,
             json!({ "error": "workspace_not_found", "id": id }),
@@ -526,23 +529,9 @@ async fn get_workspace(
             Json(screen).into_response()
         };
     }
-    let bundle = match adapter.hydrate(&state, &id, &req).await {
-        Hydration::Data(bundle) => bundle,
-        Hydration::Screen(screen) => return Json(screen).into_response(),
-        Hydration::StaleSession(screen) => {
-            // A pinned session stays; only the unusable sign-in goes.
-            if let (Some(session), AuthPolicy::SignIn(sign_in)) = (&req.session, app.auth)
-                && session.pinned
-            {
-                let (hash, sign_in) = (session.token_hash.clone(), sign_in.to_owned());
-                if let Err(e) = blocking(&state, move |s| s.detach_sign_in(&hash, &sign_in)).await {
-                    return e.into_response();
-                }
-                return Json(screen).into_response();
-            }
-            return session::stale_session(screen);
-        }
-        Hydration::Error(r) => return r,
+    let bundle = match compose(&state, app.feeds, &caller, &req).await {
+        Ok(bundle) => bundle,
+        Err(r) => return r,
     };
     let served = match layouts::active_for_client(&state, &id, &req.headers).await {
         Ok(Some(v)) => v,
@@ -562,6 +551,70 @@ async fn get_workspace(
         queries: bundle.queries,
     };
     (layouts::served_headers(served.version), Json(spec)).into_response()
+}
+
+/// Run `feeds` (`(source, feed)`, checked by the catalog) concurrently and
+/// merge their data in order. A feed whose source needs a sign-in the caller
+/// lacks is skipped. Any other answer than data ends the request, the first
+/// in feed order winning: a fixed screen is served as is; a stale sign-in
+/// on a pinned session (a pod token, D46) loses only that sign-in and gets
+/// the screen, any other session a 401 with it; an error passes through.
+async fn compose(
+    state: &Pod,
+    feeds: &[(&str, &str)],
+    caller: &Caller,
+    req: &RequestCtx,
+) -> Result<protocol::DataBundle, Response> {
+    let runs = feeds.iter().map(|(source, feed)| async move {
+        let (adapter, manifest) = state.catalog.source(source)?;
+        if let Some(sign_in) = manifest.sign_in
+            && !caller.has(sign_in)
+        {
+            return None;
+        }
+        Some((manifest.sign_in, adapter.feed(state, feed, req).await))
+    });
+    let mut bundle = protocol::DataBundle::default();
+    for (sign_in, answer) in futures_util::future::join_all(runs)
+        .await
+        .into_iter()
+        .flatten()
+    {
+        match answer {
+            Hydration::Data(data) => {
+                bundle.entities.extend(data.entities);
+                bundle.queries.extend(data.queries);
+            }
+            Hydration::Screen(screen) => return Err(Json(screen).into_response()),
+            Hydration::StaleSession(screen) => {
+                // A pinned session stays; only the unusable sign-in goes.
+                if let (Some(session), Some(sign_in)) = (&req.session, sign_in)
+                    && session.pinned
+                {
+                    let (hash, sign_in) = (session.token_hash.clone(), sign_in.to_owned());
+                    if let Err(e) =
+                        blocking(state, move |s| s.detach_sign_in(&hash, &sign_in)).await
+                    {
+                        return Err(e.into_response());
+                    }
+                    return Err(Json(screen).into_response());
+                }
+                return Err(session::stale_session(screen));
+            }
+            Hydration::Error(r) => return Err(r),
+        }
+    }
+    Ok(bundle)
+}
+
+/// What a [`AppAdapter::feed`] answers for a feed name it doesn't know (the
+/// catalog checks app feeds, so only a direct caller can get it): 404
+/// `feed_not_found`.
+pub fn unknown_feed(source: &str, feed: &str) -> Hydration {
+    Hydration::Error(json_error(
+        StatusCode::NOT_FOUND,
+        json!({ "error": "feed_not_found", "source": source, "feed": feed }),
+    ))
 }
 
 /// A JSON error response, kept small so it can travel in `Result::Err`.

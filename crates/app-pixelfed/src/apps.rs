@@ -7,7 +7,7 @@ use std::sync::{Arc, LazyLock};
 
 use axum::{Json, Router, body::Bytes, response::IntoResponse, routing::post};
 use pod_core::layouts::LayoutSource;
-use pod_core::{AppInfo, AuthPolicy, Pod, StaticAdapter};
+use pod_core::{AppInfo, AuthPolicy, FeedSpec, PathSpec, Pod, SourceManifest, StaticAdapter};
 use protocol::WorkspaceSpec;
 use serde_json::json;
 
@@ -57,6 +57,7 @@ pub const HOME: AppInfo = AppInfo {
     icon: "photo",
     dev: false,
     auth: AuthPolicy::SignIn(crate::adapter::SIGN_IN),
+    feeds: &[(crate::adapter::NAME, crate::adapter::HOME_FEED)],
 };
 
 /// The static demo feed (fixture data, no upstream).
@@ -66,6 +67,28 @@ pub const DEMO: AppInfo = AppInfo {
     icon: "photo",
     dev: true,
     auth: AuthPolicy::Public,
+    feeds: &[(DEMO_NAME, pod_core::static_app::FEED)],
+};
+
+/// The `pixelfed_demo` adapter's name (its data source id).
+pub const DEMO_NAME: &str = "pixelfed_demo";
+
+/// What the demo's layouts use: its fixed data and the stateless ack. Its
+/// data reuses Pixelfed's shapes (`pixelfed://` URIs, `timeline:home`), so
+/// it declares no entity scheme or query key of its own: those belong to
+/// the Pixelfed source.
+const DEMO_MANIFEST: SourceManifest = SourceManifest {
+    feeds: &[FeedSpec {
+        name: pod_core::static_app::FEED,
+        query_keys: &[],
+        doc: "Fixed demo posts (fixtures/pixelfed_home_bundle.json).",
+    }],
+    actions: &[PathSpec {
+        pattern: "/v1/demo/ack",
+        query_keys: &[],
+        doc: "Accepts any action and changes nothing.",
+    }],
+    ..SourceManifest::new("Pixelfed demo")
 };
 
 static DEMO_JSON: &str = include_str!("../../../fixtures/pixelfed_home_bundle.json");
@@ -85,7 +108,8 @@ pub fn validate_fixtures() {
 /// bundle, plus `POST /v1/demo/ack` for its buttons.
 pub fn demo_adapter() -> Arc<StaticAdapter> {
     Arc::new(
-        StaticAdapter::new("pixelfed_demo", DEMO, DEMO_FILES, &DEMO_BUNDLE)
+        StaticAdapter::new(DEMO_NAME, DEMO, DEMO_FILES, &DEMO_BUNDLE)
+            .with_manifest(DEMO_MANIFEST)
             .with_legacy_files(DEMO_LEGACY)
             .with_router(demo_router),
     )

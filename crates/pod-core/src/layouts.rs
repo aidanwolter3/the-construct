@@ -283,6 +283,10 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
             "invalid layout: unknown node type '{t}' (a typo? this build does not know it)"
         )));
     }
+    // Layouts reach only what their app's data sources declare (decision
+    // `custom-apps-and-data-sources`).
+    crate::source::check_routes(&parsed, &catalog.app_sources(src.app_id))
+        .map_err(|e| fail(format!("invalid layout: {e}")))?;
     let schema = obj
         .get("schema")
         .and_then(Value::as_u64)
@@ -833,11 +837,12 @@ pub struct LayoutEvent {
     pub version: i64,
 }
 
-/// A session's data changed (D50): `event: data` to that session's
-/// subscribers of `workspace_id` only.
+/// A session's data from one source changed (D50): `event: data` to that
+/// session's subscribers of the apps that draw on `source` only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataEvent {
-    pub workspace_id: String,
+    /// A data source id (an adapter's name).
+    pub source: String,
     pub token_hash: String,
 }
 
@@ -1050,8 +1055,15 @@ async fn events(
         (Caller::Signed(_), Some(device)) => Some(state.device_live(&device)),
         _ => None,
     };
-    // The session's own `data` events (D50) need to know who listens.
+    // The session's own `data` events (D50) need to know who listens, and
+    // which sources this app draws on.
     let session_hash = caller.session().map(|s| s.token_hash.clone());
+    let sources: Vec<&'static str> = state
+        .catalog()
+        .app_sources(&id)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
     let schema = headers
         .contains_key(protocol::SCHEMA_HEADER)
         .then(|| client_schema(&headers));
@@ -1074,6 +1086,7 @@ async fn events(
         _live: Option<crate::notify::LiveDevice>,
         data_rx: broadcast::Receiver<DataEvent>,
         session_hash: Option<String>,
+        sources: Vec<&'static str>,
         recheck: Option<tokio::time::Interval>,
         _slot: Option<SseSlot>,
         shutdown: tokio::sync::watch::Receiver<bool>,
@@ -1096,6 +1109,7 @@ async fn events(
             _live: live,
             data_rx,
             session_hash,
+            sources,
             recheck,
             _slot: slot,
             shutdown: state.shutdown_signal(),
@@ -1150,7 +1164,7 @@ async fn events(
                     Got::Data(d) => {
                         let mine = match &d {
                             Ok(d) => {
-                                d.workspace_id == s.id
+                                s.sources.contains(&d.source.as_str())
                                     && s.session_hash.as_deref() == Some(d.token_hash.as_str())
                             }
                             // Lagged: a reload is never wrong.

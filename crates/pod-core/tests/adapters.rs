@@ -14,8 +14,8 @@ use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::{Migration, open_session_on};
 use pod_core::{
-    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, Catalog, Hydration, Pod, RequestCtx,
-    SignInProvider, StaticAdapter,
+    AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, Catalog, FeedSpec, Hydration, Pod,
+    RequestCtx, SignInProvider, SourceManifest, StaticAdapter,
 };
 use protocol::{DataBundle, EntityRecord, WorkspaceSpec};
 use serde_json::{Value, json};
@@ -50,6 +50,7 @@ const OPEN: AppInfo = AppInfo {
     icon: "photo",
     dev: false,
     auth: AuthPolicy::Public,
+    feeds: &[("open", "all")],
 };
 const GATED: AppInfo = AppInfo {
     id: "gated",
@@ -57,6 +58,7 @@ const GATED: AppInfo = AppInfo {
     icon: "photo",
     dev: true,
     auth: AuthPolicy::SignIn("test"),
+    feeds: &[("gated", "all")],
 };
 
 fn open_app() -> Arc<dyn AppAdapter> {
@@ -108,10 +110,20 @@ impl AppAdapter for Gated {
             ),
         )
     }
-    fn hydrate<'a>(
+    fn manifest(&self) -> SourceManifest {
+        SourceManifest {
+            feeds: &[FeedSpec {
+                name: "all",
+                query_keys: &[],
+                doc: "",
+            }],
+            ..SourceManifest::new("T")
+        }
+    }
+    fn feed<'a>(
         &'a self,
         _pod: &'a Pod,
-        _app_id: &'a str,
+        _feed: &'a str,
         req: &'a RequestCtx,
     ) -> BoxFuture<'a, Hydration> {
         Box::pin(async move {
@@ -350,11 +362,13 @@ fn the_core_names_no_app() {
             if code.starts_with("//") {
                 continue;
             }
-            assert!(
-                !code.to_ascii_lowercase().contains("pixelfed"),
-                "src/{name}:{}: the core must not name an app: {line}",
-                i + 1
-            );
+            for app in ["pixelfed", "recipes"] {
+                assert!(
+                    !code.to_ascii_lowercase().contains(app),
+                    "src/{name}:{}: the core must not name an app: {line}",
+                    i + 1
+                );
+            }
         }
     }
 }

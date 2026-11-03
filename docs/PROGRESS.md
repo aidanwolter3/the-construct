@@ -582,3 +582,15 @@ new layout files; diffs between versions.
 - Tests: protocol schema, client-core store and engine (survives a restart, per app), shared `RememberedFormTest`,
   simulator `theChosenViewIsRememberedAcrossRestarts`.
 - Needs a client build and a device check (Android: pick Cards, kill the app, reopen: Cards).
+
+## Data sources (issue #45, P1a)
+
+- Decision `custom-apps-and-data-sources`: `AppAdapter::hydrate` became `manifest()` (feeds, data paths, actions,
+  entity schemes and field docs; `pod_core::source`) plus named `feed`s. `AppInfo::feeds` lists an app's root feeds
+  as `(source, feed)`; `get_workspace` runs them concurrently and merges. `publish_data` is keyed by source.
+- Startup checks: manifests, unique entity schemes, non-overlapping query keys, app feeds exist, and every route a
+  layout file uses is in its app's sources' manifests.
+- No wire change: built-in answers are byte-identical, fixtures regenerate unchanged, no client build.
+- Tests: `pod-core/tests/sources.rs` (catalog checks, the route check, two-source composition with a signed-out
+  and a stale source, data-event fan-out), `source.rs` unit tests, `the_core_names_no_app` also checks "recipes".
+- Next (issue #45): P1b custom apps on the pod, P1c clients, P2 MCP endpoint, P3 layout parts.

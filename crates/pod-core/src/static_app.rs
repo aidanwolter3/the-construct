@@ -5,14 +5,26 @@ use protocol::{DataBundle, WorkspaceSpec};
 
 use crate::adapter::{AppAdapter, AppInfo, BoxFuture, Hydration, Pod, RequestCtx};
 use crate::layouts::LayoutSource;
+use crate::source::{FeedSpec, SourceManifest};
+
+/// The one feed of a [`StaticAdapter`]: list `(name, FEED)` in the app's
+/// [`AppInfo::feeds`].
+pub const FEED: &str = "all";
+
+static FEEDS: &[FeedSpec] = &[FeedSpec {
+    name: FEED,
+    query_keys: &[],
+    doc: "The app's fixed data.",
+}];
 
 /// An app with no upstream: its layout files and one fixed bundle of
 /// entities and queries, served to everyone (D40). Optional extra routes
 /// (e.g. a stateless endpoint its buttons call) come with
-/// [`Self::with_router`].
+/// [`Self::with_router`]. Its app lists `(name, FEED)` among its feeds.
 pub struct StaticAdapter {
     name: &'static str,
     app: AppInfo,
+    manifest: SourceManifest,
     files: &'static [LayoutSource],
     legacy: &'static [(&'static str, u32)],
     data: DataBundle,
@@ -32,6 +44,10 @@ impl StaticAdapter {
         Self {
             name,
             app,
+            manifest: SourceManifest {
+                feeds: FEEDS,
+                ..SourceManifest::new(app.title)
+            },
             files,
             legacy: &[],
             data: DataBundle {
@@ -40,6 +56,15 @@ impl StaticAdapter {
             },
             router: Router::new,
         }
+    }
+
+    /// What it offers layouts ([`AppAdapter::manifest`]); by default only
+    /// the [`FEED`] feed, which answers the fixed data. Declare the routes
+    /// of [`Self::with_router`] here. The manifest's feeds all answer the
+    /// fixed data.
+    pub fn with_manifest(mut self, manifest: SourceManifest) -> Self {
+        self.manifest = manifest;
+        self
     }
 
     /// See [`AppAdapter::legacy_files`].
@@ -76,12 +101,21 @@ impl AppAdapter for StaticAdapter {
         (self.router)()
     }
 
-    fn hydrate<'a>(
+    fn manifest(&self) -> SourceManifest {
+        self.manifest
+    }
+
+    fn feed<'a>(
         &'a self,
         _pod: &'a Pod,
-        _app_id: &'a str,
+        feed: &'a str,
         _req: &'a RequestCtx,
     ) -> BoxFuture<'a, Hydration> {
-        Box::pin(async move { Hydration::Data(self.data.clone()) })
+        Box::pin(async move {
+            if self.manifest.feed(feed).is_none() {
+                return crate::unknown_feed(self.name, feed);
+            }
+            Hydration::Data(self.data.clone())
+        })
     }
 }
