@@ -22,6 +22,8 @@ pub static MIGRATIONS: &[Migration] = &[
              instance   TEXT NOT NULL
          );",
     ),
+    // 2 (D48): posts on their way to Pixelfed (crate::posting).
+    Migration::Sql(crate::posting::MIGRATION),
 ];
 
 /// Outcome of [`PixelfedStore::sign_in_pixelfed`].

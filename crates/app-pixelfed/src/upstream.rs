@@ -16,6 +16,8 @@ use crate::{MediaPolicy, MediaRoute};
 pub const API_TIMEOUT: Duration = Duration::from_secs(10);
 /// Media downloads may take longer than API calls.
 pub const MEDIA_TIMEOUT: Duration = Duration::from_secs(30);
+/// Timeout of one photo upload to the instance.
+pub const UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub const APP_NAME: &str = "The Construct";
 pub const SCOPES: &str = "read write";
@@ -455,6 +457,105 @@ impl Upstream {
             req = req.header("Idempotency-Key", key);
         }
         Self::send_json(req).await
+    }
+
+    /// `GET /api/v1/statuses/{id}`. `id` must be path-safe.
+    pub async fn get_status(&self, token: &str, id: &str) -> Result<Value, UpstreamError> {
+        Self::send_json(
+            self.http
+                .get(self.url(&format!("/api/v1/statuses/{id}")))
+                .bearer_auth(token),
+        )
+        .await
+    }
+
+    /// Upload one photo: `POST /api/v2/media` (the answer may still be
+    /// processing: 202, `url` null), or `/api/v1/media` when the instance has
+    /// no v2 (404). Returns the attachment JSON.
+    pub async fn upload_media(
+        &self,
+        token: &str,
+        bytes: Vec<u8>,
+        content_type: &str,
+    ) -> Result<Value, UpstreamError> {
+        let form = |bytes: Vec<u8>| -> Result<reqwest::multipart::Form, UpstreamError> {
+            let ext = match content_type {
+                "image/png" => "png",
+                "image/webp" => "webp",
+                _ => "jpg",
+            };
+            let part = reqwest::multipart::Part::bytes(bytes)
+                .file_name(format!("photo.{ext}"))
+                .mime_str(content_type)
+                .map_err(|e| UpstreamError::Unreachable(e.to_string()))?;
+            Ok(reqwest::multipart::Form::new().part("file", part))
+        };
+        let send = |path: &str, bytes: Vec<u8>| -> Result<reqwest::RequestBuilder, UpstreamError> {
+            Ok(self
+                .http
+                .post(self.url(path))
+                .timeout(UPLOAD_TIMEOUT)
+                .bearer_auth(token)
+                .multipart(form(bytes)?))
+        };
+        match Self::send_json(send("/api/v2/media", bytes.clone())?).await {
+            Err(UpstreamError::Status(StatusCode::NOT_FOUND, _)) => {
+                Self::send_json(send("/api/v1/media", bytes)?).await
+            }
+            other => other,
+        }
+    }
+
+    /// `GET /api/v1/media/{id}`: the attachment, `Ok(None)` while it is still
+    /// processing (206, or no `url` yet). `id` must be path-safe.
+    pub async fn media_status(
+        &self,
+        token: &str,
+        id: &str,
+    ) -> Result<Option<Value>, UpstreamError> {
+        let resp = self
+            .http
+            .get(self.url(&format!("/api/v1/media/{id}")))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| UpstreamError::Unreachable(e.to_string()))?;
+        let status = resp.status();
+        let body = resp
+            .bytes()
+            .await
+            .map_err(|e| UpstreamError::Unreachable(e.to_string()))?;
+        if status == StatusCode::PARTIAL_CONTENT {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            let mut text = String::from_utf8_lossy(&body).into_owned();
+            text.truncate(500);
+            return Err(UpstreamError::Status(status, text));
+        }
+        let v: Value = serde_json::from_slice(&body)
+            .map_err(|e| UpstreamError::Unreachable(format!("invalid JSON from upstream: {e}")))?;
+        Ok(v["url"].is_string().then_some(v))
+    }
+
+    /// `POST /api/v1/statuses` with `media_ids[]`: a new post.
+    pub async fn create_post(
+        &self,
+        token: &str,
+        caption: &str,
+        media_ids: &[String],
+        idempotency_key: &str,
+    ) -> Result<Value, UpstreamError> {
+        let mut form: Vec<(&str, &str)> = vec![("status", caption), ("visibility", "public")];
+        form.extend(media_ids.iter().map(|id| ("media_ids[]", id.as_str())));
+        Self::send_json(
+            self.http
+                .post(self.url("/api/v1/statuses"))
+                .bearer_auth(token)
+                .header("Idempotency-Key", idempotency_key)
+                .form(&form),
+        )
+        .await
     }
 }
 

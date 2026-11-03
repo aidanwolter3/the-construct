@@ -26,6 +26,7 @@ pub mod apps;
 pub mod config;
 pub mod db;
 pub mod layout;
+pub mod posting;
 pub mod routes;
 pub mod upstream;
 

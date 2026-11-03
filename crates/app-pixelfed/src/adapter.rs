@@ -141,4 +141,8 @@ impl AppAdapter for PixelfedAdapter {
     ) -> BoxFuture<'a, Hydration> {
         Box::pin(crate::routes::home_feed(self, pod, req))
     }
+
+    fn resume<'a>(&'a self, pod: &'a Pod) -> BoxFuture<'a, ()> {
+        Box::pin(crate::posting::resume(pod))
+    }
 }

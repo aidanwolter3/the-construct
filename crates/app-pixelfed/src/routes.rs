@@ -47,6 +47,15 @@ pub fn router() -> Router<Pod> {
         .route("/v1/pixelfed/posts/like", post(like))
         .route("/v1/pixelfed/posts/bookmark", post(bookmark))
         .route("/v1/pixelfed/posts/comment", post(comment))
+        .route("/v1/pixelfed/posts/create", post(crate::posting::create))
+        .route(
+            "/v1/pixelfed/posts/pending/retry",
+            post(crate::posting::retry),
+        )
+        .route(
+            "/v1/pixelfed/posts/pending/discard",
+            post(crate::posting::discard),
+        )
         .route("/v1/pixelfed/screens/comments", get(comments_screen))
         .route("/v1/pixelfed/media/{key}", get(media))
 }
@@ -54,7 +63,7 @@ pub fn router() -> Router<Pod> {
 // ---------- helpers ----------
 
 /// The Pixelfed adapter of this pod (registered by the `server` binary).
-fn adapter(state: &Pod) -> &PixelfedAdapter {
+pub(crate) fn adapter(state: &Pod) -> &PixelfedAdapter {
     state
         .adapter::<PixelfedAdapter>()
         .expect("the Pixelfed routes are mounted by the Pixelfed adapter")
@@ -104,7 +113,7 @@ struct RefreshLock(tokio::sync::Mutex<()>);
 /// The instance `session` signed in to and its stored account. A session
 /// from before D45 uses the default instance; one whose instance this pod no
 /// longer accepts (the configuration changed) has none.
-async fn session_account(
+pub(crate) async fn session_account(
     state: &Pod,
     session: &Session,
 ) -> Result<Option<(Instance, PixelfedAccount)>, ApiError> {
@@ -142,7 +151,7 @@ async fn stored_account(
 /// `<scheme>://<Host><public prefix>/v1/pixelfed/media`, from the request so
 /// that clients reaching the pod as e.g. 10.0.2.2 get URLs they can load (the
 /// prefix: a pod host's public route for this pod, D46).
-fn proxy_base(headers: &HeaderMap) -> String {
+pub(crate) fn proxy_base(headers: &HeaderMap) -> String {
     let host = headers
         .get(header::HOST)
         .and_then(|h| h.to_str().ok())
@@ -178,7 +187,7 @@ fn str_field<'a>(payload: &'a Value, key: &str) -> Option<&'a str> {
         .filter(|s| !s.is_empty())
 }
 
-fn invalid_request(expected: Value) -> Response {
+pub(crate) fn invalid_request(expected: Value) -> Response {
     json_error(
         StatusCode::BAD_REQUEST,
         json!({ "error": "invalid_request", "expected": expected }),
@@ -294,7 +303,7 @@ async fn refresh_account(
 /// once and retry. A 401 that survives (no refresh possible, or the fresh
 /// token is rejected too) is returned as `Status(401)`. Also returns the
 /// access token of the last attempt (the one a surviving 401 rejected).
-async fn with_token<T, F, Fut>(
+pub(crate) async fn with_token<T, F, Fut>(
     state: &Pod,
     instance: &Instance,
     account: PixelfedAccount,
@@ -655,7 +664,54 @@ pub async fn home_feed(pf: &PixelfedAdapter, state: &Pod, req: &RequestCtx) -> H
         Err(e) => return Hydration::Error(e.into_response()),
     };
     let mut media = MediaUrls::new(&proxy_base(&req.headers), rt.media_for(others));
-    let timeline = normalize_timeline(&statuses, &mut media);
+    let mut timeline = normalize_timeline(&statuses, &mut media);
+    // Posts on their way (D48) go first: placeholders, then finished posts
+    // the timeline does not list yet.
+    if let Some(session) = &req.session {
+        let listed: std::collections::HashSet<String> = statuses
+            .iter()
+            .flat_map(|s| [s["id"].as_str(), s["reblog"]["id"].as_str()])
+            .flatten()
+            .map(str::to_owned)
+            .collect();
+        let (placeholders, missing) =
+            match crate::posting::placeholders(state, session, req, &listed).await {
+                Ok(p) => p,
+                Err(e) => return Hydration::Error(e.into_response()),
+            };
+        let mut first = Vec::new();
+        for (uri, post, media_entities) in placeholders {
+            timeline.entities.extend(media_entities);
+            timeline.entities.insert(uri.clone(), post);
+            first.push(uri);
+        }
+        for id in missing.iter().filter(|id| valid_status_id(id)) {
+            let (result, _) = with_token(
+                state,
+                &instance,
+                account_again(state, &instance).await,
+                |token| {
+                    let (upstream, id) = (&upstream, id);
+                    async move { upstream.get_status(&token, id).await }
+                },
+            )
+            .await;
+            match result.ok().and_then(|v| Status::deserialize(&v).ok()) {
+                Some(status) => {
+                    let post = super::normalize_post(&status, &mut media, &mut timeline.entities);
+                    let uri = super::post_uri(&status.id);
+                    timeline.entities.insert(uri.clone(), post);
+                    first.push(uri);
+                }
+                None => tracing::info!(%id, "a new post is not readable yet"),
+            }
+        }
+        if !first.is_empty() {
+            timeline.order.retain(|u| !first.contains(u));
+            first.append(&mut timeline.order);
+            timeline.order = first;
+        }
+    }
     if let Err(e) = save_media_keys(state, media).await {
         return Hydration::Error(e.into_response());
     }
@@ -666,6 +722,16 @@ pub async fn home_feed(pf: &PixelfedAdapter, state: &Pod, req: &RequestCtx) -> H
         "pixelfed_home served"
     );
     Hydration::Data(layout::home_feed(timeline.entities, timeline.order))
+}
+
+/// The stored account of `instance` again (after `with_token` consumed it;
+/// a refresh may have replaced its token).
+async fn account_again(state: &Pod, instance: &Instance) -> PixelfedAccount {
+    stored_account(state, instance)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 // ---------- actions ----------
@@ -684,7 +750,7 @@ async fn bookmark(State(state): State<Pod>, headers: HeaderMap, body: Bytes) -> 
     toggle(state, headers, body, Toggle::Bookmark).await
 }
 
-fn valid_status_id(id: &str) -> bool {
+pub(crate) fn valid_status_id(id: &str) -> bool {
     (1..=64).contains(&id.len())
         && id
             .bytes()

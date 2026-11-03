@@ -855,7 +855,7 @@ async fn a_session_from_before_v11_stays_signed_in() {
         let later: Vec<String> = conn
             .prepare(
                 "SELECT name FROM sqlite_master WHERE type = 'table'
-                 AND (name LIKE 'recipes%' OR name = 'pixelfed_session_instance')
+                 AND (name LIKE 'recipes%' OR name IN ('pixelfed_session_instance', 'pixelfed_pending_posts'))
                  OR (type = 'table' AND name IN ('pod_settings', 'uploads'))",
             )
             .unwrap()
@@ -1785,4 +1785,248 @@ async fn any_instance_refuses_private_and_plain_http_hosts() {
     }
     // The default instance still works.
     sign_in_at(&pod.url, &fake.url).await;
+}
+
+// ---------- posting (D47, D48) ----------
+
+/// The first bytes of a 3x2 PNG (all the pod and the fake look at).
+fn png() -> Vec<u8> {
+    let mut b = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    b.extend_from_slice(&3u32.to_be_bytes());
+    b.extend_from_slice(&2u32.to_be_bytes());
+    b.extend_from_slice(&[8, 2, 0, 0, 0]);
+    b
+}
+
+async fn upload_png(pod: &str, session: &str, key: &str) -> String {
+    let resp = client()
+        .post(format!("{pod}/v1/uploads"))
+        .bearer_auth(session)
+        .header("content-type", "image/png")
+        .header("idempotency-key", key)
+        .body(png())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    resp.json::<Value>().await.unwrap()["upload_id"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+async fn wait_for(what: &str, mut f: impl AsyncFnMut() -> bool) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !f().await {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// The workspace's SSE stream, read in the background into a shared string.
+fn listen(pod: &str, session: &str) -> Arc<std::sync::Mutex<String>> {
+    let seen = Arc::new(std::sync::Mutex::new(String::new()));
+    let (url, session, out) = (
+        format!("{pod}/v1/workspaces/pixelfed_home/events"),
+        session.to_owned(),
+        seen.clone(),
+    );
+    tokio::spawn(async move {
+        let mut resp = client().get(url).bearer_auth(session).send().await.unwrap();
+        while let Ok(Some(chunk)) = resp.chunk().await {
+            out.lock()
+                .unwrap()
+                .push_str(&String::from_utf8_lossy(&chunk));
+        }
+    });
+    seen
+}
+
+#[tokio::test]
+async fn posting_photos_reaches_pixelfed_and_the_feed() {
+    let env = env().await;
+    let session = sign_in(&env).await;
+    let fake = env.fake.fake.as_ref().unwrap();
+    fake.set_media_processing_polls(2);
+    let events = listen(&env.pod.url, &session);
+    let a = upload_png(&env.pod.url, &session, "photo-a").await;
+    let b = upload_png(&env.pod.url, &session, "photo-b").await;
+    let url = format!("{}/v1/pixelfed/posts/create", env.pod.url);
+    let body =
+        json!({ "caption": "  Hello there ", "media": [a, b], "client_id": "post-nonce-01" });
+    let (status, answer) = post_json(&url, Some(&session), body.clone()).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{answer}");
+    assert_eq!(answer["id"], "pixelfed://posts/pending-post-nonce-01");
+
+    // Right away the feed starts with the placeholder, its photos served by the pod.
+    let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+    let first = home["queries"]["timeline:home"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    if first == "pixelfed://posts/pending-post-nonce-01" {
+        let p = &home["entities"][&first];
+        assert_eq!(p["pending_label"], "Posting…");
+        assert_eq!(p["caption"], "Hello there");
+        assert!(p.get("id").is_none(), "placeholders have no id");
+        let m = p["media_uris"][0].as_str().unwrap();
+        let photo = home["entities"][m]["url"].as_str().unwrap();
+        assert!(photo.ends_with(&format!("/v1/uploads/{a}")), "{photo}");
+        let resp = client().get(photo).send().await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // The job uploads, waits for processing, posts once; the session hears of it.
+    wait_for("the post", async || !fake.created_ids().is_empty()).await;
+    wait_for("the data event", async || {
+        events.lock().unwrap().contains("event: data")
+    })
+    .await;
+    let id = fake.created_ids()[0].clone();
+    let upstream = upstream_status(&env, &id).await;
+    assert_eq!(upstream["content_text"], "Hello there");
+    assert_eq!(upstream["media_attachments"].as_array().unwrap().len(), 2);
+    let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+    let order = home["queries"]["timeline:home"].as_array().unwrap();
+    assert_eq!(order[0], json!(format!("pixelfed://posts/{id}")));
+    assert!(
+        !order
+            .iter()
+            .any(|u| u.as_str().unwrap().contains("pending-"))
+    );
+    let post = &home["entities"][format!("pixelfed://posts/{id}")];
+    assert_eq!(post["caption"], "Hello there");
+    assert_eq!(post["media_uris"].as_array().unwrap().len(), 2);
+    // The photos are released; the same client_id doesn't post again.
+    let resp = client()
+        .get(format!("{}/v1/uploads/{a}", env.pod.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let (status, _) = post_json(&url, Some(&session), body).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(fake.created_ids().len(), 1);
+}
+
+#[tokio::test]
+async fn refused_posts_can_be_retried_or_discarded() {
+    let env = env().await;
+    let session = sign_in(&env).await;
+    let other = sign_in(&env).await;
+    let fake = env.fake.fake.as_ref().unwrap();
+    fake.set_media_processing_polls(0);
+    let url = format!("{}/v1/pixelfed/posts/create", env.pod.url);
+    let mine = upload_png(&env.pod.url, &session, "p1").await;
+    let theirs = upload_png(&env.pod.url, &other, "p1").await;
+    // Bad input 400, someone else's or unknown uploads 422, no session 401.
+    for bad in [
+        json!({ "media": [], "client_id": "nonce-0000" }),
+        json!({ "media": [mine, mine], "client_id": "nonce-0000" }),
+        json!({ "media": ["a", "b", "c", "d", "e"], "client_id": "nonce-0000" }),
+        json!({ "media": [mine], "client_id": "x" }),
+        json!({ "media": [mine], "caption": "x".repeat(501), "client_id": "nonce-0000" }),
+    ] {
+        let (status, _) = post_json(&url, Some(&session), bad.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    for media in [json!([theirs]), json!(["0".repeat(32)])] {
+        let (status, body) = post_json(
+            &url,
+            Some(&session),
+            json!({ "media": media, "client_id": "nonce-0000" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    }
+    let (status, _) = post_json(
+        &url,
+        None,
+        json!({ "media": [mine], "client_id": "nonce-0000" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Pixelfed refuses the post once: the placeholder says so.
+    fake.add_faults([fake_pixelfed::FaultRule::status(422)
+        .path("/api/v1/statuses")
+        .method("POST")
+        .times(1)]);
+    let (status, _) = post_json(
+        &url,
+        Some(&session),
+        json!({ "media": [mine], "client_id": "nonce-0001" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let pending = "pixelfed://posts/pending-nonce-0001";
+    wait_for("the refusal", async || {
+        let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+        home["entities"][pending]["failed"] == true
+    })
+    .await;
+    let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+    assert!(
+        home["entities"][pending]["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("Couldn't post")
+    );
+    assert!(home["entities"][pending].get("pending_label").is_none());
+    // Not in the other session's feed.
+    let (_, theirs_home) = get_home(&env.pod.url, Some(&other)).await;
+    assert!(theirs_home["entities"].get(pending).is_none());
+
+    // Retry: posted (Pixelfed kept the uploaded media).
+    let retry = format!("{}/v1/pixelfed/posts/pending/retry", env.pod.url);
+    let (status, _) = post_json(&retry, Some(&session), json!({ "client_id": "nonce-0001" })).await;
+    assert_eq!(status, StatusCode::OK);
+    wait_for("the retried post", async || fake.created_ids().len() == 1).await;
+    assert_eq!(fake.media_ids().len(), 1, "the photo was uploaded once");
+
+    // Discard a refused one: gone, with its photos.
+    fake.add_faults([fake_pixelfed::FaultRule::status(422)
+        .path("/api/v1/statuses")
+        .method("POST")
+        .times(1)]);
+    let again = upload_png(&env.pod.url, &session, "p2").await;
+    post_json(
+        &url,
+        Some(&session),
+        json!({ "media": [again], "client_id": "nonce-0002" }),
+    )
+    .await;
+    let pending = "pixelfed://posts/pending-nonce-0002";
+    wait_for("the second refusal", async || {
+        let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+        home["entities"][pending]["failed"] == true
+    })
+    .await;
+    let discard = format!("{}/v1/pixelfed/posts/pending/discard", env.pod.url);
+    let (status, _) = post_json(
+        &discard,
+        Some(&session),
+        json!({ "client_id": "nonce-0002" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, home) = get_home(&env.pod.url, Some(&session)).await;
+    assert!(home["entities"].get(pending).is_none());
+    let resp = client()
+        .get(format!("{}/v1/uploads/{again}", env.pod.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let (status, _) = post_json(
+        &discard,
+        Some(&session),
+        json!({ "client_id": "nonce-0002" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
