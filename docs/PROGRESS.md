@@ -407,6 +407,15 @@ from a client (D32, D33).
 - The menu never calls an undrawable version the latest; it says "Update the app to see vN" instead.
 - Needs a device check on the Mac: the hint on Android and the desktop window.
 
+## Pod core and app adapters (D40)
+- The pod is split: `pod-core` (generic; names no app), `app-pixelfed` (the Pixelfed adapter + `pixelfed_demo` as a
+  `StaticAdapter`), and `server` (the binary that composes them). The `AppAdapter` trait is documented for
+  implementors in `crates/pod-core/src/adapter.rs`.
+- Sessions are pod-wide and collect sign-ins; apps declare the sign-in they need (`pixelfed_home` needs
+  `pixelfed`). Migration v11 adds `adapter_migrations` and `session_sign_ins` and keeps existing sessions signed in.
+- No wire, layout or schema change: no client build or device check needed.
+- **Not yet:** a second adapter; the media proxy is still Pixelfed-only.
+
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
   bookmarks are idempotent upstream, comments are not).

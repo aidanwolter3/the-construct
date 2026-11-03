@@ -19,8 +19,8 @@ use client_core::{
     SIGN_IN_INTERRUPTED, SecureStore, StateSnapshot, UrlOpener,
 };
 use serde_json::{Value, json};
-use server::pixelfed::routes::session_hash;
-use server::{AppState, PixelfedConfig};
+use server::session::session_hash;
+use server::{AppState, PixelfedConfig, WithPixelfed};
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 const SEED: &str = "seed-token";
@@ -77,7 +77,7 @@ impl Env {
         .unwrap();
         spawn_serve(&rt, fl, fake_pixelfed::app(Arc::new(fake_state)));
         let pod_state =
-            Arc::new(AppState::in_memory().with_pixelfed(PixelfedConfig::new(&fake, None)));
+            Arc::new(server::state_in_memory().with_pixelfed(PixelfedConfig::new(&fake, None)));
         let (pl, paddr) = bind();
         spawn_serve(&rt, pl, server::app(Arc::clone(&pod_state)));
         Self {

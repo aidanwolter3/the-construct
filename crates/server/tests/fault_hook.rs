@@ -10,7 +10,6 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
-use server::AppState;
 use tower::ServiceExt;
 
 async fn send(app: &Router, req: Request<Body>) -> (StatusCode, Value) {
@@ -46,7 +45,7 @@ async fn set_fault(app: &Router, body: Value) -> (StatusCode, Value) {
 }
 
 fn hooked() -> Router {
-    server::app(Arc::new(AppState::in_memory().with_test_hooks(true)))
+    server::app(Arc::new(server::state_in_memory().with_test_hooks(true)))
 }
 
 #[tokio::test]

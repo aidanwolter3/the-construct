@@ -11,8 +11,10 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 use sha2::{Digest, Sha256};
 
 /// One schema upgrade: plain SQL, or Rust code for data conversions SQL
-/// cannot do (hashing, compression).
-enum Migration {
+/// cannot do (hashing, compression). The core's list is [`MIGRATIONS`]; each
+/// adapter has its own ([`crate::AppAdapter::migrations`],
+/// [`Store::migrate_adapter`]).
+pub enum Migration {
     Sql(&'static str),
     Rust(fn(&Transaction<'_>) -> rusqlite::Result<()>),
 }
@@ -110,6 +112,27 @@ const MIGRATIONS: &[Migration] = &[
     // v10 (D39): the counter app is gone. Its old `home` rows in
     // `app_versions` stay, inert (no app reads them).
     Migration::Sql("DROP TABLE IF EXISTS counters;"),
+    // v11 (D40): adapters and sign-ins. `adapter_migrations` tracks each
+    // adapter's own migration list (`Store::migrate_adapter`).
+    // `session_sign_ins` records which sign-ins a session completed; every
+    // session that exists was made by the Pixelfed sign-in (the only one there
+    // was), so each gets a `pixelfed` row and stays signed in. The v2-v4
+    // `pixelfed_*` tables above are frozen history here: only the Pixelfed
+    // adapter reads them.
+    Migration::Sql(
+        "CREATE TABLE adapter_migrations (
+         adapter TEXT PRIMARY KEY NOT NULL,
+         version INTEGER NOT NULL
+     );
+     CREATE TABLE session_sign_ins (
+         token_hash TEXT NOT NULL,
+         provider   TEXT NOT NULL,
+         created_at INTEGER NOT NULL,
+         PRIMARY KEY (token_hash, provider)
+     );
+     INSERT INTO session_sign_ins (token_hash, provider, created_at)
+         SELECT token_hash, 'pixelfed', created_at FROM sessions;",
+    ),
 ];
 
 fn migrate_v9(tx: &Transaction<'_>) -> rusqlite::Result<()> {
@@ -399,7 +422,7 @@ pub const BLOB_ZSTD_LEVEL: i32 = 19;
 
 /// SHA-256 hex of a layout's canonical JSON (its blob key).
 pub fn content_hash(json: &str) -> String {
-    crate::pixelfed::hex(&Sha256::digest(json.as_bytes()))
+    crate::util::hex(&Sha256::digest(json.as_bytes()))
 }
 
 /// `(encoding, data)`: zstd when it is smaller, else the raw bytes.
@@ -536,64 +559,41 @@ fn key_number(key: &str) -> Option<u32> {
     key.rsplit_once('/').and_then(|(_, n)| n.parse().ok())
 }
 
-/// Outcome of [`Store::sign_in_pixelfed`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SignIn {
-    /// Account stored and session created.
-    Ok,
-    /// Another account owns this pod; nothing was changed.
-    NotOwner { owner: String },
-}
+use crate::util::now_secs;
 
-/// A registered OAuth app on the upstream instance.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PixelfedApp {
-    pub client_id: String,
-    pub client_secret: String,
-}
-
-/// The stored upstream account (and its access token).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct PixelfedAccount {
-    pub access_token: String,
-    pub account_id: String,
-    pub username: String,
-    /// Upstream refresh token (Pixelfed issues one; the fake too).
-    pub refresh_token: Option<String>,
-    /// Unix seconds when the access token expires, if the upstream said.
-    pub expires_at: Option<i64>,
-    /// The redirect_uri of the app (pixelfed_apps row) that issued the token.
-    pub redirect_uri: Option<String>,
-}
-
-fn now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64)
-}
-
-fn save_account_on(
-    conn: &Connection,
-    instance: &str,
-    account: &PixelfedAccount,
-) -> rusqlite::Result<()> {
+fn attach_sign_in_on(conn: &Connection, token_hash: &str, sign_in: &str) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT OR REPLACE INTO pixelfed_account
-             (instance, access_token, account_id, username, created_at,
-              refresh_token, expires_at, redirect_uri)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![
-            instance,
-            account.access_token,
-            account.account_id,
-            account.username,
-            now_secs(),
-            account.refresh_token,
-            account.expires_at,
-            account.redirect_uri,
-        ],
+        "INSERT OR IGNORE INTO session_sign_ins (token_hash, provider, created_at)
+         VALUES (?1, ?2, ?3)",
+        params![token_hash, sign_in, now_secs()],
     )?;
     Ok(())
+}
+
+/// A completed sign-in, inside the adapter's transaction ([`Store::transaction`]):
+/// prunes sessions older than `session_ttl_secs` (and their sign-ins), creates
+/// the session `token_hash` if it does not exist, and records `sign_in` on it.
+/// Calling it again for the same session adds the sign-in (one session
+/// collects the sign-ins of every app, D40).
+pub fn open_session_on(
+    tx: &Connection,
+    token_hash: &str,
+    sign_in: &str,
+    session_ttl_secs: i64,
+) -> rusqlite::Result<()> {
+    let now = now_secs();
+    let cutoff = now.saturating_sub(session_ttl_secs);
+    tx.execute(
+        "DELETE FROM session_sign_ins WHERE token_hash IN
+             (SELECT token_hash FROM sessions WHERE created_at <= ?1)",
+        [cutoff],
+    )?;
+    tx.execute("DELETE FROM sessions WHERE created_at <= ?1", [cutoff])?;
+    tx.execute(
+        "INSERT OR IGNORE INTO sessions (token_hash, created_at) VALUES (?1, ?2)",
+        params![token_hash, now],
+    )?;
+    attach_sign_in_on(tx, token_hash, sign_in)
 }
 
 const APP_VERSION_COLS: &str = "app_id, version, created_at, source, note, file_key, hash, schema";
@@ -773,6 +773,13 @@ fn refuse(msg: String) -> rusqlite::Error {
     rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(msg))
 }
 
+/// [`migrate`] for tests of later migrations (an adapter's own test builds
+/// a database at an old version, then opens it).
+#[doc(hidden)]
+pub fn migrate_to(conn: &mut Connection, target: usize) -> rusqlite::Result<()> {
+    migrate(conn, target)
+}
+
 /// Run migrations up to `user_version = target`. Each step runs in an
 /// IMMEDIATE transaction (the write lock is taken up front) that re-reads
 /// `user_version`, so two processes starting on the same database never both
@@ -867,169 +874,98 @@ impl Store {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    // ---------- Pixelfed (v2) ----------
+    /// Run `f` on the connection (an adapter's own queries). Keep it short:
+    /// the store has one connection, behind a lock.
+    pub fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> T) -> T {
+        f(&self.conn())
+    }
 
-    pub fn pixelfed_app(
+    /// Run `f` in one transaction, committed when `f` returns `Ok` (also
+    /// when it decided to write nothing) and rolled back on `Err`. Adapters
+    /// use it to make their own writes and a sign-in ([`open_session_on`])
+    /// atomic.
+    pub fn transaction<T>(
         &self,
-        instance: &str,
-        redirect_uri: &str,
-    ) -> rusqlite::Result<Option<PixelfedApp>> {
-        self.conn()
-            .query_row(
-                "SELECT client_id, client_secret FROM pixelfed_apps
-                 WHERE instance = ?1 AND redirect_uri = ?2",
-                [instance, redirect_uri],
-                |r| {
-                    Ok(PixelfedApp {
-                        client_id: r.get(0)?,
-                        client_secret: r.get(1)?,
-                    })
-                },
-            )
-            .optional()
-    }
-
-    pub fn save_pixelfed_app(
-        &self,
-        instance: &str,
-        redirect_uri: &str,
-        app: &PixelfedApp,
-    ) -> rusqlite::Result<()> {
-        self.conn().execute(
-            "INSERT OR REPLACE INTO pixelfed_apps (instance, redirect_uri, client_id, client_secret)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![instance, redirect_uri, app.client_id, app.client_secret],
-        )?;
-        Ok(())
-    }
-
-    /// Forget a cached app (the upstream no longer knows it).
-    pub fn delete_pixelfed_app(&self, instance: &str, redirect_uri: &str) -> rusqlite::Result<()> {
-        self.conn().execute(
-            "DELETE FROM pixelfed_apps WHERE instance = ?1 AND redirect_uri = ?2",
-            [instance, redirect_uri],
-        )?;
-        Ok(())
-    }
-
-    pub fn pixelfed_account(&self, instance: &str) -> rusqlite::Result<Option<PixelfedAccount>> {
-        self.conn()
-            .query_row(
-                "SELECT access_token, account_id, username, refresh_token, expires_at, redirect_uri
-                 FROM pixelfed_account WHERE instance = ?1",
-                [instance],
-                |r| {
-                    Ok(PixelfedAccount {
-                        access_token: r.get(0)?,
-                        account_id: r.get(1)?,
-                        username: r.get(2)?,
-                        refresh_token: r.get(3)?,
-                        expires_at: r.get(4)?,
-                        redirect_uri: r.get(5)?,
-                    })
-                },
-            )
-            .optional()
-    }
-
-    /// Store (replacing any previous) the upstream account for `instance`.
-    /// Does not touch the pinned owner (token refreshes use this).
-    pub fn save_pixelfed_account(
-        &self,
-        instance: &str,
-        account: &PixelfedAccount,
-    ) -> rusqlite::Result<()> {
-        save_account_on(&self.conn(), instance, account)
-    }
-
-    /// The pinned owner's upstream account id, if anyone has signed in.
-    pub fn pixelfed_owner(&self, instance: &str) -> rusqlite::Result<Option<String>> {
-        self.conn()
-            .query_row(
-                "SELECT account_id FROM pixelfed_owner WHERE instance = ?1",
-                [instance],
-                |r| r.get(0),
-            )
-            .optional()
-    }
-
-    /// Sign-in, atomically: if no owner is pinned (or `replace_owner`),
-    /// `account` becomes the owner; if another account is pinned, nothing
-    /// changes and [`SignIn::NotOwner`] is returned. Otherwise the account is
-    /// stored, the session created, and sessions older than `session_ttl_secs`
-    /// are pruned.
-    pub fn sign_in_pixelfed(
-        &self,
-        instance: &str,
-        account: &PixelfedAccount,
-        token_hash: &str,
-        replace_owner: bool,
-        session_ttl_secs: i64,
-    ) -> rusqlite::Result<SignIn> {
+        f: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<T>,
+    ) -> rusqlite::Result<T> {
         let mut conn = self.conn();
-        let tx = conn.transaction()?;
-        let owner: Option<String> = tx
-            .query_row(
-                "SELECT account_id FROM pixelfed_owner WHERE instance = ?1",
-                [instance],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if let Some(owner) = owner
-            && owner != account.account_id
-            && !replace_owner
-        {
-            return Ok(SignIn::NotOwner { owner });
-        }
-        let now = now_secs();
-        tx.execute(
-            "INSERT INTO pixelfed_owner (instance, account_id, created_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(instance) DO UPDATE SET account_id = excluded.account_id,
-                 created_at = CASE WHEN account_id = excluded.account_id THEN created_at
-                                   ELSE excluded.created_at END",
-            params![instance, account.account_id, now],
-        )?;
-        save_account_on(&tx, instance, account)?;
-        tx.execute(
-            "DELETE FROM sessions WHERE created_at <= ?1",
-            [now.saturating_sub(session_ttl_secs)],
-        )?;
-        tx.execute(
-            "INSERT INTO sessions (token_hash, created_at) VALUES (?1, ?2)",
-            params![token_hash, now],
-        )?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let out = f(&tx)?;
         tx.commit()?;
-        Ok(SignIn::Ok)
+        Ok(out)
     }
 
-    pub fn delete_pixelfed_account(&self, instance: &str) -> rusqlite::Result<()> {
-        self.conn().execute(
-            "DELETE FROM pixelfed_account WHERE instance = ?1",
-            [instance],
-        )?;
+    /// Run an adapter's migrations that have not run yet, each in its own
+    /// IMMEDIATE transaction that also bumps the adapter's row in
+    /// `adapter_migrations` (so two starters never both run a step). Step `i`
+    /// upgrades the adapter from version `i` to `i + 1`.
+    pub fn migrate_adapter(&self, adapter: &str, steps: &[Migration]) -> rusqlite::Result<()> {
+        let mut conn = self.conn();
+        for (i, step) in steps.iter().enumerate() {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let now: i64 = tx
+                .query_row(
+                    "SELECT version FROM adapter_migrations WHERE adapter = ?1",
+                    [adapter],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .unwrap_or(0);
+            if now > i as i64 {
+                continue;
+            }
+            match step {
+                Migration::Sql(sql) => tx.execute_batch(sql)?,
+                Migration::Rust(f) => f(&tx)?,
+            }
+            tx.execute(
+                "INSERT INTO adapter_migrations (adapter, version) VALUES (?1, ?2)
+                 ON CONFLICT(adapter) DO UPDATE SET version = excluded.version",
+                params![adapter, (i + 1) as i64],
+            )?;
+            tx.commit()?;
+        }
         Ok(())
     }
 
-    /// Compare-and-delete: forget the stored account only if it still holds
-    /// `access_token` (a concurrent sign-in or refresh may have replaced it).
-    /// Returns whether a row was deleted.
-    pub fn delete_pixelfed_account_if_token(
-        &self,
-        instance: &str,
-        access_token: &str,
-    ) -> rusqlite::Result<bool> {
-        Ok(self.conn().execute(
-            "DELETE FROM pixelfed_account WHERE instance = ?1 AND access_token = ?2",
-            [instance, access_token],
-        )? > 0)
+    /// An adapter's migration version (0 before its first step).
+    pub fn adapter_version(&self, adapter: &str) -> rusqlite::Result<i64> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT version FROM adapter_migrations WHERE adapter = ?1",
+                [adapter],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(0))
     }
 
+    // ---------- Sessions and sign-ins (v2, v11) ----------
+
+    /// Create a session with no sign-ins (tests and tooling; real sessions
+    /// come from a sign-in, [`open_session_on`]).
     pub fn create_session(&self, token_hash: &str) -> rusqlite::Result<()> {
         self.conn().execute(
             "INSERT INTO sessions (token_hash, created_at) VALUES (?1, ?2)",
             params![token_hash, now_secs()],
         )?;
         Ok(())
+    }
+
+    /// Record that `sign_in` completed on an existing session (tests and
+    /// tooling; see [`open_session_on`]).
+    pub fn attach_sign_in(&self, token_hash: &str, sign_in: &str) -> rusqlite::Result<()> {
+        attach_sign_in_on(&self.conn(), token_hash, sign_in)
+    }
+
+    /// The sign-ins completed on a session, sorted.
+    pub fn session_sign_ins(&self, token_hash: &str) -> rusqlite::Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare_cached(
+            "SELECT provider FROM session_sign_ins WHERE token_hash = ?1 ORDER BY provider",
+        )?;
+        stmt.query_map([token_hash], |r| r.get(0))?.collect()
     }
 
     /// Whether the session exists and is younger than `ttl_secs`.
@@ -1058,30 +994,18 @@ impl Store {
             .is_some())
     }
 
-    /// Returns whether a session was deleted.
+    /// Delete a session and its sign-ins (logout). Returns whether a session
+    /// was deleted.
     pub fn delete_session(&self, token_hash: &str) -> rusqlite::Result<bool> {
-        Ok(self
-            .conn()
-            .execute("DELETE FROM sessions WHERE token_hash = ?1", [token_hash])?
-            > 0)
-    }
-
-    /// Remember proxy keys (idempotent).
-    pub fn save_media_keys<'a>(
-        &self,
-        keys: impl IntoIterator<Item = (&'a String, &'a String)>,
-    ) -> rusqlite::Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        {
-            let mut stmt = tx.prepare_cached(
-                "INSERT OR IGNORE INTO pixelfed_media (key, url) VALUES (?1, ?2)",
-            )?;
-            for (key, url) in keys {
-                stmt.execute([key, url])?;
-            }
-        }
-        tx.commit()
+        tx.execute(
+            "DELETE FROM session_sign_ins WHERE token_hash = ?1",
+            [token_hash],
+        )?;
+        let deleted = tx.execute("DELETE FROM sessions WHERE token_hash = ?1", [token_hash])? > 0;
+        tx.commit()?;
+        Ok(deleted)
     }
 
     // ---------- App versions (v7, layouts as code) ----------
@@ -1199,16 +1123,6 @@ impl Store {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
     }
-
-    pub fn media_url(&self, key: &str) -> rusqlite::Result<Option<String>> {
-        self.conn()
-            .query_row(
-                "SELECT url FROM pixelfed_media WHERE key = ?1",
-                [key],
-                |r| r.get(0),
-            )
-            .optional()
-    }
 }
 
 #[cfg(test)]
@@ -1254,87 +1168,103 @@ mod tests {
         assert_eq!(tables, 0);
     }
 
-    fn account(id: &str, token: &str) -> PixelfedAccount {
-        PixelfedAccount {
-            access_token: token.into(),
-            account_id: id.into(),
-            username: format!("u{id}"),
-            ..Default::default()
-        }
-    }
-
     #[test]
-    fn v4_pins_an_existing_account_as_owner() {
+    fn v11_gives_every_existing_session_the_pixelfed_sign_in() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("server.db");
         {
-            // A v3 database with a stored account.
             let mut conn = Connection::open(&path).unwrap();
-            migrate(&mut conn, 3).unwrap();
-            save_account_on(&conn, "i", &account("7", "t")).unwrap();
+            migrate(&mut conn, 10).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (token_hash, created_at) VALUES ('h', 5)",
+                [],
+            )
+            .unwrap();
         }
         let s = Store::open(&path).unwrap();
-        assert_eq!(s.pixelfed_owner("i").unwrap().as_deref(), Some("7"));
+        assert_eq!(s.session_sign_ins("h").unwrap(), ["pixelfed"]);
+        assert!(s.session_sign_ins("other").unwrap().is_empty());
     }
 
     #[test]
-    fn sign_in_pins_the_first_owner() {
+    fn sessions_collect_sign_ins_and_logout_removes_them() {
         let s = Store::open_in_memory().unwrap();
         let ttl = 86_400;
-        assert_eq!(
-            s.sign_in_pixelfed("i", &account("1", "a"), "h1", false, ttl)
-                .unwrap(),
-            SignIn::Ok
-        );
-        assert_eq!(
-            s.sign_in_pixelfed("i", &account("2", "b"), "h2", false, ttl)
-                .unwrap(),
-            SignIn::NotOwner { owner: "1".into() }
-        );
-        // Nothing changed: account, owner, no session for the rejected sign-in.
-        assert_eq!(s.pixelfed_account("i").unwrap().unwrap().access_token, "a");
-        assert!(!s.session_exists("h2").unwrap());
-        // Same account again; then a forced replacement.
-        assert_eq!(
-            s.sign_in_pixelfed("i", &account("1", "c"), "h3", false, ttl)
-                .unwrap(),
-            SignIn::Ok
-        );
-        assert_eq!(
-            s.sign_in_pixelfed("i", &account("2", "d"), "h4", true, ttl)
-                .unwrap(),
-            SignIn::Ok
-        );
-        assert_eq!(s.pixelfed_owner("i").unwrap().as_deref(), Some("2"));
-        // Owners are per instance.
-        assert_eq!(s.pixelfed_owner("other").unwrap(), None);
+        s.transaction(|tx| open_session_on(tx, "h", "b", ttl))
+            .unwrap();
+        s.transaction(|tx| open_session_on(tx, "h", "a", ttl))
+            .unwrap();
+        // Again: idempotent.
+        s.transaction(|tx| open_session_on(tx, "h", "a", ttl))
+            .unwrap();
+        assert!(s.session_valid("h", ttl).unwrap());
+        assert_eq!(s.session_sign_ins("h").unwrap(), ["a", "b"]);
+        assert!(s.delete_session("h").unwrap());
+        assert!(s.session_sign_ins("h").unwrap().is_empty());
+        assert!(!s.delete_session("h").unwrap());
     }
 
     #[test]
     fn session_ttl_and_pruning() {
         let s = Store::open_in_memory().unwrap();
         s.create_session("old").unwrap();
+        s.attach_sign_in("old", "a").unwrap();
         s.conn()
             .execute("UPDATE sessions SET created_at = created_at - 1000", [])
             .unwrap();
         assert!(s.session_valid("old", 2000).unwrap());
         assert!(!s.session_valid("old", 999).unwrap());
         assert!(!s.session_valid("missing", 2000).unwrap());
-        // A sign-in prunes sessions past the TTL.
-        s.sign_in_pixelfed("i", &account("1", "a"), "new", false, 999)
+        // A sign-in prunes sessions past the TTL, with their sign-ins.
+        s.transaction(|tx| open_session_on(tx, "new", "a", 999))
             .unwrap();
         assert!(!s.session_exists("old").unwrap());
+        assert!(s.session_sign_ins("old").unwrap().is_empty());
         assert!(s.session_valid("new", 999).unwrap());
     }
 
     #[test]
-    fn account_compare_and_delete() {
+    fn a_failed_transaction_writes_nothing() {
         let s = Store::open_in_memory().unwrap();
-        s.save_pixelfed_account("i", &account("1", "new")).unwrap();
-        assert!(!s.delete_pixelfed_account_if_token("i", "old").unwrap());
-        assert!(s.pixelfed_account("i").unwrap().is_some());
-        assert!(s.delete_pixelfed_account_if_token("i", "new").unwrap());
-        assert!(s.pixelfed_account("i").unwrap().is_none());
+        let r: rusqlite::Result<()> = s.transaction(|tx| {
+            open_session_on(tx, "h", "a", 100)?;
+            Err(rusqlite::Error::QueryReturnedNoRows)
+        });
+        assert!(r.is_err());
+        assert!(!s.session_exists("h").unwrap());
+    }
+
+    #[test]
+    fn adapter_migrations_run_once_in_order() {
+        fn add_row(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+            tx.execute("INSERT INTO demo_t (n) VALUES (2)", [])?;
+            Ok(())
+        }
+        static STEPS: &[Migration] = &[
+            Migration::Sql("CREATE TABLE demo_t (n INTEGER NOT NULL);"),
+            Migration::Rust(add_row),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.db");
+        for _ in 0..2 {
+            let s = Store::open(&path).unwrap();
+            s.migrate_adapter("demo", STEPS).unwrap();
+            assert_eq!(s.adapter_version("demo").unwrap(), 2);
+            let rows: i64 = s
+                .with_conn(|c| c.query_row("SELECT COUNT(*) FROM demo_t", [], |r| r.get(0)))
+                .unwrap();
+            assert_eq!(rows, 1, "the Rust step ran once");
+        }
+        // A later build adds a step: only it runs.
+        static MORE: &[Migration] = &[
+            Migration::Sql("CREATE TABLE demo_t (n INTEGER NOT NULL);"),
+            Migration::Rust(add_row),
+            Migration::Sql("ALTER TABLE demo_t ADD COLUMN m INTEGER;"),
+        ];
+        let s = Store::open(&path).unwrap();
+        s.migrate_adapter("demo", MORE).unwrap();
+        assert_eq!(s.adapter_version("demo").unwrap(), 3);
+        assert_eq!(s.adapter_version("other").unwrap(), 0);
     }
 
     fn file(app: &str, n: u32, json: &str, note: &str) -> FileVersion {

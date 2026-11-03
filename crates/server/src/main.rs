@@ -1,4 +1,5 @@
-//! The Construct server binary.
+//! The Construct server binary: the generic pod (`pod-core`) serving the
+//! compile-time adapters (`server::adapters`, D40).
 //!
 //! Environment:
 //! - `CONSTRUCT_ADDR`: listen address (default `127.0.0.1:8080`).
@@ -6,7 +7,8 @@
 //!   created if missing).
 //! - `CONSTRUCT_TEST_HOOKS=1`: enables `POST /v1/test/fault`.
 //! - `CONSTRUCT_SHOW_DEV_APPS=1`: `GET /v1/apps` also lists the dev apps
-//!   (`pixelfed_demo`, `home`).
+//!   (`pixelfed_demo`).
+//! - `CONSTRUCT_SESSION_TTL_DAYS`: pod session lifetime (default 90).
 //! - `PIXELFED_INSTANCE_URL`: Pixelfed instance for pod->upstream calls
 //!   (default `http://127.0.0.1:8081`, the local fake; `http://localhost:8090` for the
 //!   local real Pixelfed, whose web/OAuth routes only answer on Host `localhost`).
@@ -47,7 +49,13 @@ async fn main() -> std::io::Result<()> {
     let dir = data_dir();
     let test_hooks = std::env::var("CONSTRUCT_TEST_HOOKS").is_ok_and(|v| v == "1");
     let show_dev_apps = std::env::var("CONSTRUCT_SHOW_DEV_APPS").is_ok_and(|v| v == "1");
-    let state = match server::AppState::open_dir(&dir) {
+    let pixelfed = server::PixelfedConfig::from_env();
+    tracing::info!(
+        instance = %pixelfed.instance_url,
+        public = %pixelfed.public_url,
+        "Pixelfed adapter configured"
+    );
+    let state = match server::AppState::open_dir(&dir, server::adapters(pixelfed)) {
         Ok(s) => s,
         Err(e) => {
             // E.g. a layout file changed after it was deployed: say which, and stop.
@@ -56,19 +64,13 @@ async fn main() -> std::io::Result<()> {
         }
     }
     .with_test_hooks(test_hooks)
-    .with_pixelfed(server::PixelfedConfig::from_env())
+    .with_session_ttl_secs(server::session::session_ttl_from_env())
     .with_dev_apps(show_dev_apps);
-    let pixelfed = state.pixelfed_config();
-    tracing::info!(
-        instance = %pixelfed.instance_url,
-        public = %pixelfed.public_url,
-        "Pixelfed adapter configured"
-    );
     tracing::info!(db = %dir.join("server.db").display(), "server database opened");
     if test_hooks {
         tracing::warn!("CONSTRUCT_TEST_HOOKS=1: POST /v1/test/fault is enabled");
     }
-    for app in server::layouts::APPS {
+    for app in state.catalog().apps() {
         if let Ok(Some(v)) = state.store().app_latest_meta(app.id) {
             tracing::info!(app = app.id, version = v.version, "serving layout");
         }

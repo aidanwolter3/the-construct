@@ -71,7 +71,7 @@ fn parse(s: &str) -> Value {
 
 /// The newest `pixelfed_demo` layout file with another title.
 fn retitled(title: &str) -> UiNode {
-    let newest = layouts::parse_files(layouts::FILES)
+    let newest = layouts::parse_files(&server::catalog(), &server::layout_files())
         .unwrap()
         .into_iter()
         .rfind(|f| f.app_id == APP)
@@ -83,7 +83,10 @@ fn retitled(title: &str) -> UiNode {
 }
 
 fn latest(pod: &Pod, app: &str) -> i64 {
-    layouts::latest(pod.state.store(), app).unwrap().unwrap().0
+    layouts::latest(pod.state.store(), pod.state.catalog(), app)
+        .unwrap()
+        .unwrap()
+        .0
 }
 
 fn versions(page: &Value) -> Vec<i64> {
@@ -97,7 +100,7 @@ fn versions(page: &Value) -> Vec<i64> {
 
 #[test]
 fn list_apps_shows_the_app_and_dev_apps_on_request() {
-    let p = pod(AppState::in_memory());
+    let p = pod(server::state_in_memory());
     let e = engine(&p.base, "pixelfed_home");
     let apps = parse(&e.list_apps().unwrap());
     let ids: Vec<&str> = apps["apps"]
@@ -112,7 +115,7 @@ fn list_apps_shows_the_app_and_dev_apps_on_request() {
     assert_eq!(app["latest_version"], latest(&p, "pixelfed_home"));
     assert!(app["updated_at"].as_str().unwrap().ends_with('Z'));
 
-    let dev = pod(AppState::in_memory().with_dev_apps(true));
+    let dev = pod(server::state_in_memory().with_dev_apps(true));
     let e = engine(&dev.base, APP);
     let apps = parse(&e.list_apps().unwrap());
     let ids: Vec<&str> = apps["apps"]
@@ -126,7 +129,7 @@ fn list_apps_shows_the_app_and_dev_apps_on_request() {
 
 #[test]
 fn app_versions_pages_newest_first() {
-    let p = pod(AppState::in_memory());
+    let p = pod(server::state_in_memory());
     let first = latest(&p, APP);
     for i in 0..4 {
         layouts::append_version(
@@ -174,7 +177,7 @@ fn app_versions_pages_newest_first() {
 
 #[test]
 fn app_version_returns_the_layout_and_errors_are_sentences() {
-    let p = pod(AppState::in_memory());
+    let p = pod(server::state_in_memory());
     layouts::append_version(p.state.store(), APP, &retitled("Two"), Some("two")).unwrap();
     let n = latest(&p, APP);
     let e = engine(&p.base, APP);
@@ -280,7 +283,7 @@ fn a_server_that_is_not_a_pod_says_so() {
 
 #[test]
 fn snapshot_layout_json_follows_the_pods_version() {
-    let p = pod(AppState::in_memory());
+    let p = pod(server::state_in_memory());
     let e = engine(&p.base, APP);
     let n = latest(&p, APP);
     wait_until("first fetch", || e.snapshot().layout_json != "{}");

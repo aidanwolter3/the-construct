@@ -1,4 +1,4 @@
-# The pod (crates/server) as a small runtime image for Fly.io (deploy/fly/pod.toml).
+# The pod (crates/server: pod-core + the app adapters) as a small runtime image for Fly.io (deploy/fly/pod.toml).
 #
 #   docker build -f deploy/pod.Dockerfile -t construct-pod .     # from the repo root
 #   docker run --rm -p 8080:8080 -v construct-data:/data construct-pod

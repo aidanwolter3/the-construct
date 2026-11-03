@@ -1,0 +1,29 @@
+[package]
+name = "app-pixelfed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The Pixelfed adapter: sign-in, home feed, likes, bookmarks, comments, the
+# media proxy, its `pixelfed_*` tables, and the `pixelfed_demo` fixture app.
+
+[dependencies]
+pod-core = { path = "../pod-core" }
+protocol = { workspace = true }
+serde_json.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+axum = { version = "0.8", features = ["http2"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
+tracing = "0.1"
+# Async upstream client (Pixelfed). rustls only; `stream` for the media proxy.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+sha2 = "0.10"
+base64 = "0.22"
+getrandom = "0.3"
+# `stream::unfold` for the size-capped media proxy body.
+futures-util = { version = "0.3", default-features = false }
+
+[dev-dependencies]
+tempfile = "3"

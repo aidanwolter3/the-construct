@@ -29,7 +29,7 @@ use client_core::{
     StateSnapshot, UrlOpener,
 };
 use serde_json::{Value, json};
-use server::{AppState, PixelfedConfig};
+use server::{AppState, PixelfedConfig, WithPixelfed};
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 
@@ -291,7 +291,7 @@ impl Harness {
         };
 
         let pod_state = Arc::new(
-            AppState::in_memory().with_pixelfed(PixelfedConfig::new(upstream.url(), None)),
+            server::state_in_memory().with_pixelfed(PixelfedConfig::new(upstream.url(), None)),
         );
         let hits: Arc<Mutex<Vec<Hit>>> = Arc::default();
         let log = Arc::clone(&hits);

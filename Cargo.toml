@@ -4,6 +4,8 @@ members = [
     "crates/protocol",
     "crates/client-core",
     "crates/client-ffi",
+    "crates/pod-core",
+    "crates/app-pixelfed",
     "crates/server",
     "crates/fake-pixelfed",
     "crates/e2e",
