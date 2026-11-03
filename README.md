@@ -219,6 +219,7 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 | `PIXELFED_OWNER_ACCOUNT_ID` | unset | The only upstream account id allowed to sign in to the default instance (replaces a pinned owner). Unset, and on every other instance: the first account to sign in is pinned; others get 403 `account_not_owner`. |
 | `PIXELFED_ALLOW_ACCOUNT_CHANGE` | unset | `1`/`true`: on the default and listed instances any account may sign in and replace the stored one (no pinning). Instances typed under `*` always keep their first account. |
 | `CONSTRUCT_SESSION_TTL_DAYS` | `90` | Lifetime of sessions other than pod tokens, in days (1..=36500; other values warn and use 90). Pod tokens don't expire. |
+| `CONSTRUCT_UPLOAD_MAX_BYTES` | `20971520` (20 MB) | Largest file a client may upload to `POST /v1/uploads` (photos for a post, D47); at least 1024. |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
 
 The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PROVIDER`, `CONSTRUCT_LLM_MODEL`,
@@ -964,6 +965,7 @@ entries starting with `#` are comments. An argument cannot contain `;`, and sinc
 | `swipe-left <target>` / `swipe-right <target>` | Touch-swipes the selected node; `swipe-left` on a carousel shows the next page. |
 | `scroll-to <target>` | Scrolls the feed until the selected node is visible (e.g. `scroll-to Kept my distance`). |
 | `type <target> <text>` | Replaces the text of the selected text field with `<text>` (clear, then type), e.g. `type tag:server-custom-url http://127.0.0.1:8080`. The target is `tag:<testTag>`, a single word, or `"quoted text"` (may contain spaces); the text is the rest of the command. |
+| `pick <path> [<path>…]` | Queues files the next photo picker (`core://MediaPicker`'s add tile) returns; relative paths resolve against the working directory, `"quoted paths"` may contain spaces. E.g. `click tag:new-post; pick fixtures/pixelfed/media/carousel-1.png; click tag:media-picker-add:photos; click Share`. In fixture mode a shared post shows "Posting…" until the next `wait` / `idle`. |
 | `offline` / `online` | Fixture mode only: flips the engine's connectivity. |
 | `publish-version <note>` | Fixture mode only: the fake pod publishes a new newest version of the app on screen (its layout with a "What's new: <note>" banner); followers see it at once. |
 | `screen <WxH or preset>` | Restarts the renderer at the new size. Engine state carries over; UI state such as scroll position does not. |

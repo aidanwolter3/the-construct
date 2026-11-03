@@ -126,6 +126,55 @@ fn e2e_suite() {
     wait_upstream(up, &id, (false, false));
     assert_eq!(h.posts_to(BOOKMARK_ENDPOINT), [200, 200]);
 
+    // 5b. Post a photo (fake only: a real account would get a public post). The
+    // placeholder shows at once; the outbox uploads the photo, the pod posts it, and
+    // its data event makes the engine reload: the real post is first in the feed.
+    if !up.is_real() {
+        up.fake().set_media_processing_polls(2);
+        let photo = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/pixelfed/media/carousel-1.png"
+        );
+        let staged = engine.stage_attachment(photo).expect("stage the photo");
+        engine.dispatch(
+            &serde_json::json!({
+                "intent": "action.mutation.create", "query_key": "timeline:home",
+                "position": "start", "entity_uri": "pixelfed://posts/pending-e2e-post-0001",
+                "entity": {"author_name": "You", "caption": "From the e2e suite",
+                           "media_uris": "$attachments.photos", "pending_label": "Posting…"},
+                "attachments": {"photos": [staged.id]},
+                "endpoint": "/v1/pixelfed/posts/create",
+                "payload": {"caption": "From the e2e suite", "media": "$attachments.photos",
+                            "client_id": "e2e-post-0001"},
+                "refresh_workspace": true, "dismiss": true
+            })
+            .to_string(),
+        );
+        assert_eq!(
+            feed(&engine.snapshot())[0],
+            "pixelfed://posts/pending-e2e-post-0001"
+        );
+        wait_flushed(&engine, TIMEOUT);
+        assert_eq!(h.posts_to("/v1/uploads"), [200]);
+        assert_eq!(h.posts_to("/v1/pixelfed/posts/create"), [202]);
+        wait_until("the post on the upstream", TIMEOUT, || {
+            !up.fake().created_ids().is_empty()
+        });
+        let new_id = up.fake().created_ids()[0].clone();
+        wait_until("the real post first in the feed", TIMEOUT, || {
+            feed(&engine.snapshot()).first() == Some(&format!("pixelfed://posts/{new_id}"))
+        });
+        let p = post(&engine.snapshot(), &new_id);
+        assert_eq!(p["caption"], "From the e2e suite");
+        assert_eq!(p["media_uris"].as_array().map(Vec::len), Some(1));
+        assert!(
+            !feed(&engine.snapshot())
+                .iter()
+                .any(|u| u.contains("pending-"))
+        );
+        eprintln!("[e2e] posted {new_id} after {:?}", started.elapsed());
+    }
+
     // 6. Sign out.
     engine.logout();
     wait_until("signed out", TIMEOUT, || {

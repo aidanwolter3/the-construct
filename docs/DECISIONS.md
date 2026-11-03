@@ -1626,12 +1626,13 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   re-encodes to JPEG at most 2048 px on the long side, drops all metadata (GPS), stores the file under
   `<storage>/attachments/` and registers `construct://attachments/<id>` (`url: file://…`). A create's `attachments`
   map names the form lists; `$attachments.<name>` is the local entity URIs in `entity` and the upload ids in
-  `payload`. Engine store v5: `attachments` table, `action_outbox.attachments_json`.
+  `payload`. Engine store v5: `attachments` table; a row's attachment refs and upload ids live in its `create_json`.
 - **Outbox:** before a row's POST, each attachment without an upload id goes to `POST /v1/uploads` (raw body,
   `Idempotency-Key`, 60 s timeout, the usual response classes). Upload ids are saved per attachment, so a retry
   resumes. Files are deleted with their row (accepted, refused, or dropped at sign-out); unused staged files after
   24 h.
-- **Pod:** `uploads` table (core migration) and files in `<pod data>/uploads/`. Signed-in callers only; jpeg, png
+- **Pod:** `uploads` table (core migration v13) holding the bytes too: the pod's own database, so uploads go with
+  the pod and in-memory test pods work. Signed-in callers only; jpeg, png
   and webp, checked by magic bytes; `CONSTRUCT_UPLOAD_MAX_BYTES` (default 20 MB); a cap on unclaimed uploads per
   session; same key and session give the same id. Adapters `get` (same session only), `claim` and `release`;
   unclaimed uploads go after 24 h, released ones at once.

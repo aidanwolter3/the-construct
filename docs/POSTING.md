@@ -58,6 +58,8 @@ Share ── Create ──────▶ temp post at top of feed
 - `action.mutation.create` gains `attachments` (`{"photos": "$form.photos"}`), `position` and `dismiss`. In the
   intent's `entity`, `$attachments.photos` becomes the local entity URIs; in its `payload`, the upload ids (filled in
   at flush time).
+- Store v5 adds the `attachments` table; a create's attachment refs (and their upload ids) live in its
+  `create_json`.
 - The outbox uploads a row's attachments first (`POST /v1/uploads`, raw body, `Idempotency-Key: <attachment id>`),
   remembers each `upload_id` so retries don't upload twice, then POSTs the payload as for any create. Attachment files
   are deleted when the row is.
@@ -65,14 +67,15 @@ Share ── Create ──────▶ temp post at top of feed
 
 ### Pod
 - `POST /v1/uploads` (signed-in callers; jpeg/png/webp checked by magic bytes; `CONSTRUCT_UPLOAD_MAX_BYTES`, default
-  20 MB) stores the file under the pod's data dir and answers `{upload_id}`.
+  20 MB) stores the file in the pod's own database (`uploads`, deleted with the pod) and answers `{upload_id}`.
 - `GET /v1/uploads/{id}` is a public capability URL (like the media proxy), so placeholders can show the photos on any
   device. Uploads nobody claimed are deleted after 24 h; claimed ones when their owner releases them.
 - Adapters use `AppState::uploads()` (`get`, `claim`, `release`, `public_url`) and `AppState::publish_data`.
 - `AppAdapter::resume` runs when a pod opens, so interrupted jobs start again.
 
 ### Pixelfed adapter
-- `POST /v1/pixelfed/posts/create {caption, media, client_id}` checks 1–4 media and the caption length, claims the
+- `POST /v1/pixelfed/posts/create {caption, media, client_id}` checks 1–4 media and the caption length (500,
+  Pixelfed's default), claims the
   uploads, saves a `pixelfed_pending_posts` row (one per `client_id`) and answers 202. A job then:
   1. uploads each photo (`POST /api/v2/media`; `/api/v1/media` when v2 is missing),
   2. waits for processing (`GET /api/v1/media/{id}` until it has a URL),
@@ -80,8 +83,10 @@ Share ── Create ──────▶ temp post at top of feed
   4. releases the uploads and publishes `event: data`.
 - Transient upstream errors retry with backoff; a refusal marks the row failed with a readable message.
 - The home feed lists this session's pending and failed posts first, as `pixelfed://posts/pending-<client_id>` (the
-  URI the client's placeholder already has, so nothing flickers), with `post_state` `posting` or `failed`. A finished
-  post that the timeline doesn't list yet is fetched by id and shown first.
+  URI the client's placeholder already has, so nothing flickers). A placeholder has no `id` (the layout hides the
+  like/comment row with a `Conditional` on `$item.id`), and either `pending_label` ("Posting…") or `failed: true`
+  with `error`. A finished post that the timeline doesn't list yet is fetched by id and shown first; its row is kept
+  10 minutes, so a late retry of the create still answers 202.
 - `POST /v1/pixelfed/posts/pending/retry` and `/discard` (`{client_id}`) back the placeholder's buttons.
 
 ## States of a post

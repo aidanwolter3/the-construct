@@ -405,10 +405,10 @@ fn sync_appends_new_files_once_and_refuses_changes() {
     let (v, layout) = latest(&store, &catalog(), "pixelfed_home")
         .unwrap()
         .unwrap();
-    assert_eq!(v, 3, "0003: the generic feed");
+    assert_eq!(v, 4, "0004: the feed with photo posting");
     assert!(pod_core::validate::unknown_node_types(&layout).is_empty());
     // Each client gets the newest version it can draw.
-    for (schema, version) in [(1, 1), (2, 2), (protocol::SCHEMA_VERSION, 3)] {
+    for (schema, version) in [(1, 1), (2, 2), (7, 3), (protocol::SCHEMA_VERSION, 4)] {
         let served = active_for(&store, &catalog(), "pixelfed_home", schema)
             .unwrap()
             .unwrap();

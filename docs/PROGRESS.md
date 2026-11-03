@@ -464,6 +464,21 @@ from a client (D32, D33).
 - Staging: `CONSTRUCT_TEMP_PODS=1`; existing data moves into an admin pod with `server pods adopt` (README "Pods").
 - Needs a client build and a device check (Android: open a pod with a code, Pixelfed sign-in, sign out, leave).
 
+## Posting photos (D47-D49, docs/POSTING.md)
+
+- Schema 8: `core://MediaPicker`, `TextField.lines`, `action.mutation.create` `attachments` / `position` /
+  `dismiss`, `$form?.<field>`, icons `add_photo` / `add` / `refresh`.
+- Engine: `stage_attachment` (FFI too) re-encodes a picked photo upright as a metadata-free JPEG (at most 2048 px);
+  the outbox uploads a create's photos to `POST /v1/uploads` (once each, resumable) before its POST.
+- Pod: uploads in the pod's database (`GET /v1/uploads/{id}` is a public path), `event: data` per session,
+  `AppAdapter::resume`.
+- Pixelfed: `POST /v1/pixelfed/posts/create` answers 202; a job uploads to Pixelfed (v2 media, v1 fallback), waits
+  for processing and posts (idempotent). The feed shows "Posting…" placeholders, or the refusal with Retry/Discard.
+  The fake takes media and photo posts. Layout `pixelfed_home/0004.json`: a New post screen.
+- Client: picker on desktop (file dialog), Android (photo picker, HEIC converted) and the simulator (`pick`).
+- Needs a device check: the Android photo picker and the macOS file dialog; posting to a real Pixelfed instance
+  (v2 media processing is modelled on Mastodon's API).
+
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
   bookmarks are idempotent upstream, comments are not).
