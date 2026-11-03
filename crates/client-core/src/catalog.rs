@@ -104,7 +104,7 @@ fn error_for(status: u16, body: &str) -> LayoutApiError {
 }
 
 impl Inner {
-    /// One public `GET`; 2xx -> the body.
+    /// One `GET` (with the session, if any); 2xx -> the body.
     fn catalog_get(&self, path: &str) -> Result<String, LayoutApiError> {
         let url = format!("{}{path}", self.base_url);
         let client = reqwest::blocking::Client::builder()
@@ -116,17 +116,18 @@ impl Inner {
                 reason: format!("cannot start the request: {e}"),
             })?;
         // The schema header lets the pod say which versions this build can draw.
-        let sent = client
-            .get(&url)
-            .header(
-                protocol::SCHEMA_HEADER,
-                protocol::SCHEMA_VERSION.to_string(),
-            )
-            .send()
-            .and_then(|r| {
-                let status = r.status().as_u16();
-                r.text().map(|t| (status, t))
-            });
+        let mut req = client.get(&url).header(
+            protocol::SCHEMA_HEADER,
+            protocol::SCHEMA_VERSION.to_string(),
+        );
+        // A pod host (D46) needs the pod token to know whose apps these are.
+        if let Some(t) = self.session_token() {
+            req = req.bearer_auth(t);
+        }
+        let sent = req.send().and_then(|r| {
+            let status = r.status().as_u16();
+            r.text().map(|t| (status, t))
+        });
         let (status, text) = match sent {
             Ok(x) => x,
             Err(e) => {

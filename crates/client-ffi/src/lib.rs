@@ -223,6 +223,12 @@ impl EngineHandle {
         self.inner.logout();
     }
 
+    /// Forget the session on this device only ("Leave this pod", D46): no
+    /// server call; private data purged and the workspace fetched again.
+    pub fn forget_session(&self) {
+        self.inner.forget_session();
+    }
+
     /// Register an observer; it immediately receives the current snapshot.
     pub fn subscribe(&self, observer: Box<dyn StateObserver>) {
         self.inner

@@ -197,8 +197,14 @@ impl Session {
         }
     }
 
+    /// `signed_in` with the account, or `signed_out` for a session with no
+    /// account (a pod token before or after an app sign-in, D46); either way
+    /// `"session": true`, so the UI can offer to leave the pod.
     fn auth_json(&self) -> String {
-        let mut v = json!({ "state": "signed_in" });
+        if self.username.is_none() && self.display_name.is_none() && self.avatar_url.is_none() {
+            return json!({ "state": "signed_out", "session": true }).to_string();
+        }
+        let mut v = json!({ "state": "signed_in", "session": true });
         for (k, f) in [
             ("username", &self.username),
             ("display_name", &self.display_name),
@@ -1384,6 +1390,12 @@ impl ConstructEngine {
     pub fn logout(&self) {
         self.inner.logout();
     }
+
+    /// Forget the session on this device only ("Leave this pod", D46): no
+    /// server call, private data purged, the workspace fetched without it.
+    pub fn forget_session(&self) {
+        self.inner.forget_session();
+    }
 }
 
 impl Inner {
@@ -1416,6 +1428,30 @@ impl Inner {
             self.signal.wake();
         }
         self.notify(snap);
+    }
+
+    /// After a logout whose session the pod kept: hold the token again (no
+    /// account), unless another session arrived meanwhile.
+    fn restore_session(&self, token: String) {
+        let snap = {
+            let mut st = lock(&self.state);
+            if st.session.is_some() {
+                return;
+            }
+            let session = Session {
+                token,
+                username: None,
+                display_name: None,
+                avatar_url: None,
+            };
+            st.auth_json = session.auth_json();
+            st.session = Some(session);
+            st.seq += 1;
+            st.snapshot()
+        };
+        println!("[ConstructEngine] signed out of the app; the pod session stays");
+        self.notify(snap);
+        self.sync_session_store();
     }
 
     fn session_token(&self) -> Option<String> {
@@ -1892,6 +1928,7 @@ impl Inner {
                 app_path,
                 token_path,
             } => self.start_login(instance_url, app_path, token_path),
+            ActionIntent::OpenSession { path, payload } => self.open_session(path, payload),
             ActionIntent::LoadData { path } => {
                 if self.begin_load(&path) {
                     let inner = Arc::clone(self);
@@ -2283,6 +2320,86 @@ impl Inner {
                 .is_some_and(|f| Arc::ptr_eq(f, flow))
     }
 
+    /// `ActionIntent::OpenSession` (D46): POST `payload` to the pod path
+    /// `path` on an auth thread; the answer's `session_token` becomes the
+    /// session (no account yet) and the workspace is fetched again.
+    fn open_session(self: &Arc<Self>, path: String, payload: Value) {
+        let valid = path.starts_with('/')
+            && !path.starts_with("//")
+            && same_origin(&self.base_url, &format!("{}{path}", self.base_url));
+        if !valid {
+            eprintln!("[ConstructEngine] open session {path:?}: not a pod path; ignored");
+            return;
+        }
+        if lock(&self.flow)
+            .as_ref()
+            .is_some_and(|f| f.exchanging.load(Ordering::SeqCst))
+        {
+            println!("[ConstructEngine] open session ignored: a sign-in is being completed");
+            return;
+        }
+        let flow = Arc::new(Flow {
+            cancelled: AtomicBool::new(false),
+            state: auth::random_state(),
+            redirect_tx: None,
+            exchanging: AtomicBool::new(true),
+        });
+        self.replace_flow(Some(Arc::clone(&flow)));
+        self.set_auth_json(pending_auth_json());
+        let url = format!("{}{path}", self.base_url);
+        self.spawn_auth_thread(flow, false, move |weak, flow| {
+            let client = auth_client().map_err(|e| failed(auth::SIGN_IN_FAILED, e))?;
+            let answer = post_auth(&client, &url, None, &payload)?;
+            let Some(token) = json_str(&answer, "session_token") else {
+                return Err(failed(
+                    auth::SIGN_IN_FAILED,
+                    format!("POST {url}: no session_token"),
+                ));
+            };
+            println!("[ConstructEngine] session opened via {path}");
+            let inner = weak.upgrade().ok_or(LoginError::Cancelled)?;
+            inner.complete_sign_in(
+                flow,
+                Session {
+                    token,
+                    username: None,
+                    display_name: None,
+                    avatar_url: None,
+                },
+            )
+        });
+    }
+
+    /// See [`ConstructEngine::forget_session`].
+    fn forget_session(self: &Arc<Self>) {
+        self.replace_flow(None);
+        let snap = {
+            let mut st = lock(&self.state);
+            st.session = None;
+            st.auth_json = SIGNED_OUT_AUTH_JSON.to_string();
+            st.auth_blocked = false;
+            st.purge_private(&self.workspace_id, true);
+            st.seq += 1;
+            st.snapshot()
+        };
+        println!("[ConstructEngine] session forgotten on this device");
+        self.notify(snap);
+        let inner = Arc::clone(self);
+        let spawned = thread::Builder::new()
+            .name("construct-engine-forget".into())
+            .spawn(move || {
+                inner.sync_session_store();
+                inner.drop_stale_pending();
+                if !inner.signal.is_shut_down() {
+                    inner.refresh();
+                }
+            });
+        if let Err(e) = spawned {
+            eprintln!("[ConstructEngine] failed to spawn the forget thread: {e}");
+            self.sync_session_store();
+        }
+    }
+
     /// `ActionIntent::AuthLogin`: go `pending` and run the flow on a
     /// background thread (the dispatching thread never blocks). The pod's
     /// sign-in endpoints come from the intent (`app_path`, `token_path`), so
@@ -2623,15 +2740,21 @@ impl Inner {
                 strong.sync_session_store();
                 strong.drop_stale_pending();
                 drop(strong);
+                let mut kept = None;
                 if let Some(token) = token {
                     match auth_client().and_then(|c| {
                         c.post(&url)
-                            .bearer_auth(token)
+                            .bearer_auth(&token)
                             .send()
                             .map_err(|e| e.to_string())
                     }) {
                         Ok(r) => {
-                            println!("[ConstructEngine] POST {url} -> {}", r.status().as_u16())
+                            println!("[ConstructEngine] POST {url} -> {}", r.status().as_u16());
+                            // A pod token's session stays (D46): keep it.
+                            let body: Value = r.json().unwrap_or(Value::Null);
+                            if body["session_kept"] == true {
+                                kept = Some(token);
+                            }
                         }
                         Err(e) => eprintln!("[ConstructEngine] POST {url} failed (ignored): {e}"),
                     }
@@ -2639,6 +2762,9 @@ impl Inner {
                 if let Some(inner) = weak.upgrade()
                     && !inner.signal.is_shut_down()
                 {
+                    if let Some(token) = kept {
+                        inner.restore_session(token);
+                    }
                     inner.refresh();
                 }
             });
@@ -2745,9 +2871,16 @@ fn failed(message: &str, detail: impl Into<String>) -> LoginError {
 fn post_auth(
     client: &reqwest::blocking::Client,
     url: &str,
+    bearer: Option<&str>,
     body: &Value,
 ) -> Result<Value, LoginError> {
-    let resp = client.post(url).json(body).send().map_err(|e| {
+    let mut req = client.post(url).json(body);
+    // The current session (a pod token, D46) goes along: a pod host routes
+    // the sign-in to its pod, and the pod adds the sign-in to that session.
+    if let Some(t) = bearer {
+        req = req.bearer_auth(t);
+    }
+    let resp = req.send().map_err(|e| {
         failed(
             auth::sign_in_error_message(None, None),
             format!("POST {url}: cannot reach the pod: {e}"),
@@ -2828,9 +2961,11 @@ fn login_flow(
     };
 
     let client = auth_client().map_err(|e| failed(auth::SIGN_IN_FAILED, e))?;
+    let bearer = weak.upgrade().and_then(|i| i.session_token());
     let app = post_auth(
         &client,
         &format!("{base_url}{}", target.app_path),
+        bearer.as_deref(),
         &json!({ "instance_url": instance_url, "redirect_uri": redirect_uri }),
     )?;
     let (Some(client_id), Some(endpoint)) = (
@@ -2996,9 +3131,11 @@ fn finish_sign_in(
         inner.set_auth_json(pending_auth_json());
     }
 
+    let bearer = weak.upgrade().and_then(|i| i.session_token());
     let token = post_auth(
         client,
         &format!("{base_url}{token_path}"),
+        bearer.as_deref(),
         &json!({
             "instance_url": instance_url,
             "code": code,

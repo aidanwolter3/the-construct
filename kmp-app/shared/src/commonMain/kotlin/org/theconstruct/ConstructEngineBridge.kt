@@ -49,6 +49,9 @@ interface ConstructEngineBridge {
     /** Signs out (non-blocking). No-op for fakes without sign-in. */
     fun logout() {}
 
+    /** Forgets the session on this device only ("Leave this pod", D46). No-op for fakes without sign-in. */
+    fun forgetSession() {}
+
     /**
      * Releases the engine (called by [ConstructController.openApp] on the bridge it replaces, and by the platform when
      * the UI goes away for good). Default: nothing to release.

@@ -580,6 +580,22 @@ private fun AccountSection(controller: ConstructController, state: ConstructStat
                 }
             }
         }
+        if (auth.session) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Your pod is open on this device",
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f).padding(vertical = 10.dp),
+                )
+                TextButton(
+                    onClick = {
+                        controller.menu.closeMenu()
+                        controller.leavePod()
+                    },
+                    modifier = Modifier.testTag("menu-leave-pod"),
+                ) { Text("Leave this pod") }
+            }
+        }
     }
 }
 

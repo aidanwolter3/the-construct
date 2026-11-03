@@ -815,6 +815,8 @@ internal open class UniffiVTableCallbackInterfaceUrlOpener(
 
 
 
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -835,6 +837,8 @@ internal interface IntegrityCheckingUniffiLib : Library {
 fun uniffi_client_ffi_checksum_method_enginehandle_app_versions(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_dispatch(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_forget_session(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_handle_auth_redirect(
 ): Short
@@ -931,6 +935,8 @@ fun uniffi_client_ffi_fn_method_enginehandle_app_version(`ptr`: Pointer,`appId`:
 fun uniffi_client_ffi_fn_method_enginehandle_app_versions(`ptr`: Pointer,`appId`: RustBuffer.ByValue,`before`: RustBuffer.ByValue,`limit`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_dispatch(`ptr`: Pointer,`intentJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_client_ffi_fn_method_enginehandle_forget_session(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_handle_auth_redirect(`ptr`: Pointer,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
@@ -1083,6 +1089,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_dispatch() != 57352.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_forget_session() != 37071.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_handle_auth_redirect() != 36756.toShort()) {
@@ -1591,6 +1600,12 @@ public interface EngineHandleInterface {
     fun `dispatch`(`intentJson`: kotlin.String)
     
     /**
+     * Forget the session on this device only ("Leave this pod", D46): no
+     * server call; private data purged and the workspace fetched again.
+     */
+    fun `forgetSession`()
+    
+    /**
      * Deliver an OAuth redirect URL (custom-scheme mode). True if it was
      * taken: by the pending sign-in, or (none in memory, e.g. after a
      * process restart) by a background completion of the persisted one
@@ -1762,6 +1777,21 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_dispatch(
         it, FfiConverterString.lower(`intentJson`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Forget the session on this device only ("Leave this pod", D46): no
+     * server call; private data purged and the workspace fetched again.
+     */override fun `forgetSession`()
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_forget_session(
+        it, _status)
 }
     }
     

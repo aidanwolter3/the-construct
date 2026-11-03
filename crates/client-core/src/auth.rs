@@ -50,6 +50,9 @@ pub const SIGN_IN_POD_UNREACHABLE: &str = "Can't reach your pod.";
 pub const SIGN_IN_DENIED: &str = "Sign-in was cancelled.";
 pub const SIGN_IN_TIMED_OUT: &str = "Sign-in timed out. Please try again.";
 pub const SIGN_IN_FAILED: &str = "Something went wrong. Please try again.";
+pub const POD_CODE_REJECTED: &str = "That pod code didn't work.";
+pub const TOO_MANY_TRIES: &str = "Too many tries. Wait a minute and try again.";
+pub const NO_TEMPORARY_PODS: &str = "No temporary pods right now.";
 
 /// The `auth_json` message for a failed pod auth call: `status` is `None`
 /// when the pod could not be reached, `code` the `error` field of its JSON
@@ -63,6 +66,9 @@ pub fn sign_in_error_message(status: Option<u16>, code: Option<&str>) -> &'stati
         Some("oauth_exchange_failed") => SIGN_IN_REJECTED,
         Some("instance_not_allowed") => SIGN_IN_INSTANCE_NOT_ALLOWED,
         Some("redirect_uri_not_allowed") => SIGN_IN_REDIRECT_NOT_ALLOWED,
+        Some("pod_not_found") => POD_CODE_REJECTED,
+        Some("rate_limited") => TOO_MANY_TRIES,
+        Some("temporary_pods_full" | "temporary_pods_disabled") => NO_TEMPORARY_PODS,
         Some("upstream_unreachable" | "upstream_error") => SIGN_IN_UPSTREAM_DOWN,
         _ if status == 502 || status == 504 => SIGN_IN_UPSTREAM_DOWN,
         _ => SIGN_IN_FAILED,

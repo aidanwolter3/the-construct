@@ -239,10 +239,8 @@ async fn an_app_that_requires_a_sign_in_is_served_only_with_it() {
     assert_eq!(status, StatusCode::OK);
     assert!(!headers.contains_key("x-construct-session"));
     assert_eq!(body["workspace"]["id"], "gated");
-    for bearer in ["stale", "bare"] {
-        let (status, _, _) = get_json(&state, "/v1/workspaces/gated/events", Some(bearer)).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED, "{bearer} events");
-    }
+    let (status, _, _) = get_json(&state, "/v1/workspaces/gated/events", Some("stale")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "stale events");
     // Signed in: the adapter's data under the layout; it saw the session.
     let (status, body, headers) = get_json(&state, "/v1/workspaces/gated", Some("good")).await;
     assert_eq!(status, StatusCode::OK);

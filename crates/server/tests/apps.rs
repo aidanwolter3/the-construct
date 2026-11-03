@@ -739,12 +739,21 @@ async fn sse_auth_matches_the_workspace_get() {
         signed_in.next_event().await,
         layout_msg("pixelfed_home", files("pixelfed_home"))
     );
-    // Stale bearer, or a session without the `pixelfed` sign-in: 401, like
-    // GET /v1/workspaces/pixelfed_home.
-    for bearer in ["stale", "other"] {
-        let resp = client().get(&url).bearer_auth(bearer).send().await.unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "{bearer}");
-    }
+    // A valid session without the `pixelfed` sign-in keeps its session
+    // (D46), like GET /v1/workspaces/pixelfed_home: allowed.
+    let mut other = SseReader::connect(&url, Some("other")).await;
+    assert_eq!(
+        other.next_event().await,
+        layout_msg("pixelfed_home", files("pixelfed_home"))
+    );
+    // A stale bearer: 401, like the workspace GET.
+    let resp = client()
+        .get(&url)
+        .bearer_auth("stale")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     // Unknown workspace: 404; malformed: 400.
     let resp = client()
         .get(format!("{}/v1/workspaces/nope/events", pod.url))

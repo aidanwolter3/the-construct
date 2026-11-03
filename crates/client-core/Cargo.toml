@@ -30,3 +30,5 @@ server = { path = "../server" }
 fake-pixelfed = { path = "../fake-pixelfed" }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
+# tests/pod_host.rs keeps the host's pods in a temporary directory.
+tempfile = "3"

@@ -120,6 +120,10 @@ class FeedTest {
             AuthInfo.parse("""{"state":"pending","message":"Loading your feed…"}"""),
         )
         assertEquals(AuthInfo(), AuthInfo.parse("garbage"))
+        assertEquals(
+            AuthInfo("signed_out", session = true),
+            AuthInfo.parse("""{"state":"signed_out","session":true}"""),
+        )
         assertTrue(AuthInfo.parse("{}").state == "signed_out")
     }
 

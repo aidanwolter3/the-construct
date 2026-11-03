@@ -257,9 +257,21 @@ class ModelTest {
             ActionIntent.Navigate("pixelfed://bookmarks", PresentationMode.Replace),
             ActionIntent.AuthLogin("https://pixelfed.social"),
             ActionIntent.AuthLogin("https://pixelfed.social", "/v1/auth/x/app", "/v1/auth/x/token"),
+            ActionIntent.OpenSession("/v1/pods/open", JsonObject(mapOf("token" to JsonPrimitive("\$form.pod_token")))),
+            ActionIntent.OpenSession("/v1/pods/temporary"),
         )) {
             assertEquals(i, ConstructJson.decodeIntent(ConstructJson.encodeIntent(i)))
         }
+    }
+
+    @Test
+    fun openSessionBindsTheTypedPodCode() {
+        val i = ConstructJson.decodeIntent(
+            """{"intent":"action.auth.session","path":"/v1/pods/open","payload":{"token":"${'$'}form.pod_token"}}""",
+        )
+        val bound = bindForm(i, mapOf("pod_token" to " cpod_abc "), nonce = { "n" }) as ActionIntent.OpenSession
+        assertEquals("cpod_abc", bound.payload.jsonObject["token"]!!.jsonPrimitive.content)
+        assertEquals(null, bindForm(i, emptyMap()), "nothing is sent while the box is empty")
     }
 
     @Test

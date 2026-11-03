@@ -348,6 +348,16 @@ sealed class ActionIntent {
         @SerialName("token_path") val tokenPath: String = "",
     ) : ActionIntent()
 
+    /**
+     * `action.auth.session` (schema 7, D46): the engine POSTs [payload] to the server path [path] and keeps the
+     * answer's `session_token` as its session, e.g. a typed pod code (`/v1/pods/open`) or a temporary pod.
+     */
+    @Serializable
+    data class OpenSession(
+        val path: String,
+        val payload: JsonElement = JsonObject(emptyMap()),
+    ) : ActionIntent()
+
     /** `action.data.load` (D34): the engine loads a pod path (a screen's `data`) and caches its answer. */
     @Serializable
     data class LoadData(val path: String) : ActionIntent()
@@ -491,6 +501,7 @@ object ActionIntentSerializer : TaggedUnionSerializer<ActionIntent>("org.thecons
         Variant("action.navigation.back", ActionIntent.NavigateBack::class, ActionIntent.NavigateBack.serializer()),
         Variant("action.mutation.optimistic", ActionIntent.OptimisticMutate::class, ActionIntent.OptimisticMutate.serializer()),
         Variant("action.auth.login", ActionIntent.AuthLogin::class, ActionIntent.AuthLogin.serializer()),
+        Variant("action.auth.session", ActionIntent.OpenSession::class, ActionIntent.OpenSession.serializer()),
         Variant("action.data.load", ActionIntent.LoadData::class, ActionIntent.LoadData.serializer()),
         Variant("action.mutation.create", ActionIntent.Create::class, ActionIntent.Create.serializer()),
     )
