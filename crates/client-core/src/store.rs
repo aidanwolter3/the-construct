@@ -101,7 +101,7 @@ const MIGRATION_V4: &str = "
 ALTER TABLE action_outbox ADD COLUMN session_bound INTEGER NOT NULL DEFAULT 1;
 ";
 
-/// Schema v5 (D47): staged attachments (files under `<storage>/attachments/`).
+/// Schema v5 (D49): staged attachments (files under `<storage>/attachments/`).
 /// `released_at` is set once the create that carried them was accepted (the
 /// file is kept a little longer, while the placeholder may still show it).
 const MIGRATION_V5: &str = "
@@ -171,10 +171,10 @@ pub struct CreateInfo {
     pub query_key: String,
     #[serde(default)]
     pub refresh_workspace: bool,
-    /// The temporary entity is listed first (`position: start`, schema 8).
+    /// The temporary entity is listed first (`position: start`, schema 9).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub at_start: bool,
-    /// Attachments uploaded before the POST (D47), in payload order.
+    /// Attachments uploaded before the POST (D49), in payload order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<AttachmentRef>,
 }

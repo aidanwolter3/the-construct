@@ -2,7 +2,7 @@
 
 Server-driven UI: a Rust "pod" serves app layouts (JSON `UiNode` trees) plus normalized entities; native clients
 (macOS desktop, Android, headless simulator) render them with shared Compose code and a shared Rust engine.
-Apps today: Pixelfed (`pixelfed_home`) and Recipes (`recipes`). Read `README.md` for details and `docs/DECISIONS.md` (D1–D46) before
+Apps today: Pixelfed (`pixelfed_home`) and Recipes (`recipes`). Read `README.md` for details and `docs/DECISIONS.md` (D1–D47) before
 changing architecture; `docs/PROGRESS.md` has history and next steps. `DESIGN.md` is the original design doc
 (product renamed from "Project Canvas"; AI layout editing was built, then shelved — see D32/D33).
 

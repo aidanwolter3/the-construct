@@ -568,7 +568,7 @@ async fn concurrent_temporary_pods_respect_the_cap() {
     assert_eq!(env.host.store().live_temporary_count().unwrap(), 2);
 }
 
-/// Uploads (D47) pass through the host (a body far over the 16 KB the host
+/// Uploads (D49) pass through the host (a body far over the 16 KB the host
 /// reads itself), stay in their pod, and load without a bearer only from
 /// their pod's public prefix.
 #[tokio::test]

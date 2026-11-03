@@ -1,4 +1,4 @@
-//! Uploads (docs/DECISIONS.md D47, docs/POSTING.md): files a client sends
+//! Uploads (docs/DECISIONS.md D49, docs/POSTING.md): files a client sends
 //! before an action that needs them (photos for a post). The core stores them
 //! and knows nothing about what they are for; an adapter's route receives
 //! their ids, reads them ([`Uploads::get`]), claims them while it works and

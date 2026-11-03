@@ -18,7 +18,7 @@ base64 = "0.22"
 # M7 push channel (events.rs): async reqwest stream read in short slices on a
 # private current-thread runtime, so a dropped engine closes it promptly.
 tokio = { version = "1", features = ["rt", "time", "net"] }
-# Attachments (attachments.rs, D47): decode a picked photo, apply its EXIF
+# Attachments (attachments.rs, D49): decode a picked photo, apply its EXIF
 # rotation, scale it down and re-encode it as a JPEG without metadata.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 

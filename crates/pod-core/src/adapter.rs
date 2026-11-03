@@ -151,7 +151,7 @@ pub trait AppAdapter: Any + Send + Sync {
         req: &'a RequestCtx,
     ) -> BoxFuture<'a, Hydration>;
 
-    /// Background work to pick up when a pod opens (D48), such as jobs a
+    /// Background work to pick up when a pod opens (D50), such as jobs a
     /// restart interrupted. Called once per pod, on the pod's runtime, after
     /// migrations; runs concurrently with requests. Default: nothing.
     fn resume<'a>(&'a self, pod: &'a Pod) -> BoxFuture<'a, ()> {

@@ -92,7 +92,7 @@ pub const LOAD_SIGNED_OUT: &str = "Sign in to see this.";
 pub const LOAD_NOT_FOUND: &str = "This isn't available anymore.";
 /// Timeout for a single outbox POST.
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
-/// Timeout for one attachment upload (`POST /v1/uploads`, D47).
+/// Timeout for one attachment upload (`POST /v1/uploads`, D49).
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 /// Pod path attachments are uploaded to.
 pub const UPLOADS_PATH: &str = "/v1/uploads";
@@ -464,7 +464,7 @@ struct State {
     settling: Vec<(String, String, bool)>,
     /// Queued by the flush of an accepted create.
     followups: Vec<Followup>,
-    /// Staged attachments (D47), by id; each is drawn as the local entity
+    /// Staged attachments (D49), by id; each is drawn as the local entity
     /// `construct://attachments/<id>`.
     attachments: BTreeMap<String, Attachment>,
 }
@@ -1274,7 +1274,7 @@ fn open_store(storage_path: &str) -> (Option<Store>, Arc<Mutex<()>>) {
     }
 }
 
-/// The schema-8 parts of an `action.mutation.create`.
+/// The schema-9 parts of an `action.mutation.create`.
 struct CreateOptions {
     refresh_workspace: bool,
     attachments: BTreeMap<String, Value>,
@@ -1612,7 +1612,7 @@ impl ConstructEngine {
         self.inner.forget_session();
     }
 
-    /// Stage a picked photo for a create's `attachments` (D47): decoded,
+    /// Stage a picked photo for a create's `attachments` (D49): decoded,
     /// turned upright, scaled to at most 2048 px, re-encoded as a JPEG without
     /// metadata and kept under the engine's storage. Its local entity
     /// `construct://attachments/<id>` appears in the snapshot. Blocking (call
@@ -2698,7 +2698,7 @@ impl Inner {
         }
     }
 
-    /// The pod said our data changed (`event: data`, D48): refetch the
+    /// The pod said our data changed (`event: data`, D50): refetch the
     /// workspace, then every data path loaded so far.
     fn reload_all(&self) {
         self.refresh();
@@ -3706,7 +3706,7 @@ fn classify_error(code: u16, resp: reqwest::blocking::Response) -> FlushResult {
     }
 }
 
-/// `POST {base}/v1/uploads` with one staged file (D47). The attachment id is
+/// `POST {base}/v1/uploads` with one staged file (D49). The attachment id is
 /// the idempotency key, so a retried upload gets the same upload id.
 fn upload_file(
     client: &reqwest::blocking::Client,

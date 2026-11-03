@@ -85,15 +85,15 @@ internal object ConstructIcons {
             "C16.07,4.74 14.12,4 12,4c-4.97,0 -9,4.03 -9,9s4.02,9 9,9 9,-4.03 9,-9c0,-2.12 -0.74,-4.07 -1.97,-5.61z" +
             "M12,20c-3.87,0 -7,-3.13 -7,-7s3.13,-7 7,-7 7,3.13 7,7 -3.13,7 -7,7z",
     )
-    /** Material "AddPhotoAlternate" (schema 8 `add_photo`): a new post, the media picker's add tile. */
+    /** Material "AddPhotoAlternate" (schema 9 `add_photo`): a new post, the media picker's add tile. */
     val AddPhoto = icon(
         "AddPhoto",
         "M19,7v2.99s-1.99,0.01 -2,0V7h-3s0.01,-1.99 0,-2h3V2h2v3h3v2h-3z" +
             "M16,11V8h-3V5H5c-1.1,0 -2,0.9 -2,2v12c0,1.1 0.9,2 2,2h12c1.1,0 2,-0.9 2,-2v-8h-3zM5,19l3,-4 2,3 3,-4 4,5H5z",
     )
-    /** Material "Add" (schema 8 `add`). */
+    /** Material "Add" (schema 9 `add`). */
     val Add = icon("Add", "M19,13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z")
-    /** Material "Refresh" (schema 8 `refresh`): e.g. a failed post's Retry. */
+    /** Material "Refresh" (schema 9 `refresh`): e.g. a failed post's Retry. */
     val Refresh = icon(
         "Refresh",
         "M17.65,6.35C16.2,4.9 14.21,4 12,4c-4.42,0 -7.99,3.58 -7.99,8s3.57,8 7.99,8c3.73,0 6.84,-2.55 7.73,-6h-2.08" +

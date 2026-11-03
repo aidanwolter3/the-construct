@@ -265,7 +265,7 @@ impl EngineHandle {
         self.inner.refresh();
     }
 
-    /// Stage a picked photo (D47): blocking (call off the UI thread). Returns
+    /// Stage a picked photo (D49): blocking (call off the UI thread). Returns
     /// JSON `{"id", "uri", "url", "width", "height"}`; the attachment's local
     /// entity (`uri`) is in the next snapshots.
     pub fn stage_attachment(&self, path: String) -> Result<String, AttachmentError> {

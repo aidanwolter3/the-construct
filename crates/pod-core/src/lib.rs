@@ -87,9 +87,9 @@ pub struct AppState {
     show_dev_apps: bool,
     /// New app versions, fanned out to SSE subscribers.
     layout_tx: tokio::sync::broadcast::Sender<layouts::LayoutEvent>,
-    /// "Your data changed" (D48), fanned out to that session's subscribers.
+    /// "Your data changed" (D50), fanned out to that session's subscribers.
     data_tx: tokio::sync::broadcast::Sender<layouts::DataEvent>,
-    /// Largest upload (`CONSTRUCT_UPLOAD_MAX_BYTES`, D47).
+    /// Largest upload (`CONSTRUCT_UPLOAD_MAX_BYTES`, D49).
     upload_max_bytes: usize,
     /// Set once the adapters' [`AppAdapter::resume`] and the upload sweeper
     /// have been started for this pod.
@@ -196,19 +196,19 @@ impl AppState {
         self.sse_keepalive
     }
 
-    /// Largest upload accepted (`CONSTRUCT_UPLOAD_MAX_BYTES`, D47).
+    /// Largest upload accepted (`CONSTRUCT_UPLOAD_MAX_BYTES`, D49).
     pub fn with_upload_max_bytes(mut self, max: usize) -> Self {
         self.upload_max_bytes = max;
         self
     }
 
-    /// The pod's uploads (D47), for adapters.
+    /// The pod's uploads (D49), for adapters.
     pub fn uploads<'a>(self: &'a Pod) -> uploads::Uploads<'a> {
         uploads::Uploads { pod: self }
     }
 
     /// Tell `session`'s clients of `workspace_id` that its data changed
-    /// (`event: data`, D48): they reload. No-op without subscribers.
+    /// (`event: data`, D50): they reload. No-op without subscribers.
     pub fn publish_data(&self, workspace_id: &str, session: &Session) {
         let _ = self.data_tx.send(layouts::DataEvent {
             workspace_id: workspace_id.to_owned(),

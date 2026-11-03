@@ -144,7 +144,7 @@ const MIGRATIONS: &[Migration] = &[
          value TEXT NOT NULL
      );",
     ),
-    // v13 (D47): uploads. Files a session sends before an action that needs
+    // v13 (D49): uploads. Files a session sends before an action that needs
     // them; `owner` is the adapter's claim (kept until it releases them).
     Migration::Sql(
         "CREATE TABLE uploads (

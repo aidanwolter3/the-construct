@@ -15,6 +15,8 @@
 //!   created_at (unix s), url, and `reblogged_by_uri` / `reblogged_by_name` when the
 //!   timeline entry was a reblog (the post is the INNER status, so actions target the
 //!   inner id). The author fields are copies, so layouts bind them on the post (D36).
+//!   `cover_url` / `cover_blurhash` (the first media's preview, else its image) and
+//!   `media_count` are copies too, for the cards view (D48).
 //! - `pixelfed://users/<id>`: id, username (acct), display_name, avatar_url.
 //! - `pixelfed://media/<id>`: id, type, url, preview_url, aspect_ratio, alt_text, blurhash.
 //!
@@ -551,6 +553,21 @@ pub fn normalize_post(
         author.get("avatar_url").cloned().unwrap_or(Value::Null),
     );
     post.set("author_uri", author_uri);
+    // The first media, for the cards view (D48).
+    let first = media_uris.first().map(|uri| &entities[uri]);
+    let cover = first.and_then(|m| {
+        ["preview_url", "url"]
+            .into_iter()
+            .find_map(|k| m.get(k).filter(|v| v.is_string()).cloned())
+    });
+    post.set("cover_url", cover.unwrap_or(Value::Null));
+    post.set(
+        "cover_blurhash",
+        first
+            .and_then(|m| m.get("blurhash").cloned())
+            .unwrap_or(Value::Null),
+    );
+    post.set("media_count", media_uris.len());
     post.set("media_uris", media_uris);
     post.set("caption", caption);
     post.set("content_warning", json!(content_warning));
@@ -578,6 +595,33 @@ pub const COMMENT_PREFIX: &str = "pixelfed://comments/";
 
 pub fn comment_uri(id: &str) -> String {
     format!("{COMMENT_PREFIX}{id}")
+}
+
+/// The query key of the post screen (D48): the one post.
+pub fn post_query(post_id: &str) -> String {
+    format!("post:{post_id}")
+}
+
+/// The post screen's data (D48) from a `GET /api/v1/statuses/<id>` response:
+/// the post (the inner one of a reblog) with its author and media, and
+/// `queries["post:<id>"]` listing it. `None` when it is not a status.
+pub fn normalize_post_screen(
+    id: &str,
+    raw: &Value,
+    media: &mut MediaUrls,
+) -> Option<protocol::DataBundle> {
+    let status = Status::deserialize(raw)
+        .inspect_err(|e| tracing::warn!(error = %e, %id, "unparseable Pixelfed status"))
+        .ok()?;
+    let target = status.target();
+    let mut entities = BTreeMap::new();
+    let post = normalize_post(target, media, &mut entities);
+    let uri = post_uri(&target.id);
+    entities.insert(uri.clone(), post);
+    Some(protocol::DataBundle {
+        entities,
+        queries: BTreeMap::from([(post_query(id), vec![uri])]),
+    })
 }
 
 /// The query key of a post's comments (the comments screen lists it).
@@ -735,6 +779,98 @@ pub fn normalize_comments(
         );
     }
     out
+}
+
+/// Most extra `context` calls one comments screen makes for replies to comments.
+pub const MAX_REPLY_FETCHES: usize = 50;
+
+/// Extra `context` calls in flight at once.
+const REPLY_FETCH_CONCURRENCY: usize = 6;
+
+/// A status id as text (Pixelfed sends strings, some servers numbers).
+fn raw_status_id(raw: &Value) -> Option<String> {
+    match &raw["id"] {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+/// The comments in `descendants` that report more replies than `descendants` holds and
+/// were not `asked` for yet.
+fn comments_missing_replies(descendants: &[Value], asked: &HashSet<String>) -> Vec<String> {
+    let parsed: Vec<Status> = descendants
+        .iter()
+        .filter_map(|raw| Status::deserialize(raw).ok())
+        .collect();
+    let mut present: BTreeMap<&str, i64> = BTreeMap::new();
+    for s in &parsed {
+        if let Some(p) = s.in_reply_to_id.as_deref() {
+            *present.entry(p).or_default() += 1;
+        }
+    }
+    parsed
+        .iter()
+        .filter(|s| {
+            let want = s.replies_count.or(s.reply_count).unwrap_or(0);
+            want > present.get(s.id.as_str()).copied().unwrap_or(0) && !asked.contains(&s.id)
+        })
+        .map(|s| s.id.clone())
+        .collect()
+}
+
+/// `context` (the post's `GET /api/v1/statuses/{id}/context`) with the replies to its
+/// comments added to `descendants`. Pixelfed's `context` lists only the direct replies, so
+/// each comment that reports more replies than are present is asked for its own `context`
+/// with `fetch` (`None`: that call failed; its replies stay missing), level by level, at
+/// most [`MAX_REPLY_FETCHES`] calls. A Mastodon-style whole thread needs no extra call.
+pub async fn complete_comment_thread<F, Fut>(post_id: &str, mut context: Value, fetch: F) -> Value
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Option<Value>>,
+{
+    let Some(obj) = context.as_object_mut() else {
+        return context;
+    };
+    let mut all = match obj.remove("descendants") {
+        Some(Value::Array(items)) => items,
+        _ => Vec::new(),
+    };
+    let mut known: HashSet<String> = all.iter().filter_map(raw_status_id).collect();
+    let mut asked = HashSet::from([post_id.to_owned()]);
+    let mut budget = MAX_REPLY_FETCHES;
+    loop {
+        let mut wanted = comments_missing_replies(&all, &asked);
+        if wanted.is_empty() {
+            break;
+        }
+        if budget == 0 {
+            tracing::info!(post_id, skipped = wanted.len(), "comment thread cut short");
+            break;
+        }
+        wanted.truncate(budget);
+        budget -= wanted.len();
+        asked.extend(wanted.iter().cloned());
+        for chunk in wanted.chunks(REPLY_FETCH_CONCURRENCY) {
+            let replies =
+                futures_util::future::join_all(chunk.iter().map(|id| fetch(id.clone()))).await;
+            for mut reply_context in replies.into_iter().flatten() {
+                let Some(Value::Array(items)) = reply_context
+                    .as_object_mut()
+                    .and_then(|o| o.remove("descendants"))
+                else {
+                    continue;
+                };
+                for s in items {
+                    if raw_status_id(&s).is_some_and(|id| known.insert(id)) {
+                        all.push(s);
+                    }
+                }
+            }
+        }
+    }
+    obj.insert("descendants".to_owned(), Value::Array(all));
+    context
 }
 
 /// "CW: " + the warning, unless the author already wrote a "CW" word.
@@ -1492,7 +1628,72 @@ mod tests {
 
 #[cfg(test)]
 mod comment_tests {
-    use super::relative_time;
+    use super::{MAX_REPLY_FETCHES, complete_comment_thread, relative_time};
+    use serde_json::{Value, json};
+    use std::sync::Mutex;
+
+    fn reply(id: &str, parent: &str, replies: i64) -> Value {
+        json!({ "id": id, "in_reply_to_id": parent, "replies_count": replies,
+                "account": { "id": "1", "username": "a" } })
+    }
+
+    fn ids(context: &Value) -> Vec<&str> {
+        context["descendants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn thread_asks_each_comment_with_missing_replies() {
+        // Pixelfed: one level per call. "c" reports a reply that is gone (stale count),
+        // "d" fails; neither is asked twice.
+        let asked = Mutex::new(Vec::new());
+        let root = json!({ "ancestors": [], "descendants": [
+            reply("a", "p", 1), reply("c", "p", 1), reply("d", "p", 2) ] });
+        let done = complete_comment_thread("p", root, |id| {
+            asked.lock().unwrap().push(id.clone());
+            async move {
+                match id.as_str() {
+                    "a" => Some(json!({ "descendants": [reply("b", "a", 1)] })),
+                    "b" => Some(json!({ "descendants": [reply("e", "b", 0)] })),
+                    "c" => Some(json!({ "descendants": [] })),
+                    _ => None,
+                }
+            }
+        })
+        .await;
+        assert_eq!(ids(&done), ["a", "c", "d", "b", "e"]);
+        assert_eq!(done["ancestors"], json!([]));
+        assert_eq!(*asked.lock().unwrap(), ["a", "c", "d", "b"]);
+    }
+
+    #[tokio::test]
+    async fn a_whole_thread_needs_no_more_calls_and_calls_are_capped() {
+        let whole = json!({ "descendants": [reply("a", "p", 1), reply("b", "a", 0)] });
+        let done =
+            complete_comment_thread("p", whole.clone(), |_| async { panic!("no call expected") })
+                .await;
+        assert_eq!(done, whole);
+
+        // An endless chain stops after MAX_REPLY_FETCHES calls.
+        let calls = Mutex::new(0);
+        let chain = json!({ "descendants": [reply("0", "p", 1)] });
+        let done = complete_comment_thread("p", chain, |id| {
+            *calls.lock().unwrap() += 1;
+            let next = (id.parse::<usize>().unwrap() + 1).to_string();
+            async move { Some(json!({ "descendants": [reply(&next, &id, 1)] })) }
+        })
+        .await;
+        assert_eq!(*calls.lock().unwrap(), MAX_REPLY_FETCHES);
+        assert_eq!(ids(&done).len(), MAX_REPLY_FETCHES + 1);
+
+        // Not an object: unchanged.
+        let odd = complete_comment_thread("p", json!([1]), |_| async { None }).await;
+        assert_eq!(odd, json!([1]));
+    }
 
     #[test]
     fn relative_time_labels() {

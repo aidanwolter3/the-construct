@@ -379,7 +379,7 @@ impl Inner {
     /// Blocking (the refetch); called on the events thread.
     fn on_push_event(&self, ev: &SseEvent) {
         if ev.event == "data" {
-            // D48: the pod's data changed (e.g. a post finished): reload the
+            // D50: the pod's data changed (e.g. a post finished): reload the
             // workspace and every loaded data path.
             let ws = serde_json::from_str::<Value>(&ev.data)
                 .ok()

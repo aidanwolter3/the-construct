@@ -52,6 +52,9 @@ const REQUEST_LOG_CAP: usize = 500;
 /// Longest comment accepted (Pixelfed's default caption / comment limit).
 pub const MAX_STATUS_CHARS: usize = 500;
 
+/// Most replies `GET /api/v1/statuses/:id/context` lists (Pixelfed's limit).
+pub const CONTEXT_REPLY_LIMIT: usize = 100;
+
 /// Idempotency keys remembered for `POST /api/v1/statuses` (oldest dropped first).
 const IDEMPOTENCY_CAP: usize = 1000;
 /// Most media attachments on one post (Pixelfed's default album size).
@@ -355,6 +358,24 @@ impl Inner {
         chain
     }
 
+    /// Pixelfed's `context`: the direct parent only, and the direct replies only (oldest
+    /// first, at most [`CONTEXT_REPLY_LIMIT`]), and none at all while `replies_count` is 0.
+    fn pixelfed_context(&self, id: &str) -> (Vec<String>, Vec<String>) {
+        let Some(status) = self.statuses.get(id) else {
+            return (Vec::new(), Vec::new());
+        };
+        let parent = status["in_reply_to_id"]
+            .as_str()
+            .filter(|p| self.statuses.contains_key(*p))
+            .map(str::to_owned);
+        let mut replies = Vec::new();
+        if status["replies_count"].as_i64().unwrap_or(0) > 0 {
+            replies = self.reply_ids(id);
+            replies.truncate(CONTEXT_REPLY_LIMIT);
+        }
+        (parent.into_iter().collect(), replies)
+    }
+
     /// Every reply below `id`, depth first, siblings oldest first (Mastodon `descendants`).
     fn descendants(&self, id: &str) -> Vec<String> {
         let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
@@ -415,6 +436,7 @@ pub struct AppState {
     seed_token: Option<String>,
     pristine: Content,
     admin: bool,
+    mastodon_threads: bool,
 }
 
 impl AppState {
@@ -554,6 +576,7 @@ impl AppState {
             seed_token,
             pristine: content,
             admin: true,
+            mastodon_threads: false,
         };
         state.reset(false);
         Ok(state)
@@ -569,6 +592,14 @@ impl AppState {
 
     pub fn admin_enabled(&self) -> bool {
         self.admin
+    }
+
+    /// Answer `GET /api/v1/statuses/:id/context` like Mastodon (the whole parent chain and
+    /// every reply below, depth first) instead of like Pixelfed (the parent and the direct
+    /// replies only; the default). `FAKE_PIXELFED_THREADS=mastodon` in the binary.
+    pub fn with_mastodon_threads(mut self, enabled: bool) -> Self {
+        self.mastodon_threads = enabled;
+        self
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -1735,8 +1766,10 @@ async fn get_status(
     }
 }
 
-/// `GET /api/v1/statuses/:id/context`: the thread around a status. On a reblog, the
-/// reblogged status's thread.
+/// `GET /api/v1/statuses/:id/context`: the thread around a status. Like Pixelfed, only one
+/// level each way (the parent; the direct replies), so a client must ask again for the
+/// replies to a reply; Mastodon's whole thread with [`AppState::with_mastodon_threads`]. On
+/// a reblog, the reblogged status's thread.
 async fn status_context(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1752,11 +1785,16 @@ async fn status_context(
     let Some(target) = inner.target_id(&id) else {
         return not_found();
     };
+    let (ancestors, descendants) = if state.mastodon_threads {
+        (inner.ancestors(&target), inner.descendants(&target))
+    } else {
+        inner.pixelfed_context(&target)
+    };
     let render =
         |ids: Vec<String>| -> Vec<Value> { ids.iter().filter_map(|id| inner.render(id)).collect() };
     Json(json!({
-        "ancestors": render(inner.ancestors(&target)),
-        "descendants": render(inner.descendants(&target)),
+        "ancestors": render(ancestors),
+        "descendants": render(descendants),
     }))
     .into_response()
 }

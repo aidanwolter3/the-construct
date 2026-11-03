@@ -444,6 +444,13 @@ from a client (D32, D33).
 - Needs a client build: Android device check on the developer's Mac.
 - **Not yet:** photos, ingredient tick boxes, a grid list.
 
+## Replies to comments (D47)
+
+- Replies to comments now show on real Pixelfed: its `context` lists only direct replies, so the pod also asks each
+  comment with replies for its own (capped, concurrent; a failure only loses that branch).
+- The fake Pixelfed answers `context` like Pixelfed (one level each way); `FAKE_PIXELFED_THREADS=mastodon` keeps the
+  whole-thread answer. Tests cover both, the call count, a reply to a reply and a failed branch.
+
 ## Sign in to any Pixelfed instance (D45)
 
 - The signed-out Pixelfed screen has a server box when `PIXELFED_ALLOWED_INSTANCES` is set; staging sets `*`, so
@@ -464,9 +471,18 @@ from a client (D32, D33).
 - Staging: `CONSTRUCT_TEMP_PODS=1`; existing data moves into an admin pod with `server pods adopt` (README "Pods").
 - Needs a client build and a device check (Android: open a pod with a code, Pixelfed sign-in, sign out, leave).
 
-## Posting photos (D47-D49, docs/POSTING.md)
+## Pixelfed cards view (D48)
 
-- Schema 8: `core://MediaPicker`, `TextField.lines`, `action.mutation.create` `attachments` / `position` /
+- Schema 8: `core://List` `columns`, `spacing_dp`, `padding_h_dp` (a grid); `core://Conditional` on `$form.<field>`
+  and with `equals`.
+- `layouts/pixelfed_home/0004.json`: a List/Cards switch over the feed; two-column cards (cover, author, like count) open a
+  new post screen (`pixelfed://posts/{id}`, `GET /v1/pixelfed/screens/post?id=`). Posts carry `cover_url`,
+  `cover_blurhash` and `media_count`. Schema-7 apps keep `0003`.
+- Needs a client build and a device check (Android: switch to Cards, tap a card, like on the post screen, back).
+
+## Posting photos (D49-D51, docs/POSTING.md)
+
+- Schema 9: `core://MediaPicker`, `TextField.lines`, `action.mutation.create` `attachments` / `position` /
   `dismiss`, `$form?.<field>`, icons `add_photo` / `add` / `refresh`.
 - Engine: `stage_attachment` (FFI too) re-encodes a picked photo upright as a metadata-free JPEG (at most 2048 px);
   the outbox uploads a create's photos to `POST /v1/uploads` (once each, resumable) before its POST.

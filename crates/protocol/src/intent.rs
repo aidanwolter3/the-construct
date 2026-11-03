@@ -71,7 +71,7 @@ pub enum ActionIntent {
     /// then every loaded path that produced `query_key` is reloaded (and the
     /// workspace too with `refresh_workspace`). A 4xx removes it again.
     ///
-    /// Schema 8 (D47, D49): `attachments` maps a name to a form-bound list of
+    /// Schema 9 (D49, D51): `attachments` maps a name to a form-bound list of
     /// staged attachment ids (`{"photos": "$form.photos"}`). The engine
     /// uploads them before the POST; `"$attachments.<name>"` is then the
     /// local attachment entity URIs inside `entity` and the upload ids inside
@@ -119,7 +119,7 @@ pub enum PresentationMode {
     Replace,
 }
 
-/// Where `action.mutation.create` puts its new entity in the list (schema 8).
+/// Where `action.mutation.create` puts its new entity in the list (schema 9).
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Position {

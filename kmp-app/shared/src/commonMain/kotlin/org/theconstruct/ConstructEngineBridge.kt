@@ -75,7 +75,7 @@ interface ConstructEngineBridge {
     /** `GET /v1/apps/{appId}/versions/{version}`: the version's metadata plus its full `layout` (a workspace [UiNode]). */
     fun appVersion(appId: String, version: Long): String = throw appsUnavailable()
 
-    // Attachments (schema 8, D47): photos picked by `core://MediaPicker`.
+    // Attachments (schema 9, D49): photos picked by `core://MediaPicker`.
 
     /**
      * Stages the image file at [path] for a later create's `attachments` (BLOCKING: decodes, scales and re-encodes it;

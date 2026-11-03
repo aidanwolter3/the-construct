@@ -56,7 +56,7 @@ import javax.imageio.ImageIO
  * one, set to "just now") and the client reloads those paths; otherwise it is rejected and removed. A create with
  * `position: start` is listed first while pending.
  *
- * Attachments (schema 8, D47): [stageAttachment] accepts any image file ImageIO can read and lists its local entity
+ * Attachments (schema 9, D49): [stageAttachment] accepts any image file ImageIO can read and lists its local entity
  * `construct://attachments/sim-<n>` (`url` = the file itself). A create with `attachments` (a new post) replaces
  * `"$attachments.<name>"` in its entity with those entity URIs and stays a pending placeholder (as the layout drew it,
  * e.g. its `pending_label` "Posting…") until [settle] (the simulator's `wait` / `idle` steps) while online; it then
@@ -215,7 +215,7 @@ class FakeEngineBridge(
     }
 
     /**
-     * Stages [path] like the engine (D47), without re-encoding: any image ImageIO reads is accepted; its local entity
+     * Stages [path] like the engine (D49), without re-encoding: any image ImageIO reads is accepted; its local entity
      * points at the file itself.
      */
     override fun stageAttachment(path: String): Result<AttachmentInfo> {

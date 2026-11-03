@@ -91,7 +91,7 @@ class ConstructController(
     /** The hamburger menu's state: kept here so an open drawer or version picker survives rotation. */
     val menu: MenuState = MenuState(this)
 
-    /** Photos staged by `core://MediaPicker` that no create has taken yet (D47). */
+    /** Photos staged by `core://MediaPicker` that no create has taken yet (D49). */
     val attachments: Attachments = Attachments({ this.bridge })
 
     /** The back stack of screens and their form values (D34). */
@@ -159,7 +159,7 @@ class ConstructController(
      * Binds the visible form's `$form.<field>` values and a fresh `$nonce` into [intent] (nothing is sent when a
      * referenced field is blank), opens or closes screens for navigation intents that match the layout's screens
      * (DECISIONS D34), and sends everything else to the engine. A create hands its attachments to the engine and, with
-     * `dismiss` (schema 8), closes the screen it was sent from (clearing its form).
+     * `dismiss` (schema 9), closes the screen it was sent from (clearing its form).
      */
     fun dispatch(intent: ActionIntent) {
         val bound = bindForm(intent, navigation.activeForm()) ?: return

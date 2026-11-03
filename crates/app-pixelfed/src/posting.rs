@@ -1,4 +1,4 @@
-//! Posting photos (docs/POSTING.md, D47/D48): the client's outbox uploads the
+//! Posting photos (docs/POSTING.md, D49/D50): the client's outbox uploads the
 //! photos to the pod (`/v1/uploads`), then posts
 //! `POST /v1/pixelfed/posts/create {caption, media: [upload ids], client_id}`.
 //! The pod answers 202 at once and a job does the rest:

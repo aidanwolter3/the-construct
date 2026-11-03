@@ -340,7 +340,7 @@ private val PickerTileBorder = Color(0xFFD8D8DE)
 private val PickerTileSize = 80.dp
 
 /**
- * `core://MediaPicker` (schema 8, D47/D49): the picked photos as square thumbnails (from each attachment's local
+ * `core://MediaPicker` (schema 9, D49/D51): the picked photos as square thumbnails (from each attachment's local
  * entity) with a remove button, and an add tile while fewer than `max_items` are picked. The form value is a JSON
  * array of staged attachment ids ([parseFormList]). Picking and staging run off the UI thread; a staging failure
  * shows its reason under the tiles. Tags: `media-picker:<field>`, `media-picker-add:<field>`,

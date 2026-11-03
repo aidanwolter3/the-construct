@@ -1,4 +1,4 @@
-//! Attachments (docs/DECISIONS.md D47): staging a photo, a create that carries
+//! Attachments (docs/DECISIONS.md D49): staging a photo, a create that carries
 //! it, the outbox uploading it before the POST (once, even across retries),
 //! and its files being cleaned up. Against a small mock pod.
 

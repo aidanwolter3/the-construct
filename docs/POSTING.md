@@ -1,7 +1,7 @@
 # Posting photos
 
 How a user posts photos with a caption to Pixelfed, and why the client, the engine and `pod-core` stay generic while
-doing it. Decisions: D47 (attachments and uploads), D48 (server-side pending creates and data events), D49 (schema 8
+doing it. Decisions: D49 (attachments and uploads), D50 (server-side pending creates and data events), D51 (schema 9
 vocabulary).
 
 ## What the user sees

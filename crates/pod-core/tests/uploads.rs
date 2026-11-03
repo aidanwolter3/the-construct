@@ -1,4 +1,4 @@
-//! Uploads (D47), `event: data` (D48) and the adapters' `resume` hook, with
+//! Uploads (D49), `event: data` (D50) and the adapters' `resume` hook, with
 //! test adapters only.
 
 use std::sync::Arc;

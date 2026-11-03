@@ -20,8 +20,10 @@ pub const MAX_PADDING_DP: u16 = 64;
 pub const MAX_SIZE_DP: u16 = 512;
 /// Most options in one `core://ChoiceChips`.
 pub const MAX_CHOICES: usize = 50;
+/// Most columns of a `core://List` grid.
+pub const MAX_COLUMNS: u16 = 6;
 /// Most items a `core://MediaPicker` may hold, and most lines of a
-/// multi-line `core://TextField` (schema 8, D49).
+/// multi-line `core://TextField` (schema 9, D51).
 pub const MAX_MEDIA_ITEMS: u32 = 10;
 pub const MAX_TEXT_LINES: u32 = 12;
 
@@ -212,8 +214,16 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             filter,
             group_by,
             where_,
+            columns,
+            spacing_dp,
+            padding_h_dp,
             ..
         } => {
+            if *columns > MAX_COLUMNS {
+                return Err(format!("list columns {columns} (max {MAX_COLUMNS})"));
+            }
+            check_dp("list spacing_dp", *spacing_dp, MAX_PADDING_DP)?;
+            check_dp("list padding_h_dp", *padding_h_dp, MAX_PADDING_DP)?;
             if let Some(i) = indent
                 && (i.step_dp > MAX_PADDING_DP || i.max.unwrap_or(4) > 8)
             {
@@ -360,7 +370,7 @@ fn check_values(node: &UiNode) -> Result<(), String> {
     }
 }
 
-/// A create's `attachments` (schema 8, D47): each name `[a-z_]+` maps to a
+/// A create's `attachments` (schema 9, D49): each name `[a-z_]+` maps to a
 /// `$form.<field>` binding, and every `$attachments.<name>` the intent uses is
 /// one of them.
 fn check_attachments(intent: &ActionIntent) -> Result<(), String> {
@@ -555,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_8_nodes_and_attachments_are_checked() {
+    fn schema_9_nodes_and_attachments_are_checked() {
         let picker =
             |n: u32| node(json!({"type": "core://MediaPicker", "field": "p", "max_items": n}));
         assert_eq!(check_values(&picker(4)), Ok(()));
@@ -588,6 +598,19 @@ mod tests {
                 check_attachments(&create(a.clone(), p.clone())).is_err(),
                 "{a} {p}"
             );
+        }
+    }
+
+    #[test]
+    fn list_grids_are_checked() {
+        let ok = list(json!({"columns": 2, "spacing_dp": 12, "padding_h_dp": 12}));
+        assert_eq!(check_values(&ok), Ok(()));
+        for bad in [
+            json!({"columns": 40}),
+            json!({"spacing_dp": 500}),
+            json!({"padding_h_dp": 500}),
+        ] {
+            assert!(check_values(&list(bad.clone())).is_err(), "{bad}");
         }
     }
 }

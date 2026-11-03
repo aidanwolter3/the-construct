@@ -23,7 +23,7 @@ sha2 = "0.10"
 base64 = "0.22"
 getrandom = "0.3"
 # `stream::unfold` for the size-capped media proxy body.
-futures-util = { version = "0.3", default-features = false }
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 tempfile = "3"

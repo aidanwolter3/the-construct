@@ -100,6 +100,29 @@ fun isTruthy(value: String, item: JsonObject?): Boolean {
     }
 }
 
+/**
+ * Whether a `core://Conditional` shows (D48): [value] is `$form.<field>` (the form value, "" while unset) or as for
+ * [isTruthy]. Without [equals], the value must be truthy; with it, the value as text (null and missing are "") must
+ * equal [equals].
+ */
+fun conditionShows(value: String, equals: String?, item: JsonObject?, form: Map<String, String>?): Boolean {
+    val formValue = if (value.startsWith("\$form.")) form?.get(value.removePrefix("\$form.")).orEmpty() else null
+    if (equals == null) return if (formValue != null) isTruthy(formValue, null) else isTruthy(value, item)
+    val text = formValue ?: run {
+        val field = itemFieldName(value, allowEntityPrefix = true)
+        if (field == null) {
+            value
+        } else {
+            when (val v = item?.get(field)) {
+                null, JsonNull -> ""
+                is JsonPrimitive -> v.content
+                else -> v.toString()
+            }
+        }
+    }
+    return text == equals
+}
+
 /** Resolves a [ListBinding] (DECISIONS D1) to a list of entity URIs. */
 fun resolveList(refs: ListBinding, item: JsonObject?): List<String> = when (refs) {
     is ListBinding.Items -> refs.items

@@ -24,10 +24,13 @@
 //!   (D44). Additive: schema 6 clients still draw schema 3 to 5 layouts.
 //! - 7: `action.auth.session` (open a session from a server path: a pod code
 //!   or a temporary pod, D46). Additive.
-//! - 8: `core://MediaPicker`, `core://TextField` `lines`,
+//! - 8: `core://List` `columns`, `spacing_dp` and `padding_h_dp` (a grid),
+//!   and `core://Conditional` on a form value (`$form.<field>`) or with
+//!   `equals` (D48). Additive.
+//! - 9: `core://MediaPicker`, `core://TextField` `lines`,
 //!   `action.mutation.create` `attachments` / `position` / `dismiss`, the
 //!   `$form?.<field>` binding and the `add_photo` / `add` / `refresh` icons
-//!   (D47, D49). Additive.
+//!   (D49, D51). Additive.
 //!
 //! # A breaking schema change
 //!
@@ -43,7 +46,7 @@ use crate::{ActionIntent, Align, Position, TextStyle, UiNode};
 /// Request header carrying the client's schema version.
 pub const SCHEMA_HEADER: &str = "x-construct-schema";
 /// The schema version this build draws.
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 
 /// Breaking changes, oldest first: `(client schema, oldest layout schema it
 /// draws)`. A client of schema `c` draws layouts written for schemas
@@ -100,7 +103,7 @@ pub fn compatibility(layout: u32, client: u32) -> Compatibility {
 }
 
 fn intent_schema(i: &ActionIntent) -> u32 {
-    // `$form?.<field>` (schema 8) anywhere in the intent.
+    // `$form?.<field>` (schema 9) anywhere in the intent.
     let optional_form = serde_json::to_string(i).is_ok_and(|j| j.contains("$form?."));
     let own = match i {
         ActionIntent::Create {
@@ -108,22 +111,22 @@ fn intent_schema(i: &ActionIntent) -> u32 {
             position,
             dismiss,
             ..
-        } if !attachments.is_empty() || *position != Position::End || *dismiss => 8,
+        } if !attachments.is_empty() || *position != Position::End || *dismiss => 9,
         ActionIntent::LoadData { .. } | ActionIntent::Create { .. } => 2,
         ActionIntent::OpenSession { .. } => 7,
         _ => 1,
     };
-    if optional_form { own.max(8) } else { own }
+    if optional_form { own.max(9) } else { own }
 }
 
 /// Icons added in schema 6 (D44).
 const ICONS_6: [&str; 2] = ["flame", "timer"];
-/// Icons added in schema 8 (D49).
-const ICONS_8: [&str; 3] = ["add_photo", "add", "refresh"];
+/// Icons added in schema 9 (D51).
+const ICONS_9: [&str; 3] = ["add_photo", "add", "refresh"];
 
 fn icon_schema(icon: &str) -> u32 {
-    if ICONS_8.contains(&icon) {
-        8
+    if ICONS_9.contains(&icon) {
+        9
     } else if ICONS_6.contains(&icon) {
         6
     } else {
@@ -133,12 +136,23 @@ fn icon_schema(icon: &str) -> u32 {
 
 fn node_schema(node: &UiNode) -> u32 {
     match node {
-        UiNode::MediaPicker { .. } => 8,
-        UiNode::TextField { lines: Some(_), .. } => 8,
+        UiNode::MediaPicker { .. } => 9,
+        UiNode::TextField { lines: Some(_), .. } => 9,
         UiNode::Chip { icon: Some(i), .. } | UiNode::Badge { icon: i, .. } => icon_schema(i),
         UiNode::IconButton {
             icon, active_icon, ..
         } => icon_schema(icon).max(active_icon.as_deref().map_or(3, icon_schema)),
+        UiNode::List {
+            columns,
+            spacing_dp,
+            padding_h_dp,
+            ..
+        } if *columns > 1 || *spacing_dp > 0 || *padding_h_dp > 0 => 8,
+        UiNode::Conditional { value, equals, .. }
+            if equals.is_some() || value.starts_with("$form.") =>
+        {
+            8
+        }
         UiNode::Box { .. }
         | UiNode::ChoiceChips { .. }
         | UiNode::Text {
@@ -279,14 +293,32 @@ mod tests {
         assert_eq!(required_schema(&flame), 6);
         let warning = node(json!({"type": "core://Chip", "text": "x", "icon": "warning"}));
         assert_eq!(required_schema(&warning), 3);
-        // Schema 8 (D49): the media picker, multi-line fields, richer creates.
+        // Schema 8 (D48): grids and form-driven conditionals.
+        let grid = node(json!({"type": "core://List", "query_key": "q",
+            "item_template": {"type": "core://Divider"}, "columns": 2, "spacing_dp": 12}));
+        assert_eq!(required_schema(&grid), 8);
+        let one = node(json!({"type": "core://List", "query_key": "q",
+            "item_template": {"type": "core://Divider"}, "columns": 1}));
+        assert_eq!(required_schema(&one), 3);
+        let by_form = node(json!({"type": "core://Conditional", "value": "$form.view",
+            "content": {"type": "core://Divider"}}));
+        assert_eq!(required_schema(&by_form), 8);
+        let equals = node(json!({"type": "core://Conditional", "value": "$item.kind",
+            "equals": "photo", "content": {"type": "core://Divider"}}));
+        assert_eq!(required_schema(&equals), 8);
+        let plain = node(
+            json!({"type": "core://Conditional", "value": "$item.caption",
+            "content": {"type": "core://Divider"}}),
+        );
+        assert_eq!(required_schema(&plain), 3);
+        // Schema 9 (D51): the media picker, multi-line fields, richer creates.
         let picker = node(json!({"type": "core://MediaPicker", "field": "photos", "max_items": 4}));
-        assert_eq!(required_schema(&picker), 8);
+        assert_eq!(required_schema(&picker), 9);
         let caption = node(json!({"type": "core://TextField", "field": "c", "lines": 4}));
-        assert_eq!(required_schema(&caption), 8);
+        assert_eq!(required_schema(&caption), 9);
         let add = node(json!({"type": "core://IconButton", "icon": "add_photo",
             "content_description": "New post", "on_click": {"intent": "action.navigation.back"}}));
-        assert_eq!(required_schema(&add), 8);
+        assert_eq!(required_schema(&add), 9);
         let attach = node(
             json!({"type": "core://Button", "label": "Share", "on_click": {
             "intent": "action.mutation.create", "query_key": "q", "entity_uri": "x://p/$nonce",
@@ -294,19 +326,19 @@ mod tests {
             "payload": {"media": "$attachments.photos"},
             "attachments": {"photos": "$form.photos"}}}),
         );
-        assert_eq!(required_schema(&attach), 8);
+        assert_eq!(required_schema(&attach), 9);
         let start = node(
             json!({"type": "core://Button", "label": "Add", "on_click": {
             "intent": "action.mutation.create", "query_key": "q", "entity_uri": "x://p/$nonce",
             "entity": {}, "endpoint": "/v1/x", "payload": {}, "position": "start"}}),
         );
-        assert_eq!(required_schema(&start), 8);
+        assert_eq!(required_schema(&start), 9);
         let optional = node(
             json!({"type": "core://Button", "label": "Add", "on_click": {
             "intent": "action.mutation.create", "query_key": "q", "entity_uri": "x://p/$nonce",
             "entity": {}, "endpoint": "/v1/x", "payload": {"c": "$form?.caption"}}}),
         );
-        assert_eq!(required_schema(&optional), 8);
+        assert_eq!(required_schema(&optional), 9);
         // Round trip keeps the new fields.
         let back: UiNode = serde_json::from_value(serde_json::to_value(&attach).unwrap()).unwrap();
         assert_eq!(back, attach);
@@ -418,9 +450,13 @@ mod tests {
         assert_eq!(oldest_layout_schema(6), 3);
         assert_eq!(compatibility(5, 6), Compatible);
         assert_eq!(compatibility(6, 5), UpdateRequired);
-        // Schema 8 (D49) is additive too.
+        // Schema 8 (D48) is additive too.
         assert_eq!(oldest_layout_schema(8), 3);
         assert_eq!(compatibility(7, 8), Compatible);
         assert_eq!(compatibility(8, 7), UpdateRequired);
+        // Schema 9 (D51) is additive too.
+        assert_eq!(oldest_layout_schema(9), 3);
+        assert_eq!(compatibility(8, 9), Compatible);
+        assert_eq!(compatibility(9, 8), UpdateRequired);
     }
 }

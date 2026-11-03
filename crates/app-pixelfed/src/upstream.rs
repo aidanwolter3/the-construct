@@ -427,6 +427,17 @@ impl Upstream {
         .await
     }
 
+    /// `GET /api/v1/statuses/{id}` (one status). `id` must already be
+    /// validated as path-safe.
+    pub async fn status(&self, token: &str, id: &str) -> Result<Value, UpstreamError> {
+        Self::send_json(
+            self.http
+                .get(self.url(&format!("/api/v1/statuses/{id}")))
+                .bearer_auth(token),
+        )
+        .await
+    }
+
     /// `GET /api/v1/statuses/{id}/context` (`{ancestors, descendants}`). `id`
     /// must already be validated as path-safe.
     pub async fn status_context(&self, token: &str, id: &str) -> Result<Value, UpstreamError> {

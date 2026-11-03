@@ -827,7 +827,7 @@ pub struct LayoutEvent {
     pub version: i64,
 }
 
-/// A session's data changed (D48): `event: data` to that session's
+/// A session's data changed (D50): `event: data` to that session's
 /// subscribers of `workspace_id` only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataEvent {
@@ -908,7 +908,7 @@ async fn events(
     // Events carry only version numbers, so anyone may listen; only a
     // session the pod no longer knows is told so (a valid one lacking the
     // app's sign-in, e.g. a pod token's, D46, must not be dropped).
-    // The session's own `data` events (D48) need to know who listens.
+    // The session's own `data` events (D50) need to know who listens.
     let session_hash = match state.caller(&headers).await {
         Ok(Caller::Stale) if matches!(app.auth, AuthPolicy::SignIn(_)) => return unauthorized(),
         Ok(c) => c.into_session().map(|s| s.token_hash),

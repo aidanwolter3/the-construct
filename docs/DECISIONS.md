@@ -1617,7 +1617,50 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
 - **Not yet:** self-service sign-up; per-device credentials and revoking one device; evicting idle pods from memory;
   sample recipes for temporary pods; a pod quota on disk; a separate Fly app for anonymous demos.
 
-## D47: Attachments: the client stages files, the outbox uploads them, the pod stores them
+## D47: Replies to comments come from each comment's own `context`
+
+- **Why:** replies to comments did not show on real Pixelfed. Its `GET /api/v1/statuses/{id}/context`
+  (`ApiV1Controller::statusContext`) lists only the direct parent and the direct replies (by id, at most 100, none
+  while `replies_count` is 0), unlike Mastodon's whole thread. The pod threaded whatever `descendants` held, and the
+  fake answered like Mastodon, so tests passed.
+- **Pod:** the comments screen asks the post for its `context`, then, level by level, each comment whose
+  `replies_count` is above the replies already present (`app_pixelfed::complete_comment_thread`): at most 50 extra
+  calls per screen, 6 at a time. A failed call loses only that comment's replies (logged). A Mastodon-style upstream
+  costs no extra call. Threading and the depth cap (4) are unchanged.
+- **Fake:** `context` answers like Pixelfed by default; `FAKE_PIXELFED_THREADS=mastodon` (`with_mastodon_threads`)
+  keeps the old whole-thread answer so both shapes are tested.
+- **Weighed:** Pixelfed's web endpoints (`/api/v2/comments/...`) return nested replies, but they are not part of the
+  OAuth API and are undocumented; fetching every comment's `context` regardless of its count costs a call per comment
+  and finds nothing Pixelfed would not list (it returns no replies while the count is 0).
+
+## D48: A cards view for Pixelfed: list grids and form-driven conditionals (schema 8)
+
+- **Why:** the user asked for a grid view of the Pixelfed feed and picked, from mockups, a List/Cards switch above the
+  feed with two-column cards (cover photo, author, like count) that open the post. The shared UI could not draw it:
+  a `core://List` stacks full-width items, and nothing could show part of a layout based on a switch.
+- **Generic vocabulary (additive schema 8):** `core://List` `columns` (0/1 = one item per row, at most 6),
+  `spacing_dp` (between items, both ways) and `padding_h_dp`. A grid row is a `Row` of equal-weight cells, top-aligned,
+  a short last row left-aligned; a group header starts a new row; `indent` is ignored in a grid. `core://Conditional`
+  reads `$form.<field>` ("" while unset) and takes `equals`: show the content only when the value, as text (null and
+  missing are ""), equals it. A switch is then a `core://ChoiceChips` over a form value plus one `Conditional` per
+  view; the empty option is the default view.
+- **Pixelfed (`layouts/pixelfed_home/0004.json`, adapter only):** the feed slot is a Column of the chips and two
+  Conditionals (the old post list, and a two-column `core://List` of `Tappable` cards over the same
+  `timeline:home` query, so both views share entities and likes). A card opens the new post screen
+  (`pixelfed://posts/{id}`, Push), whose data `GET /v1/pixelfed/screens/post?id=<id>` returns the post (the inner one
+  of a boost), its author and media and `queries["post:<id>"]`; it reuses the feed's post card. Posts gain
+  `cover_url` (first media's preview, else its image, proxied), `cover_blurhash` and `media_count`. Text-only posts
+  show their caption on a tinted box instead of a photo.
+- **Compatibility:** 0004 declares schema 8, so apps of schema 7 and older keep 0003; the switch value is per
+  screen form state, so it resets when the app restarts.
+- **Weighed:** a server-only grid (the adapter grouping posts into row entities with fixed-size tiles on a separate
+  screen) needed no client build but could not fill the screen width or switch in place; a dedicated
+  `core://Grid` node (the List already has the query, filter, `where` and groups a grid needs); a three-column
+  photo-only grid and a server-side view setting (the user chose cards; a form value needs no endpoint).
+- **Not yet:** remembering the chosen view across restarts; a multi-photo marker on cards (needs a numeric
+  comparison or a server-made flag); more columns on wide screens.
+
+## D49: Attachments: the client stages files, the outbox uploads them, the pod stores them
 
 - **Why:** posting photos (docs/POSTING.md) needs files to travel from the user's device to an adapter. The outbox
   and pod only moved JSON. Doing it generically means any app can take photos with a layout change and an adapter
@@ -1644,7 +1687,7 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   every adapter would parse multipart); uploading at pick time (fast Share, but uploads for posts never sent, and no
   offline picking); base64 in JSON (a third larger, hits the 2 MB body limit).
 
-## D48: Creates can stay pending on the server; the pod can say "your data changed"
+## D50: Creates can stay pending on the server; the pod can say "your data changed"
 
 - **Why:** Pixelfed processes media after upload, so a post isn't there when the create returns. The client's
   placeholder is dropped on the first reload after a 2xx (D35), so the server has to keep showing it, and tell the
@@ -1661,9 +1704,9 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   is 10 s); the client polling (traffic for every open client, and still a delay); putting data in the event (the
   fetch paths already do auth and normalising).
 
-## D49: Schema 8: media picker, multi-line fields, richer creates
+## D51: Schema 9: media picker, multi-line fields, richer creates
 
-- `core://MediaPicker {field, max_items, label?}` (D47).
+- `core://MediaPicker {field, max_items, label?}` (D49).
 - `core://TextField.lines`: a multi-line field without `on_submit` (amends D43's single-line rule).
 - `action.mutation.create` gains `attachments`, `position` (`start` | `end`, default `end`: where the placeholder goes
   in its list) and `dismiss` (close the screen after dispatch).

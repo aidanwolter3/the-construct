@@ -144,7 +144,7 @@ fun newNonce(random: Random = Random.Default): String =
  * Binds `$form.<field>` (from [form]) and `$nonce` (one fresh value for the whole intent) in every string of [intent]
  * except its `value_expr`s, in one pass (a value is never re-scanned, so typed text containing `$nonce` stays as
  * typed). Returns null, so nothing is dispatched, when a field referenced as `$form.<field>` is blank (a list value,
- * [parseFormList], is blank when empty). `$form?.<field>` (schema 8) binds a blank field to "" and never blocks.
+ * [parseFormList], is blank when empty). `$form?.<field>` (schema 9) binds a blank field to "" and never blocks.
  * A string that is exactly `$form.<field>` (or `$form?.<field>`) of a list value becomes that JSON array, e.g.
  * `"attachments": {"photos": ["a","b"]}`.
  */
@@ -243,7 +243,7 @@ class Navigation internal constructor(private val controller: ConstructControlle
     }
 
     /**
-     * Closes the top screen after a create with `dismiss` (schema 8) and clears its form; its photos now belong to that
+     * Closes the top screen after a create with `dismiss` (schema 9) and clears its form; its photos now belong to that
      * create. False when no screen is open.
      */
     internal fun dismiss(): Boolean {
