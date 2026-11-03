@@ -25,6 +25,41 @@ pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
     ]
 }
 
+/// The env var that lets `CONSTRUCT_OPEN_POD` serve a non-loopback address.
+pub const INSECURE_OPEN_POD_VAR: &str = "CONSTRUCT_INSECURE_OPEN_POD_ON_NETWORK";
+
+/// Whether `addr` (`CONSTRUCT_ADDR`) only accepts connections from this
+/// machine.
+pub fn is_loopback_addr(addr: &str) -> bool {
+    addr.parse::<std::net::SocketAddr>()
+        .is_ok_and(|a| a.ip().is_loopback())
+        || addr
+            .rsplit_once(':')
+            .is_some_and(|(h, _)| h.eq_ignore_ascii_case("localhost"))
+}
+
+/// Security audit #31 (L2): the open pod gives every caller the whole pod,
+/// sign-ins included. Refused behind Fly (`on_fly`, `FLY_APP_NAME`) always,
+/// and on a non-loopback address unless `insecure_opt_in`
+/// ([`INSECURE_OPEN_POD_VAR`]`=1`): anyone on the network would get it.
+pub fn check_open_pod(addr: &str, on_fly: bool, insecure_opt_in: bool) -> Result<(), String> {
+    if on_fly {
+        return Err(
+            "CONSTRUCT_OPEN_POD is refused on Fly (FLY_APP_NAME is set): \
+                    every visitor would get the pod. Use pod tokens (`server pods create`)."
+                .to_owned(),
+        );
+    }
+    if !is_loopback_addr(addr) && !insecure_opt_in {
+        return Err(format!(
+            "CONSTRUCT_OPEN_POD is refused on {addr}: anyone who can reach it would get the \
+             whole pod and its sign-ins. Bind 127.0.0.1, use a pod token (`server pods create`), \
+             or set {INSECURE_OPEN_POD_VAR}=1 on a network you trust."
+        ));
+    }
+    Ok(())
+}
+
 /// The per-pod settings for a new pod (D46): the recipes family collection
 /// is imported only into pods made with `import_recipes`.
 pub fn new_pod_settings(import_recipes: bool) -> Vec<(String, String)> {
@@ -161,5 +196,36 @@ impl WithPixelfed for AppState {
         self.adapter::<PixelfedAdapter>()
             .expect("the pod has the Pixelfed adapter")
             .config()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_pod_bind_addresses() {
+        for a in [
+            "127.0.0.1:8080",
+            "127.1.2.3:1",
+            "[::1]:8080",
+            "localhost:8080",
+        ] {
+            assert!(is_loopback_addr(a), "{a}");
+            assert!(check_open_pod(a, false, false).is_ok(), "{a}");
+            assert!(check_open_pod(a, true, true).is_err(), "Fly: {a}");
+        }
+        for a in [
+            "0.0.0.0:8080",
+            "[::]:8080",
+            "192.168.1.5:8080",
+            "pod.example:8080",
+            "bad",
+        ] {
+            assert!(!is_loopback_addr(a), "{a}");
+            assert!(check_open_pod(a, false, false).is_err(), "{a}");
+            assert!(check_open_pod(a, false, true).is_ok(), "opt-in: {a}");
+            assert!(check_open_pod(a, true, true).is_err(), "Fly: {a}");
+        }
     }
 }

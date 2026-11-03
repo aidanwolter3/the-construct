@@ -24,6 +24,7 @@ pub mod uploads;
 pub mod util;
 pub mod validate;
 
+use std::collections::HashMap;
 use std::path::Path as FsPath;
 use std::sync::{Arc, Mutex};
 
@@ -105,8 +106,13 @@ pub struct AppState {
     /// Set once the adapters' [`AppAdapter::resume`] and the upload sweeper
     /// have been started for this pod.
     started: std::sync::atomic::AtomicBool,
-    /// SSE keepalive interval (15 s; shorter in tests).
+    /// SSE keepalive interval (15 s; shorter in tests). Streams with a
+    /// session also re-check it this often.
     sse_keepalive: std::time::Duration,
+    /// Open SSE streams per session token hash, capped at
+    /// `sse_streams_per_token` ([`layouts::SseSlot`]).
+    pub(crate) sse_streams: Mutex<HashMap<String, usize>>,
+    sse_streams_per_token: usize,
     /// Set by [`AppState::shutdown`]: open SSE streams end.
     shutdown: tokio::sync::watch::Sender<bool>,
     /// Notifications: the events fan-out, open device streams, polls (D52).
@@ -164,6 +170,8 @@ impl AppState {
             disk_guard: None,
             started: std::sync::atomic::AtomicBool::new(false),
             sse_keepalive: layouts::DEFAULT_KEEPALIVE,
+            sse_streams: Mutex::new(HashMap::new()),
+            sse_streams_per_token: layouts::DEFAULT_SSE_STREAMS_PER_TOKEN,
             shutdown: tokio::sync::watch::channel(false).0,
             notifier: notify::Notifier::default(),
             push: None,
@@ -217,6 +225,17 @@ impl AppState {
 
     pub fn sse_keepalive(&self) -> std::time::Duration {
         self.sse_keepalive
+    }
+
+    /// Override how many SSE streams one session token may hold open
+    /// ([`layouts::DEFAULT_SSE_STREAMS_PER_TOKEN`]).
+    pub fn with_sse_streams_per_token(mut self, max: usize) -> Self {
+        self.sse_streams_per_token = max;
+        self
+    }
+
+    pub fn sse_streams_per_token(&self) -> usize {
+        self.sse_streams_per_token
     }
 
     /// Send notifications by Web Push with `sender` (D52).

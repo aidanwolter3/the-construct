@@ -153,6 +153,10 @@ pub struct HostConfig {
     pub trust_fly_client_ip: bool,
     /// Upload quotas and the low-disk guard.
     pub storage: StorageLimits,
+    /// Send `Strict-Transport-Security` on every response. Only behind an
+    /// HTTPS proxy (Fly, `FLY_APP_NAME`): on plain HTTP it would be ignored,
+    /// and on `localhost` it would pin the name to HTTPS for other servers.
+    pub hsts: bool,
 }
 
 impl HostConfig {
@@ -184,6 +188,7 @@ impl HostConfig {
             temporary_pod_settings: Vec::new(),
             trust_fly_client_ip: var("FLY_APP_NAME").is_some(),
             storage: StorageLimits::from_env(),
+            hsts: var("FLY_APP_NAME").is_some(),
         }
     }
 }
@@ -817,7 +822,79 @@ pub fn app(host: Arc<Host>) -> Router {
         .route(screen::TEMPORARY_PATH, post(temporary_pod))
         .route("/v1/p/{pod_id}/{*rest}", get(public_route))
         .fallback(dispatch)
-        .with_state(host)
+        .with_state(host.clone())
+        .layer(axum::middleware::map_response_with_state(
+            host.config.hsts,
+            security_headers,
+        ))
+}
+
+/// Headers on every response, unless the route set its own (an upload's
+/// `sandbox` CSP stays). Clients only fetch JSON, SSE and images, so a page
+/// that loads one of these in a browser gets nothing it could run or frame.
+async fn security_headers(State(hsts): State<bool>, mut resp: Response) -> Response {
+    let h = resp.headers_mut();
+    let defaults = [
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        (header::REFERRER_POLICY, "no-referrer"),
+        (header::X_FRAME_OPTIONS, "DENY"),
+        (
+            header::CONTENT_SECURITY_POLICY,
+            "default-src 'none'; frame-ancestors 'none'",
+        ),
+    ];
+    for (name, value) in defaults {
+        h.entry(name)
+            .or_insert_with(|| HeaderValue::from_static(value));
+    }
+    if hsts {
+        h.entry(header::STRICT_TRANSPORT_SECURITY)
+            .or_insert_with(|| HeaderValue::from_static("max-age=31536000"));
+    }
+    resp
+}
+
+/// Whether a request may use the open pod: its `Host` (or HTTP/2
+/// authority) must be `localhost`, a `*.localhost` name or an IP literal
+/// (`127.0.0.1`, `[::1]`, the emulator's `10.0.2.2`, a LAN address), any
+/// port. A DNS-rebinding page always sends its own domain name, so it never
+/// passes; a request without a Host (HTTP/1.0, in-process tests) does not
+/// come from a browser and passes.
+pub fn open_pod_host_allowed(headers: &HeaderMap, uri: &Uri) -> bool {
+    let host = match headers.get(header::HOST) {
+        Some(v) => match v.to_str() {
+            Ok(v) => v.trim().to_owned(),
+            Err(_) => return false,
+        },
+        None => match uri.authority() {
+            Some(a) => a.as_str().rsplit('@').next().unwrap_or_default().to_owned(),
+            None => return true,
+        },
+    };
+    let name = if let Some(rest) = host.strip_prefix('[') {
+        // `[v6]` or `[v6]:port`.
+        let Some((v6, port)) = rest.split_once(']') else {
+            return false;
+        };
+        if !(port.is_empty() || port.strip_prefix(':').is_some_and(valid_port)) {
+            return false;
+        }
+        return v6.parse::<std::net::Ipv6Addr>().is_ok();
+    } else {
+        match host.rsplit_once(':') {
+            Some((name, port)) if valid_port(port) => name,
+            Some(_) => return false,
+            None => host.as_str(),
+        }
+    };
+    let name = name.strip_suffix('.').unwrap_or(name).to_ascii_lowercase();
+    name == "localhost"
+        || name.ends_with(".localhost")
+        || name.parse::<std::net::Ipv4Addr>().is_ok()
+}
+
+fn valid_port(p: &str) -> bool {
+    !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// The caller's address for rate limits: Fly's `Fly-Client-IP` when the
@@ -869,8 +946,21 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
         },
         None => None,
     };
-    let Some(pod_id) = found.or_else(|| host.open_pod_id.get().cloned()) else {
-        return no_pod(&host, &req, token.is_some());
+    let pod_id = match (found, host.open_pod_id.get()) {
+        (Some(id), _) => id,
+        (None, Some(open)) if open_pod_host_allowed(req.headers(), req.uri()) => open.clone(),
+        (None, Some(_)) => {
+            // A DNS-rebinding page names its own domain: no open pod for it.
+            tracing::warn!(
+                host = ?req.headers().get(header::HOST),
+                "open pod refused for a Host that is not localhost or an IP address"
+            );
+            return json_error(
+                StatusCode::FORBIDDEN,
+                json!({ "error": "host_not_allowed" }),
+            );
+        }
+        (None, None) => return no_pod(&host, &req, token.is_some()),
     };
     let open = match host.pod(&pod_id).await {
         Ok(p) => p,
@@ -1084,6 +1174,66 @@ async fn public_route(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A route's own headers (an upload's `sandbox` CSP) are kept.
+    #[tokio::test]
+    async fn security_headers_keep_a_routes_own() {
+        let mut resp = Response::new(axum::body::Body::empty());
+        resp.headers_mut().insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static("sandbox"),
+        );
+        let resp = security_headers(State(true), resp).await;
+        let h = resp.headers();
+        assert_eq!(h[header::CONTENT_SECURITY_POLICY], "sandbox");
+        assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(h[header::STRICT_TRANSPORT_SECURITY], "max-age=31536000");
+        assert_eq!(h.get_all(header::CONTENT_SECURITY_POLICY).iter().count(), 1);
+    }
+
+    /// Security audit #31 (L1): only names a DNS-rebinding page can't send.
+    #[test]
+    fn open_pod_hosts() {
+        let check = |host: Option<&str>, uri: &str| {
+            let mut h = HeaderMap::new();
+            if let Some(v) = host {
+                h.insert(header::HOST, HeaderValue::from_str(v).unwrap());
+            }
+            open_pod_host_allowed(&h, &uri.parse().unwrap())
+        };
+        for ok in [
+            "localhost",
+            "localhost:8080",
+            "LocalHost.:8080",
+            "app.localhost:1",
+            "127.0.0.1",
+            "127.0.0.1:8080",
+            "10.0.2.2:8080",
+            "192.168.1.20:8080",
+            "[::1]",
+            "[::1]:8080",
+        ] {
+            assert!(check(Some(ok), "/v1/apps"), "{ok}");
+        }
+        for bad in [
+            "evil.example",
+            "evil.example:8080",
+            "localhost.evil.example",
+            "127.0.0.1.nip.io:8080",
+            "localhost:80x",
+            "[::1]x",
+            "[nope]:8080",
+            "",
+        ] {
+            assert!(!check(Some(bad), "/v1/apps"), "{bad}");
+        }
+        assert!(check(None, "/v1/apps"), "no Host: not a browser");
+        assert!(
+            check(None, "http://localhost:8080/v1/apps"),
+            "HTTP/2 authority"
+        );
+        assert!(!check(None, "http://evil.example:8080/v1/apps"));
+    }
 
     #[test]
     fn tokens_and_names() {
