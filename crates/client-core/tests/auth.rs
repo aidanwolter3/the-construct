@@ -1231,9 +1231,18 @@ fn the_engine_fetches_the_newest_layout_its_schema_draws() {
     wait_signed_in(&engine);
     let snap = engine.snapshot();
     let layout: Value = serde_json::from_str(&snap.layout_json).unwrap();
-    assert_eq!(layout["version"], 3);
+    assert_eq!(layout["version"], 4);
     let ws: Value = serde_json::from_str(&snap.workspace_json).unwrap();
-    assert_eq!(ws["screens"][0]["route"], "pixelfed://posts/{id}/comments");
+    let routes: Vec<&str> = ws["screens"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["route"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        routes,
+        ["pixelfed://posts/{id}", "pixelfed://posts/{id}/comments"]
+    );
     // Generic nodes only.
     assert!(
         !snap.workspace_json.contains("\"type\":\"pixelfed://"),

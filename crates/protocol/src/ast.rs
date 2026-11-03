@@ -127,6 +127,17 @@ pub enum UiNode {
         /// Schema 6 (D44): see [`ListWhere`].
         #[serde(rename = "where", default, skip_serializing_if = "Option::is_none")]
         where_: Option<ListWhere>,
+        /// Schema 8 (D48): items side by side in this many equal columns
+        /// (a grid); 0 and 1 mean one item per row. Group headers span the
+        /// width and start a new row; `indent` applies to one column only.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        columns: u16,
+        /// Schema 8 (D48): space between items (both ways in a grid).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        spacing_dp: u16,
+        /// Schema 8 (D48): space left and right of the items.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        padding_h_dp: u16,
     },
     /// An image from a URL (a literal or a binding such as
     /// `"$item.avatar_url"`). `size_dp` makes it a square of that size;
@@ -204,9 +215,17 @@ pub enum UiNode {
     #[serde(rename = "core://Divider")]
     Divider {},
     /// `content` only when `value` (a binding such as `$item.caption`) is
-    /// truthy: not missing, null, false, 0, "", "0" or an empty array.
+    /// truthy: not missing, null, false, 0, "", "0" or an empty array. Schema
+    /// 8 (D48): `value` may be a form value (`$form.<field>`, "" while unset),
+    /// and with `equals` the content shows only when the value, as text,
+    /// equals it (`"equals": ""` shows it while the value is unset or empty).
     #[serde(rename = "core://Conditional")]
-    Conditional { value: String, content: Box<UiNode> },
+    Conditional {
+        value: String,
+        content: Box<UiNode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        equals: Option<String>,
+    },
     /// A swipeable pager over entities: `items` is a binding to a list of
     /// entity URIs (`"$item.media_uris"`) or a literal list; each is drawn with
     /// `item_template` (`$item` = that entity). Page dots and an "n/N" badge

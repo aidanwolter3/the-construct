@@ -98,6 +98,7 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
                 ],
             },
             UiNode::Conditional {
+                equals: None,
                 value: "$item.content_warning".into(),
                 content: Box::new(UiNode::Chip {
                     text: "$item.content_warning_label".into(),
@@ -106,6 +107,7 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
                 }),
             },
             UiNode::Conditional {
+                equals: None,
                 value: "$item.reblogged_by_name".into(),
                 content: Box::new(UiNode::Badge {
                     text: "$item.reblogged_by_name boosted".into(),
@@ -159,6 +161,9 @@ fn full_workspace() -> UiNode {
                             filter: None,
                             group_by: None,
                             where_: None,
+                            columns: 0,
+                            spacing_dp: 0,
+                            padding_h_dp: 0,
                         },
                         UiNode::List {
                             query_key: "timeline:pinned".into(),
@@ -187,6 +192,9 @@ fn full_workspace() -> UiNode {
                                 field: "kind".into(),
                                 equals: "$form.kind".into(),
                             }),
+                            columns: 2,
+                            spacing_dp: 12,
+                            padding_h_dp: 12,
                         },
                     ],
                 },

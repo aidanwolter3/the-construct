@@ -335,15 +335,24 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
         .unwrap();
     assert_eq!(cw.get_str("content_warning_label"), Some("CW: Snake photo"));
 
-    // The layout is generic: a core://List of posts whose buttons hold the actions.
-    let UiNode::Workspace { id, slots, .. } = &spec.workspace else {
+    // The layout is generic: core://Lists of posts (one per row, and the
+    // two-column cards, D48) whose buttons hold the actions.
+    let UiNode::Workspace { id, .. } = &spec.workspace else {
         panic!("not a workspace");
     };
     assert_eq!(id, "pixelfed_home");
-    let UiNode::List { query_key, .. } = &slots[0].content else {
-        panic!("not a core://List");
-    };
-    assert_eq!(query_key, "timeline:home");
+    let feeds: Vec<u16> = spec
+        .workspace
+        .walk()
+        .into_iter()
+        .filter_map(|n| match n {
+            UiNode::List {
+                query_key, columns, ..
+            } if query_key == "timeline:home" => Some(*columns),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(feeds, [0, 2]);
     assert!(
         spec.workspace
             .walk()
@@ -380,6 +389,7 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
             }],
         }
     );
+    assert_eq!(button("card-like:$item.uri"), button("like:$item.uri"));
     assert_eq!(
         button("bookmark:$item.uri"),
         ActionIntent::OptimisticMutate {
@@ -667,7 +677,8 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     // No schema header: a client from before screens gets the newest version it can
-    // draw (0001; 0002 adds the comments screen, 0003 the generic nodes).
+    // draw (0001; 0002 adds the comments screen, 0003 the generic nodes, 0004
+    // the cards view and the post screen).
     assert_eq!(version(&resp).as_deref(), Some("1"));
     let resp = client()
         .get(&url)
@@ -679,9 +690,9 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
         .send()
         .await
         .unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("3"));
+    assert_eq!(version(&resp).as_deref(), Some("4"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
-    assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 1));
+    assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 2));
     // A newer version replaces the feed layout; entities still come upstream.
     let mut node = server::layouts::builtin(&server::catalog(), "pixelfed_home").unwrap();
     if let UiNode::Workspace { title, .. } = &mut node {
@@ -689,7 +700,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     }
     server::layouts::append_version(state.store(), "pixelfed_home", &node, None).unwrap();
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("4"));
+    assert_eq!(version(&resp).as_deref(), Some("5"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert_eq!(spec.workspace, node);
     assert_eq!(spec.queries["timeline:home"].len(), 5);
@@ -1889,4 +1900,64 @@ async fn any_instance_refuses_private_and_plain_http_hosts() {
     }
     // The default instance still works.
     sign_in_at(&pod.url, &fake.url).await;
+}
+
+async fn get_post_screen(pod: &str, bearer: Option<&str>, id: &str) -> (StatusCode, Value) {
+    let mut req = client().get(format!("{pod}/v1/pixelfed/screens/post?id={id}"));
+    if let Some(t) = bearer {
+        req = req.bearer_auth(t);
+    }
+    let resp = req.send().await.unwrap();
+    let status = resp.status();
+    (status, resp.json().await.unwrap_or(Value::Null))
+}
+
+#[tokio::test]
+async fn post_screen_data_is_the_post_with_its_cover() {
+    let env = env().await;
+    let session = sign_in(&env).await;
+    let (status, body) = get_post_screen(&env.pod.url, Some(&session), CAROUSEL).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let bundle: protocol::DataBundle = serde_json::from_value(body).unwrap();
+    let uri = format!("pixelfed://posts/{CAROUSEL}");
+    assert_eq!(
+        bundle.queries[&format!("post:{CAROUSEL}")],
+        vec![uri.clone()]
+    );
+    let post = &bundle.entities[&uri];
+    let media = post.get_str_list("media_uris").unwrap();
+    assert!(media.len() > 1);
+    assert_eq!(post.get_i64("media_count"), Some(media.len() as i64));
+    // The cover is the first media's preview (else its image), proxied.
+    let first = &bundle.entities[media[0]];
+    let want = first
+        .get_str("preview_url")
+        .or(first.get_str("url"))
+        .unwrap();
+    assert_eq!(post.get_str("cover_url"), Some(want));
+    assert!(want.starts_with(&format!("{}/v1/pixelfed/media/", env.pod.url)));
+    assert!(
+        bundle
+            .entities
+            .contains_key(post.get_str("author_uri").unwrap())
+    );
+    // A boost's id gives the boosted post, listed under the asked id.
+    let (status, boosted) = get_post_screen(&env.pod.url, Some(&session), REBLOG_OUTER).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        boosted["queries"][format!("post:{REBLOG_OUTER}")][0],
+        format!("pixelfed://posts/{REBLOG_INNER}")
+    );
+    // Unknown post: 404; bad id: 400; no session: 401.
+    let (status, body) = get_post_screen(&env.pod.url, Some(&session), "999").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "post_not_found");
+    for bad in ["a.b", ""] {
+        let (status, _) = get_post_screen(&env.pod.url, Some(&session), bad).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    for bearer in [None, Some("bogus")] {
+        let (status, _) = get_post_screen(&env.pod.url, bearer, CAROUSEL).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
 }

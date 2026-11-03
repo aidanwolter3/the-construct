@@ -471,6 +471,15 @@ from a client (D32, D33).
 - Staging: `CONSTRUCT_TEMP_PODS=1`; existing data moves into an admin pod with `server pods adopt` (README "Pods").
 - Needs a client build and a device check (Android: open a pod with a code, Pixelfed sign-in, sign out, leave).
 
+## Pixelfed cards view (D48)
+
+- Schema 8: `core://List` `columns`, `spacing_dp`, `padding_h_dp` (a grid); `core://Conditional` on `$form.<field>`
+  and with `equals`.
+- `layouts/pixelfed_home/0004.json`: a List/Cards switch over the feed; two-column cards (cover, author, like) open a
+  new post screen (`pixelfed://posts/{id}`, `GET /v1/pixelfed/screens/post?id=`). Posts carry `cover_url`,
+  `cover_blurhash` and `media_count`. Schema-7 apps keep `0003`.
+- Needs a client build and a device check (Android: switch to Cards, tap a card, like from a card and the post).
+
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
   bookmarks are idempotent upstream, comments are not).

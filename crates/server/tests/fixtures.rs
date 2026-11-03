@@ -7,7 +7,8 @@
 //! - `fixtures/pixelfed_screen_data.json` holds the comments screen data of
 //!   every fixture post (`{path: DataBundle}`), made by the pod's own
 //!   normalization from the fake upstream at a fixed "now", with avatar URLs
-//!   pointing at the fake's `/storage/` (which the simulator serves).
+//!   pointing at the fake's `/storage/` (which the simulator serves), and the
+//!   post screen data of every fixture post (D48).
 //!
 //! `UPDATE_FIXTURES=1 cargo test -p server --test fixtures` rewrites them.
 
@@ -19,7 +20,7 @@ use protocol::{DataBundle, EntityRecord, UiNode};
 use serde_json::Value;
 use server::pixelfed::{
     MediaAllowlist, MediaUrls, comment_uri, comments_query, complete_comment_thread,
-    normalize_comments, normalize_timeline,
+    normalize_comments, normalize_post_screen, normalize_timeline,
 };
 
 const FAKE_URL: &str = "http://127.0.0.1:8081";
@@ -204,8 +205,15 @@ async fn screen_data_fixture_is_the_pods_comments_data() {
             format!("/v1/pixelfed/screens/comments?post_id={id}"),
             bundle,
         );
+        let raw = get(format!("/api/v1/statuses/{id}")).await;
+        let mut media = MediaUrls::new(PROXY, &allow);
+        let mut post = normalize_post_screen(id, &raw, &mut media).unwrap();
+        for e in post.entities.values_mut() {
+            unproxy(e, &media);
+        }
+        out.insert(format!("/v1/pixelfed/screens/post?id={id}"), post);
     }
-    assert_eq!(out.len(), 5);
+    assert_eq!(out.len(), 10);
     check_or_write(
         "pixelfed_screen_data.json",
         &(serde_json::to_string_pretty(&out).unwrap() + "\n"),

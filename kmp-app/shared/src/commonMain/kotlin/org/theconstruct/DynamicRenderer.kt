@@ -172,7 +172,7 @@ fun RenderUiNode(
 
         UiNode.Divider -> HorizontalDivider(modifier, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-        is UiNode.Conditional -> if (isTruthy(node.value, item)) {
+        is UiNode.Conditional -> if (conditionShows(node.value, node.equals, item, LocalForm.current)) {
             RenderUiNode(node.content, entities, onDispatch, modifier, item)
         }
 
@@ -315,7 +315,12 @@ private fun ItemList(
     }
     val starts = remember(items, node.groupBy) { node.groupBy?.let { g -> items?.let { groupStarts(it, g.field) } } }
     val counts = remember(starts) { starts?.let(::groupCounts) }
-    Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+    val columns = node.columns.coerceAtLeast(1)
+    Column(
+        modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(node.spacingDp.dp),
+    ) {
         val message = when {
             items == null || items.isNotEmpty() -> null
             all.isNullOrEmpty() -> node.emptyText
@@ -328,6 +333,10 @@ private fun ItemList(
                 color = Color.Gray,
                 modifier = Modifier.padding(16.dp).testTag("list-empty"),
             )
+        }
+        if (columns > 1 && items != null) {
+            ItemGrid(node, columns, items, starts, counts, entities, onDispatch)
+            return@Column
         }
         items?.forEachIndexed { i, item ->
             val header = node.groupBy?.header
@@ -343,9 +352,64 @@ private fun ItemList(
                 // Phone: full width. Wider screens: a centered, readable column.
                 RenderUiNode(
                     node.itemTemplate, entities, onDispatch,
-                    Modifier.widthIn(max = FEED_MAX_WIDTH).fillMaxWidth().padding(start = indentDp(node.indent, item).dp),
+                    Modifier.widthIn(max = FEED_MAX_WIDTH).fillMaxWidth()
+                        .padding(horizontal = node.paddingHDp.dp)
+                        .padding(start = indentDp(node.indent, item).dp),
                     item,
                 )
+            }
+        }
+    }
+}
+
+/**
+ * The rows of a [columns]-column grid over [count] items (D48): item indexes, at most [columns] per row; an item that
+ * starts a group ([starts]) starts a new row, so its header can span the width above it.
+ */
+fun gridRows(count: Int, starts: List<Boolean>?, columns: Int): List<List<Int>> {
+    val rows = mutableListOf<MutableList<Int>>()
+    for (i in 0 until count) {
+        if (rows.isEmpty() || rows.last().size >= columns || starts?.getOrNull(i) == true) rows.add(mutableListOf())
+        rows.last().add(i)
+    }
+    return rows
+}
+
+/** A `core://List` with `columns` > 1 (D48): rows of equal cells, top-aligned, a short last row left-aligned. */
+@Composable
+private fun ItemGrid(
+    node: UiNode.ItemList,
+    columns: Int,
+    items: List<JsonObject>,
+    starts: List<Boolean>?,
+    counts: List<Int>?,
+    entities: Map<String, JsonObject>,
+    onDispatch: (ActionIntent) -> Unit,
+) {
+    val rows = remember(items.size, starts, columns) { gridRows(items.size, starts, columns) }
+    val gap = node.spacingDp.dp
+    rows.forEach { row ->
+        val first = items[row.first()]
+        val header = node.groupBy?.header
+        if (header != null && starts?.getOrNull(row.first()) == true) {
+            key("group-header", first["uri"]) {
+                val headed = JsonObject(first + ("group_count" to JsonPrimitive(counts?.getOrNull(row.first()) ?: 0)))
+                RenderUiNode(header, entities, onDispatch, Modifier.widthIn(max = FEED_MAX_WIDTH).fillMaxWidth(), headed)
+            }
+        }
+        // Keyed by the row's first entity; cells by their own URI.
+        key("grid-row", first["uri"]) {
+            Row(
+                Modifier.widthIn(max = FEED_MAX_WIDTH).fillMaxWidth().padding(horizontal = node.paddingHDp.dp),
+                horizontalArrangement = Arrangement.spacedBy(gap),
+                verticalAlignment = Alignment.Top,
+            ) {
+                row.forEach { i ->
+                    key(items[i]["uri"]) {
+                        RenderUiNode(node.itemTemplate, entities, onDispatch, Modifier.weight(1f), items[i])
+                    }
+                }
+                repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }
