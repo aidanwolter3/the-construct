@@ -593,4 +593,8 @@ new layout files; diffs between versions.
 - No wire change: built-in answers are byte-identical, fixtures regenerate unchanged, no client build.
 - Tests: `pod-core/tests/sources.rs` (catalog checks, the route check, two-source composition with a signed-out
   and a stale source, data-event fan-out), `source.rs` unit tests, `the_core_names_no_app` also checks "recipes".
-- Next (issue #45): P1b custom apps on the pod, P1c clients, P2 MCP endpoint, P3 layout parts.
+- P1b, custom apps on the pod: core migration v15, `pod_core::custom` (create, edit, rename, restore, delete,
+  validate, hide), `validate::custom_layout`, lenient composition with `core://sources/<id>`, caps, `/v1/apps`
+  `kind`/`hidden`/`?all=1`, SSE `event: deleted`. Tests: `pod-core/tests/custom_apps.rs`, e2e `custom_apps.rs`
+  (Kitchen over the fake Pixelfed + recipes through the engine: like via the outbox, a recipe screen, a live push to
+  a second engine, delete).

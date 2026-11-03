@@ -384,6 +384,17 @@ impl Catalog {
             }
             names.push(name);
             for app in a.apps() {
+                if !app
+                    .id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    || app.id.is_empty()
+                {
+                    return Err(format!(
+                        "app id '{}' is not [A-Za-z0-9_]+ ('-' is kept for custom apps)",
+                        app.id
+                    ));
+                }
                 if apps.iter().any(|(x, _)| x.id == app.id) {
                     return Err(format!("app '{}' is served by two adapters", app.id));
                 }

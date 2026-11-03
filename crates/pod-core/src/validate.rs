@@ -505,6 +505,315 @@ pub fn route_params(route: &str) -> Result<Vec<String>, String> {
     Ok(params)
 }
 
+/// Why a custom app's layout was refused ([`custom_layout`]): where (a JSON
+/// pointer into the layout), what is wrong, and what is allowed instead, so
+/// whoever wrote it (often Claude) can fix it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayoutError {
+    pub pointer: String,
+    pub message: String,
+    pub allowed: Vec<String>,
+}
+
+impl LayoutError {
+    fn new(pointer: &str, message: impl Into<String>) -> Self {
+        Self {
+            pointer: pointer.to_owned(),
+            message: message.into(),
+            allowed: Vec::new(),
+        }
+    }
+
+    fn allowing(mut self, allowed: impl IntoIterator<Item = String>) -> Self {
+        self.allowed = allowed.into_iter().collect();
+        self
+    }
+
+    /// `{"pointer", "message", "allowed"}`.
+    pub fn to_json(&self) -> Value {
+        serde_json::json!({
+            "pointer": self.pointer,
+            "message": self.message,
+            "allowed": self.allowed,
+        })
+    }
+}
+
+impl std::fmt::Display for LayoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.pointer.is_empty() {
+            write!(f, "{}", self.message)?;
+        } else {
+            write!(f, "{}: {}", self.pointer, self.message)?;
+        }
+        if !self.allowed.is_empty() {
+            write!(f, " (allowed: {})", self.allowed.join(", "))?;
+        }
+        Ok(())
+    }
+}
+
+/// The validation of a custom app's layout (decision
+/// `custom-apps-and-data-sources`), stricter than a layout file's:
+///
+/// 1. [`validate_structure`] (the root id must be `id`);
+/// 2. no node type or intent this build doesn't know;
+/// 3. capabilities, against `sources` (the app's feeds' sources): screen
+///    `data` and `action.data.load` paths fit a declared data path;
+///    mutation and create endpoints fit a declared action; no
+///    `action.auth.*` (sign-ins start from Settings); every `query_key`
+///    fits a key the sources fill; entity URIs (`entity_uri`, `${uri#field}`
+///    bindings) use a declared scheme or `core://sources/<id>`; no other
+///    pod path (`/v1/...`) appears anywhere.
+///
+/// `Err` names the JSON pointer and the allowed alternatives.
+pub fn custom_layout(
+    id: &str,
+    doc: &Value,
+    sources: &[(&str, &crate::source::SourceManifest)],
+) -> Result<UiNode, LayoutError> {
+    let node = validate_structure(id, doc).map_err(|e| LayoutError::new("", e))?;
+    if let Some(t) = unknown_node_types(&node).first() {
+        let at = find_pointer(doc, "", &|k, v| {
+            k == "type" && v.as_str() == Some(t.as_str())
+        })
+        .unwrap_or_default();
+        return Err(LayoutError::new(&at, format!("unknown node type '{t}'"))
+            .allowing(protocol::NODE_TYPES.iter().map(|t| t.to_string())));
+    }
+    let mut found = Vec::new();
+    crate::layouts::unknown_intent_tags(doc, "", &mut found);
+    if let Some((at, tag)) = found.first() {
+        return Err(LayoutError::new(
+            at,
+            format!("unknown action intent '{tag}'"),
+        ));
+    }
+    let caps = Caps::new(sources);
+    caps.walk(doc, "")?;
+    Ok(node)
+}
+
+/// The first pointer under `at` whose `(key, value)` satisfies `pred`.
+fn find_pointer(v: &Value, at: &str, pred: &dyn Fn(&str, &Value) -> bool) -> Option<String> {
+    match v {
+        Value::Object(map) => map.iter().find_map(|(k, child)| {
+            let here = format!("{at}/{}", escape_pointer(k));
+            if pred(k, child) {
+                Some(here)
+            } else {
+                find_pointer(child, &here, pred)
+            }
+        }),
+        Value::Array(items) => items
+            .iter()
+            .enumerate()
+            .find_map(|(i, child)| find_pointer(child, &format!("{at}/{i}"), pred)),
+        _ => None,
+    }
+}
+
+fn escape_pointer(k: &str) -> String {
+    k.replace('~', "~0").replace('/', "~1")
+}
+
+/// What a custom layout may use, from its sources' manifests.
+struct Caps<'a> {
+    sources: &'a [(&'a str, &'a crate::source::SourceManifest)],
+}
+
+impl<'a> Caps<'a> {
+    fn new(sources: &'a [(&'a str, &'a crate::source::SourceManifest)]) -> Self {
+        Self { sources }
+    }
+
+    fn data_paths(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.sources
+            .iter()
+            .flat_map(|(_, m)| m.data_paths.iter().map(|p| p.pattern))
+    }
+
+    fn actions(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.sources
+            .iter()
+            .flat_map(|(_, m)| m.actions.iter().map(|p| p.pattern))
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.sources.iter().flat_map(|(_, m)| m.query_keys())
+    }
+
+    fn schemes(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.sources
+            .iter()
+            .flat_map(|(_, m)| m.entity_schemes.iter().copied())
+    }
+
+    fn data_path(&self, at: &str, path: &str) -> Result<(), LayoutError> {
+        if self
+            .data_paths()
+            .any(|p| crate::source::path_matches(p, path))
+        {
+            return Ok(());
+        }
+        Err(LayoutError::new(
+            at,
+            format!("'{path}' is not a data path of this app's data sources"),
+        )
+        .allowing(self.data_paths().map(str::to_owned)))
+    }
+
+    fn action(&self, at: &str, path: &str) -> Result<(), LayoutError> {
+        if self.actions().any(|p| crate::source::path_matches(p, path)) {
+            return Ok(());
+        }
+        Err(LayoutError::new(
+            at,
+            format!("'{path}' is not an action of this app's data sources"),
+        )
+        .allowing(self.actions().map(str::to_owned)))
+    }
+
+    fn query_key(&self, at: &str, key: &str) -> Result<(), LayoutError> {
+        if self.keys().any(|p| crate::source::key_matches(p, key)) {
+            return Ok(());
+        }
+        Err(LayoutError::new(
+            at,
+            format!("query key '{key}' is not one this app's data sources fill"),
+        )
+        .allowing(self.keys().map(str::to_owned)))
+    }
+
+    /// An entity URI (only checked when it names a scheme: `$item.uri`
+    /// and other bindings are the client's business).
+    fn entity(&self, at: &str, uri: &str) -> Result<(), LayoutError> {
+        let Some((scheme, rest)) = uri.split_once("://") else {
+            return Ok(());
+        };
+        if scheme.contains('$') {
+            return Ok(());
+        }
+        if scheme == "core" {
+            if rest.starts_with("sources/") {
+                return Ok(());
+            }
+        } else if self.schemes().any(|s| s == scheme) {
+            return Ok(());
+        }
+        Err(LayoutError::new(
+            at,
+            format!("entity URI '{uri}' is not from this app's data sources"),
+        )
+        .allowing(
+            self.schemes()
+                .map(|s| format!("{s}://..."))
+                .chain(["core://sources/<source>".to_owned()]),
+        ))
+    }
+
+    fn intent(&self, at: &str, map: &serde_json::Map<String, Value>) -> Result<(), LayoutError> {
+        let tag = map.get("intent").and_then(Value::as_str).unwrap_or("");
+        let field = |k: &str| map.get(k).and_then(Value::as_str);
+        match tag {
+            "action.mutation.optimistic" | "action.mutation.create" => {
+                if let Some(e) = field("endpoint") {
+                    self.action(&format!("{at}/endpoint"), e)?;
+                }
+                if let Some(u) = field("entity_uri") {
+                    self.entity(&format!("{at}/entity_uri"), u)?;
+                }
+            }
+            "action.data.load" => {
+                if let Some(p) = field("path") {
+                    self.data_path(&format!("{at}/path"), p)?;
+                }
+            }
+            t if t.starts_with("action.auth.") => {
+                return Err(LayoutError::new(
+                    at,
+                    format!(
+                        "'{t}' is not allowed in a custom app: sign-ins start from Settings \
+                         (show a hint with core://sources/<source>#signed_in instead)"
+                    ),
+                ));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Walk the layout.
+    fn walk(&self, v: &Value, at: &str) -> Result<(), LayoutError> {
+        match v {
+            Value::Object(map) => {
+                if map.get("intent").is_some_and(Value::is_string) {
+                    self.intent(at, map)?;
+                }
+                for (k, child) in map {
+                    let here = format!("{at}/{}", escape_pointer(k));
+                    match (k.as_str(), child) {
+                        ("query_key", Value::String(q)) => self.query_key(&here, q)?,
+                        // Checked with their intent above.
+                        ("endpoint" | "path" | "entity_uri", Value::String(_))
+                            if map.contains_key("intent") => {}
+                        (_, Value::String(s)) => self.string(&here, s)?,
+                        ("screens", Value::Array(items)) => {
+                            for (i, item) in items.iter().enumerate() {
+                                self.walk_screen(item, &format!("{here}/{i}"))?;
+                            }
+                        }
+                        _ => self.walk(child, &here)?,
+                    }
+                }
+                Ok(())
+            }
+            Value::Array(items) => items
+                .iter()
+                .enumerate()
+                .try_for_each(|(i, child)| self.walk(child, &format!("{at}/{i}"))),
+            Value::String(s) => self.string(at, s),
+            _ => Ok(()),
+        }
+    }
+
+    fn walk_screen(&self, v: &Value, at: &str) -> Result<(), LayoutError> {
+        let Value::Object(map) = v else {
+            return self.walk(v, at);
+        };
+        for (k, child) in map {
+            let here = format!("{at}/{}", escape_pointer(k));
+            match (k.as_str(), child) {
+                ("data", Value::String(p)) => self.data_path(&here, p)?,
+                // A screen route is local navigation (any scheme).
+                ("route", Value::String(_)) => {}
+                (_, Value::String(s)) => self.string(&here, s)?,
+                _ => self.walk(child, &here)?,
+            }
+        }
+        Ok(())
+    }
+
+    /// Any other string: no pod path, and `${uri#field}` bindings name
+    /// entities of the sources.
+    fn string(&self, at: &str, s: &str) -> Result<(), LayoutError> {
+        if s.trim_start().starts_with("/v1/") {
+            return Err(LayoutError::new(
+                at,
+                format!(
+                    "'{s}' is a pod path; a custom layout may only use its sources' data paths (screen \"data\", action.data.load) and actions (mutation endpoints)"
+                ),
+            ));
+        }
+        for binding in s.split("${").skip(1) {
+            let inner = binding.split('}').next().unwrap_or("");
+            let uri = inner.split('#').next().unwrap_or("");
+            self.entity(at, uri)?;
+        }
+        Ok(())
+    }
+}
+
 /// Every action intent in the tree (screens included).
 pub fn intents(node: &UiNode) -> Vec<&ActionIntent> {
     node.walk()

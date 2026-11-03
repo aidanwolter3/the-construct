@@ -127,6 +127,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             ],
         },
     ],
+    dev: false,
 };
 
 /// `layout_file!("NNNN")` embeds `layouts/recipes/NNNN.json`.

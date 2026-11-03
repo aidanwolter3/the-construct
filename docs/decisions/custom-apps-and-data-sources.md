@@ -41,16 +41,42 @@ Decision:
 
 Built-in answers are byte-identical (bodies and headers), fixtures regenerate unchanged, and no URL, layout file or
 `SCHEMA_VERSION` changed: no client build. The `pixelfed_demo` source reuses Pixelfed's shapes (`pixelfed://` URIs,
-`timeline:home`), so it declares no entity scheme or query key of its own; P1b should not offer dev sources to
-custom apps.
+`timeline:home`), so it declares no entity scheme or query key of its own, and it is marked `dev`: custom apps may use
+it only where dev apps are shown.
 
-Not done yet (later PRs of issue #45):
+## Custom apps on the pod (P1b)
 
-- **P1b:** custom apps in the pod (`custom_apps` table, `/v1/custom-apps` API, `validate::custom_layout` with query
-  key and entity scheme checks and no `action.auth.*`, caps, hidden apps, `/v1/apps` `kind`/`hidden`). With them,
-  composition becomes lenient for custom apps (a failing feed is recorded and skipped) and adds
-  `core://sources/<id>` = `{title, signed_in, error?}` so a layout can hint "Connect Pixelfed in Settings". Built-in
-  apps stay strict and get no such entity, so their answers don't change.
+- **Storage:** core migration v15: `custom_apps(id, title, icon, feeds_json, created_at, updated_at, deleted_at)`;
+  `app_versions` gains `author` (`user` | `claude`, NULL for files) and `meta_json`. Ids are `c-` plus 10 base32
+  characters; built-in app ids may not contain `-` (checked at startup). Versions are ordinary `app_versions` rows
+  (`source` `custom` or `restore`, the request's note), so serving, schema negotiation, SSE and the versions API work
+  unchanged once the core resolves an app through `AppState::app(id) -> AppRef` (`Builtin` | `Custom`) instead of the
+  static catalog. A version is recorded as written for its vocabulary's schema, raised to the oldest one current
+  clients draw.
+- **API** (`pod_core::custom`, README "Custom apps"): create, edit with compare-and-append (`base_version`, 409
+  `stale_base`), rename/re-icon/re-feed (the latest layout must still fit), restore (appends a copy), soft delete
+  (purged after 30 days by the hourly sweeper; open event streams get `event: deleted` and end), a dry-run validate,
+  and hide/show for any app (`pod_settings` `apps.hidden`; `GET /v1/apps` lists hidden apps only with `?all=1`, and
+  every row now has `kind` and `hidden`). The pod sets a written layout's root `id`.
+- **Who writes:** the pod token's pinned session (later also the MCP credential). Any valid session may delete and
+  hide, which is all clients do.
+- **Validation** (`validate::custom_layout`): the structural checks; no unknown node type or intent; screen `data`
+  and `action.data.load` paths fit the sources' data paths; mutation and create endpoints fit their actions; no
+  `action.auth.*`; every `query_key` fits a key the sources fill; entity URIs (`entity_uri`, `${uri#field}`) use a
+  declared scheme or `core://sources/…`; no other `/v1/` path anywhere (so not `/v1/auth/logout`, `/v1/devices`,
+  `/v1/pods/*`, `/v1/uploads`). Errors carry the JSON pointer (`at`) and the allowed alternatives.
+- **Composition** is lenient for custom apps: a failing feed is skipped and recorded; a stale sign-in on the pod
+  token's session is detached and the rest served (any other session still gets the 401). Their root gets one
+  `core://sources/<id>` entity per source, `{id, title, signed_in, error?}`. Built-in apps stay strict and get none.
+- **Caps** (the same on temporary pods): 50 live apps, 500 versions per app (the oldest pruned, numbers keep
+  counting), 256 KiB per layout (the existing layout limit), 60 writes a minute per pod (in memory).
+- **App icons:** `photo`, `recipe`, `dashboard` (clients draw unknown names as a generic icon).
+
+A custom layout can only call routes its sources declare, with the caller's own session: no more than curl with the
+same token could do. A misleading button label is an accepted risk.
+
+Not done yet (later commits of issue #45):
+
 - **P1c:** client support (Custom marker, delete, hide, sign in from Settings).
 - **P2:** `POST /v1/mcp` for Claude with a host-issued, scoped credential (decision `mcp-connector`).
 - **P3:** layout `parts` and `core://Ref`, `ref_update` versions, copies with an update notice (decision

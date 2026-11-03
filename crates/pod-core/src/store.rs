@@ -213,6 +213,25 @@ const MIGRATIONS: &[Migration] = &[
          PRIMARY KEY (device_id, app_id, channel)
      );",
     ),
+    // v15 (decision `custom-apps-and-data-sources`): custom apps, owned by
+    // the pod's user. `feeds_json` is the app's root feeds, `[[source,
+    // feed], ...]`; `deleted_at` marks a soft delete (purged after 30 days).
+    // Their versions are `app_versions` rows like a built-in app's;
+    // `author` says who wrote a version (`user` | `claude`; NULL for files)
+    // and `meta_json` holds extra facts about it (`copied_from`, ...).
+    Migration::Sql(
+        "CREATE TABLE custom_apps (
+         id         TEXT PRIMARY KEY NOT NULL,
+         title      TEXT NOT NULL,
+         icon       TEXT NOT NULL,
+         feeds_json TEXT NOT NULL,
+         created_at INTEGER NOT NULL,
+         updated_at INTEGER NOT NULL,
+         deleted_at INTEGER
+     );
+     ALTER TABLE app_versions ADD COLUMN author TEXT;
+     ALTER TABLE app_versions ADD COLUMN meta_json TEXT;",
+    ),
 ];
 
 /// A pod setting inside a transaction (an adapter migration reads its
@@ -589,6 +608,11 @@ pub struct AppVersion {
     /// a file version recorded before v9 whose file is missing from this
     /// build (see [`AppVersion::schema`]).
     pub schema: Option<u32>,
+    /// Who wrote it: `user` or `claude` for a custom app's version, `None`
+    /// for a layout file's (store v15).
+    pub author: Option<String>,
+    /// Extra facts about the version as a JSON object, e.g. `copied_from`.
+    pub meta_json: Option<String>,
 }
 
 impl AppVersion {
@@ -696,7 +720,8 @@ pub fn open_session_on(
     attach_sign_in_on(tx, token_hash, sign_in)
 }
 
-const APP_VERSION_COLS: &str = "app_id, version, created_at, source, note, file_key, hash, schema";
+const APP_VERSION_COLS: &str =
+    "app_id, version, created_at, source, note, file_key, hash, schema, author, meta_json";
 
 fn app_version_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AppVersion> {
     Ok(AppVersion {
@@ -708,10 +733,15 @@ fn app_version_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AppVersion> {
         file_key: r.get(5)?,
         hash: r.get(6)?,
         schema: r.get(7)?,
+        author: r.get(8)?,
+        meta_json: r.get(9)?,
     })
 }
 
-fn latest_app_version_on(conn: &Connection, app_id: &str) -> rusqlite::Result<Option<AppVersion>> {
+pub(crate) fn latest_app_version_on(
+    conn: &Connection,
+    app_id: &str,
+) -> rusqlite::Result<Option<AppVersion>> {
     conn.query_row(
         &format!(
             "SELECT {APP_VERSION_COLS} FROM app_versions WHERE app_id = ?1
@@ -725,6 +755,31 @@ fn latest_app_version_on(conn: &Connection, app_id: &str) -> rusqlite::Result<Op
 
 /// A layout file's key and content hash (versions created from files).
 type FileRef<'a> = Option<(&'a str, &'a str)>;
+
+/// A version written at runtime (a custom app's): who wrote it and extra
+/// facts ([`AppVersion::author`], [`AppVersion::meta_json`]).
+pub(crate) struct Authored<'a> {
+    pub author: &'a str,
+    pub meta_json: Option<&'a str>,
+}
+
+/// Append a custom app's version: `json` as version `MAX + 1`.
+pub(crate) fn append_authored_version_on(
+    conn: &Connection,
+    app_id: &str,
+    json: &str,
+    source: &str,
+    note: Option<&str>,
+    schema: u32,
+    by: Authored<'_>,
+) -> rusqlite::Result<i64> {
+    let version = append_app_version_on(conn, app_id, json, source, note, None, schema)?;
+    conn.execute(
+        "UPDATE app_versions SET author = ?1, meta_json = ?2 WHERE app_id = ?3 AND version = ?4",
+        params![by.author, by.meta_json, app_id, version],
+    )?;
+    Ok(version)
+}
 
 /// Append `json` as version `MAX + 1` of the app (blob stored once by hash);
 /// `file` = `(file_key, file_hash)`; `schema` = the schema it was written for.

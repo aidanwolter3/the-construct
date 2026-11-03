@@ -152,6 +152,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             ],
         },
     ],
+    dev: false,
 };
 
 /// What the adapter's handlers read per request: the config and what is

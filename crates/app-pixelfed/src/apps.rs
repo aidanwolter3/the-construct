@@ -88,6 +88,7 @@ const DEMO_MANIFEST: SourceManifest = SourceManifest {
         query_keys: &[],
         doc: "Accepts any action and changes nothing.",
     }],
+    dev: true,
     ..SourceManifest::new("Pixelfed demo")
 };
 

@@ -906,7 +906,9 @@ async fn a_session_from_before_v11_stays_signed_in() {
         let conn = rusqlite::Connection::open(dir.path().join("server.db")).unwrap();
         conn.execute_batch(
             "DROP TABLE session_sign_ins; DROP TABLE adapter_migrations;
-             ALTER TABLE sessions DROP COLUMN pinned; PRAGMA user_version = 10;",
+             ALTER TABLE sessions DROP COLUMN pinned;
+             ALTER TABLE app_versions DROP COLUMN author;
+             ALTER TABLE app_versions DROP COLUMN meta_json; PRAGMA user_version = 10;",
         )
         .unwrap();
         let later: Vec<String> = conn
@@ -915,7 +917,7 @@ async fn a_session_from_before_v11_stays_signed_in() {
                  AND (name LIKE 'recipes%' OR name IN ('pixelfed_session_instance', 'pixelfed_pending_posts'))
                  OR (type = 'table' AND name IN ('pod_settings', 'uploads', 'notifications',
                      'notification_polls', 'devices', 'device_channel_prefs',
-                     'pixelfed_notify_cursor'))",
+                     'pixelfed_notify_cursor', 'custom_apps'))",
             )
             .unwrap()
             .query_map([], |r| r.get(0))

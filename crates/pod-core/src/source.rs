@@ -38,6 +38,9 @@ pub struct SourceManifest {
     pub actions: &'static [PathSpec],
     /// The entities it serves, with their fields.
     pub entities: &'static [EntityDoc],
+    /// A dev source (fixture data): custom apps may use it only where dev
+    /// apps are shown (`CONSTRUCT_SHOW_DEV_APPS=1`).
+    pub dev: bool,
 }
 
 impl SourceManifest {
@@ -52,6 +55,7 @@ impl SourceManifest {
             data_paths: &[],
             actions: &[],
             entities: &[],
+            dev: false,
         }
     }
 
@@ -232,6 +236,16 @@ fn parse_key_pattern(p: &str) -> Result<Vec<Part<'_>>, String> {
 /// Check that `p` is a valid query-key pattern.
 pub fn check_key_pattern(p: &str) -> Result<(), String> {
     parse_key_pattern(p).map(|_| ())
+}
+
+/// Whether the layout query key `key` (bindings and all, e.g.
+/// `comments:$route.id`) fits the valid pattern `pattern`.
+pub fn key_matches(pattern: &str, key: &str) -> bool {
+    let Ok(p) = parse_key_pattern(pattern) else {
+        return false;
+    };
+    let parts: Vec<&str> = key.split(':').collect();
+    parts.len() == p.len() && p.iter().zip(&parts).all(|(pp, k)| part_matches(*pp, k))
 }
 
 /// Whether some query key matches both patterns (both valid).

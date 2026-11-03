@@ -303,6 +303,31 @@ paths, e.g. the Pixelfed media proxy).
   `fly ssh console -a the-construct-pod -C "/server pods remove-adopted"`. The image has no shell, so `rm` doesn't
   exist there (not in `fly ssh sftp shell` either).
 
+## Custom apps
+
+A pod's user can have apps of their own next to the built-in ones (decision `custom-apps-and-data-sources`, issue
+#45): any layout the node vocabulary can draw, over the feeds, screen data and actions the pod's data sources
+declare (each adapter's `SourceManifest`). They are served like built-ins (workspace, SSE, versions, schema
+negotiation) and marked `"kind": "custom"` in `GET /v1/apps`. Every write is validated against the app's sources
+(errors name a JSON pointer and what is allowed) and appended to the app's history.
+
+```bash
+pod=http://127.0.0.1:8080; token=cpod_…   # the pod token
+curl -fsS -H "Authorization: Bearer $token" -H 'content-type: application/json' $pod/v1/custom-apps -d '{
+  "title": "Kitchen", "icon": "recipe", "feeds": [["recipes", "all"], ["pixelfed", "home"]],
+  "note": "Recipes next to my feed", "layout": {"type": "core://Workspace", "title": "Kitchen", "slots": […]}}'
+```
+
+- `GET /v1/custom-apps/{id}` (feeds, latest layout), `PUT …/{id}/layout {layout, note?, base_version?}` (409
+  `stale_base`), `PATCH …/{id} {title?, icon?, feeds?}`, `POST …/{id}/restore {version}`, `DELETE …/{id}` (soft;
+  purged after 30 days; open streams get `event: deleted`), `POST /v1/custom-apps/validate {feeds, layout}` (dry run),
+  `PUT /v1/apps/{id}/hidden {hidden}` (any app; hidden apps are listed only with `GET /v1/apps?all=1`).
+- Writes need the pod token's session; any valid session may delete and hide. The pod sets the layout's root `id`.
+- A custom app's root also gets `core://sources/<source>` entities `{title, signed_in, error?}`: a signed-out or
+  failing source shows no data, and the layout can say so (`${core://sources/pixelfed#signed_in}`). Sign-ins start
+  from Settings; custom layouts can't hold sign-in buttons.
+- Caps per pod: 50 apps, 500 versions per app (the oldest are pruned), 256 KiB per layout, 60 writes a minute.
+
 ## Notifications
 
 Apps send notifications through the pod (D52, design in `docs/NOTIFICATIONS.md`). Only an app's adapter knows where

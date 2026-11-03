@@ -14,6 +14,7 @@
 //! list of feeds, which the core runs and merges.
 
 pub mod adapter;
+pub mod custom;
 pub mod disk;
 pub mod layouts;
 pub mod net;
@@ -49,6 +50,7 @@ pub use adapter::{
     AppAdapter, AppInfo, AuthPolicy, BoxFuture, Catalog, Hydration, Pod, RequestCtx, SignInAccount,
     SignInProvider,
 };
+pub use custom::{AppRef, CustomApp};
 pub use notify::{NewNotification, PollCtx, PollOutcome, PollStatus};
 pub use session::{Caller, Session};
 pub use source::{EntityDoc, FeedSpec, PathSpec, SourceManifest};
@@ -127,6 +129,8 @@ pub struct AppState {
     /// This pod's public path prefix, set by the host (D46), for work done
     /// outside a request (notification polls).
     public_prefix: std::sync::OnceLock<String>,
+    /// Custom apps: caps and the write-rate window.
+    pub(crate) custom: custom::CustomState,
 }
 
 impl AppState {
@@ -183,6 +187,7 @@ impl AppState {
             notifier: notify::Notifier::default(),
             push: None,
             public_prefix: std::sync::OnceLock::new(),
+            custom: custom::CustomState::default(),
         })
     }
 
@@ -338,10 +343,63 @@ impl AppState {
                 {
                     tracing::info!(deleted = n, "old unclaimed uploads deleted");
                 }
+                let purged = blocking(&pod, |s| custom::purge(s, util::now_secs())).await;
+                if let Ok(n) = purged
+                    && n > 0
+                {
+                    tracing::info!(purged = n, "deleted custom apps purged");
+                }
                 drop(pod);
                 tokio::time::sleep(uploads::SWEEP_EVERY).await;
             }
         });
+    }
+
+    /// Limits on custom apps ([`custom::Caps`]).
+    pub fn with_custom_app_caps(mut self, caps: custom::Caps) -> Self {
+        self.custom = custom::CustomState::new(caps);
+        self
+    }
+
+    /// The app `id`: a built-in one, or a live custom app. `None` for an
+    /// unknown or deleted app.
+    pub async fn app(self: &Pod, id: &str) -> Result<Option<custom::AppRef>, ApiError> {
+        if let Some(a) = self.catalog.app(id) {
+            return Ok(Some(custom::AppRef::Builtin(*a)));
+        }
+        if !custom::is_custom_id(id) {
+            return Ok(None);
+        }
+        let id = id.to_owned();
+        blocking(self, move |s| {
+            s.with_conn(|c| custom::custom_app_on(c, &id))
+        })
+        .await
+        .map(|a| a.map(custom::AppRef::Custom))
+    }
+
+    /// The data sources app `app` draws on: its feeds' sources, plus a
+    /// built-in app's own adapter.
+    pub fn sources_of(&self, app: &custom::AppRef) -> Vec<&'static str> {
+        match app {
+            custom::AppRef::Builtin(a) => self
+                .catalog
+                .app_sources(a.id)
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect(),
+            custom::AppRef::Custom(a) => {
+                let mut out: Vec<&'static str> = Vec::new();
+                for (s, _) in &a.feeds {
+                    if let Some((adapter, _)) = self.catalog.source(s)
+                        && !out.contains(&adapter.name())
+                    {
+                        out.push(adapter.name());
+                    }
+                }
+                out
+            }
+        }
     }
 
     /// Enable `POST /v1/test/fault` (`CONSTRUCT_TEST_HOOKS=1`).
@@ -393,8 +451,9 @@ impl AppState {
     }
 
     /// Broadcast a new app version to SSE subscribers (no-op without any).
-    /// Nothing at runtime appends versions (they come with a deploy); tests
-    /// and tooling that append with [`layouts::append_version`] call this.
+    /// Built-in apps get new versions only with a deploy; custom app writes
+    /// ([`custom`]) call this, and so do tests and tooling that append with
+    /// [`layouts::append_version`].
     pub fn publish_layout(&self, workspace_id: &str, version: i64) {
         let _ = self.layout_tx.send(layouts::LayoutEvent {
             workspace_id: workspace_id.to_owned(),
@@ -438,6 +497,7 @@ pub fn app(state: Pod) -> Router {
         .merge(session::router())
         .merge(layouts::router())
         .merge(notify::router())
+        .merge(custom::router())
         .merge(uploads::router(state.upload_max_bytes));
     for a in state.catalog.adapters() {
         router = router.merge(a.router());
@@ -500,11 +560,15 @@ async fn get_workspace(
     if let Some(r) = layouts::reject_invalid_workspace_id(&id) {
         return r;
     }
-    let Some(app) = state.catalog.app(&id).copied() else {
-        return json_error(
-            StatusCode::NOT_FOUND,
-            json!({ "error": "workspace_not_found", "id": id }),
-        );
+    let app = match state.app(&id).await {
+        Ok(Some(app)) => app,
+        Ok(None) => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                json!({ "error": "workspace_not_found", "id": id }),
+            );
+        }
+        Err(e) => return e.into_response(),
     };
     let caller = match state.caller(&headers).await {
         Ok(c) => c,
@@ -519,17 +583,23 @@ async fn get_workspace(
         headers,
         session: caller.clone().into_session(),
     };
-    if let AuthPolicy::SignIn(sign_in) = app.auth
+    if let custom::AppRef::Builtin(info) = &app
+        && let AuthPolicy::SignIn(sign_in) = info.auth
         && !caller.has(sign_in)
     {
-        let screen = signed_out(&state, sign_in, &app, &req);
+        let screen = signed_out(&state, sign_in, info, &req);
         return if stale {
             session::stale_session(screen)
         } else {
             Json(screen).into_response()
         };
     }
-    let bundle = match compose(&state, app.feeds, &caller, &req).await {
+    let feeds = app.feeds();
+    let feeds: Vec<(&str, &str)> = feeds
+        .iter()
+        .map(|(s, f)| (s.as_str(), f.as_str()))
+        .collect();
+    let bundle = match compose(&state, &feeds, &caller, &req, app.is_custom()).await {
         Ok(bundle) => bundle,
         Err(r) => return r,
     };
@@ -555,15 +625,25 @@ async fn get_workspace(
 
 /// Run `feeds` (`(source, feed)`, checked by the catalog) concurrently and
 /// merge their data in order. A feed whose source needs a sign-in the caller
-/// lacks is skipped. Any other answer than data ends the request, the first
-/// in feed order winning: a fixed screen is served as is; a stale sign-in
-/// on a pinned session (a pod token, D46) loses only that sign-in and gets
-/// the screen, any other session a 401 with it; an error passes through.
+/// lacks is skipped.
+///
+/// A built-in app (`lenient` false) ends the request on any other answer
+/// than data, the first in feed order winning: a fixed screen is served as
+/// is; a stale sign-in on a pinned session (a pod token, D46) loses only
+/// that sign-in and gets the screen, any other session a 401 with it; an
+/// error passes through.
+///
+/// A custom app (`lenient` true) keeps going: a failing feed is skipped and
+/// recorded, a stale sign-in on a pinned session is detached (on any other
+/// session it is a 401, as for built-ins). It also gets one
+/// `core://sources/<id>` entity per source, `{title, signed_in, error?}`,
+/// so its layout can tell a signed-out or failing source apart.
 async fn compose(
     state: &Pod,
     feeds: &[(&str, &str)],
     caller: &Caller,
     req: &RequestCtx,
+    lenient: bool,
 ) -> Result<protocol::DataBundle, Response> {
     let runs = feeds.iter().map(|(source, feed)| async move {
         let (adapter, manifest) = state.catalog.source(source)?;
@@ -572,10 +652,17 @@ async fn compose(
         {
             return None;
         }
-        Some((manifest.sign_in, adapter.feed(state, feed, req).await))
+        Some((
+            adapter.name(),
+            manifest.sign_in,
+            adapter.feed(state, feed, req).await,
+        ))
     });
     let mut bundle = protocol::DataBundle::default();
-    for (sign_in, answer) in futures_util::future::join_all(runs)
+    // Sources whose sign-in went stale or whose feed failed.
+    let mut detached: Vec<&str> = Vec::new();
+    let mut errors: Vec<(&str, String)> = Vec::new();
+    for (source, sign_in, answer) in futures_util::future::join_all(runs)
         .await
         .into_iter()
         .flatten()
@@ -585,7 +672,8 @@ async fn compose(
                 bundle.entities.extend(data.entities);
                 bundle.queries.extend(data.queries);
             }
-            Hydration::Screen(screen) => return Err(Json(screen).into_response()),
+            Hydration::Screen(screen) if !lenient => return Err(Json(screen).into_response()),
+            Hydration::Screen(_) => errors.push((source, "unavailable".into())),
             Hydration::StaleSession(screen) => {
                 // A pinned session stays; only the unusable sign-in goes.
                 if let (Some(session), Some(sign_in)) = (&req.session, sign_in)
@@ -597,11 +685,43 @@ async fn compose(
                     {
                         return Err(e.into_response());
                     }
-                    return Err(Json(screen).into_response());
+                    if !lenient {
+                        return Err(Json(screen).into_response());
+                    }
+                    detached.push(source);
+                    continue;
                 }
                 return Err(session::stale_session(screen));
             }
-            Hydration::Error(r) => return Err(r),
+            Hydration::Error(r) if !lenient => return Err(r),
+            Hydration::Error(r) => {
+                let status = r.status();
+                tracing::warn!(source, %status, "a custom app's feed failed; served without it");
+                errors.push((source, format!("error {}", status.as_u16())));
+            }
+        }
+    }
+    if lenient {
+        let mut seen: Vec<&str> = Vec::new();
+        for (source, _) in feeds {
+            let Some((adapter, manifest)) = state.catalog.source(source) else {
+                continue;
+            };
+            let name = adapter.name();
+            if seen.contains(&name) {
+                continue;
+            }
+            seen.push(name);
+            let signed_in =
+                !detached.contains(&name) && manifest.sign_in.is_none_or(|s| caller.has(s));
+            let mut e = protocol::EntityRecord::default();
+            e.set("id", name);
+            e.set("title", manifest.title);
+            e.set("signed_in", signed_in);
+            if let Some((_, err)) = errors.iter().find(|(s, _)| *s == name) {
+                e.set("error", err.clone());
+            }
+            bundle.entities.insert(format!("core://sources/{name}"), e);
         }
     }
     Ok(bundle)
