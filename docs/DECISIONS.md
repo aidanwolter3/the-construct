@@ -1616,3 +1616,33 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   - Accepted: media URLs carry the pod id (128 random bits) and are readable without a token (public upstream media).
 - **Not yet:** self-service sign-up; per-device credentials and revoking one device; evicting idle pods from memory;
   sample recipes for temporary pods; a pod quota on disk; a separate Fly app for anonymous demos.
+
+## D47: Notifications from apps are a generic pod pipeline; only adapters know their source (design)
+
+Full design: `docs/NOTIFICATIONS.md`. Not built yet; each phase adds its own entry.
+
+- **Why:** the user wants Pixelfed notifications from their pod on every device, including when the app is closed.
+  Nothing existed: no background work in pods, SSE carried only layout events, no device record, no push on Android.
+- **Boundary (D34/D40):** only the adapter knows its upstream. pod-core, pod-host, the server binary, the engine, the
+  FFI and the shared UI handle notifications in general: an opaque `app_id`, channel ids the adapter declares
+  (`AppAdapter::notification_channels`), ready-made `title`/`body` text, and a `target_uri` the client resolves
+  against that app's own layout routes like any `action.navigation.open`.
+- **Source:** adapters either poll (`poll_notifications` + `poll_interval`, cursor in their own tables) or push in
+  (`AppState::notify`). One pipeline: insert with `UNIQUE(app_id, dedupe_key)` (idempotent), broadcast, push.
+  Pixelfed polls `GET /api/v1/notifications` (scope `read`, already granted); a first poll stores recent ones quietly.
+- **Waking pods:** pods open lazily, so the host runs a scheduler over `host.db` `pods.next_wake_at`; pods report
+  their next wake through a factory-provided hook and never see `host.db`. Pods poll only with a registered device
+  or a recent listener. Staging's pod machine is always on.
+- **Delivery:** the existing per-workspace SSE stream gains `notification` / `notifications_read` events for all of
+  the pod's apps (session required; old engines ignore them). Closed-app delivery is standard Web Push (RFC
+  8030/8291/8292, server-wide VAPID key) to an endpoint the device registers (`devices`, bound to the session,
+  per-device channel prefs). Android gets it through UnifiedPush, with the embedded FCM distributor as fallback, so
+  the pod never holds Google credentials. Push endpoints are client-supplied, so they go through the D45 guarded
+  public client (moved to `pod_core::net`).
+- **Clients:** a generic inbox (bell + unread count) in the shared UI, per-channel settings, Android channels named
+  `<app_id>.<channel>` made from the pod's list, desktop tray notifications while running. No `SCHEMA_VERSION` bump.
+- **Weighed:** FCM direct (simpler on stock Android, but Firebase secrets on the pod and a Google dependency);
+  upstream push subscriptions (Pixelfed's push is Expo-only for its own app, so polling); a separate pod-wide
+  events stream (a second connection per client for no gain); notifications as layout entities only (they span
+  apps, so the inbox is client chrome like the app menu; a `DataBundle` endpoint for per-app screens is optional).
+- **Not yet:** everything (phases in the design); closed-app push on desktop.
