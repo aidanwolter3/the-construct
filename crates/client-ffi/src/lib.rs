@@ -35,6 +35,9 @@ pub struct FfiStateSnapshot {
     pub layout_json: String,
     /// Data path loads: `{path: {"state", "error"?}}` (docs/DECISIONS.md D34).
     pub loads_json: String,
+    /// Unread notifications (D47): `{"unread_total": n, "unread_by_app":
+    /// {app_id: n}}`; zeros while signed out.
+    pub notifications_json: String,
 }
 
 impl From<StateSnapshot> for FfiStateSnapshot {
@@ -49,6 +52,7 @@ impl From<StateSnapshot> for FfiStateSnapshot {
             auth_json: s.auth_json,
             layout_json: s.layout_json,
             loads_json: s.loads_json,
+            notifications_json: s.notifications_json,
         }
     }
 }
@@ -114,6 +118,17 @@ pub trait SecureStore: Send + Sync {
 #[uniffi::export(callback_interface)]
 pub trait UrlOpener: Send + Sync {
     fn open(&self, url: String) -> bool;
+}
+
+/// Gets each notification that arrives live while the engine's events
+/// stream is open (D47), as `Notification` JSON (`{id, app_id, channel,
+/// title, body, image_url?, target_uri?, group_key?, created_at, read}`), so
+/// the platform can show it. Never called for notifications fetched by a
+/// list call, replayed or passed to `handle_push_message`. Called on the
+/// engine's events thread; an exception thrown here is contained.
+#[uniffi::export(callback_interface)]
+pub trait NotificationListener: Send + Sync {
+    fn on_notification(&self, notification_json: String);
 }
 
 struct StoreAdapter(Box<dyn SecureStore>);
@@ -273,6 +288,108 @@ impl EngineHandle {
     pub fn app_version(&self, app_id: String, version: i64) -> Result<String, LayoutApiError> {
         Ok(self.inner.app_version(&app_id, version)?)
     }
+
+    // Notifications (D47). The calls below are blocking (call them off the
+    // UI thread) and return JSON. Without a session there are none: lists
+    // are empty, counts zero, and the calls that need one fail
+    // `Unauthorized`.
+
+    /// Set (replace) the listener for notifications that arrive live.
+    pub fn set_notification_listener(&self, listener: Box<dyn NotificationListener>) {
+        self.inner.set_notification_listener(move |n| {
+            listener.on_notification(serde_json::to_string(n).unwrap_or_default())
+        });
+    }
+
+    /// What the pod shows for this device (`platform` e.g. "android",
+    /// "desktop"; `name` e.g. the device model). Non-blocking.
+    pub fn set_device_info(&self, platform: String, name: String) {
+        self.inner.set_device_info(&platform, &name);
+    }
+
+    /// This installation's device id (stable across restarts).
+    pub fn device_id(&self) -> String {
+        self.inner.device_id()
+    }
+
+    /// One page of notifications, newest first: `{notifications: [...],
+    /// unread_total, unread_by_app, next_before?}` (pass `next_before` as
+    /// `before` for the next page; `limit` 0..=100). From the pod, else
+    /// (unreachable) from the cache.
+    pub fn list_notifications(
+        &self,
+        before: Option<String>,
+        limit: u32,
+        app_id: Option<String>,
+    ) -> Result<String, LayoutApiError> {
+        let list = self
+            .inner
+            .list_notifications(before.as_deref(), limit, app_id.as_deref())?;
+        Ok(serde_json::to_string(&list).unwrap_or_default())
+    }
+
+    /// Mark notifications read (at once locally, then on the pod):
+    /// `{unread_total, unread_by_app}`.
+    pub fn mark_notifications_read(&self, ids: Vec<String>) -> Result<String, LayoutApiError> {
+        let ev = self.inner.mark_notifications_read(&ids)?;
+        Ok(serde_json::to_string(&ev).unwrap_or_default())
+    }
+
+    /// Mark every notification read (of one app, when given).
+    pub fn mark_all_notifications_read(
+        &self,
+        app_id: Option<String>,
+    ) -> Result<String, LayoutApiError> {
+        let ev = self.inner.mark_all_notifications_read(app_id.as_deref())?;
+        Ok(serde_json::to_string(&ev).unwrap_or_default())
+    }
+
+    /// `{"channels": [{app_id, id, title, description, default_enabled,
+    /// importance, enabled}]}` with this device's choices.
+    pub fn notification_channels(&self) -> Result<String, LayoutApiError> {
+        Ok(self.inner.notification_channels()?)
+    }
+
+    /// Turn one of an app's channels on or off for this device.
+    pub fn set_channel_enabled(
+        &self,
+        app_id: String,
+        channel: String,
+        enabled: bool,
+    ) -> Result<(), LayoutApiError> {
+        Ok(self.inner.set_channel_enabled(&app_id, &channel, enabled)?)
+    }
+
+    /// The server's VAPID public key (base64url) for a Web Push
+    /// subscription; `NotFound` when the server sends no push.
+    pub fn push_public_key(&self) -> Result<String, LayoutApiError> {
+        Ok(self.inner.push_public_key()?)
+    }
+
+    /// Send this device's Web Push subscription to the pod (remembered and
+    /// sent again after the next sign-in).
+    pub fn register_push(
+        &self,
+        endpoint: String,
+        p256dh: String,
+        auth: String,
+    ) -> Result<(), LayoutApiError> {
+        Ok(self.inner.register_push(&endpoint, &p256dh, &auth)?)
+    }
+
+    /// Stop Web Push to this device.
+    pub fn unregister_push(&self) -> Result<(), LayoutApiError> {
+        Ok(self.inner.unregister_push()?)
+    }
+
+    /// A decrypted Web Push message body: cached, unread counts updated
+    /// (observers notified); returns the `Notification` JSON, or None if
+    /// the body is not a notification. Never calls the listener.
+    pub fn handle_push_message(&self, payload_json: String) -> Option<String> {
+        self.inner
+            .handle_push_message(&payload_json)
+            .map(|n| serde_json::to_string(&n).unwrap_or_default())
+    }
 }
 
 uniffi::setup_scaffolding!();
@@ -330,6 +447,23 @@ mod tests {
             handle.app_version("home".into(), 1),
             Err(LayoutApiError::Offline { .. })
         ));
+
+        // Notifications: signed out there are none, and no errors.
+        assert_eq!(
+            handle.list_notifications(None, 20, None).unwrap(),
+            r#"{"notifications":[],"unread_total":0,"unread_by_app":{}}"#
+        );
+        assert_eq!(
+            handle.notification_channels().unwrap(),
+            r#"{"channels":[]}"#
+        );
+        assert!(matches!(
+            handle.push_public_key(),
+            Err(LayoutApiError::Unauthorized { .. })
+        ));
+        assert_eq!(handle.handle_push_message("nope".into()), None);
+        assert_eq!(handle.device_id(), handle.device_id());
+        assert!(handle.device_id().len() >= 8);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -429,12 +563,18 @@ mod tests {
             auth_json: r#"{"state":"signed_in","username":"a"}"#.into(),
             layout_json: r#"{"app_id":"home","version":5}"#.into(),
             loads_json: r#"{"/v1/x":{"state":"ready"}}"#.into(),
+            notifications_json: r#"{"unread_total":1,"unread_by_app":{"a":1}}"#.into(),
         };
         let ffi: FfiStateSnapshot = core.clone().into();
         assert_eq!(ffi.queries_json, core.queries_json);
         assert_eq!(ffi.auth_json, core.auth_json);
         assert_eq!(ffi.layout_json, core.layout_json);
         assert_eq!(ffi.loads_json, core.loads_json);
+        assert_eq!(ffi.notifications_json, core.notifications_json);
+        assert_eq!(
+            snap.notifications_json,
+            r#"{"unread_by_app":{},"unread_total":0}"#
+        );
         assert_eq!(snap.layout_json, "{}");
         assert_eq!(snap.loads_json, "{}");
         assert_eq!((ffi.seq, ffi.pending_actions), (7, 2));
