@@ -16,6 +16,7 @@ pub mod layouts;
 pub mod net;
 pub mod notify;
 pub mod push;
+pub mod secrets;
 pub mod session;
 pub mod static_app;
 pub mod store;
@@ -135,6 +136,8 @@ impl AppState {
             store
                 .migrate_adapter(a.name(), a.migrations())
                 .map_err(|e| format!("migrating the '{}' adapter's tables: {e}", a.name()))?;
+            a.on_open(&store)
+                .map_err(|e| format!("opening the '{}' adapter's data: {e}", a.name()))?;
         }
         let report = layouts::sync(&store, &catalog)?;
         for warning in &report.missing {
@@ -171,12 +174,12 @@ impl AppState {
         })
     }
 
-    /// State backed by `<dir>/server.db` (the directory is created).
+    /// State backed by `<dir>/server.db` (the directory is created, 0700).
     pub fn open_dir(
         dir: &FsPath,
         adapters: Vec<Arc<dyn AppAdapter>>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        std::fs::create_dir_all(dir)?;
+        util::create_private_dir(dir)?;
         Ok(Self::try_new(
             Store::open(&dir.join("server.db"))?,
             adapters,

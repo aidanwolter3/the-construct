@@ -137,6 +137,17 @@ pub trait AppAdapter: Any + Send + Sync {
         &[]
     }
 
+    /// Upkeep each time a pod opens, after the migrations, for data that
+    /// depends on the server's configuration rather than the schema: e.g.
+    /// sealing stored credentials under the current key
+    /// ([`Store::secrets`](crate::store::Store::secrets)), which a one-time
+    /// migration can't do because the key may be set or rotated later. An
+    /// error stops the pod from opening, so only fail on database errors.
+    fn on_open(&self, store: &crate::store::Store) -> Result<(), String> {
+        let _ = store;
+        Ok(())
+    }
+
     /// The data for `GET /v1/workspaces/:id`, for one of this adapter's apps.
     ///
     /// Called on every workspace fetch, including each refetch after an SSE

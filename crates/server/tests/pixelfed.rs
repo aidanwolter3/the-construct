@@ -948,6 +948,64 @@ async fn a_session_from_before_v11_stays_signed_in() {
     );
 }
 
+/// Staging's upgrade to sealed credentials: a sign-in stored in plaintext
+/// (no `CONSTRUCT_SECRETS_KEY`) is sealed when the pod opens with a key and
+/// keeps working; new sign-ins are sealed; the file is private.
+#[tokio::test]
+async fn plaintext_credentials_are_sealed_when_a_key_is_set() {
+    use server::secrets::Secrets;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("server.db");
+    let plain = server::state_new(
+        server::store::Store::open(&path)
+            .unwrap()
+            .with_secrets(Secrets::none()),
+    );
+    let env = env_with(plain).await;
+    let session = sign_in(&env).await;
+    env.pod.handle.abort();
+    let raw = |what: &str| -> String {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.query_row(&format!("SELECT {what} FROM pixelfed_account"), [], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    };
+    let token = raw("access_token");
+    assert!(!Secrets::is_sealed(&token));
+
+    let key = Secrets::from_keys(&[[42; 32]]);
+    let state = server::state_new(server::store::Store::open(&path).unwrap().with_secrets(key))
+        .with_pixelfed(PixelfedConfig::new(&env.fake.url, None));
+    for col in ["access_token", "refresh_token"] {
+        let v = raw(col);
+        assert!(Secrets::is_sealed(&v) && !v.contains(&token), "{col}: {v}");
+    }
+    let secret: String = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row("SELECT client_secret FROM pixelfed_apps", [], |r| r.get(0))
+        .unwrap();
+    assert!(Secrets::is_sealed(&secret));
+    let pod = spawn_pod(state).await;
+    let (status, body) = get_home(&pod.url, Some(&session)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        !body["queries"]["timeline:home"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    // A new sign-in (registered app reused, its secret opened) is sealed too.
+    sign_in_at(&pod.url, &env.fake.url).await;
+    assert!(Secrets::is_sealed(&raw("access_token")));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+}
+
 /// Signing in again with a valid session keeps that session (one session
 /// collects every sign-in, D40); without one, a new session is made.
 #[tokio::test]
