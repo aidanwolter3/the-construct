@@ -298,8 +298,9 @@ pub struct RequestCtx {
     /// The request headers (`Host` and `X-Forwarded-Proto` for absolute
     /// URLs; [`protocol::SCHEMA_HEADER`]).
     pub headers: HeaderMap,
-    /// The client's schema ([`crate::layouts::client_schema`]).
-    pub schema: u32,
+    /// What the client draws: its schema and features
+    /// ([`crate::layouts::client_caps`]).
+    pub client: protocol::ClientCaps,
     /// The caller's valid session, if the request carried one.
     pub session: Option<Session>,
 }

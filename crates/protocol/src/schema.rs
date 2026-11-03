@@ -38,6 +38,17 @@
 //! - 12: `core://List` `focus` (scroll to one item and tint it,
 //!   docs/decisions/list-focus.md). Additive.
 //!
+//! # Additive changes: features, not numbers
+//!
+//! After 12, additive vocabulary no longer bumps [`SCHEMA_VERSION`] (one
+//! shared counter made every parallel change conflict,
+//! docs/decisions/layout-features.md). Each addition is a named feature, one
+//! file `crates/protocol/features/<name>.md` (see its README), mapped from the
+//! nodes that use it in [`node_features`] / [`intent_features`]. A client
+//! sends the features it draws in [`FEATURES_HEADER`]; a layout needs the
+//! features [`required_features`] finds in it, worked out by the pod (layout
+//! files don't declare them). [`ClientCaps::can_draw`] checks both.
+//!
 //! # A breaking schema change
 //!
 //! Bump [`SCHEMA_VERSION`], then add `(new version, oldest layout schema it
@@ -47,11 +58,20 @@
 //! old layouts would still draw need a new version file declaring the new
 //! schema.
 
+use std::collections::BTreeSet;
+
 use crate::{ActionIntent, Align, Position, TextStyle, UiNode};
+
+include!(concat!(env!("OUT_DIR"), "/features.rs"));
 
 /// Request header carrying the client's schema version.
 pub const SCHEMA_HEADER: &str = "x-construct-schema";
-/// The schema version this build draws.
+/// Request header carrying the features the client draws, comma-separated
+/// ([`FEATURES`]). Absent means none.
+pub const FEATURES_HEADER: &str = "x-construct-features";
+/// The schema version this build draws: the base vocabulary. Bumped only by a
+/// breaking change (with a [`RETIRED`] entry); additive vocabulary is a
+/// feature ([`FEATURES`]).
 pub const SCHEMA_VERSION: u32 = 12;
 
 /// Breaking changes, oldest first: `(client schema, oldest layout schema it
@@ -106,6 +126,89 @@ pub fn compatibility(layout: u32, client: u32) -> Compatibility {
     } else {
         Compatibility::Compatible
     }
+}
+
+/// What a client draws: its schema and its features.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClientCaps {
+    pub schema: u32,
+    pub features: BTreeSet<String>,
+}
+
+impl ClientCaps {
+    /// What this build draws ([`SCHEMA_VERSION`], [`FEATURES`]).
+    pub fn this_build() -> Self {
+        Self {
+            schema: SCHEMA_VERSION,
+            features: FEATURES.iter().map(|f| (*f).to_owned()).collect(),
+        }
+    }
+
+    /// A client of `schema` with no features.
+    pub fn schema(schema: u32) -> Self {
+        Self {
+            schema,
+            features: BTreeSet::new(),
+        }
+    }
+
+    /// `self` with the features of a [`FEATURES_HEADER`] value.
+    pub fn with_features_header(mut self, value: &str) -> Self {
+        self.features = parse_features(value);
+        self
+    }
+
+    /// Whether this client can draw a layout written for `schema` that uses
+    /// `features`, and why not.
+    pub fn can_draw<S: AsRef<str>>(&self, schema: u32, features: &[S]) -> Compatibility {
+        match compatibility(schema, self.schema) {
+            Compatibility::Compatible
+                if features.iter().any(|f| !self.features.contains(f.as_ref())) =>
+            {
+                Compatibility::UpdateRequired
+            }
+            c => c,
+        }
+    }
+}
+
+/// The [`FEATURES_HEADER`] value of this build.
+pub fn features_header() -> String {
+    FEATURES.join(",")
+}
+
+/// The feature names of a [`FEATURES_HEADER`] value (blank entries dropped).
+pub fn parse_features(value: &str) -> BTreeSet<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The features `node` (and everything under it) uses, sorted.
+pub fn required_features(node: &UiNode) -> Vec<&'static str> {
+    let mut out = BTreeSet::new();
+    for n in node.walk() {
+        node_features(n, &mut out);
+        for i in n.own_intents() {
+            intent_features(i, &mut out);
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// The features one node uses itself (not its children). Add one arm per
+/// feature, e.g. `if let UiNode::Foo { .. } = node { out.insert(feature::FOO); }`
+/// (`crates/protocol/features/README.md`).
+fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
+    let _ = (node, out);
+}
+
+/// The features one action intent uses; see [`node_features`].
+fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
+    let _ = (intent, out);
 }
 
 fn intent_schema(i: &ActionIntent) -> u32 {
@@ -460,6 +563,34 @@ mod tests {
             last = (client, oldest);
         }
         assert!(oldest_layout_schema(SCHEMA_VERSION) <= SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn features_gate_layouts() {
+        use Compatibility::*;
+        let old = ClientCaps::schema(12);
+        let new = ClientCaps::schema(12).with_features_header(" foo, ,bar ");
+        assert_eq!(
+            new.features.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["bar", "foo"]
+        );
+        let none: [&str; 0] = [];
+        assert_eq!(old.can_draw(12, &none), Compatible);
+        assert_eq!(old.can_draw(12, &["foo"]), UpdateRequired);
+        assert_eq!(new.can_draw(11, &["foo"]), Compatible);
+        assert_eq!(new.can_draw(12, &["foo", "bar"]), Compatible);
+        assert_eq!(new.can_draw(12, &["foo", "baz"]), UpdateRequired);
+        // The schema still decides first: a retired layout stays retired.
+        assert_eq!(new.can_draw(2, &none), Retired);
+        assert_eq!(new.can_draw(13, &["foo"]), UpdateRequired);
+        // This build draws every feature it knows, by name.
+        let this = ClientCaps::this_build();
+        assert_eq!(this.schema, SCHEMA_VERSION);
+        assert_eq!(parse_features(&features_header()), this.features);
+        assert!(FEATURES.windows(2).all(|w| w[0] < w[1]), "sorted");
+        // Nothing before features needs one.
+        let sticky = node(json!({"type": "core://Sticky", "content": {"type": "core://Divider"}}));
+        assert!(required_features(&sticky).is_empty());
     }
 
     #[test]

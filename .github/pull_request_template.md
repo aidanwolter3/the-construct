@@ -4,7 +4,7 @@
 
 ## Compatibility
 
-- **Schema bump:** no <!-- yes: protocol::SCHEMA_VERSION went from N to N+1 -->
+- **Schema bump / new feature:** no <!-- or: new layout feature `<name>` (crates/protocol/features/); or: breaking, protocol::SCHEMA_VERSION went from N to N+1 with a RETIRED entry -->
 - **Client update needed:** no <!-- yes: users need a new desktop/Android build; no: ships via the pod/layout files only -->
 
 ## Screenshots

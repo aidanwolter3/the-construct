@@ -126,6 +126,7 @@ impl Inner {
                 protocol::SCHEMA_HEADER,
                 protocol::SCHEMA_VERSION.to_string(),
             )
+            .header(protocol::FEATURES_HEADER, protocol::features_header())
             .header(protocol::DEVICE_HEADER, &self.device_id);
         // A pod host (D46) needs the pod token to know whose apps these are.
         if let Some(t) = self.session_token() {
