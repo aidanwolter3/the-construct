@@ -1,5 +1,8 @@
 # Collection fields can be computed from the row, and rows ordered by several fields
 
+Amended by [collection-lookups](collection-lookups.md): a `lookup` kind reads rules in another collection, and
+`compute` may be a list of kinds tried in order.
+
 Date: 2026-11-03. Related: [collections](collections.md), [custom-apps-and-data-sources](custom-apps-and-data-sources.md),
 issue #62. Amends `collections`, which said "no computed fields".
 

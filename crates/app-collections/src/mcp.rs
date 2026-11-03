@@ -25,9 +25,14 @@ break. edit_rows changes rows directly (imports, backfills): it first answers a 
 must show the user (the count and the sample) before calling again with its confirm token; every edit \
 can be undone with undo_edit. Any field may be computed from the row's other fields \
 whenever they change: compute: {kind: \"expr\", expr} evaluates a small expression at once (entity.<field>, \
-literals, + joins text or adds numbers, -, !, c ? a : b, parentheses), and compute: {kind: \"model\", from: \
+literals, + joins text or adds numbers, -, !, c ? a : b, parentheses); compute: {kind: \"lookup\", from, \
+collection, key, value, match: exact|contains|regex, learn?} takes the value of the best matching row of \
+another collection, kept as editable rules (the longest key wins); and compute: {kind: \"model\", from: \
 [fields], prompt} has a model answer the prompt about those fields in the background (a choice answers one \
 of its options; each input is asked once, and a value set by hand is kept and remembered for that input). \
+compute may be a list tried in order, e.g. [lookup with learn: true, model]: rules first, the model only \
+when none matches, and its answers (and hand edits) are added as rules. After editing rules, apply_change \
+{op: recompute_field} computes the field again for every row. \
 order_by may list several fields ([\"section\", \"done\"]; a choice sorts by the order of its options).";
 
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
@@ -41,11 +46,15 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
 pub fn tools() -> Vec<Value> {
     let collection = json!({ "type": "string", "description": "A collection's name" });
     let note = json!({ "type": "string", "description": "What changed, in the user's words (shown in the history)" });
-    let compute = json!({ "type": ["object", "null"],
-        "description": "The pod computes the value from the row's other fields (not from other computed fields), again whenever they change; a value written by hand stays until they change. kind \"expr\": {kind, expr}, e.g. \"entity.quantity ? entity.name + \\\" (\\\" + entity.quantity + \\\")\\\" : entity.name\" (entity.<field>, JSON literals, + joins text or adds numbers, -, !, c ? a : b, parentheses; an empty value is \"\" or 0 and false in a condition), evaluated in the write. kind \"model\": {kind, from: field or [fields], prompt}, e.g. {from: \"name\", prompt: \"Which grocery store section is this item in?\"}: a model answers in the background (a choice: one of its options; text: trimmed), each input once; a value set by hand is remembered as the answer for that input. Needs optional or a default (what the row reads until computed). null: stop computing.",
-        "properties": { "kind": { "type": "string", "enum": ["expr", "model"] }, "expr": { "type": "string" },
+    let kind = json!({ "type": "object",
+        "properties": { "kind": { "type": "string", "enum": ["expr", "lookup", "model"] }, "expr": { "type": "string" },
             "from": { "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
-            "prompt": { "type": "string" } }, "required": ["kind"] });
+            "prompt": { "type": "string" }, "collection": { "type": "string" }, "key": { "type": "string" },
+            "value": { "type": "string" }, "match": { "type": "string", "enum": model::Match::ALL },
+            "learn": { "type": "boolean" } }, "required": ["kind"] });
+    let compute = json!({
+        "description": "The pod computes the value from the row's other fields (not from other computed fields), again whenever they change; a value written by hand stays until they change. One kind, or a list of kinds tried in order (the first with an answer wins; a model is last). kind \"lookup\": {kind, from: field, collection, key, value, match?: exact (the default; ignores case and spacing) | contains (the key's whole words, ignoring case) | regex (case-insensitive, at most 200 characters; an invalid one is skipped and listed by describe_collection), learn?}: the value field of the row of another collection whose key (a text field) matches this row's from field, the longest matching key winning; evaluated in the write; not recomputed when the rules change (apply_change recompute_field does). learn: true adds a rule (the input as an exact key, or an anchored regex) when a later kind (the model) answers, and a hand edit of the field adds or changes that rule. Example: [{kind: \"lookup\", from: \"name\", collection: \"section_rules\", key: \"pattern\", value: \"section\", match: \"contains\", learn: true}, {kind: \"model\", from: \"name\", prompt: \"...\"}]. kind \"expr\": {kind, expr}, e.g. \"entity.quantity ? entity.name + \\\" (\\\" + entity.quantity + \\\")\\\" : entity.name\" (entity.<field>, JSON literals, + joins text or adds numbers, -, !, c ? a : b, parentheses; an empty value is \"\" or 0 and false in a condition), evaluated in the write. kind \"model\": {kind, from: field or [fields], prompt}, e.g. {from: \"name\", prompt: \"Which grocery store section is this item in?\"}: a model answers in the background (a choice: one of its options; text: trimmed), each input once; a value set by hand is remembered as the answer for that input. Needs optional or a default (what the row reads until computed). null: stop computing.",
+        "anyOf": [kind, { "type": "array", "items": kind }, { "type": "null" }] });
     let field = json!({ "type": "object", "description": "{name, type: text|number|bool|date|choice, options? (choice), optional?, default?, compute?}",
         "properties": { "name": { "type": "string" }, "type": { "type": "string", "enum": model::Kind::ALL },
             "options": { "type": "array", "items": { "type": "string" } }, "optional": { "type": "boolean" }, "default": {},
@@ -81,7 +90,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "apply_change",
-            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, optional?, default?, compute?} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title}]. compute ({kind: \"expr\", expr} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
+            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, optional?, default?, compute?} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title}]. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. A lookup is not recomputed when its rules change: after editing them, recompute_field computes the field again for every row (a row only the model could answer keeps its value). Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
             json!({ "collection": collection, "base_version": { "type": "integer", "description": "The definition version you read" },
                     "changes": { "type": "array", "items": { "type": "object" } }, "apps": apps, "note": note }),
             &["collection", "changes"],
@@ -193,13 +202,14 @@ async fn list(pod: &Pod) -> Result<Value, Value> {
         .blocking(move |s| {
             let apps = custom::apps_using(s, p.catalog(), NAME)?;
             s.with_conn(|c| {
+                let others = db::defs_by_name(c)?;
                 db::all_defs(c)?
                     .into_iter()
                     .map(|(version, def)| {
                         let rows = db::all_rows(c, &def.name, false)?.len();
                         Ok(json!({
                             "name": def.name, "title": def.title, "version": version, "rows": rows,
-                            "fields": def.live_fields().map(|f| def.describe_field(f)).collect::<Vec<_>>(),
+                            "fields": def.live_fields().map(|f| def.describe_field(f, &others)).collect::<Vec<_>>(),
                             "used_by": users(&apps, &def.name),
                         }))
                     })
@@ -237,13 +247,26 @@ async fn define(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Val
         descending: args["descending"].as_bool().unwrap_or(false),
     };
     // After every field exists: a compute may read a later one.
+    let others = pod
+        .blocking(|s| s.with_conn(db::defs_by_name))
+        .await
+        .map_err(db_err)?;
     for (i, spec) in specs.iter().enumerate() {
-        model::set_compute(&mut def, &format!("f{}", i + 1), spec.get("compute"))
-            .map_err(|e| invalid(i, e))?;
+        model::set_compute(
+            &mut def,
+            &format!("f{}", i + 1),
+            spec.get("compute"),
+            &others,
+        )
+        .map_err(|e| invalid(i, e))?;
     }
     let order = model::order_names(args.get("order_by")).map_err(bad)?;
     def.order_by = model::resolve_order(&def, &order).map_err(bad)?;
     model::check_definition(&def, caps.fields)
+        .map_err(|e| json!({ "error": "invalid_definition", "detail": e, "status": 400 }))?;
+    let mut with_new = others.clone();
+    with_new.insert(def.name.clone(), def.clone());
+    model::check_lookups(&def, &with_new)
         .map_err(|e| json!({ "error": "invalid_definition", "detail": e, "status": 400 }))?;
     let note = note_arg(args, "Created");
     let stored = def.clone();
@@ -272,7 +295,7 @@ async fn define(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Val
     .await?;
     Ok(json!({
         "ok": true, "collection": name, "version": version,
-        "definition": def.describe(pod_core::util::now_secs(), KEEP_SECS),
+        "definition": def.describe(pod_core::util::now_secs(), KEEP_SECS, &with_new),
         "next": format!("Make an app with create_app and feeds [[\"collections\", \"{name}\"]]; describe_collection has layout snippets."),
     }))
 }
@@ -372,13 +395,15 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
                     .collect();
                 let computed: Vec<Value> = db::computed_counts(c, &lookup)?
                     .into_iter()
-                    .filter_map(|(f, n)| def.by_id(&f).filter(|x| x.compute.is_some()).map(|x| json!({ "field": x.name, "answers": n })))
+                    .filter_map(|(f, n)| def.by_id(&f).filter(|x| x.computed()).map(|x| json!({ "field": x.name, "answers": n })))
                     .collect();
+                let lookups = crate::lookup::report(c, &def)?;
+                let others = db::defs_by_name(c)?;
                 Ok(Some((
                     latest,
                     shown,
                     rows,
-                    (aside, computed),
+                    (aside, computed, lookups, others),
                     db::def_history(c, &lookup, 20)?,
                     db::recent_edits(c, &lookup)?,
                     users(&apps, &lookup),
@@ -387,7 +412,9 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
         })
         .await
         .map_err(db_err)?;
-    let Some((latest, shown, rows, (aside, computed), history, edits, used_by)) = found else {
+    let Some((latest, shown, rows, (aside, computed, lookups, others), history, edits, used_by)) =
+        found
+    else {
         return Err(missing(&name));
     };
     let Some((v, def)) = shown else {
@@ -397,10 +424,11 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
         "collection": name,
         "version": v,
         "latest_version": latest,
-        "definition": def.describe(pod_core::util::now_secs(), KEEP_SECS),
+        "definition": def.describe(pod_core::util::now_secs(), KEEP_SECS, &others),
         "rows": rows,
         "kept_aside": aside,
         "computed_answers": computed,
+        "lookups": lookups,
         "history": history,
         "recent_edits": edits,
         "used_by": used_by,
@@ -510,6 +538,11 @@ async fn commit(
     let mut new_defs: HashMap<String, Definition> =
         defs.into_iter().map(|(_, d)| (d.name.clone(), d)).collect();
     new_defs.insert(name.to_owned(), planned.def.clone());
+    // Every lookup (into this collection too) against the new definitions.
+    for d in new_defs.values() {
+        model::check_lookups(d, &new_defs)
+            .map_err(|e| json!({ "error": "invalid_change", "detail": e, "status": 400 }))?;
+    }
     for (app, _, latest) in &apps {
         let layout = edited.get(&app.id).unwrap_or(latest);
         let feeds: Vec<String> = app
@@ -540,7 +573,9 @@ async fn commit(
     let def = planned.def.clone();
     let convert = planned.convert.clone();
     let to_compute = planned.compute.clone();
+    let to_recompute = planned.recompute.clone();
     let coll = name.to_owned();
+    let others = new_defs.clone();
     let (version, conversions, versions, jobs) = refusable(pod, move |tx| {
         let current = db::latest_def(tx, &coll)?.map(|(v, _)| v);
         if current != Some(base) {
@@ -555,9 +590,21 @@ async fn commit(
                 conversions.push(db::convert_field(tx, &coll, f, version, now, caps.text_chars)?);
             }
         }
+        // The lookups were checked against the other collections as read
+        // above; one changed meanwhile: refuse.
+        if db::defs_by_name(tx)?
+            .into_iter()
+            .any(|(n, d)| n != coll && others.get(&n) != Some(&d))
+        {
+            return Ok(Err(json!({ "error": "stale_base", "status": 409,
+                "detail": "another collection changed meanwhile; apply the change again" })));
+        }
         let mut jobs = Vec::new();
         for id in &to_compute {
-            jobs.extend(crate::compute::backfill(tx, &def, id, caps.rows, caps.text_chars)?);
+            jobs.extend(crate::compute::backfill(tx, &def, id, false, caps.rows, now, caps)?);
+        }
+        for id in &to_recompute {
+            jobs.extend(crate::compute::backfill(tx, &def, id, true, caps.rows, now, caps)?);
         }
         let mut versions = Vec::new();
         for s in &staged {
@@ -582,7 +629,7 @@ async fn commit(
         "ok": true, "collection": name, "version": version,
         "conversions": conversions.iter().map(|c| c.to_json(&planned.def.title)).collect::<Vec<_>>(),
         "apps": versions.iter().map(|(a, v)| json!({ "app": a, "version": v })).collect::<Vec<_>>(),
-        "definition": planned.def.describe(pod_core::util::now_secs(), KEEP_SECS),
+        "definition": planned.def.describe(pod_core::util::now_secs(), KEEP_SECS, &new_defs),
         "computing_rows": computing,
     }))
 }
@@ -601,6 +648,10 @@ async fn apply_change(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Valu
         return Err(bad("\"changes\" is a list of ops"));
     };
     let (version, def) = current(pod, &name).await?;
+    let others = pod
+        .blocking(|s| s.with_conn(db::defs_by_name))
+        .await
+        .map_err(db_err)?;
     if let Some(b) = args["base_version"].as_i64()
         && b != version
     {
@@ -609,7 +660,7 @@ async fn apply_change(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Valu
             "detail": "the collection changed since that version; describe_collection and reapply" }),
         );
     }
-    let planned = changes::plan(&def, ops, pod_core::util::now_secs(), caps.text_chars, caps.fields)
+    let planned = changes::plan(&def, ops, &others, pod_core::util::now_secs(), caps.text_chars, caps.fields)
         .map_err(|(i, e)| json!({ "error": "invalid_change", "at": format!("/changes/{i}"), "detail": e, "status": 400 }))?;
     let note = note_arg(args, "Changed");
     commit(pod, caps, &name, version, planned, args, note).await
@@ -771,7 +822,7 @@ async fn edit_rows(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, 
                     after,
                     write,
                     now,
-                    caps.text_chars,
+                    caps,
                 )?);
             }
             let after = &*after;

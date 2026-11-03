@@ -6,8 +6,9 @@
 //! due: date?}`), and this one built-in source stores and serves any
 //! collection the same way. There is no stored code: no triggers or upstream
 //! calls. A field may be computed from the row's other fields ([`compute`],
-//! decision `collection-computed-fields`): by a small expression, or by a
-//! model's answer to a prompt about them.
+//! decision `collection-computed-fields`): by a small expression, by rules
+//! kept in another collection ([`lookup`], decision `collection-lookups`),
+//! or by a model's answer to a prompt about them, tried in order.
 //!
 //! What layouts use (the same for every collection `<c>`):
 //!
@@ -36,6 +37,7 @@ pub mod changes;
 pub mod compute;
 pub mod db;
 pub mod expr;
+pub mod lookup;
 mod mcp;
 pub mod model;
 
@@ -486,7 +488,7 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
                 updated_at: now,
                 deleted_at: None,
             };
-            let jobs = compute::after_write(tx, &def, None, &mut row, &body, now, caps.text_chars)?;
+            let jobs = compute::after_write(tx, &def, None, &mut row, &body, now, caps)?;
             if let Err(e) = check_usage(tx, caps, 1, bytes_of(&row.values))? {
                 return Ok(Err(e));
             }
@@ -532,15 +534,8 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
                 e,
             )));
         }
-        let jobs = compute::after_write(
-            tx,
-            &def,
-            Some(&before_values),
-            &mut row,
-            &body,
-            now,
-            caps.text_chars,
-        )?;
+        let jobs =
+            compute::after_write(tx, &def, Some(&before_values), &mut row, &body, now, caps)?;
         match body.get("deleted") {
             Some(Value::Bool(true)) => row.deleted_at = row.deleted_at.or(Some(now)),
             Some(Value::Bool(false)) => {
@@ -688,7 +683,7 @@ pub fn export(
         "collection": name,
         "version": version,
         "exported_at": pod_core::layouts::rfc3339(now),
-        "definition": def.describe(now, KEEP_SECS),
+        "definition": def.describe(now, KEEP_SECS, &db::defs_by_name(conn)?),
         "rows": rows,
         "kept_aside": aside,
     })))
