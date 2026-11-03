@@ -71,12 +71,13 @@ No schema bump and no new vocabulary: the app is a layout file and adapter code.
 Not done yet:
 
 - **Opening a link** ("Get tickets", "View on Meetup"): no intent opens an external URL; the event screen shows
-  the URL as text. That is new client vocabulary (a named layout feature and a client build).
+  the URL as text. That is new client vocabulary (a named layout feature and a client build): issue #63.
 - **Extractors** `rss`, `embedded-json` (e.g. Next.js page state) and `selectors`, and headless-browser fetching for
-  pages that render with JavaScript. Matching against the raw page text as well as the extracted fields.
+  pages that render with JavaScript. Matching against the raw page text as well as the extracted fields: issue #65.
 - **Zones by name** (`America/Denver`): offsets are fixed, so a target's offset is wrong half the year across DST,
-  and `TZID` times are read as wall clock.
+  and `TZID` times are read as wall clock: issue #66.
 - **Editing a rule or site in place** from the app: there is no prefilled text field; the app removes and re-adds,
   Claude edits with the MCP tools.
 - **Day-of reminders** for a matched event.
-- **The Improv Boulder target itself**: a user's data, added over MCP (`watcher_preview` first), not shipped.
+- **The Improv Boulder target itself**: a user's data, added over MCP (`watcher_preview` first), not shipped:
+  issue #64.
