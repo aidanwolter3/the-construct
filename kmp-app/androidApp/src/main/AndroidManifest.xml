@@ -18,8 +18,8 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
-        <!-- singleTask: the OAuth redirect (construct://oauth, opened by the browser in its own task) must reach
-             this same activity instance and engine via onNewIntent (DECISIONS D19).
+        <!-- singleTask: the OAuth redirect (opened by the browser in its own task) must reach this same activity
+             instance and engine via onNewIntent (DECISIONS D19).
              adjustResize: the window is not panned for the keyboard; Compose gets the IME insets instead and the
              root's safeDrawingPadding lifts the menu's custom server URL field above the keyboard. -->
         <activity
@@ -36,6 +36,18 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="construct" android:host="oauth" />
+            </intent-filter>
+            <!-- The sign-in redirect as a verified App Link (decision android-app-link-sign-in-redirect, security audit
+                 #31): Android checks https://<host>/.well-known/assetlinks.json for this build's signing cert and then
+                 opens these links only in this app. Used for the pod on that host once verified; construct://oauth
+                 above stays for other servers, older pods and the pod's fallback page. Host: -PconstructAppLinkHost. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="${constructAppLinkHost}" />
+                <data android:path="/oauth/android" />
             </intent-filter>
         </activity>
         <!-- Notification taps (D52) come through this non-exported activity, which forwards them to MainActivity with

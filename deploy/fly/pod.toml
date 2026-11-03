@@ -22,6 +22,15 @@ primary_region = "dfw"
   PIXELFED_INSTANCE_URL = "https://the-construct-fake-pixelfed.fly.dev"
   # The sign-in screen's server box accepts any public HTTPS Pixelfed instance (D45).
   PIXELFED_ALLOWED_INSTANCES = "*"
+  # The Android app's sign-in redirect is a verified App Link on this host (decision
+  # android-app-link-sign-in-redirect); construct://oauth stays accepted for older builds.
+  PIXELFED_EXTRA_REDIRECTS = "https://the-construct-pod.fly.dev/oauth/android"
+  # Signing certs whose Android builds may open that link, served in /.well-known/assetlinks.json.
+  # Not secret (every APK carries its cert), so they can live here; unset, the endpoint is 404 and
+  # Android 12+ builds keep construct://oauth. Get a fingerprint with
+  #   keytool -list -v -keystore <keystore> -alias <alias> | grep SHA256
+  # (debug: -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android), then add:
+  # CONSTRUCT_ANDROID_CERT_SHA256 = "<release SHA-256>,<debug SHA-256>"
   # Anyone may make a temporary pod (24 h, then deleted): how Claude sessions and
   # visitors try staging. Temporary pods only reach the fake Pixelfed; real use
   # (and real Pixelfed servers) goes in admin pods (D46).

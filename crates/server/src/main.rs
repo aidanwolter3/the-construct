@@ -284,6 +284,13 @@ async fn serve() -> Result<(), String> {
     if let Some(t) = config.temporary {
         tracing::info!(hours = t.hours, max = t.max_live, "temporary pods enabled");
     }
+    if !config.android.cert_sha256.is_empty() {
+        tracing::info!(
+            package = %config.android.package,
+            certs = config.android.cert_sha256.len(),
+            "Android App Links: serving /.well-known/assetlinks.json"
+        );
+    }
     let open_pod = config.open_pod.is_some();
     let host = tokio::task::spawn_blocking(move || Host::open(&dir, factory()?, config))
         .await
