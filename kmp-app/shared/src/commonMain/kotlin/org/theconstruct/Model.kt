@@ -81,6 +81,22 @@ data class Indent(
     val max: Int? = null,
 )
 
+/**
+ * `core://List` search (schema 5, D43). [value] is `$form.<field>` or literal text; while it is non-blank only items
+ * where every word of it is found in one of [fields] are drawn (case and accents ignored, [matchesFilter]).
+ * [noMatchText] shows when nothing matches (default: the list's `empty_text`).
+ */
+@Serializable
+data class ListFilter(
+    val value: String,
+    val fields: List<String>,
+    @SerialName("no_match_text") val noMatchText: String? = null,
+)
+
+/** `core://List` group headers (schema 5, D43): [header] is drawn before each drawn item whose [field] changes. */
+@Serializable
+data class GroupBy(val field: String, val header: UiNode)
+
 // ---------------------------------------------------------------------------
 // UI AST, discriminated by "type"
 // ---------------------------------------------------------------------------
@@ -115,13 +131,18 @@ sealed class UiNode {
         @SerialName("on_click") val onClick: ActionIntent,
     ) : UiNode()
 
-    /** `core://List` (D34): the entities of `queries[queryKey]`, each rendered with [itemTemplate]. */
+    /**
+     * `core://List` (D34): the entities of `queries[queryKey]`, each rendered with [itemTemplate]. [filter] and
+     * [groupBy] are schema 5 (D43).
+     */
     @Serializable
     data class ItemList(
         @SerialName("query_key") val queryKey: String,
         @SerialName("item_template") val itemTemplate: UiNode,
         val indent: Indent? = null,
         @SerialName("empty_text") val emptyText: String? = null,
+        val filter: ListFilter? = null,
+        @SerialName("group_by") val groupBy: GroupBy? = null,
     ) : UiNode()
 
     /**
@@ -139,7 +160,10 @@ sealed class UiNode {
         val blurhash: String? = null,
     ) : UiNode()
 
-    /** `core://TextField` (D34): edits the form value `$form.<field>`; [onSubmit] is sent with it, then it clears. */
+    /**
+     * `core://TextField` (D34): edits the form value `$form.<field>`; [onSubmit] is sent with it, then it clears.
+     * Without [onSubmit] (e.g. a search box feeding a list's filter, D43) it shows a Clear button while non-empty.
+     */
     @Serializable
     data class TextField(
         val field: String,

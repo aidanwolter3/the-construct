@@ -144,9 +144,29 @@ class ModelTest {
                 tag = "row:\$item.id",
             ),
             UiNode.Tappable(ActionIntent.NavigateBack, UiNode.Divider),
+            UiNode.ItemList(
+                "q", UiNode.Divider,
+                filter = ListFilter("\$form.q", listOf("search_text"), noMatchText = "None"),
+                groupBy = GroupBy("category", UiNode.Text("\$item.category", TextStyle.Title)),
+            ),
+            UiNode.TextField("q", placeholder = "Search"),
         )
         for (n in nodes) assertEquals(n, ConstructJson.decodeNode(ConstructJson.encodeNode(n)), n.toString())
         assertTrue(ConstructJson.encodeNode(UiNode.Divider) == "{\"type\":\"core://Divider\"}", ConstructJson.encodeNode(UiNode.Divider))
+    }
+
+    @Test
+    fun listFilterAndGroupByDecodeFromTheWire() {
+        val raw = """{"type":"core://List","query_key":"recipes:all","item_template":{"type":"core://Divider"},
+            "filter":{"value":"${'$'}form.q","fields":["search_text"]},
+            "group_by":{"field":"category","header":{"type":"core://Text","value_expr":"${'$'}item.category","style":"Title"}}}"""
+        val l = assertIs<UiNode.ItemList>(ConstructJson.decodeNode(raw))
+        assertEquals(ListFilter("\$form.q", listOf("search_text")), l.filter)
+        assertEquals("category", l.groupBy?.field)
+        assertIs<UiNode.Text>(l.groupBy?.header)
+        val plain = assertIs<UiNode.ItemList>(ConstructJson.decodeNode("""{"type":"core://List","query_key":"q","item_template":{"type":"core://Divider"}}"""))
+        assertNull(plain.filter)
+        assertTrue(!ConstructJson.encodeNode(plain).contains("filter"), "null optional fields are omitted")
     }
 
     @Test

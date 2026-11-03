@@ -1450,3 +1450,30 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   holding only the title; schema-3 clients keep getting `recipes/0001` (the "View" buttons). This supersedes D41's
   "Each list row is one line: a View button, then the title" for schema-4 clients.
 - **Not yet:** `on_long_press`; a pressed/ripple style choice per node (clients draw their platform default).
+
+## D43: Lists filter as you type, and draw their own group headers (schema 5)
+
+- **Why:** issue #17: the recipes list (81 recipes) could only be scrolled; nothing could search a list, and
+  "what can I make with rhubarb?" was impossible. The fix should work for any app's list.
+- **Client-side filtering:** `core://List` takes `filter: {value, fields, no_match_text?}`. `value` is `$form.<field>`
+  (the form value a `core://TextField` edits) or literal text. While it is non-blank, an item is drawn only when
+  every whitespace-separated word of it is found in at least one of `fields` (words may match different fields;
+  strings, numbers and arrays of them are searchable). Matching ignores case and common Latin accents (a fold table
+  plus dropped combining marks; Kotlin common code has no Unicode normalizer). `no_match_text` (default
+  `empty_text`) shows when the filter hides everything. It works offline and is instant for hundreds of entities.
+- **Server-side search was weighed** (`action.data.load` against a search endpoint): better for huge lists, but needs
+  the network and a debounce primitive. Not built; a later schema can add it for lists that need it.
+- **Search box:** a `core://TextField` without `on_submit` already edited its form value as you type; it is now one
+  line with a Clear button (`textfield-clear:<field>`, "Clear") while non-empty. The workspace's slots already had a
+  form scope (the navigation's root form), like each screen.
+- **Group headers:** headers carried in the data (`category_header` on a category's first recipe) go missing once
+  that item is filtered out. `group_by: {field, header}` makes the list draw `header` (any node, `$item` = the
+  group's first drawn item) wherever `item[field]` changes between drawn items. The pod's `children()` includes the
+  header, so it is validated and counted for the schema like the item template.
+- **Schema 5, additive:** a List with `filter` or `group_by` needs schema 5; `RETIRED` is unchanged, so schema-5
+  clients still draw schema-3/4 layouts. `layouts/recipes/0003.json` (schema 5) puts a search box (`$form.q`) above the
+  list, filters on the recipes adapter's new `search_text` entity field (title, category, ingredient names) and
+  groups by `category`. Schema-4 clients keep `recipes/0002`, schema-3 clients `recipes/0001`; `category_header` stays
+  in the data for them.
+- **Not yet:** server-side search; highlighting matches; a search query surviving app restarts (form values are
+  in memory).

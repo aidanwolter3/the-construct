@@ -15,6 +15,9 @@
 //!   schema 3 clients draw only layouts written for schema 3.
 //! - 4: `core://Tappable` (any node made tappable, D42). Additive: schema 4
 //!   clients still draw schema 3 layouts.
+//! - 5: `core://List` `filter` (client-side search as you type) and
+//!   `group_by` (headers drawn by the list, D43). Additive: schema 5 clients
+//!   still draw schema 3 and 4 layouts.
 //!
 //! # A breaking schema change
 //!
@@ -30,7 +33,7 @@ use crate::{ActionIntent, TextStyle, UiNode};
 /// Request header carrying the client's schema version.
 pub const SCHEMA_HEADER: &str = "x-construct-schema";
 /// The schema version this build draws.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Breaking changes, oldest first: `(client schema, oldest layout schema it
 /// draws)`. A client of schema `c` draws layouts written for schemas
@@ -96,6 +99,9 @@ fn intent_schema(i: &ActionIntent) -> u32 {
 fn node_schema(node: &UiNode) -> u32 {
     match node {
         UiNode::Workspace { screens, .. } if !screens.is_empty() => 2,
+        UiNode::List {
+            filter, group_by, ..
+        } if filter.is_some() || group_by.is_some() => 5,
         UiNode::List { .. } | UiNode::Image { .. } | UiNode::TextField { .. } => 2,
         UiNode::Text {
             style: TextStyle::Label | TextStyle::Secondary,
@@ -190,6 +196,19 @@ mod tests {
         let t = &tappable.children()[0];
         assert_eq!(t.own_intents().len(), 1);
         assert_eq!(t.children().len(), 1);
+        // A filtered or grouped list is schema 5 (D43); the group header is a child.
+        let filtered = node(json!({"type": "core://List", "query_key": "q",
+            "item_template": {"type": "core://Text", "value_expr": "$item.title", "style": "Body"},
+            "filter": {"value": "$form.q", "fields": ["title"]}}));
+        assert_eq!(required_schema(&filtered), 5);
+        let grouped = node(json!({"type": "core://List", "query_key": "q",
+            "item_template": {"type": "core://Divider"},
+            "group_by": {"field": "category", "header":
+                {"type": "core://Tappable", "on_click": {"intent": "action.navigation.back"},
+                 "content": {"type": "core://Divider"}}}}));
+        assert_eq!(required_schema(&grouped), 5);
+        assert_eq!(grouped.children().len(), 2);
+        assert_eq!(grouped.walk().len(), 4);
     }
 
     #[test]
@@ -286,5 +305,10 @@ mod tests {
         assert_eq!(compatibility(3, 4), Compatible);
         assert_eq!(compatibility(4, 3), UpdateRequired);
         assert_eq!(compatibility(2, 4), Retired);
+        // Schema 5 (D43) is additive too.
+        assert_eq!(oldest_layout_schema(5), 3);
+        assert_eq!(compatibility(3, 5), Compatible);
+        assert_eq!(compatibility(4, 5), Compatible);
+        assert_eq!(compatibility(5, 4), UpdateRequired);
     }
 }

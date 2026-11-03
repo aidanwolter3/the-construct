@@ -1,6 +1,6 @@
 use protocol::{
-    ActionIntent, EntityRecord, FieldUpdate, ImageShape, ListBinding, Orientation,
-    PresentationMode, SlotSpec, TextStyle, Tone, UiNode, WorkspaceSpec,
+    ActionIntent, EntityRecord, FieldUpdate, GroupBy, ImageShape, ListBinding, ListFilter,
+    Orientation, PresentationMode, SlotSpec, TextStyle, Tone, UiNode, WorkspaceSpec,
 };
 use serde_json::{Value, json};
 
@@ -153,6 +153,8 @@ fn full_workspace() -> UiNode {
                             )),
                             indent: None,
                             empty_text: None,
+                            filter: None,
+                            group_by: None,
                         },
                         UiNode::List {
                             query_key: "timeline:pinned".into(),
@@ -165,6 +167,18 @@ fn full_workspace() -> UiNode {
                             )),
                             indent: None,
                             empty_text: Some("Nothing pinned".into()),
+                            filter: Some(ListFilter {
+                                value: "$form.q".into(),
+                                fields: vec!["caption".into()],
+                                no_match_text: Some("No match".into()),
+                            }),
+                            group_by: Some(GroupBy {
+                                field: "day".into(),
+                                header: Box::new(UiNode::Text {
+                                    value_expr: "$item.day".into(),
+                                    style: TextStyle::Title,
+                                }),
+                            }),
                         },
                     ],
                 },

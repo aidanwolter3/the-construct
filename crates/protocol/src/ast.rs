@@ -104,7 +104,9 @@ pub enum UiNode {
     /// A list of the entities of `queries[query_key]`, each rendered with
     /// `item_template` (`$item.<field>` binds the entity). `indent` shifts an
     /// item right by `item[indent.field] * step_dp` (capped at `max` steps).
-    /// `empty_text` shows when the query is present but empty.
+    /// `empty_text` shows when the query is present but empty. `filter` and
+    /// `group_by` are schema 5 (docs/DECISIONS.md D43): see [`ListFilter`]
+    /// and [`GroupBy`].
     #[serde(rename = "core://List")]
     List {
         query_key: String,
@@ -113,6 +115,10 @@ pub enum UiNode {
         indent: Option<Indent>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         empty_text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filter: Option<ListFilter>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group_by: Option<GroupBy>,
     },
     /// An image from a URL (a literal or a binding such as
     /// `"$item.avatar_url"`). `size_dp` makes it a square of that size;
@@ -317,9 +323,14 @@ impl UiNode {
             UiNode::Container { children, .. }
             | UiNode::Row { children, .. }
             | UiNode::Column { children, .. } => children.iter().collect(),
-            UiNode::List { item_template, .. } | UiNode::Carousel { item_template, .. } => {
-                vec![item_template]
-            }
+            UiNode::List {
+                item_template,
+                group_by,
+                ..
+            } => std::iter::once(item_template.as_ref())
+                .chain(group_by.as_ref().map(|g| g.header.as_ref()))
+                .collect(),
+            UiNode::Carousel { item_template, .. } => vec![item_template],
             UiNode::Conditional { content, .. } | UiNode::Tappable { content, .. } => {
                 vec![content]
             }
@@ -387,6 +398,32 @@ pub struct Indent {
     pub step_dp: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max: Option<u16>,
+}
+
+/// `core://List` filtering (schema 5, D43), done by the client as you type.
+/// `value` is the query: `$form.<field>` (the form value a `core://TextField`
+/// with that `field` edits) or literal text. While it is blank every item is
+/// drawn. Otherwise an item is drawn only when every word of the query (split
+/// on whitespace) is found in at least one of the item's `fields`; matching
+/// ignores case and accents ("creme" finds "Crème"). `no_match_text` shows
+/// when the query hides every item (default: the list's `empty_text`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListFilter {
+    pub value: String,
+    pub fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_match_text: Option<String>,
+}
+
+/// `core://List` group headers (schema 5, D43): before each drawn item whose
+/// `item[field]` differs from the previous drawn item's, the list draws
+/// `header` with `$item` bound to that item. Headers follow the drawn items,
+/// so they stay right while a [`ListFilter`] hides some. The query should
+/// already be ordered by `field`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct GroupBy {
+    pub field: String,
+    pub header: Box<UiNode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]

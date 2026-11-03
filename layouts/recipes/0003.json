@@ -1,0 +1,256 @@
+{
+  "note": "Recipes: a search box above the list filters recipes by title, category or ingredient as you type (list filter and group_by, D43)",
+  "schema": 5,
+  "layout": {
+    "type": "core://Workspace",
+    "id": "recipes",
+    "title": "Recipes",
+    "slots": [
+      {
+        "slot_id": "recipes",
+        "provider_uri": "recipes://all",
+        "content": {
+          "type": "core://Column",
+          "spacing_dp": 4,
+          "children": [
+            {
+              "type": "core://Row",
+              "padding_h_dp": 16,
+              "children": [
+                {
+                  "type": "core://TextField",
+                  "field": "q",
+                  "placeholder": "Search recipes or ingredients"
+                }
+              ]
+            },
+            {
+              "type": "core://List",
+              "query_key": "recipes:all",
+              "empty_text": "No recipes yet",
+              "item_template": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://Tappable",
+                    "on_click": {
+                      "intent": "action.navigation.open",
+                      "presentation": "Push",
+                      "target_uri": "recipes://recipes/$item.id"
+                    },
+                    "content_description": "Open $item.title",
+                    "content": {
+                      "type": "core://Row",
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 12,
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.title",
+                          "style": "Label"
+                        },
+                        {
+                          "type": "core://Spacer"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "type": "core://Divider"
+                  }
+                ]
+              },
+              "filter": {
+                "value": "$form.q",
+                "fields": [
+                  "search_text"
+                ],
+                "no_match_text": "No recipes match"
+              },
+              "group_by": {
+                "field": "category",
+                "header": {
+                  "type": "core://Column",
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 4,
+                  "children": [
+                    {
+                      "type": "core://Spacer",
+                      "size_dp": 8
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.category",
+                      "style": "Title"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "screens": [
+      {
+        "id": "recipe",
+        "route": "recipes://recipes/{id}",
+        "title": "${recipes://recipes/$route.id#title}",
+        "data": "/v1/recipes/screens/recipe?id=$route.id",
+        "content": {
+          "type": "core://Column",
+          "spacing_dp": 4,
+          "padding_h_dp": 16,
+          "padding_v_dp": 8,
+          "children": [
+            {
+              "type": "core://Text",
+              "value_expr": "${recipes://recipes/$route.id#summary}",
+              "style": "Secondary"
+            },
+            {
+              "type": "core://List",
+              "query_key": "recipe:$route.id:ingredients",
+              "item_template": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://Conditional",
+                    "value": "$item.section",
+                    "content": {
+                      "type": "core://Column",
+                      "padding_v_dp": 8,
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.section",
+                          "style": "Title"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "type": "core://Conditional",
+                    "value": "$item.group",
+                    "content": {
+                      "type": "core://Column",
+                      "padding_v_dp": 4,
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.group",
+                          "style": "Label"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "type": "core://Text",
+                    "value_expr": "•  $item.text",
+                    "style": "Body"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "core://List",
+              "query_key": "recipe:$route.id:steps",
+              "item_template": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://Conditional",
+                    "value": "$item.section",
+                    "content": {
+                      "type": "core://Column",
+                      "padding_v_dp": 8,
+                      "children": [
+                        {
+                          "type": "core://Spacer",
+                          "size_dp": 8
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.section",
+                          "style": "Title"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "type": "core://Conditional",
+                    "value": "$item.group",
+                    "content": {
+                      "type": "core://Column",
+                      "padding_v_dp": 4,
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.group",
+                          "style": "Label"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "type": "core://Column",
+                    "padding_v_dp": 3,
+                    "children": [
+                      {
+                        "type": "core://Text",
+                        "value_expr": "$item.number.  $item.text",
+                        "style": "Body"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "type": "core://List",
+              "query_key": "recipe:$route.id:notes",
+              "item_template": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://Conditional",
+                    "value": "$item.section",
+                    "content": {
+                      "type": "core://Column",
+                      "padding_v_dp": 8,
+                      "children": [
+                        {
+                          "type": "core://Spacer",
+                          "size_dp": 8
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.section",
+                          "style": "Title"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "type": "core://Text",
+                    "value_expr": "$item.text",
+                    "style": "Body"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "core://Spacer",
+              "size_dp": 12
+            },
+            {
+              "type": "core://Text",
+              "value_expr": "Source: ${recipes://recipes/$route.id#source}",
+              "style": "Caption"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
