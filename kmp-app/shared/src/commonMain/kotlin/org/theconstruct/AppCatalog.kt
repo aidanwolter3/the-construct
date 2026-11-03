@@ -299,7 +299,15 @@ class AppRepository(
     // Touched only on the caller's (UI) thread: the suspend functions return there after the background call.
     private val specs = HashMap<Pair<String, Long>, UiNode>()
 
-    suspend fun apps(): List<AppSummary> = call { AppCatalogJson.parseApps(bridge().listApps()) }
+    /** The last apps list loaded (any thread may read it), or null before the first. */
+    @Volatile
+    var lastApps: List<AppSummary>? = null
+        private set
+
+    suspend fun apps(): List<AppSummary> = call { AppCatalogJson.parseApps(bridge().listApps()) }.also { lastApps = it }
+
+    /** Runs a blocking notification call of the current bridge on the background dispatcher, like the apps calls. */
+    internal suspend fun <T> notifications(block: (ConstructEngineBridge) -> T): T = call { block(bridge()) }
 
     suspend fun versions(appId: String, before: Long? = null, limit: Int? = PAGE_SIZE): AppVersionPage =
         call { AppCatalogJson.parseVersions(bridge().appVersions(appId, before, limit)) }

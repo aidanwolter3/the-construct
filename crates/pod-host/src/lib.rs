@@ -51,6 +51,29 @@ pub type PodFactory = Arc<dyn Fn(Store) -> Result<AppState, String> + Send + Syn
 pub const TOKEN_PREFIX: &str = "cpod_";
 /// How often the sweeper removes expired pods.
 pub const SWEEP_EVERY: Duration = Duration::from_secs(300);
+/// How often the scheduler looks for pods whose notification polls are due.
+pub const SCHEDULE_EVERY: Duration = Duration::from_secs(30);
+/// Pods polled at the same time, at most.
+pub const POLL_CONCURRENCY: usize = 8;
+/// `host_secrets` key of the generated VAPID private key.
+pub const VAPID_SECRET: &str = "vapid_private_key";
+
+/// The server's Web Push VAPID private key (D52): `configured` (the
+/// `CONSTRUCT_VAPID_PRIVATE_KEY` value) or one generated once and kept in
+/// `<dir>/host.db`. Called before the host opens, so pods can be built with it.
+pub fn vapid_private_key(dir: &FsPath, configured: Option<&str>) -> Result<String, String> {
+    if let Some(k) = configured {
+        return Ok(k.to_owned());
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+    let store = HostStore::open(&dir.join("host.db")).map_err(|e| e.to_string())?;
+    store
+        .secret_or(
+            VAPID_SECRET,
+            pod_core::push::PushSender::generate_private_key,
+        )
+        .map_err(|e| e.to_string())
+}
 
 /// Temporary pods (`CONSTRUCT_TEMP_PODS=1`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,6 +204,8 @@ pub struct Host {
     temp_creates: RateLimit,
     /// Makes the temporary-pod cap check and the creation one step.
     temp_lock: Mutex<()>,
+    /// The next wake last written to `host.db` per pod (skips rewrites).
+    wakes: Mutex<HashMap<String, Option<i64>>>,
 }
 
 impl Host {
@@ -204,6 +229,7 @@ impl Host {
             code_tries: RateLimit::new(10, Duration::from_secs(60)),
             temp_creates: RateLimit::new(5, Duration::from_secs(3600)),
             temp_lock: Mutex::new(()),
+            wakes: Mutex::new(HashMap::new()),
         };
         if let Some(name) = host.config.open_pod.clone() {
             let id = match host.store.pod_by_name(&name).map_err(|e| e.to_string())? {
@@ -435,6 +461,58 @@ impl Host {
         Ok(token)
     }
 
+    /// Send pod `name` a test notification (blocking; the admin CLI): the
+    /// first channel any adapter declares, stored in the pod's inbox and sent
+    /// by Web Push to its devices. A running server's open streams don't
+    /// hear it (another process); clients see it on their next refresh.
+    /// Returns its title.
+    pub fn notify_test(&self, name: &str) -> Result<String, String> {
+        let pod = self
+            .store
+            .live_pod(
+                &self
+                    .store
+                    .pod_by_name(name)
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| format!("no pod named {name:?}"))?
+                    .id,
+            )
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("pod {name:?} has expired"))?;
+        let store =
+            Store::open(&self.pod_dir(&pod.id)?.join("server.db")).map_err(|e| e.to_string())?;
+        let state: Pod = Arc::new((self.factory)(store)?);
+        state.set_public_prefix(&format!("/v1/p/{}", pod.id));
+        let channel = state
+            .notification_channels()
+            .into_iter()
+            .next()
+            .ok_or("no app declares a notification channel")?;
+        let now = now_secs();
+        let title = "Test notification".to_owned();
+        let note = pod_core::NewNotification {
+            app_id: channel.app_id.clone(),
+            channel: channel.id.clone(),
+            dedupe_key: format!("test:{now}:{}", &new_pod_id()[..8]),
+            title: title.clone(),
+            body: format!("Sent with `server pods notify-test` ({})", channel.title),
+            image_url: None,
+            target_uri: None,
+            group_key: None,
+            created_at: now,
+            quiet: false,
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
+        let (_, deliveries) = rt
+            .block_on(state.notify_and_deliver(vec![note]))
+            .map_err(|(status, body)| format!("{status}: {}", body.0))?;
+        tracing::info!(pod = %name, deliveries, "test notification sent");
+        Ok(title)
+    }
+
     /// Stop pod `name` now (its token stops working); the sweeper deletes
     /// its files.
     pub fn delete(&self, name: &str) -> Result<(), String> {
@@ -499,6 +577,77 @@ impl Host {
         });
     }
 
+    /// Run due notification polls (D52): every open pod and every pod
+    /// `host.db` says is due, at most [`POLL_CONCURRENCY`] at once; each pod's
+    /// next wake goes back to `host.db`, so after a restart only pods with
+    /// work are opened. Returns how many pods were looked at.
+    pub async fn run_due_polls(self: &Arc<Self>) -> usize {
+        let now = now_secs();
+        let mut ids: Vec<String> = self.cache().keys().cloned().collect();
+        match self.blocking(move |h| h.store.due_pods(now)).await {
+            Ok(Ok(due)) => {
+                for id in due {
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+            }
+            Ok(Err(e)) => tracing::error!(error = %e, "scheduler: cannot list due pods"),
+            Err(_) => {}
+        }
+        let count = ids.len();
+        let mut tasks = tokio::task::JoinSet::new();
+        for id in ids {
+            while tasks.len() >= POLL_CONCURRENCY {
+                tasks.join_next().await;
+            }
+            let host = self.clone();
+            tasks.spawn(async move {
+                // A pod deleted meanwhile is not reopened.
+                let live = host
+                    .blocking({
+                        let id = id.clone();
+                        move |h| h.store.live_pod(&id)
+                    })
+                    .await;
+                if !matches!(live, Ok(Ok(Some(_)))) {
+                    return;
+                }
+                let Ok(open) = host.pod(&id).await else {
+                    return;
+                };
+                let next = open.pod.poll_due().await;
+                let unchanged = host
+                    .wakes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(id.clone(), next)
+                    == Some(next);
+                if !unchanged {
+                    let _ = host
+                        .blocking(move |h| h.store.set_next_wake(&id, next))
+                        .await;
+                }
+            });
+        }
+        while tasks.join_next().await.is_some() {}
+        count
+    }
+
+    /// Run [`Self::run_due_polls`] every [`SCHEDULE_EVERY`].
+    pub fn spawn_scheduler(self: &Arc<Self>) {
+        let host = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(SCHEDULE_EVERY);
+            every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                every.tick().await;
+                let Some(h) = host.upgrade() else { return };
+                h.run_due_polls().await;
+            }
+        });
+    }
+
     /// End every open pod's SSE streams (before a graceful shutdown).
     pub fn shutdown(&self) {
         for open in self.cache().values() {
@@ -539,6 +688,7 @@ impl Host {
                 json!({ "error": "pod_unavailable" }),
             ))
         })?;
+        state.set_public_prefix(&format!("/v1/p/{id}"));
         let pod: Pod = Arc::new(state);
         let open = Arc::new(OpenPod {
             router: pod_core::app(pod.clone()),

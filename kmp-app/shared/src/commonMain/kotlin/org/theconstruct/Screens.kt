@@ -215,6 +215,13 @@ class Navigation internal constructor(private val controller: ConstructControlle
         else -> false
     }
 
+    /** Whether a screen of the displayed layout matches [targetUri]. */
+    fun canOpen(targetUri: String): Boolean {
+        val workspace = displayedWorkspace(controller.state.value, controller.pinned.value) as? UiNode.Workspace
+            ?: return false
+        return workspace.screens.any { matchRoute(it.route, targetUri) != null }
+    }
+
     /** Opens the screen whose route matches; false when no screen of the displayed layout does. */
     fun open(intent: ActionIntent.Navigate): Boolean {
         val workspace = displayedWorkspace(controller.state.value, controller.pinned.value) as? UiNode.Workspace

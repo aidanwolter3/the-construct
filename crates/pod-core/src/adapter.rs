@@ -11,10 +11,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use axum::{Router, http::HeaderMap, response::Response};
-use protocol::{DataBundle, Orientation, SlotSpec, TextStyle, UiNode, WorkspaceSpec};
+use protocol::{
+    DataBundle, NotificationChannel, Orientation, SlotSpec, TextStyle, UiNode, WorkspaceSpec,
+};
 
 use crate::AppState;
 use crate::layouts::LayoutSource;
+use crate::notify::{PollCtx, PollOutcome};
 use crate::session::Session;
 use crate::store::Migration;
 
@@ -150,6 +153,39 @@ pub trait AppAdapter: Any + Send + Sync {
         app_id: &'a str,
         req: &'a RequestCtx,
     ) -> BoxFuture<'a, Hydration>;
+
+    /// The kinds of notification this adapter's apps send (D52), such as
+    /// "Likes". Called at startup and when listing channels. Each channel's
+    /// `app_id` must be one of [`Self::apps`]; ids are `[a-z0-9_]{1,32}`,
+    /// unique per app, and never change once shipped (devices store their
+    /// choices by id). Write titles and descriptions for people.
+    fn notification_channels(&self) -> Vec<NotificationChannel> {
+        Vec::new()
+    }
+
+    /// How often the host should call [`Self::poll_notifications`] (at least
+    /// 30 s); `None`: this adapter doesn't poll. Polls happen only while the
+    /// pod has a registered device.
+    fn poll_interval(&self) -> Option<std::time::Duration> {
+        None
+    }
+
+    /// Fetch new notifications from the upstream (D52): called by the host
+    /// scheduler every [`Self::poll_interval`], outside any request, with a
+    /// 20 s timeout. Keep your own cursor in your own tables; report each
+    /// upstream event with a stable `dedupe_key` (reporting one twice is
+    /// harmless). Write the text yourself: clients show `title` and `body` as
+    /// they are and open `target_uri` in your app's layout routes. Mark a
+    /// first poll's backlog `quiet`. An adapter whose upstream can call the
+    /// pod instead reports from its own route with [`AppState::notify`].
+    fn poll_notifications<'a>(
+        &'a self,
+        pod: &'a Pod,
+        ctx: &'a PollCtx,
+    ) -> BoxFuture<'a, PollOutcome> {
+        let _ = (pod, ctx);
+        Box::pin(async { PollOutcome::default() })
+    }
 
     /// Background work to pick up when a pod opens (D50), such as jobs a
     /// restart interrupted. Called once per pod, on the pod's runtime, after
@@ -308,6 +344,37 @@ impl Catalog {
                 return Err(format!(
                     "app '{}' requires sign-in '{id}', which no adapter provides",
                     app.id
+                ));
+            }
+        }
+        for (i, a) in adapters.iter().enumerate() {
+            let channels = a.notification_channels();
+            for (n, c) in channels.iter().enumerate() {
+                if !apps.iter().any(|(app, j)| app.id == c.app_id && *j == i) {
+                    return Err(format!(
+                        "adapter '{}' declares channel '{}' for '{}', which is not one of its apps",
+                        a.name(),
+                        c.id,
+                        c.app_id
+                    ));
+                }
+                if !crate::notify::valid_channel_id(&c.id) {
+                    return Err(format!("channel id '{}' is not [a-z0-9_]{{1,32}}", c.id));
+                }
+                if channels[..n]
+                    .iter()
+                    .any(|o| o.app_id == c.app_id && o.id == c.id)
+                {
+                    return Err(format!(
+                        "app '{}' declares channel '{}' twice",
+                        c.app_id, c.id
+                    ));
+                }
+            }
+            if a.poll_interval().is_some() && channels.is_empty() {
+                return Err(format!(
+                    "adapter '{}' polls for notifications but declares no channel",
+                    a.name()
                 ));
             }
         }

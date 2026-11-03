@@ -820,6 +820,8 @@ async fn app_version(
 
 // ---------- push ----------
 
+use crate::notify::NotifyEvent;
+
 /// An app's latest version changed (what the SSE channel carries).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayoutEvent {
@@ -845,6 +847,38 @@ fn layout_event(ev: &LayoutEvent) -> Event {
     Event::default()
         .event("layout")
         .data(json!({ "workspace_id": ev.workspace_id, "version": ev.version }).to_string())
+}
+
+/// The next notification event of a stream that has notifications (never
+/// resolves for one that doesn't). A lag only loses events (the client
+/// refreshes its counts when it reconnects), so it is skipped; a closed
+/// channel stops notifications on this stream.
+async fn recv_notify(rx: &mut Option<broadcast::Receiver<NotifyEvent>>) -> Option<NotifyEvent> {
+    let Some(r) = rx.as_mut() else {
+        return std::future::pending().await;
+    };
+    match r.recv().await {
+        Ok(e) => Some(e),
+        Err(broadcast::error::RecvError::Lagged(n)) => {
+            tracing::warn!(skipped = n, "notification subscriber lagged");
+            None
+        }
+        Err(broadcast::error::RecvError::Closed) => {
+            *rx = None;
+            None
+        }
+    }
+}
+
+fn notify_event(ev: &NotifyEvent) -> Event {
+    match ev {
+        NotifyEvent::New(n) => Event::default()
+            .event(protocol::notify::NOTIFICATION_EVENT)
+            .data(serde_json::to_string(n).unwrap_or_default()),
+        NotifyEvent::Read(r) => Event::default()
+            .event(protocol::notify::NOTIFICATIONS_READ_EVENT)
+            .data(serde_json::to_string(r).unwrap_or_default()),
+    }
 }
 
 fn workspace_not_found(id: &str) -> Response {
@@ -908,12 +942,22 @@ async fn events(
     // Events carry only version numbers, so anyone may listen; only a
     // session the pod no longer knows is told so (a valid one lacking the
     // app's sign-in, e.g. a pod token's, D46, must not be dropped).
-    // The session's own `data` events (D50) need to know who listens.
-    let session_hash = match state.caller(&headers).await {
-        Ok(Caller::Stale) if matches!(app.auth, AuthPolicy::SignIn(_)) => return unauthorized(),
-        Ok(c) => c.into_session().map(|s| s.token_hash),
+    let caller = match state.caller(&headers).await {
+        Ok(c) => c,
         Err(e) => return e.into_response(),
     };
+    if let (AuthPolicy::SignIn(_), Caller::Stale) = (app.auth, &caller) {
+        return unauthorized();
+    }
+    // Notifications (D52) are private: only a valid session hears them, for
+    // every app of the pod. A device with a stream open gets no Web Push.
+    let notify_rx = caller.session().map(|_| state.subscribe_notifications());
+    let live = match (&caller, crate::notify::device_id(&headers)) {
+        (Caller::Signed(_), Some(device)) => Some(state.device_live(&device)),
+        _ => None,
+    };
+    // The session's own `data` events (D50) need to know who listens.
+    let session_hash = caller.session().map(|s| s.token_hash.clone());
     let schema = headers
         .contains_key(protocol::SCHEMA_HEADER)
         .then(|| client_schema(&headers));
@@ -932,6 +976,8 @@ async fn events(
         sent: i64,
         schema: Option<u32>,
         rx: broadcast::Receiver<LayoutEvent>,
+        notify_rx: Option<broadcast::Receiver<NotifyEvent>>,
+        _live: Option<crate::notify::LiveDevice>,
         data_rx: broadcast::Receiver<DataEvent>,
         session_hash: Option<String>,
         shutdown: tokio::sync::watch::Receiver<bool>,
@@ -944,6 +990,8 @@ async fn events(
             sent: current,
             schema,
             rx,
+            notify_rx,
+            _live: live,
             data_rx,
             session_hash,
             shutdown: state.shutdown_signal(),
@@ -965,11 +1013,13 @@ async fn events(
             loop {
                 enum Got {
                     Layout(Result<LayoutEvent, broadcast::error::RecvError>),
+                    Notify(Option<NotifyEvent>),
                     Data(Result<DataEvent, broadcast::error::RecvError>),
                     Stop,
                 }
                 let got = tokio::select! {
                     r = s.rx.recv() => Got::Layout(r),
+                    n = recv_notify(&mut s.notify_rx) => Got::Notify(n),
                     d = s.data_rx.recv() => Got::Data(d),
                     // Server shutting down: end the stream so graceful
                     // shutdown is not held open by subscribers.
@@ -978,6 +1028,8 @@ async fn events(
                 let received = match got {
                     Got::Stop => return None,
                     Got::Layout(r) => r,
+                    Got::Notify(Some(e)) => return Some((Ok(notify_event(&e)), s)),
+                    Got::Notify(None) => continue,
                     Got::Data(d) => {
                         let mine = match &d {
                             Ok(d) => {

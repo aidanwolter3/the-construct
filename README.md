@@ -219,6 +219,9 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 | `PIXELFED_OWNER_ACCOUNT_ID` | unset | The only upstream account id allowed to sign in to the default instance (replaces a pinned owner). Unset, and on every other instance: the first account to sign in is pinned; others get 403 `account_not_owner`. |
 | `PIXELFED_ALLOW_ACCOUNT_CHANGE` | unset | `1`/`true`: on the default and listed instances any account may sign in and replace the stored one (no pinning). Instances typed under `*` always keep their first account. |
 | `CONSTRUCT_SESSION_TTL_DAYS` | `90` | Lifetime of sessions other than pod tokens, in days (1..=36500; other values warn and use 90). Pod tokens don't expire. |
+| `CONSTRUCT_VAPID_PRIVATE_KEY` | generated | Web Push signing key for notifications (D52): base64url of a 32-byte P-256 private key. Unset: the server generates one on first start and keeps it in `host.db` (devices subscribed with its public key keep working across restarts). Staging/production should set it as a secret so a lost volume doesn't orphan subscriptions. |
+| `CONSTRUCT_VAPID_SUBJECT` | the repo URL | Contact (`mailto:` or `https:`) that push services may use to reach the operator. |
+| `CONSTRUCT_PUSH` | on | `off`: no Web Push (notifications still reach the inbox and open apps). |
 | `CONSTRUCT_UPLOAD_MAX_BYTES` | `20971520` (20 MB) | Largest file a client may upload to `POST /v1/uploads` (photos for a post, D49); at least 1024. |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
 
@@ -262,6 +265,7 @@ paths, e.g. the Pixelfed media proxy).
   server pods remove-adopted [dir]               # delete the renamed originals adopt left behind (default: data dir)
   server pods rotate <name>                      # new code; the old one stops working, app sign-ins end
   server pods delete <name>                      # stops now; files deleted within 5 minutes
+  server pods notify-test <name>                 # a test notification: inbox + Web Push to the pod's devices
   server pods list
   ```
 
@@ -286,6 +290,39 @@ paths, e.g. the Pixelfed media proxy).
   Then delete the renamed original (it still holds the old sessions and app tokens):
   `fly ssh console -a the-construct-pod -C "/server pods remove-adopted"`. The image has no shell, so `rm` doesn't
   exist there (not in `fly ssh sftp shell` either).
+
+## Notifications
+
+Apps send notifications through the pod (D52, design in `docs/NOTIFICATIONS.md`). Only an app's adapter knows where
+they come from; the pod, the engine and the clients see an app id, a channel the adapter declares ("Likes"), text the
+adapter wrote, and a navigation target in that app's own layout routes.
+
+- **Sources:** an adapter polls its upstream (`AppAdapter::poll_notifications`, every `poll_interval`) or reports
+  from its own routes (`AppState::notify`). The host's scheduler checks every 30 s and opens only pods that are due
+  (`host.db` `pods.next_wake_at`). A pod polls only while it has a registered device (one seen in the last 30 days),
+  so idle and temporary pods cost no upstream calls. Failed polls back off (1 min doubling to 1 h); a revoked
+  sign-in stops polls until someone signs in again. Pixelfed polls `GET /api/v1/notifications` every 2 minutes; the
+  first poll stores the recent backlog as already read.
+- **Delivery:** each notification is stored once (`UNIQUE(app_id, dedupe_key)`, the newest 500 for 30 days), sent as
+  an `event: notification` on every open events stream of the pod (callers with a session only), and sent by Web Push
+  (RFC 8291 encryption, VAPID) to registered devices that want its channel and have no stream open.
+- **API** (pod session required; `X-Construct-Device: <client-made id>` on calls and the events stream):
+
+  | Call | Answer |
+  |---|---|
+  | `GET /v1/notifications?limit=0..100&before=<id>&app=<id>` | `{notifications, unread_total, unread_by_app, next_before?}`, newest first |
+  | `POST /v1/notifications/read {"ids": [...]}` or `{"all": true, "app"?: id}` | `{unread_total, unread_by_app}`; also an `event: notifications_read` |
+  | `GET /v1/notifications/channels` | `{"channels": [{app_id, id, title, description, default_enabled, importance, enabled}]}` (`enabled` for the calling device) |
+  | `PUT /v1/devices/{id} {"platform", "name"?, "push"?: {endpoint, p256dh, auth} \| null}` | registers the device under the caller's session; `push` sets or (null) removes its Web Push subscription |
+  | `PUT /v1/devices/{id}/channels {"<app>.<channel>": bool}` | the device's channel choices |
+  | `DELETE /v1/devices/{id}` | forget the device (the engine calls it on sign-out) |
+  | `GET /v1/push/key` | `{"vapid_public_key"}` (404 `push_unavailable` with `CONSTRUCT_PUSH=off`) |
+
+  Push endpoints must be `https://` on a public host (any local URL with `CONSTRUCT_TEST_HOOKS=1`, for test
+  receivers); deliveries resolve only public addresses. 404/410 from the push service drops the subscription, as do 5
+  failures in a row. At most 20 devices and 60 deliveries a minute per pod.
+- **Try it:** `server pods notify-test <name>` (or, against the fake upstream, inject one with its admin API; see
+  "Fake Pixelfed upstream").
 
 ## Try it on your phone with a real Pixelfed instance
 
@@ -990,13 +1027,19 @@ entries starting with `#` are comments. An argument cannot contain `;`, and sinc
 | `open-history <id or title>` | Opens that app's version picker (opening the drawer first if needed). |
 | `select-version <n or latest>` | In the picker, shows version `n` (`2` or `v2`; presses "Load older" as needed) or follows the latest again; waits for the drawer to close. |
 | `set-server <preset or URL>` | Picks `staging`, `emulator`, `usb` or a custom `http(s)://host[:port]` in the Server section. The simulator records the choice and shows it in the menu, but keeps its engine. |
+| `notify <app_id> <channel> <title>` | Fixture mode only: the fake pod sends a live notification (D52): the platform hook (`onNotification`) fires and the bell's unread count goes up. |
+| `open-inbox` | Clicks the bell (`inbox-button`) and waits for the inbox (`inbox`) to load; reports the rows shown or its message. |
+| `close-inbox` | Closes the inbox. |
+| `click-notification <text>` | Clicks the inbox row containing `<text>` and waits for its app (opened if it is another one) and target screen; reports both. |
+| `open-notification-settings` | Opens the menu's notification settings (`menu-notifications`) and waits for the channels. |
+| `toggle-channel <app>.<channel>` | In the settings, flips a channel's switch (`channel:<app>.<channel>`, e.g. `pixelfed_home.likes`); reports `on`/`off`. |
 
 The menu commands are thin wrappers over clicks on the menu's test tags (`click tag:app-history-pixelfed_demo` works too,
 see [The menu](#the-menu-all-surfaces)). Each one waits until idle and until every apps call has finished (they run
 on a background thread), and fails with a hint when its control is missing (e.g. `select-version 2` without
 `open-history`: "no version picker on screen (use open-history first)"). Examples (fixture mode). The menu commands also
 work in live mode; start the pod with `CONSTRUCT_SHOW_DEV_APPS=1` to list the dev apps. `publish-version`,
-`offline` and `online` are fixture-only.
+`notify`, `offline` and `online` are fixture-only.
 
 ```bash
 cat > /tmp/menu.txt <<'SCRIPT'
@@ -1036,6 +1079,19 @@ from the pod: `UPDATE_FIXTURES=1 cargo test -p server --test fixtures` (the test
 ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate -Pscreen=phone -Pout=/tmp/sim \
   -Pscript='click tag:comment:pixelfed://posts/781254316723458049; wait-text 3000 Which lens?; shot comments;
     type tag:textfield:comment Golden light!; click tag:textfield-send:comment; wait-text 3000 just now; shot sent'
+```
+
+**Notifications (D52).** The bell (`inbox-button`, content description "Notifications") sits top-right with the
+unread count (`inbox-badge`); the inbox (`inbox`) lists rows `notification-row:<id>` by day, with `inbox-mark-all`
+and `inbox-close`; the menu's `menu-notifications` opens `notification-settings` with `channel:<app>.<channel>` rows
+(`channel-switch:<app>.<channel>`). In fixture mode the fake pod serves `fixtures/notifications.json` (wire-shaped,
+except `age_seconds`, so times stay relative to now); its targets open the comments screen of `pixelfed_home` posts.
+The inbox commands also work live (`-PbaseUrl`) against a pod's real notifications.
+
+```bash
+./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -Pout=/tmp/sim \
+  -Pscript='notify pixelfed_demo likes Bob liked your post; shot badge; open-inbox; shot inbox;
+    click-notification commented on; shot comments; back; open-notification-settings; toggle-channel pixelfed_home.likes; shot settings'
 ```
 
 The output directory holds the PNGs, `steps.log` (human-readable) and `steps.json` (one entry per step:

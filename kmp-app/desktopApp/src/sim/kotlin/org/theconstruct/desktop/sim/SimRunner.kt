@@ -28,6 +28,7 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.state.ToggleableState
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -107,6 +108,8 @@ class SimRunner(
     private val installImageLoader: Boolean = true,
     /** Fixture mode: the fake pod publishes a new version of the app on screen (`publish-version`); returns its number. */
     private val publishVersion: ((String) -> Long)? = null,
+    /** Fixture mode: the fake pod sends a live notification (`notify <app> <channel> <title>`). */
+    private val notify: ((app: String, channel: String, title: String) -> Unit)? = null,
     /** The server the menu shows at first; `set-server` records the choice (the simulator never switches servers). */
     server: String = SIM_SERVERS.first().url,
     /** The photo picker `core://MediaPicker` opens; `pick` queues its files. */
@@ -305,7 +308,7 @@ class SimRunner(
             }
             SimStep.CloseMenu -> {
                 if (!menuShown()) throw StepFailure("the menu is not open")
-                if (hasTag("version-picker")) clickTag("menu-back", "")
+                if (hasTag("version-picker") || hasTag("notification-settings")) clickTag("menu-back", "")
                 clickTag("menu-close", "")
                 awaitCondition("the menu to close", LAYOUT_TIMEOUT_MS) { !menuShown() && !controller.menu.open }
                 return "" to null
@@ -380,6 +383,68 @@ class SimRunner(
                 val v = publish(step.note)
                 waitForIdle()
                 return "published v$v" to null
+            }
+            is SimStep.Notify -> {
+                val send = notify ?: throw StepFailure("'notify' is not supported in $modeName mode")
+                val before = controller.unread.value.total
+                send(step.app, step.channel, step.title)
+                waitForIdle()
+                return "unread $before -> ${controller.unread.value.total}" to null
+            }
+            SimStep.OpenInbox -> {
+                if (!hasTag("inbox")) {
+                    if (menuShown()) throw StepFailure("the menu is open (use close-menu first)")
+                    clickTag("inbox-button", "the bell is not on screen (an open screen covers it: use back first)")
+                }
+                awaitTag("inbox", "the inbox did not open")
+                awaitLayoutCalls()
+                if (hasTag("inbox-message")) return textUnder("inbox-message", self = true) to null
+                return "${tagsStartingWith("notification-row:").size} notification(s) shown" to null
+            }
+            SimStep.CloseInbox -> {
+                if (!hasTag("inbox")) throw StepFailure("the inbox is not open")
+                clickTag("inbox-close", "")
+                awaitCondition("the inbox to close", LAYOUT_TIMEOUT_MS) { !hasTag("inbox") }
+                return "" to null
+            }
+            is SimStep.ClickNotification -> {
+                requireTag("inbox", "the inbox is not open (use open-inbox first)")
+                val rows = tagsStartingWith("notification-row:")
+                val tag = rows.firstOrNull { textUnder(it).contains(step.text, ignoreCase = true) }
+                    ?: throw StepFailure("no notification contains '${step.text}'; shown: ${rows.map { textUnder(it) }}")
+                val engine = controller.state.value.engine
+                clickTag(tag, "")
+                awaitCondition("the notification's app to load", LAYOUT_TIMEOUT_MS) {
+                    !hasTag("inbox") && controller.state.value.workspace != null
+                }
+                awaitLayoutCalls()
+                val opened = controller.currentAppId()
+                val screen = tagsStartingWith("screen:").lastOrNull()?.removePrefix("screen:")
+                val switched = if (controller.state.value.engine != engine) "opened $opened" else "in $opened"
+                return "${tag.removePrefix("notification-row:")}: $switched" + (screen?.let { ", screen $it" } ?: ", no screen") to null
+            }
+            SimStep.OpenNotificationSettings -> {
+                if (!hasTag("notification-settings")) {
+                    ensureMenuSections()
+                    clickTag("menu-notifications", "no Notifications entry in the menu")
+                }
+                awaitTag("notification-settings", "the notification settings did not open")
+                awaitLayoutCalls()
+                if (hasTag("channels-error")) return "error shown: ${textUnder("channels-error")}" to null
+                return "${tagsStartingWith("channel:").size} channel(s)" to null
+            }
+            is SimStep.ToggleChannel -> {
+                requireTag("notification-settings", "the notification settings are not open (use open-notification-settings first)")
+                val tag = "channel:${step.channel}"
+                if (!hasTag(tag)) {
+                    throw StepFailure("no channel '${step.channel}'; listed: ${tagsStartingWith("channel:").map { it.removePrefix("channel:") }}")
+                }
+                clickTag(tag, "")
+                awaitLayoutCalls()
+                if (hasTag("channel-error")) throw StepFailure("error shown: ${textUnder("channel-error")}")
+                val on = onAllNodes(hasTestTag("channel-switch:${step.channel}"), useUnmergedTree = true).fetchSemanticsNodes()
+                    .firstOrNull()?.config?.getOrNull(SemanticsProperties.ToggleableState) == ToggleableState.On
+                return (if (on) "on" else "off") to null
             }
             is SimStep.Screen -> error("handled by run()")
         }
@@ -482,7 +547,8 @@ class SimRunner(
     }
 
     /** The drawer is showing its sections or the version picker. */
-    private fun SkikoComposeUiTest.menuShown(): Boolean = hasTag("menu-drawer") || hasTag("version-picker")
+    private fun SkikoComposeUiTest.menuShown(): Boolean =
+        hasTag("menu-drawer") || hasTag("version-picker") || hasTag("notification-settings")
 
     private fun SkikoComposeUiTest.awaitMenu() {
         waitForIdle()
@@ -499,7 +565,7 @@ class SimRunner(
             clickTag("menu-button", "the menu button is not on screen")
             awaitMenu()
         }
-        if (hasTag("version-picker")) {
+        if (hasTag("version-picker") || hasTag("notification-settings")) {
             clickTag("menu-back", "")
             awaitTag("menu-drawer", "the menu did not go back to its sections")
         }
@@ -563,9 +629,10 @@ class SimRunner(
 
     private fun SkikoComposeUiTest.underMenuButton(node: SemanticsNodeInteraction): Boolean {
         val center = node.fetchSemanticsNode().boundsInRoot.center
-        val buttons = onAllNodes(hasTestTag("menu-button"), useUnmergedTree = true).fetchSemanticsNodes()
-        return buttons.any { it.boundsInRoot.contains(center) } &&
-            node.fetchSemanticsNode().config.getOrNull(SemanticsProperties.TestTag) != "menu-button"
+        val tag = node.fetchSemanticsNode().config.getOrNull(SemanticsProperties.TestTag)
+        return listOf("menu-button", "inbox-button").any { b ->
+            b != tag && onAllNodes(hasTestTag(b), useUnmergedTree = true).fetchSemanticsNodes().any { it.boundsInRoot.contains(center) }
+        }
     }
 
     private fun SkikoComposeUiTest.describeBounds(node: SemanticsNodeInteraction): String {

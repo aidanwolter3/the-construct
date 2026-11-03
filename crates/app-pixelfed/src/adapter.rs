@@ -1,11 +1,15 @@
-//! [`PixelfedAdapter`]: the `pixelfed_home` app and the `pixelfed` sign-in.
+//! [`PixelfedAdapter`]: the `pixelfed_home` app, the `pixelfed` sign-in and
+//! its notifications (D52, [`crate::notify`]).
 
 use std::sync::{Arc, RwLock};
 
 use axum::Router;
 use pod_core::layouts::LayoutSource;
-use pod_core::{AppAdapter, AppInfo, BoxFuture, Hydration, Pod, RequestCtx, SignInProvider};
-use protocol::WorkspaceSpec;
+use pod_core::{
+    AppAdapter, AppInfo, BoxFuture, Hydration, Pod, PollCtx, PollOutcome, RequestCtx,
+    SignInProvider,
+};
+use protocol::{NotificationChannel, WorkspaceSpec};
 
 use crate::config::{Instance, PixelfedConfig};
 use crate::upstream::{Clients, Upstream};
@@ -140,6 +144,22 @@ impl AppAdapter for PixelfedAdapter {
         req: &'a RequestCtx,
     ) -> BoxFuture<'a, Hydration> {
         Box::pin(crate::routes::home_feed(self, pod, req))
+    }
+
+    fn notification_channels(&self) -> Vec<NotificationChannel> {
+        crate::notify::channels()
+    }
+
+    fn poll_interval(&self) -> Option<std::time::Duration> {
+        Some(crate::notify::POLL_INTERVAL)
+    }
+
+    fn poll_notifications<'a>(
+        &'a self,
+        pod: &'a Pod,
+        ctx: &'a PollCtx,
+    ) -> BoxFuture<'a, PollOutcome> {
+        Box::pin(crate::notify::poll(self, pod, ctx))
     }
 
     fn resume<'a>(&'a self, pod: &'a Pod) -> BoxFuture<'a, ()> {

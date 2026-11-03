@@ -545,3 +545,18 @@ from a client (D32, D33).
 
 Parked: a layout agent (deleted in D37; it can come back from git history), e.g. as developer tooling that writes
 new layout files; diffs between versions.
+
+## Notifications from apps (D52)
+
+- Design in `docs/NOTIFICATIONS.md`, built in one PR: protocol notification types; pod-core pipeline (store once,
+  SSE `notification` / `notifications_read` events, Web Push with a server-wide VAPID key, devices and per-device
+  channel choices, polling with backoff; core migration v14); the host scheduler (`host.db` migration 2); the
+  Pixelfed source (polls `/api/v1/notifications`, adapter migration 3) and the fake upstream's notifications; engine
+  store v6 (device id, notification cache, listener, FFI); the shared inbox, bell badge and channel settings; desktop
+  tray notifications; Android channels, permission and closed-app push via UnifiedPush with the embedded FCM
+  distributor as fallback.
+- Tests: pod-core (`tests/notifications.rs`, including encrypted delivery to a local push receiver), the Pixelfed
+  adapter and fake, the e2e suite (sign-in -> device -> injected like -> unread), the host scheduler
+  (`server/tests/host.rs`), client-core, shared and simulator tests.
+- Needs the developer's devices: Android permission prompt, channels and push with the app killed (ntfy and the FCM
+  fallback), the desktop tray, and a real Pixelfed instance's notification types.

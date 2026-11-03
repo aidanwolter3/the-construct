@@ -52,14 +52,56 @@ pub fn pod_factory(
     session_ttl_secs: i64,
     show_dev_apps: bool,
 ) -> pod_host::PodFactory {
+    pod_factory_with_push(pixelfed, test_hooks, session_ttl_secs, show_dev_apps, None)
+}
+
+/// [`pod_factory`] whose pods send notifications by Web Push with `push`
+/// (one sender, and so one VAPID key, for the whole server; D52).
+pub fn pod_factory_with_push(
+    pixelfed: PixelfedConfig,
+    test_hooks: bool,
+    session_ttl_secs: i64,
+    show_dev_apps: bool,
+    push: Option<Arc<push::PushSender>>,
+) -> pod_host::PodFactory {
     let adapters = adapters(pixelfed);
     Arc::new(move |store| {
         Ok(AppState::try_new(store, adapters.clone())?
             .with_test_hooks(test_hooks)
             .with_session_ttl_secs(session_ttl_secs)
-            .with_dev_apps(show_dev_apps))
+            .with_dev_apps(show_dev_apps)
+            .with_push(push.clone()))
     })
 }
+
+/// The Web Push sender from the environment (D52), or `None` with
+/// `CONSTRUCT_PUSH=off`. The VAPID key is `CONSTRUCT_VAPID_PRIVATE_KEY`, else
+/// one kept in `<data_dir>/host.db`; the contact is `CONSTRUCT_VAPID_SUBJECT`.
+/// With test hooks, deliveries may go to local endpoints (test receivers).
+pub fn push_from_env(
+    data_dir: &Path,
+    test_hooks: bool,
+) -> Result<Option<Arc<push::PushSender>>, String> {
+    let var = |k: &str| {
+        std::env::var(k)
+            .ok()
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty())
+    };
+    if var("CONSTRUCT_PUSH").as_deref() == Some("off") {
+        return Ok(None);
+    }
+    let key = pod_host::vapid_private_key(data_dir, var("CONSTRUCT_VAPID_PRIVATE_KEY").as_deref())?;
+    let subject =
+        var("CONSTRUCT_VAPID_SUBJECT").unwrap_or_else(|| DEFAULT_VAPID_SUBJECT.to_owned());
+    Ok(Some(Arc::new(push::PushSender::new(
+        &key, &subject, test_hooks,
+    )?)))
+}
+
+/// `CONSTRUCT_VAPID_SUBJECT` when unset: push services may use it to reach
+/// the operator.
+pub const DEFAULT_VAPID_SUBJECT: &str = "https://github.com/aidanwolter3/the-construct";
 
 /// Every layout file the pod ships, per app in number order.
 pub fn layout_files() -> Vec<layouts::LayoutSource> {

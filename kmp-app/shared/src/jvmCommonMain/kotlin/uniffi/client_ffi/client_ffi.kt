@@ -654,6 +654,9 @@ internal open class UniffiForeignFutureStructVoid(
 internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
     fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructVoid.UniffiByValue,)
 }
+internal interface UniffiCallbackInterfaceNotificationListenerMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`notificationJson`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
 internal interface UniffiCallbackInterfaceSecureStoreMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`key`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
 }
@@ -668,6 +671,22 @@ internal interface UniffiCallbackInterfaceStateObserverMethod0 : com.sun.jna.Cal
 }
 internal interface UniffiCallbackInterfaceUrlOpenerMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`url`: RustBuffer.ByValue,`uniffiOutReturn`: ByteByReference,uniffiCallStatus: UniffiRustCallStatus,)
+}
+@Structure.FieldOrder("onNotification", "uniffiFree")
+internal open class UniffiVTableCallbackInterfaceNotificationListener(
+    @JvmField internal var `onNotification`: UniffiCallbackInterfaceNotificationListenerMethod0? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+) : Structure() {
+    class UniffiByValue(
+        `onNotification`: UniffiCallbackInterfaceNotificationListenerMethod0? = null,
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    ): UniffiVTableCallbackInterfaceNotificationListener(`onNotification`,`uniffiFree`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceNotificationListener) {
+        `onNotification` = other.`onNotification`
+        `uniffiFree` = other.`uniffiFree`
+    }
+
 }
 @Structure.FieldOrder("get", "set", "delete", "uniffiFree")
 internal open class UniffiVTableCallbackInterfaceSecureStore(
@@ -821,6 +840,32 @@ internal open class UniffiVTableCallbackInterfaceUrlOpener(
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -840,6 +885,8 @@ internal interface IntegrityCheckingUniffiLib : Library {
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_app_versions(
 ): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_device_id(
+): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_discard_attachment(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_dispatch(
@@ -848,11 +895,31 @@ fun uniffi_client_ffi_checksum_method_enginehandle_forget_session(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_handle_auth_redirect(
 ): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_handle_push_message(
+): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_list_apps(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_list_notifications(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_logout(
 ): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_mark_all_notifications_read(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_mark_notifications_read(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_notification_channels(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_push_public_key(
+): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_refresh(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_register_push(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_set_channel_enabled(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_set_device_info(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_set_notification_listener(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_snapshot(
 ): Short
@@ -860,11 +927,15 @@ fun uniffi_client_ffi_checksum_method_enginehandle_stage_attachment(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_subscribe(
 ): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_unregister_push(
+): Short
 fun uniffi_client_ffi_checksum_constructor_enginehandle_new(
 ): Short
 fun uniffi_client_ffi_checksum_constructor_enginehandle_new_with_options(
 ): Short
 fun uniffi_client_ffi_checksum_constructor_enginehandle_new_with_workspace(
+): Short
+fun uniffi_client_ffi_checksum_method_notificationlistener_on_notification(
 ): Short
 fun uniffi_client_ffi_checksum_method_securestore_get(
 ): Short
@@ -914,6 +985,7 @@ internal interface UniffiLib : Library {
             val lib = loadIndirect<UniffiLib>(componentName)
             // No need to check the contract version and checksums, since 
             // we already did that with `IntegrityCheckingUniffiLib` above.
+            uniffiCallbackInterfaceNotificationListener.register(lib)
             uniffiCallbackInterfaceSecureStore.register(lib)
             uniffiCallbackInterfaceStateObserver.register(lib)
             uniffiCallbackInterfaceUrlOpener.register(lib)
@@ -942,6 +1014,8 @@ fun uniffi_client_ffi_fn_method_enginehandle_app_version(`ptr`: Pointer,`appId`:
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_app_versions(`ptr`: Pointer,`appId`: RustBuffer.ByValue,`before`: RustBuffer.ByValue,`limit`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_client_ffi_fn_method_enginehandle_device_id(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_discard_attachment(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_dispatch(`ptr`: Pointer,`intentJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -950,17 +1024,41 @@ fun uniffi_client_ffi_fn_method_enginehandle_forget_session(`ptr`: Pointer,uniff
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_handle_auth_redirect(`ptr`: Pointer,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
+fun uniffi_client_ffi_fn_method_enginehandle_handle_push_message(`ptr`: Pointer,`payloadJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_list_apps(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_client_ffi_fn_method_enginehandle_list_notifications(`ptr`: Pointer,`before`: RustBuffer.ByValue,`limit`: Int,`appId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_logout(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_client_ffi_fn_method_enginehandle_mark_all_notifications_read(`ptr`: Pointer,`appId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_client_ffi_fn_method_enginehandle_mark_notifications_read(`ptr`: Pointer,`ids`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_client_ffi_fn_method_enginehandle_notification_channels(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_client_ffi_fn_method_enginehandle_push_public_key(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_refresh(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_client_ffi_fn_method_enginehandle_register_push(`ptr`: Pointer,`endpoint`: RustBuffer.ByValue,`p256dh`: RustBuffer.ByValue,`auth`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_client_ffi_fn_method_enginehandle_set_channel_enabled(`ptr`: Pointer,`appId`: RustBuffer.ByValue,`channel`: RustBuffer.ByValue,`enabled`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_client_ffi_fn_method_enginehandle_set_device_info(`ptr`: Pointer,`platform`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_client_ffi_fn_method_enginehandle_set_notification_listener(`ptr`: Pointer,`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_snapshot(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_stage_attachment(`ptr`: Pointer,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_subscribe(`ptr`: Pointer,`observer`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_client_ffi_fn_method_enginehandle_unregister_push(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_client_ffi_fn_init_callback_vtable_notificationlistener(`vtable`: UniffiVTableCallbackInterfaceNotificationListener,
 ): Unit
 fun uniffi_client_ffi_fn_init_callback_vtable_securestore(`vtable`: UniffiVTableCallbackInterfaceSecureStore,
 ): Unit
@@ -1100,6 +1198,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_app_versions() != 23677.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_device_id() != 26780.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_discard_attachment() != 46768.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1112,13 +1213,43 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_handle_auth_redirect() != 36756.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_handle_push_message() != 63531.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_list_apps() != 35426.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_list_notifications() != 55124.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_logout() != 63659.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_mark_all_notifications_read() != 52089.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_mark_notifications_read() != 59741.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_notification_channels() != 38638.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_push_public_key() != 54271.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_refresh() != 33148.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_register_push() != 15603.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_set_channel_enabled() != 57723.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_set_device_info() != 2774.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_set_notification_listener() != 51107.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_snapshot() != 50695.toShort()) {
@@ -1130,6 +1261,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_subscribe() != 32106.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_unregister_push() != 18758.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_client_ffi_checksum_constructor_enginehandle_new() != 42554.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1137,6 +1271,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_constructor_enginehandle_new_with_workspace() != 47149.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_notificationlistener_on_notification() != 4555.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_securestore_get() != 59076.toShort()) {
@@ -1613,6 +1750,11 @@ public interface EngineHandleInterface {
     fun `appVersions`(`appId`: kotlin.String, `before`: kotlin.Long?, `limit`: kotlin.UInt?): kotlin.String
     
     /**
+     * This installation's device id (stable across restarts).
+     */
+    fun `deviceId`(): kotlin.String
+    
+    /**
      * Forget a staged photo the user removed before sending.
      */
     fun `discardAttachment`(`id`: kotlin.String)
@@ -1637,9 +1779,24 @@ public interface EngineHandleInterface {
     fun `handleAuthRedirect`(`url`: kotlin.String): kotlin.Boolean
     
     /**
+     * A decrypted Web Push message body: cached, unread counts updated
+     * (observers notified); returns the `Notification` JSON, or None if
+     * the body is not a notification. Never calls the listener.
+     */
+    fun `handlePushMessage`(`payloadJson`: kotlin.String): kotlin.String?
+    
+    /**
      * The pod's apps (`GET /v1/apps`).
      */
     fun `listApps`(): kotlin.String
+    
+    /**
+     * One page of notifications, newest first: `{notifications: [...],
+     * unread_total, unread_by_app, next_before?}` (pass `next_before` as
+     * `before` for the next page; `limit` 0..=100). From the pod, else
+     * (unreachable) from the cache.
+     */
+    fun `listNotifications`(`before`: kotlin.String?, `limit`: kotlin.UInt, `appId`: kotlin.String?): kotlin.String
     
     /**
      * Sign out (non-blocking): forgets the session, notifies `signed_out`;
@@ -1648,9 +1805,54 @@ public interface EngineHandleInterface {
     fun `logout`()
     
     /**
+     * Mark every notification read (of one app, when given).
+     */
+    fun `markAllNotificationsRead`(`appId`: kotlin.String?): kotlin.String
+    
+    /**
+     * Mark notifications read (at once locally, then on the pod):
+     * `{unread_total, unread_by_app}`.
+     */
+    fun `markNotificationsRead`(`ids`: List<kotlin.String>): kotlin.String
+    
+    /**
+     * `{"channels": [{app_id, id, title, description, default_enabled,
+     * importance, enabled}]}` with this device's choices.
+     */
+    fun `notificationChannels`(): kotlin.String
+    
+    /**
+     * The server's VAPID public key (base64url) for a Web Push
+     * subscription; `NotFound` when the server sends no push.
+     */
+    fun `pushPublicKey`(): kotlin.String
+    
+    /**
      * Re-fetch the workspace on the calling thread (blocking), then notify.
      */
     fun `refresh`()
+    
+    /**
+     * Send this device's Web Push subscription to the pod (remembered and
+     * sent again after the next sign-in).
+     */
+    fun `registerPush`(`endpoint`: kotlin.String, `p256dh`: kotlin.String, `auth`: kotlin.String)
+    
+    /**
+     * Turn one of an app's channels on or off for this device.
+     */
+    fun `setChannelEnabled`(`appId`: kotlin.String, `channel`: kotlin.String, `enabled`: kotlin.Boolean)
+    
+    /**
+     * What the pod shows for this device (`platform` e.g. "android",
+     * "desktop"; `name` e.g. the device model). Non-blocking.
+     */
+    fun `setDeviceInfo`(`platform`: kotlin.String, `name`: kotlin.String)
+    
+    /**
+     * Set (replace) the listener for notifications that arrive live.
+     */
+    fun `setNotificationListener`(`listener`: NotificationListener)
     
     /**
      * The current snapshot.
@@ -1668,6 +1870,11 @@ public interface EngineHandleInterface {
      * Register an observer; it immediately receives the current snapshot.
      */
     fun `subscribe`(`observer`: StateObserver)
+    
+    /**
+     * Stop Web Push to this device.
+     */
+    fun `unregisterPush`()
     
     companion object
 }
@@ -1800,6 +2007,21 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
 
     
     /**
+     * This installation's device id (stable across restarts).
+     */override fun `deviceId`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_device_id(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Forget a staged photo the user removed before sending.
      */override fun `discardAttachment`(`id`: kotlin.String)
         = 
@@ -1861,6 +2083,23 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
 
     
     /**
+     * A decrypted Web Push message body: cached, unread counts updated
+     * (observers notified); returns the `Notification` JSON, or None if
+     * the body is not a notification. Never calls the listener.
+     */override fun `handlePushMessage`(`payloadJson`: kotlin.String): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_handle_push_message(
+        it, FfiConverterString.lower(`payloadJson`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * The pod's apps (`GET /v1/apps`).
      */
     @Throws(LayoutApiException::class)override fun `listApps`(): kotlin.String {
@@ -1869,6 +2108,25 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
     uniffiRustCallWithError(LayoutApiException) { _status ->
     UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_list_apps(
         it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * One page of notifications, newest first: `{notifications: [...],
+     * unread_total, unread_by_app, next_before?}` (pass `next_before` as
+     * `before` for the next page; `limit` 0..=100). From the pod, else
+     * (unreachable) from the cache.
+     */
+    @Throws(LayoutApiException::class)override fun `listNotifications`(`before`: kotlin.String?, `limit`: kotlin.UInt, `appId`: kotlin.String?): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_list_notifications(
+        it, FfiConverterOptionalString.lower(`before`),FfiConverterUInt.lower(`limit`),FfiConverterOptionalString.lower(`appId`),_status)
 }
     }
     )
@@ -1892,6 +2150,73 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
 
     
     /**
+     * Mark every notification read (of one app, when given).
+     */
+    @Throws(LayoutApiException::class)override fun `markAllNotificationsRead`(`appId`: kotlin.String?): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_mark_all_notifications_read(
+        it, FfiConverterOptionalString.lower(`appId`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Mark notifications read (at once locally, then on the pod):
+     * `{unread_total, unread_by_app}`.
+     */
+    @Throws(LayoutApiException::class)override fun `markNotificationsRead`(`ids`: List<kotlin.String>): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_mark_notifications_read(
+        it, FfiConverterSequenceString.lower(`ids`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * `{"channels": [{app_id, id, title, description, default_enabled,
+     * importance, enabled}]}` with this device's choices.
+     */
+    @Throws(LayoutApiException::class)override fun `notificationChannels`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_notification_channels(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * The server's VAPID public key (base64url) for a Web Push
+     * subscription; `NotFound` when the server sends no push.
+     */
+    @Throws(LayoutApiException::class)override fun `pushPublicKey`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_push_public_key(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Re-fetch the workspace on the calling thread (blocking), then notify.
      */override fun `refresh`()
         = 
@@ -1899,6 +2224,66 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_refresh(
         it, _status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Send this device's Web Push subscription to the pod (remembered and
+     * sent again after the next sign-in).
+     */
+    @Throws(LayoutApiException::class)override fun `registerPush`(`endpoint`: kotlin.String, `p256dh`: kotlin.String, `auth`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_register_push(
+        it, FfiConverterString.lower(`endpoint`),FfiConverterString.lower(`p256dh`),FfiConverterString.lower(`auth`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Turn one of an app's channels on or off for this device.
+     */
+    @Throws(LayoutApiException::class)override fun `setChannelEnabled`(`appId`: kotlin.String, `channel`: kotlin.String, `enabled`: kotlin.Boolean)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_set_channel_enabled(
+        it, FfiConverterString.lower(`appId`),FfiConverterString.lower(`channel`),FfiConverterBoolean.lower(`enabled`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * What the pod shows for this device (`platform` e.g. "android",
+     * "desktop"; `name` e.g. the device model). Non-blocking.
+     */override fun `setDeviceInfo`(`platform`: kotlin.String, `name`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_set_device_info(
+        it, FfiConverterString.lower(`platform`),FfiConverterString.lower(`name`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Set (replace) the listener for notifications that arrive live.
+     */override fun `setNotificationListener`(`listener`: NotificationListener)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_set_notification_listener(
+        it, FfiConverterTypeNotificationListener.lower(`listener`),_status)
 }
     }
     
@@ -1946,6 +2331,21 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_subscribe(
         it, FfiConverterTypeStateObserver.lower(`observer`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Stop Web Push to this device.
+     */
+    @Throws(LayoutApiException::class)override fun `unregisterPush`()
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_unregister_push(
+        it, _status)
 }
     }
     
@@ -2042,7 +2442,12 @@ data class FfiStateSnapshot (
     /**
      * Data path loads: `{path: {"state", "error"?}}` (docs/DECISIONS.md D34).
      */
-    var `loadsJson`: kotlin.String
+    var `loadsJson`: kotlin.String, 
+    /**
+     * Unread notifications (D52): `{"unread_total": n, "unread_by_app":
+     * {app_id: n}}`; zeros while signed out.
+     */
+    var `notificationsJson`: kotlin.String
 ) {
     
     companion object
@@ -2063,6 +2468,7 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
@@ -2075,7 +2481,8 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterString.allocationSize(value.`queriesJson`) +
             FfiConverterString.allocationSize(value.`authJson`) +
             FfiConverterString.allocationSize(value.`layoutJson`) +
-            FfiConverterString.allocationSize(value.`loadsJson`)
+            FfiConverterString.allocationSize(value.`loadsJson`) +
+            FfiConverterString.allocationSize(value.`notificationsJson`)
     )
 
     override fun write(value: FfiStateSnapshot, buf: ByteBuffer) {
@@ -2088,6 +2495,7 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterString.write(value.`authJson`, buf)
             FfiConverterString.write(value.`layoutJson`, buf)
             FfiConverterString.write(value.`loadsJson`, buf)
+            FfiConverterString.write(value.`notificationsJson`, buf)
     }
 }
 
@@ -2295,6 +2703,67 @@ public object FfiConverterTypeLayoutApiError : FfiConverterRustBuffer<LayoutApiE
     }
 
 }
+
+
+
+
+
+/**
+ * Gets each notification that arrives live while the engine's events
+ * stream is open (D52), as `Notification` JSON (`{id, app_id, channel,
+ * title, body, image_url?, target_uri?, group_key?, created_at, read}`), so
+ * the platform can show it. Never called for notifications fetched by a
+ * list call, replayed or passed to `handle_push_message`. Called on the
+ * engine's events thread; an exception thrown here is contained.
+ */
+public interface NotificationListener {
+    
+    fun `onNotification`(`notificationJson`: kotlin.String)
+    
+    companion object
+}
+
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceNotificationListener {
+    internal object `onNotification`: UniffiCallbackInterfaceNotificationListenerMethod0 {
+        override fun callback(`uniffiHandle`: Long,`notificationJson`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeNotificationListener.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onNotification`(
+                    FfiConverterString.lift(`notificationJson`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeNotificationListener.handleMap.remove(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceNotificationListener.UniffiByValue(
+        `onNotification`,
+        uniffiFree,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_client_ffi_fn_init_callback_vtable_notificationlistener(vtable)
+    }
+}
+
+/**
+ * The ffiConverter which transforms the Callbacks in to handles to pass to Rust.
+ *
+ * @suppress
+ */
+public object FfiConverterTypeNotificationListener: FfiConverterCallbackInterface<NotificationListener>()
 
 
 
@@ -2656,6 +3125,34 @@ public object FfiConverterOptionalTypeUrlOpener: FfiConverterRustBuffer<UrlOpene
         } else {
             buf.put(1)
             FfiConverterTypeUrlOpener.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
+    override fun read(buf: ByteBuffer): List<kotlin.String> {
+        val len = buf.getInt()
+        return List<kotlin.String>(len) {
+            FfiConverterString.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.String>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterString.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterString.write(it, buf)
         }
     }
 }

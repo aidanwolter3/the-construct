@@ -385,6 +385,12 @@ impl Harness {
     pub fn set_pod_reachable(&self, on: bool) {
         self.proxy.set_online(on);
     }
+
+    /// Run `f` on the harness's runtime (e.g. the pod's notification poll,
+    /// `pod_state.poll_due()`, without waiting for a scheduler).
+    pub fn block_on<F: std::future::Future>(&self, f: F) -> F::Output {
+        self.rt.as_ref().expect("the runtime runs").block_on(f)
+    }
 }
 
 impl Drop for Harness {

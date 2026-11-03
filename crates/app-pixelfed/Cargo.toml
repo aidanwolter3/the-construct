@@ -27,3 +27,5 @@ futures-util = { version = "0.3", default-features = false, features = ["alloc"]
 
 [dev-dependencies]
 tempfile = "3"
+# The fake upstream, in-process, for the notification polling tests.
+fake-pixelfed = { path = "../fake-pixelfed" }

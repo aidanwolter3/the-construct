@@ -239,34 +239,7 @@ pub fn canonical_base(typed: &str) -> Option<String> {
     })
 }
 
-/// A public-looking host name: a dotted DNS name (no IP literal, no
-/// `localhost`, `.local`, `.internal`, ...). The DNS answer is checked at
-/// connect time too ([`crate::upstream`]).
-pub fn is_public_host(host: &str) -> bool {
-    let host = host.trim_end_matches('.').to_ascii_lowercase();
-    if host.parse::<std::net::IpAddr>().is_ok() || host.starts_with('[') {
-        return false;
-    }
-    let labels: Vec<&str> = host.split('.').collect();
-    if labels.len() < 2
-        || labels.iter().any(|l| {
-            l.is_empty()
-                || l.len() > 63
-                || !l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        })
-    {
-        return false;
-    }
-    // A numeric last label is an IP address in some spelling (`0x7f.1`).
-    let tld = labels[labels.len() - 1];
-    if tld.bytes().all(|b| b.is_ascii_digit()) || tld.starts_with("0x") {
-        return false;
-    }
-    !matches!(
-        tld,
-        "localhost" | "local" | "internal" | "lan" | "home" | "intranet" | "corp" | "arpa"
-    )
-}
+pub use pod_core::net::is_public_host;
 
 /// An `https://<public host>` base on the default port.
 fn is_public_base(url: &str) -> bool {

@@ -11,6 +11,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
 import org.theconstruct.ActionIntent
+import org.theconstruct.AppNotification
 import org.theconstruct.AttachmentException
 import org.theconstruct.AttachmentInfo
 import org.theconstruct.ConstructEngineBridge
@@ -62,6 +63,10 @@ import javax.imageio.ImageIO
  * e.g. its `pending_label` "Posting…") until [settle] (the simulator's `wait` / `idle` steps) while online; it then
  * becomes a finished post at the same URI and place: without `pending_label` / `failed`, with a fake `id`,
  * `like_count` 0, `reply_count` 0 and `is_liked` false.
+ *
+ * Notifications (D52): with [notifications] (shared by the run's bridges) the notification calls answer from it, the
+ * snapshot carries its unread counts, and [FakeNotifications.inject] fires this bridge's listener (live arrival) while
+ * it is open. Without, the interface defaults apply ("Notifications aren't available here.").
  */
 class FakeEngineBridge(
     bundleJson: String,
@@ -70,6 +75,8 @@ class FakeEngineBridge(
     appId: String? = null,
     apps: FakeAppCatalog? = null,
     screenData: String? = null,
+    /** The fake pod's notifications (null = this fake has none). */
+    val notifications: FakeNotifications? = null,
 ) : ConstructEngineBridge {
     /** [prevValues]: field -> value before this row was applied (null = absent). */
     private class Row(val intent: ActionIntent.OptimisticMutate, var prevValues: Map<String, JsonElement?>)
@@ -136,6 +143,55 @@ class FakeEngineBridge(
         // catalog).
         this.apps.latestCompatibleLayout(this.appId)?.let { workspace = it }
         shownVersion = this.apps.latestCompatibleVersion(this.appId) ?: 1
+    }
+
+    @Volatile
+    private var notificationListener: ((String) -> Unit)? = null
+
+    /** Re-emits on a notifications change; on a live arrival also tells the listener first. */
+    private val notificationWatcher: (AppNotification?) -> Unit = { n ->
+        if (n != null) notificationListener?.invoke(ConstructJson.json.encodeToString(AppNotification.serializer(), n))
+        synchronized(lock) { seq++ }
+        emit()
+    }
+
+    init {
+        notifications?.watch(notificationWatcher)
+    }
+
+    override fun setNotificationListener(onNotification: (String) -> Unit) {
+        notificationListener = onNotification
+    }
+
+    override fun setDeviceInfo(platform: String, name: String) {
+        println("[sim] device info: $platform / $name")
+    }
+
+    override fun deviceId(): String = if (notifications == null) "" else "sim-device"
+
+    override fun listNotifications(before: String?, limit: Int, appId: String?): String =
+        notificationsCall { it.listJson(before, limit, appId) }
+
+    override fun markNotificationsRead(ids: List<String>): String = notificationsCall { it.markRead(ids) }
+
+    override fun markAllNotificationsRead(appId: String?): String = notificationsCall { it.markAllRead(appId) }
+
+    override fun notificationChannels(): String = notificationsCall { it.channelsJson() }
+
+    override fun setChannelEnabled(appId: String, channel: String, enabled: Boolean) {
+        notificationsCall(needsPod = true) { it.setChannelEnabled(appId, channel, enabled); "" }
+    }
+
+    override fun pushPublicKey(): String =
+        throw LayoutApiException("This pod doesn't send push notifications.", LayoutApiException.Kind.NotFound, 404)
+
+    /** Like the engine: lists work offline (its cache; here the store), marking read is optimistic. */
+    private fun notificationsCall(needsPod: Boolean = false, call: (FakeNotifications) -> String): String {
+        val n = notifications ?: throw LayoutApiException("Notifications aren't available here.")
+        if (needsPod && !online) {
+            throw LayoutApiException("Can't reach your pod. Check your connection and try again.", LayoutApiException.Kind.Offline)
+        }
+        return call(n)
     }
 
     override fun subscribe(onState: (EngineSnapshot) -> Unit) {
@@ -323,6 +379,8 @@ class FakeEngineBridge(
     }
 
     override fun close() {
+        notifications?.unwatch(notificationWatcher)
+        notificationListener = null
         synchronized(lock) {
             listeners.clear()
         }
@@ -535,6 +593,7 @@ class FakeEngineBridge(
         loadsJson = JsonObject(loads).toString(),
         authJson = authJson,
         layoutJson = JsonObject(mapOf("app_id" to JsonPrimitive(appId), "version" to JsonPrimitive(shownVersion))).toString(),
+        notificationsJson = notifications?.unreadJson() ?: NO_UNREAD,
     )
 
     private fun emit() {
@@ -543,6 +602,7 @@ class FakeEngineBridge(
     }
 
     companion object {
+        private const val NO_UNREAD = "{\"unread_total\":0,\"unread_by_app\":{}}"
         private val queriesSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
 
         /** [e] with every string exactly `$attachments.<name>` replaced by [values]`[name]` (others kept as they are). */

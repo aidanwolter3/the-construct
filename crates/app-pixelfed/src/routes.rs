@@ -95,7 +95,7 @@ async fn signed_in_account(
 #[derive(Default)]
 struct PodRules(std::sync::OnceLock<bool>);
 
-async fn others_allowed(state: &Pod) -> Result<bool, ApiError> {
+pub(crate) async fn others_allowed(state: &Pod) -> Result<bool, ApiError> {
     let rules = state.local::<PodRules>();
     if let Some(v) = rules.0.get() {
         return Ok(*v);
@@ -174,7 +174,7 @@ pub(crate) fn proxy_base(headers: &HeaderMap) -> String {
     format!("{scheme}://{host}{prefix}{MEDIA_PATH}")
 }
 
-async fn save_media_keys(state: &Pod, media: MediaUrls) -> Result<(), ApiError> {
+pub(crate) async fn save_media_keys(state: &Pod, media: MediaUrls) -> Result<(), ApiError> {
     if media.keys.is_empty() {
         return Ok(());
     }

@@ -1,7 +1,10 @@
 //! Server push channel (M7, docs/DECISIONS.md D24): a `construct-engine-events`
 //! thread keeps `GET /v1/workspaces/<id>/events` (Server-Sent Events) open
 //! while the engine is online and refetches the workspace when a
-//! `layout` event names a version newer than the last applied one.
+//! `layout` event names a version newer than the last applied one. The same
+//! stream carries `notification` / `notifications_read` events for every app
+//! of the pod (D52, handled in [`crate::notify`]); after each (re)connect with
+//! a session the engine fetches recent notifications to catch up.
 //!
 //! The stream is read with async reqwest on a private current-thread Tokio
 //! runtime, in short slices ([`TICK`]), so a dropped engine is noticed
@@ -209,10 +212,10 @@ pub(crate) fn events_thread(
         if signal.is_shut_down() {
             return;
         }
-        let (online, token) = match weak.upgrade() {
+        let (online, token, device) = match weak.upgrade() {
             Some(inner) => {
                 let online = lock(&inner.state).is_online;
-                (online, inner.session_token())
+                (online, inner.session_token(), inner.device_id.clone())
             }
             None => return,
         };
@@ -232,7 +235,10 @@ pub(crate) fn events_thread(
                 .header(
                     protocol::SCHEMA_HEADER,
                     protocol::SCHEMA_VERSION.to_string(),
-                );
+                )
+                // Marks this device live: the pod sends it no Web Push
+                // while the stream is open (D52).
+                .header(protocol::DEVICE_HEADER, &device);
             if let Some(t) = &token {
                 req = req.bearer_auth(t);
             }
@@ -251,6 +257,13 @@ pub(crate) fn events_thread(
                     println!("[ConstructEngine] events: subscribed to {url}");
                 } else {
                     println!("[ConstructEngine] events: connected to {url}");
+                }
+                // Catch up on notifications missed while disconnected
+                // (and register the device), before reading new events.
+                if let Some(t) = &token
+                    && let Some(inner) = weak.upgrade()
+                {
+                    inner.on_stream_connected(t);
                 }
                 match read_stream(
                     &rt,
@@ -378,6 +391,9 @@ impl Inner {
     /// version is newer than the last applied one (or when none is known).
     /// Blocking (the refetch); called on the events thread.
     fn on_push_event(&self, ev: &SseEvent) {
+        if self.on_notification_event(ev) {
+            return;
+        }
         if ev.event == "data" {
             // D50: the pod's data changed (e.g. a post finished): reload the
             // workspace and every loaded data path.

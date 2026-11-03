@@ -162,6 +162,57 @@ const MIGRATIONS: &[Migration] = &[
      );
      CREATE INDEX uploads_owner ON uploads(owner);",
     ),
+    // v14 (D52): notifications from apps. `notifications` holds what adapters
+    // reported (`UNIQUE(app_id, dedupe_key)` makes reporting idempotent);
+    // `notification_polls` is each polling adapter's schedule and backoff
+    // (`stopped_for` = the sign-in it lost; a new sign-in resumes it);
+    // `devices` are the clients that registered (bound to a session, with an
+    // optional Web Push subscription) and `device_channel_prefs` their
+    // channel choices (no row = the channel's default).
+    Migration::Sql(
+        "CREATE TABLE notifications (
+         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+         app_id      TEXT NOT NULL,
+         channel     TEXT NOT NULL,
+         dedupe_key  TEXT NOT NULL,
+         title       TEXT NOT NULL,
+         body        TEXT NOT NULL DEFAULT '',
+         image_url   TEXT,
+         target_uri  TEXT,
+         group_key   TEXT,
+         created_at  INTEGER NOT NULL,
+         inserted_at INTEGER NOT NULL,
+         read_at     INTEGER,
+         UNIQUE (app_id, dedupe_key)
+     );
+     CREATE INDEX notifications_unread ON notifications (read_at, app_id);
+     CREATE TABLE notification_polls (
+         adapter     TEXT PRIMARY KEY NOT NULL,
+         next_at     INTEGER NOT NULL,
+         failures    INTEGER NOT NULL DEFAULT 0,
+         last_error  TEXT,
+         stopped_for TEXT
+     );
+     CREATE TABLE devices (
+         id            TEXT PRIMARY KEY NOT NULL,
+         token_hash    TEXT NOT NULL,
+         platform      TEXT NOT NULL,
+         name          TEXT NOT NULL DEFAULT '',
+         created_at    INTEGER NOT NULL,
+         last_seen     INTEGER NOT NULL,
+         push_endpoint TEXT,
+         push_p256dh   TEXT,
+         push_auth     TEXT,
+         push_failures INTEGER NOT NULL DEFAULT 0
+     );
+     CREATE TABLE device_channel_prefs (
+         device_id TEXT NOT NULL,
+         app_id    TEXT NOT NULL,
+         channel   TEXT NOT NULL,
+         enabled   INTEGER NOT NULL,
+         PRIMARY KEY (device_id, app_id, channel)
+     );",
+    ),
 ];
 
 /// A pod setting inside a transaction (an adapter migration reads its
@@ -606,6 +657,12 @@ fn attach_sign_in_on(conn: &Connection, token_hash: &str, sign_in: &str) -> rusq
         "INSERT OR IGNORE INTO session_sign_ins (token_hash, provider, created_at)
          VALUES (?1, ?2, ?3)",
         params![token_hash, sign_in, now_secs()],
+    )?;
+    // A polling adapter that lost this sign-in polls again (D52).
+    conn.execute(
+        "UPDATE notification_polls SET stopped_for = NULL, next_at = 0, failures = 0
+         WHERE stopped_for = ?1",
+        [sign_in],
     )?;
     Ok(())
 }

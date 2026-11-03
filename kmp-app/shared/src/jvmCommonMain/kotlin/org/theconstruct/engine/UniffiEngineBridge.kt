@@ -7,6 +7,7 @@ import org.theconstruct.EngineSnapshot
 import org.theconstruct.LayoutApiException
 import uniffi.client_ffi.EngineHandle
 import uniffi.client_ffi.FfiStateSnapshot
+import uniffi.client_ffi.NotificationListener
 import uniffi.client_ffi.SecureStore
 import uniffi.client_ffi.StateObserver
 import uniffi.client_ffi.UrlOpener
@@ -71,6 +72,70 @@ class UniffiEngineBridge(val handle: EngineHandle) : ConstructEngineBridge {
     override fun appVersion(appId: String, version: Long): String =
         catalog("$appId v$version") { handle.appVersion(appId, version) }
 
+    // Notifications (D52). The listener is held here too (UniFFI's handle map also pins it).
+    @Volatile
+    private var notificationListener: NotificationListener? = null
+
+    override fun setNotificationListener(onNotification: (String) -> Unit) {
+        if (closed) return
+        val listener = object : NotificationListener {
+            override fun onNotification(notificationJson: String) {
+                try {
+                    onNotification(notificationJson)
+                } catch (t: Throwable) {
+                    // Never throw into the engine's events thread.
+                    engineLog("notification listener failed: $t")
+                }
+            }
+        }
+        notificationListener = listener
+        handle.setNotificationListener(listener)
+    }
+
+    override fun setDeviceInfo(platform: String, name: String) {
+        if (closed) return
+        handle.setDeviceInfo(platform, name)
+    }
+
+    override fun deviceId(): String = if (closed) "" else handle.deviceId()
+
+    override fun listNotifications(before: String?, limit: Int, appId: String?): String =
+        catalog("list notifications") { handle.listNotifications(before, limit.toUIntArg(), appId) }
+
+    override fun markNotificationsRead(ids: List<String>): String =
+        catalog("mark ${ids.size} notification(s) read") { handle.markNotificationsRead(ids) }
+
+    override fun markAllNotificationsRead(appId: String?): String =
+        catalog("mark all notifications read") { handle.markAllNotificationsRead(appId) }
+
+    override fun notificationChannels(): String = catalog("notification channels") { handle.notificationChannels() }
+
+    override fun setChannelEnabled(appId: String, channel: String, enabled: Boolean) {
+        catalog("channel $appId.$channel enabled=$enabled") {
+            handle.setChannelEnabled(appId, channel, enabled)
+            ""
+        }
+    }
+
+    override fun pushPublicKey(): String = catalog("push public key") { handle.pushPublicKey() }
+
+    override fun registerPush(endpoint: String, p256dh: String, auth: String) {
+        // Log only the push service's host: the endpoint path is a capability.
+        catalog("register push at ${endpoint.substringAfter("://").substringBefore('/')}") {
+            handle.registerPush(endpoint, p256dh, auth)
+            ""
+        }
+    }
+
+    override fun unregisterPush() {
+        catalog("unregister push") {
+            handle.unregisterPush()
+            ""
+        }
+    }
+
+    override fun handlePushMessage(payloadJson: String): String? = if (closed) null else handle.handlePushMessage(payloadJson)
+
     override fun stageAttachment(path: String): Result<AttachmentInfo> {
         if (closed) return Result.failure(AttachmentException(CLOSED))
         return try {
@@ -105,6 +170,7 @@ class UniffiEngineBridge(val handle: EngineHandle) : ConstructEngineBridge {
         closed = true
         engineLog("engine closed")
         synchronized(observers) { observers.clear() }
+        notificationListener = null
         handle.close()
     }
 
@@ -121,7 +187,7 @@ class UniffiEngineBridge(val handle: EngineHandle) : ConstructEngineBridge {
             call()
         } catch (e: uniffi.client_ffi.LayoutApiException) {
             val mapped = e.toLayoutApiException()
-            engineLog("apps: $what failed: ${mapped.kind} ${mapped.message}")
+            engineLog("pod call: $what failed: ${mapped.kind} ${mapped.message}")
             throw mapped
         } catch (e: IllegalStateException) {
             // Closed by another thread meanwhile (UniFFI: "... object has already been destroyed").
@@ -174,6 +240,7 @@ internal fun FfiStateSnapshot.toEngineSnapshot(): EngineSnapshot = EngineSnapsho
     authJson = authJson,
     layoutJson = layoutJson,
     loadsJson = loadsJson,
+    notificationsJson = notificationsJson,
 )
 
 /** A negative limit can't be meant; 0 makes the pod answer 400 with a readable error. */

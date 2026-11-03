@@ -114,6 +114,10 @@ class MenuState internal constructor(private val controller: ConstructController
 
     var serverExpanded by mutableStateOf(false)
 
+    /** The notification settings are shown in the drawer instead of the sections. */
+    var notificationSettingsOpen by mutableStateOf(false)
+        private set
+
     /** The custom server URL being typed, or null when that field is closed. */
     var customUrl by mutableStateOf<String?>(null)
 
@@ -126,6 +130,7 @@ class MenuState internal constructor(private val controller: ConstructController
     fun closeMenu() {
         open = false
         historyAppId = null
+        notificationSettingsOpen = false
         selectError = null
         appError = null
         serverExpanded = false
@@ -140,10 +145,19 @@ class MenuState internal constructor(private val controller: ConstructController
         historyToken++
     }
 
-    /** Back closes the innermost level: the custom URL field, the version picker, then the drawer. */
+    /** Shows the notification settings (also opening the drawer); they reload each time. */
+    fun showNotificationSettings() {
+        if (!open) openMenu()
+        historyAppId = null
+        notificationSettingsOpen = true
+        controller.inbox.retryChannels()
+    }
+
+    /** Back closes the innermost level: the custom URL field, the version picker or notification settings, the drawer. */
     fun back() {
         when {
             customUrl != null -> customUrl = null
+            notificationSettingsOpen -> notificationSettingsOpen = false
             historyAppId != null -> {
                 historyAppId = null
                 selectError = null
@@ -301,6 +315,7 @@ internal fun MenuDrawer(
     state: ConstructState,
     pin: PinnedVersion?,
     server: ServerChoice?,
+    notificationSettingsExtra: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     val menu = controller.menu
@@ -329,7 +344,9 @@ internal fun MenuDrawer(
             ModalDrawerSheet(Modifier.width(304.dp)) {
                 if (shown) {
                     val historyId = menu.historyAppId
-                    if (historyId != null) {
+                    if (menu.notificationSettingsOpen) {
+                        NotificationSettings(controller, notificationSettingsExtra)
+                    } else if (historyId != null) {
                         VersionPicker(controller, state, pin, historyId)
                     } else {
                         MenuSections(controller, state, pin, server)
@@ -365,6 +382,18 @@ private fun MenuSections(controller: ConstructController, state: ConstructState,
 
         SectionTitle("Apps")
         AppsSection(controller, state, pin)
+
+        SectionDivider()
+        Row(
+            Modifier.fillMaxWidth().clickable(onClick = menu::showNotificationSettings).testTag("menu-notifications")
+                .padding(start = 20.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(ConstructIcons.Notifications, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(14.dp))
+            Text("Notifications", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            Icon(ConstructIcons.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
 
         SectionDivider()
         SectionTitle("Connection")
@@ -420,7 +449,7 @@ private fun NewerVersionBanner(controller: ConstructController, state: Construct
     }
 }
 
-private fun appIcon(icon: String): ImageVector = when (icon) {
+internal fun appIcon(icon: String): ImageVector = when (icon) {
     "photo" -> ConstructIcons.Photo
     else -> ConstructIcons.Dashboard
 }

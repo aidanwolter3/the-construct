@@ -61,7 +61,7 @@ impl fmt::Display for LayoutApiError {
 impl std::error::Error for LayoutApiError {}
 
 /// Percent-encode a path segment (everything but RFC 3986 unreserved).
-fn segment(s: &str) -> String {
+pub(crate) fn segment(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
@@ -116,10 +116,13 @@ impl Inner {
                 reason: format!("cannot start the request: {e}"),
             })?;
         // The schema header lets the pod say which versions this build can draw.
-        let mut req = client.get(&url).header(
-            protocol::SCHEMA_HEADER,
-            protocol::SCHEMA_VERSION.to_string(),
-        );
+        let mut req = client
+            .get(&url)
+            .header(
+                protocol::SCHEMA_HEADER,
+                protocol::SCHEMA_VERSION.to_string(),
+            )
+            .header(protocol::DEVICE_HEADER, &self.device_id);
         // A pod host (D46) needs the pod token to know whose apps these are.
         if let Some(t) = self.session_token() {
             req = req.bearer_auth(t);

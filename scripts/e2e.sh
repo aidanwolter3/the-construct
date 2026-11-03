@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end suite (crates/e2e/tests/suite.rs): sign-in via PKCE with a scripted browser, feed,
-# like, offline like -> flush, bookmark; the real pod and client-core engine in-process.
+# like, offline like -> flush, bookmark; the real pod and client-core engine in-process. Also
+# crates/e2e/tests/notifications.rs (a like injected on the fake becomes an unread pod
+# notification; skipped against a real upstream).
 # README "End-to-end tests".
 #
 # Usage: scripts/e2e.sh [--upstream fake|real] [--in-process] [--faults] [-- <cargo test args>]
@@ -30,13 +32,13 @@ while [[ $# -gt 0 ]]; do
     --in-process) in_process=1; shift ;;
     --faults) faults=1; shift ;;
     --) shift; extra=("$@"); break ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
   esac
 done
 
 run_suite() {
-  cargo test -p e2e --test suite -- --nocapture ${extra[@]+"${extra[@]}"}
+  cargo test -p e2e --test suite --test notifications -- --nocapture ${extra[@]+"${extra[@]}"}
 }
 
 case "$upstream" in

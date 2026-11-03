@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
-use protocol::{EntityRecord, UiNode};
+use protocol::{EntityRecord, Notification, UiNode};
 use rusqlite::{Connection, ErrorCode, MAIN_DB, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -33,7 +33,7 @@ pub use rusqlite::Error as StoreError;
 pub type StoreResult<T> = Result<T, StoreError>;
 
 /// Current schema version (`PRAGMA user_version`).
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// Outbox row status for rows not yet accepted or rejected by the server.
 pub const STATUS_PENDING: &str = "PENDING";
@@ -117,6 +117,24 @@ CREATE TABLE IF NOT EXISTS attachments (
 );
 ";
 
+/// Schema v6 (D52): small engine values (`engine_kv`: the device id, the
+/// last fetched notification channels and unread counts, the remembered
+/// push subscription) and the notification cache (the newest
+/// [`NOTIFICATIONS_KEPT`], so the inbox works offline). `json` is the
+/// [`Notification`] as the pod sent it; `read` mirrors its flag.
+const MIGRATION_V6: &str = "
+CREATE TABLE IF NOT EXISTS engine_kv (
+    key TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY NOT NULL,
+    app_id TEXT NOT NULL,
+    read INTEGER NOT NULL DEFAULT 0,
+    json TEXT NOT NULL
+);
+";
+
 /// `MIGRATIONS[i]` upgrades schema v`i` to v`i+1`, each in one transaction.
 const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [
     MIGRATION_V1,
@@ -124,7 +142,19 @@ const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [
     MIGRATION_V3,
     MIGRATION_V4,
     MIGRATION_V5,
+    MIGRATION_V6,
 ];
+
+/// Notifications kept in the cache (the newest ids).
+pub const NOTIFICATIONS_KEPT: usize = 200;
+
+/// `engine_kv` keys of the notification cache (cleared at sign-out).
+pub const KV_NOTIFICATION_CHANNELS: &str = "notification_channels";
+pub const KV_NOTIFICATION_UNREAD: &str = "notification_unread";
+
+/// Newest first: pod ids are sortable (numeric strings or fixed-width ids),
+/// so a longer id is newer and equal lengths compare as text.
+const NOTIFICATION_ORDER: &str = "LENGTH(id) DESC, id DESC";
 
 /// `(domain, entity_type)` from a `<domain>://<type>/<id...>` URI, e.g.
 /// `pixelfed://posts/101` -> `("pixelfed", "posts")`. Missing parts are `""`.
@@ -697,6 +727,165 @@ pub trait StoreOps {
             )?
             .execute(params![id, prev_value_json, also_to_json(also)?])?;
         Ok(())
+    }
+
+    // ---- engine_kv ----
+
+    fn kv_get(&self, key: &str) -> StoreResult<Option<String>> {
+        self.conn()
+            .prepare_cached("SELECT value FROM engine_kv WHERE key = ?1")?
+            .query_row([key], |r| r.get(0))
+            .optional()
+    }
+
+    fn kv_set(&self, key: &str, value: &str) -> StoreResult<()> {
+        self.conn()
+            .prepare_cached(
+                "INSERT INTO engine_kv (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            )?
+            .execute(params![key, value])?;
+        Ok(())
+    }
+
+    fn kv_delete(&self, key: &str) -> StoreResult<()> {
+        self.conn()
+            .prepare_cached("DELETE FROM engine_kv WHERE key = ?1")?
+            .execute([key])?;
+        Ok(())
+    }
+
+    // ---- notifications ----
+
+    /// Insert or replace a notification. Returns whether it was new.
+    fn upsert_notification(&self, n: &Notification) -> StoreResult<bool> {
+        let existed = self
+            .conn()
+            .prepare_cached("SELECT 1 FROM notifications WHERE id = ?1")?
+            .query_row([&n.id], |_| Ok(()))
+            .optional()?
+            .is_some();
+        let json = serde_json::to_string(n).map_err(json_err)?;
+        self.conn()
+            .prepare_cached(
+                "INSERT INTO notifications (id, app_id, read, json) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(id) DO UPDATE SET app_id = excluded.app_id,
+                     read = excluded.read, json = excluded.json",
+            )?
+            .execute(params![n.id, n.app_id, n.read, json])?;
+        Ok(!existed)
+    }
+
+    /// Whether a notification is cached.
+    fn has_notification(&self, id: &str) -> StoreResult<bool> {
+        Ok(self
+            .conn()
+            .prepare_cached("SELECT 1 FROM notifications WHERE id = ?1")?
+            .query_row([id], |_| Ok(()))
+            .optional()?
+            .is_some())
+    }
+
+    /// The apps with an unread cached notification.
+    fn unread_notification_apps(&self) -> StoreResult<Vec<String>> {
+        let mut stmt = self
+            .conn()
+            .prepare_cached("SELECT DISTINCT app_id FROM notifications WHERE read = 0")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        rows.collect()
+    }
+
+    /// Keep only the newest `keep` notifications. Returns the number deleted.
+    fn prune_notifications(&self, keep: usize) -> StoreResult<usize> {
+        self.conn()
+            .prepare_cached(&format!(
+                "DELETE FROM notifications WHERE id NOT IN (
+                     SELECT id FROM notifications ORDER BY {NOTIFICATION_ORDER} LIMIT ?1)"
+            ))?
+            .execute([keep as i64])
+    }
+
+    /// Cached notifications, newest first: older than `before` (an id) when
+    /// given, of `app` when given, at most `limit` (corrupt rows skipped).
+    fn load_notifications(
+        &self,
+        before: Option<&str>,
+        limit: usize,
+        app: Option<&str>,
+    ) -> StoreResult<Vec<Notification>> {
+        let mut stmt = self.conn().prepare_cached(&format!(
+            "SELECT id, json FROM notifications
+             WHERE (?1 IS NULL OR LENGTH(id) < LENGTH(?1)
+                    OR (LENGTH(id) = LENGTH(?1) AND id < ?1))
+               AND (?2 IS NULL OR app_id = ?2)
+             ORDER BY {NOTIFICATION_ORDER} LIMIT ?3"
+        ))?;
+        let rows = stmt.query_map(params![before, app, limit as i64], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, json) = row?;
+            match serde_json::from_str::<Notification>(&json) {
+                Ok(n) => out.push(n),
+                Err(e) => {
+                    eprintln!("[ConstructEngine] store: ignoring corrupt notification {id}: {e}")
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Mark cached notifications read: the given `ids`, or (`ids` = None)
+    /// every one of `app` (all apps when `app` is None). Returns
+    /// `app_id -> number newly marked`.
+    fn mark_notifications_read(
+        &self,
+        ids: Option<&[String]>,
+        app: Option<&str>,
+    ) -> StoreResult<BTreeMap<String, u32>> {
+        let mut targets: Vec<(String, String, String)> = Vec::new();
+        {
+            let mut stmt = self.conn().prepare_cached(
+                "SELECT id, app_id, json FROM notifications
+                 WHERE read = 0 AND (?1 IS NULL OR app_id = ?1)",
+            )?;
+            let rows = stmt.query_map(params![app], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            for row in rows {
+                let (id, app_id, json): (String, String, String) = row?;
+                if ids.is_none_or(|ids| ids.contains(&id)) {
+                    targets.push((id, app_id, json));
+                }
+            }
+        }
+        let mut by_app = BTreeMap::new();
+        for (id, app_id, json) in targets {
+            let json = match serde_json::from_str::<Value>(&json) {
+                Ok(mut v) => {
+                    v["read"] = Value::Bool(true);
+                    v.to_string()
+                }
+                Err(_) => json,
+            };
+            self.conn()
+                .prepare_cached("UPDATE notifications SET read = 1, json = ?2 WHERE id = ?1")?
+                .execute(params![id, json])?;
+            *by_app.entry(app_id).or_insert(0u32) += 1;
+        }
+        Ok(by_app)
+    }
+
+    /// Forget every cached notification, the cached channels and unread
+    /// counts (sign-out: they hold private text). Returns the number of
+    /// notifications deleted.
+    fn delete_notification_cache(&self) -> StoreResult<usize> {
+        let n = self
+            .conn()
+            .prepare_cached("DELETE FROM notifications")?
+            .execute([])?;
+        self.kv_delete(KV_NOTIFICATION_CHANNELS)?;
+        self.kv_delete(KV_NOTIFICATION_UNREAD)?;
+        Ok(n)
     }
 }
 
@@ -1284,6 +1473,64 @@ mod tests {
         assert_eq!(ws.queries, queries);
         assert_eq!(ws.updated_at, 3);
         assert_eq!(s.load_workspace("other").unwrap(), None);
+    }
+
+    fn notification(id: &str, app: &str) -> Notification {
+        Notification {
+            id: id.into(),
+            app_id: app.into(),
+            channel: "c".into(),
+            title: format!("t{id}"),
+            body: String::new(),
+            image_url: None,
+            target_uri: None,
+            group_key: None,
+            created_at: 1,
+            read: false,
+        }
+    }
+
+    #[test]
+    fn notification_cache_orders_prunes_marks_and_clears() {
+        let s = Store::open_in_memory().unwrap();
+        // Numeric ids: "10" is newer than "9".
+        for (id, app) in [("9", "a"), ("10", "b"), ("8", "a")] {
+            assert!(s.upsert_notification(&notification(id, app)).unwrap());
+        }
+        assert!(!s.upsert_notification(&notification("9", "a")).unwrap());
+        let ids = |v: Vec<Notification>| v.into_iter().map(|n| n.id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(s.load_notifications(None, 10, None).unwrap()),
+            ["10", "9", "8"]
+        );
+        assert_eq!(
+            ids(s.load_notifications(Some("10"), 1, None).unwrap()),
+            ["9"]
+        );
+        assert_eq!(
+            ids(s.load_notifications(None, 10, Some("a")).unwrap()),
+            ["9", "8"]
+        );
+        let marked = s
+            .mark_notifications_read(Some(&["9".to_owned()]), None)
+            .unwrap();
+        assert_eq!(marked, BTreeMap::from([("a".to_owned(), 1)]));
+        assert!(s.load_notifications(None, 10, None).unwrap()[1].read);
+        assert_eq!(s.unread_notification_apps().unwrap().len(), 2);
+        assert_eq!(
+            s.mark_notifications_read(None, Some("b")).unwrap(),
+            BTreeMap::from([("b".to_owned(), 1)])
+        );
+        assert_eq!(s.prune_notifications(2).unwrap(), 1);
+        assert_eq!(
+            ids(s.load_notifications(None, 10, None).unwrap()),
+            ["10", "9"]
+        );
+        s.kv_set(KV_NOTIFICATION_UNREAD, "{}").unwrap();
+        s.kv_set("device_id", "keep-me-1").unwrap();
+        assert_eq!(s.delete_notification_cache().unwrap(), 2);
+        assert_eq!(s.kv_get(KV_NOTIFICATION_UNREAD).unwrap(), None);
+        assert_eq!(s.kv_get("device_id").unwrap().as_deref(), Some("keep-me-1"));
     }
 
     #[test]

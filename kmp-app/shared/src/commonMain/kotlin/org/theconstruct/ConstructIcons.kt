@@ -60,6 +60,12 @@ internal object ConstructIcons {
             "c-1.93,0 -3.68,-0.79 -4.94,-2.06l-1.42,1.42C8.27,19.99 10.51,21 13,21c4.97,0 9,-4.03 9,-9s-4.03,-9 -9,-9z" +
             "M12,8v5l4.28,2.54 0.72,-1.21 -3.5,-2.08V8H12z",
     )
+    /** Material "Notifications": the inbox bell. */
+    val Notifications = icon(
+        "Notifications",
+        "M12,22c1.1,0 2,-0.9 2,-2h-4c0,1.1 0.89,2 2,2zM18,16v-5c0,-3.07 -1.64,-5.64 -4.5,-6.32V4c0,-0.83 -0.67,-1.5 -1.5,-1.5" +
+            "s-1.5,0.67 -1.5,1.5v0.68C7.63,5.36 6,7.92 6,11v5l-2,2v1h16v-1l-2,-2z",
+    )
     val Menu = icon("Menu", "M3,18h18v-2H3v2zM3,13h18v-2H3v2zM3,6v2h18V6H3z")
     /** Material "Image": the Pixelfed apps. */
     val Photo = icon(

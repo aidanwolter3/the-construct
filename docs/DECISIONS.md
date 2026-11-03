@@ -1713,3 +1713,70 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
 - `$form?.<field>` binds a blank field to `""` instead of blocking the send (a caption is optional).
 - Icons `add_photo`, `add`, `refresh`.
 - Additive: `RETIRED` is unchanged; schema-7 clients get the newest layout they can draw.
+
+## D52: Notifications from apps are a generic pod pipeline; only adapters know their source
+
+Design: `docs/NOTIFICATIONS.md`. README "Notifications" has the API and configuration.
+
+- **Why:** the user wants Pixelfed notifications from their pod on every device, including when the app is closed.
+  Nothing existed: no background work in pods, SSE carried only layout events, no device record, no push on Android.
+- **Boundary (D34/D40):** only the adapter knows its upstream. pod-core, pod-host, the server binary, the engine, the
+  FFI and the shared UI handle notifications in general: an opaque `app_id`, channel ids the adapter declares
+  (`AppAdapter::notification_channels`), ready-made `title`/`body` text, and a `target_uri` the client resolves
+  against that app's own layout routes like any `action.navigation.open`. `the_core_names_no_app` still passes.
+- **Source:** adapters either poll (`poll_notifications` + `poll_interval`, cursor in their own tables) or report from
+  their own routes (`AppState::notify`). One pipeline: insert with `UNIQUE(app_id, dedupe_key)` (idempotent; core
+  migration v14 adds `notifications`, `notification_polls`, `devices`, `device_channel_prefs`), broadcast, push.
+  Retention: the newest 500 for 30 days. A failed poll backs off (1 min doubling to 1 h, never below the interval);
+  `PollStatus::SignInGone` stops polls until any session completes that sign-in again (`attach_sign_in_on` resumes
+  them).
+- **Pixelfed:** polls `GET /api/v1/notifications` every 2 minutes (scope `read`, already granted) for each stored
+  account the config still accepts. The first poll of an instance stores the newest 20 quietly (already read, never
+  pushed); later ones page from the cursor (`pixelfed_notify_cursor`, adapter migration 3), at most 3 pages. Channels
+  `likes`, `comments`, `mentions`, `follows`, `boosts`, `other` (off by default). Post-related ones open
+  `pixelfed://posts/<id>/comments` (the comments screen route); follows open the app. Avatars go through the media
+  proxy as pod paths (`<public prefix>/v1/pixelfed/media/<key>`), which clients prefix with their base URL. A token
+  revoked upstream deletes the account and the instance's cursor, so a later sign-in doesn't replay old ones. The fake
+  upstream serves the endpoint and `POST /_admin/notifications` to inject one.
+- **Waking pods:** pods open lazily, so the host's scheduler (`Host::run_due_polls`, every 30 s, 8 pods at a time)
+  runs `AppState::poll_due` on every open pod and every pod whose `host.db` `pods.next_wake_at` (host migration 2) is
+  due, and writes the pod's next wake back. pod-core never sees `host.db`; the host sets each pod's public prefix for
+  work outside requests (`AppState::set_public_prefix`). A pod polls only with a device seen in the last 30 days, so
+  idle and temporary pods cost no upstream calls. Staging's pod machine is always on.
+- **Delivery:** the existing per-workspace SSE stream gains `notification` / `notifications_read` events for all of
+  the pod's apps (session required; anonymous streams hear only layout events; old engines ignore them). Closed-app
+  delivery is standard Web Push (RFC 8291 encryption and RFC 8292 VAPID via `web-push-native`, sent with reqwest) to
+  an endpoint the device registers (`PUT /v1/devices/{id}`, bound to the caller's session, per-device channel
+  choices). A device with an events stream open (`X-Construct-Device` on the stream) gets no push: it shows the
+  arrival itself. One VAPID key for the server: `CONSTRUCT_VAPID_PRIVATE_KEY`, else generated once into `host.db`
+  (`host_secrets`). `server pods notify-test <name>` sends a test one.
+- **Security:** push endpoints are client-supplied, so they must be `https://` on a public host name and deliveries go
+  through the public-only resolver (the D45 guard, moved to `pod_core::net` and shared with the Pixelfed adapter);
+  test hooks allow local receivers. 404/410 drops a subscription, as do 5 failures in a row. At most 20 devices and
+  60 deliveries a minute per pod. Payloads are end-to-end encrypted, so push services and gateways see no text.
+  Devices of a deleted or rotated session stop getting pushes (joined on a valid session, pruned on registration).
+- **Engine (store v6):** a device id (32 hex, kept in cache.db, survives sign-out) on every call and the events
+  stream; the device registers when the stream connects with a session, after a sign-in, and when its info or push
+  subscription changes. The newest 200 notifications, the channel list and the unread counts are cached, so the inbox
+  and badge work offline; mark-read is optimistic and queued while offline. The snapshot's `notifications_json` holds
+  the counts; a listener fires only for live arrivals (never for catch-up fetches, lists or push messages, so one
+  notification never alerts twice). Sign-out deletes the device first, then clears the cache.
+- **Clients:** a bell with an unread badge next to the menu opens an inbox of every app's notifications; tapping one
+  opens its app and target and marks it read. The menu's Notifications settings list each app's channels with
+  switches (this device's choices on the pod). Desktop shows tray notifications while running and unfocused, plus a
+  dock badge where supported. Android: `POST_NOTIFICATIONS` asked once, channels `<app_id>.<channel>` grouped per
+  app from the pod's list, OS notifications for live arrivals while in the background, and closed-app push through
+  UnifiedPush: a distributor app (ntfy, ...) if installed, else the embedded FCM distributor, which turns the app into
+  its own distributor via Play services and the UnifiedPush project's public Web Push -> FCM gateway. No Firebase
+  project, `google-services.json` or Google credentials anywhere; `-PnoFcmFallback` leaves the fallback out. No
+  `SCHEMA_VERSION` bump.
+- **Weighed:** FCM direct (simpler on stock Android, but Firebase secrets on the pod and a Google dependency);
+  upstream push subscriptions (Pixelfed's push is Expo-only for its own app, so polling); a separate pod-wide
+  events stream (a second connection per client for no gain); notifications as layout entities only (they span
+  apps, so the inbox is client chrome like the app menu); a wake hook from pods to the host (the scheduler visits
+  open pods anyway, so writing their next wake after each visit is enough).
+- **Not yet:** closed-app notifications on desktop (no OS push channel for a JVM app; it could stay in the tray);
+  removing a posted Android notification when it is read on another device; per-app notification screens in layouts
+  (`core://notifications` entities); upstream push instead of polling where an upstream offers Web Push. Not checked on
+  a device yet: the Android permission prompt, channels, UnifiedPush with ntfy and the FCM fallback with the app killed,
+  the desktop tray, and the type names a real Pixelfed instance sends.

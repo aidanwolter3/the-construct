@@ -1,16 +1,28 @@
 package org.theconstruct.desktop
 
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.awt.ComposeWindow
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Notification
+import androidx.compose.ui.window.Tray
+import androidx.compose.ui.window.TrayState
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
+import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
+import org.theconstruct.AppNotification
 import org.theconstruct.ConstructApp
 import org.theconstruct.ConstructController
 import org.theconstruct.ConstructEngineBridge
@@ -18,9 +30,12 @@ import org.theconstruct.ServerChoice
 import org.theconstruct.engine.UniffiEngineBridge
 import uniffi.client_ffi.UrlOpener
 import java.awt.Desktop
+import java.awt.GraphicsEnvironment
+import java.awt.SystemTray
 import java.awt.Taskbar
 import java.awt.image.BufferedImage
 import java.io.File
+import java.net.InetAddress
 import java.net.URI
 import javax.imageio.ImageIO
 
@@ -46,7 +61,67 @@ private fun openSession(root: File, baseUrl: String, workspace: String): Session
         println("[desktop] opening engine for workspace=$appId")
         return UniffiEngineBridge.create(storage.absolutePath, baseUrl, appId, urlOpener = BrowserOpener)
     }
-    return Session(baseUrl, ConstructController(open(workspace), workspace, ::open))
+    val controller = ConstructController(open(workspace), workspace, ::open)
+    controller.setDeviceInfo("desktop", deviceName())
+    return Session(baseUrl, controller)
+}
+
+/** The name the pod shows for this device: the host name, else "Desktop". */
+private fun deviceName(): String = try {
+    InetAddress.getLocalHost().hostName.takeIf { it.isNotBlank() && it != "localhost" } ?: "Desktop"
+} catch (t: Throwable) {
+    "Desktop"
+}
+
+/** Whether a tray icon (and so OS notifications) can be shown: not headless, and the platform has a system tray. */
+private val traySupported: Boolean by lazy {
+    try {
+        !GraphicsEnvironment.isHeadless() && SystemTray.isSupported()
+    } catch (t: Throwable) {
+        false
+    }
+}
+
+/** The window is focused: live notifications then only update the bell, else they become OS notifications. */
+@Volatile
+private var windowFocused = true
+
+@Volatile
+private var mainWindow: ComposeWindow? = null
+
+/**
+ * D52 on desktop, while the app runs: a live notification becomes an OS notification through the tray (only while the
+ * window is not focused; when focused, the bell's badge updates). No closed-app push on desktop.
+ */
+private fun postNotification(tray: TrayState?, n: AppNotification) {
+    if (windowFocused || tray == null) return
+    try {
+        tray.sendNotification(Notification(n.title, n.body.ifBlank { n.title }, Notification.Type.None))
+    } catch (t: Throwable) {
+        println("[desktop] cannot show a notification: $t")
+    }
+}
+
+/** The dock / taskbar badge: the unread count (none at 0) where the platform supports it; a no-op elsewhere. */
+private fun setDockBadge(unread: Int) {
+    try {
+        if (!Taskbar.isTaskbarSupported()) return
+        val taskbar = Taskbar.getTaskbar()
+        if (!taskbar.isSupported(Taskbar.Feature.ICON_BADGE_TEXT)) return
+        taskbar.setIconBadge(if (unread > 0) (if (unread > 99) "99+" else unread.toString()) else null)
+    } catch (t: Throwable) {
+        println("[desktop] cannot set the dock badge: $t")
+    }
+}
+
+/** Brings the window to the front (the tray icon's action). */
+private fun showWindow(state: WindowState) {
+    state.isMinimized = false
+    mainWindow?.let {
+        it.isVisible = true
+        it.toFront()
+        it.requestFocus()
+    }
 }
 
 /**
@@ -68,6 +143,16 @@ fun main() {
     loadIcon("/icon/construct-macos-1024.png")?.let(::setDockIcon)
 
     application {
+        val windowState = rememberWindowState(width = 480.dp, height = 720.dp)
+        val trayState = if (traySupported) rememberTrayState() else null
+        if (trayState != null && windowIcon != null) {
+            Tray(
+                icon = BitmapPainter(windowIcon.toComposeImageBitmap()),
+                state = trayState,
+                tooltip = "The Construct",
+                onAction = { showWindow(windowState) },
+            )
+        }
         Window(
             onCloseRequest = {
                 session?.controller?.close()
@@ -75,9 +160,18 @@ fun main() {
             },
             title = "The Construct",
             icon = windowIcon?.let { BitmapPainter(it.toComposeImageBitmap()) },
-            state = rememberWindowState(width = 480.dp, height = 720.dp),
+            state = windowState,
         ) {
+            mainWindow = window
+            val windowInfo = LocalWindowInfo.current
+            LaunchedEffect(windowInfo) { snapshotFlow { windowInfo.isWindowFocused }.collect { windowFocused = it } }
             val current = session ?: return@Window
+            DisposableEffect(current) {
+                current.controller.onNotification = { n -> postNotification(trayState, n) }
+                onDispose { current.controller.onNotification = null }
+            }
+            val unread by current.controller.unread.collectAsState()
+            LaunchedEffect(unread.total) { setDockBadge(unread.total) }
             val server = ServerChoice(current.baseUrl, DESKTOP_SERVERS, error = switchError) { url -> switchServer(root, current, url, workspace) }
             val frame = window
             val picker = remember(frame) { DesktopMediaPicker { frame } }

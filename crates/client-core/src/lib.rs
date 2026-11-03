@@ -48,6 +48,7 @@ pub mod auth;
 pub mod catalog;
 pub mod events;
 pub mod expr;
+pub mod notify;
 pub mod store;
 
 use std::collections::{BTreeMap, HashMap};
@@ -67,6 +68,8 @@ use serde_json::{Value, json};
 use auth::{LoopbackListener, PendingAuth, Pkce, Redirect, guarded};
 pub use auth::{MemoryStore, RedirectMode, SecureStore, UrlOpener};
 pub use catalog::LayoutApiError;
+pub use notify::{NotificationListener, PushSubscription};
+pub use protocol::{Notification, NotificationList, ReadEvent};
 use store::{
     AlsoUpdate, Attachment, AttachmentRef, CreateInfo, DataLoad, NewOutboxRow, OutboxRow, Store,
     StoreOps,
@@ -322,6 +325,10 @@ enum FetchOutcome {
 ///   is a short sentence for the UI). The queries of loaded paths are part
 ///   of `queries_json` (cached, so also shown offline), as are the temporary
 ///   entities of pending `action.mutation.create` rows.
+/// - `notifications_json`: unread notification counts (D52),
+///   `{"unread_total": n, "unread_by_app": {app_id: n}}` (apps with none
+///   left out; zeros while signed out). Lists come from
+///   [`ConstructEngine::list_notifications`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateSnapshot {
     pub workspace_json: String,
@@ -333,6 +340,7 @@ pub struct StateSnapshot {
     pub auth_json: String,
     pub layout_json: String,
     pub loads_json: String,
+    pub notifications_json: String,
 }
 
 /// A pending `action.mutation.create` row: its temporary entity is listed in
@@ -464,6 +472,9 @@ struct State {
     settling: Vec<(String, String, bool)>,
     /// Queued by the flush of an accepted create.
     followups: Vec<Followup>,
+    /// Unread notifications (D52; see [`StateSnapshot::notifications_json`]).
+    unread_total: u32,
+    unread_by_app: BTreeMap<String, u32>,
     /// Staged attachments (D49), by id; each is drawn as the local entity
     /// `construct://attachments/<id>`.
     attachments: BTreeMap<String, Attachment>,
@@ -508,6 +519,7 @@ impl State {
             auth_json,
             layout_json: self.layout_json(),
             loads_json,
+            notifications_json: self.notifications_json(),
         }
     }
 
@@ -820,6 +832,7 @@ impl State {
                 }
             }
         }
+        self.clear_notifications();
         self.entities.retain(|u, _| keep.contains(u));
         // Staged photos are the account's too; those a remaining (signed-out)
         // create still needs stay.
@@ -1155,6 +1168,16 @@ struct Inner {
     /// Serializes reads/writes of `pending_key` (lock order: `pending_io`,
     /// then `flow`).
     pending_io: Mutex<()>,
+    /// This installation's id (D52), sent as `x-construct-device`.
+    device_id: String,
+    /// Device registration state (lock order: `device_io`, then `device`,
+    /// then `state`; never held during HTTP except `device_io`).
+    device: Mutex<notify::DeviceState>,
+    /// Serializes device registrations.
+    device_io: Mutex<()>,
+    notification_listener: Mutex<Option<NotificationListener>>,
+    /// Mark-reads the pod has not confirmed (sent on reconnect).
+    pending_reads: Mutex<Vec<notify::ReadReq>>,
     /// Where staged attachments are written (`<storage>/attachments`, or a
     /// temporary directory for an in-memory store).
     attachments_dir: PathBuf,
@@ -1463,6 +1486,8 @@ impl ConstructEngine {
             ..State::default()
         };
         state.load_cached(workspace_id);
+        let device_id = notify::load_device_id(state.store.as_ref());
+        let push = notify::load_push(state.store.as_ref());
         state.sweep_attachments(unix_now());
         let stored = guarded("SecureStore.get", || secure_store.get(&session_key)).flatten();
         if let Some(session) = stored.as_deref().and_then(Session::parse) {
@@ -1472,6 +1497,7 @@ impl ConstructEngine {
             );
             state.auth_json = session.auth_json();
             state.session = Some(session);
+            state.load_unread();
         }
 
         let poll_interval = config.poll_interval;
@@ -1495,6 +1521,11 @@ impl ConstructEngine {
             flow: Mutex::new(None),
             session_io: Mutex::new(()),
             pending_io: Mutex::new(()),
+            device_id,
+            device: Mutex::new(notify::DeviceState::new(push)),
+            device_io: Mutex::new(()),
+            notification_listener: Mutex::new(None),
+            pending_reads: Mutex::new(Vec::new()),
             attachments_dir,
         });
 
@@ -1865,13 +1896,13 @@ impl Inner {
     fn refresh(&self) -> FetchOutcome {
         let net = lock(&self.net);
         let mut token = self.session_token();
-        let mut result = fetch(&self.workspace_url, token.as_deref());
+        let mut result = fetch(&self.workspace_url, token.as_deref(), &self.device_id);
         if let (Err(FetchError::Status(401)), Some(t)) = (&result, &token) {
             // The refresh below delivers a newer snapshot than this one.
             let _ = self.expire_session(t, "workspace fetch");
             token = None;
             if !self.signal.is_shut_down() {
-                result = fetch(&self.workspace_url, None);
+                result = fetch(&self.workspace_url, None, &self.device_id);
             }
         }
         if self.signal.is_shut_down() {
@@ -2048,8 +2079,9 @@ impl Inner {
             let sent = token
                 .as_deref()
                 .filter(|_| same_origin(&self.base_url, &url));
+            let device = same_origin(&self.base_url, &url).then_some(self.device_id.as_str());
             let result = match self.upload_attachments(client, &row, sent) {
-                Ok(body) => post_json(client, &url, &body, sent),
+                Ok(body) => post_json(client, &url, &body, sent, device),
                 Err(r) => r,
             };
             if let FlushResult::Unauthorized = result {
@@ -2610,7 +2642,7 @@ impl Inner {
         let net = lock(&self.net);
         let token = self.session_token();
         let url = format!("{}{path}", self.base_url);
-        let result = fetch_data(&url, token.as_deref());
+        let result = fetch_data(&url, token.as_deref(), &self.device_id);
         if self.signal.is_shut_down() {
             return;
         }
@@ -2768,8 +2800,9 @@ impl Inner {
         self.replace_flow(Some(Arc::clone(&flow)));
         self.set_auth_json(pending_auth_json());
         let url = format!("{}{path}", self.base_url);
+        let device = self.device_id.clone();
         self.spawn_auth_thread(flow, false, move |weak, flow| {
-            let client = auth_client().map_err(|e| failed(auth::SIGN_IN_FAILED, e))?;
+            let client = auth_client(&device).map_err(|e| failed(auth::SIGN_IN_FAILED, e))?;
             let answer = post_auth(&client, &url, None, &payload)?;
             let Some(token) = json_str(&answer, "session_token") else {
                 return Err(failed(
@@ -2794,14 +2827,15 @@ impl Inner {
     /// See [`ConstructEngine::forget_session`].
     fn forget_session(self: &Arc<Self>) {
         self.replace_flow(None);
-        let snap = {
+        lock(&self.device).registered_for = None;
+        let (snap, token) = {
             let mut st = lock(&self.state);
-            st.session = None;
+            let token = st.session.take().map(|s| s.token);
             st.auth_json = SIGNED_OUT_AUTH_JSON.to_string();
             st.auth_blocked = false;
             st.purge_private(&self.workspace_id, true);
             st.seq += 1;
-            st.snapshot()
+            (st.snapshot(), token)
         };
         println!("[ConstructEngine] session forgotten on this device");
         self.notify(snap);
@@ -2810,6 +2844,11 @@ impl Inner {
             .name("construct-engine-forget".into())
             .spawn(move || {
                 inner.sync_session_store();
+                if let Some(token) = token {
+                    // The session stays valid on the pod: take this device
+                    // off it so no notifications are pushed here.
+                    notify::delete_device(&inner.base_url, &inner.device_id, &token);
+                }
                 inner.drop_stale_pending();
                 if !inner.signal.is_shut_down() {
                     inner.refresh();
@@ -3132,12 +3171,15 @@ impl Inner {
             }
         };
         self.notify(snap);
+        // Failures are logged; the events stream's next connect retries.
+        let _ = self.ensure_device_registered(false);
         Ok(())
     }
 
     /// See [`ConstructEngine::logout`].
     fn logout(self: &Arc<Self>) {
         self.replace_flow(None);
+        lock(&self.device).registered_for = None;
         let (snap, token) = {
             let mut st = lock(&self.state);
             let token = st.session.take().map(|s| s.token);
@@ -3154,6 +3196,7 @@ impl Inner {
         // right after `logout()` cannot leave the session in the store.
         let strong = Arc::clone(self);
         let url = format!("{}/v1/auth/logout", self.base_url);
+        let (base_url, device) = (self.base_url.clone(), self.device_id.clone());
         let spawned = thread::Builder::new()
             .name("construct-engine-logout".into())
             .spawn(move || {
@@ -3163,7 +3206,10 @@ impl Inner {
                 drop(strong);
                 let mut kept = None;
                 if let Some(token) = token {
-                    match auth_client().and_then(|c| {
+                    // While the session is still valid on the pod: no more
+                    // notifications for this device.
+                    notify::delete_device(&base_url, &device, &token);
+                    match auth_client(&device).and_then(|c| {
                         c.post(&url)
                             .bearer_auth(&token)
                             .send()
@@ -3217,16 +3263,23 @@ enum FetchError {
 /// `GET url`, with `Authorization: Bearer <token>` when signed in. Returns
 /// the bundle and its [`LAYOUT_VERSION_HEADER`] (`None` when absent, e.g.
 /// the unversioned signed-out `pixelfed_home` screen).
-fn fetch(url: &str, token: Option<&str>) -> Result<(WorkspaceSpec, Option<u64>), FetchError> {
+fn fetch(
+    url: &str,
+    token: Option<&str>,
+    device: &str,
+) -> Result<(WorkspaceSpec, Option<u64>), FetchError> {
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(5))
         .build()
         .map_err(|e| FetchError::Other(format!("client build: {e}")))?;
-    let mut req = client.get(url).header(
-        protocol::SCHEMA_HEADER,
-        protocol::SCHEMA_VERSION.to_string(),
-    );
+    let mut req = client
+        .get(url)
+        .header(
+            protocol::SCHEMA_HEADER,
+            protocol::SCHEMA_VERSION.to_string(),
+        )
+        .header(protocol::DEVICE_HEADER, device);
     if let Some(t) = token {
         req = req.bearer_auth(t);
     }
@@ -3247,16 +3300,19 @@ fn fetch(url: &str, token: Option<&str>) -> Result<(WorkspaceSpec, Option<u64>),
 }
 
 /// `GET url` for a data path, with the session and the schema header.
-fn fetch_data(url: &str, token: Option<&str>) -> Result<DataBundle, FetchError> {
+fn fetch_data(url: &str, token: Option<&str>, device: &str) -> Result<DataBundle, FetchError> {
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .timeout(DATA_LOAD_TIMEOUT)
         .build()
         .map_err(|e| FetchError::Other(format!("client build: {e}")))?;
-    let mut req = client.get(url).header(
-        protocol::SCHEMA_HEADER,
-        protocol::SCHEMA_VERSION.to_string(),
-    );
+    let mut req = client
+        .get(url)
+        .header(
+            protocol::SCHEMA_HEADER,
+            protocol::SCHEMA_VERSION.to_string(),
+        )
+        .header(protocol::DEVICE_HEADER, device);
     if let Some(t) = token {
         req = req.bearer_auth(t);
     }
@@ -3269,8 +3325,15 @@ fn fetch_data(url: &str, token: Option<&str>) -> Result<DataBundle, FetchError> 
     serde_json::from_str(&raw).map_err(|e| FetchError::Other(format!("bad data bundle: {e}")))
 }
 
-fn auth_client() -> Result<reqwest::blocking::Client, String> {
+/// HTTP client for the sign-in calls to the pod (they carry the device
+/// header like every other pod call).
+fn auth_client(device: &str) -> Result<reqwest::blocking::Client, String> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Ok(v) = reqwest::header::HeaderValue::from_str(device) {
+        headers.insert(protocol::DEVICE_HEADER, v);
+    }
     reqwest::blocking::Client::builder()
+        .default_headers(headers)
         .connect_timeout(Duration::from_secs(5))
         .timeout(AUTH_HTTP_TIMEOUT)
         .build()
@@ -3352,7 +3415,7 @@ fn login_flow(
     redirect_rx: Option<mpsc::Receiver<Redirect>>,
 ) -> Result<(), LoginError> {
     let instance_url = target.instance_url.as_str();
-    let (base_url, opener, redirect_mode, loopback_port, signal) = {
+    let (base_url, opener, redirect_mode, loopback_port, signal, device) = {
         let inner = weak.upgrade().ok_or(LoginError::Cancelled)?;
         (
             inner.base_url.clone(),
@@ -3360,6 +3423,7 @@ fn login_flow(
             inner.redirect.clone(),
             inner.loopback_port,
             Arc::clone(&inner.signal),
+            inner.device_id.clone(),
         )
     };
     let cancelled = || flow.is_cancelled() || signal.is_shut_down();
@@ -3381,7 +3445,7 @@ fn login_flow(
         (None, RedirectMode::Loopback) => unreachable!("loopback always has a listener"),
     };
 
-    let client = auth_client().map_err(|e| failed(auth::SIGN_IN_FAILED, e))?;
+    let client = auth_client(&device).map_err(|e| failed(auth::SIGN_IN_FAILED, e))?;
     let bearer = weak.upgrade().and_then(|i| i.session_token());
     let app = post_auth(
         &client,
@@ -3589,13 +3653,13 @@ fn recover_sign_in(
     flow: &Arc<Flow>,
     redirect: Redirect,
 ) -> Result<(), LoginError> {
-    let (pending, base_url) = {
+    let (pending, base_url, device) = {
         let inner = weak.upgrade().ok_or(LoginError::Cancelled)?;
         let pending = redirect
             .state()
             .and_then(|state| inner.take_pending(state))
             .ok_or(LoginError::Unmatched)?;
-        (pending, inner.base_url.clone())
+        (pending, inner.base_url.clone(), inner.device_id.clone())
     };
     if flow.is_cancelled() {
         return Err(LoginError::Cancelled);
@@ -3610,7 +3674,7 @@ fn recover_sign_in(
             "the persisted sign-in has no token path (started by an older build)",
         ));
     }
-    let client = auth_client().map_err(|e| failed(auth::SIGN_IN_FAILED, e))?;
+    let client = auth_client(&device).map_err(|e| failed(auth::SIGN_IN_FAILED, e))?;
     finish_sign_in(
         weak,
         flow,
@@ -3668,11 +3732,15 @@ fn post_json(
     url: &str,
     body: &str,
     token: Option<&str>,
+    device: Option<&str>,
 ) -> FlushResult {
     let mut req = client
         .post(url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .body(body.to_string());
+    if let Some(d) = device {
+        req = req.header(protocol::DEVICE_HEADER, d);
+    }
     if let Some(t) = token {
         req = req.bearer_auth(t);
     }

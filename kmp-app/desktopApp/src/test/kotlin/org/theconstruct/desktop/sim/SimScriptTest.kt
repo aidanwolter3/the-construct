@@ -178,4 +178,29 @@ class SimScriptTest {
         // publish-version needs the fake pod.
         assertFailsWith<ScriptParseException> { validateStepsForMode(parseScript("publish-version x"), "live") }
     }
+
+    @Test
+    fun notificationCommandsParse() {
+        val steps = parseScript(
+            "notify pixelfed_demo likes Bob liked your post; open-inbox; click-notification Bob liked; close-inbox; " +
+                "open-notification-settings; toggle-channel pixelfed_home.likes",
+        )
+        val notify = assertIs<SimStep.Notify>(steps[0])
+        assertEquals(Triple("pixelfed_demo", "likes", "Bob liked your post"), Triple(notify.app, notify.channel, notify.title))
+        assertEquals("notify pixelfed_demo likes Bob liked your post", notify.toString())
+        assertEquals(SimStep.OpenInbox, steps[1])
+        assertEquals("Bob liked", assertIs<SimStep.ClickNotification>(steps[2]).text)
+        assertEquals(SimStep.CloseInbox, steps[3])
+        assertEquals(SimStep.OpenNotificationSettings, steps[4])
+        assertEquals("pixelfed_home.likes", assertIs<SimStep.ToggleChannel>(steps[5]).channel)
+        for (bad in listOf(
+            "notify", "notify app", "notify app likes", "open-inbox x", "close-inbox now", "click-notification",
+            "open-notification-settings x", "toggle-channel", "toggle-channel likes", "toggle-channel app.", "toggle-channel .likes",
+        )) {
+            assertFailsWith<ScriptParseException>(bad) { parseScript(bad) }
+        }
+        // notify needs the fake pod; the inbox commands also work live.
+        assertFailsWith<ScriptParseException> { validateStepsForMode(parseScript("notify a b c"), "live") }
+        validateStepsForMode(parseScript("open-inbox; click-notification x; open-notification-settings; toggle-channel a.b"), "live")
+    }
 }

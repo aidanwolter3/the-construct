@@ -12,6 +12,8 @@
 //!   data dir) once the pod works. The image has no shell, so no `rm`.
 //! - `pods rotate <name>`: a new token; the old one stops working.
 //! - `pods delete <name>`: stop a pod now; its files go at the next sweep.
+//! - `pods notify-test <name>`: send the pod a test notification (stored in
+//!   its inbox and sent by Web Push to its devices).
 //! - `pods list`.
 //!
 //! Environment:
@@ -25,6 +27,9 @@
 //! - `CONSTRUCT_TEST_HOOKS=1`: enables `POST /v1/test/fault` in every pod.
 //! - `CONSTRUCT_SHOW_DEV_APPS=1`: `GET /v1/apps` also lists the dev apps.
 //! - `CONSTRUCT_SESSION_TTL_DAYS`: lifetime of sessions other than pod tokens.
+//! - `CONSTRUCT_VAPID_PRIVATE_KEY`, `CONSTRUCT_VAPID_SUBJECT`, `CONSTRUCT_PUSH=off`:
+//!   Web Push for notifications (D52); without a key the server makes one and
+//!   keeps it in `host.db`.
 //! - `PIXELFED_*`: see `PixelfedConfig::from_env` and README.
 //!
 //! A pod's layout files are synced into its database when the pod is first
@@ -46,18 +51,26 @@ fn data_dir() -> PathBuf {
     home.join(".construct-server")
 }
 
-fn factory() -> server::host::PodFactory {
+fn factory() -> Result<server::host::PodFactory, String> {
     let test_hooks = std::env::var("CONSTRUCT_TEST_HOOKS").is_ok_and(|v| v == "1");
     let show_dev_apps = std::env::var("CONSTRUCT_SHOW_DEV_APPS").is_ok_and(|v| v == "1");
     if test_hooks {
-        tracing::warn!("CONSTRUCT_TEST_HOOKS=1: POST /v1/test/fault is enabled");
+        tracing::warn!(
+            "CONSTRUCT_TEST_HOOKS=1: POST /v1/test/fault is enabled and Web Push may reach local addresses"
+        );
     }
-    server::pod_factory(
+    let push = server::push_from_env(&data_dir(), test_hooks)?;
+    match &push {
+        Some(p) => tracing::info!(public_key = %p.public_key(), "Web Push enabled"),
+        None => tracing::info!("Web Push off (CONSTRUCT_PUSH=off)"),
+    }
+    Ok(server::pod_factory_with_push(
         server::PixelfedConfig::from_env(),
         test_hooks,
         server::session::session_ttl_from_env(),
         show_dev_apps,
-    )
+        push,
+    ))
 }
 
 fn main() -> std::process::ExitCode {
@@ -91,7 +104,8 @@ fn main() -> std::process::ExitCode {
                 "usage: server [serve]\n       server pods create <name> [--import-recipes]\n       \
                  server pods adopt <name> <path/to/server.db>\n       server pods remove-adopted [dir]\n       \
                  server pods rotate <name>\n       \
-                 server pods delete <name>\n       server pods list"
+                 server pods delete <name>\n       server pods notify-test <name>\n       \
+                 server pods list"
             );
             std::process::ExitCode::from(2)
         }
@@ -116,7 +130,7 @@ fn pods(args: &[&str]) -> Result<(), String> {
         new_pod_settings: server::new_pod_settings(false),
         ..HostConfig::default()
     };
-    let host = Host::open(&dir, factory(), config)?;
+    let host = Host::open(&dir, factory()?, config)?;
     match args {
         ["create", name, flags @ ..] => {
             let import = match flags {
@@ -170,6 +184,10 @@ fn pods(args: &[&str]) -> Result<(), String> {
                 println!("Deleted {}", p.display());
             }
         }
+        ["notify-test", name] => {
+            let title = host.notify_test(name)?;
+            println!("Sent \"{title}\" to pod '{name}'.");
+        }
         ["list"] => {
             for p in host.store().pods().map_err(|e| e.to_string())? {
                 let expires = p
@@ -186,7 +204,7 @@ fn pods(args: &[&str]) -> Result<(), String> {
         }
         _ => {
             return Err(
-                "unknown pods command (create, adopt, remove-adopted, rotate, delete, list)".into(),
+                "unknown pods command (create, adopt, remove-adopted, rotate, delete, notify-test, list)".into(),
             );
         }
     }
@@ -223,7 +241,7 @@ async fn serve() -> Result<(), String> {
         tracing::info!(hours = t.hours, max = t.max_live, "temporary pods enabled");
     }
     let open_pod = config.open_pod.is_some();
-    let host = tokio::task::spawn_blocking(move || Host::open(&dir, factory(), config))
+    let host = tokio::task::spawn_blocking(move || Host::open(&dir, factory()?, config))
         .await
         .map_err(|e| e.to_string())??;
     let host = Arc::new(host);
@@ -237,6 +255,7 @@ async fn serve() -> Result<(), String> {
         }
     }
     host.spawn_sweeper();
+    host.spawn_scheduler();
     if !open_pod {
         tracing::info!("callers need a pod token (see `server pods`)");
     }

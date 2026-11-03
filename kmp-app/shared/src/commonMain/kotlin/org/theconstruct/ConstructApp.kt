@@ -18,10 +18,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -59,13 +64,23 @@ data class ConstructState(
  * [openApp] only reports that other apps can't be opened here.
  *
  * Also holds what must outlive a composition (Android rotation; not process restart): the version the user pinned
- * ([pinned]) and the menu's state ([menu]).
+ * ([pinned]), the menu's state ([menu]) and the notification inbox's ([inbox], D52).
+ *
+ * Notifications (D52): [unread] follows the snapshots; [onNotification] hears live arrivals of every engine this
+ * controller holds; [openNotification] opens a notification's app and target. Blocking pod calls run on [io].
  */
-class ConstructController(
+class ConstructController internal constructor(
     bridge: ConstructEngineBridge,
-    appId: String? = null,
-    private val openBridge: ((appId: String) -> ConstructEngineBridge)? = null,
+    appId: String?,
+    io: CoroutineDispatcher,
+    private val openBridge: ((appId: String) -> ConstructEngineBridge)?,
 ) {
+    constructor(
+        bridge: ConstructEngineBridge,
+        appId: String? = null,
+        openBridge: ((appId: String) -> ConstructEngineBridge)? = null,
+    ) : this(bridge, appId, layoutIoDispatcher, openBridge)
+
     @Volatile
     private var bridge: ConstructEngineBridge = bridge
 
@@ -99,6 +114,33 @@ class ConstructController(
 
     private val switchLock = Any()
 
+    /** Background work that must not block the caller (marking read, push registration); cancelled by [close]. */
+    private val background = CoroutineScope(SupervisorJob() + io)
+
+    /**
+     * Platform hook for notifications that arrive LIVE while an engine runs (never catch-up, lists or push): e.g. post
+     * an OS notification when the app is in the background. Called on the engine's events thread, not the main thread;
+     * exceptions are caught and logged. Installed on the current engine and on every engine [openApp] creates.
+     */
+    @Volatile
+    var onNotification: ((AppNotification) -> Unit)? = null
+
+    private val _unread = MutableStateFlow(UnreadCounts())
+
+    /** Unread notifications (all apps), from the engine's snapshots: drives the bell's badge. */
+    val unread: StateFlow<UnreadCounts> = _unread.asStateFlow()
+
+    /** The notification inbox's and the notification settings' state (kept here, like [menu]). */
+    val inbox: InboxState = InboxState(this)
+
+    @Volatile
+    private var deviceInfo: Pair<String, String>? = null
+
+    /** A notification target waiting for its app's workspace ([openNotification]). */
+    private data class PendingTarget(val targetUri: String, val engine: Int)
+
+    private val pendingTarget = MutableStateFlow<PendingTarget?>(null)
+
     /** Set by [close] (under [switchLock]): [openApp] and [pin] then do nothing, so no engine outlives the controller. */
     @Volatile
     private var closed = false
@@ -111,7 +153,26 @@ class ConstructController(
     }
 
     private fun subscribe(b: ConstructEngineBridge, engine: Int) {
+        try {
+            b.setNotificationListener { json -> onLiveNotification(json, engine) }
+            deviceInfo?.let { (platform, name) -> b.setDeviceInfo(platform, name) }
+        } catch (t: Throwable) {
+            println("[Construct] notification setup failed: $t")
+        }
         b.subscribe { onSnapshot(it, engine) }
+    }
+
+    private fun onLiveNotification(json: String, engine: Int) {
+        if (engine != _state.value.engine) return // a replaced engine
+        val n = NotificationsJson.parseNotification(json) ?: run {
+            println("[Construct] unreadable live notification dropped")
+            return
+        }
+        try {
+            onNotification?.invoke(n)
+        } catch (t: Throwable) {
+            println("[Construct] onNotification failed: $t")
+        }
     }
 
     /** The app on screen: the one opened, else what the engine reports. */
@@ -152,6 +213,11 @@ class ConstructController(
                     loads = LoadState.parseAll(snapshot.loadsJson),
                 )
             }
+        }
+        val now = _state.value
+        if (now.engine == engine && now.seq == snapshot.seq) {
+            _unread.value = NotificationsJson.parseUnread(snapshot.notificationsJson)
+            applyPendingTarget()
         }
     }
 
@@ -214,8 +280,129 @@ class ConstructController(
         synchronized(switchLock) {
             if (closed) return
             closed = true
+            pendingTarget.value = null
+            background.cancel()
             bridge.close()
         }
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------
+    // Notifications (D52)
+    // -----------------------------------------------------------------------------------------------------------------
+
+    /** What the pod shows for this device (e.g. "android", the model): applied now and to every engine created later. */
+    fun setDeviceInfo(platform: String, name: String) {
+        deviceInfo = platform to name
+        try {
+            bridge.setDeviceInfo(platform, name)
+        } catch (t: Throwable) {
+            println("[Construct] setDeviceInfo failed: $t")
+        }
+    }
+
+    /**
+     * Sends this device's Web Push subscription to the pod, in the background (errors are logged). The engine keeps it
+     * in the shared cache, so engines created later keep it too.
+     */
+    fun registerPush(endpoint: String, p256dh: String, auth: String) {
+        inBackground("register push") { it.registerPush(endpoint, p256dh, auth) }
+    }
+
+    /** Stops Web Push to this device, in the background (errors are logged). */
+    fun unregisterPush() {
+        inBackground("unregister push") { it.unregisterPush() }
+    }
+
+    /** The pod's VAPID public key for a Web Push subscription; null on any error. BLOCKING: call off the main thread. */
+    fun pushPublicKey(): String? = try {
+        bridge.pushPublicKey().takeIf { it.isNotBlank() }
+    } catch (t: Throwable) {
+        println("[Construct] push public key: $t")
+        null
+    }
+
+    /** A decrypted Web Push body, handed to the current engine (cached, counted); the notification, or null. */
+    fun handlePushMessage(payloadJson: String): AppNotification? = try {
+        bridge.handlePushMessage(payloadJson)?.let(NotificationsJson::parseNotification)
+    } catch (t: Throwable) {
+        println("[Construct] push message: $t")
+        null
+    }
+
+    /** Every app's notification channels with this device's choices; empty on any error. BLOCKING: off the main thread. */
+    fun notificationChannels(): List<NotificationChannelInfo> = try {
+        NotificationsJson.parseChannels(bridge.notificationChannels())
+    } catch (t: Throwable) {
+        println("[Construct] notification channels: $t")
+        emptyList()
+    }
+
+    /** [appId]'s title from the apps catalog, when it has been loaded (the menu or the inbox load it); else null. */
+    fun appTitle(appId: String): String? =
+        ((menu.apps as? Load.Ready)?.value ?: apps.lastApps)?.firstOrNull { it.id == appId }?.title
+
+    /** Marks [ids] read in the background; [unread] follows at once. */
+    fun markNotificationsRead(ids: List<String>) {
+        if (ids.isEmpty()) return
+        inBackground("mark read") { _unread.value = NotificationsJson.parseUnread(it.markNotificationsRead(ids)) }
+    }
+
+    /** Marks every notification (of [appId], when given) read in the background. */
+    fun markAllNotificationsRead(appId: String? = null) {
+        inBackground("mark all read") { _unread.value = NotificationsJson.parseUnread(it.markAllNotificationsRead(appId)) }
+    }
+
+    /**
+     * Opens a notification (a tapped inbox row or OS notification): opens [appId] unless it is on screen ([openApp]),
+     * then, once that app's workspace has loaded, opens [targetUri] (`action.navigation.open`, Push) through the normal
+     * routing (D35; a target no screen matches, or none, just leaves the app open), and marks [notificationId] read in
+     * the background. Call it on the main thread; it works right after the controller is created (cold start).
+     */
+    fun openNotification(appId: String, targetUri: String?, notificationId: String?) {
+        if (closed) return
+        notificationId?.let { markNotificationsRead(listOf(it)) }
+        menu.closeMenu()
+        inbox.close()
+        if (appId != currentAppId() && !openApp(appId)) {
+            println("[Construct] cannot open app $appId for a notification")
+            return
+        }
+        if (targetUri.isNullOrBlank()) return
+        // An earlier screen stack belongs to what the user was doing; the notification's screen goes on top of it.
+        pendingTarget.value = PendingTarget(targetUri.trim(), _state.value.engine)
+        applyPendingTarget()
+    }
+
+    /**
+     * Opens the pending notification target once its engine shows a workspace. Dropped when another engine took over,
+     * or once a versioned layout (the app itself, not its signed-out screen) has no screen for it.
+     */
+    private fun applyPendingTarget() {
+        val p = pendingTarget.value ?: return
+        val s = _state.value
+        if (s.engine != p.engine) {
+            pendingTarget.compareAndSet(p, null)
+            return
+        }
+        if (s.workspace == null) return
+        val matched = navigation.canOpen(p.targetUri)
+        if (!matched && s.activeLayout.version == null) return // the signed-out screen: wait for the app's layout
+        if (!pendingTarget.compareAndSet(p, null)) return
+        if (matched) navigation.open(ActionIntent.Navigate(p.targetUri, PresentationMode.Push))
+    }
+
+    /** Runs [call] on the current bridge off the caller's thread; errors are logged. Counted in [LayoutCalls]. */
+    private fun inBackground(what: String, call: (ConstructEngineBridge) -> Unit) {
+        if (closed) return
+        val b = bridge
+        LayoutCalls.add(1)
+        background.launch {
+            try {
+                call(b)
+            } catch (t: Throwable) {
+                println("[Construct] $what failed: $t")
+            }
+        }.invokeOnCompletion { LayoutCalls.add(-1) } // also when cancelled before it started ([close])
     }
 
     /**
@@ -267,6 +454,8 @@ class ConstructController(
             _pinned.value = null
             navigation.clear()
             _state.value = ConstructState(isOnline = _state.value.isOnline, engine = engine)
+            // A target for the app being opened is re-keyed to its new engine ([openNotification] sets it after this).
+            pendingTarget.value = null
             subscribe(next, engine)
             try {
                 old.close()
@@ -280,8 +469,10 @@ class ConstructController(
 
 /**
  * The shared root UI: the rendered layout and, over it, the hamburger button that opens the menu (apps and their
- * versions, connection, account, server). [server] is the platform's server picker (null = no Server section);
- * [mediaPicker] the platform's photo picker for `core://MediaPicker` (null = picking photos is not available).
+ * versions, notifications, connection, account, server) and the bell that opens the notification inbox. [server] is
+ * the platform's server picker (null = no Server section); [mediaPicker] the platform's photo picker for
+ * `core://MediaPicker` (null = picking photos is not available). [notificationSettingsExtra] is shown at the top
+ * of the menu's notification settings (e.g. the platform's OS permission row).
  */
 @Composable
 fun ConstructApp(
@@ -289,9 +480,11 @@ fun ConstructApp(
     modifier: Modifier = Modifier,
     server: ServerChoice? = null,
     mediaPicker: MediaPickerPlatform? = null,
+    notificationSettingsExtra: (@Composable () -> Unit)? = null,
 ) {
     val state by controller.state.collectAsState()
     val pin by controller.pinned.collectAsState()
+    val unread by controller.unread.collectAsState()
     // Material3 light scheme on a white background and surface (feed photos sit on white, as on Pixelfed/Instagram).
     MaterialTheme(colorScheme = lightColorScheme(background = Color.White, surface = Color.White)) {
         Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -299,7 +492,7 @@ fun ConstructApp(
                 LocalMediaPickerPlatform provides mediaPicker,
                 LocalAttachments provides controller.attachments,
             ) {
-                MenuDrawer(controller, state, pin, server) {
+                MenuDrawer(controller, state, pin, server, notificationSettingsExtra) {
                     Box(Modifier.fillMaxSize()) {
                         val workspace = displayedWorkspace(state, pin)
                         if (workspace == null) {
@@ -319,6 +512,7 @@ fun ConstructApp(
                             CompositionLocalProvider(
                                 LocalConstructQueries provides state.queries,
                                 LocalWorkspaceTitleInset provides MENU_BUTTON_INSET,
+                                LocalWorkspaceTitleEndInset provides BELL_BUTTON_INSET,
                                 LocalForm provides controller.navigation.rootForm,
                             ) {
                                 RenderUiNode(workspace, state.entities, controller::dispatch, Modifier.fillMaxSize())
@@ -329,8 +523,15 @@ fun ConstructApp(
                             onClick = controller.menu::openMenu,
                             modifier = Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 8.dp),
                         )
-                        // An open screen covers the layout and the menu button; the drawer still opens over it.
+                        BellButton(
+                            unread = unread.total,
+                            onClick = controller.inbox::openInbox,
+                            modifier = Modifier.align(Alignment.TopEnd).padding(end = 8.dp, top = 8.dp),
+                        )
+                        // An open screen covers the layout and the buttons; the drawer still opens over it.
                         ScreenHost(controller, state)
+                        // The inbox covers everything but the drawer.
+                        InboxPanel(controller)
                     }
                 }
             }

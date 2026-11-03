@@ -21,6 +21,7 @@ bindgen = ["uniffi/cli"]
 
 [dependencies]
 client-core.workspace = true
+serde_json.workspace = true
 uniffi.workspace = true
 
 # Android: forward stdout/stderr (client-core's println!/eprintln!) to logcat.

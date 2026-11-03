@@ -26,6 +26,8 @@ data class EngineSnapshot(
     val layoutJson: String = "{}",
     /** Data path loads (DECISIONS D34): `{path: {"state":"loading"|"ready"|"error","error"?}}`; `"{}"` when none. */
     val loadsJson: String = "{}",
+    /** Unread notifications (D52): `{"unread_total":N,"unread_by_app":{"app":n}}`. Parse with [NotificationsJson.parseUnread]. */
+    val notificationsJson: String = "{\"unread_total\":0,\"unread_by_app\":{}}",
 )
 
 /**
@@ -75,6 +77,60 @@ interface ConstructEngineBridge {
     /** `GET /v1/apps/{appId}/versions/{version}`: the version's metadata plus its full `layout` (a workspace [UiNode]). */
     fun appVersion(appId: String, version: Long): String = throw appsUnavailable()
 
+    // Notifications from apps (D52, docs/NOTIFICATIONS.md). The blocking calls (list, mark read, channels, push key) are
+    // like the apps calls: off the UI thread, pod JSON in, [LayoutApiException] out. The defaults make a fake without
+    // notifications compile: listing throws "not available", the rest do nothing.
+
+    /**
+     * Sets (replaces) the listener for notifications that arrive LIVE (never for catch-up, lists or push): called on the
+     * engine's events thread with the `Notification` JSON (`{id, app_id, channel, title, body, image_url?, target_uri?,
+     * group_key?, created_at, read}`; parse with [NotificationsJson.parseNotification]).
+     */
+    fun setNotificationListener(onNotification: (String) -> Unit) {}
+
+    /** What the pod shows for this device (`platform` e.g. "android", "desktop"; `name` e.g. the model). Non-blocking. */
+    fun setDeviceInfo(platform: String, name: String) {}
+
+    /** This installation's device id (stable across restarts); "" when unknown. */
+    fun deviceId(): String = ""
+
+    /**
+     * One page of notifications, newest first: `{"notifications":[...],"unread_total","unread_by_app",next_before?}`
+     * (pass `next_before` as [before] for the next page). BLOCKING. From the pod, else from the engine's cache.
+     */
+    fun listNotifications(before: String? = null, limit: Int = 50, appId: String? = null): String =
+        throw notificationsUnavailable()
+
+    /** Marks [ids] read (optimistic, offline-safe): `{"unread_total","unread_by_app"}`. BLOCKING. */
+    fun markNotificationsRead(ids: List<String>): String = throw notificationsUnavailable()
+
+    /** Marks every notification (of [appId], when given) read: `{"unread_total","unread_by_app"}`. BLOCKING. */
+    fun markAllNotificationsRead(appId: String? = null): String = throw notificationsUnavailable()
+
+    /**
+     * `{"channels":[{app_id,id,title,description,default_enabled,importance,enabled}]}` with this device's choices.
+     * BLOCKING.
+     */
+    fun notificationChannels(): String = throw notificationsUnavailable()
+
+    /** Turns one of an app's channels on or off for this device. BLOCKING; throws [LayoutApiException]. */
+    fun setChannelEnabled(appId: String, channel: String, enabled: Boolean) {}
+
+    /** The pod's VAPID public key (base64url) for a Web Push subscription. BLOCKING; NotFound when it sends no push. */
+    fun pushPublicKey(): String = throw notificationsUnavailable()
+
+    /** Sends this device's Web Push subscription to the pod (remembered by the engine). BLOCKING. */
+    fun registerPush(endpoint: String, p256dh: String, auth: String) {}
+
+    /** Stops Web Push to this device. BLOCKING. */
+    fun unregisterPush() {}
+
+    /**
+     * A decrypted Web Push message body: cached and counted; returns the `Notification` JSON, or null when the body is
+     * not a notification. Never calls the [setNotificationListener] listener.
+     */
+    fun handlePushMessage(payloadJson: String): String? = null
+
     // Attachments (schema 9, D49): photos picked by `core://MediaPicker`.
 
     /**
@@ -90,3 +146,5 @@ interface ConstructEngineBridge {
 }
 
 private fun appsUnavailable() = LayoutApiException("Apps aren't available here.")
+
+private fun notificationsUnavailable() = LayoutApiException("Notifications aren't available here.")
