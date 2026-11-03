@@ -18,6 +18,10 @@
 //! - 5: `core://List` `filter` (client-side search as you type) and
 //!   `group_by` (headers drawn by the list, D43). Additive: schema 5 clients
 //!   still draw schema 3 and 4 layouts.
+//! - 6: `core://Box` (a coloured, rounded surface), `core://ChoiceChips`
+//!   (chips editing a form value), `core://List` `where` (exact-match
+//!   filter), `core://Column` and `core://Row` `align`, the `Display` text style, and the `flame` / `timer` icons
+//!   (D44). Additive: schema 6 clients still draw schema 3 to 5 layouts.
 //!
 //! # A breaking schema change
 //!
@@ -28,12 +32,12 @@
 //! old layouts would still draw need a new version file declaring the new
 //! schema.
 
-use crate::{ActionIntent, TextStyle, UiNode};
+use crate::{ActionIntent, Align, TextStyle, UiNode};
 
 /// Request header carrying the client's schema version.
 pub const SCHEMA_HEADER: &str = "x-construct-schema";
 /// The schema version this build draws.
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// Breaking changes, oldest first: `(client schema, oldest layout schema it
 /// draws)`. A client of schema `c` draws layouts written for schemas
@@ -96,8 +100,34 @@ fn intent_schema(i: &ActionIntent) -> u32 {
     }
 }
 
+/// Icons added in schema 6 (D44).
+const ICONS_6: [&str; 2] = ["flame", "timer"];
+
 fn node_schema(node: &UiNode) -> u32 {
     match node {
+        UiNode::Box { .. }
+        | UiNode::ChoiceChips { .. }
+        | UiNode::Text {
+            style: TextStyle::Display,
+            ..
+        } => 6,
+        UiNode::List {
+            where_: Some(_), ..
+        } => 6,
+        UiNode::Column { align, .. } if *align != Align::Start => 6,
+        UiNode::Row { align: Some(_), .. } => 6,
+        UiNode::Chip { icon: Some(i), .. } | UiNode::Badge { icon: i, .. }
+            if ICONS_6.contains(&i.as_str()) =>
+        {
+            6
+        }
+        UiNode::IconButton {
+            icon, active_icon, ..
+        } if ICONS_6.contains(&icon.as_str())
+            || active_icon.as_deref().is_some_and(|i| ICONS_6.contains(&i)) =>
+        {
+            6
+        }
         UiNode::Workspace { screens, .. } if !screens.is_empty() => 2,
         UiNode::List {
             filter, group_by, ..
@@ -209,6 +239,26 @@ mod tests {
         assert_eq!(required_schema(&grouped), 5);
         assert_eq!(grouped.children().len(), 2);
         assert_eq!(grouped.walk().len(), 4);
+        // Schema 6 (D44): boxes, choice chips, `where`, Display text, new icons.
+        let boxed = node(json!({"type": "core://Box", "background": "$item.color",
+            "content": {"type": "core://Text", "value_expr": "a", "style": "Body"}}));
+        assert_eq!(required_schema(&boxed), 6);
+        assert_eq!(boxed.children().len(), 1);
+        let chips = node(json!({"type": "core://ChoiceChips", "field": "cat",
+            "options": [{"label": "All"}, {"label": "Desserts", "value": "Desserts"}]}));
+        assert_eq!(required_schema(&chips), 6);
+        let centred = node(json!({"type": "core://Column", "align": "Center", "children": []}));
+        assert_eq!(required_schema(&centred), 6);
+        let display = node(json!({"type": "core://Text", "value_expr": "a", "style": "Display"}));
+        assert_eq!(required_schema(&display), 6);
+        let wher = node(json!({"type": "core://List", "query_key": "q",
+            "item_template": {"type": "core://Divider"},
+            "where": {"field": "category", "equals": "$form.cat"}}));
+        assert_eq!(required_schema(&wher), 6);
+        let flame = node(json!({"type": "core://Chip", "text": "425°F", "icon": "flame"}));
+        assert_eq!(required_schema(&flame), 6);
+        let warning = node(json!({"type": "core://Chip", "text": "x", "icon": "warning"}));
+        assert_eq!(required_schema(&warning), 3);
     }
 
     #[test]
@@ -263,6 +313,8 @@ mod tests {
                     json!({"type": t, "on_click": {"intent": "action.navigation.back"},
                                             "content": {"type": "core://Divider"}})
                 }
+                "core://Box" => json!({"type": t, "content": {"type": "core://Divider"}}),
+                "core://ChoiceChips" => json!({"type": t, "field": "f", "options": []}),
                 other => panic!("no sample for {other}"),
             };
             let n: UiNode = serde_json::from_value(v).unwrap_or_else(|e| panic!("{t}: {e}"));
@@ -310,5 +362,9 @@ mod tests {
         assert_eq!(compatibility(3, 5), Compatible);
         assert_eq!(compatibility(4, 5), Compatible);
         assert_eq!(compatibility(5, 4), UpdateRequired);
+        // Schema 6 (D44) is additive too.
+        assert_eq!(oldest_layout_schema(6), 3);
+        assert_eq!(compatibility(5, 6), Compatible);
+        assert_eq!(compatibility(6, 5), UpdateRequired);
     }
 }

@@ -1477,3 +1477,34 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   in the data for them.
 - **Not yet:** server-side search; highlighting matches; a search query surviving app restarts (form values are
   in memory).
+
+## D44: A prettier recipes app: boxes, choice chips and exact-match lists (schema 6)
+
+- **Why:** the recipes list was plain title rows and the recipe screen one column of bullets and numbered text. The
+  data already knows each recipe's category, ingredient count, oven temperature and step times, so the screens can
+  say much more at a glance. Mockups were reviewed first; the chosen designs were "index rows" for the list and a
+  "clean card" for the recipe.
+- **New generic vocabulary (schema 6, additive):**
+  - `core://Box`: any node on a surface with `background`, `content_color` (text and icons inside), `border_color`,
+    `corner_dp`, `padding_h_dp`/`padding_v_dp`, optional `width_dp`/`height_dp` and `align` (Start/Center/End).
+    Colours are `#RRGGBB` or a binding (`$item.color`, `${<uri>#color}`) so the data can pick them; a value that
+    does not resolve to a colour draws nothing. It draws letter tiles, the tinted title area, step-number circles,
+    the summary strip's border and a fixed-width quantity column.
+  - `core://ChoiceChips {field, options: [{label, value}], padding_h_dp}`: a sideways-scrolling single-choice chip
+    row editing a form value, like a `core://TextField` does. An empty value clears the field; the option matching
+    the value (the empty one while unset) is drawn selected. Tags `choice:<field>:<value>`.
+  - `core://List` `where: {field, equals}`: while `equals` (`$form.<field>` or literal) is non-blank, only items
+    whose `field` equals it are drawn; applied before `filter`, so a category picker and a search box work together.
+  - Group headers' `$item` also has `group_count` (drawn items in the group), so counts follow the filters.
+  - `core://Column` `align` (places narrower children), `core://Row` `align` (Start = top, End = bottom; default
+    centred), the `Display` text style (large serif) and the `flame` / `timer` icons.
+- **Weighed:** a text width/alignment option on `core://Text` (a Box with `width_dp` does the same without touching
+  the most used node), and colour tokens instead of hex values (no theming system exists yet; hex keeps the client
+  dumb). A dark theme will need the data's colours revisited.
+- **Recipes adapter:** new entity fields, no migration (computed on read). Recipes: `category_short` (name without
+  the parenthesised examples), `color`/`ink` (the category's fill and text colour), `initial`, `meta`
+  ("9 ingredients · 425°F · 55 min", the yield when there is room), `ingredient_count`, `step_count`, `oven_short`,
+  `time_short` (the main instruction group's minutes; later groups are often another method). Ingredients:
+  `amount` (fraction characters: "⅓ cup"), `thing`, `details`. Steps: `temp_text`, `time_text`, `has_cues`.
+- **Layout:** `layouts/recipes/0004.json` (schema 6). Schema-5 clients keep `recipes/0003`.
+- **Not yet:** recipe photos; ticking off ingredients while cooking; a grid list.

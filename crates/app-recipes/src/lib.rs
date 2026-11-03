@@ -53,6 +53,7 @@ pub static FILES: &[LayoutSource] = &[
     layout_file!("0001"),
     layout_file!("0002"),
     layout_file!("0003"),
+    layout_file!("0004"),
 ];
 
 /// The recipes adapter.

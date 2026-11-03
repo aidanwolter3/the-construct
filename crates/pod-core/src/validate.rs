@@ -18,6 +18,8 @@ pub const ASPECT_RATIO_RANGE: std::ops::RangeInclusive<f32> = 0.2..=5.0;
 pub const MAX_PADDING_DP: u16 = 64;
 /// Largest image / icon size.
 pub const MAX_SIZE_DP: u16 = 512;
+/// Most options in one `core://ChoiceChips`.
+pub const MAX_CHOICES: usize = 50;
 
 /// Nesting depth of objects/arrays (a scalar root is 0). Iterative, so a deep
 /// document cannot overflow the stack here.
@@ -165,6 +167,16 @@ fn check_tint(tint: &str) -> Result<(), String> {
     }
 }
 
+/// A `core://Box` colour: `#RRGGBB`, or a binding (`$item.<field>`,
+/// `${<uri>#<field>}`) the client resolves.
+fn check_color(c: &str) -> Result<(), String> {
+    if c.contains("$item.") || c.contains("${") {
+        Ok(())
+    } else {
+        check_tint(c).map_err(|_| format!("colour '{c}' must be #RRGGBB or a binding"))
+    }
+}
+
 /// Numeric fields the renderers cannot draw sensibly (a non-finite `f32`
 /// would even serialize as `null` and make the stored layout unreadable), and
 /// names clients must know (icons, tints).
@@ -192,6 +204,7 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             indent,
             filter,
             group_by,
+            where_,
             ..
         } => {
             if let Some(i) = indent
@@ -212,7 +225,62 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             if group_by.as_ref().is_some_and(|g| g.field.trim().is_empty()) {
                 return Err("list group_by needs a field".into());
             }
+            if where_
+                .as_ref()
+                .is_some_and(|w| w.field.trim().is_empty() || w.equals.trim().is_empty())
+            {
+                return Err("list where needs a field and a value".into());
+            }
             Ok(())
+        }
+        UiNode::Box {
+            background,
+            content_color,
+            border_color,
+            corner_dp,
+            padding_h_dp,
+            padding_v_dp,
+            width_dp,
+            height_dp,
+            ..
+        } => {
+            for c in [background, content_color, border_color]
+                .into_iter()
+                .flatten()
+            {
+                check_color(c)?;
+            }
+            check_dp("corner_dp", *corner_dp, MAX_SIZE_DP)?;
+            check_dp("padding_h_dp", *padding_h_dp, MAX_PADDING_DP)?;
+            check_dp("padding_v_dp", *padding_v_dp, MAX_PADDING_DP)?;
+            for s in [width_dp, height_dp].into_iter().flatten() {
+                if *s == 0 || *s > MAX_SIZE_DP {
+                    return Err(format!("box width/height {s} (1..={MAX_SIZE_DP})"));
+                }
+            }
+            Ok(())
+        }
+        UiNode::ChoiceChips {
+            field,
+            options,
+            padding_h_dp,
+        } => {
+            if field.trim().is_empty() {
+                return Err("choice chips need a field".into());
+            }
+            if options.is_empty() || options.len() > MAX_CHOICES {
+                return Err(format!("choice chips need 1..={MAX_CHOICES} options"));
+            }
+            let mut values = std::collections::HashSet::new();
+            for o in options {
+                if o.label.trim().is_empty() {
+                    return Err("every choice needs a label".into());
+                }
+                if !values.insert(o.value.as_str()) {
+                    return Err(format!("choice value '{}' is used twice", o.value));
+                }
+            }
+            check_dp("padding_h_dp", *padding_h_dp, MAX_PADDING_DP)
         }
         UiNode::Image {
             size_dp,
@@ -376,5 +444,48 @@ mod tests {
         ] {
             assert!(check_values(&list(bad.clone())).is_err(), "{bad}");
         }
+    }
+
+    fn node(v: Value) -> UiNode {
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn schema_6_nodes_are_checked() {
+        let ok = list(json!({"where": {"field": "category", "equals": "$form.cat"}}));
+        assert_eq!(check_values(&ok), Ok(()));
+        assert!(check_values(&list(json!({"where": {"field": "", "equals": "x"}}))).is_err());
+        let boxed = |extra: Value| {
+            let mut v = json!({"type": "core://Box", "content": {"type": "core://Divider"}});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            node(v)
+        };
+        for good in [
+            json!({"background": "#FBE6DF", "content_color": "$item.ink"}),
+            json!({"border_color": "${x://a#line}", "width_dp": 44, "height_dp": 44}),
+        ] {
+            assert_eq!(check_values(&boxed(good.clone())), Ok(()), "{good}");
+        }
+        for bad in [
+            json!({"background": "red"}),
+            json!({"width_dp": 0}),
+            json!({"corner_dp": 9999}),
+        ] {
+            assert!(check_values(&boxed(bad.clone())).is_err(), "{bad}");
+        }
+        let chips = |options: Value| {
+            node(json!({"type": "core://ChoiceChips", "field": "cat", "options": options}))
+        };
+        assert_eq!(
+            check_values(&chips(
+                json!([{"label": "All"}, {"label": "A", "value": "a"}])
+            )),
+            Ok(())
+        );
+        assert!(check_values(&chips(json!([]))).is_err());
+        assert!(check_values(&chips(json!([{"label": "A"}, {"label": "B"}]))).is_err());
+        assert!(check_values(&chips(json!([{"label": " ", "value": "a"}]))).is_err());
     }
 }

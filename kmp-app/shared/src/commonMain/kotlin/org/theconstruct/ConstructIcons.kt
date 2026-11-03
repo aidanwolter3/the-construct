@@ -70,6 +70,21 @@ internal object ConstructIcons {
     val ExpandMore = icon("ExpandMore", "M16.59,8.59L12,13.17 7.41,8.59 6,10l6,6 6,-6z")
     val ExpandLess = icon("ExpandLess", "M12,8l-6,6 1.41,1.41L12,10.83l4.59,4.58L18,14z")
     val Send = icon("Send", "M2.01,21L23,12 2.01,3 2,10l15,2 -15,2z")
+    /** Material "Whatshot" (schema 6 `flame`): oven temperatures. */
+    val Flame = icon(
+        "Flame",
+        "M13.5,0.67s0.74,2.65 0.74,4.8c0,2.06 -1.35,3.73 -3.41,3.73 -2.07,0 -3.63,-1.67 -3.63,-3.73l0.03,-0.36" +
+            "C5.21,7.51 4,10.62 4,14c0,4.42 3.58,8 8,8s8,-3.58 8,-8C20,8.61 17.41,3.8 13.5,0.67z" +
+            "M11.71,19c-1.78,0 -3.22,-1.4 -3.22,-3.14 0,-1.62 1.05,-2.76 2.81,-3.12 1.77,-0.36 3.6,-1.21 4.62,-2.58" +
+            " 0.39,1.29 0.59,2.65 0.59,4.04 0,2.65 -2.15,4.8 -4.8,4.8z",
+    )
+    /** Material "Timer" (schema 6 `timer`): step times. */
+    val Timer = icon(
+        "Timer",
+        "M15,1H9v2h6V1zM11,14h2V8h-2v6zM19.03,7.39l1.42,-1.42c-0.43,-0.51 -0.9,-0.99 -1.41,-1.41l-1.42,1.42" +
+            "C16.07,4.74 14.12,4 12,4c-4.97,0 -9,4.03 -9,9s4.02,9 9,9 9,-4.03 9,-9c0,-2.12 -0.74,-4.07 -1.97,-5.61z" +
+            "M12,20c-3.87,0 -7,-3.13 -7,-7s3.13,-7 7,-7 7,3.13 7,7 -3.13,7 -7,7z",
+    )
 
     /** The icons layouts name (protocol `ICONS`, DECISIONS D36); null for an unknown name. */
     fun named(name: String): ImageVector? = when (name) {
@@ -83,6 +98,8 @@ internal object ConstructIcons {
         "send" -> Send
         "arrow_back" -> ArrowBack
         "close" -> Close
+        "flame" -> Flame
+        "timer" -> Timer
         else -> null
     }
 }

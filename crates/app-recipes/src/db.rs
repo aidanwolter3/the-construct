@@ -366,26 +366,32 @@ pub fn all_recipes(conn: &Connection) -> rusqlite::Result<DataBundle> {
 /// `(slug, entity)` for every recipe, in list order.
 fn recipe_entities(conn: &Connection) -> rusqlite::Result<Vec<(String, EntityRecord)>> {
     let mut stmt = conn.prepare(
-        "SELECT r.slug, r.title, c.name, r.source, r.yield_min, r.yield_max, r.yield_unit
+        "SELECT r.slug, r.title, c.name, r.source, r.yield_min, r.yield_max, r.yield_unit, c.slug
          FROM recipes r JOIN recipes_categories c ON c.slug = r.category
          ORDER BY c.position, r.title COLLATE NOCASE, r.id",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, String>(1)?,
-            r.get::<_, String>(2)?,
-            r.get::<_, Option<String>>(3)?,
-            r.get::<_, Option<f64>>(4)?,
-            r.get::<_, Option<f64>>(5)?,
-            r.get::<_, Option<String>>(6)?,
+            (
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ),
+            (
+                r.get::<_, Option<f64>>(4)?,
+                r.get::<_, Option<f64>>(5)?,
+                r.get::<_, Option<String>>(6)?,
+            ),
+            r.get::<_, String>(7)?,
         ))
     })?;
     let mut ingredients = ingredient_names(conn)?;
+    let mut stats = recipe_stats(conn)?;
     let mut out = Vec::new();
     let mut last_category: Option<String> = None;
     for row in rows {
-        let (slug, title, category, source, ymin, ymax, yunit) = row?;
+        let ((slug, title, category, source), (ymin, ymax, yunit), category_slug) = row?;
         let yield_text = format::yield_text(ymin, ymax, yunit.as_deref());
         let summary = match &yield_text {
             Some(y) => format!("{category} · {y}"),
@@ -394,6 +400,15 @@ fn recipe_entities(conn: &Connection) -> rusqlite::Result<Vec<(String, EntityRec
         let mut search = vec![title.clone(), category.clone()];
         search.extend(ingredients.remove(&slug).unwrap_or_default());
         let mut e = EntityRecord::new();
+        let st = stats.remove(&slug).unwrap_or_default();
+        set_display_fields(
+            &mut e,
+            &title,
+            &category,
+            &category_slug,
+            &st,
+            yield_text.as_deref(),
+        );
         e.set("id", slug.clone());
         e.set("search_text", search.join(" · "));
         e.set("title", title);
@@ -410,6 +425,127 @@ fn recipe_entities(conn: &Connection) -> rusqlite::Result<Vec<(String, EntityRec
         out.push((slug, e));
     }
     Ok(out)
+}
+
+/// A recipe's numbers for the list's meta line and the card's summary strip.
+#[derive(Debug, Default, Clone, PartialEq)]
+struct RecipeStats {
+    ingredients: i64,
+    steps: i64,
+    /// The hottest oven temperature a step names.
+    oven_f: Option<i64>,
+    /// The minutes the main (first) instruction group names, summed; later
+    /// groups are often another method ("Crockpot method").
+    minutes: Option<i64>,
+}
+
+fn recipe_stats(conn: &Connection) -> rusqlite::Result<HashMap<String, RecipeStats>> {
+    let mut out: HashMap<String, RecipeStats> = HashMap::new();
+    let mut stmt = conn.prepare(
+        "SELECT r.slug, COUNT(*) FROM recipes_ingredients i
+         JOIN recipes_ingredient_groups g ON g.id = i.group_id
+         JOIN recipes r ON r.id = g.recipe_id
+         WHERE i.alt_of IS NULL GROUP BY r.slug",
+    )?;
+    for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+        let (slug, n) = row?;
+        out.entry(slug).or_default().ingredients = n;
+    }
+    let mut stmt = conn.prepare(
+        "SELECT r.slug, COUNT(*), MAX(s.temp_f),
+                SUM(CASE WHEN g.position = (SELECT MIN(position) FROM recipes_instruction_groups
+                                            WHERE recipe_id = r.id)
+                         THEN s.time_min END)
+         FROM recipes_steps s
+         JOIN recipes_instruction_groups g ON g.id = s.group_id
+         JOIN recipes r ON r.id = g.recipe_id
+         GROUP BY r.slug",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, Option<i64>>(2)?,
+            r.get::<_, Option<i64>>(3)?,
+        ))
+    })?;
+    for row in rows {
+        let (slug, steps, oven_f, minutes) = row?;
+        let st = out.entry(slug).or_default();
+        st.steps = steps;
+        st.oven_f = oven_f;
+        st.minutes = minutes.filter(|&m| m > 0);
+    }
+    Ok(out)
+}
+
+/// `(tint, ink)` of a category: a light fill and the text colour drawn on it
+/// (D44). Unknown categories are grey.
+pub fn category_colors(slug: &str) -> (&'static str, &'static str) {
+    match slug {
+        "appetizers-sides-salads" => ("#E3F1E0", "#2F6B2A"),
+        "main-dishes-meat-casseroles" => ("#FBE6DF", "#A3361B"),
+        "side-dishes-rice-grains" => ("#F3EBD3", "#6E5A12"),
+        "desserts" => ("#F6E3EF", "#93306C"),
+        "breakfast" => ("#FBF0D0", "#8A5A00"),
+        "baking-breads-crusts-frosting" => ("#F1E7DA", "#7A4F22"),
+        "snacks-confections" => ("#FDE9D6", "#A04E0C"),
+        "drinks" => ("#DFF0F2", "#1F6B74"),
+        _ => ("#EEEFF2", "#4A4D55"),
+    }
+}
+
+/// A category name without its parenthesised examples:
+/// `"Main Dishes (Meat/Casseroles)"` -> `"Main Dishes"`.
+pub fn short_category(name: &str) -> String {
+    match name.split_once(" (") {
+        Some((short, _)) if !short.trim().is_empty() => short.trim().to_owned(),
+        _ => name.to_owned(),
+    }
+}
+
+/// The fields layouts from schema 6 draw (D44): `category_short`, `color` /
+/// `ink` (the category's fill and text colours), `initial`, `meta` (the
+/// list's one-line summary), and the card's summary strip
+/// (`ingredient_count`, `step_count`, `oven_short`, `time_short`).
+fn set_display_fields(
+    e: &mut EntityRecord,
+    title: &str,
+    category: &str,
+    category_slug: &str,
+    st: &RecipeStats,
+    yield_text: Option<&str>,
+) {
+    let (tint, ink) = category_colors(category_slug);
+    e.set("category_short", short_category(category));
+    e.set("color", tint);
+    e.set("ink", ink);
+    let initial = title
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_default();
+    e.set("initial", initial);
+    let mut meta = vec![match st.ingredients {
+        1 => "1 ingredient".to_owned(),
+        n => format!("{n} ingredients"),
+    }];
+    meta.extend(st.oven_f.map(|t| format!("{t}°F")));
+    meta.extend(st.minutes.map(|m| format::minutes_text(m, None)));
+    if meta.len() < 3 {
+        meta.extend(yield_text.map(str::to_owned));
+    }
+    e.set("meta", meta.join(" · "));
+    e.set("ingredient_count", st.ingredients);
+    e.set("step_count", st.steps);
+    e.set(
+        "oven_short",
+        st.oven_f.map_or("–".to_owned(), |t| format!("{t}°")),
+    );
+    e.set(
+        "time_short",
+        st.minutes.map_or("–".to_owned(), format::minutes_short),
+    );
 }
 
 /// Every recipe's distinct ingredient names (alternatives included), by slug,
@@ -580,9 +716,17 @@ fn ingredient_entities(
             text.push_str(" or ");
             text.push_str(alt);
         }
+        let (amount, mut thing, details) = format::ingredient_parts(&r.fields);
+        for alt in alternatives.get(&r.id).into_iter().flatten() {
+            thing.push_str(" or ");
+            thing.push_str(alt);
+        }
         let mut e = EntityRecord::new();
         e.set("text", text);
         e.set("name", r.fields.name.clone());
+        e.set("amount", amount);
+        e.set("thing", thing);
+        e.set("details", details);
         if out.is_empty() {
             e.set("section", "Ingredients");
         }
@@ -637,6 +781,15 @@ fn step_entities(
         number += 1;
         e.set("number", number);
         e.set("text", text);
+        if temp_f.is_some() || time_min.is_some() {
+            e.set("has_cues", true);
+        }
+        if let Some(t) = temp_f {
+            e.set("temp_text", format!("{t}°F"));
+        }
+        if let Some(m) = time_min {
+            e.set("time_text", format::minutes_text(m, time_max));
+        }
         e.set("temp_f", json!(temp_f));
         e.set("time_min", json!(time_min));
         e.set("time_max", json!(time_max));
@@ -658,6 +811,50 @@ mod tests {
 
     fn count(conn: &Connection, sql: &str) -> i64 {
         conn.query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn recipes_carry_display_fields() {
+        let conn = db();
+        let bundle = recipe_screen(&conn, "quiche-lorraine").unwrap().unwrap();
+        let r = &bundle.entities["recipes://recipes/quiche-lorraine"];
+        let get = |e: &EntityRecord, f: &str| e.get(f).cloned().unwrap_or_default();
+        assert_eq!(get(r, "category_short"), "Main Dishes");
+        assert_eq!(get(r, "color"), "#FBE6DF");
+        assert_eq!(get(r, "initial"), "Q");
+        assert_eq!(get(r, "meta"), "9 ingredients · 425°F · 55 min");
+        assert_eq!(get(r, "ingredient_count"), 9);
+        assert_eq!(get(r, "step_count"), 7);
+        assert_eq!(get(r, "oven_short"), "425°");
+        assert_eq!(get(r, "time_short"), "55m");
+        let ingredients: Vec<_> = bundle.queries["recipe:quiche-lorraine:ingredients"]
+            .iter()
+            .map(|u| &bundle.entities[u])
+            .collect();
+        assert_eq!(get(ingredients[0], "amount"), "12 slices");
+        assert_eq!(get(ingredients[0], "thing"), "bacon");
+        assert_eq!(get(ingredients[0], "details"), "crisply fried");
+        assert_eq!(get(ingredients[2], "amount"), "⅓ cup");
+        assert_eq!(get(ingredients[8], "amount"), "1 (9\")");
+        let steps: Vec<_> = bundle.queries["recipe:quiche-lorraine:steps"]
+            .iter()
+            .map(|u| &bundle.entities[u])
+            .collect();
+        assert_eq!(get(steps[4], "temp_text"), "425°F");
+        assert_eq!(get(steps[4], "time_text"), "15 min");
+        assert!(steps[1].get("temp_text").is_none());
+        // Without an oven or a time, the yield fills the meta line.
+        let all = all_recipes(&conn).unwrap();
+        let meatballs = &all.entities["recipes://recipes/meatballs"];
+        assert_eq!(get(meatballs, "meta"), "7 ingredients · 400°F · 40 min");
+        let bars = all
+            .entities
+            .values()
+            .find(|e| get(e, "title") == "Homemade Peanut Butter Cups")
+            .unwrap();
+        assert_eq!(get(bars, "meta"), "6 ingredients · Makes 3 dozen");
+        assert_eq!(get(bars, "time_short"), "–");
+        assert_eq!(short_category("Snacks/Confections"), "Snacks/Confections");
     }
 
     #[test]

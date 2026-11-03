@@ -435,6 +435,15 @@ from a client (D32, D33).
 - Needs a client build: Android device check on the developer's Mac.
 - **Not yet:** server-side search for very large lists (needs a debounce primitive).
 
+## Prettier recipes (D44)
+- Schema 6: `core://Box` (coloured, rounded surface), `core://ChoiceChips` (chips editing a form value), List
+  `where` (exact match), `group_count` in group headers, Column/Row `align`, the `Display` text style, `flame` and
+  `timer` icons.
+- Recipes: colour letter tiles, a meta line and category chips in the list; a tinted serif title, a summary strip,
+  a quantity column with fraction characters and oven/timer chips on the recipe (`layouts/recipes/0004.json`).
+- Needs a client build: Android device check on the developer's Mac.
+- **Not yet:** photos, ingredient tick boxes, a grid list.
+
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
   bookmarks are idempotent upstream, comments are not).
