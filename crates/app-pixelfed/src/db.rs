@@ -5,7 +5,13 @@
 //! notification poll's cursor per instance (D52).
 //!
 //! [`PixelfedStore`] adds these queries to the core's [`Store`].
+//!
+//! Upstream credentials (`access_token`, `refresh_token`, `client_secret`)
+//! are sealed with the store's key ([`pod_core::secrets`]); a row that does
+//! not open (the key is missing or wrong) reads as absent, so the user signs
+//! in again. [`reseal`] seals rows written before the key was set.
 
+use pod_core::secrets::Secrets;
 use pod_core::store::{Migration, Store, open_session_on};
 use pod_core::util::now_secs;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -67,8 +73,41 @@ pub struct PixelfedAccount {
     pub redirect_uri: Option<String>,
 }
 
+fn access_ctx(instance: &str) -> String {
+    format!("pixelfed_account.access_token:{instance}")
+}
+
+fn refresh_ctx(instance: &str) -> String {
+    format!("pixelfed_account.refresh_token:{instance}")
+}
+
+fn client_secret_ctx(instance: &str, redirect_uri: &str) -> String {
+    format!("pixelfed_apps.client_secret:{instance} {redirect_uri}")
+}
+
+/// Open a stored secret; `None` (logged) when it doesn't open.
+fn open_or_warn(
+    secrets: &Secrets,
+    what: &str,
+    instance: &str,
+    ctx: &str,
+    stored: &str,
+) -> Option<String> {
+    match secrets.open(ctx, stored) {
+        Ok(plain) => Some(plain),
+        Err(e) => {
+            tracing::error!(
+                instance,
+                "stored Pixelfed {what} can't be read ({e}); treating it as signed out"
+            );
+            None
+        }
+    }
+}
+
 fn save_account_on(
     conn: &Connection,
+    secrets: &Secrets,
     instance: &str,
     account: &PixelfedAccount,
 ) -> rusqlite::Result<()> {
@@ -79,11 +118,14 @@ fn save_account_on(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             instance,
-            account.access_token,
+            secrets.seal(&access_ctx(instance), &account.access_token),
             account.account_id,
             account.username,
             now_secs(),
-            account.refresh_token,
+            account
+                .refresh_token
+                .as_deref()
+                .map(|t| secrets.seal(&refresh_ctx(instance), t)),
             account.expires_at,
             account.redirect_uri,
         ],
@@ -162,6 +204,7 @@ pub trait PixelfedStore {
 const ACCOUNT_COLS: &str =
     "access_token, account_id, username, refresh_token, expires_at, redirect_uri";
 
+/// A stored account row, its secrets still sealed.
 fn row_to_account(r: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<PixelfedAccount> {
     Ok(PixelfedAccount {
         access_token: r.get(at)?,
@@ -173,26 +216,127 @@ fn row_to_account(r: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<Pixelfed
     })
 }
 
+/// `sealed` with its tokens opened; `None` (logged) when one doesn't open.
+fn open_account(
+    secrets: &Secrets,
+    instance: &str,
+    sealed: PixelfedAccount,
+) -> Option<PixelfedAccount> {
+    let access_token = open_or_warn(
+        secrets,
+        "access token",
+        instance,
+        &access_ctx(instance),
+        &sealed.access_token,
+    )?;
+    let refresh_token = match &sealed.refresh_token {
+        None => None,
+        Some(t) => Some(open_or_warn(
+            secrets,
+            "refresh token",
+            instance,
+            &refresh_ctx(instance),
+            t,
+        )?),
+    };
+    Some(PixelfedAccount {
+        access_token,
+        refresh_token,
+        ..sealed
+    })
+}
+
+/// Seal (again) every stored credential that is plaintext or sealed with an
+/// older key, under the store's current key: rows from before sealing, or
+/// written while no key was set. Runs when a pod opens; values that don't
+/// open are left as they are. Returns how many values were sealed.
+pub fn reseal(store: &Store) -> rusqlite::Result<usize> {
+    let secrets = store.secrets().clone();
+    if !secrets.enabled() {
+        return Ok(0);
+    }
+    store.transaction(|tx| {
+        let mut done = 0;
+        let mut reseal_one = |stored: &str, ctx: &str| -> Option<String> {
+            if !secrets.needs_reseal(stored) {
+                return None;
+            }
+            let plain = secrets.open(ctx, stored).ok()?;
+            done += 1;
+            Some(secrets.seal(ctx, &plain))
+        };
+        let accounts: Vec<(String, String, Option<String>)> = {
+            let mut stmt =
+                tx.prepare("SELECT instance, access_token, refresh_token FROM pixelfed_account")?;
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        for (instance, access, refresh) in accounts {
+            let new_access = reseal_one(&access, &access_ctx(&instance));
+            let new_refresh = refresh
+                .as_deref()
+                .and_then(|t| reseal_one(t, &refresh_ctx(&instance)));
+            if new_access.is_some() || new_refresh.is_some() {
+                tx.execute(
+                    "UPDATE pixelfed_account SET access_token = ?2, refresh_token = ?3
+                     WHERE instance = ?1",
+                    params![
+                        instance,
+                        new_access.unwrap_or(access),
+                        new_refresh.or(refresh)
+                    ],
+                )?;
+            }
+        }
+        let apps: Vec<(String, String, String)> = {
+            let mut stmt =
+                tx.prepare("SELECT instance, redirect_uri, client_secret FROM pixelfed_apps")?;
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        for (instance, redirect_uri, secret) in apps {
+            if let Some(new) = reseal_one(&secret, &client_secret_ctx(&instance, &redirect_uri)) {
+                tx.execute(
+                    "UPDATE pixelfed_apps SET client_secret = ?3
+                     WHERE instance = ?1 AND redirect_uri = ?2",
+                    params![instance, redirect_uri, new],
+                )?;
+            }
+        }
+        Ok(done)
+    })
+}
+
 impl PixelfedStore for Store {
     fn pixelfed_app(
         &self,
         instance: &str,
         redirect_uri: &str,
     ) -> rusqlite::Result<Option<PixelfedApp>> {
-        self.with_conn(|c| {
+        let row: Option<(String, String)> = self.with_conn(|c| {
             c.query_row(
                 "SELECT client_id, client_secret FROM pixelfed_apps
                  WHERE instance = ?1 AND redirect_uri = ?2",
                 [instance, redirect_uri],
-                |r| {
-                    Ok(PixelfedApp {
-                        client_id: r.get(0)?,
-                        client_secret: r.get(1)?,
-                    })
-                },
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()
-        })
+        })?;
+        // A secret that doesn't open reads as no app: the next sign-in
+        // registers a new one, replacing the row.
+        Ok(row.and_then(|(client_id, sealed)| {
+            let client_secret = open_or_warn(
+                self.secrets(),
+                "client secret",
+                instance,
+                &client_secret_ctx(instance, redirect_uri),
+                &sealed,
+            )?;
+            Some(PixelfedApp {
+                client_id,
+                client_secret,
+            })
+        }))
     }
 
     fn save_pixelfed_app(
@@ -205,7 +349,15 @@ impl PixelfedStore for Store {
             c.execute(
                 "INSERT OR REPLACE INTO pixelfed_apps (instance, redirect_uri, client_id, client_secret)
                  VALUES (?1, ?2, ?3, ?4)",
-                params![instance, redirect_uri, app.client_id, app.client_secret],
+                params![
+                    instance,
+                    redirect_uri,
+                    app.client_id,
+                    self.secrets().seal(
+                        &client_secret_ctx(instance, redirect_uri),
+                        &app.client_secret
+                    )
+                ],
             )
         })?;
         Ok(())
@@ -222,14 +374,15 @@ impl PixelfedStore for Store {
     }
 
     fn pixelfed_account(&self, instance: &str) -> rusqlite::Result<Option<PixelfedAccount>> {
-        self.with_conn(|c| {
+        let sealed = self.with_conn(|c| {
             c.query_row(
                 &format!("SELECT {ACCOUNT_COLS} FROM pixelfed_account WHERE instance = ?1"),
                 [instance],
                 |r| row_to_account(r, 0),
             )
             .optional()
-        })
+        })?;
+        Ok(sealed.and_then(|a| open_account(self.secrets(), instance, a)))
     }
 
     fn save_pixelfed_account(
@@ -237,7 +390,7 @@ impl PixelfedStore for Store {
         instance: &str,
         account: &PixelfedAccount,
     ) -> rusqlite::Result<()> {
-        self.with_conn(|c| save_account_on(c, instance, account))
+        self.with_conn(|c| save_account_on(c, self.secrets(), instance, account))
     }
 
     fn pixelfed_owner(&self, instance: &str) -> rusqlite::Result<Option<String>> {
@@ -280,7 +433,7 @@ impl PixelfedStore for Store {
                                        ELSE excluded.created_at END",
                 params![instance, account.account_id, now_secs()],
             )?;
-            save_account_on(tx, instance, account)?;
+            save_account_on(tx, self.secrets(), instance, account)?;
             open_session_on(tx, token_hash, SIGN_IN, session_ttl_secs)?;
             tx.execute(
                 "DELETE FROM pixelfed_session_instance
@@ -322,12 +475,28 @@ impl PixelfedStore for Store {
         instance: &str,
         access_token: &str,
     ) -> rusqlite::Result<bool> {
-        Ok(self.with_conn(|c| {
-            c.execute(
-                "DELETE FROM pixelfed_account WHERE instance = ?1 AND access_token = ?2",
-                [instance, access_token],
-            )
-        })? > 0)
+        // Sealed values differ on every write, so compare the plaintext.
+        self.transaction(|tx| {
+            let stored: Option<String> = tx
+                .query_row(
+                    "SELECT access_token FROM pixelfed_account WHERE instance = ?1",
+                    [instance],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let matches = stored.is_some_and(|s| {
+                self.secrets()
+                    .open(&access_ctx(instance), &s)
+                    .is_ok_and(|t| t == access_token)
+            });
+            if matches {
+                tx.execute(
+                    "DELETE FROM pixelfed_account WHERE instance = ?1",
+                    [instance],
+                )?;
+            }
+            Ok(matches)
+        })
     }
 
     fn save_media_keys<'a>(
@@ -361,8 +530,14 @@ impl PixelfedStore for Store {
             let mut stmt = c.prepare_cached(&format!(
                 "SELECT instance, {ACCOUNT_COLS} FROM pixelfed_account ORDER BY instance"
             ))?;
-            stmt.query_map([], |r| Ok((r.get(0)?, row_to_account(r, 1)?)))?
-                .collect()
+            let rows: Vec<(String, PixelfedAccount)> = stmt
+                .query_map([], |r| Ok((r.get(0)?, row_to_account(r, 1)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            // Accounts that don't open are skipped (logged), like signed out.
+            Ok(rows
+                .into_iter()
+                .filter_map(|(i, a)| open_account(self.secrets(), &i, a).map(|a| (i, a)))
+                .collect())
         })
     }
 
@@ -427,7 +602,7 @@ mod tests {
             // A v3 database with a stored account.
             let mut conn = Connection::open(&path).unwrap();
             pod_core::store::migrate_to(&mut conn, 3).unwrap();
-            save_account_on(&conn, "i", &account("7", "t")).unwrap();
+            save_account_on(&conn, &Secrets::none(), "i", &account("7", "t")).unwrap();
         }
         let s = Store::open(&path).unwrap();
         assert_eq!(s.pixelfed_owner("i").unwrap().as_deref(), Some("7"));
@@ -540,6 +715,162 @@ mod tests {
         assert_eq!(s.notify_cursor("b").unwrap(), None);
         s.delete_notify_cursor("a").unwrap();
         assert_eq!(s.notify_cursor("a").unwrap(), None);
+    }
+
+    fn sealed_store(keys: &[[u8; 32]]) -> Store {
+        let s = Store::open_in_memory()
+            .unwrap()
+            .with_secrets(Secrets::from_keys(keys));
+        s.migrate_adapter("pixelfed", MIGRATIONS).unwrap();
+        s
+    }
+
+    fn raw_tokens(s: &Store) -> (String, Option<String>, String) {
+        s.with_conn(|c| -> rusqlite::Result<_> {
+            let (a, r) = c.query_row(
+                "SELECT access_token, refresh_token FROM pixelfed_account WHERE instance = 'i'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            let secret = c.query_row(
+                "SELECT client_secret FROM pixelfed_apps WHERE instance = 'i'",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok((a, r, secret))
+        })
+        .unwrap()
+    }
+
+    fn seed(s: &Store) {
+        let a = PixelfedAccount {
+            refresh_token: Some("refresh".into()),
+            ..account("1", "access")
+        };
+        s.save_pixelfed_account("i", &a).unwrap();
+        let app = PixelfedApp {
+            client_id: "cid".into(),
+            client_secret: "csecret".into(),
+        };
+        s.save_pixelfed_app("i", "r", &app).unwrap();
+    }
+
+    #[test]
+    fn credentials_are_sealed_at_rest() {
+        let s = sealed_store(&[[7; 32]]);
+        seed(&s);
+        let (access, refresh, secret) = raw_tokens(&s);
+        for raw in [&access, refresh.as_ref().unwrap(), &secret] {
+            assert!(Secrets::is_sealed(raw), "{raw}");
+        }
+        assert!(!access.contains("access") && !secret.contains("csecret"));
+        let a = s.pixelfed_account("i").unwrap().unwrap();
+        assert_eq!(
+            (a.access_token.as_str(), a.refresh_token.as_deref()),
+            ("access", Some("refresh"))
+        );
+        assert_eq!(
+            s.pixelfed_app("i", "r").unwrap().unwrap().client_secret,
+            "csecret"
+        );
+        assert_eq!(s.pixelfed_accounts().unwrap()[0].1.access_token, "access");
+        // A sealed value moved to another row doesn't open there.
+        s.with_conn(|c| {
+            c.execute(
+                "INSERT INTO pixelfed_account (instance, access_token, account_id, username, created_at)
+                 VALUES ('j', ?1, '2', 'u2', 0)",
+                [&access],
+            )
+        })
+        .unwrap();
+        assert_eq!(s.pixelfed_account("j").unwrap(), None);
+        // Compare-and-delete compares the plaintext.
+        assert!(!s.delete_pixelfed_account_if_token("i", &access).unwrap());
+        assert!(s.delete_pixelfed_account_if_token("i", "access").unwrap());
+        assert_eq!(s.pixelfed_account("i").unwrap(), None);
+    }
+
+    #[test]
+    fn reseal_seals_plaintext_rows_and_rotates() {
+        // Rows written without a key (staging before sealing) ...
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.db");
+        {
+            let s = Store::open(&path).unwrap().with_secrets(Secrets::none());
+            s.migrate_adapter("pixelfed", MIGRATIONS).unwrap();
+            seed(&s);
+            assert_eq!(raw_tokens(&s).0, "access");
+            assert_eq!(reseal(&s).unwrap(), 0, "no key: nothing to do");
+        }
+        // ... are sealed once a key is set, and the sign-in keeps working.
+        let old = Store::open(&path)
+            .unwrap()
+            .with_secrets(Secrets::from_keys(&[[1; 32]]));
+        assert_eq!(
+            old.pixelfed_account("i").unwrap().unwrap().access_token,
+            "access"
+        );
+        assert_eq!(reseal(&old).unwrap(), 3);
+        assert_eq!(reseal(&old).unwrap(), 0, "idempotent");
+        let sealed_old = raw_tokens(&old);
+        assert!(Secrets::is_sealed(&sealed_old.0));
+        drop(old);
+        // Rotation: a new first key; the old one still opens until resealed.
+        let rotated = Store::open(&path)
+            .unwrap()
+            .with_secrets(Secrets::from_keys(&[[2; 32], [1; 32]]));
+        assert_eq!(
+            rotated.pixelfed_account("i").unwrap().unwrap().access_token,
+            "access"
+        );
+        assert_eq!(reseal(&rotated).unwrap(), 3);
+        assert_ne!(raw_tokens(&rotated).0, sealed_old.0);
+        drop(rotated);
+        let new_only = Store::open(&path)
+            .unwrap()
+            .with_secrets(Secrets::from_keys(&[[2; 32]]));
+        assert_eq!(
+            new_only
+                .pixelfed_app("i", "r")
+                .unwrap()
+                .unwrap()
+                .client_secret,
+            "csecret"
+        );
+    }
+
+    #[test]
+    fn missing_or_wrong_key_reads_as_signed_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.db");
+        {
+            let s = Store::open(&path)
+                .unwrap()
+                .with_secrets(Secrets::from_keys(&[[1; 32]]));
+            s.migrate_adapter("pixelfed", MIGRATIONS).unwrap();
+            seed(&s);
+        }
+        for secrets in [Secrets::none(), Secrets::from_keys(&[[9; 32]])] {
+            let s = Store::open(&path).unwrap().with_secrets(secrets);
+            assert_eq!(s.pixelfed_account("i").unwrap(), None);
+            assert_eq!(s.pixelfed_accounts().unwrap(), []);
+            assert_eq!(s.pixelfed_app("i", "r").unwrap(), None);
+            assert!(!s.delete_pixelfed_account_if_token("i", "access").unwrap());
+            assert_eq!(
+                reseal(&s).unwrap(),
+                0,
+                "values that don't open stay as they are"
+            );
+            // The rows are kept: setting the right key again restores them.
+            assert!(Secrets::is_sealed(&raw_tokens(&s).0));
+        }
+        let s = Store::open(&path)
+            .unwrap()
+            .with_secrets(Secrets::from_keys(&[[1; 32]]));
+        assert_eq!(
+            s.pixelfed_account("i").unwrap().unwrap().access_token,
+            "access"
+        );
     }
 
     #[test]
