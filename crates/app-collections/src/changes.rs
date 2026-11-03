@@ -9,21 +9,24 @@
 //! | `{op: remove_field, field}` | soft removal: hidden, data kept for the purge window |
 //! | `{op: restore_field, field}` | undo a removal (its data comes back) |
 //! | `{op: update_field, field, type?, options?, optional?, default?, compute?}` | values converted row by row; what doesn't fit is kept aside (`compute: null` stops computing; values stay) |
+//! | `{op: recompute_field, field}` | compute the field again for every row now (after editing the rules a lookup reads; a value only the model could answer stays) |
 //! | `{op: set_order, field?, descending?}` | the list order: a field or a list of fields, first key first (none: oldest first) |
 //! | `{op: set_title, title}` | the collection's title |
 
 use serde_json::Value;
 
-use crate::model::{self, Definition, Field};
+use crate::model::{self, Definition, Defs, Field};
 
 /// A new definition, the ids of the fields whose values must be converted
-/// (their type or options changed) and of the fields to compute for
-/// existing rows (their `compute` is new or changed).
+/// (their type or options changed), of the fields to compute for existing
+/// rows (their `compute` is new or changed) and of the fields to compute
+/// again for every row (`recompute_field`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Planned {
     pub def: Definition,
     pub convert: Vec<String>,
     pub compute: Vec<String>,
+    pub recompute: Vec<String>,
 }
 
 /// The field an op names (by name or alias, live or, for `restore_field`,
@@ -48,23 +51,29 @@ fn find<'a>(def: &'a mut Definition, name: &str, removed: bool) -> Result<&'a mu
         })
 }
 
-/// Apply change `ops` to `def`. `Err((op index, why))`.
+/// Apply change `ops` to `def` (`others`: every collection's live
+/// definition, which lookups read). `Err((op index, why))`.
 pub fn plan(
     def: &Definition,
     ops: &[Value],
+    others: &Defs,
     now: i64,
     max_chars: usize,
     max_fields: usize,
 ) -> Result<Planned, (usize, String)> {
     let mut def = def.clone();
     let before = def.clone();
+    let mut recompute = Vec::new();
     for (i, op) in ops.iter().enumerate() {
-        apply_op(&mut def, op, now, max_chars).map_err(|e| (i, e))?;
+        apply_op(&mut def, op, others, &mut recompute, now, max_chars).map_err(|e| (i, e))?;
     }
     model::check_definition(&def, max_fields).map_err(|e| (ops.len().saturating_sub(1), e))?;
+    let compute = to_compute(&before, &def);
+    recompute.retain(|id| !compute.contains(id));
     Ok(Planned {
         convert: to_convert(&before, &def),
-        compute: to_compute(&before, &def),
+        compute,
+        recompute,
         def,
     })
 }
@@ -73,7 +82,7 @@ fn to_compute(before: &Definition, after: &Definition) -> Vec<String> {
     after
         .live_fields()
         .filter(|f| {
-            f.compute.is_some()
+            f.computed()
                 && before.by_id(&f.id).is_none_or(|b| {
                     !b.live()
                         || b.compute != f.compute
@@ -98,7 +107,14 @@ fn to_convert(before: &Definition, after: &Definition) -> Vec<String> {
         .collect()
 }
 
-fn apply_op(def: &mut Definition, op: &Value, now: i64, max_chars: usize) -> Result<(), String> {
+fn apply_op(
+    def: &mut Definition,
+    op: &Value,
+    others: &Defs,
+    recompute: &mut Vec<String>,
+    now: i64,
+    max_chars: usize,
+) -> Result<(), String> {
     let arg = |k: &str| op[k].as_str().map(str::trim).unwrap_or("");
     match op["op"].as_str().unwrap_or("") {
         "add_field" => {
@@ -117,7 +133,7 @@ fn apply_op(def: &mut Definition, op: &Value, now: i64, max_chars: usize) -> Res
             def.next_field += 1;
             let id = field.id.clone();
             def.fields.push(field);
-            model::set_compute(def, &id, op.get("compute"))?;
+            model::set_compute(def, &id, op.get("compute"), others)?;
         }
         "rename_field" => {
             let to = arg("to").to_owned();
@@ -190,7 +206,16 @@ fn apply_op(def: &mut Definition, op: &Value, now: i64, max_chars: usize) -> Res
                 ));
             }
             let id = f.id.clone();
-            model::set_compute(def, &id, op.get("compute"))?;
+            model::set_compute(def, &id, op.get("compute"), others)?;
+        }
+        "recompute_field" => {
+            let f = find(def, arg("field"), false)?;
+            if !f.computed() {
+                return Err(format!("field '{}' is not computed", f.name));
+            }
+            if !recompute.contains(&f.id) {
+                recompute.push(f.id.clone());
+            }
         }
         "set_order" => {
             let names = model::order_names(op.get("field"))?;
@@ -202,7 +227,7 @@ fn apply_op(def: &mut Definition, op: &Value, now: i64, max_chars: usize) -> Res
         }
         other => {
             return Err(format!(
-                "unknown op '{other}' (add_field, rename_field, remove_field, restore_field, update_field, set_order, set_title)"
+                "unknown op '{other}' (add_field, rename_field, remove_field, restore_field, update_field, recompute_field, set_order, set_title)"
             ));
         }
     }
@@ -262,21 +287,20 @@ pub fn restore(
         .fields
         .iter()
         .filter(|f| {
-            f.compute.as_ref().is_some_and(|c| {
-                c.sources()
-                    .iter()
-                    .any(|id| !def.by_id(id).is_some_and(Field::live))
-            })
+            f.compute_sources()
+                .iter()
+                .any(|id| !def.by_id(id).is_some_and(Field::live))
         })
         .map(|f| f.id.clone())
         .collect();
     for f in def.fields.iter_mut().filter(|f| gone.contains(&f.id)) {
-        f.compute = None;
+        f.compute.clear();
     }
     model::check_definition(&def, max_fields)?;
     Ok(Planned {
         convert: to_convert(current, &def),
         compute: to_compute(current, &def),
+        recompute: Vec::new(),
         def,
     })
 }
@@ -285,6 +309,17 @@ pub fn restore(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// [`plan`] with no other collections.
+    fn plan_(
+        def: &Definition,
+        ops: &[Value],
+        now: i64,
+        max_chars: usize,
+        max_fields: usize,
+    ) -> Result<Planned, (usize, String)> {
+        plan(def, ops, &Defs::default(), now, max_chars, max_fields)
+    }
 
     fn todos() -> Definition {
         let fields = [
@@ -308,7 +343,7 @@ mod tests {
 
     #[test]
     fn ops_add_rename_remove_and_retype() {
-        let p = plan(
+        let p = plan_(
             &todos(),
             &[
                 json!({"op": "add_field", "name": "priority", "type": "choice", "options": ["low", "high"], "default": "low"}),
@@ -334,7 +369,7 @@ mod tests {
         assert_eq!(d.order_by, vec!["f3".to_owned()]);
         assert_eq!(p.convert, vec!["f1".to_owned()]);
         // Renaming back drops the alias.
-        let back = plan(
+        let back = plan_(
             d,
             &[json!({"op": "rename_field", "field": "deadline", "to": "due"})],
             1,
@@ -350,7 +385,7 @@ mod tests {
 
     #[test]
     fn orders_take_several_fields_and_computed_fields_are_reported() {
-        let p = plan(
+        let p = plan_(
             &todos(),
             &[
                 json!({"op": "add_field", "name": "kind", "type": "choice",
@@ -366,7 +401,7 @@ mod tests {
         );
         // A computed field can't read another computed field (yet).
         assert!(p.unwrap_err().1.contains("computed itself"));
-        let p = plan(
+        let p = plan_(
             &todos(),
             &[
                 json!({"op": "add_field", "name": "kind", "type": "choice",
@@ -384,7 +419,7 @@ mod tests {
         assert_eq!(p.def.order_by, vec!["f4".to_owned(), "f2".to_owned()]);
         assert_eq!(p.compute, vec!["f4".to_owned(), "f5".to_owned()]);
         // Removing an order field drops it from the order; the rest stays.
-        let p2 = plan(
+        let p2 = plan_(
             &p.def,
             &[
                 json!({"op": "set_order", "field": "done"}),
@@ -398,7 +433,7 @@ mod tests {
             p2.unwrap_err().1.contains("which is removed"),
             "a source can't be removed while a field computes from it"
         );
-        let p2 = plan(
+        let p2 = plan_(
             &p.def,
             &[json!({"op": "remove_field", "field": "due"})],
             2,
@@ -411,7 +446,7 @@ mod tests {
             "unchanged computes are not reported again"
         );
         // Changing a choice's options recomputes it.
-        let p2 = plan(
+        let p2 = plan_(
             &p.def,
             &[json!({"op": "update_field", "field": "kind", "options": ["home", "work", "errand"]})],
             2,
@@ -421,7 +456,7 @@ mod tests {
         .unwrap();
         assert_eq!(p2.compute, vec!["f4".to_owned()]);
         // Stop computing, then the order goes back to oldest first.
-        let p3 = plan(
+        let p3 = plan_(
             &p.def,
             &[
                 json!({"op": "update_field", "field": "kind", "compute": null}),
@@ -432,7 +467,7 @@ mod tests {
             10,
         )
         .unwrap();
-        assert!(p3.def.field("kind").unwrap().compute.is_none());
+        assert!(p3.def.field("kind").unwrap().compute.is_empty());
         assert!(p3.def.order_by.is_empty());
         for bad in [
             json!({"op": "set_order", "field": ["done", "nope"]}),
@@ -443,7 +478,7 @@ mod tests {
                    "compute": {"kind": "expr", "expr": "entity.title *"}}),
         ] {
             assert!(
-                plan(&todos(), std::slice::from_ref(&bad), 1, 99, 10).is_err(),
+                plan_(&todos(), std::slice::from_ref(&bad), 1, 99, 10).is_err(),
                 "{bad}"
             );
         }
@@ -463,7 +498,7 @@ mod tests {
         ];
         for op in cases {
             let ok = json!({"op": "set_title", "title": "Tasks"});
-            let err = plan(&todos(), &[ok, op.clone()], 1, 99, 10).unwrap_err();
+            let err = plan_(&todos(), &[ok, op.clone()], 1, 99, 10).unwrap_err();
             assert_eq!(err.0, 1, "{op}: {}", err.1);
         }
         let all_gone = [
@@ -471,13 +506,13 @@ mod tests {
             json!({"op": "remove_field", "field": "done"}),
             json!({"op": "remove_field", "field": "due"}),
         ];
-        assert!(plan(&todos(), &all_gone, 1, 99, 10).is_err());
+        assert!(plan_(&todos(), &all_gone, 1, 99, 10).is_err());
     }
 
     #[test]
     fn restore_brings_back_removed_fields_and_removes_new_ones() {
         let v1 = todos();
-        let v2 = plan(
+        let v2 = plan_(
             &v1,
             &[
                 json!({"op": "remove_field", "field": "due"}),

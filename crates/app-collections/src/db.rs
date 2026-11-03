@@ -126,6 +126,14 @@ pub fn latest_def(conn: &Connection, name: &str) -> rusqlite::Result<Option<(i64
     row.map(|(v, j)| Ok((v, parse_def(&j)?))).transpose()
 }
 
+/// Every collection's live definition, keyed by name.
+pub fn defs_by_name(conn: &Connection) -> rusqlite::Result<model::Defs> {
+    Ok(all_defs(conn)?
+        .into_iter()
+        .map(|(_, d)| (d.name.clone(), d))
+        .collect())
+}
+
 /// Every collection's live definition, by name.
 pub fn all_defs(conn: &Connection) -> rusqlite::Result<Vec<(i64, Definition)>> {
     let mut stmt = conn.prepare_cached(
@@ -467,6 +475,28 @@ pub fn remember_computed(
         params![collection, field_id, key, value.to_string(), source, now],
     )?;
     Ok(())
+}
+
+/// Every cached answer of field `field_id` of `collection`: `(key, value,
+/// source)`, oldest first.
+pub fn computed_answers(
+    conn: &Connection,
+    collection: &str,
+    field_id: &str,
+) -> rusqlite::Result<Vec<(String, Value, String)>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT key, value, source FROM collections_computed WHERE collection = ?1 AND field_id = ?2
+         ORDER BY updated_at, key",
+    )?;
+    stmt.query_map(params![collection, field_id], |r| {
+        let v: String = r.get(1)?;
+        Ok((
+            r.get::<_, String>(0)?,
+            serde_json::from_str(&v).unwrap_or(Value::Null),
+            r.get::<_, String>(2)?,
+        ))
+    })?
+    .collect()
 }
 
 /// Cached answers per field id of `collection`.

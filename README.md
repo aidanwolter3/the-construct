@@ -367,7 +367,8 @@ version history as written by Claude.
 A custom app that needs data no source holds, such as a todo list, keeps it in **Collections** (decision
 `collections`, issue #54, `crates/app-collections`): one built-in source that stores any collection Claude declares.
 Claude never writes a data source; it declares typed fields (`text`, `number`, `bool`, `date`, `choice`; optional, with
-a default) and the pod stores, validates and serves the rows. There is no logic: no computed fields or triggers.
+a default) and the pod stores, validates and serves the rows. There is no stored code or triggers; a field may be
+computed from its row (below).
 
 | A layout uses (for collection `<c>`) | |
 |---|---|
@@ -387,6 +388,12 @@ a default) and the pod stores, validates and serves the rows. There is no logic:
   aside (a later change back puts it back).
 - **Lenient writes:** a write made under an older definition (an offline todo) still lands: old names resolve through
   aliases, removed fields are ignored, only a wrong type is refused.
+- **Computed fields** (decisions `collection-computed-fields`, `collection-lookups`): a field's `compute` is one kind
+  or a list tried in order. `expr`: a small expression over the row, in the write. `lookup`: the value of the best
+  matching rule, a row of another collection (`match`: `exact`, `contains` by whole words, or a linear-time `regex`;
+  the longest key wins), in the write. `model`: a model's answer in the background (last in a list). With
+  `[lookup (learn: true), model]` the model is asked only when no rule matches, and its answers and hand edits become
+  rules people can see and edit. `apply_change {op: recompute_field}` computes a field again after its rules change.
 - **Row edits by Claude** (imports, backfills; Collections only): `edit_rows` first answers a preview (count and
   sample) and a confirm token, which Claude shows the user before applying; `undo_edit` reverts it as one step.
   `add_row` writes one row the user just asked for ("log that I had the oil changed") at once, without the preview,

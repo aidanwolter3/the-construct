@@ -1,9 +1,14 @@
-//! Computed fields (decision `collection-computed-fields`): a field with
-//! `compute` gets its value from the row's other fields whenever they
-//! change, in one of two ways.
+//! Computed fields (decisions `collection-computed-fields`,
+//! `collection-lookups`): a field with `compute` gets its value from the
+//! row's other fields whenever they change. `compute` is a list of kinds
+//! tried in order (one kind is a list of one); the first that answers wins.
 //!
 //! - `expr`: an expression ([`crate::expr`]) evaluated inside the write,
 //!   e.g. a label `entity.name + " (" + entity.quantity + ")"`.
+//! - `lookup`: the value of the best matching rule, a row of another
+//!   collection ([`crate::lookup`]), inside the write. With `learn`, a
+//!   model's answer and a hand edit become rules there (instead of the
+//!   per-input cache below).
 //! - `model`: a model's answer to the field's prompt about the source
 //!   fields' values, e.g. a grocery item's store section from its name. The
 //!   answer for the same inputs comes from `collections_computed` (keyed by
@@ -17,7 +22,8 @@
 //!
 //! A computed field still takes writes: a value set by hand stays until a
 //! source field changes (or the write clears the field), and then the field
-//! is computed again.
+//! is computed again. A model, answering in the background, is always the
+//! last kind of a list.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -28,8 +34,9 @@ use rusqlite::Connection;
 use serde_json::{Map, Value, json};
 
 use crate::db::{self, Row};
+use crate::lookup::{self, Rules};
 use crate::model::{self, Compute, Definition, Field, Kind};
-use crate::{CollectionsAdapter, NAME};
+use crate::{Caps, CollectionsAdapter, NAME};
 
 /// What a `model` compute asks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,6 +189,8 @@ pub struct Job {
     /// The source values (as text, in `from` order) and their cache key.
     pub inputs: Vec<String>,
     pub key: String,
+    /// The input of a lookup that learns the answer (its `from` value).
+    pub learn_input: Option<String>,
 }
 
 /// A value as text for a model or a cache key (`None`: empty).
@@ -227,9 +236,9 @@ fn inputs(
 
 /// What the sources of `compute` read in `values`, to tell whether they
 /// changed.
-fn source_state(def: &Definition, compute: &Compute, values: &Map<String, Value>) -> Vec<Value> {
-    compute
-        .sources()
+fn source_state(def: &Definition, field: &Field, values: &Map<String, Value>) -> Vec<Value> {
+    field
+        .compute_sources()
         .iter()
         .map(|id| value_of(def, id, values))
         .collect()
@@ -249,64 +258,136 @@ fn cached(
     Ok(model::coerce(field, &v, max_chars).ok().flatten())
 }
 
-/// Evaluate an `expr` compute of `field` over `values`: its value, or
+/// Evaluate an `expr` kind `c` of `field` over `values`: its value, or
 /// `None` (empty) when it has none or it doesn't fit the type.
 pub fn eval_expr(
     def: &Definition,
     field: &Field,
+    c: &Compute,
     values: &Map<String, Value>,
     max_chars: usize,
 ) -> Option<Value> {
-    let e = field.compute.as_ref()?.parsed()?;
+    let e = c.parsed()?;
     let v = crate::expr::eval(&e, &|id| value_of(def, id, values)).ok()?;
     model::coerce(field, &v, max_chars).ok().flatten()
 }
 
-/// Compute `field` of `row` now: an expression is evaluated; a model's
-/// answer comes from the cache, else a [`Job`] is answered (the field is
-/// left empty until then).
+/// The rules of each lookup kind, loaded once per write or backfill.
+#[derive(Debug, Default)]
+pub struct Lookups {
+    rules: BTreeMap<(String, usize), Rules>,
+}
+
+impl Lookups {
+    fn rules(&mut self, conn: &Connection, field: &Field, i: usize) -> rusqlite::Result<&Rules> {
+        let k = (field.id.clone(), i);
+        if !self.rules.contains_key(&k) {
+            let r = Rules::load(conn, &field.compute[i])?;
+            self.rules.insert(k.clone(), r);
+        }
+        Ok(&self.rules[&k])
+    }
+}
+
+/// What computing a field gave.
+#[derive(Debug, Clone, PartialEq)]
+enum Answer {
+    /// A value now (an expression, a rule or a cached model answer).
+    Now(Value),
+    /// The model must be asked.
+    Later(Job),
+    /// No kind answered: the field reads its default.
+    None,
+}
+
+/// Compute `field` over `row`'s values (the field itself left out): each
+/// kind in order until one answers.
+fn answer(
+    conn: &Connection,
+    def: &Definition,
+    field: &Field,
+    row: &Row,
+    lookups: &mut Lookups,
+    max_chars: usize,
+) -> rusqlite::Result<Answer> {
+    let mut values = row.values.clone();
+    values.remove(&field.id);
+    let learning = field.learning_lookup();
+    for (i, c) in field.compute.iter().enumerate() {
+        match c {
+            Compute::Expr { .. } => {
+                if let Some(v) = eval_expr(def, field, c, &values, max_chars) {
+                    return Ok(Answer::Now(v));
+                }
+            }
+            Compute::Lookup { from, .. } => {
+                let Some(input) = lookup::text_of(&value_of(def, from, &values)) else {
+                    continue;
+                };
+                let found = lookups.rules(conn, field, i)?.find(&input).cloned();
+                if let Some(v) =
+                    found.and_then(|v| model::coerce(field, &v, max_chars).ok().flatten())
+                {
+                    return Ok(Answer::Now(v));
+                }
+            }
+            Compute::Model { from, .. } => {
+                let Some((texts, key)) = inputs(def, from, &values) else {
+                    continue;
+                };
+                // With a learning lookup, its rules are what was learned.
+                if learning.is_none()
+                    && let Some(v) = cached(conn, def, field, &key, max_chars)?
+                {
+                    return Ok(Answer::Now(v));
+                }
+                let learn_input = match learning {
+                    Some(Compute::Lookup { from, .. }) => {
+                        lookup::text_of(&value_of(def, from, &values))
+                    }
+                    _ => None,
+                };
+                return Ok(Answer::Later(Job {
+                    row_id: row.id.clone(),
+                    field_id: field.id.clone(),
+                    inputs: texts,
+                    key,
+                    learn_input,
+                }));
+            }
+        }
+    }
+    Ok(Answer::None)
+}
+
+/// Compute `field` of `row` now: the field is set to the answer, or left
+/// empty (its default) until a [`Job`] is answered.
 fn recompute(
     conn: &Connection,
     def: &Definition,
     field: &Field,
     row: &mut Row,
+    lookups: &mut Lookups,
     max_chars: usize,
 ) -> rusqlite::Result<Option<Job>> {
+    let a = answer(conn, def, field, row, lookups, max_chars)?;
     row.values.remove(&field.id);
-    match &field.compute {
-        Some(Compute::Expr { .. }) => {
-            if let Some(v) = eval_expr(def, field, &row.values, max_chars) {
-                row.values.insert(field.id.clone(), v);
-            }
-            Ok(None)
+    Ok(match a {
+        Answer::Now(v) => {
+            row.values.insert(field.id.clone(), v);
+            None
         }
-        Some(Compute::Model { from, .. }) => {
-            let Some((texts, key)) = inputs(def, from, &row.values) else {
-                return Ok(None);
-            };
-            match cached(conn, def, field, &key, max_chars)? {
-                Some(v) => {
-                    row.values.insert(field.id.clone(), v);
-                    Ok(None)
-                }
-                None => Ok(Some(Job {
-                    row_id: row.id.clone(),
-                    field_id: field.id.clone(),
-                    inputs: texts,
-                    key,
-                })),
-            }
-        }
-        None => Ok(None),
-    }
+        Answer::Later(job) => Some(job),
+        Answer::None => None,
+    })
 }
 
 /// After a write to `row` (its values `before` the write, `None` for a
 /// create; `write`: the names it set), inside the write's transaction. A
 /// computed field is computed again when a create leaves it empty, when the
 /// write clears it, or when a source field changed and the write doesn't
-/// set it; a model field set by hand teaches the cache. Answers the jobs
-/// for [`spawn`].
+/// set it. A field set by hand teaches its learning lookup (a rule), else
+/// its model's cache. Answers the jobs for [`spawn`].
 pub fn after_write(
     conn: &Connection,
     def: &Definition,
@@ -314,13 +395,14 @@ pub fn after_write(
     row: &mut Row,
     write: &Map<String, Value>,
     now: i64,
-    max_chars: usize,
+    caps: Caps,
 ) -> rusqlite::Result<Vec<Job>> {
     let mut jobs = Vec::new();
+    let mut lookups = Lookups::default();
     for field in def.live_fields() {
-        let Some(compute) = &field.compute else {
+        if !field.computed() {
             continue;
-        };
+        }
         let written = write
             .iter()
             .find(|(n, _)| def.field(n).is_some_and(|f| f.id == field.id))
@@ -328,60 +410,122 @@ pub fn after_write(
         let cleared =
             written.is_some_and(|v| v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty()));
         if written.is_some() && !cleared {
-            // A value set by hand: kept, and (model) the answer for these
-            // inputs from now on.
-            if let (Compute::Model { from, .. }, Some(v)) = (compute, row.values.get(&field.id))
-                && let Some((_, key)) = inputs(def, from, &row.values)
-            {
-                db::remember_computed(conn, &def.name, &field.id, &key, v, db::SOURCE_EDIT, now)?;
+            // A value set by hand: kept, and the answer for these inputs
+            // from now on.
+            if let Some(v) = row.values.get(&field.id) {
+                teach(conn, def, field, &row.values, v, now, caps)?;
             }
             continue;
         }
         let needed = cleared
             || match before {
                 None => true,
-                Some(b) => source_state(def, compute, b) != source_state(def, compute, &row.values),
+                Some(b) => source_state(def, field, b) != source_state(def, field, &row.values),
             };
-        if needed && let Some(job) = recompute(conn, def, field, row, max_chars)? {
+        if needed
+            && let Some(job) = recompute(conn, def, field, row, &mut lookups, caps.text_chars)?
+        {
             jobs.push(job);
         }
     }
     Ok(jobs)
 }
 
-/// After a change that adds or changes field `field_id`'s compute, inside
-/// `tx`: an expression is evaluated for every live row; a model fills the
-/// rows where the field is empty (from the cache, else at most `limit` jobs
-/// for [`spawn`]): a value already there may be a person's.
+/// A person set `field` to `v` for the row `values`: a learning lookup gets
+/// (or changes) the rule for its input; else a model remembers the answer.
+fn teach(
+    conn: &Connection,
+    def: &Definition,
+    field: &Field,
+    values: &Map<String, Value>,
+    v: &Value,
+    now: i64,
+    caps: Caps,
+) -> rusqlite::Result<()> {
+    if let Some(c @ Compute::Lookup { from, .. }) = field.learning_lookup() {
+        if let Some(input) = lookup::text_of(&value_of(def, from, values)) {
+            lookup::learn(conn, c, &input, v, true, now, caps)?;
+        }
+        return Ok(());
+    }
+    if let Some((from, _)) = field.model_step()
+        && let Some((_, key)) = inputs(def, from, values)
+    {
+        db::remember_computed(conn, &def.name, &field.id, &key, v, db::SOURCE_EDIT, now)?;
+    }
+    Ok(())
+}
+
+/// After a change that adds or changes field `field_id`'s compute (`all`:
+/// or asks to compute it again), inside `tx`. A field computed only by
+/// expressions is computed for every live row. Otherwise a value already
+/// there may be a person's: an empty field is computed (a model job, at
+/// most `limit`); with `all`, a row with a value gets what an expression,
+/// a rule or the cache answers now, and keeps its value when only the model
+/// could answer. A learning lookup first learns the field's cached model
+/// answers as rules.
 pub fn backfill(
     tx: &Connection,
     def: &Definition,
     field_id: &str,
+    all: bool,
     limit: usize,
-    max_chars: usize,
+    now: i64,
+    caps: Caps,
 ) -> rusqlite::Result<Vec<Job>> {
-    let Some(field) = def
-        .by_id(field_id)
-        .filter(|f| f.live() && f.compute.is_some())
-    else {
+    let max_chars = caps.text_chars;
+    let Some(field) = def.by_id(field_id).filter(|f| f.live() && f.computed()) else {
         return Ok(Vec::new());
     };
-    let is_expr = matches!(field.compute, Some(Compute::Expr { .. }));
+    if let Some(c) = field.learning_lookup() {
+        learn_cache(tx, def, field, c, now, caps)?;
+    }
+    let only_expr = field
+        .compute
+        .iter()
+        .all(|c| matches!(c, Compute::Expr { .. }));
+    let mut lookups = Lookups::default();
     let mut jobs = Vec::new();
     for mut r in db::all_rows(tx, &def.name, false)? {
-        if !is_expr && r.values.contains_key(&field.id) {
-            continue;
-        }
         let old = r.values.get(&field.id).cloned();
-        match recompute(tx, def, field, &mut r, max_chars)? {
-            Some(job) if jobs.len() < limit => jobs.push(job),
-            _ => {}
+        if only_expr || old.is_none() {
+            match recompute(tx, def, field, &mut r, &mut lookups, max_chars)? {
+                Some(job) if jobs.len() < limit => jobs.push(job),
+                _ => {}
+            }
+        } else if all && let Answer::Now(v) = answer(tx, def, field, &r, &mut lookups, max_chars)? {
+            r.values.insert(field.id.clone(), v);
         }
         if r.values.get(&field.id) != old.as_ref() {
             db::save_row_values(tx, &def.name, &r)?;
         }
     }
     Ok(jobs)
+}
+
+/// Learn `field`'s cached model answers (one source, the lookup's) as
+/// rules of lookup `c`: what was learned before the lookup becomes visible
+/// and editable. People's answers replace rules; models' don't.
+fn learn_cache(
+    tx: &Connection,
+    def: &Definition,
+    field: &Field,
+    c: &Compute,
+    now: i64,
+    caps: Caps,
+) -> rusqlite::Result<()> {
+    let Compute::Lookup { from, .. } = c else {
+        return Ok(());
+    };
+    if field.model_step().map(|(f, _)| f) != Some(std::slice::from_ref(from)) {
+        return Ok(());
+    }
+    for (key, value, source) in db::computed_answers(tx, &def.name, &field.id)? {
+        if let Some(v) = model::coerce(field, &value, caps.text_chars).ok().flatten() {
+            lookup::learn(tx, c, &key, &v, source == db::SOURCE_EDIT, now, caps)?;
+        }
+    }
+    Ok(())
 }
 
 /// Ask the model for `jobs` of `collection` in the background (each
@@ -397,20 +541,22 @@ pub fn spawn(pod: &Pod, collection: &str, jobs: Vec<Job>) {
     let Some(field_model) = adapter.model.clone() else {
         return;
     };
-    let max_chars = adapter.caps().text_chars;
+    let caps = adapter.caps();
+    let max_chars = caps.text_chars;
     let weak = Arc::downgrade(pod);
     let collection = collection.to_owned();
     tokio::spawn(async move {
-        // (field id, key) → (inputs, rows), in a stable order.
-        let mut groups: BTreeMap<(String, String), (Vec<String>, Vec<String>)> = BTreeMap::new();
+        // (field id, key) → (inputs, lookup input, rows), in a stable order.
+        type Group = (Vec<String>, Option<String>, Vec<String>);
+        let mut groups: BTreeMap<(String, String), Group> = BTreeMap::new();
         for j in jobs {
             groups
                 .entry((j.field_id, j.key))
-                .or_insert_with(|| (j.inputs, Vec::new()))
-                .1
+                .or_insert_with(|| (j.inputs, j.learn_input, Vec::new()))
+                .2
                 .push(j.row_id);
         }
-        for ((field_id, key), (texts, row_ids)) in groups {
+        for ((field_id, key), (texts, learn_input, row_ids)) in groups {
             let Some(pod) = weak.upgrade() else { return };
             let name = collection.clone();
             let Ok(Some((_, def))) = pod
@@ -423,7 +569,8 @@ pub fn spawn(pod: &Pod, collection: &str, jobs: Vec<Job>) {
             let Some(field) = def.by_id(&field_id).filter(|f| f.live()).cloned() else {
                 continue;
             };
-            let Some(Compute::Model { from, prompt }) = field.compute.clone() else {
+            let Some((from, prompt)) = field.model_step().map(|(f, p)| (f.to_vec(), p.to_owned()))
+            else {
                 continue;
             };
             if from.len() != texts.len() {
@@ -458,21 +605,37 @@ pub fn spawn(pod: &Pod, collection: &str, jobs: Vec<Job>) {
                         let Some(field) = def.by_id(&field_id).filter(|f| f.live()) else {
                             return Ok(0);
                         };
-                        let Some(Compute::Model { from, .. }) = &field.compute else {
+                        let Some((from, _)) = field.model_step() else {
                             return Ok(0);
                         };
-                        db::remember_computed(
-                            tx,
-                            &name,
-                            &field.id,
-                            &key,
-                            &value,
-                            db::SOURCE_MODEL,
-                            now,
-                        )?;
-                        // The cache may hold a person's answer now (it wins).
-                        let value = cached(tx, &def, field, &key, max_chars)?.unwrap_or(value);
                         let mut n = 0;
+                        let value = match (field.learning_lookup(), &learn_input) {
+                            // Learned as a rule; a rule may answer already
+                            // (a person's, which wins).
+                            (Some(c), Some(input)) => {
+                                if lookup::learn(tx, c, input, &value, false, now, caps)? {
+                                    n += 1;
+                                }
+                                Rules::load(tx, c)?
+                                    .find(input)
+                                    .and_then(|v| model::coerce(field, v, max_chars).ok().flatten())
+                                    .unwrap_or(value)
+                            }
+                            (Some(_), None) => value,
+                            (None, _) => {
+                                db::remember_computed(
+                                    tx,
+                                    &name,
+                                    &field.id,
+                                    &key,
+                                    &value,
+                                    db::SOURCE_MODEL,
+                                    now,
+                                )?;
+                                // The cache may hold a person's answer now (it wins).
+                                cached(tx, &def, field, &key, max_chars)?.unwrap_or(value)
+                            }
+                        };
                         let mut seen = HashSet::new();
                         for id in row_ids {
                             if !seen.insert(id.clone()) {
