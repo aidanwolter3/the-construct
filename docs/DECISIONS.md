@@ -1126,6 +1126,9 @@ session. The rules below hold inside each pod.
     intent the screen offers.
   - Server (`menu-server`).
 
+  **Superseded in part by [settings-page-and-sign-ins](decisions/settings-page-and-sign-ins.md):** Connection,
+  Account and Server moved into a Settings page; the drawer lists only the apps plus a Settings row.
+
   "Newer version available" (`menu-newer`, with "Show latest") sits at the top while it applies.
 - **Opening another app** goes through an optional engine factory on `ConstructController` (same server and
   storage; the previous engine is closed). Android, desktop and both simulator modes provide one. Without a

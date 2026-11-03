@@ -18,8 +18,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
 
 // The pod's apps and their linear version history (GET /v1/apps, /v1/apps/{id}/versions[/{n}]) for the hamburger
-// menu, plus the pure rules the menu follows (pinning, "newer version available", the badge, server URLs). The
-// Compose UI is in Menu.kt.
+// menu, the session's sign-ins (GET /v1/auth/sign-ins) for its Settings page, plus the pure rules the menu follows
+// (pinning, "newer version available", the badge, server URLs). The Compose UI is in Menu.kt.
 
 /**
  * The layout on display, from [EngineSnapshot.layoutJson]: the app ([appId], i.e. the workspace id) and its latest
@@ -42,6 +42,25 @@ data class ActiveLayout(
             ActiveLayout()
         }
     }
+}
+
+/**
+ * One sign-in on this device's pod session (`GET /v1/auth/sign-ins`), a row of Settings' Sign-ins list: the
+ * service's [title] ("Pixelfed"), its [server] base URL and the [username] there when the pod knows them, and the
+ * titles of the [apps] that use it.
+ */
+data class SignInSummary(
+    val id: String,
+    val title: String,
+    val server: String? = null,
+    val username: String? = null,
+    val apps: List<String> = emptyList(),
+) {
+    /** The server without its scheme: `https://pixelfed.social` -> `pixelfed.social`. */
+    val serverHost: String? get() = server?.substringAfter("://")?.trimEnd('/')
+
+    /** The row's second line: "@aidan · pixelfed.social" ("" when neither is known). */
+    val subtitle: String get() = listOfNotNull(username?.let { "@$it" }, serverHost).joinToString(" · ")
 }
 
 /**
@@ -165,6 +184,22 @@ object AppCatalogJson {
         }
         return AppVersionPage(versions, o.jLong("next_before"), o.jLong("latest_version"), o.latestCompatible())
     }
+
+    /** `GET /v1/auth/sign-ins`: `{"sign_ins":[{"id","title","server"?,"username"?,"apps":[{"id","title"}]}]}`. */
+    fun parseSignIns(json: String): List<SignInSummary> =
+        ((obj(json)["sign_ins"] as? JsonArray) ?: JsonArray(emptyList())).mapNotNull { e ->
+            val o = e as? JsonObject ?: return@mapNotNull null
+            val id = o.jStr("id")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            SignInSummary(
+                id = id,
+                title = o.jStr("title")?.takeIf { it.isNotBlank() } ?: id,
+                server = o.jStr("server")?.takeIf { it.isNotBlank() },
+                username = o.jStr("username")?.takeIf { it.isNotBlank() },
+                apps = ((o["apps"] as? JsonArray) ?: JsonArray(emptyList())).mapNotNull { a ->
+                    (a as? JsonObject)?.let { it.jStr("title") ?: it.jStr("id") }
+                },
+            )
+        }
 
     /** `latest_compatible_version` (null = none fits); `latest_version` from a pod that doesn't send it. */
     private fun JsonObject.latestCompatible(): Long? =
@@ -311,6 +346,13 @@ class AppRepository(
 
     suspend fun versions(appId: String, before: Long? = null, limit: Int? = PAGE_SIZE): AppVersionPage =
         call { AppCatalogJson.parseVersions(bridge().appVersions(appId, before, limit)) }
+
+    /** The session's sign-ins; a pod without `/v1/auth/sign-ins` (404) has none to list. */
+    suspend fun signIns(): List<SignInSummary> = try {
+        call { AppCatalogJson.parseSignIns(bridge().signIns()) }
+    } catch (e: LayoutApiException) {
+        if (e.kind == LayoutApiException.Kind.NotFound) emptyList() else throw e
+    }
 
     suspend fun spec(appId: String, version: Long): UiNode {
         specs[appId to version]?.let { return it }

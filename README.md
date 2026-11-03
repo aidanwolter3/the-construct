@@ -153,7 +153,7 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 
 All clients default to the deployed staging pod, `https://the-construct-pod.fly.dev`, and to the Pixelfed app
 (`pixelfed_home`; signed out, it shows "Sign in with Pixelfed"). For the local server started above, pass its URL
-explicitly (`CONSTRUCT_BASE_URL=http://127.0.0.1:8080`) or pick **Local** in the menu's Server section. With
+explicitly (`CONSTRUCT_BASE_URL=http://127.0.0.1:8080`) or pick **Local** in Settings' server picker. With
 `-Dconstruct.workspace=pixelfed_demo`, a "The Construct" window opens with the one-post demo served by the server
 (no sign-in). Clicking the heart prints the intent to stdout and the post's `is_liked` and `like_count` update:
 
@@ -252,7 +252,7 @@ paths, e.g. the Pixelfed media proxy).
 
 - **In the app:** the "Open your pod" screen takes the pod code (or, where enabled, **Try a temporary pod**). Any
   number of devices can use the same code. Signing in to an app (Pixelfed) happens inside the pod, so every device
-  of the pod sees it; **Sign out** signs the pod out of the app and keeps the pod open; the menu's **Leave this pod**
+  of the pod sees it; **Sign out** signs the pod out of the app and keeps the pod open; Settings' **Leave pod**
   forgets the code on this device.
 - **API:** `POST /v1/pods/open {"token": "cpod_…"}` -> `{"session_token"}` (401 `pod_not_found`; 10 tries a minute
   per client address; behind Fly the address is `Fly-Client-IP`, elsewhere the connection's peer). `POST /v1/pods/temporary` -> `{"session_token", "expires_at", "pod"}` (404 when disabled, 429, 503
@@ -360,11 +360,11 @@ browser. "Sign in with Pixelfed" still goes to the fake. Your upstream token liv
    adb shell am start -S -n org.theconstruct.android/.MainActivity --es baseUrl http://localhost:8080 --es workspace pixelfed_home
    ```
 
-   (A release build has no extras: pick **Local USB** in the menu's Server section instead.)
+   (A release build has no extras: pick **Local USB** in Settings' server picker instead.)
 
 4. Tap **Sign in with Pixelfed**: the browser opens the instance's authorize page; log in and approve; the
-   `construct://oauth` redirect returns to the app, which shows your home timeline (the menu's Account section says
-   "Signed in as @you"). Like and bookmark are applied at once and go through the outbox to the instance (queued while
+   `construct://oauth` redirect returns to the app, which shows your home timeline (Settings lists
+   "Pixelfed · @you · <instance>"). Like and bookmark are applied at once and go through the outbox to the instance (queued while
    offline, flushed on reconnect). **Sign out** deletes the session and the cached private feed.
 
 Notes:
@@ -495,19 +495,29 @@ offline, when actions wait to be sent, or when the version you picked has a newe
   you view an older version and a newer one is published, the drawer shows "Newer version available" with
   **Show latest**. Picking "Latest" follows new versions again. When the version you picked is on an older page,
   a checked "Pinned: vN" row sits under "Latest" until "Load older" lists it.
-- **Connection:** Online / Offline and "N pending" ("Connecting…" until the engine first reports; no offline badge
-  then). Offline, the Apps list from the last load stays without an error, and it reloads once back online.
-- **Account:** "Signed in as @you" with **Sign out**, or **Sign in**.
-- **Server:** Staging, Local emulator (`http://10.0.2.2:8080`), Local USB (`http://127.0.0.1:8080`) or a custom
+- **Settings** (at the bottom; decision [settings-page-and-sign-ins](docs/decisions/settings-page-and-sign-ins.md)),
+  with the connection status beside it: Online / Offline and "N pending" ("Connecting…" until the engine first
+  reports; no offline badge then). Offline, the Apps list from the last load stays without an error, and it reloads
+  once back online. Settings opens a page with:
+  - **Your pod:** the connection (with the last error), the server picker (below), and "Pod open on this device"
+    with **Leave pod**, which forgets the pod code on this device.
+  - **Sign-ins:** every sign-in on the pod (`GET /v1/auth/sign-ins`), e.g. "Pixelfed · @you · pixelfed.social".
+    A row opens its detail: server, username, the apps that use it, and **Sign out of Pixelfed** (the pod stays
+    open). With none: "Not signed in" with **Sign in**, or "Signing in…" / "Sign-in failed: …". A pod that can't
+    list sign-ins (an older one) still shows "Signed in as @you" with **Sign out**.
+  - **Notifications:** the per-app notification channels (D52).
+- **Server** (in Settings): Staging, Local emulator (`http://10.0.2.2:8080`), Local USB (`http://127.0.0.1:8080`) or a custom
   URL on Android; Staging, Local (`http://127.0.0.1:8080`) or a custom `http(s)://host[:port]` on desktop. On
   Android a custom URL must be `https://` unless it is `localhost`, `127.0.0.1` or `10.0.2.2` ("Use https:// for
   remote servers"), since images can only load over cleartext from those hosts. This is in every build, release
   included. Both switch in place: the new engine is started first, and the choice is saved only once it started.
   Each server keeps its own cache and outbox.
 
-Back (Android) closes the innermost level (custom URL field, picker, drawer). Test tags: `menu-button`,
+Back (Android) closes the innermost level (custom URL field, notification settings, a sign-in's detail, Settings,
+picker, drawer). Test tags: `menu-button`,
 `menu-badge`, `menu-drawer`, `menu-close`, `menu-back`, `app-<id>`, `app-history-<id>`, `app-error`, `apps-error`,
-`menu-newer`, `menu-newer-latest`, `menu-connection`, `menu-account`, `menu-sign-in`, `menu-sign-out`,
+`menu-newer`, `menu-newer-latest`, `menu-settings`, `settings`, `menu-connection`, `menu-account`, `sign-in-<id>`,
+`sign-in-detail`, `sign-ins-error`, `menu-sign-in`, `menu-sign-out`, `menu-leave-pod`, `menu-notifications`,
 `menu-server`, `server-<key>`, `server-custom`, `server-custom-url`, `server-custom-hint`, `server-custom-use`,
 `version-picker`, `version-latest`, `version-pinned`, `version-<n>`, `versions-more`, `versions-error`,
 `version-error`.
@@ -766,8 +776,8 @@ thread; `auth_json` in every snapshot goes `pending` -> `signed_in` (username, d
   data load and the workspace row (D37). `logout()` also drops actions queued while signed in; a 401 keeps them for
   the next sign-in. The DB runs
   with `secure_delete=ON` and the WAL is truncated after the purge, so the rows don't linger in the file's bytes.
-- UI: the menu's Account section shows "Signed in as @username" with **Sign out** (`ConstructController.logout()`),
-  "Signing in…" while pending, then "Loading your feed…" from the code exchange until the first signed-in fetch
+- UI: Settings' Sign-ins list shows "Pixelfed · @username · <instance>"; its detail page has **Sign out**
+  (`ConstructController.logout()`). The list shows "Signing in…" while pending, then "Loading your feed…" from the code exchange until the first signed-in fetch
   lands. It shows "Sign-in failed: <message>" on error, otherwise "Not signed in" with **Sign in** (the screen's own
   sign-in button works too). Messages are short and human ("This pod belongs to a different Pixelfed account.",
   "Can't reach your pod.", ...); the URL/status/body detail is in the `[ConstructEngine]` log only.
@@ -936,7 +946,7 @@ virtual screen (no window), runs a small script against it and writes PNG screen
 ./gradlew -PskipRustBuild :desktopApp:simulate -PbaseUrl=http://127.0.0.1:8080 -Pscript="shot live"   # live mode
 # live sign-in against the pod + fake upstream (see "Sign in (client)")
 ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_home -PbaseUrl=http://127.0.0.1:8080 \
-  -Pscript="shot signed-out; click Sign in with Pixelfed; open-menu; wait-text 20000 @constructdemo; close-menu; wait-text 20000 Alice Lumen; wait-images 20000; shot feed; click Like; shot liked"
+  -Pscript="shot signed-out; click Sign in with Pixelfed; open-settings; wait-text 20000 @constructdemo; close-menu; wait-text 20000 Alice Lumen; wait-images 20000; shot feed; click Like; shot liked"
 # live menu against a local pod started with CONSTRUCT_SHOW_DEV_APPS=1
 ./gradlew -PskipRustBuild :desktopApp:simulate -PbaseUrl=http://127.0.0.1:8080 \
   -Pscript="open-menu; open-history Pixelfed; select-version 1; open-menu; open-app pixelfed_demo; assert-text Sunrise over Boulder"
@@ -980,15 +990,15 @@ does not load within `timeoutMs`, it logs a warning and still runs the script (s
 step runs. **Sign-in in live mode:** the engine gets an in-memory session store (every run starts signed out; the
 Keychain is never touched) and a "browser" that GETs the authorize URL with `auto=1`; when the answer is a redirect to
 the engine's loopback `redirect_uri` (the fake upstream does that, with or without `FAKE_PIXELFED_AUTO_APPROVE`), it
-follows it, so `click Sign in with Pixelfed; open-menu; wait-text 20000 @constructdemo` signs in (the account is shown in the menu). A real Pixelfed answers with its
-login page instead: the simulator prints the authorize URL and the menu's Account section shows "no browser available"
+follows it, so `click Sign in with Pixelfed; open-settings; wait-text 20000 @constructdemo` signs in (the account is shown in Settings). A real Pixelfed answers with its
+login page instead: the simulator prints the authorize URL and Settings' Sign-ins section shows "no browser available"
 (opening the URL in a real browser and logging in still completes the sign-in while the script waits). For a real
 instance pass `-PpixelfedLogin=<login>:<password>`: the "browser" then does what a person would (`PixelfedLoginBrowser`,
 own cookie jar): `GET /login` for the CSRF `_token`, `POST /login` (Pixelfed logs in by e-mail; a login without `@` is
 sent as `<login>@example.test`, the dev seed's domain), `GET` the authorize URL, `POST` the consent page's approve
 form (`_token`, `state`, `client_id`, `auth_token`; the deny form is the one with `_method=DELETE`) and follows the
 302 to the loopback listener. Failures (wrong password, 429 throttling) are logged with the URL. After the user
-appears (`open-menu; wait-text 30000 @constructadmin; close-menu`), wait for feed text too (e.g. `wait-text 20000 Alice
+appears (`open-settings; wait-text 30000 @constructadmin; close-menu`), wait for feed text too (e.g. `wait-text 20000 Alice
 Example boosted`): the account updates before the refetched feed arrives.
 
 **Images** (Coil, DECISIONS D18) are deterministic. In fixture mode the network is never used: any image URL whose
@@ -1022,16 +1032,17 @@ entries starting with `#` are comments. An argument cannot contain `;`, and sinc
 | `screen <WxH or preset>` | Restarts the renderer at the new size. Engine state carries over; UI state such as scroll position does not. |
 | `back` | A system Back press (closes the innermost menu level); fails if nothing handles it. |
 | `open-menu` | Opens the drawer (clicks `menu-button`) and waits for the apps list (or its error). |
-| `close-menu` | Closes the drawer (leaving the version picker first). |
+| `close-menu` | Closes the drawer (leaving the version picker, Settings or a detail page first). |
+| `open-settings` | Opens the drawer's Settings page (`menu-settings`) and waits for its list of sign-ins; reports how many are listed. |
 | `open-app <id or title>` | Opens an app from the drawer (`pixelfed_home` or `Pixelfed`) and waits until it has loaded. |
 | `open-history <id or title>` | Opens that app's version picker (opening the drawer first if needed). |
 | `select-version <n or latest>` | In the picker, shows version `n` (`2` or `v2`; presses "Load older" as needed) or follows the latest again; waits for the drawer to close. |
-| `set-server <preset or URL>` | Picks `staging`, `emulator`, `usb` or a custom `http(s)://host[:port]` in the Server section. The simulator records the choice and shows it in the menu, but keeps its engine. |
+| `set-server <preset or URL>` | Picks `staging`, `emulator`, `usb` or a custom `http(s)://host[:port]` in Settings' server picker (opening Settings first). The simulator records the choice and shows it in the menu, but keeps its engine. |
 | `notify <app_id> <channel> <title>` | Fixture mode only: the fake pod sends a live notification (D52): the platform hook (`onNotification`) fires and the bell's unread count goes up. |
 | `open-inbox` | Clicks the bell (`inbox-button`) and waits for the inbox (`inbox`) to load; reports the rows shown or its message. |
 | `close-inbox` | Closes the inbox. |
 | `click-notification <text>` | Clicks the inbox row containing `<text>` and waits for its app (opened if it is another one) and target screen; reports both. |
-| `open-notification-settings` | Opens the menu's notification settings (`menu-notifications`) and waits for the channels. |
+| `open-notification-settings` | Opens the notification settings (Settings' `menu-notifications` row) and waits for the channels. |
 | `toggle-channel <app>.<channel>` | In the settings, flips a channel's switch (`channel:<app>.<channel>`, e.g. `pixelfed_home.likes`); reports `on`/`off`. |
 
 The menu commands are thin wrappers over clicks on the menu's test tags (`click tag:app-history-pixelfed_demo` works too,
@@ -1056,7 +1067,7 @@ open-menu; set-server http://127.0.0.1:8080; assert-text 127.0.0.1; close-menu
 SCRIPT
 ./gradlew -PskipRustBuild :desktopApp:simulate -PscriptFile=/tmp/menu.txt
 ./gradlew -PskipRustBuild :desktopApp:simulate -Pscreen=desktop -PscriptFile=/tmp/menu.txt
-# offline: the badge and the Connection section
+# offline: the badge and the Settings row
 ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo \
   -Pscript="offline; click Like; open-menu; assert-text Offline; assert-text 1 pending; shot offline"
 ```
@@ -1083,7 +1094,7 @@ from the pod: `UPDATE_FIXTURES=1 cargo test -p server --test fixtures` (the test
 
 **Notifications (D52).** The bell (`inbox-button`, content description "Notifications") sits top-right with the
 unread count (`inbox-badge`); the inbox (`inbox`) lists rows `notification-row:<id>` by day, with `inbox-mark-all`
-and `inbox-close`; the menu's `menu-notifications` opens `notification-settings` with `channel:<app>.<channel>` rows
+and `inbox-close`; Settings' `menu-notifications` row opens `notification-settings` with `channel:<app>.<channel>` rows
 (`channel-switch:<app>.<channel>`). In fixture mode the fake pod serves `fixtures/notifications.json` (wire-shaped,
 except `age_seconds`, so times stay relative to now); its targets open the comments screen of `pixelfed_home` posts.
 The inbox commands also work live (`-PbaseUrl`) against a pod's real notifications.
@@ -1136,7 +1147,7 @@ Gradle properties for `:androidApp`:
 
 Run on an emulator. The app talks to the staging pod unless told otherwise. For a local server, start it first
 (`cargo run -p server`, on the host's 127.0.0.1:8080, which the emulator reaches as `10.0.2.2:8080`) and pass
-`--es baseUrl http://10.0.2.2:8080`, or pick **Local emulator** in the menu's Server section:
+`--es baseUrl http://10.0.2.2:8080`, or pick **Local emulator** in Settings' server picker:
 
 ```bash
 export PATH="$HOME/Library/Android/sdk/platform-tools:$HOME/Library/Android/sdk/emulator:$PATH"

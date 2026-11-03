@@ -67,7 +67,7 @@ use serde_json::{Value, json};
 
 use auth::{LoopbackListener, PendingAuth, Pkce, Redirect, guarded};
 pub use auth::{MemoryStore, RedirectMode, SecureStore, UrlOpener};
-pub use catalog::LayoutApiError;
+pub use catalog::{LayoutApiError, SIGN_INS_UNSUPPORTED};
 pub use notify::{NotificationListener, PushSubscription};
 pub use protocol::{Notification, NotificationList, ReadEvent};
 use store::{
@@ -1637,7 +1637,7 @@ impl ConstructEngine {
         self.inner.logout();
     }
 
-    /// Forget the session on this device only ("Leave this pod", D46): no
+    /// Forget the session on this device only (Settings' "Leave pod", D46): no
     /// server call, private data purged, the workspace fetched without it.
     pub fn forget_session(&self) {
         self.inner.forget_session();

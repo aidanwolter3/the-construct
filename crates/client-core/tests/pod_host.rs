@@ -1,6 +1,7 @@
 //! The engine in front of a pod host (D46): no token -> "Open your pod";
 //! a temporary pod opens a session; Pixelfed sign-in adds to that session;
-//! signing out keeps the pod token; leaving the pod forgets it.
+//! signing out keeps the pod token; leaving the pod forgets it. Settings'
+//! list of sign-ins follows along.
 
 use std::net::TcpListener;
 use std::sync::Arc;
@@ -128,6 +129,13 @@ fn a_device_opens_a_pod_signs_in_signs_out_and_leaves() {
     wait_until(&engine, "the open-your-pod screen", |s| {
         s.workspace_json.contains("Try a temporary pod")
     });
+    let sign_ins =
+        |e: &ConstructEngine| -> Value { serde_json::from_str(&e.sign_ins().unwrap()).unwrap() };
+    assert_eq!(
+        sign_ins(&engine),
+        json!({ "sign_ins": [] }),
+        "no session yet"
+    );
 
     // A wrong code: a short message, no session.
     engine.dispatch(&open_session(
@@ -165,6 +173,10 @@ fn a_device_opens_a_pod_signs_in_signs_out_and_leaves() {
         auth(s)["state"] == "signed_in" && s.queries_json.contains("timeline:home")
     });
     assert_eq!(token(&store).as_deref(), Some(pod_token.as_str()));
+    let list = sign_ins(&engine);
+    assert_eq!(list["sign_ins"][0]["title"], "Pixelfed", "{list}");
+    assert_eq!(list["sign_ins"][0]["server"], fake.as_str());
+    assert_eq!(list["sign_ins"][0]["username"], "constructdemo");
 
     // Sign out of Pixelfed: the pod token stays.
     engine.logout();
@@ -174,6 +186,7 @@ fn a_device_opens_a_pod_signs_in_signs_out_and_leaves() {
             && s.workspace_json.contains("Sign in with Pixelfed")
     });
     assert_eq!(token(&store).as_deref(), Some(pod_token.as_str()));
+    assert_eq!(sign_ins(&engine), json!({ "sign_ins": [] }));
 
     // Leave the pod on this device.
     engine.forget_session();

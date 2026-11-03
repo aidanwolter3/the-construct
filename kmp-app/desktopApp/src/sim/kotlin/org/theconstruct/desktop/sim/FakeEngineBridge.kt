@@ -7,9 +7,14 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
 import org.theconstruct.ActionIntent
 import org.theconstruct.AppNotification
 import org.theconstruct.AttachmentException
@@ -30,7 +35,9 @@ import javax.imageio.ImageIO
  * Loads a hydration bundle (`{version, workspace, entities, queries}`, DECISIONS D2) and emits snapshots
  * shaped like the real engine's (D6: workspace JSON = the layout node, entities JSON = the
  * URI-keyed map, queries JSON = the bundle's queries; `seq` increases with every state change).
- * [authJson] is passed through unchanged (default signed out) until [logout] sets it to signed out.
+ * [authJson] is passed through unchanged (default signed out) until [logout] sets it to signed out. While it is
+ * `signed_in`, `signIns` (Settings) lists one Pixelfed sign-in on the fake upstream ([SIGN_IN_SERVER]) with its
+ * `username`.
  * `OptimisticMutate` intents are applied
  * with the D4 expression subset (including the M6 ternary); other intents are logged and ignored.
  * The primary field and every `also` field are evaluated against the PRE-mutation entity and
@@ -394,6 +401,20 @@ class FakeEngineBridge(
 
     override fun appVersion(appId: String, version: Long): String = appsCall { apps.versionJson(appId, version) }
 
+    override fun signIns(): String = appsCall {
+        val auth = synchronized(lock) { authJson }
+        val o = runCatching { ConstructJson.json.parseToJsonElement(auth).jsonObject }.getOrNull()
+        if ((o?.get("state") as? JsonPrimitive)?.contentOrNull != "signed_in") return@appsCall """{"sign_ins":[]}"""
+        val row = buildJsonObject {
+            put("id", "pixelfed")
+            put("title", "Pixelfed")
+            put("server", SIGN_IN_SERVER)
+            (o["username"] as? JsonPrimitive)?.contentOrNull?.let { put("username", it) }
+            put("apps", buildJsonArray { add(buildJsonObject { put("id", "pixelfed_home"); put("title", "Pixelfed") }) })
+        }
+        buildJsonObject { put("sign_ins", buildJsonArray { add(row) }) }.toString()
+    }
+
     private fun appsCall(read: () -> String): String {
         synchronized(lock) {
             if (!isOnline) {
@@ -602,6 +623,9 @@ class FakeEngineBridge(
     }
 
     companion object {
+        /** The server of the fake's Pixelfed sign-in (fake-pixelfed's default address). */
+        const val SIGN_IN_SERVER = "http://127.0.0.1:8081"
+
         private const val NO_UNREAD = "{\"unread_total\":0,\"unread_by_app\":{}}"
         private val queriesSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
 

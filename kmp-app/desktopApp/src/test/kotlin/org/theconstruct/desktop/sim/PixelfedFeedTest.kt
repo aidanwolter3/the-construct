@@ -70,14 +70,16 @@ class PixelfedFeedTest {
     }
 
     @Test
-    fun signedInMenuShowsUsernameAndSignOutSignsOut() {
+    fun signedInSettingsListThePixelfedSignInAndSignOutSignsOut() {
         val fake = FakeEngineBridge(
             assertNotNull(findFixture("pixelfed_home_feed_bundle.json")).readText(),
             authJson = """{"state":"signed_in","username":"constructdemo","display_name":"Construct Demo"}""",
         )
         run(
             fake,
-            "assert-no-text @constructdemo; open-menu; assert-text Signed in as @constructdemo; click tag:menu-sign-out; " +
+            "assert-no-text @constructdemo; open-menu; assert-no-text @constructdemo; " +
+                "open-settings; assert-text @constructdemo · 127.0.0.1:8081; click tag:sign-in-pixelfed; " +
+                "assert-text Used by; assert-text Sign out of Pixelfed; click tag:menu-sign-out; " +
                 "assert-no-text @constructdemo; assert-no-text Sign out; assert-text Not signed in",
         )
     }
@@ -85,10 +87,10 @@ class PixelfedFeedTest {
     @Test
     fun pendingAndErrorAuthStatesShowInTheMenu() {
         val bundle = assertNotNull(findFixture("pixelfed_home_feed_bundle.json")).readText()
-        run(FakeEngineBridge(bundle, authJson = """{"state":"pending"}"""), "open-menu; assert-text Signing in; assert-no-text Sign out")
+        run(FakeEngineBridge(bundle, authJson = """{"state":"pending"}"""), "open-settings; assert-text Signing in; assert-no-text Sign out")
         run(
             FakeEngineBridge(bundle, authJson = """{"state":"error","error":"no browser available"}"""),
-            "assert-no-text no browser available; open-menu; assert-text no browser available; assert-no-text Sign out",
+            "assert-no-text no browser available; open-settings; assert-text no browser available; assert-no-text Sign out",
         )
     }
 
@@ -97,7 +99,7 @@ class PixelfedFeedTest {
         val bundle = assertNotNull(findFixture("pixelfed_home_feed_bundle.json")).readText()
         run(
             FakeEngineBridge(bundle, authJson = """{"state":"pending","message":"Loading your feed…"}"""),
-            "open-menu; assert-text Loading your feed; assert-no-text Signing in; assert-no-text Sign out",
+            "open-settings; assert-text Loading your feed; assert-no-text Signing in; assert-no-text Sign out",
         )
     }
 
@@ -109,7 +111,7 @@ class PixelfedFeedTest {
         SimImages.install("fixture")
         runSkikoComposeUiTest(size = Size(390f, 844f), density = Density(1f)) {
             setContent { ConstructApp(controller) }
-            controller.menu.openMenu()
+            controller.menu.showSettings()
             waitForIdle()
             val layouts = mutableListOf<TextLayoutResult>()
             onNode(hasText(reason, substring = true))

@@ -304,14 +304,24 @@ class SimRunner(
                 awaitMenu()
                 awaitLayoutCalls()
                 if (hasTag("apps-error")) return "error shown: ${textUnder("apps-error")}" to null
-                return (if (hasTag("version-picker")) "version picker" else "${appTags().size} app(s)") to null
+                return when {
+                    hasTag("version-picker") -> "version picker"
+                    hasTag("settings") || hasTag("sign-in-detail") -> "settings"
+                    else -> "${appTags().size} app(s)"
+                } to null
             }
             SimStep.CloseMenu -> {
                 if (!menuShown()) throw StepFailure("the menu is not open")
-                if (hasTag("version-picker") || hasTag("notification-settings")) clickTag("menu-back", "")
+                backToMenuSections()
                 clickTag("menu-close", "")
                 awaitCondition("the menu to close", LAYOUT_TIMEOUT_MS) { !menuShown() && !controller.menu.open }
                 return "" to null
+            }
+            SimStep.OpenSettings -> {
+                ensureSettings()
+                if (hasTag("sign-ins-error")) return "error shown: ${textUnder("sign-ins-error")}" to null
+                val listed = tagsStartingWith("sign-in-").count { it != "sign-in-detail" }
+                return "$listed sign-in(s)" to null
             }
             is SimStep.OpenApp -> {
                 val tag = appTag(step.app)
@@ -360,8 +370,8 @@ class SimRunner(
                 return (if (pin == null) "following the latest version" else "showing v${pin.version}") to null
             }
             is SimStep.SetServer -> {
-                ensureMenuSections()
-                requireTag("menu-server", "no Server section in the menu")
+                ensureSettings()
+                requireTag("menu-server", "no server picker in Settings")
                 if (!hasTag("server-custom")) clickTag("menu-server", "")
                 val key = step.server.lowercase()
                 if (key in SERVER_PRESETS) {
@@ -425,8 +435,8 @@ class SimRunner(
             }
             SimStep.OpenNotificationSettings -> {
                 if (!hasTag("notification-settings")) {
-                    ensureMenuSections()
-                    clickTag("menu-notifications", "no Notifications entry in the menu")
+                    ensureSettings()
+                    clickTag("menu-notifications", "no Notifications entry in Settings")
                 }
                 awaitTag("notification-settings", "the notification settings did not open")
                 awaitLayoutCalls()
@@ -546,9 +556,10 @@ class SimRunner(
         clickNode(all[0], "test tag", "tag:$tag")
     }
 
-    /** The drawer is showing its sections or the version picker. */
+    /** The drawer is showing its sections, the version picker, Settings, a sign-in's detail or notification settings. */
     private fun SkikoComposeUiTest.menuShown(): Boolean =
-        hasTag("menu-drawer") || hasTag("version-picker") || hasTag("notification-settings")
+        hasTag("menu-drawer") || hasTag("version-picker") || hasTag("settings") || hasTag("sign-in-detail") ||
+            hasTag("notification-settings")
 
     private fun SkikoComposeUiTest.awaitMenu() {
         waitForIdle()
@@ -559,15 +570,36 @@ class SimRunner(
         }
     }
 
-    /** Opens the menu if needed and goes back from the version picker to the sections. */
+    /** Opens the menu if needed and goes back from the version picker or Settings to the sections. */
     private fun SkikoComposeUiTest.ensureMenuSections() {
         if (!menuShown()) {
             clickTag("menu-button", "the menu button is not on screen")
             awaitMenu()
         }
-        if (hasTag("version-picker") || hasTag("notification-settings")) {
+        backToMenuSections()
+        awaitLayoutCalls()
+    }
+
+    /** Presses the drawer's Back until it shows its sections (at most a detail page, then Settings). */
+    private fun SkikoComposeUiTest.backToMenuSections() {
+        repeat(3) {
+            if (hasTag("menu-drawer")) return
             clickTag("menu-back", "")
-            awaitTag("menu-drawer", "the menu did not go back to its sections")
+            waitForIdle()
+        }
+        awaitTag("menu-drawer", "the menu did not go back to its sections")
+    }
+
+    /** Opens the menu's Settings page (from wherever the drawer is) and waits for its calls. */
+    private fun SkikoComposeUiTest.ensureSettings() {
+        if (hasTag("sign-in-detail") || hasTag("notification-settings")) {
+            clickTag("menu-back", "")
+            waitForIdle()
+        }
+        if (!hasTag("settings")) {
+            ensureMenuSections()
+            clickTag("menu-settings", "no Settings row in the menu")
+            awaitTag("settings", "Settings did not open")
         }
         awaitLayoutCalls()
     }

@@ -31,6 +31,8 @@ sealed class SimStep(val command: String, val arg: String = "") {
     // Hamburger menu: each waits for idle and for the apps calls, and fails with a hint when its control is missing.
     object OpenMenu : SimStep("open-menu")
     object CloseMenu : SimStep("close-menu")
+    /** Opens the menu's Settings page and waits for its list of sign-ins. */
+    object OpenSettings : SimStep("open-settings")
     /** [app]: an app id (`pixelfed_home`) or its title (`Pixelfed`). */
     class OpenApp(val app: String) : SimStep("open-app", app)
     class OpenHistory(val app: String) : SimStep("open-history", app)
@@ -141,6 +143,7 @@ fun parseScript(script: String): List<SimStep> {
             )
             "open-menu" -> { noArg(); SimStep.OpenMenu }
             "close-menu" -> { noArg(); SimStep.CloseMenu }
+            "open-settings" -> { noArg(); SimStep.OpenSettings }
             "open-app" -> SimStep.OpenApp(requireArg("an app id or title (e.g. pixelfed_home or Pixelfed)"))
             "open-history" -> SimStep.OpenHistory(requireArg("an app id or title (e.g. pixelfed_home or Pixelfed)"))
             "select-version" -> {
@@ -192,7 +195,7 @@ fun parseScript(script: String): List<SimStep> {
             else -> throw ScriptParseException(
                 "${where()}: unknown command '$command' (expected one of: " +
                     "shot, click, wait, idle, assert-text, assert-no-text, wait-text, wait-images, swipe-left, swipe-right, " +
-                    "scroll-to, type, back, pick, open-menu, close-menu, open-app, open-history, select-version, set-server, " +
+                    "scroll-to, type, back, pick, open-menu, close-menu, open-settings, open-app, open-history, select-version, set-server, " +
                     "publish-version, notify, open-inbox, close-inbox, click-notification, open-notification-settings, " +
                     "toggle-channel, offline, online, screen)",
             )

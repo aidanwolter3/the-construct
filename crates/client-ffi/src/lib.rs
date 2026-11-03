@@ -253,7 +253,7 @@ impl EngineHandle {
         self.inner.logout();
     }
 
-    /// Forget the session on this device only ("Leave this pod", D46): no
+    /// Forget the session on this device only (Settings' "Leave pod", D46): no
     /// server call; private data purged and the workspace fetched again.
     pub fn forget_session(&self) {
         self.inner.forget_session();
@@ -421,6 +421,12 @@ impl EngineHandle {
             .handle_push_message(&payload_json)
             .map(|n| serde_json::to_string(&n).unwrap_or_default())
     }
+
+    /// The sign-ins on this device's pod session (`GET /v1/auth/sign-ins`);
+    /// `{"sign_ins":[]}` without a session.
+    pub fn sign_ins(&self) -> Result<String, LayoutApiError> {
+        Ok(self.inner.sign_ins()?)
+    }
 }
 
 fn serde_json_string(info: &client_core::AttachmentInfo) -> Result<String, String> {
@@ -474,6 +480,8 @@ mod tests {
             handle.list_apps(),
             Err(LayoutApiError::Offline { .. })
         ));
+        // No session: answered without a request.
+        assert_eq!(handle.sign_ins().unwrap(), r#"{"sign_ins":[]}"#);
         assert!(matches!(
             handle.app_versions("home".into(), Some(3), Some(2)),
             Err(LayoutApiError::Offline { .. })

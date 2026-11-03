@@ -40,7 +40,8 @@ use serde_json::{Value, json};
 use store::Store;
 
 pub use adapter::{
-    AppAdapter, AppInfo, AuthPolicy, BoxFuture, Catalog, Hydration, Pod, RequestCtx, SignInProvider,
+    AppAdapter, AppInfo, AuthPolicy, BoxFuture, Catalog, Hydration, Pod, RequestCtx, SignInAccount,
+    SignInProvider,
 };
 pub use notify::{NewNotification, PollCtx, PollOutcome, PollStatus};
 pub use session::{Caller, Session};

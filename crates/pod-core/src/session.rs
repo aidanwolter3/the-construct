@@ -6,22 +6,23 @@
 //! completing one records it on the session
 //! ([`crate::store::open_session_on`]), and an app that requires it
 //! ([`crate::AuthPolicy::SignIn`]) is served only to sessions that have it.
-//! `POST /v1/auth/logout` ends the session and every sign-in on it.
+//! `POST /v1/auth/logout` ends the session and every sign-in on it;
+//! `GET /v1/auth/sign-ins` lists them for the client's Settings.
 
 use axum::{
     Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{get, post},
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use protocol::WorkspaceSpec;
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::{ApiError, AppState, Pod, blocking};
+use crate::{ApiError, AppState, AuthPolicy, Pod, blocking};
 
 /// Response header on a 401 for a stale session (`invalid`): the client
 /// clears its session and refetches without the bearer.
@@ -173,7 +174,54 @@ impl AppState {
 }
 
 pub(crate) fn router() -> Router<Pod> {
-    Router::new().route("/v1/auth/logout", post(logout))
+    Router::new()
+        .route("/v1/auth/logout", post(logout))
+        .route("/v1/auth/sign-ins", get(sign_ins))
+}
+
+/// `GET /v1/auth/sign-ins`: the sign-ins on the caller's session, for
+/// the client's Settings: `{"sign_ins": [{"id", "title", "server"?,
+/// "username"?, "apps": [{"id", "title"}]}]}` in sign-in id order. `apps` are
+/// the listed apps (`GET /v1/apps`) that require the sign-in. No bearer: an
+/// empty list; a stale one: 401. Sign-ins no adapter provides any more are
+/// left out.
+async fn sign_ins(State(state): State<Pod>, headers: HeaderMap) -> Response {
+    let caller = match state.caller(&headers).await {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
+    };
+    let session = match caller {
+        Caller::Anonymous => return Json(json!({ "sign_ins": [] })).into_response(),
+        Caller::Stale => return unauthorized(),
+        Caller::Signed(s) => s,
+    };
+    let catalog = state.catalog();
+    let mut out: Vec<Value> = Vec::new();
+    for id in &session.sign_ins {
+        let (Some(provider), Some(adapter)) = (catalog.sign_in(id), catalog.sign_in_adapter(id))
+        else {
+            continue;
+        };
+        let account = adapter
+            .sign_in_account(&state, id, &session)
+            .await
+            .unwrap_or_default();
+        let apps: Vec<Value> = catalog
+            .apps()
+            .filter(|a| a.auth == AuthPolicy::SignIn(provider.id))
+            .filter(|a| !a.dev || state.show_dev_apps())
+            .map(|a| json!({ "id": a.id, "title": a.title }))
+            .collect();
+        let mut row = json!({ "id": provider.id, "title": provider.title, "apps": apps });
+        if let Some(server) = account.server {
+            row["server"] = json!(server);
+        }
+        if let Some(username) = account.username {
+            row["username"] = json!(username);
+        }
+        out.push(row);
+    }
+    Json(json!({ "sign_ins": out })).into_response()
 }
 
 /// `POST /v1/auth/logout` (bearer): deletes the pod session and its sign-ins.

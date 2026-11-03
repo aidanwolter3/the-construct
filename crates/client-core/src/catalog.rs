@@ -1,5 +1,6 @@
 //! App catalog API (docs/DECISIONS.md D27, D32): blocking, read-only calls to
-//! the pod's public `/v1/apps` endpoints for the menu and the version picker.
+//! the pod's public `/v1/apps` endpoints for the menu and the version picker,
+//! plus the session's sign-ins for Settings (`/v1/auth/sign-ins`).
 //! Each call runs on the caller's thread (Kotlin calls them on
 //! `Dispatchers.IO`, never the UI thread) with the engine's base URL and
 //! returns the pod's JSON body unchanged.
@@ -26,6 +27,9 @@ pub const LAYOUTS_UNAUTHORIZED: &str = "The pod refused this request.";
 /// `reason` when `GET /v1/apps` gets a 404 or a 2xx that is not the pod's
 /// apps JSON: the base URL is some other web server.
 pub const LAYOUTS_NOT_A_POD: &str = "This server doesn't look like a Construct pod.";
+
+/// `reason` when the pod has no `GET /v1/auth/sign-ins` (an older pod).
+pub const SIGN_INS_UNSUPPORTED: &str = "This pod can't list sign-ins yet.";
 
 /// Why a catalog call failed. `reason` is a short sentence for the UI; the
 /// URL, status and body go to the log.
@@ -210,6 +214,24 @@ impl ConstructEngine {
     pub fn app_version(&self, app_id: &str, version: i64) -> Result<String, LayoutApiError> {
         self.inner
             .catalog_get(&format!("/v1/apps/{}/versions/{version}", segment(app_id)))
+    }
+
+    /// `GET /v1/auth/sign-ins`: the sign-ins on this device's pod
+    /// session, for Settings: `{"sign_ins":[{id, title, server?, username?,
+    /// apps:[{id, title}]}]}`. Blocking. Without a session it answers
+    /// `{"sign_ins":[]}` without a request. Like the other catalog calls, a
+    /// 401 is only an error here: it never signs out (the workspace fetch
+    /// does that). A pod without `/v1/auth/sign-ins` answers 404: [`SIGN_INS_UNSUPPORTED`].
+    pub fn sign_ins(&self) -> Result<String, LayoutApiError> {
+        if self.inner.session_token().is_none() {
+            return Ok(r#"{"sign_ins":[]}"#.to_owned());
+        }
+        match self.inner.catalog_get("/v1/auth/sign-ins") {
+            Err(LayoutApiError::NotFound { .. }) => Err(LayoutApiError::NotFound {
+                reason: SIGN_INS_UNSUPPORTED.to_owned(),
+            }),
+            other => other,
+        }
     }
 }
 

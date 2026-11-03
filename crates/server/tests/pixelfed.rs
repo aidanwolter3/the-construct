@@ -582,6 +582,46 @@ async fn logout_ends_the_session() {
     signed_out_button(&serde_json::from_value(home).unwrap());
 }
 
+#[tokio::test]
+async fn sign_ins_lists_the_pixelfed_account_with_its_server() {
+    let env = env().await;
+    let list = |bearer: Option<String>| {
+        let url = format!("{}/v1/auth/sign-ins", env.pod.url);
+        async move {
+            let mut req = client().get(url);
+            if let Some(b) = bearer {
+                req = req.bearer_auth(b);
+            }
+            let resp = req.send().await.unwrap();
+            let status = resp.status();
+            (status, resp.json::<Value>().await.unwrap_or(Value::Null))
+        }
+    };
+    let (status, body) = list(None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({ "sign_ins": [] }));
+    let (status, _) = list(Some("stale".into())).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let session = sign_in(&env).await;
+    let (status, body) = list(Some(session.clone())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        json!({ "sign_ins": [{
+            "id": "pixelfed",
+            "title": "Pixelfed",
+            "server": env.fake.url,
+            "username": "constructdemo",
+            "apps": [{ "id": "pixelfed_home", "title": "Pixelfed" }],
+        }] })
+    );
+    let logout = format!("{}/v1/auth/logout", env.pod.url);
+    post_json(&logout, Some(&session), json!({})).await;
+    let (status, _) = list(Some(session)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "the session ended");
+}
+
 /// A pod whose store already has a session (signed in to Pixelfed) + upstream
 /// account for `instance`.
 fn seeded_state(instance: &str, upstream_token: &str) -> AppState {

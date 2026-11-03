@@ -6,8 +6,8 @@ use std::sync::{Arc, RwLock};
 use axum::Router;
 use pod_core::layouts::LayoutSource;
 use pod_core::{
-    AppAdapter, AppInfo, BoxFuture, Hydration, Pod, PollCtx, PollOutcome, RequestCtx,
-    SignInProvider,
+    AppAdapter, AppInfo, BoxFuture, Hydration, Pod, PollCtx, PollOutcome, RequestCtx, Session,
+    SignInAccount, SignInProvider,
 };
 use protocol::{NotificationChannel, WorkspaceSpec};
 
@@ -130,7 +130,10 @@ impl AppAdapter for PixelfedAdapter {
     }
 
     fn sign_ins(&self) -> Vec<SignInProvider> {
-        vec![SignInProvider { id: SIGN_IN }]
+        vec![SignInProvider {
+            id: SIGN_IN,
+            title: "Pixelfed",
+        }]
     }
 
     fn signed_out(&self, _sign_in: &str, app: &AppInfo, _req: &RequestCtx) -> WorkspaceSpec {
@@ -160,6 +163,27 @@ impl AppAdapter for PixelfedAdapter {
         ctx: &'a PollCtx,
     ) -> BoxFuture<'a, PollOutcome> {
         Box::pin(crate::notify::poll(self, pod, ctx))
+    }
+
+    fn sign_in_account<'a>(
+        &'a self,
+        pod: &'a Pod,
+        _sign_in: &'a str,
+        session: &'a Session,
+    ) -> BoxFuture<'a, Option<SignInAccount>> {
+        Box::pin(async move {
+            match crate::routes::session_account(pod, session).await {
+                Ok(Some((instance, account))) => Some(SignInAccount {
+                    server: Some(instance.url),
+                    username: Some(account.username).filter(|u| !u.is_empty()),
+                }),
+                Ok(None) => None,
+                Err(e) => {
+                    tracing::warn!(status = %e.0, "sign-in account lookup failed");
+                    None
+                }
+            }
+        })
     }
 
     fn resume<'a>(&'a self, pod: &'a Pod) -> BoxFuture<'a, ()> {
