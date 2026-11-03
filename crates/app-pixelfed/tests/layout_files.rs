@@ -28,6 +28,10 @@ fn every_file_in_layouts_is_embedded() {
     for app_dir in std::fs::read_dir(&root).unwrap() {
         let app_dir = app_dir.unwrap().path();
         let app_id = app_dir.file_name().unwrap().to_str().unwrap().to_owned();
+        // Other adapters' apps are checked by their own crates.
+        if !app_id.starts_with("pixelfed_") {
+            continue;
+        }
         for f in std::fs::read_dir(&app_dir).unwrap() {
             let name = f.unwrap().file_name().into_string().unwrap();
             on_disk.push(format!("{app_id}/{name}"));
@@ -41,7 +45,7 @@ fn every_file_in_layouts_is_embedded() {
     embedded.sort();
     assert_eq!(
         on_disk, embedded,
-        "every file in layouts/ must be listed in app_pixelfed::apps (and vice versa)"
+        "every file in layouts/pixelfed_* must be listed in app_pixelfed::apps (and vice versa)"
     );
     for f in files() {
         let text =

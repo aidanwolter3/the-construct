@@ -2,7 +2,7 @@
 
 Server-driven UI: a Rust "pod" serves app layouts (JSON `UiNode` trees) plus normalized entities; native clients
 (macOS desktop, Android, headless simulator) render them with shared Compose code and a shared Rust engine.
-Only app today: Pixelfed (`pixelfed_home`). Read `README.md` for details and `docs/DECISIONS.md` (D1–D39) before
+Apps today: Pixelfed (`pixelfed_home`) and Recipes (`recipes`). Read `README.md` for details and `docs/DECISIONS.md` (D1–D41) before
 changing architecture; `docs/PROGRESS.md` has history and next steps. `DESIGN.md` is the original design doc
 (product renamed from "Project Canvas"; AI layout editing was built, then shelved — see D32/D33).
 
@@ -12,6 +12,7 @@ changing architecture; `docs/PROGRESS.md` has history and next steps. `DESIGN.md
   sign-ins, store. Knows apps only through `AppAdapter` (`adapter.rs`, D40). `validate.rs` checks layout files.
 - `crates/app-pixelfed` — the Pixelfed adapter (OAuth, feed, likes, comments, media proxy, `pixelfed_*` tables) and
   the `pixelfed_demo` dev app (a `StaticAdapter`).
+- `crates/app-recipes` — the recipes adapter (`recipes_*` tables, the recipe import migration, D41).
 - `crates/server` — the pod binary: `pod-core` + the compile-time adapters (`server::adapters`).
 - `crates/client-core` — engine: SQLite cache, outbox sync, PKCE sign-in, SSE subscriber.
 - `crates/client-ffi` — UniFFI bridge (Kotlin bindings live in `kmp-app/shared/src/jvmCommonMain`).
@@ -75,7 +76,7 @@ Gradle's cache lock. `~/.construct-cloud-warmup.status` reads `running`, `done` 
 ## Layouts as code (only way to publish a new layout version)
 Add `layouts/<app>/NNNN.json` (`{"note": "...", "schema": N, "layout": {...}}`, next number, no gaps; `schema` =
 the current `protocol::SCHEMA_VERSION`), add one
-`layout_file!("<app>", "NNNN")` line to the app's file list (Pixelfed: `crates/app-pixelfed/src/apps.rs`), run `cargo test`,
+`layout_file!("<app>", "NNNN")` line to the app's file list (Pixelfed: `crates/app-pixelfed/src/apps.rs`; recipes: `crates/app-recipes/src/lib.rs`), run `cargo test`,
 push. Never edit or renumber a deployed file (its `schema` included) — the server refuses to start. A breaking
 schema change retires old versions via `protocol::RETIRED`, not by editing files (D36). Clients are read-only for
 layout state.

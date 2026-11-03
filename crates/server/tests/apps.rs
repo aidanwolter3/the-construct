@@ -111,12 +111,12 @@ fn files(app: &str) -> i64 {
 }
 
 #[tokio::test]
-async fn apps_lists_only_pixelfed_unless_dev_apps_are_shown() {
+async fn apps_lists_dev_apps_only_when_shown() {
     let pod = pod().await;
     let (status, _, body) = get(&pod, "/v1/apps").await;
     assert_eq!(status, StatusCode::OK);
     let apps = body["apps"].as_array().unwrap();
-    assert_eq!(apps.len(), 1, "{body}");
+    assert_eq!(apps.len(), 2, "{body}");
     let a = &apps[0];
     assert_eq!(
         (&a["id"], &a["title"], &a["icon"], &a["latest_version"]),
@@ -128,6 +128,10 @@ async fn apps_lists_only_pixelfed_unless_dev_apps_are_shown() {
         )
     );
     assert!(is_rfc3339(&a["updated_at"]), "{a}");
+    assert_eq!(
+        (&apps[1]["id"], &apps[1]["title"], &apps[1]["icon"]),
+        (&json!("recipes"), &json!("Recipes"), &json!("recipe"))
+    );
 
     let dev = spawn(server::state_in_memory().with_dev_apps(true)).await;
     deploy(&dev, "pixelfed_demo", "Two");
@@ -149,6 +153,7 @@ async fn apps_lists_only_pixelfed_unless_dev_apps_are_shown() {
         got,
         [
             ("pixelfed_home", "Pixelfed", "photo", files("pixelfed_home")),
+            ("recipes", "Recipes", "recipe", files("recipes")),
             (
                 "pixelfed_demo",
                 "Pixelfed demo",

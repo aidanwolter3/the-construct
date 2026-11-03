@@ -1,0 +1,23 @@
+[package]
+name = "app-recipes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The recipes adapter: the family recipe collection in the pod's own SQLite
+# (`recipes_*` tables), its import, and the `recipes` app. No upstream.
+
+[dependencies]
+pod-core = { path = "../pod-core" }
+protocol = { workspace = true }
+serde_json.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+axum = { version = "0.8", features = ["http2"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tempfile = "3"

@@ -1,0 +1,796 @@
+//! The `recipes_*` tables: schema, the one-time import, and the reads behind
+//! the app (docs/DECISIONS.md D41).
+
+use std::collections::{BTreeMap, HashMap};
+
+use pod_core::store::Migration;
+use protocol::{DataBundle, EntityRecord};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use serde::Deserialize;
+use serde_json::json;
+
+use crate::format::{self, Ingredient, UnitNames};
+
+/// The adapter's migrations. Append-only: never edit or reorder a step that
+/// has shipped (staging has run it).
+pub static MIGRATIONS: &[Migration] = &[
+    // 1: the schema and the units.
+    Migration::Sql(SCHEMA),
+    // 2: import the family collection (data/import-0001.json, frozen).
+    Migration::Rust(import_0001),
+];
+
+const SCHEMA: &str = "
+CREATE TABLE recipes_units (
+    code    TEXT PRIMARY KEY NOT NULL,
+    display TEXT NOT NULL,
+    plural  TEXT NOT NULL,
+    kind    TEXT NOT NULL CHECK (kind IN ('volume', 'weight', 'count', 'length', 'vague')),
+    to_base REAL                -- ml (volume) or g (weight); NULL otherwise
+);
+INSERT INTO recipes_units (code, display, plural, kind, to_base) VALUES
+    ('tsp', 'tsp', 'tsp', 'volume', 4.92892),
+    ('tbsp', 'Tbsp', 'Tbsp', 'volume', 14.7868),
+    ('cup', 'cup', 'cups', 'volume', 236.588),
+    ('fl_oz', 'fl oz', 'fl oz', 'volume', 29.5735),
+    ('pt', 'pt', 'pt', 'volume', 473.176),
+    ('qt', 'qt', 'qt', 'volume', 946.353),
+    ('gal', 'gal', 'gal', 'volume', 3785.41),
+    ('ml', 'ml', 'ml', 'volume', 1.0),
+    ('l', 'l', 'l', 'volume', 1000.0),
+    ('oz', 'oz', 'oz', 'weight', 28.3495),
+    ('lb', 'lb', 'lb', 'weight', 453.592),
+    ('g', 'g', 'g', 'weight', 1.0),
+    ('pinch', 'pinch', 'pinches', 'vague', NULL),
+    ('dash', 'dash', 'dashes', 'vague', NULL),
+    ('splash', 'splash', 'splashes', 'vague', NULL),
+    ('can', 'can', 'cans', 'count', NULL),
+    ('pkg', 'pkg', 'pkg', 'count', NULL),
+    ('box', 'box', 'boxes', 'count', NULL),
+    ('bottle', 'bottle', 'bottles', 'count', NULL),
+    ('container', 'container', 'containers', 'count', NULL),
+    ('stick', 'stick', 'sticks', 'count', NULL),
+    ('square', 'square', 'squares', 'count', NULL),
+    ('clove', 'clove', 'cloves', 'count', NULL),
+    ('bunch', 'bunch', 'bunches', 'count', NULL),
+    ('head', 'head', 'heads', 'count', NULL),
+    ('slice', 'slice', 'slices', 'count', NULL),
+    ('sprig', 'sprig', 'sprigs', 'count', NULL),
+    ('stalk', 'stalk', 'stalks', 'count', NULL),
+    ('inch', 'inch', 'inches', 'length', NULL);
+
+CREATE TABLE recipes_categories (
+    slug     TEXT PRIMARY KEY NOT NULL,
+    name     TEXT NOT NULL,
+    position INTEGER NOT NULL
+);
+
+CREATE TABLE recipes (
+    id         INTEGER PRIMARY KEY,
+    slug       TEXT NOT NULL UNIQUE,     -- the URI id: recipes://recipes/<slug>
+    title      TEXT NOT NULL,
+    category   TEXT NOT NULL REFERENCES recipes_categories(slug),
+    source     TEXT,                     -- where the recipe came from (scan, doc)
+    yield_min  REAL,
+    yield_max  REAL,
+    yield_unit TEXT                      -- 'servings', 'dozen', 'pans', ...
+);
+
+CREATE TABLE recipes_ingredient_groups (
+    id        INTEGER PRIMARY KEY,
+    recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+    name      TEXT,                      -- 'Cake', 'Topping', ...; NULL: the only group
+    position  INTEGER NOT NULL
+);
+
+CREATE TABLE recipes_ingredients (
+    id          INTEGER PRIMARY KEY,
+    group_id    INTEGER NOT NULL REFERENCES recipes_ingredient_groups(id) ON DELETE CASCADE,
+    position    INTEGER NOT NULL,
+    qty_min     REAL,
+    qty_max     REAL,                    -- ranges: 4-6 cups
+    unit        TEXT REFERENCES recipes_units(code),
+    extra_qty   REAL,                    -- '1 cup + 1 Tbsp'
+    extra_unit  TEXT REFERENCES recipes_units(code),
+    pkg_qty     REAL,                    -- '1 (19 oz) box'
+    pkg_unit    TEXT REFERENCES recipes_units(code),
+    name        TEXT NOT NULL,
+    preparation TEXT,
+    note        TEXT,
+    scale_basis TEXT,                    -- 'per pan', 'per serving'
+    is_optional INTEGER NOT NULL DEFAULT 0,
+    is_divided  INTEGER NOT NULL DEFAULT 0,
+    to_taste    INTEGER NOT NULL DEFAULT 0,
+    alt_of      INTEGER REFERENCES recipes_ingredients(id) ON DELETE CASCADE  -- 'or 2 small lemons'
+);
+
+CREATE TABLE recipes_instruction_groups (
+    id        INTEGER PRIMARY KEY,
+    recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+    name      TEXT,                      -- 'Crockpot method', ...; NULL: the main steps
+    position  INTEGER NOT NULL
+);
+
+CREATE TABLE recipes_steps (
+    id       INTEGER PRIMARY KEY,
+    group_id INTEGER NOT NULL REFERENCES recipes_instruction_groups(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    text     TEXT NOT NULL,
+    temp_f   INTEGER,
+    time_min INTEGER,                    -- minutes
+    time_max INTEGER
+);
+
+CREATE TABLE recipes_notes (
+    recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+    position  INTEGER NOT NULL,
+    text      TEXT NOT NULL,
+    PRIMARY KEY (recipe_id, position)
+);
+
+CREATE INDEX recipes_by_category ON recipes(category);
+CREATE INDEX recipes_ingredient_groups_by_recipe ON recipes_ingredient_groups(recipe_id);
+CREATE INDEX recipes_ingredients_by_group ON recipes_ingredients(group_id);
+CREATE INDEX recipes_instruction_groups_by_recipe ON recipes_instruction_groups(recipe_id);
+CREATE INDEX recipes_steps_by_group ON recipes_steps(group_id);
+";
+
+// ---------- import ----------
+
+/// The first import: 81 recipes in 8 categories, made from the family
+/// recipe PDF by `scripts/recipes_from_pdf.py`. Frozen once deployed:
+/// corrections go in a new migration.
+pub static IMPORT_0001: &str = include_str!("../data/import-0001.json");
+
+/// An import file (`data/import-*.json`).
+#[derive(Debug, Deserialize)]
+pub struct ImportFile {
+    pub categories: Vec<ImportCategory>,
+    pub recipes: Vec<ImportRecipe>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportCategory {
+    pub slug: String,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportRecipe {
+    pub slug: String,
+    pub title: String,
+    /// The category's name (as in `categories`).
+    pub category: String,
+    pub source: Option<String>,
+    #[serde(rename = "yield")]
+    pub yld: Option<ImportYield>,
+    pub ingredient_groups: Vec<ImportIngredientGroup>,
+    pub instruction_groups: Vec<ImportInstructionGroup>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportYield {
+    pub min: f64,
+    pub max: Option<f64>,
+    pub unit: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportIngredientGroup {
+    pub name: Option<String>,
+    pub ingredients: Vec<ImportIngredient>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportIngredient {
+    pub qty_min: Option<f64>,
+    pub qty_max: Option<f64>,
+    pub unit: Option<String>,
+    pub extra_qty: Option<f64>,
+    pub extra_unit: Option<String>,
+    pub pkg_qty: Option<f64>,
+    pub pkg_unit: Option<String>,
+    pub name: String,
+    pub preparation: Option<String>,
+    pub note: Option<String>,
+    pub scale_basis: Option<String>,
+    pub is_optional: bool,
+    pub is_divided: bool,
+    pub to_taste: bool,
+    /// "1 large lemon or 2 small lemons": the other choices.
+    #[serde(default)]
+    pub alternatives: Vec<ImportIngredient>,
+    /// The line as written in the source (checked by the tests, not stored).
+    #[serde(default)]
+    pub line: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportInstructionGroup {
+    pub name: Option<String>,
+    pub steps: Vec<ImportStep>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportStep {
+    pub text: String,
+    pub temp_f: Option<i64>,
+    pub time_min: Option<i64>,
+    pub time_max: Option<i64>,
+}
+
+/// Parse an import file.
+pub fn parse_import(json: &str) -> serde_json::Result<ImportFile> {
+    serde_json::from_str(json)
+}
+
+fn import_0001(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    let file = parse_import(IMPORT_0001)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    import(tx, &file)
+}
+
+/// Insert every category and recipe of `file`.
+pub fn import(conn: &Connection, file: &ImportFile) -> rusqlite::Result<()> {
+    let base: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(position) + 1, 0) FROM recipes_categories",
+        [],
+        |r| r.get(0),
+    )?;
+    let mut slugs: HashMap<&str, &str> = HashMap::new();
+    for (i, c) in file.categories.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO recipes_categories (slug, name, position) VALUES (?1, ?2, ?3)",
+            params![c.slug, c.name, base + i as i64],
+        )?;
+        slugs.insert(&c.name, &c.slug);
+    }
+    for r in &file.recipes {
+        let category = slugs
+            .get(r.category.as_str())
+            .copied()
+            .unwrap_or(&r.category);
+        conn.execute(
+            "INSERT INTO recipes (slug, title, category, source, yield_min, yield_max, yield_unit)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                r.slug,
+                r.title,
+                category,
+                r.source,
+                r.yld.as_ref().map(|y| y.min),
+                r.yld.as_ref().and_then(|y| y.max),
+                r.yld.as_ref().and_then(|y| y.unit.clone()),
+            ],
+        )?;
+        let recipe_id = conn.last_insert_rowid();
+        for (gi, g) in r.ingredient_groups.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO recipes_ingredient_groups (recipe_id, name, position) VALUES (?1, ?2, ?3)",
+                params![recipe_id, g.name, gi as i64],
+            )?;
+            let group_id = conn.last_insert_rowid();
+            for (ii, ing) in g.ingredients.iter().enumerate() {
+                let id = insert_ingredient(conn, group_id, ii as i64, ing, None)?;
+                for alt in &ing.alternatives {
+                    insert_ingredient(conn, group_id, ii as i64, alt, Some(id))?;
+                }
+            }
+        }
+        for (gi, g) in r.instruction_groups.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO recipes_instruction_groups (recipe_id, name, position) VALUES (?1, ?2, ?3)",
+                params![recipe_id, g.name, gi as i64],
+            )?;
+            let group_id = conn.last_insert_rowid();
+            for (si, s) in g.steps.iter().enumerate() {
+                conn.execute(
+                    "INSERT INTO recipes_steps (group_id, position, text, temp_f, time_min, time_max)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![group_id, si as i64, s.text, s.temp_f, s.time_min, s.time_max],
+                )?;
+            }
+        }
+        for (ni, n) in r.notes.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO recipes_notes (recipe_id, position, text) VALUES (?1, ?2, ?3)",
+                params![recipe_id, ni as i64, n],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn insert_ingredient(
+    conn: &Connection,
+    group_id: i64,
+    position: i64,
+    i: &ImportIngredient,
+    alt_of: Option<i64>,
+) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT INTO recipes_ingredients (group_id, position, qty_min, qty_max, unit, extra_qty,
+             extra_unit, pkg_qty, pkg_unit, name, preparation, note, scale_basis, is_optional,
+             is_divided, to_taste, alt_of)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+        params![
+            group_id,
+            position,
+            i.qty_min,
+            i.qty_max,
+            i.unit,
+            i.extra_qty,
+            i.extra_unit,
+            i.pkg_qty,
+            i.pkg_unit,
+            i.name,
+            i.preparation,
+            i.note,
+            i.scale_basis,
+            i.is_optional,
+            i.is_divided,
+            i.to_taste,
+            alt_of,
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+// ---------- reads ----------
+
+pub const RECIPE_PREFIX: &str = "recipes://recipes/";
+pub const ALL_QUERY: &str = "recipes:all";
+
+pub fn recipe_uri(slug: &str) -> String {
+    format!("{RECIPE_PREFIX}{slug}")
+}
+
+/// Every recipe, by category then title: one `recipes://recipes/<slug>`
+/// entity each, listed in `queries["recipes:all"]`. The first recipe of a
+/// category carries `category_header` (the list draws it as a heading).
+pub fn all_recipes(conn: &Connection) -> rusqlite::Result<DataBundle> {
+    let mut bundle = DataBundle::default();
+    let mut order = Vec::new();
+    for (slug, entity) in recipe_entities(conn)? {
+        let uri = recipe_uri(&slug);
+        order.push(uri.clone());
+        bundle.entities.insert(uri, entity);
+    }
+    bundle.queries.insert(ALL_QUERY.into(), order);
+    Ok(bundle)
+}
+
+/// `(slug, entity)` for every recipe, in list order.
+fn recipe_entities(conn: &Connection) -> rusqlite::Result<Vec<(String, EntityRecord)>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.slug, r.title, c.name, r.source, r.yield_min, r.yield_max, r.yield_unit
+         FROM recipes r JOIN recipes_categories c ON c.slug = r.category
+         ORDER BY c.position, r.title COLLATE NOCASE, r.id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, Option<String>>(3)?,
+            r.get::<_, Option<f64>>(4)?,
+            r.get::<_, Option<f64>>(5)?,
+            r.get::<_, Option<String>>(6)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    let mut last_category: Option<String> = None;
+    for row in rows {
+        let (slug, title, category, source, ymin, ymax, yunit) = row?;
+        let yield_text = format::yield_text(ymin, ymax, yunit.as_deref());
+        let summary = match &yield_text {
+            Some(y) => format!("{category} · {y}"),
+            None => category.clone(),
+        };
+        let mut e = EntityRecord::new();
+        e.set("id", slug.clone());
+        e.set("title", title);
+        e.set("category", category.clone());
+        e.set("summary", summary);
+        e.set("source", source.unwrap_or_default());
+        if let Some(y) = yield_text {
+            e.set("yield_text", y);
+        }
+        if last_category.as_deref() != Some(category.as_str()) {
+            e.set("category_header", category.clone());
+            last_category = Some(category);
+        }
+        out.push((slug, e));
+    }
+    Ok(out)
+}
+
+/// The query keys of a recipe screen.
+pub fn ingredients_query(slug: &str) -> String {
+    format!("recipe:{slug}:ingredients")
+}
+pub fn steps_query(slug: &str) -> String {
+    format!("recipe:{slug}:steps")
+}
+pub fn notes_query(slug: &str) -> String {
+    format!("recipe:{slug}:notes")
+}
+
+/// The data of one recipe's screen, or `None` for an unknown slug: the
+/// recipe entity (the same one the list has) and three lists, ingredients
+/// (`recipes://ingredients/<id>`), steps (`recipes://steps/<id>`) and notes
+/// (`recipes://notes/<recipe>-<n>`). The first item of each list carries
+/// `section` ("Ingredients", ...); the first item of a named group carries
+/// `group` ("Topping", ...).
+pub fn recipe_screen(conn: &Connection, slug: &str) -> rusqlite::Result<Option<DataBundle>> {
+    let id: Option<i64> = conn
+        .query_row("SELECT id FROM recipes WHERE slug = ?1", [slug], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    let Some(id) = id else {
+        return Ok(None);
+    };
+    let mut bundle = DataBundle::default();
+    if let Some((_, e)) = recipe_entities(conn)?.into_iter().find(|(s, _)| s == slug) {
+        bundle.entities.insert(recipe_uri(slug), e);
+    }
+
+    let units = units(conn)?;
+    let mut ingredients = Vec::new();
+    for (uri, e) in ingredient_entities(conn, id, &units)? {
+        ingredients.push(uri.clone());
+        bundle.entities.insert(uri, e);
+    }
+    bundle.queries.insert(ingredients_query(slug), ingredients);
+
+    let mut steps = Vec::new();
+    for (uri, e) in step_entities(conn, id)? {
+        steps.push(uri.clone());
+        bundle.entities.insert(uri, e);
+    }
+    bundle.queries.insert(steps_query(slug), steps);
+
+    let mut notes = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT position, text FROM recipes_notes WHERE recipe_id = ?1 ORDER BY position",
+    )?;
+    let rows = stmt.query_map([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    for (n, row) in rows.enumerate() {
+        let (pos, text) = row?;
+        let mut e = EntityRecord::new();
+        e.set("text", text);
+        if n == 0 {
+            e.set("section", "Notes");
+        }
+        let uri = format!("recipes://notes/{id}-{pos}");
+        notes.push(uri.clone());
+        bundle.entities.insert(uri, e);
+    }
+    bundle.queries.insert(notes_query(slug), notes);
+    Ok(Some(bundle))
+}
+
+/// code -> display names.
+pub fn units(conn: &Connection) -> rusqlite::Result<HashMap<String, UnitNames>> {
+    let mut stmt = conn.prepare("SELECT code, display, plural FROM recipes_units")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            UnitNames {
+                one: r.get(1)?,
+                many: r.get(2)?,
+            },
+        ))
+    })?;
+    rows.collect()
+}
+
+struct IngredientRow {
+    id: i64,
+    group_id: i64,
+    group_name: Option<String>,
+    alt_of: Option<i64>,
+    fields: Ingredient,
+}
+
+fn ingredient_entities(
+    conn: &Connection,
+    recipe_id: i64,
+    units: &HashMap<String, UnitNames>,
+) -> rusqlite::Result<Vec<(String, EntityRecord)>> {
+    let unit = |code: Option<String>| code.and_then(|c| units.get(&c).cloned());
+    let mut stmt = conn.prepare(
+        "SELECT i.id, g.id, g.name, i.alt_of, i.qty_min, i.qty_max, i.unit, i.extra_qty,
+                i.extra_unit, i.pkg_qty, i.pkg_unit, i.name, i.preparation, i.note,
+                i.scale_basis, i.is_optional, i.is_divided, i.to_taste
+         FROM recipes_ingredients i JOIN recipes_ingredient_groups g ON g.id = i.group_id
+         WHERE g.recipe_id = ?1
+         ORDER BY g.position, i.position, i.alt_of IS NOT NULL, i.id",
+    )?;
+    let rows: Vec<IngredientRow> = stmt
+        .query_map([recipe_id], |r| {
+            let pkg_unit: Option<String> = r.get(10)?;
+            Ok(IngredientRow {
+                id: r.get(0)?,
+                group_id: r.get(1)?,
+                group_name: r.get(2)?,
+                alt_of: r.get(3)?,
+                fields: Ingredient {
+                    qty_min: r.get(4)?,
+                    qty_max: r.get(5)?,
+                    unit: unit(r.get(6)?),
+                    extra_qty: r.get(7)?,
+                    extra_unit: unit(r.get(8)?),
+                    pkg_qty: r.get(9)?,
+                    pkg_unit: pkg_unit
+                        .clone()
+                        .and_then(|c| units.get(&c).cloned().map(|n| (c, n))),
+                    name: r.get(11)?,
+                    preparation: r.get(12)?,
+                    note: r.get(13)?,
+                    scale_basis: r.get(14)?,
+                    is_optional: r.get(15)?,
+                    is_divided: r.get(16)?,
+                    to_taste: r.get(17)?,
+                },
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+
+    let mut alternatives: BTreeMap<i64, Vec<String>> = BTreeMap::new();
+    for r in rows.iter().filter(|r| r.alt_of.is_some()) {
+        alternatives
+            .entry(r.alt_of.unwrap_or_default())
+            .or_default()
+            .push(format::ingredient(&r.fields));
+    }
+    let mut out = Vec::new();
+    let mut last_group = None;
+    for r in rows.iter().filter(|r| r.alt_of.is_none()) {
+        let mut text = format::ingredient(&r.fields);
+        for alt in alternatives.get(&r.id).into_iter().flatten() {
+            text.push_str(" or ");
+            text.push_str(alt);
+        }
+        let mut e = EntityRecord::new();
+        e.set("text", text);
+        e.set("name", r.fields.name.clone());
+        if out.is_empty() {
+            e.set("section", "Ingredients");
+        }
+        if last_group != Some(r.group_id) {
+            if let Some(name) = &r.group_name {
+                e.set("group", name.clone());
+            }
+            last_group = Some(r.group_id);
+        }
+        out.push((format!("recipes://ingredients/{}", r.id), e));
+    }
+    Ok(out)
+}
+
+fn step_entities(
+    conn: &Connection,
+    recipe_id: i64,
+) -> rusqlite::Result<Vec<(String, EntityRecord)>> {
+    let mut stmt = conn.prepare(
+        "SELECT s.id, g.id, g.name, s.text, s.temp_f, s.time_min, s.time_max
+         FROM recipes_steps s JOIN recipes_instruction_groups g ON g.id = s.group_id
+         WHERE g.recipe_id = ?1
+         ORDER BY g.position, s.position",
+    )?;
+    let rows = stmt.query_map([recipe_id], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, Option<i64>>(4)?,
+            r.get::<_, Option<i64>>(5)?,
+            r.get::<_, Option<i64>>(6)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    let mut last_group = None;
+    let mut number = 0;
+    for row in rows {
+        let (id, group_id, group_name, text, temp_f, time_min, time_max) = row?;
+        let mut e = EntityRecord::new();
+        if out.is_empty() {
+            e.set("section", "Instructions");
+        }
+        if last_group != Some(group_id) {
+            if let Some(name) = group_name {
+                e.set("group", name);
+            }
+            last_group = Some(group_id);
+            number = 0;
+        }
+        number += 1;
+        e.set("number", number);
+        e.set("text", text);
+        e.set("temp_f", json!(temp_f));
+        e.set("time_min", json!(time_min));
+        e.set("time_max", json!(time_max));
+        out.push((format!("recipes://steps/{id}"), e));
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        import(&conn, &parse_import(IMPORT_0001).unwrap()).unwrap();
+        conn
+    }
+
+    fn count(conn: &Connection, sql: &str) -> i64 {
+        conn.query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn the_import_has_81_recipes_in_8_categories() {
+        let conn = db();
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM recipes"), 81);
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM recipes_categories"), 8);
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM recipes r LEFT JOIN recipes_categories c ON c.slug = r.category
+                 WHERE c.slug IS NULL"
+            ),
+            0,
+            "every recipe is in a known category"
+        );
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM recipes_ingredients i
+                 WHERE (i.unit IS NOT NULL AND i.unit NOT IN (SELECT code FROM recipes_units))
+                    OR (i.extra_unit IS NOT NULL AND i.extra_unit NOT IN (SELECT code FROM recipes_units))
+                    OR (i.pkg_unit IS NOT NULL AND i.pkg_unit NOT IN (SELECT code FROM recipes_units))"
+            ),
+            0,
+            "every unit is a known unit"
+        );
+    }
+
+    /// Formatting the stored fields gives back the recipe file's lines, so no
+    /// ingredient lost anything in the import.
+    #[test]
+    fn ingredients_format_back_to_the_source_lines() {
+        // Lines the formatter writes in its own order (a note moves to the end),
+        // or that name the alternative's thing in the first choice too.
+        let reworded: HashMap<&str, &str> = [
+            (
+                "3 medium eggplants (about 3 1/2 lb total), sliced crosswise into 1/2\"-thick rounds",
+                "3 medium eggplants, sliced crosswise into 1/2\"-thick rounds (about 3 1/2 lb total)",
+            ),
+            (
+                "2 cups (12 oz) semisweet chocolate chips",
+                "2 cups semisweet chocolate chips (12 oz)",
+            ),
+            (
+                "1 large or 2 small lemons, peeled and seeded",
+                "1 large lemon or 2 small lemons, peeled and seeded",
+            ),
+        ]
+        .into();
+        let conn = db();
+        let file = parse_import(IMPORT_0001).unwrap();
+        let mut checked = 0;
+        for r in &file.recipes {
+            let bundle = recipe_screen(&conn, &r.slug).unwrap().unwrap();
+            let got: Vec<&str> = bundle.queries[&ingredients_query(&r.slug)]
+                .iter()
+                .map(|u| bundle.entities[u].get_str("text").unwrap())
+                .collect();
+            let want: Vec<&str> = r
+                .ingredient_groups
+                .iter()
+                .flat_map(|g| &g.ingredients)
+                .map(|i| {
+                    let line = i.line.as_deref().unwrap();
+                    reworded.get(line).copied().unwrap_or(line)
+                })
+                .collect();
+            assert_eq!(got, want, "{}", r.title);
+            checked += got.len();
+        }
+        assert!(checked > 600, "{checked}");
+    }
+
+    #[test]
+    fn a_recipe_screen_has_sections_groups_and_notes() {
+        let conn = db();
+        let b = recipe_screen(&conn, "harvest-salad").unwrap().unwrap();
+        let recipe = &b.entities["recipes://recipes/harvest-salad"];
+        assert_eq!(recipe.get_str("title"), Some("Harvest Salad"));
+        assert_eq!(recipe.get_str("yield_text"), Some("Serves 8-10"));
+
+        let items = |q: String| -> Vec<&EntityRecord> {
+            b.queries[&q].iter().map(|u| &b.entities[u]).collect()
+        };
+        let ing = items(ingredients_query("harvest-salad"));
+        assert_eq!(ing[0].get_str("section"), Some("Ingredients"));
+        assert_eq!(ing[0].get_str("group"), Some("Salad"));
+        assert_eq!(
+            ing[0].get_str("text"),
+            Some("1 lb shaved Brussels sprouts, stems removed")
+        );
+        let groups: Vec<&str> = ing.iter().filter_map(|e| e.get_str("group")).collect();
+        assert_eq!(groups, ["Salad", "Vinaigrette", "Candied Pecans"]);
+        assert!(ing[1..].iter().all(|e| e.get("section").is_none()));
+
+        let steps = items(steps_query("harvest-salad"));
+        assert_eq!(steps[0].get_str("section"), Some("Instructions"));
+        assert_eq!(steps[0].get("group"), None);
+        assert_eq!(steps[4].get_str("group"), Some("For the candied pecans"));
+        let numbers: Vec<i64> = steps.iter().map(|e| e.get_i64("number").unwrap()).collect();
+        assert_eq!(numbers, [1, 2, 3, 4, 1, 2, 3]);
+
+        let notes = items(notes_query("harvest-salad"));
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].get_str("section"), Some("Notes"));
+
+        assert!(recipe_screen(&conn, "no-such-recipe").unwrap().is_none());
+    }
+
+    #[test]
+    fn steps_keep_temperatures_and_times() {
+        let conn = db();
+        let (temp, lo, hi): (Option<i64>, Option<i64>, Option<i64>) = conn
+            .query_row(
+                "SELECT s.temp_f, s.time_min, s.time_max FROM recipes_steps s
+                 JOIN recipes_instruction_groups g ON g.id = s.group_id
+                 JOIN recipes r ON r.id = g.recipe_id
+                 WHERE r.slug = 'brownie-pudding' AND s.text LIKE 'Bake%'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((temp, lo, hi), (Some(350), Some(40), Some(45)));
+    }
+
+    #[test]
+    fn the_list_heads_each_category_once() {
+        let conn = db();
+        let b = all_recipes(&conn).unwrap();
+        let order = &b.queries[ALL_QUERY];
+        assert_eq!(order.len(), 81);
+        let headers: Vec<&str> = order
+            .iter()
+            .filter_map(|u| b.entities[u].get_str("category_header"))
+            .collect();
+        assert_eq!(
+            headers,
+            [
+                "Appetizers/Sides/Salads",
+                "Main Dishes (Meat/Casseroles)",
+                "Side Dishes (Rice/Grains)",
+                "Desserts",
+                "Breakfast",
+                "Baking (Breads/Crusts/Frosting)",
+                "Snacks/Confections",
+                "Drinks",
+            ]
+        );
+        // Slugs are valid route parameters.
+        for u in order {
+            let slug = u.strip_prefix(RECIPE_PREFIX).unwrap();
+            assert!(
+                (1..=64).contains(&slug.len())
+                    && slug
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+                "{slug}"
+            );
+        }
+    }
+}

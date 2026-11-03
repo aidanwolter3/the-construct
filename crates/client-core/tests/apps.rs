@@ -109,7 +109,7 @@ fn list_apps_shows_the_app_and_dev_apps_on_request() {
         .iter()
         .map(|a| a["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["pixelfed_home"]);
+    assert_eq!(ids, ["pixelfed_home", "recipes"]);
     let app = &apps["apps"][0];
     assert_eq!(app["title"], "Pixelfed");
     assert_eq!(app["latest_version"], latest(&p, "pixelfed_home"));
@@ -124,7 +124,7 @@ fn list_apps_shows_the_app_and_dev_apps_on_request() {
         .iter()
         .map(|a| a["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["pixelfed_home", "pixelfed_demo"]);
+    assert_eq!(ids, ["pixelfed_home", "recipes", "pixelfed_demo"]);
 }
 
 #[test]

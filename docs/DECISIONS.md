@@ -1402,3 +1402,30 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   changed: a workspace whose app has no layout version the client can draw is now 409 `no_compatible_version`
   (before, `pixelfed_demo` fell back to the fixture's own layout and `pixelfed_home` panicked).
 - **Media proxy** stays Pixelfed-only (`app-pixelfed`) until a second app needs one.
+
+## D41: Recipes are a second adapter with its own tables in the pod's SQLite
+
+- **Why:** issue #13: the family recipe collection (81 recipes, 8 categories, normalized from the original scans)
+  becomes an app. It is the first adapter with no upstream and the first whose data lives in the pod.
+- **Storage:** the pod's existing SQLite file, no new service (Turso / Postgres stay options if the data must be
+  reachable without the pod or goes multi-tenant). Typed tables, as in the issue: `recipes_units` (code, display,
+  plural, kind, `to_base` in ml or g), `recipes_categories` (ordered), `recipes`, `recipes_ingredient_groups`,
+  `recipes_ingredients` (quantity range, `+ extra`, package size, unit, name, preparation, note, scale basis,
+  optional/divided/to-taste flags, `alt_of` for "or" choices), `recipes_instruction_groups`, `recipes_steps`
+  (text plus parsed `temp_f`, `time_min`, `time_max`) and `recipes_notes`. Added beyond the issue's sketch: a
+  `slug` per recipe (the stable URI id), `source`, a `plural` unit name, and the `container` and `inch` units
+  (`length` kind). The generic `entities` table for new data types is not built yet: nothing needs it.
+- **Import:** the adapter's migration 2 loads `crates/app-recipes/data/import-0001.json`, generated from the PDF by
+  `scripts/recipes_from_pdf.py`. Like a deployed layout file, the import file is frozen once shipped: a correction
+  is a new migration. A test rebuilds every ingredient from its stored fields and checks it matches the PDF line
+  (three lines are reworded on purpose: two move a note to the end, one names the first of two choices).
+- **Display:** quantities are decimals shown as fractions (halves, thirds, quarters, eighths; thirds are in the
+  data). The adapter formats each ingredient, step and yield into entity text; the layout only binds fields.
+- **App:** `recipes`, `AuthPolicy::Public`, icon `recipe` (clients without that icon draw their generic one).
+  `GET /v1/workspaces/recipes` lists every recipe by category (the first of each carries `category_header`);
+  `GET /v1/recipes/screens/recipe?id=<slug>` is the `recipes://recipes/{id}` screen's data (three lists whose first
+  item carries `section`, and whose first item of a named group carries `group`).
+- **No client build:** only existing vocabulary (schema 3). Rows open with a "View" button because lists have no
+  tappable row; a tappable row or a dedicated icon would be new vocabulary.
+- **Not yet:** editing recipes, search, scaling servings (the fields support it), access control (anyone who can
+  reach the pod can read the recipes).

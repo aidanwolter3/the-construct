@@ -3,27 +3,32 @@
 //! runs it, and tests build the same pod with [`state_in_memory`] and friends.
 //!
 //! The core's modules are re-exported (`server::layouts`, `server::store`,
-//! ...), and `server::pixelfed` is the Pixelfed adapter crate.
+//! ...), `server::pixelfed` is the Pixelfed adapter crate and
+//! `server::recipes` the recipes adapter crate.
 
 use std::path::Path;
 use std::sync::Arc;
 
 pub use app_pixelfed as pixelfed;
 pub use app_pixelfed::{DEFAULT_PIXELFED_URL, PixelfedAdapter, PixelfedConfig};
+pub use app_recipes as recipes;
 pub use pod_core::*;
 
 /// The pod's adapters, in `GET /v1/apps` order: the Pixelfed feed (with the
-/// `pixelfed` sign-in), then the `pixelfed_demo` dev app.
+/// `pixelfed` sign-in), the recipes, then the `pixelfed_demo` dev app.
 pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
     vec![
         Arc::new(PixelfedAdapter::new(pixelfed)),
+        Arc::new(app_recipes::RecipesAdapter::new()),
         app_pixelfed::apps::demo_adapter(),
     ]
 }
 
 /// Every layout file the pod ships, per app in number order.
 pub fn layout_files() -> Vec<layouts::LayoutSource> {
-    app_pixelfed::apps::files()
+    let mut files = app_pixelfed::apps::files();
+    files.extend_from_slice(app_recipes::FILES);
+    files
 }
 
 /// A catalog of the pod's apps (no store), for checking layout files.
