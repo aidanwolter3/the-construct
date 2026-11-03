@@ -31,6 +31,7 @@ pub static HOME_FILES: &[LayoutSource] = &[
     layout_file!("pixelfed_home", "0005"),
     layout_file!("pixelfed_home", "0006"),
     layout_file!("pixelfed_home", "0007"),
+    layout_file!("pixelfed_home", "0008"),
 ];
 
 /// `pixelfed_demo`'s layout files, in number order.
