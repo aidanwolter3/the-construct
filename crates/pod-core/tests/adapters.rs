@@ -366,7 +366,9 @@ fn the_core_names_no_app() {
             if code.starts_with("//") {
                 continue;
             }
-            for app in ["pixelfed", "recipes"] {
+            // `std::collections` is not the Collections source.
+            let code = code.replace("std::collections", "");
+            for app in ["pixelfed", "recipes", "collections"] {
                 assert!(
                     !code.to_ascii_lowercase().contains(app),
                     "src/{name}:{}: the core must not name an app: {line}",

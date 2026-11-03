@@ -101,6 +101,9 @@ Claude edits custom apps through `POST /v1/mcp` with a host-issued, pod-scoped c
 Custom layouts reuse built-in parts by reference (`core://Ref`), and copies hear about updates: decision
 [layout-parts](layout-parts.md) (P3).
 
+Custom apps keep data of their own (a todo list) in the Collections source, which Claude declares data in: decision
+[collections](collections.md) (issue #54).
+
 Not done yet:
 
 - `action.auth.login` paths in built-in layout files are not checked against a manifest; none uses one today (the

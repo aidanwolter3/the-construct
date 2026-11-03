@@ -355,6 +355,36 @@ version history as written by Claude.
 - **Disconnect:** `server pods revoke-mcp <name>`. Rotating the pod code (`server pods rotate`) keeps Claude
   connected.
 
+### Collections (data a custom app keeps)
+
+A custom app that needs data no source holds, such as a todo list, keeps it in **Collections** (decision
+`collections`, issue #54, `crates/app-collections`): one built-in source that stores any collection Claude declares.
+Claude never writes a data source; it declares typed fields (`text`, `number`, `bool`, `date`, `choice`; optional, with
+a default) and the pod stores, validates and serves the rows. There is no logic: no computed fields or triggers.
+
+| A layout uses (for collection `<c>`) | |
+|---|---|
+| feed `["collections", "<c>"]` | rows `collections://<c>/<id>` under `collection:<c>`, with every field by name plus `id`, `deleted` (`false`), `created_at`, `updated_at` |
+| `GET /v1/collections/<c>/rows` | the same, as a screen's data path |
+| `POST /v1/collections/<c>/create {<field>: …, client_id?}` | `action.mutation.create` (a repeated `client_id` answers the same row) |
+| `POST /v1/collections/<c>/update {id, <field>: …}` | `action.mutation.optimistic` (an `id` of `pending-<nonce>` finds a row whose create was just sent) |
+| `POST /v1/collections/<c>/delete {id}` | a mutation of `deleted` to `true`; hide it at once with the List's `where: {field: "deleted", equals: "false"}` |
+| `GET /v1/collections/<c>/export` | everything, deleted rows and kept-aside values included |
+
+- **MCP tools:** `list_collections`, `define_collection`, `describe_collection` (with layout snippets),
+  `apply_change`, `restore_collection_version`, `edit_rows`, `undo_edit`, `export_collection`.
+- **Change sets:** `apply_change` sends the collection change and the app layouts that go with it. Every custom app
+  using Collections is checked against the new definition; if one would break, nothing applies and the error names
+  the app and the binding. Fields have permanent ids: a rename keeps the old name as an alias, a removal is soft
+  (hidden, data kept 30 days, `restore_field`), a type change converts row by row and keeps what doesn't convert
+  aside (a later change back puts it back).
+- **Lenient writes:** a write made under an older definition (an offline todo) still lands: old names resolve through
+  aliases, removed fields are ignored, only a wrong type is refused.
+- **Row edits by Claude** (imports, backfills; Collections only): `edit_rows` first answers a preview (count and
+  sample) and a confirm token, which Claude shows the user before applying; `undo_edit` reverts it as one step.
+- **Caps per pod** (temporary pods too): 20 collections, 40 fields each, 5,000 rows and 4 MiB of values in all, 500
+  rows per edit, 4,000 characters per text value.
+
 ## Notifications
 
 Apps send notifications through the pod (D52, design in `docs/NOTIFICATIONS.md`). Only an app's adapter knows where

@@ -628,3 +628,25 @@ new layout files; diffs between versions.
   `copied_from` / `updates_from` / `dismiss-update`, MCP `list_parts` / `rebase_context` / `dismiss_update`, and the
   menu's "has updates" row (engine/FFI `dismiss_update`). Tests: `pod-core/tests/parts.rs`, `server/tests/mcp.rs`,
   shared `AppCatalogTest`, simulator `MenuTest`. Needs a device check of the notice row.
+
+## Collections: data custom apps keep in the pod (issue #54)
+
+- Decision `collections`: one built-in, generic data source (`crates/app-collections`, source `collections`)
+  that stores any collection Claude declares over MCP. Pod-core gained only generic pieces: pattern feeds
+  (`FeedSpec` named `{name}`), `AppAdapter::check_custom_layout` (a source checks custom layouts against its own
+  data), adapter MCP tools (`mcp_tools`, `mcp_call`, `mcp_instructions`), pod-wide data events
+  (`publish_data_all`), and staged custom-app writes (`custom::stage_layout` / `commit_staged` / `apps_using`) so a
+  change set commits the definition, row conversions and app versions in one transaction.
+- Routes per collection: feed, `rows` data path, `create` (idempotent on `client_id`), `update` (finds a pending
+  create's row by `pending-<nonce>`), `delete` (soft), `export`. The open questions are decided in the decision file
+  (delete = a `deleted` flag + the List's `where`; formatting and reminders deferred; no links yet).
+- MCP: `list_collections`, `define_collection`, `describe_collection` (with layout snippets), `apply_change`,
+  `restore_collection_version`, `edit_rows` (preview, confirm token), `undo_edit`, `export_collection`.
+- No wire change, no `SCHEMA_VERSION` bump, no client build: the todo app uses existing nodes and intents (a ☐/☑
+  `core://Tappable` for the tick and the `close` icon, since there is no check icon yet).
+- Tests: unit tests in `model.rs`, `changes.rs`, `bindings.rs`, `source.rs`; `app-collections/tests/collections.rs`
+  (the todo app's routes, live data events, binding checks, a change set with the app, a refused one that would
+  break another app, aliases, soft removal and purge, type conversion with values kept aside and restored, edit
+  preview/confirm/undo, caps); e2e `collections.rs` (two engines: add and tick through the outbox, live sync, a todo
+  added offline before a rename arrives under the new name, delete). Needs a device check: the todo app on Android
+  and in the macOS window.

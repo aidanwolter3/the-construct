@@ -314,6 +314,25 @@ fn hints(def: &Definition) -> Value {
                 "endpoint": format!("/v1/collections/{n}/update"),
                 "payload": { "id": "$item.id", b.name.as_str(): "$value" } } });
     }
+    // A whole row: the tick, the text, then the delete at the end. Inside a
+    // Row, a core://Column takes the full width (pushing the delete off
+    // screen); a core://Container takes what it needs.
+    let mut children = Vec::new();
+    if out.get("toggle").is_some() {
+        children.push(out["toggle"].clone());
+    }
+    children.push(
+        json!({ "type": "core://Container", "orientation": "Vertical", "padding_dp": 0,
+        "children": [out["list"]["item_template"].clone()] }),
+    );
+    children.push(json!({ "type": "core://Spacer" }));
+    children.push(out["delete"].clone());
+    out["row"] = json!({ "type": "core://Row", "spacing_dp": 12, "padding_h_dp": 16, "padding_v_dp": 6,
+        "align": "Center", "children": children });
+    out["notes"] = json!(format!(
+        "{} Use \"row\" as the list's item_template. Inside a core://Row, use core://Container (not core://Column, which takes the whole width) and a core://Spacer to push the delete to the end.",
+        out["notes"].as_str().unwrap_or("")
+    ));
     out
 }
 

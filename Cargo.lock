@@ -778,6 +778,7 @@ dependencies = [
  "serde_json",
  "server",
  "tokio",
+ "tower",
 ]
 
 [[package]]

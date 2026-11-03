@@ -304,7 +304,6 @@ async fn a_write_on_one_device_reloads_the_app_on_every_device() {
     let mut laptop = pod_core::app(pod.clone())
         .oneshot(
             Request::get(format!("/v1/workspaces/{app}/events"))
-                .header("authorization", "Bearer laptop")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -383,6 +382,20 @@ async fn bindings_must_fit_the_collection() {
     let d = ok(&pod, "describe_collection", json!({"collection": "todos"})).await;
     assert_eq!(d["used_by"], json!([]));
     assert!(d["layout_hints"]["toggle"].is_object());
+    // The snippets are a valid app as they are.
+    let h = &d["layout_hints"];
+    let mut list = h["list"].clone();
+    list["item_template"] = h["row"].clone();
+    let layout = json!({"type": "core://Workspace", "title": "Todos", "slots": [
+        {"slot_id": "add", "provider_uri": "core://custom", "content": h["add"]},
+        {"slot_id": "list", "provider_uri": "core://custom", "content": list}]});
+    ok(
+        &pod,
+        "create_app",
+        json!({"title": "Hinted", "feeds": h["feed"].as_array().map(|f| json!([f])).unwrap(),
+        "layout": layout}),
+    )
+    .await;
     assert_eq!(d["definition"]["fields"][1]["name"], "done");
 }
 
