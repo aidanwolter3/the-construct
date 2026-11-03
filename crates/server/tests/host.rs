@@ -592,7 +592,10 @@ async fn the_scheduler_polls_pods_with_devices() {
     env.host.run_due_polls().await; // first poll: backlog stored quietly
     let (_, _, list) = get(&env.url("/v1/notifications"), Some(&token)).await;
     assert_eq!(list["unread_total"], 0);
-    assert!(!list["notifications"].as_array().unwrap().is_empty(), "{list}");
+    assert!(
+        !list["notifications"].as_array().unwrap().is_empty(),
+        "{list}"
+    );
 
     let (status, made) = post(
         &format!("{}/_admin/notifications", env.fake.url),
@@ -606,7 +609,12 @@ async fn the_scheduler_polls_pods_with_devices() {
     let (_, _, list) = get(&env.url("/v1/notifications?limit=0"), Some(&token)).await;
     assert_eq!(list["unread_total"], 0, "the next poll is not due yet");
     let dir = env._dir.path().join("pods");
-    let pod_dir = std::fs::read_dir(&dir).unwrap().next().unwrap().unwrap().path();
+    let pod_dir = std::fs::read_dir(&dir)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
     rusqlite::Connection::open(pod_dir.join("server.db"))
         .unwrap()
         .execute("UPDATE notification_polls SET next_at = 0", [])
@@ -616,9 +624,15 @@ async fn the_scheduler_polls_pods_with_devices() {
     assert_eq!(list["unread_total"], 1, "{list}");
     let first = &list["notifications"][0];
     assert_eq!(first["channel"], "likes");
-    assert!(first["title"].as_str().unwrap().contains("liked your post"), "{first}");
     assert!(
-        first["target_uri"].as_str().unwrap().starts_with("pixelfed://posts/"),
+        first["title"].as_str().unwrap().contains("liked your post"),
+        "{first}"
+    );
+    assert!(
+        first["target_uri"]
+            .as_str()
+            .unwrap()
+            .starts_with("pixelfed://posts/"),
         "{first}"
     );
 }
