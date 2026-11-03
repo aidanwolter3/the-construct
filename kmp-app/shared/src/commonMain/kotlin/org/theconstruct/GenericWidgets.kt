@@ -11,6 +11,19 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -317,6 +330,143 @@ internal fun NodeChoiceChips(node: UiNode.ChoiceChips, modifier: Modifier) {
                     }
                     .testTag("choice:${node.field}:${option.value}")
                     .padding(horizontal = 14.dp, vertical = 8.dp),
+            )
+        }
+    }
+}
+
+private val PickerTileBg = Color(0xFFF2F2F5)
+private val PickerTileBorder = Color(0xFFD8D8DE)
+private val PickerTileSize = 80.dp
+
+/**
+ * `core://MediaPicker` (schema 8, D47/D49): the picked photos as square thumbnails (from each attachment's local
+ * entity) with a remove button, and an add tile while fewer than `max_items` are picked. The form value is a JSON
+ * array of staged attachment ids ([parseFormList]). Picking and staging run off the UI thread; a staging failure
+ * shows its reason under the tiles. Tags: `media-picker:<field>`, `media-picker-add:<field>`,
+ * `media-picker-remove:<id>`, `media-picker-error:<field>`.
+ */
+@Composable
+internal fun NodeMediaPicker(node: UiNode.MediaPicker, entities: Map<String, JsonObject>, modifier: Modifier) {
+    val form = LocalForm.current
+    val attachments = LocalAttachments.current
+    val platform = LocalMediaPickerPlatform.current
+    val ids = parseFormList(form?.get(node.field)).orEmpty()
+    val max = node.maxItems.coerceAtLeast(0)
+    var error by remember(node.field) { mutableStateOf<String?>(null) }
+    var busy by remember(node.field) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    fun current(): List<String> = parseFormList(form?.get(node.field)).orEmpty()
+    fun store(list: List<String>) {
+        if (list.isEmpty()) form?.remove(node.field) else form?.set(node.field, encodeFormList(list))
+    }
+    val pick: () -> Unit = pick@{
+        error = null
+        if (platform == null || attachments == null || form == null) {
+            error = "Picking photos isn't available here."
+            return@pick
+        }
+        busy = true
+        scope.launch {
+            MediaCalls.add(1)
+            try {
+                val paths = platform.pick((max - current().size).coerceAtLeast(1))
+                for (path in paths) {
+                    if (current().size >= max) break
+                    // Not cancellable: a staged file must be discarded, not lost, if the screen closes meanwhile.
+                    val result = withContext(NonCancellable) { attachments.stage(path) }
+                    val info = result.getOrNull()
+                    if (info == null) {
+                        error = result.exceptionOrNull()?.message ?: "Couldn't add that photo."
+                        continue
+                    }
+                    if (!isActive) {
+                        attachments.discard(info.id)
+                        break
+                    }
+                    store(current() + info.id)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = e.message ?: "Couldn't open the photo picker."
+            } finally {
+                busy = false
+                MediaCalls.add(-1)
+            }
+        }
+    }
+    Column(modifier.fillMaxWidth().testTag("media-picker:${node.field}")) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ids.forEachIndexed { index, id ->
+                // Keyed by attachment id: removing one keeps the others' loaded images.
+                key(id) {
+                    Box(Modifier.size(PickerTileSize).clip(RoundedCornerShape(8.dp))) {
+                        ConstructImage(
+                            url = attachmentUrl(id, entities, attachments),
+                            contentDescription = pageContentDescription(null, index, ids.size),
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        Box(
+                            Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(4.dp)
+                                .size(24.dp)
+                                .clip(CircleShape)
+                                .background(Color(0x99000000))
+                                .clickable(onClickLabel = "Remove photo") {
+                                    attachments?.discard(id)
+                                    store(current() - id)
+                                }
+                                .semantics { contentDescription = "Remove photo ${index + 1}" }
+                                .testTag("media-picker-remove:$id"),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(ConstructIcons.Close, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                }
+            }
+            if (ids.size < max) {
+                val label = node.label?.takeIf { it.isNotBlank() } ?: "Add photo"
+                Column(
+                    Modifier
+                        .size(PickerTileSize)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(PickerTileBg)
+                        .border(1.dp, PickerTileBorder, RoundedCornerShape(8.dp))
+                        .clickable(enabled = !busy, onClickLabel = label, onClick = pick)
+                        .semantics { role = Role.Button }
+                        .testTag("media-picker-add:${node.field}")
+                        .padding(6.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    if (busy) {
+                        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(ConstructIcons.AddPhoto, contentDescription = null, tint = MutedText, modifier = Modifier.size(28.dp))
+                    }
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MutedText,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            }
+        }
+        error?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 6.dp).testTag("media-picker-error:${node.field}"),
             )
         }
     }

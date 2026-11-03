@@ -74,6 +74,19 @@ interface ConstructEngineBridge {
 
     /** `GET /v1/apps/{appId}/versions/{version}`: the version's metadata plus its full `layout` (a workspace [UiNode]). */
     fun appVersion(appId: String, version: Long): String = throw appsUnavailable()
+
+    // Attachments (schema 8, D47): photos picked by `core://MediaPicker`.
+
+    /**
+     * Stages the image file at [path] for a later create's `attachments` (BLOCKING: decodes, scales and re-encodes it;
+     * call it off the UI thread). Its local entity `construct://attachments/<id>` then appears in the snapshots. The
+     * failure is an [AttachmentException] with a readable reason. Default: not available.
+     */
+    fun stageAttachment(path: String): Result<AttachmentInfo> =
+        Result.failure(AttachmentException("Photos can't be added here."))
+
+    /** Forgets a staged attachment no create took (its file and entity go). Default: nothing to forget. */
+    fun discardAttachment(id: String) {}
 }
 
 private fun appsUnavailable() = LayoutApiException("Apps aren't available here.")

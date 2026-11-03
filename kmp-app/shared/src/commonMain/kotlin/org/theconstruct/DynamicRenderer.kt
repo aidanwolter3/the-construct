@@ -46,6 +46,9 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
+/** The most lines a `core://TextField` grows to (its `lines` is clamped to this). */
+private const val MAX_TEXT_FIELD_LINES = 12
+
 /** Maximum width of a list item on wide screens (a readable column, like Instagram/Pixelfed web). */
 val FEED_MAX_WIDTH = 560.dp
 
@@ -198,6 +201,8 @@ fun RenderUiNode(
         is UiNode.Box -> NodeBox(node, entities, onDispatch, item, modifier)
 
         is UiNode.ChoiceChips -> NodeChoiceChips(node, modifier)
+
+        is UiNode.MediaPicker -> NodeMediaPicker(node, entities, modifier)
 
         is UiNode.Unknown -> Text(
             "Unsupported component: ${node.type.ifEmpty { "<missing type>" }}",
@@ -353,21 +358,25 @@ private fun ItemList(
 
 /**
  * A text field bound to the form value [UiNode.TextField.field]; Send dispatches `on_submit` and clears it. Without
- * `on_submit` (a search box) it is one line and a Clear button empties it.
+ * `on_submit` it is one line with a Clear button (a search box), or with `lines` (schema 8) a field of up to that many
+ * lines (a caption).
  */
 @Composable
 private fun FormTextField(node: UiNode.TextField, dispatch: (ActionIntent) -> Unit, modifier: Modifier) {
     val form = LocalForm.current
     val value = form?.get(node.field).orEmpty()
     val submit = node.onSubmit
+    val lines = node.lines?.coerceIn(1, MAX_TEXT_FIELD_LINES)
+    val singleLine = submit == null && (lines == null || lines == 1)
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
             value = value,
             onValueChange = { v -> form?.set(node.field, node.maxLength?.let { v.take(it) } ?: v) },
             placeholder = { Text(node.placeholder) },
-            maxLines = if (submit == null) 1 else 4,
-            singleLine = submit == null,
-            trailingIcon = if (submit == null && value.isNotEmpty()) {
+            minLines = if (submit == null && lines != null) minOf(lines, 3) else 1,
+            maxLines = if (singleLine) 1 else lines ?: 4,
+            singleLine = singleLine,
+            trailingIcon = if (singleLine && value.isNotEmpty()) {
                 {
                     IconButton(
                         onClick = { form?.remove(node.field) },

@@ -67,6 +67,13 @@ enum class PresentationMode { Push, Modal, Replace }
 @Serializable
 enum class ImageShape { Square, Rounded, Circle }
 
+/** Where `action.mutation.create` lists its new entity (schema 8): at the start or (default) the end of its query. */
+@Serializable
+enum class CreatePosition {
+    @SerialName("start") Start,
+    @SerialName("end") End,
+}
+
 /**
  * A screen an app can open (DECISIONS D34; protocol `ast::Screen`). [route] is a URI pattern with `{name}` segments;
  * `$route.<name>` in the other fields is replaced by the captured value. [data] is a pod path loaded when the screen
@@ -191,6 +198,8 @@ sealed class UiNode {
         val placeholder: String = "",
         @SerialName("max_length") val maxLength: Int? = null,
         @SerialName("on_submit") val onSubmit: ActionIntent? = null,
+        /** Schema 8 (D49): without [onSubmit], a field of up to this many lines (e.g. a caption). */
+        val lines: Int? = null,
     ) : UiNode()
 
     // Schema 3 (DECISIONS D36): generic building blocks for composing any app on the pod.
@@ -306,6 +315,18 @@ sealed class UiNode {
         @SerialName("padding_h_dp") val paddingHDp: Int = 0,
     ) : UiNode()
 
+    /**
+     * `core://MediaPicker` (schema 8, D47/D49): thumbnails of the photos picked into the form value `$form.<field>`
+     * (a JSON array of staged attachment ids, see [parseFormList]) with a remove button each, and an add tile
+     * ([label], default "Add photo") while fewer than [maxItems] are picked.
+     */
+    @Serializable
+    data class MediaPicker(
+        val field: String,
+        @SerialName("max_items") val maxItems: Int,
+        val label: String? = null,
+    ) : UiNode()
+
     /** A node whose `type` this client does not know. [raw] is the full original object. */
     data class Unknown(val type: String, val raw: JsonObject) : UiNode()
 }
@@ -365,6 +386,11 @@ sealed class ActionIntent {
     /**
      * `action.mutation.create` (D34): the engine lists [entity] at [entityUri] in `queries[queryKey]` at once and sends
      * [payload] to [endpoint] through the outbox.
+     *
+     * Schema 8 (D47, D49): [attachments] maps a name to a form-bound list of staged attachment ids (`{"photos":
+     * "$form.photos"}`, bound by [bindForm] to a JSON array); the engine uploads them first and replaces
+     * `"$attachments.<name>"` in [entity] (local attachment URIs) and [payload] (upload ids) itself. [position] puts the
+     * entity at the start or end of the list; [dismiss] closes the current screen once dispatched.
      */
     @Serializable
     data class Create(
@@ -374,6 +400,9 @@ sealed class ActionIntent {
         val endpoint: String,
         val payload: JsonElement,
         @SerialName("refresh_workspace") val refreshWorkspace: Boolean = false,
+        val attachments: Map<String, JsonElement> = emptyMap(),
+        val position: CreatePosition = CreatePosition.End,
+        val dismiss: Boolean = false,
     ) : ActionIntent()
 
     /**
@@ -489,6 +518,7 @@ object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode
         Variant("core://Tappable", UiNode.Tappable::class, UiNode.Tappable.serializer()),
         Variant("core://Box", UiNode.Box::class, UiNode.Box.serializer()),
         Variant("core://ChoiceChips", UiNode.ChoiceChips::class, UiNode.ChoiceChips.serializer()),
+        Variant("core://MediaPicker", UiNode.MediaPicker::class, UiNode.MediaPicker.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): UiNode = UiNode.Unknown(tag, raw)

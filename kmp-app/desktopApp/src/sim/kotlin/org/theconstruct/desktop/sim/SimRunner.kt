@@ -40,6 +40,7 @@ import org.theconstruct.ConstructApp
 import org.theconstruct.ConstructController
 import org.theconstruct.ImageLoads
 import org.theconstruct.LayoutCalls
+import org.theconstruct.MediaCalls
 import org.theconstruct.LocalBackPresses
 import org.theconstruct.MenuState
 import org.theconstruct.ServerChoice
@@ -108,6 +109,10 @@ class SimRunner(
     private val publishVersion: ((String) -> Long)? = null,
     /** The server the menu shows at first; `set-server` records the choice (the simulator never switches servers). */
     server: String = SIM_SERVERS.first().url,
+    /** The photo picker `core://MediaPicker` opens; `pick` queues its files. */
+    val mediaPicker: SimMediaPicker = SimMediaPicker(log),
+    /** Fixture mode: the fake pod finishes the posts in flight ([FakeEngineBridge.settle]); run by `wait` and `idle`. */
+    private val settle: (() -> Int)? = null,
 ) {
     /** The server the menu shows: the last `set-server` choice. */
     var serverUrl: String by mutableStateOf(server)
@@ -148,7 +153,7 @@ class SimRunner(
                     val backPresses = BackPresses()
                     this@SimRunner.backPresses = backPresses
                     setContent {
-                        CompositionLocalProvider(LocalBackPresses provides backPresses) { ConstructApp(controller, server = serverChoice) }
+                        CompositionLocalProvider(LocalBackPresses provides backPresses) { ConstructApp(controller, server = serverChoice, mediaPicker = mediaPicker) }
                     }
                     waitForIdle()
                     while (i < steps.size) {
@@ -244,17 +249,27 @@ class SimRunner(
             is SimStep.Click -> {
                 waitForIdle()
                 val (node, found) = findTarget(step.text)
-                return clickNode(node, found, step.text) to null
+                val how = clickNode(node, found, step.text)
+                // A click on a media picker's add tile picks and stages off the UI thread.
+                awaitMediaCalls()
+                return how to null
             }
             is SimStep.Wait -> {
                 Thread.sleep(step.ms)
                 mainClock.advanceTimeBy(step.ms)
                 waitForIdle()
-                return "" to null
+                return settled() to null
             }
             SimStep.Idle -> {
                 waitForIdle()
-                return "" to null
+                return settled() to null
+            }
+            is SimStep.Pick -> {
+                val files = step.paths.map { File(it).absoluteFile }
+                val missing = files.filter { !it.isFile }
+                if (missing.isNotEmpty()) throw StepFailure("no such file: ${missing.joinToString()}")
+                mediaPicker.enqueue(files.map { it.path })
+                return "${files.size} file(s) queued for the next photo picker" to null
             }
             is SimStep.AssertText -> {
                 awaitCondition("text '${step.text}' to be present") { hasAnyText(step.text) }
@@ -411,6 +426,27 @@ class SimRunner(
         onRoot().performMouseInput { moveTo(Offset(1f, 1f)); moveTo(Offset(-1f, -1f)) }
         waitForIdle()
         return how
+    }
+
+    /** Lets the fake pod finish posts in flight ([settle]), then waits for idle; the step message. */
+    private fun SkikoComposeUiTest.settled(): String {
+        val n = settle?.invoke() ?: 0
+        waitForIdle()
+        return if (n > 0) "$n post(s) finished" else ""
+    }
+
+    /** Waits until no photo pick or staging is in flight ([MediaCalls]: on a background dispatcher). */
+    private fun SkikoComposeUiTest.awaitMediaCalls(timeoutMs: Long = LAYOUT_TIMEOUT_MS) {
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000
+        while (true) {
+            waitForIdle()
+            if (MediaCalls.inFlight.value == 0) break
+            if (System.nanoTime() > deadline) {
+                throw StepFailure("timed out after $timeoutMs ms with ${MediaCalls.inFlight.value} photo pick(s) in flight")
+            }
+            Thread.sleep(10)
+        }
+        waitForIdle()
     }
 
     private fun SkikoComposeUiTest.hasTag(tag: String): Boolean =

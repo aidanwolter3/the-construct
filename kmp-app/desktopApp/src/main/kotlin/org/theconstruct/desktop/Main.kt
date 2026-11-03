@@ -3,6 +3,7 @@ package org.theconstruct.desktop
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.toComposeImageBitmap
@@ -78,7 +79,9 @@ fun main() {
         ) {
             val current = session ?: return@Window
             val server = ServerChoice(current.baseUrl, DESKTOP_SERVERS, error = switchError) { url -> switchServer(root, current, url, workspace) }
-            key(current) { ConstructApp(current.controller, server = server) }
+            val frame = window
+            val picker = remember(frame) { DesktopMediaPicker { frame } }
+            key(current) { ConstructApp(current.controller, server = server, mediaPicker = picker) }
         }
     }
 }

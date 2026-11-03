@@ -22,6 +22,11 @@ sealed class SimStep(val command: String, val arg: String = "") {
     class Type(val target: String, val text: String) : SimStep("type", "$target $text")
     /** A system Back press (Android's Back; the desktop stand-in [org.theconstruct.BackPresses]). */
     object Back : SimStep("back")
+    /**
+     * Queues [paths] (image files; relative ones resolve against the working directory) for the next photo picker a
+     * `core://MediaPicker` opens, e.g. `pick fixtures/pixelfed/media/a.png; click tag:media-picker-add:photos`.
+     */
+    class Pick(val paths: List<String>) : SimStep("pick", paths.joinToString(" "))
 
     // Hamburger menu: each waits for idle and for the apps calls, and fails with a hint when its control is missing.
     object OpenMenu : SimStep("open-menu")
@@ -60,7 +65,8 @@ fun validateStepsForMode(steps: List<SimStep>, mode: String) {
 }
 
 /**
- * Parses a simulator script. Commands are separated by `;` or newlines; each is trimmed, blank
+ * Parses a simulator script (commands: README "Simulation mode"; `pick <path> [<path>…]` queues image files for the
+ * next photo picker, see [SimStep.Pick]). Commands are separated by `;` or newlines; each is trimmed, blank
  * entries are ignored and entries starting with `#` are comments. The first word is the command
  * and the rest of the entry (trimmed) is its argument, so `click Count: 2` clicks "Count: 2".
  * A `;` cannot appear inside an argument.
@@ -113,6 +119,10 @@ fun parseScript(script: String): List<SimStep> {
                 SimStep.Type(target, text)
             }
             "back" -> { noArg(); SimStep.Back }
+            "pick" -> SimStep.Pick(
+                splitPaths(requireArg("one or more file paths"))
+                    ?: throw ScriptParseException("${where()}: 'pick' needs file paths (quote a path with spaces: \"my photo.jpg\")"),
+            )
             "open-menu" -> { noArg(); SimStep.OpenMenu }
             "close-menu" -> { noArg(); SimStep.CloseMenu }
             "open-app" -> SimStep.OpenApp(requireArg("an app id or title (e.g. pixelfed_home or Pixelfed)"))
@@ -148,12 +158,37 @@ fun parseScript(script: String): List<SimStep> {
             else -> throw ScriptParseException(
                 "${where()}: unknown command '$command' (expected one of: " +
                     "shot, click, wait, idle, assert-text, assert-no-text, wait-text, wait-images, swipe-left, swipe-right, " +
-                    "scroll-to, type, back, open-menu, close-menu, open-app, open-history, select-version, set-server, " +
+                    "scroll-to, type, back, pick, open-menu, close-menu, open-app, open-history, select-version, set-server, " +
                     "publish-version, offline, online, screen)",
             )
         }
     }
     return steps
+}
+
+/** Splits a `pick` argument into paths: words, or double-quoted paths with spaces. Null when a quote is unclosed. */
+internal fun splitPaths(arg: String): List<String>? {
+    val out = mutableListOf<String>()
+    var i = 0
+    val a = arg.trim()
+    while (i < a.length) {
+        when {
+            a[i].isWhitespace() -> i++
+            a[i] == '"' -> {
+                val end = a.indexOf('"', i + 1)
+                if (end < 0) return null
+                a.substring(i + 1, end).takeIf { it.isNotEmpty() }?.let(out::add)
+                i = end + 1
+            }
+            else -> {
+                var end = i
+                while (end < a.length && !a[end].isWhitespace()) end++
+                out += a.substring(i, end)
+                i = end
+            }
+        }
+    }
+    return out.takeIf { it.isNotEmpty() }
 }
 
 /**
