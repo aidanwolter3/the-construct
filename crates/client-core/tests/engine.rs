@@ -157,6 +157,29 @@ fn server_going_away_mid_session_reports_offline_then_online() {
     server.stop();
 }
 
+/// A brief outage (one missed probe) must not flip the engine offline:
+/// the offline badge would flash for a network blip.
+#[test]
+fn brief_outage_does_not_report_offline() {
+    let server = StoppableServer::start("127.0.0.1:0");
+    let engine = ConstructEngine::init("", &server.url());
+    let rx = subscribe_channel(&engine);
+    wait_online(&rx);
+
+    // Down for about one probe interval (2 s), then back.
+    let addr = server.stop();
+    thread::sleep(Duration::from_millis(2500));
+    let server = StoppableServer::start(&addr.to_string());
+    thread::sleep(Duration::from_secs(3));
+
+    assert!(
+        rx.try_iter().all(|s| s.is_online),
+        "a single missed probe reported offline"
+    );
+    assert!(engine.snapshot().is_online);
+    server.stop();
+}
+
 fn temp_dir(tag: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
