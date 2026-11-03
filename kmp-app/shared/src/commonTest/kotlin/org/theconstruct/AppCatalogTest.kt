@@ -262,6 +262,16 @@ class AppCatalogTest {
         assertEquals(ServerUrlCheck.Invalid, ServerUrls.check("http://host/path", android))
         // Desktop (no policy): any http host.
         assertEquals(ServerUrlCheck.Ok("http://192.168.1.5:8080"), ServerUrls.check("http://192.168.1.5:8080"))
+        // Allowed, but warned about: http:// to anything but this machine (or the emulator's host alias).
+        for (url in listOf("http://192.168.1.5:8080", "http://pod.example.com", "http://[2001:db8::1]", "http://10.0.2.20")) {
+            assertTrue(ServerUrls.isCleartextRemote(url), url)
+        }
+        for (url in listOf(
+            "https://pod.example.com", "http://localhost:8080", "http://LOCALHOST", "http://127.0.0.1:8080",
+            "http://127.1.2.3", "http://[::1]:8080", "http://10.0.2.2:8080", "http://",
+        )) {
+            assertFalse(ServerUrls.isCleartextRemote(url), url)
+        }
         val choice = ServerChoice("http://10.0.2.2:8080/", listOf(ServerOption("emulator", "Local emulator", "http://10.0.2.2:8080"))) {}
         assertEquals("Local emulator", choice.label())
         assertEquals("http://x:1", choice.label("http://x:1"))
