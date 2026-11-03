@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.testTag
@@ -70,6 +71,9 @@ private const val MAX_TEXT_FIELD_LINES = 12
  * (40 dp, 8 dp from the top) that [ConstructApp] draws over it.
  */
 val STICKY_WORKSPACE_INSET = 56.dp
+
+/** The diameter of a `core://Progress` spinner without `size_dp`. */
+const val PROGRESS_DEFAULT_SIZE_DP = 16
 
 /** Maximum width of a list item on wide screens (a readable column, like Instagram/Pixelfed web). */
 val FEED_MAX_WIDTH = 560.dp
@@ -237,6 +241,16 @@ fun RenderUiNode(
         is UiNode.MediaPicker -> NodeMediaPicker(node, entities, modifier)
 
         is UiNode.Sticky -> NodeSticky(node, entities, onDispatch, item, modifier)
+
+        is UiNode.Progress -> {
+            val size = (node.sizeDp ?: PROGRESS_DEFAULT_SIZE_DP).dp
+            CircularProgressIndicator(
+                modifier = modifier.size(size).semantics { contentDescription = "In progress" },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                // A thin ring at any size: about an eighth of the diameter, at least 1.5 dp.
+                strokeWidth = maxOf(1.5.dp, size / 8),
+            )
+        }
 
         is UiNode.Unknown -> Text(
             "Unsupported component: ${node.type.ifEmpty { "<missing type>" }}",

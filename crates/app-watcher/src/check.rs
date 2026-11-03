@@ -158,7 +158,7 @@ pub async fn extract(
         Kind::Llm => {
             let Some(cfg) = &adapter.config().llm else {
                 return Err(
-                    "the llm extractor needs a model: set CONSTRUCT_WATCHER_ANTHROPIC_API_KEY on the server"
+                    "the llm extractor needs a model: set CONSTRUCT_INFER_API_KEY on the server"
                         .into(),
                 );
             };

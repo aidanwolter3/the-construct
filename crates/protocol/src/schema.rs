@@ -203,7 +203,9 @@ pub fn required_features(node: &UiNode) -> Vec<&'static str> {
 /// feature, e.g. `if let UiNode::Foo { .. } = node { out.insert(feature::FOO); }`
 /// (`crates/protocol/features/README.md`).
 fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
-    let _ = (node, out);
+    if let UiNode::Progress { .. } = node {
+        out.insert(crate::feature::PROGRESS);
+    }
 }
 
 /// The features one action intent uses; see [`node_features`].
@@ -214,6 +216,9 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
         }
         ActionIntent::LocalSet { .. } => {
             out.insert(crate::feature::LOCAL_SET);
+        }
+        ActionIntent::OpenLink { .. } => {
+            out.insert(crate::feature::OPEN_LINK);
         }
         _ => {}
     }
@@ -552,6 +557,7 @@ mod tests {
                 "core://ChoiceChips" => json!({"type": t, "field": "f", "options": []}),
                 "core://MediaPicker" => json!({"type": t, "field": "f", "max_items": 4}),
                 "core://Sticky" => json!({"type": t, "content": {"type": "core://Divider"}}),
+                "core://Progress" => json!({"type": t}),
                 other => panic!("no sample for {other}"),
             };
             let n: UiNode = serde_json::from_value(v).unwrap_or_else(|e| panic!("{t}: {e}"));

@@ -350,8 +350,30 @@ fn unreachable_server_reports_offline() {
     assert_eq!(s.workspace_json, "null");
     assert_eq!(s.entities_json, "{}");
     engine.refresh(); // synchronous, must not panic
-    assert!(!engine.snapshot().is_online);
+    let s = engine.snapshot();
+    assert!(!s.is_online);
+    assert!(s.online_known, "a failed fetch is an answer: offline");
     engine.dispatch(INCREMENT); // must not panic
+}
+
+#[test]
+fn connectivity_is_unknown_until_the_first_fetch() {
+    // A cached workspace is shown at once; it says nothing about the server
+    // yet, so UIs must not flash "offline" (e.g. when switching apps).
+    let dir = temp_dir("unknown");
+    seed_cache(&dir, "home");
+    let url = serve_fixture();
+    let engine = ConstructEngine::init(dir.to_str().unwrap(), &url);
+    let rx = subscribe_channel(&engine);
+    let first = rx.recv_timeout(TIMEOUT).expect("initial snapshot");
+    if first.seq == 1 {
+        // Only the cache load so far (the fetch may already have won the race).
+        assert_ne!(first.workspace_json, "null");
+        assert!(!first.online_known);
+    }
+    let online = wait_online(&rx);
+    assert!(online.online_known);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -366,6 +388,10 @@ fn offline_falls_back_to_cache() {
     assert_eq!(count(&snap), 0);
     assert_eq!(snap.seq, 1);
     assert!(!snap.is_online);
+    assert!(
+        !snap.online_known,
+        "the cache says nothing about the server"
+    );
 
     engine.dispatch(INCREMENT);
     assert_eq!(count(&engine.snapshot()), 1);

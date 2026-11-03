@@ -20,9 +20,10 @@ its URL, how often to check it, and an extractor: ics (an iCalendar feed), jsonl
 markup, which most event sites embed), llm (a model reads the page text; any page, but each changed \
 page costs a model call) or auto (ics, else jsonld, else llm). Before saving a target, try the page with \
 watcher_preview and pick the cheapest extractor that finds the events; set details: true when the \
-listing lacks what the rules need (lineups) and each event's own page has it. Then add a rule with \
-watcher_set_rule (any: phrases of which one must appear; none: phrases that exclude). watcher_status \
-shows each target's health: say so when one is failing or finds no events.";
+listing lacks what the rules need (lineups) and each event's own page has it. Each site has its own \
+rules: add one with watcher_set_rule and the site's id as target (any: phrases of which one must \
+appear; none: phrases that exclude); to watch for the same thing on several sites, add a rule to each. \
+watcher_status shows each target's health: say so when one is failing or finds no events.";
 
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({
@@ -66,13 +67,13 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "watcher_set_rule",
-            "Add a rule (no id) or change one (id). An event matches when every set condition holds; matching ignores case and reads the title, venue and description. New matches are notified at once.",
-            json!({ "id": s("A rule id, to change it"), "title": s("Shown in the app and in notifications"),
+            "Add a rule to a site (no id; target: the site's id) or change one (id). An event of that site matches when every set condition holds; matching ignores case and reads the title, venue and description. New matches are notified at once.",
+            json!({ "id": s("A rule id, to change it"), "target": s("The site (target id) the rule belongs to; required for a new rule when the pod watches several sites"),
+                    "title": s("Shown in the app and in notifications"),
                     "any": list("At least one of these phrases"), "all": list("Every one of these phrases"),
                     "none": list("None of these phrases (e.g. class, workshop)"),
                     "venue": s("The venue contains this"), "days": list("mon … sun"),
                     "within_days": { "type": "integer", "description": "Only events starting within this many days" },
-                    "targets": list("Target ids it applies to (default: all)"),
                     "archived": { "type": "boolean" } }),
             &[],
         ),
@@ -127,14 +128,12 @@ async fn status(adapter: &WatcherAdapter, pod: &Pod) -> Result<Value, Value> {
                     e.insert("last_extractor".into(), json!(t.last_extractor));
                     targets.push(Value::Object(e));
                 }
-                let rules: Vec<Value> = db::rules(c)?
-                    .iter()
-                    .map(|r| {
-                        let mut e = db::rule_entity(r).0;
-                        e.insert("spec".into(), json!(r.spec));
-                        Value::Object(e)
-                    })
-                    .collect();
+                let mut rules: Vec<Value> = Vec::new();
+                for r in db::rules(c)? {
+                    let mut e = db::rule_entity(&r, &db::rule_site(c, &r)?).0;
+                    e.insert("spec".into(), json!(r.spec));
+                    rules.push(Value::Object(e));
+                }
                 let b = db::matches_bundle(c, now)?;
                 let matches: Vec<Value> = b.queries[db::MATCHES_QUERY]
                     .iter()

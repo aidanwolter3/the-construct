@@ -1,5 +1,6 @@
 package org.theconstruct
 
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,7 +41,8 @@ import kotlinx.serialization.json.JsonObject
  * [pendingActions] counts queued (unsent) outbox mutations. [seq] is the seq of the last applied
  * snapshot (-1 before the first). [queries] maps a FeedList `query_key` to ordered entity URIs (M6) and
  * [auth] is the sign-in status. [activeLayout] names the app on display and its latest version. [isOnline] is null
- * while connectivity is unknown (before the first snapshot; no offline badge then).
+ * while connectivity is unknown (before the engine first hears from the server; no offline badge then). After
+ * [ConstructController.openApp] the previous engine's answer stays until the new engine has one.
  * [engine] counts engine switches ([ConstructController.openApp]): a snapshot of a replaced engine is dropped.
  */
 data class ConstructState(
@@ -228,10 +230,11 @@ class ConstructController internal constructor(
         _state.update { cur ->
             when {
                 cur.engine != engine || snapshot.seq <= cur.seq -> cur
-                decoded != null -> decoded
+                // Unknown connectivity keeps the last answer (carried over by openApp): no offline flash on a switch.
+                decoded != null -> decoded.copy(isOnline = decoded.isOnline ?: cur.isOnline)
                 else -> cur.copy(
                     auth = AuthInfo.parse(snapshot.authJson),
-                    isOnline = snapshot.isOnline,
+                    isOnline = snapshot.isOnline ?: cur.isOnline,
                     pendingActions = snapshot.pendingActions,
                     error = decodeError,
                     seq = snapshot.seq,
@@ -282,11 +285,39 @@ class ConstructController internal constructor(
             bound.steps.forEach(::run)
             return
         }
+        if (bound is ActionIntent.OpenLink) {
+            openLink(bound.url)
+            return
+        }
         if (navigation.handle(bound)) return
         send(bound)
         if (bound is ActionIntent.Create) {
             attachments.consume(attachmentIds(bound.attachments))
             if (bound.dismiss) navigation.dismiss()
+        }
+    }
+
+    private val _openedLinks = MutableStateFlow<List<String>>(emptyList())
+
+    /** The links `action.link.open` opened, oldest first (the simulator's `assert-link` reads them). */
+    val openedLinks: StateFlow<List<String>> = _openedLinks.asStateFlow()
+
+    /** Opens a link in the platform's browser; [ConstructApp] sets it from `LocalUriHandler`. */
+    @Volatile
+    internal var linkOpener: (String) -> Unit = {}
+
+    /** `action.link.open`: an `http(s)://` [url] (a binding that came out blank or another scheme does nothing). */
+    private fun openLink(url: String) {
+        val u = url.trim()
+        if (!(u.startsWith("https://") || u.startsWith("http://"))) {
+            println("[Construct] action.link.open: not an http(s) link ($u); ignored")
+            return
+        }
+        _openedLinks.value = _openedLinks.value + u
+        try {
+            linkOpener(u)
+        } catch (t: Throwable) {
+            println("[Construct] opening $u failed: $t")
         }
     }
 
@@ -556,7 +587,11 @@ fun ConstructApp(
     server: ServerChoice? = null,
     mediaPicker: MediaPickerPlatform? = null,
     notificationSettingsExtra: (@Composable () -> Unit)? = null,
+    openLink: ((String) -> Unit)? = null,
 ) {
+    // `action.link.open` (feature `open_link`): the platform browser, unless the host opens links itself (simulator).
+    val uriHandler = LocalUriHandler.current
+    controller.linkOpener = openLink ?: { uriHandler.openUri(it) }
     val state by controller.state.collectAsState()
     val pin by controller.pinned.collectAsState()
     val unread by controller.unread.collectAsState()

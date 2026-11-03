@@ -359,6 +359,13 @@ sealed class UiNode {
     @Serializable
     data class Sticky(val content: UiNode) : UiNode()
 
+    /**
+     * `core://Progress` (feature `progress`): an indeterminate circular spinner [sizeDp] across (default
+     * [PROGRESS_DEFAULT_SIZE_DP]) for work in progress, e.g. inside a [Conditional] on a status field.
+     */
+    @Serializable
+    data class Progress(@SerialName("size_dp") val sizeDp: Int? = null) : UiNode()
+
     /** A node whose `type` this client does not know. [raw] is the full original object. */
     data class Unknown(val type: String, val raw: JsonObject) : UiNode()
 }
@@ -456,6 +463,13 @@ sealed class ActionIntent {
         @SerialName("value_expr") val valueExpr: String,
         val also: List<FieldUpdate> = emptyList(),
     ) : ActionIntent()
+
+    /**
+     * `action.link.open` (feature `open_link`): open [url] (`http(s)://` only) in the device's browser. Handled here,
+     * never sent to the engine.
+     */
+    @Serializable
+    data class OpenLink(val url: String) : ActionIntent()
 
     /**
      * An intent whose `intent` tag this client does not know (e.g. the removed `action.agent.prompt`). [raw] is the full
@@ -572,6 +586,7 @@ object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode
         Variant("core://ChoiceChips", UiNode.ChoiceChips::class, UiNode.ChoiceChips.serializer()),
         Variant("core://MediaPicker", UiNode.MediaPicker::class, UiNode.MediaPicker.serializer()),
         Variant("core://Sticky", UiNode.Sticky::class, UiNode.Sticky.serializer()),
+        Variant("core://Progress", UiNode.Progress::class, UiNode.Progress.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): UiNode = UiNode.Unknown(tag, raw)
@@ -589,6 +604,7 @@ object ActionIntentSerializer : TaggedUnionSerializer<ActionIntent>("org.thecons
         Variant("action.mutation.create", ActionIntent.Create::class, ActionIntent.Create.serializer()),
         Variant("action.sequence", ActionIntent.Sequence::class, ActionIntent.Sequence.serializer()),
         Variant("action.local.set", ActionIntent.LocalSet::class, ActionIntent.LocalSet.serializer()),
+        Variant("action.link.open", ActionIntent.OpenLink::class, ActionIntent.OpenLink.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): ActionIntent = ActionIntent.Unknown(tag, raw)

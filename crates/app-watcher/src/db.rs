@@ -14,7 +14,42 @@ use crate::rules::{Candidate, RuleSpec};
 use crate::when::{When, offset_text};
 
 /// Append-only: never edit or reorder a step that has shipped.
-pub static MIGRATIONS: &[Migration] = &[Migration::Sql(SCHEMA)];
+pub static MIGRATIONS: &[Migration] = &[
+    Migration::Sql(SCHEMA),
+    // 2: every rule belongs to one site (decision `watcher-rules-per-site`).
+    Migration::Rust(rules_per_site),
+];
+
+/// Give every rule exactly one site: a rule for all sites (or several)
+/// becomes one rule per live site, matched again.
+pub fn rules_per_site(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    let now = pod_core::util::now_secs();
+    let live: Vec<String> = {
+        let mut stmt = tx
+            .prepare("SELECT id FROM watcher_targets WHERE archived = 0 ORDER BY created_at, id")?;
+        stmt.query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    for r in rules(tx)? {
+        let sites: Vec<String> = if r.spec.targets.is_empty() {
+            live.clone()
+        } else {
+            r.spec.targets.clone()
+        };
+        if sites.len() <= 1 && r.spec.targets.len() == sites.len() {
+            continue;
+        }
+        for (i, site) in sites.iter().enumerate() {
+            let mut one = r.clone();
+            one.spec.targets = vec![site.clone()];
+            if i > 0 {
+                one.id = new_id('r');
+            }
+            save_rule(tx, &one, None, now)?;
+        }
+    }
+    Ok(())
+}
 
 const SCHEMA: &str = "
 CREATE TABLE watcher_targets (
@@ -94,6 +129,11 @@ pub fn event_query(id: &str) -> String {
 /// The target screen's one-item list.
 pub fn target_query(id: &str) -> String {
     format!("watcher:target:{id}")
+}
+
+/// A site's live rules (the site screen).
+pub fn target_rules_query(id: &str) -> String {
+    format!("watcher:target:{id}:rules")
 }
 
 pub fn target_events_query(id: &str) -> String {
@@ -480,6 +520,16 @@ pub fn target_entity(c: &Connection, t: &Target, now: i64) -> rusqlite::Result<E
         json!(status == "failing" || status == "empty"),
     );
     v.insert("upcoming_count".into(), json!(upcoming));
+    let names: Vec<String> = site_rules(c, &t.id)?.into_iter().map(|r| r.title).collect();
+    v.insert("rule_count".into(), json!(names.len()));
+    v.insert(
+        "rules_text".into(),
+        json!(if names.is_empty() {
+            "No rules yet".to_owned()
+        } else {
+            format!("Watching for {}", names.join(", "))
+        }),
+    );
     v.insert(
         "meta".into(),
         json!(format!(
@@ -560,10 +610,35 @@ pub fn save_rule(
     rematch_rule(tx, r, now)
 }
 
-pub fn rule_entity(r: &Rule) -> EntityRecord {
+/// The live rules of site `target_id` (with any left for every site).
+pub fn site_rules(c: &Connection, target_id: &str) -> rusqlite::Result<Vec<Rule>> {
+    Ok(rules(c)?
+        .into_iter()
+        .filter(|r| {
+            !r.archived
+                && (r.spec.targets.is_empty() || r.spec.targets.iter().any(|t| t == target_id))
+        })
+        .collect())
+}
+
+/// The title of rule `r`'s site ("All sites" for a rule without one).
+pub fn rule_site(c: &Connection, r: &Rule) -> rusqlite::Result<String> {
+    match r.spec.targets.first() {
+        None => Ok("All sites".to_owned()),
+        Some(t) => Ok(target(c, t)?.map(|t| t.title).unwrap_or_default()),
+    }
+}
+
+/// A rule's entity; `site` is its site's title ([`rule_site`]).
+pub fn rule_entity(r: &Rule, site: &str) -> EntityRecord {
     let mut e = EntityRecord::new();
     let v = &mut e.0;
     v.insert("id".into(), json!(r.id));
+    v.insert(
+        "target_id".into(),
+        json!(r.spec.targets.first().cloned().unwrap_or_default()),
+    );
+    v.insert("site".into(), json!(site));
     v.insert("title".into(), json!(r.title));
     v.insert("summary".into(), json!(r.spec.summary()));
     v.insert("archived".into(), json!(r.archived));
@@ -869,7 +944,7 @@ fn event_entity(c: &Connection, id: &str) -> rusqlite::Result<Option<EntityRecor
     let mut e = EntityRecord::new();
     let v = &mut e.0;
     v.insert("id".into(), json!(id));
-    v.insert("title".into(), json!(title));
+    v.insert("title".into(), json!(crate::html::clean_title(&title)));
     v.insert("start".into(), json!(start));
     v.insert("end".into(), json!(end.unwrap_or_default()));
     v.insert("date_text".into(), json!(date_text));
@@ -877,7 +952,19 @@ fn event_entity(c: &Connection, id: &str) -> rusqlite::Result<Option<EntityRecor
     v.insert("when_text".into(), json!(when_text));
     v.insert("meta".into(), json!(meta));
     v.insert("venue".into(), json!(venue));
-    v.insert("description".into(), json!(description));
+    // Plain text; without a first line that only repeats the site's name
+    // (Meetup starts every description with the group's).
+    let mut text = crate::html::markdown_to_text(&description);
+    if let Some((first, rest)) = text.split_once('\n')
+        && crate::rules::normalize(first) == crate::rules::normalize(&source)
+    {
+        text = rest.trim_start().to_owned();
+    }
+    v.insert("description".into(), json!(text));
+    v.insert(
+        "tickets_url".into(),
+        json!(crate::html::tickets_url(&description).unwrap_or_default()),
+    );
     v.insert("url".into(), json!(url));
     v.insert("target_id".into(), json!(target_id));
     v.insert("source".into(), json!(source));
@@ -888,6 +975,14 @@ fn event_entity(c: &Connection, id: &str) -> rusqlite::Result<Option<EntityRecor
             String::new()
         } else {
             format!("Matched {}", rule_titles.join(", "))
+        }),
+    );
+    v.insert(
+        "match_text".into(),
+        json!(if rule_titles.is_empty() {
+            String::new()
+        } else {
+            format!("{source} · {}", rule_titles.join(", "))
         }),
     );
     v.insert("seen".into(), json!(seen));
@@ -938,7 +1033,8 @@ pub fn targets_bundle(c: &Connection, now: i64) -> rusqlite::Result<DataBundle> 
     }
     let mut rq = Vec::new();
     for r in rules(c)? {
-        b.entities.insert(rule_uri(&r.id), rule_entity(&r));
+        let site = rule_site(c, &r)?;
+        b.entities.insert(rule_uri(&r.id), rule_entity(&r, &site));
         rq.push(rule_uri(&r.id));
     }
     b.queries.insert(TARGETS_QUERY.into(), tq);
@@ -966,6 +1062,13 @@ pub fn target_screen(c: &Connection, id: &str, now: i64) -> rusqlite::Result<Opt
     b.entities
         .insert(target_uri(id), target_entity(c, &t, now)?);
     b.queries.insert(target_query(id), vec![target_uri(id)]);
+    let mut rq = Vec::new();
+    for r in site_rules(c, id)? {
+        let site = rule_site(c, &r)?;
+        b.entities.insert(rule_uri(&r.id), rule_entity(&r, &site));
+        rq.push(rule_uri(&r.id));
+    }
+    b.queries.insert(target_rules_query(id), rq);
     let q = target_events_query(id);
     b.queries.insert(q.clone(), Vec::new());
     let ids: Vec<String> = {

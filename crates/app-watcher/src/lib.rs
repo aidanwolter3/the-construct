@@ -95,8 +95,12 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         },
         PathSpec {
             pattern: "/v1/watcher/screens/target?id={id}",
-            query_keys: &["watcher:target:{id}", "watcher:target:{id}:events"],
-            doc: "One website (also as a one-item list) and its upcoming events.",
+            query_keys: &[
+                "watcher:target:{id}",
+                "watcher:target:{id}:rules",
+                "watcher:target:{id}:events",
+            ],
+            doc: "One website (also as a one-item list), its rules and its upcoming events (matched ones have matched: true).",
         },
     ],
     actions: &[
@@ -118,7 +122,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         PathSpec {
             pattern: "/v1/watcher/rules/create",
             query_keys: &[],
-            doc: "Add a rule: payload {title?, keywords (any of, comma separated), exclude?, venue?, days?, within_days?, client_id: \"$nonce\"}.",
+            doc: "Add a rule to a site: payload {target: site id, title?, keywords (any of, comma separated), exclude?, venue?, days?, within_days?, client_id: \"$nonce\"}.",
         },
         PathSpec {
             pattern: "/v1/watcher/rules/update",
@@ -149,10 +153,18 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ("venue", "where"),
                 ("description", "everything the site says (lineups)"),
                 ("url", "the event's own page, or empty"),
+                (
+                    "tickets_url",
+                    "a tickets link found in the description, or empty",
+                ),
                 ("source", "the website's title"),
                 ("target_id", "the website's id"),
                 ("matched", "a live rule matched it"),
                 ("rules_text", "Matched <rule titles>"),
+                (
+                    "match_text",
+                    "<site> · <rule titles> when matched, else empty",
+                ),
                 ("seen", "its matches were marked seen"),
             ],
         },
@@ -173,6 +185,8 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ),
                 ("failing", "health is failing or empty"),
                 ("upcoming_count", "upcoming events found"),
+                ("rule_count", "its live rules"),
+                ("rules_text", "Watching for <rule titles>, or No rules yet"),
                 ("meta", "host · extractor · interval"),
                 ("archived", "archived"),
             ],
@@ -182,6 +196,8 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             doc: "A rule.",
             fields: &[
                 ("id", "rule id"),
+                ("target_id", "the site it belongs to (empty: every site)"),
+                ("site", "that site's title"),
                 ("title", "name"),
                 ("summary", "its conditions in one line"),
                 ("keywords", "any-of phrases, comma separated"),
@@ -206,9 +222,10 @@ pub struct WatcherConfig {
 }
 
 impl WatcherConfig {
-    /// From the environment: `CONSTRUCT_WATCHER_ANTHROPIC_API_KEY`,
-    /// `CONSTRUCT_WATCHER_LLM_MODEL`,
-    /// `CONSTRUCT_WATCHER_LLM_URL`, `CONSTRUCT_WATCHER_PRIVATE_HOSTS=1`.
+    /// From the environment: the pod's shared model settings
+    /// (`CONSTRUCT_INFER_API_KEY`, `CONSTRUCT_INFER_URL`, and the model
+    /// from `CONSTRUCT_WATCHER_LLM_MODEL`, else `CONSTRUCT_INFER_MODEL`),
+    /// and `CONSTRUCT_WATCHER_PRIVATE_HOSTS=1`.
     pub fn from_env() -> Self {
         let var = |k: &str| {
             std::env::var(k)
@@ -216,14 +233,14 @@ impl WatcherConfig {
                 .map(|v| v.trim().to_owned())
                 .filter(|v| !v.is_empty())
         };
-        let key = var("CONSTRUCT_WATCHER_ANTHROPIC_API_KEY");
+        let key = var("CONSTRUCT_INFER_API_KEY");
         Self {
             llm: key.map(|api_key| LlmConfig {
                 api_key,
                 model: var("CONSTRUCT_WATCHER_LLM_MODEL")
+                    .or_else(|| var("CONSTRUCT_INFER_MODEL"))
                     .unwrap_or_else(|| extract::DEFAULT_MODEL.into()),
-                base_url: var("CONSTRUCT_WATCHER_LLM_URL")
-                    .unwrap_or_else(|| "https://api.anthropic.com".into()),
+                url: var("CONSTRUCT_INFER_URL").unwrap_or_else(|| extract::DEFAULT_URL.into()),
             }),
             allow_private_hosts: var("CONSTRUCT_WATCHER_PRIVATE_HOSTS").as_deref() == Some("1"),
         }

@@ -38,6 +38,26 @@ private val WORKSPACE_WITH_SCREEN = """
 
 class ScreensTest {
     @Test
+    fun openLinkOpensHttpLinksAndNeverReachesTheEngine() {
+        val bridge = RecordingBridge()
+        val controller = ConstructController(bridge)
+        val opened = mutableListOf<String>()
+        controller.linkOpener = { opened += it }
+        val d = '$'
+        val intent = assertIs<ActionIntent.OpenLink>(
+            ConstructJson.decodeIntent("""{"intent":"action.link.open","url":"${d}item.tickets_url"}""")
+        )
+        val item = JsonObject(mapOf("tickets_url" to JsonPrimitive("https://tix.example/1")))
+        controller.dispatch(bindIntent(intent, item))
+        // Other schemes and blank bindings do nothing.
+        controller.dispatch(ActionIntent.OpenLink("javascript:alert(1)"))
+        controller.dispatch(ActionIntent.OpenLink(""))
+        assertEquals(listOf("https://tix.example/1"), opened)
+        assertEquals(listOf("https://tix.example/1"), controller.openedLinks.value)
+        assertEquals(emptyList(), bridge.sent)
+    }
+
+    @Test
     fun routesMatchWholeSegments() {
         assertEquals(mapOf("id" to "42"), matchRoute("x://posts/{id}/thread", "x://posts/42/thread"))
         assertEquals(mapOf("a" to "1", "b" to "z_9-"), matchRoute("x://{a}/m/{b}", "x://1/m/z_9-"))

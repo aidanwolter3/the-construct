@@ -210,6 +210,7 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             check_dp("padding_v_dp", *padding_v_dp, MAX_PADDING_DP)
         }
         UiNode::Spacer { size_dp: Some(s) } => check_dp("spacer size_dp", *s, MAX_SIZE_DP),
+        UiNode::Progress { size_dp: Some(s) } => check_dp("progress size_dp", *s, MAX_SIZE_DP),
         UiNode::List {
             indent,
             filter,
@@ -739,6 +740,22 @@ impl<'a> Caps<'a> {
                     self.entity(&format!("{at}/entity_uri"), u)?;
                 }
             }
+            "action.link.open" => {
+                // A literal link must be http(s); a binding is checked by the client.
+                if let Some(u) = field("url") {
+                    let u = u.trim();
+                    if !(u.starts_with('$')
+                        || u.starts_with("https://")
+                        || u.starts_with("http://"))
+                    {
+                        return Err(LayoutError::new(
+                            &format!("{at}/url"),
+                            "a link is an http(s):// address or a binding such as $item.url"
+                                .to_owned(),
+                        ));
+                    }
+                }
+            }
             "action.data.load" => {
                 if let Some(p) = field("path") {
                     self.data_path(&format!("{at}/path"), p)?;
@@ -885,6 +902,16 @@ mod tests {
         ] {
             assert!(check_sticky(&node(bad.clone()), None).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn progress_size_is_bounded() {
+        let p = |v: Value| node(v);
+        assert_eq!(check_values(&p(json!({"type": "core://Progress"}))), Ok(()));
+        let sized = json!({"type": "core://Progress", "size_dp": 24});
+        assert_eq!(check_values(&p(sized)), Ok(()));
+        let huge = json!({"type": "core://Progress", "size_dp": 9999});
+        assert!(check_values(&p(huge)).is_err());
     }
 
     #[test]

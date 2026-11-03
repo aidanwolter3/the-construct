@@ -158,7 +158,7 @@ class SimRunner(
                     val backPresses = BackPresses()
                     this@SimRunner.backPresses = backPresses
                     setContent {
-                        CompositionLocalProvider(LocalBackPresses provides backPresses) { ConstructApp(controller, server = serverChoice, mediaPicker = mediaPicker) }
+                        CompositionLocalProvider(LocalBackPresses provides backPresses) { ConstructApp(controller, server = serverChoice, mediaPicker = mediaPicker, openLink = {}) }
                     }
                     waitForIdle()
                     while (i < steps.size) {
@@ -279,6 +279,12 @@ class SimRunner(
             is SimStep.AssertText -> {
                 awaitCondition("text '${step.text}' to be present") { hasAnyText(step.text) }
                 return "" to null
+            }
+            is SimStep.AssertLink -> {
+                awaitCondition("a link containing '${step.text}' to be opened") {
+                    controller.openedLinks.value.any { it.contains(step.text) }
+                }
+                return controller.openedLinks.value.last { it.contains(step.text) } to null
             }
             is SimStep.AssertNoText -> {
                 awaitCondition("text '${step.text}' to be absent") { !hasAnyText(step.text) }

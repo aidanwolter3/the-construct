@@ -669,3 +669,17 @@ new layout files; diffs between versions.
   re-check, ics and llm sites, seen, archive, failing health, refusals, MCP tools, fetching off). Server tests list
   the new app. Needs a device check: the Watcher app on Android and in the macOS window, and a real notification.
 - Not yet (decision file): an open-URL intent, more extractors and headless fetch, named time zones, in-place edits.
+
+## Watcher: rules per site, prettier events, links that open (issues #58, #63)
+
+- Decision `watcher-rules-per-site`: each rule belongs to one site (migration 2 splits rules for every site into one
+  per site); the site's entity says what it watches for and its screen lists its rules and every event. Events are
+  served as plain text with a `tickets_url`. The `llm` extractor shares Collections' `CONSTRUCT_INFER_*` settings.
+- Layout 0002: Matches and Sites tabs, event cards, matches highlighted on a site's screen, event header with "Get
+  tickets" and "Event page" buttons; no add forms (Claude manages sites and rules over MCP).
+- Decision `open-link-intent`: `action.link.open {url}` (feature `open_link`), handled by the shared UI with the
+  platform browser; the simulator's `assert-link`.
+- Tests: html (Markdown to text, tickets links), `rules_belong_to_sites` (scoping, screens, migration, refusal),
+  Kotlin `openLinkOpensHttpLinksAndNeverReachesTheEngine`. Needs a device check: the buttons open the browser on
+  Android and macOS (a new app build; older builds keep layout 0001).
+

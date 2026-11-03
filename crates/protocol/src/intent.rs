@@ -115,6 +115,12 @@ pub enum ActionIntent {
         also: Vec<FieldUpdate>,
     },
 
+    /// Feature `open_link`: open `url` (an `http(s)://` address, usually a
+    /// binding such as `$item.tickets_url`) in the device's browser.
+    /// Nothing is sent to the pod. A URL of any other scheme does nothing.
+    #[serde(rename = "action.link.open")]
+    OpenLink { url: String },
+
     /// Any intent tag this build does not know, e.g. the removed
     /// `action.agent.prompt` (D32), which AI edits could put into layouts
     /// that legacy app versions still hold. Deserializing one drops its
