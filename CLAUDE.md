@@ -77,6 +77,14 @@ Staging needs a pod token (D46). Make a temporary one (24 h, deleted afterwards;
 - **Push to `main` auto-deploys staging** (https://the-construct-pod.fly.dev + fake Pixelfed) when the Rust job
   passes. Keep `main` green; server schema changes need a migration that works on staging's existing DB.
 - Prefer branches + PRs for non-trivial work; check `gh run list` after pushing.
+- Every PR body must follow `.github/pull_request_template.md` and state (1) **Schema bump**: yes/no (was
+  `protocol::SCHEMA_VERSION` changed?) and (2) **Client update needed**: yes/no (does the desktop/Android app need
+  a new build, or does the change ship through the pod/layout files alone?).
+- PRs that change the interface (layouts, shared UI, new node types) must embed screenshots of the changed
+  screens, taken with the headless simulator (`:desktopApp:simulate`), before/after where it helps. Images can't
+  be uploaded through the API: push the PNGs to a side branch `screenshots/<pr-branch>` (never merged) and embed
+  them with `https://github.com/aidanwolter3/the-construct/blob/screenshots/<pr-branch>/<file>.png?raw=true`
+  (the repo is private, so `raw.githubusercontent.com` links don't render).
 - Keep sessions to one task: file follow-up work as a GitHub issue with the `/ticket` skill
   (`.claude/skills/ticket`); each issue starts with a link that opens a new session on it.
 
@@ -101,3 +109,6 @@ layout state.
 - Record architecture decisions as new `docs/DECISIONS.md` entries (don't rewrite old ones; mark superseded).
 - Read files with the Read tool — never `cat`, `head`, `tail`, `sed` or `awk` to read files (developer's rule).
 - No model names in commit messages or docs prose.
+- Commit messages follow standard git style: an imperative subject line of at most 70 characters, a blank line,
+  then a body explaining what and why, with every line wrapped at 70 characters or fewer
+  (trailers such as `Co-Authored-By` and long URLs are exempt).
