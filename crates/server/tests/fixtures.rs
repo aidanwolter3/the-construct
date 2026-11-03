@@ -18,7 +18,8 @@ use std::sync::Arc;
 use protocol::{DataBundle, EntityRecord, UiNode};
 use serde_json::Value;
 use server::pixelfed::{
-    MediaAllowlist, MediaUrls, comment_uri, comments_query, normalize_comments, normalize_timeline,
+    MediaAllowlist, MediaUrls, comment_uri, comments_query, complete_comment_thread,
+    normalize_comments, normalize_timeline,
 };
 
 const FAKE_URL: &str = "http://127.0.0.1:8081";
@@ -178,6 +179,11 @@ async fn screen_data_fixture_is_the_pods_comments_data() {
         };
         let id = post["id"].as_str().unwrap();
         let context = get(format!("/api/v1/statuses/{id}/context")).await;
+        let context = complete_comment_thread(id, context, |c| {
+            let get = &get;
+            async move { Some(get(format!("/api/v1/statuses/{c}/context")).await) }
+        })
+        .await;
         let allow = MediaAllowlist::new([FAKE_URL], []);
         let mut media = MediaUrls::new("http://pod/v1/pixelfed/media", &allow);
         let comments = normalize_comments(id, &context, OWN_ACCOUNT, NOW, &mut media);

@@ -19,6 +19,10 @@ const REBLOG_INNER: &str = "781101134560870401";
 const ME: &str = "703641122334455667";
 
 fn setup() -> (Arc<AppState>, Router) {
+    setup_with(false)
+}
+
+fn setup_with(mastodon_threads: bool) -> (Arc<AppState>, Router) {
     let state = Arc::new(
         AppState::new(Config {
             fixtures_dir: default_fixtures_dir(),
@@ -26,7 +30,8 @@ fn setup() -> (Arc<AppState>, Router) {
             auto_approve: false,
             seed_token: Some(SEED.to_owned()),
         })
-        .expect("fixtures load"),
+        .expect("fixtures load")
+        .with_mastodon_threads(mastodon_threads),
     );
     let router = app(Arc::clone(&state));
     (state, router)
@@ -148,18 +153,16 @@ async fn every_post_has_as_many_fixture_comments_as_its_replies_count() {
 }
 
 #[tokio::test]
-async fn context_is_a_depth_first_thread_with_full_statuses() {
+async fn context_is_one_level_each_way_with_full_statuses() {
     let (_, router) = setup();
+    // Like Pixelfed: the direct replies only, oldest first.
     let ctx = context(&router, CAROUSEL).await;
     let d = &ctx["descendants"];
     assert_eq!(
         ids(d),
         [
             "781300000000000101",
-            "781300000000000102",
-            "781300000000000103",
             "781300000000000104",
-            "781300000000000105",
             "781300000000000106",
             "781300000000000107",
         ]
@@ -175,35 +178,66 @@ async fn context_is_a_depth_first_thread_with_full_statuses() {
     assert_eq!(first["replies_count"], 1);
     assert_eq!(first["favourites_count"], 3);
     assert_eq!(first["url"], format!("{BASE}/p/bob/781300000000000101"));
-    assert_eq!(d[1]["in_reply_to_id"], "781300000000000101");
     // Plain text is escaped; newlines become <br />.
-    assert_eq!(d[6]["content"], "<p>Number 3 for me.<br />That blue!</p>");
-    let tram = context(&router, REBLOG_INNER).await;
-    let amp = tram["descendants"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|s| s["id"] == "781300000000000208")
-        .unwrap();
+    assert_eq!(d[3]["content"], "<p>Number 3 for me.<br />That blue!</p>");
+    let amp = status(&router, "781300000000000208").await;
     assert_eq!(amp["content"], "<p>Black &amp; white version? &lt;3</p>");
     assert_eq!(amp["content_text"], "Black & white version? <3");
     // The signed-in user's own comment carries the plain account (no `source`).
-    assert_eq!(d[5]["account"]["id"], ME);
-    assert!(d[5]["account"].get("source").is_none());
+    assert_eq!(d[2]["account"]["id"], ME);
+    assert!(d[2]["account"].get("source").is_none());
 
+    // A reply's replies come from its own context, with only its parent above it.
+    let first = context(&router, "781300000000000101").await;
+    assert_eq!(ids(&first["ancestors"]), [CAROUSEL]);
+    assert_eq!(ids(&first["descendants"]), ["781300000000000102"]);
+    assert_eq!(
+        first["descendants"][0]["in_reply_to_id"],
+        "781300000000000101"
+    );
+    let mid = context(&router, "781300000000000102").await;
+    assert_eq!(ids(&mid["ancestors"]), ["781300000000000101"]);
+    assert_eq!(ids(&mid["descendants"]), ["781300000000000103"]);
+    let leaf = context(&router, "781300000000000103").await;
+    assert_eq!(leaf["descendants"], json!([]));
+}
+
+#[tokio::test]
+async fn mastodon_threads_give_the_whole_thread() {
+    let (_, router) = setup_with(true);
+    let ctx = context(&router, CAROUSEL).await;
+    assert_eq!(
+        ids(&ctx["descendants"]),
+        [
+            "781300000000000101",
+            "781300000000000102",
+            "781300000000000103",
+            "781300000000000104",
+            "781300000000000105",
+            "781300000000000106",
+            "781300000000000107",
+        ]
+    );
     // From inside the thread: ancestors root first, then the rest below.
     let mid = context(&router, "781300000000000102").await;
     assert_eq!(ids(&mid["ancestors"]), [CAROUSEL, "781300000000000101"]);
     assert_eq!(ids(&mid["descendants"]), ["781300000000000103"]);
+    assert_eq!(
+        context(&router, REBLOG_INNER).await["descendants"]
+            .as_array()
+            .unwrap()
+            .len(),
+        13
+    );
 }
 
 #[tokio::test]
 async fn context_of_a_reblog_is_the_reblogged_thread() {
-    let (_, router) = setup();
+    let (state, router) = setup();
     let outer = context(&router, REBLOG_OUTER).await;
     let inner = context(&router, REBLOG_INNER).await;
     assert_eq!(outer, inner);
-    assert_eq!(inner["descendants"].as_array().unwrap().len(), 13);
+    assert_eq!(ids(&inner["descendants"]), state.reply_ids(REBLOG_INNER));
 }
 
 #[tokio::test]
@@ -271,10 +305,15 @@ async fn adding_a_comment_updates_the_thread_and_the_count() {
         2
     );
     assert_eq!(status(&router, CAROUSEL).await["replies_count"], 5);
-    let ctx = context(&router, CAROUSEL).await;
-    let order = ids(&ctx["descendants"]);
-    let pos = order.iter().position(|i| *i == nested["id"]).unwrap();
-    assert_eq!(order[pos - 1], "781300000000000105");
+    assert!(
+        !ids(&context(&router, CAROUSEL).await["descendants"])
+            .contains(&nested["id"].as_str().unwrap())
+    );
+    let ctx = context(&router, "781300000000000104").await;
+    assert_eq!(
+        ids(&ctx["descendants"]),
+        ["781300000000000105", nested["id"].as_str().unwrap()]
+    );
 
     // Reset brings the fixture threads back.
     state.reset(true);
@@ -284,7 +323,7 @@ async fn adding_a_comment_updates_the_thread_and_the_count() {
             .as_array()
             .unwrap()
             .len(),
-        7
+        4
     );
     assert!(state.created_ids().is_empty());
     let (s, again) = comment(&router, CAROUSEL, "after reset").await;
