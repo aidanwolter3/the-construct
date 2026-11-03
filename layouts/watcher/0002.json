@@ -1,0 +1,761 @@
+{
+  "note": "Watcher: tabs for upcoming matches, sites and rules; event cards; event screen header",
+  "schema": 12,
+  "layout": {
+    "type": "core://Workspace",
+    "id": "watcher",
+    "title": "Watcher",
+    "slots": [
+      {
+        "slot_id": "watcher",
+        "provider_uri": "watcher://matches",
+        "content": {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://Sticky",
+              "content": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://ChoiceChips",
+                    "field": "view",
+                    "remember": true,
+                    "padding_h_dp": 16,
+                    "options": [
+                      {
+                        "label": "Upcoming",
+                        "value": ""
+                      },
+                      {
+                        "label": "Sites",
+                        "value": "sites"
+                      },
+                      {
+                        "label": "Rules",
+                        "value": "rules"
+                      }
+                    ]
+                  }
+                ],
+                "padding_v_dp": 8
+              }
+            },
+            {
+              "type": "core://Conditional",
+              "value": "$form.view",
+              "content": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://List",
+                    "query_key": "watcher:matches",
+                    "item_template": {
+                      "type": "core://Tappable",
+                      "on_click": {
+                        "intent": "action.navigation.open",
+                        "presentation": "Push",
+                        "target_uri": "watcher://events/$item.id"
+                      },
+                      "content": {
+                        "type": "core://Box",
+                        "content": {
+                          "type": "core://Column",
+                          "children": [
+                            {
+                              "type": "core://Row",
+                              "children": [
+                                {
+                                  "type": "core://Box",
+                                  "content": {
+                                    "type": "core://Text",
+                                    "value_expr": "$item.when_text",
+                                    "style": "Caption"
+                                  },
+                                  "background": "#EFE9FA",
+                                  "content_color": "#4A2C82",
+                                  "corner_dp": 8,
+                                  "padding_h_dp": 8,
+                                  "padding_v_dp": 3
+                                },
+                                {
+                                  "type": "core://Spacer"
+                                },
+                                {
+                                  "type": "core://Conditional",
+                                  "value": "$item.seen",
+                                  "content": {
+                                    "type": "core://Chip",
+                                    "text": "New"
+                                  },
+                                  "equals": "false"
+                                }
+                              ],
+                              "align": "Center",
+                              "spacing_dp": 8
+                            },
+                            {
+                              "type": "core://Text",
+                              "value_expr": "$item.title",
+                              "style": "Label"
+                            },
+                            {
+                              "type": "core://Conditional",
+                              "value": "$item.venue",
+                              "content": {
+                                "type": "core://Text",
+                                "value_expr": "$item.venue",
+                                "style": "Secondary"
+                              }
+                            },
+                            {
+                              "type": "core://Conditional",
+                              "value": "$item.rules_text",
+                              "content": {
+                                "type": "core://Text",
+                                "value_expr": "$item.rules_text",
+                                "style": "Caption"
+                              }
+                            }
+                          ],
+                          "spacing_dp": 6
+                        },
+                        "border_color": "#E4E4EA",
+                        "corner_dp": 14,
+                        "padding_h_dp": 14,
+                        "padding_v_dp": 12
+                      },
+                      "content_description": "Open $item.title"
+                    },
+                    "spacing_dp": 10,
+                    "padding_h_dp": 16,
+                    "empty_text": "No matching events yet. Add a site and a rule, and matches show up here."
+                  }
+                ],
+                "spacing_dp": 8
+              },
+              "equals": ""
+            },
+            {
+              "type": "core://Conditional",
+              "value": "$form.view",
+              "content": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://List",
+                    "query_key": "watcher:targets",
+                    "item_template": {
+                      "type": "core://Tappable",
+                      "on_click": {
+                        "intent": "action.navigation.open",
+                        "presentation": "Push",
+                        "target_uri": "watcher://targets/$item.id"
+                      },
+                      "content": {
+                        "type": "core://Box",
+                        "content": {
+                          "type": "core://Column",
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "value_expr": "$item.title",
+                              "style": "Label"
+                            },
+                            {
+                              "type": "core://Text",
+                              "value_expr": "$item.health_text",
+                              "style": "Secondary"
+                            },
+                            {
+                              "type": "core://Text",
+                              "value_expr": "$item.meta",
+                              "style": "Caption"
+                            },
+                            {
+                              "type": "core://Conditional",
+                              "value": "$item.failing",
+                              "content": {
+                                "type": "core://Row",
+                                "children": [
+                                  {
+                                    "type": "core://Chip",
+                                    "text": "Needs attention",
+                                    "icon": "warning",
+                                    "tone": "Warning"
+                                  }
+                                ],
+                                "align": "Center"
+                              },
+                              "equals": "true"
+                            }
+                          ],
+                          "spacing_dp": 4
+                        },
+                        "border_color": "#E4E4EA",
+                        "corner_dp": 14,
+                        "padding_h_dp": 14,
+                        "padding_v_dp": 12
+                      },
+                      "content_description": "Open $item.title"
+                    },
+                    "spacing_dp": 10,
+                    "padding_h_dp": 16,
+                    "empty_text": "No websites yet.",
+                    "where": {
+                      "field": "archived",
+                      "equals": "false"
+                    }
+                  },
+                  {
+                    "type": "core://Column",
+                    "children": [
+                      {
+                        "type": "core://Box",
+                        "content": {
+                          "type": "core://Column",
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "value_expr": "Watch a website",
+                              "style": "Label"
+                            },
+                            {
+                              "type": "core://Text",
+                              "value_expr": "An events page or a calendar (.ics) feed. It's checked every few hours.",
+                              "style": "Secondary"
+                            },
+                            {
+                              "type": "core://TextField",
+                              "field": "url",
+                              "placeholder": "https://…"
+                            },
+                            {
+                              "type": "core://Button",
+                              "label": "Watch",
+                              "on_click": {
+                                "intent": "action.mutation.create",
+                                "query_key": "watcher:targets",
+                                "entity_uri": "watcher://targets/pending-$nonce",
+                                "entity": {
+                                  "id": "pending-$nonce",
+                                  "title": "$form.url",
+                                  "health_text": "Not checked yet",
+                                  "meta": "",
+                                  "failing": false,
+                                  "archived": false
+                                },
+                                "endpoint": "/v1/watcher/targets/create",
+                                "payload": {
+                                  "url": "$form.url",
+                                  "client_id": "$nonce"
+                                },
+                                "refresh_workspace": true
+                              }
+                            }
+                          ],
+                          "spacing_dp": 8
+                        },
+                        "border_color": "#E4E4EA",
+                        "corner_dp": 14,
+                        "padding_h_dp": 14,
+                        "padding_v_dp": 12
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 4
+                  }
+                ],
+                "spacing_dp": 10
+              },
+              "equals": "sites"
+            },
+            {
+              "type": "core://Conditional",
+              "value": "$form.view",
+              "content": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://List",
+                    "query_key": "watcher:rules",
+                    "item_template": {
+                      "type": "core://Box",
+                      "content": {
+                        "type": "core://Row",
+                        "children": [
+                          {
+                            "type": "core://Container",
+                            "orientation": "Vertical",
+                            "padding_dp": 0,
+                            "children": [
+                              {
+                                "type": "core://Text",
+                                "value_expr": "$item.title",
+                                "style": "Label"
+                              },
+                              {
+                                "type": "core://Text",
+                                "value_expr": "$item.summary",
+                                "style": "Secondary"
+                              }
+                            ]
+                          },
+                          {
+                            "type": "core://Spacer"
+                          },
+                          {
+                            "type": "core://IconButton",
+                            "icon": "close",
+                            "content_description": "Remove rule $item.title",
+                            "on_click": {
+                              "intent": "action.mutation.optimistic",
+                              "entity_uri": "$item.uri",
+                              "field": "archived",
+                              "value_expr": "true",
+                              "rollback_value": false,
+                              "endpoint": "/v1/watcher/rules/update",
+                              "payload": {
+                                "id": "$item.id",
+                                "archived": "$value"
+                              }
+                            }
+                          }
+                        ],
+                        "align": "Center",
+                        "spacing_dp": 8
+                      },
+                      "border_color": "#E4E4EA",
+                      "corner_dp": 14,
+                      "padding_h_dp": 14,
+                      "padding_v_dp": 12
+                    },
+                    "spacing_dp": 10,
+                    "padding_h_dp": 16,
+                    "empty_text": "No rules yet.",
+                    "where": {
+                      "field": "archived",
+                      "equals": "false"
+                    }
+                  },
+                  {
+                    "type": "core://Column",
+                    "children": [
+                      {
+                        "type": "core://Box",
+                        "content": {
+                          "type": "core://Column",
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "value_expr": "Add a rule",
+                              "style": "Label"
+                            },
+                            {
+                              "type": "core://Text",
+                              "value_expr": "You get a notification when a new event mentions one of these.",
+                              "style": "Secondary"
+                            },
+                            {
+                              "type": "core://TextField",
+                              "field": "rule_keywords",
+                              "placeholder": "Keywords, e.g. Budget Cuts"
+                            },
+                            {
+                              "type": "core://TextField",
+                              "field": "rule_exclude",
+                              "placeholder": "Skip events mentioning, e.g. class, workshop"
+                            },
+                            {
+                              "type": "core://Button",
+                              "label": "Add rule",
+                              "on_click": {
+                                "intent": "action.mutation.create",
+                                "query_key": "watcher:rules",
+                                "entity_uri": "watcher://rules/pending-$nonce",
+                                "entity": {
+                                  "id": "pending-$nonce",
+                                  "title": "$form.rule_keywords",
+                                  "summary": "\"$form.rule_keywords\"",
+                                  "archived": false
+                                },
+                                "endpoint": "/v1/watcher/rules/create",
+                                "payload": {
+                                  "keywords": "$form.rule_keywords",
+                                  "exclude": "$form.rule_exclude",
+                                  "client_id": "$nonce"
+                                },
+                                "refresh_workspace": true
+                              }
+                            }
+                          ],
+                          "spacing_dp": 8
+                        },
+                        "border_color": "#E4E4EA",
+                        "corner_dp": 14,
+                        "padding_h_dp": 14,
+                        "padding_v_dp": 12
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 4
+                  }
+                ],
+                "spacing_dp": 10
+              },
+              "equals": "rules"
+            }
+          ],
+          "spacing_dp": 4
+        }
+      }
+    ],
+    "screens": [
+      {
+        "id": "event",
+        "route": "watcher://events/{id}",
+        "title": "Event",
+        "data": "/v1/watcher/screens/event?id=$route.id",
+        "content": {
+          "type": "core://List",
+          "query_key": "watcher:event:$route.id",
+          "item_template": {
+            "type": "core://Column",
+            "children": [
+              {
+                "type": "core://Box",
+                "content": {
+                  "type": "core://Column",
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.when_text",
+                      "style": "Label"
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.title",
+                      "style": "Headline"
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.venue",
+                      "content": {
+                        "type": "core://Text",
+                        "value_expr": "$item.venue",
+                        "style": "Body"
+                      }
+                    }
+                  ],
+                  "spacing_dp": 6
+                },
+                "background": "#EFE9FA",
+                "content_color": "#4A2C82",
+                "corner_dp": 16,
+                "padding_h_dp": 16,
+                "padding_v_dp": 16
+              },
+              {
+                "type": "core://Conditional",
+                "value": "$item.rules_text",
+                "content": {
+                  "type": "core://Row",
+                  "children": [
+                    {
+                      "type": "core://Chip",
+                      "text": "$item.rules_text"
+                    },
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.seen",
+                      "content": {
+                        "type": "core://Button",
+                        "label": "Mark as seen",
+                        "on_click": {
+                          "intent": "action.mutation.optimistic",
+                          "entity_uri": "$item.uri",
+                          "field": "seen",
+                          "value_expr": "true",
+                          "rollback_value": false,
+                          "endpoint": "/v1/watcher/events/seen",
+                          "payload": {
+                            "id": "$item.id",
+                            "seen": "$value"
+                          }
+                        }
+                      },
+                      "equals": "false"
+                    }
+                  ],
+                  "align": "Center",
+                  "spacing_dp": 8
+                }
+              },
+              {
+                "type": "core://Conditional",
+                "value": "$item.description",
+                "content": {
+                  "type": "core://Column",
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "value_expr": "About",
+                      "style": "Label"
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.description",
+                      "style": "Body"
+                    }
+                  ],
+                  "spacing_dp": 6
+                }
+              },
+              {
+                "type": "core://Conditional",
+                "value": "$item.url",
+                "content": {
+                  "type": "core://Column",
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "value_expr": "Event page",
+                      "style": "Label"
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.url",
+                      "style": "Secondary"
+                    }
+                  ],
+                  "spacing_dp": 4
+                }
+              },
+              {
+                "type": "core://Text",
+                "value_expr": "From $item.source",
+                "style": "Caption"
+              }
+            ],
+            "spacing_dp": 16,
+            "padding_v_dp": 16
+          },
+          "spacing_dp": 0,
+          "padding_h_dp": 16
+        }
+      },
+      {
+        "id": "target",
+        "route": "watcher://targets/{id}",
+        "title": "${watcher://targets/$route.id#title}",
+        "data": "/v1/watcher/screens/target?id=$route.id",
+        "content": {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://List",
+              "query_key": "watcher:target:$route.id",
+              "item_template": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://Box",
+                    "content": {
+                      "type": "core://Column",
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.health_text",
+                          "style": "Body"
+                        },
+                        {
+                          "type": "core://Conditional",
+                          "value": "$item.failing",
+                          "content": {
+                            "type": "core://Row",
+                            "children": [
+                              {
+                                "type": "core://Chip",
+                                "text": "Needs attention",
+                                "icon": "warning",
+                                "tone": "Warning"
+                              }
+                            ],
+                            "align": "Center"
+                          },
+                          "equals": "true"
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.url",
+                          "style": "Secondary"
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.meta",
+                          "style": "Caption"
+                        }
+                      ],
+                      "spacing_dp": 6
+                    },
+                    "border_color": "#E4E4EA",
+                    "corner_dp": 14,
+                    "padding_h_dp": 14,
+                    "padding_v_dp": 12
+                  },
+                  {
+                    "type": "core://Conditional",
+                    "value": "$item.archived",
+                    "content": {
+                      "type": "core://Row",
+                      "children": [
+                        {
+                          "type": "core://Button",
+                          "label": "Check now",
+                          "on_click": {
+                            "intent": "action.mutation.optimistic",
+                            "entity_uri": "$item.uri",
+                            "field": "refreshing",
+                            "value_expr": "true",
+                            "rollback_value": false,
+                            "endpoint": "/v1/watcher/targets/refresh",
+                            "payload": {
+                              "id": "$item.id"
+                            }
+                          }
+                        },
+                        {
+                          "type": "core://Button",
+                          "label": "Stop watching",
+                          "on_click": {
+                            "intent": "action.mutation.optimistic",
+                            "entity_uri": "$item.uri",
+                            "field": "archived",
+                            "value_expr": "true",
+                            "rollback_value": false,
+                            "endpoint": "/v1/watcher/targets/update",
+                            "payload": {
+                              "id": "$item.id",
+                              "archived": "$value"
+                            }
+                          }
+                        }
+                      ],
+                      "spacing_dp": 8
+                    },
+                    "equals": "false"
+                  },
+                  {
+                    "type": "core://Conditional",
+                    "value": "$item.archived",
+                    "content": {
+                      "type": "core://Text",
+                      "value_expr": "Stopped: no longer checked.",
+                      "style": "Secondary"
+                    },
+                    "equals": "true"
+                  }
+                ],
+                "spacing_dp": 10,
+                "padding_v_dp": 12
+              },
+              "spacing_dp": 10,
+              "padding_h_dp": 16
+            },
+            {
+              "type": "core://Column",
+              "children": [
+                {
+                  "type": "core://Text",
+                  "value_expr": "Upcoming events",
+                  "style": "Title"
+                }
+              ],
+              "padding_h_dp": 16,
+              "padding_v_dp": 4
+            },
+            {
+              "type": "core://List",
+              "query_key": "watcher:target:$route.id:events",
+              "item_template": {
+                "type": "core://Tappable",
+                "on_click": {
+                  "intent": "action.navigation.open",
+                  "presentation": "Push",
+                  "target_uri": "watcher://events/$item.id"
+                },
+                "content": {
+                  "type": "core://Box",
+                  "content": {
+                    "type": "core://Column",
+                    "children": [
+                      {
+                        "type": "core://Row",
+                        "children": [
+                          {
+                            "type": "core://Box",
+                            "content": {
+                              "type": "core://Text",
+                              "value_expr": "$item.when_text",
+                              "style": "Caption"
+                            },
+                            "background": "#EFE9FA",
+                            "content_color": "#4A2C82",
+                            "corner_dp": 8,
+                            "padding_h_dp": 8,
+                            "padding_v_dp": 3
+                          },
+                          {
+                            "type": "core://Spacer"
+                          }
+                        ],
+                        "align": "Center",
+                        "spacing_dp": 8
+                      },
+                      {
+                        "type": "core://Text",
+                        "value_expr": "$item.title",
+                        "style": "Label"
+                      },
+                      {
+                        "type": "core://Conditional",
+                        "value": "$item.venue",
+                        "content": {
+                          "type": "core://Text",
+                          "value_expr": "$item.venue",
+                          "style": "Secondary"
+                        }
+                      },
+                      {
+                        "type": "core://Conditional",
+                        "value": "$item.rules_text",
+                        "content": {
+                          "type": "core://Text",
+                          "value_expr": "$item.rules_text",
+                          "style": "Caption"
+                        }
+                      }
+                    ],
+                    "spacing_dp": 6
+                  },
+                  "border_color": "#E4E4EA",
+                  "corner_dp": 14,
+                  "padding_h_dp": 14,
+                  "padding_v_dp": 12
+                },
+                "content_description": "Open $item.title"
+              },
+              "spacing_dp": 10,
+              "padding_h_dp": 16,
+              "empty_text": "No upcoming events found on this page."
+            }
+          ],
+          "spacing_dp": 4
+        }
+      }
+    ]
+  }
+}
