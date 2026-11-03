@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -540,7 +541,7 @@ private fun MenuSections(controller: ConstructController, state: ConstructState,
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 8.dp)) {
             Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "The Construct",
+                    "Apps",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f).semantics { heading() },
@@ -550,8 +551,7 @@ private fun MenuSections(controller: ConstructController, state: ConstructState,
                 }
             }
             if (newerVersionAvailable(state, pin)) NewerVersionBanner(controller, state, pin!!)
-
-            SectionTitle("Apps")
+            Spacer(Modifier.height(8.dp))
             AppsSection(controller, state, pin)
         }
         SectionDivider()
