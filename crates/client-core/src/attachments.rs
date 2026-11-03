@@ -69,7 +69,7 @@ pub fn stage(src: &Path, dir: &Path, id: &str) -> Result<Staged, String> {
     };
     // JPEG has no alpha: flatten onto white rather than black.
     let rgb = flatten(img);
-    fs::create_dir_all(dir).map_err(|e| format!("can't save the photo ({e})"))?;
+    crate::store::make_private_dir(dir).map_err(|e| format!("can't save the photo ({e})"))?;
     let path = dir.join(format!("{id}.jpg"));
     let tmp = dir.join(format!("{id}.jpg.part"));
     let written = (|| {

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Nothing of this app leaves the device in a backup or a device-to-device transfer (Android 12+; the manifest's
+     allowBackup="false" covers older versions): cache.db holds the private feed, the outbox and queued photos, and the
+     `push` SharedPreferences hold Web Push endpoints and keys. The session token could not be restored anyway (it is
+     encrypted with a non-exportable AndroidKeyStore key), so a new device signs in again. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+    </device-transfer>
+</data-extraction-rules>

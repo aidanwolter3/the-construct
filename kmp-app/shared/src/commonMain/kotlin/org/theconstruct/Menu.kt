@@ -924,7 +924,9 @@ private fun ServerSection(menu: MenuState, server: ServerChoice) {
                     label = { Text("Server URL") },
                     supportingText = {
                         when (check) {
-                            is ServerUrlCheck.Ok -> Unit
+                            is ServerUrlCheck.Ok -> if (ServerUrls.isCleartextRemote(check.url)) {
+                                Text(ServerUrls.CLEARTEXT_WARNING, Modifier.testTag("server-custom-hint"))
+                            }
                             ServerUrlCheck.Invalid -> Text(ServerUrls.FORMAT_HINT)
                             ServerUrlCheck.NeedsHttps -> Text(ServerUrls.NEEDS_HTTPS_HINT, Modifier.testTag("server-custom-hint"))
                         }
