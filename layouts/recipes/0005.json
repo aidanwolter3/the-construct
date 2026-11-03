@@ -1,6 +1,6 @@
 {
-  "note": "Recipes: the search box and category chips stay pinned at the top while the list scrolls (core://Sticky, schema 10)",
-  "schema": 10,
+  "note": "Recipes: the search box and category chips stay pinned at the top while the list scrolls (core://Sticky, schema 11)",
+  "schema": 11,
   "layout": {
     "type": "core://Workspace",
     "id": "recipes",

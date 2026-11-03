@@ -315,13 +315,16 @@ sealed class UiNode {
 
     /**
      * A sideways-scrolling row of chips editing the form value `$form.<field>` (schema 6, D44): a tap sets it to the
-     * option's value (empty clears it); the matching option (the empty one while unset) is selected.
+     * option's value (empty clears it); the matching option (the empty one while unset) is selected. With [remember]
+     * (schema 10) the device keeps the choice and restores it when the layout or screen opens again
+     * ([rememberedChoices], docs/decisions/remembered-form-values.md).
      */
     @Serializable
     data class ChoiceChips(
         val field: String,
         val options: List<ChoiceOption>,
         @SerialName("padding_h_dp") val paddingHDp: Int = 0,
+        val remember: Boolean = false,
     ) : UiNode()
 
     /**
@@ -337,7 +340,7 @@ sealed class UiNode {
     ) : UiNode()
 
     /**
-     * `core://Sticky` (schema 10): [content] scrolls with the page until it reaches the top of the scrolling view, then
+     * `core://Sticky` (schema 11): [content] scrolls with the page until it reaches the top of the scrolling view, then
      * stays pinned there (on the page background) while the rest of its parent scrolls under it ([StickyScroll]).
      */
     @Serializable

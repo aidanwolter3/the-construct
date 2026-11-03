@@ -298,12 +298,13 @@ private val ChoiceText = Color(0xFF3A3A3C)
 
 /**
  * `core://ChoiceChips` (schema 6, D44): a sideways-scrolling row of chips editing the form value
- * [UiNode.ChoiceChips.field]. Tapping one stores its value (an empty value clears the field). Tags:
- * `choice:<field>:<value>`.
+ * [UiNode.ChoiceChips.field]. Tapping one stores its value (an empty value clears the field); with `remember`
+ * (schema 10) the choice is also saved on the device ([LocalFormMemory]). Tags: `choice:<field>:<value>`.
  */
 @Composable
 internal fun NodeChoiceChips(node: UiNode.ChoiceChips, modifier: Modifier) {
     val form = LocalForm.current
+    val memory = if (node.remember) LocalFormMemory.current else null
     val current = form?.get(node.field).orEmpty()
     Row(
         modifier
@@ -323,6 +324,7 @@ internal fun NodeChoiceChips(node: UiNode.ChoiceChips, modifier: Modifier) {
                     .background(if (isSelected) ChoiceSelectedBg else ChoiceBg)
                     .clickable {
                         if (option.value.isEmpty()) form?.remove(node.field) else form?.set(node.field, option.value)
+                        memory?.save(node.field, option.value.ifEmpty { null })
                     }
                     .semantics {
                         selected = isSelected

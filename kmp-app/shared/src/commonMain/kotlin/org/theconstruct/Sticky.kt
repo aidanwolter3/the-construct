@@ -26,7 +26,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlin.math.roundToInt
 
 /**
- * The scrolling view a `core://Sticky` (schema 10) pins to: its [scroll] state and the coordinates of the scrolled
+ * The scrolling view a `core://Sticky` (schema 11) pins to: its [scroll] state and the coordinates of the scrolled
  * content ([stickyContent]). Pinned content stops [topInset] below the top of the view, e.g. clear of the menu and bell
  * buttons [ConstructApp] draws over the workspace.
  */

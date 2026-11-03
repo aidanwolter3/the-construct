@@ -196,12 +196,40 @@ val LocalForm: ProvidableCompositionLocal<SnapshotStateMap<String, String>?> = s
 /**
  * The back stack, owned by [ConstructController] (survives rotation, like the menu). [open] pushes the screen of the
  * displayed layout whose route matches (and asks the engine to load its data); [back] pops.
+ *
+ * Remembered form values (schema 10): the root form is filled from the device when a layout shows a remembered field
+ * for the first time ([restoreRoot]), a screen's form when the screen opens; [remember] saves a new choice.
  */
 @Stable
 class Navigation internal constructor(private val controller: ConstructController) {
     val stack = mutableStateListOf<ScreenEntry>()
     val rootForm: SnapshotStateMap<String, String> = mutableStateMapOf()
     private var nextKey = 0
+
+    /** Remembered root fields already restored for the current app (snapshots arrive on any thread: guarded). */
+    private val rootRestored = mutableSetOf<String>()
+
+    /**
+     * Restores the remembered fields of [workspace] (the displayed layout) that this app has not restored yet, before
+     * the layout is drawn. A field the user changed meanwhile keeps its value. Reads the device only when a new
+     * remembered field appears.
+     */
+    internal fun restoreRoot(workspace: UiNode?) {
+        val ws = workspace as? UiNode.Workspace ?: return
+        val choices = rememberedChoices(ws.slots.map { it.content })
+        if (choices.isEmpty()) return
+        synchronized(rootRestored) {
+            val fresh = choices.filterKeys { it !in rootRestored }
+            if (fresh.isEmpty()) return
+            applyRemembered(rootForm, fresh, controller.rememberedFormValues(ROOT_FORM_SCOPE))
+            rootRestored += fresh.keys
+        }
+    }
+
+    /** Saves a remembered value of form [scope] on the device (null = the default option). */
+    fun remember(scope: String, field: String, value: String?) {
+        controller.rememberFormValue(scope, field, value)
+    }
 
     val top: ScreenEntry? get() = stack.lastOrNull()
 
@@ -229,6 +257,8 @@ class Navigation internal constructor(private val controller: ConstructControlle
         for (screen in workspace.screens) {
             val params = matchRoute(screen.route, intent.targetUri) ?: continue
             val entry = ScreenEntry(nextKey++, bindRoute(screen, params), params)
+            val choices = rememberedChoices(listOfNotNull(entry.screen.content, entry.screen.footer))
+            if (choices.isNotEmpty()) applyRemembered(entry.form, choices, controller.rememberedFormValues(screen.id))
             if (intent.presentation == PresentationMode.Replace && stack.isNotEmpty()) {
                 controller.attachments.release(stack[stack.lastIndex].form)
                 stack[stack.lastIndex] = entry
@@ -269,7 +299,10 @@ class Navigation internal constructor(private val controller: ConstructControlle
     /** Closes every screen (another app is opening). */
     fun clear() {
         stack.clear()
-        rootForm.clear()
+        synchronized(rootRestored) {
+            rootForm.clear()
+            rootRestored.clear()
+        }
         controller.attachments.forgetAll()
     }
 }
@@ -286,8 +319,10 @@ internal fun ScreenHost(controller: ConstructController, state: ConstructState) 
     PlatformBackHandler(enabled = !controller.menu.open) { nav.back() }
     key(entry.key) {
         Surface(Modifier.fillMaxSize().testTag("screen:${entry.screen.id}"), color = MaterialTheme.colorScheme.background) {
+            val scope = entry.screen.id
             CompositionLocalProvider(
                 LocalForm provides entry.form,
+                LocalFormMemory provides remember(scope) { FormMemory { f, v -> nav.remember(scope, f, v) } },
                 LocalConstructQueries provides state.queries,
             ) {
                 Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {

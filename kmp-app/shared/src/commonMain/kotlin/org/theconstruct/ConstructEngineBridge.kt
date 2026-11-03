@@ -149,6 +149,15 @@ interface ConstructEngineBridge {
 
     /** Forgets a staged attachment no create took (its file and entity go). Default: nothing to forget. */
     fun discardAttachment(id: String) {}
+
+    // Remembered form values (schema 10, docs/decisions/remembered-form-values.md): kept on this device per app (the
+    // engine's) and form scope ([ROOT_FORM_SCOPE] or a screen id). Local storage only, quick enough for the UI thread.
+
+    /** The remembered values of form [scope]: field -> value. Default: none. */
+    fun rememberedFormValues(scope: String): Map<String, String> = emptyMap()
+
+    /** Remembers one value of form [scope] (null forgets it). Default: not kept. */
+    fun rememberFormValue(scope: String, field: String, value: String?) {}
 }
 
 private fun appsUnavailable() = LayoutApiException("Apps aren't available here.")

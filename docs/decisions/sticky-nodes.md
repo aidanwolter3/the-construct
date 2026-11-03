@@ -1,4 +1,4 @@
-# `core://Sticky` pins content to the top while its parent scrolls (schema 10)
+# `core://Sticky` pins content to the top while its parent scrolls (schema 11)
 
 Date: 2026-11-03. Related: D34, D36, D43, D44.
 
@@ -16,7 +16,7 @@ Considered:
 - A wrapper node, like `core://Tappable` (D42). Any content can be pinned, and the rule is the
   familiar CSS `position: sticky` one.
 
-Decision: a new wrapper node, `core://Sticky {content}` (schema 10, additive). Its content scrolls
+Decision: a new wrapper node, `core://Sticky {content}` (schema 11, additive). Its content scrolls
 with the page until it reaches the top of the scrolling view, then stays pinned there while the rest
 of its parent scrolls under it; when the end of its parent reaches it, it scrolls away with it. While
 pinned it is drawn on the page background with a hairline under it, so what scrolls under it is

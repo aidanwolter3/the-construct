@@ -33,7 +33,7 @@ pub use rusqlite::Error as StoreError;
 pub type StoreResult<T> = Result<T, StoreError>;
 
 /// Current schema version (`PRAGMA user_version`).
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// Outbox row status for rows not yet accepted or rejected by the server.
 pub const STATUS_PENDING: &str = "PENDING";
@@ -135,6 +135,21 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 ";
 
+/// Schema v7 (docs/decisions/remembered-form-values.md): form values a
+/// layout asked the device to remember (`core://ChoiceChips` `remember`),
+/// per app and form scope (`""` for the app's layout, else a screen id).
+/// Device preferences, not private data: kept at sign-out.
+const MIGRATION_V7: &str = "
+CREATE TABLE IF NOT EXISTS form_values (
+    app_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    field TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (app_id, scope, field)
+);
+";
+
 /// `MIGRATIONS[i]` upgrades schema v`i` to v`i+1`, each in one transaction.
 const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [
     MIGRATION_V1,
@@ -143,6 +158,7 @@ const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [
     MIGRATION_V4,
     MIGRATION_V5,
     MIGRATION_V6,
+    MIGRATION_V7,
 ];
 
 /// Notifications kept in the cache (the newest ids).
@@ -755,6 +771,47 @@ pub trait StoreOps {
         Ok(())
     }
 
+    // ---- form_values ----
+
+    /// The remembered form values of one app's form `scope` (field -> value).
+    fn form_values(&self, app_id: &str, scope: &str) -> StoreResult<BTreeMap<String, String>> {
+        self.conn()
+            .prepare_cached(
+                "SELECT field, value FROM form_values WHERE app_id = ?1 AND scope = ?2",
+            )?
+            .query_map(params![app_id, scope], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect()
+    }
+
+    /// Remember a form value (`None` forgets it).
+    fn set_form_value(
+        &self,
+        app_id: &str,
+        scope: &str,
+        field: &str,
+        value: Option<&str>,
+        updated_at: i64,
+    ) -> StoreResult<()> {
+        match value {
+            Some(v) => self
+                .conn()
+                .prepare_cached(
+                    "INSERT INTO form_values (app_id, scope, field, value, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(app_id, scope, field) DO UPDATE SET value = excluded.value,
+                         updated_at = excluded.updated_at",
+                )?
+                .execute(params![app_id, scope, field, v, updated_at])?,
+            None => self
+                .conn()
+                .prepare_cached(
+                    "DELETE FROM form_values WHERE app_id = ?1 AND scope = ?2 AND field = ?3",
+                )?
+                .execute(params![app_id, scope, field])?,
+        };
+        Ok(())
+    }
+
     // ---- notifications ----
 
     /// Insert or replace a notification. Returns whether it was new.
@@ -940,6 +997,66 @@ pub fn is_read_only_error(e: &StoreError) -> bool {
     )
 }
 
+/// Create `dir` (and missing parents) readable only by its owner (0700 on
+/// unix), and drop group/other access from it if it already exists. The
+/// cache holds the private feed, the outbox and queued photos. Owner bits
+/// are never added, so a deliberately read-only directory stays read-only.
+pub fn make_private_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)?;
+        strip_group_other(dir, std::fs::metadata(dir)?.permissions().mode())
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(dir)
+}
+
+/// Create the DB file at `path` as 0600 if it is missing (SQLite gives
+/// its `-wal`, `-shm` and `-journal` files the same mode), and drop
+/// group/other access from those files where they already exist (caches
+/// written before this was enforced).
+fn make_private_file(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+        {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let p = path.with_file_name(format!("{name}{suffix}"));
+            match std::fs::metadata(&p) {
+                Ok(m) => strip_group_other(&p, m.permissions().mode())?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn strip_group_other(path: &Path, mode: u32) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    if mode & 0o077 == 0 {
+        return Ok(());
+    }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & 0o7700))
+}
+
 fn read_only_error(msg: &str) -> StoreError {
     StoreError::SqliteFailure(
         rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_READONLY),
@@ -955,6 +1072,12 @@ impl Store {
     /// with a write probe that is rolled back. A probe that only hits a
     /// lock held by another connection does not fail the open.
     pub fn open(path: &Path) -> StoreResult<Self> {
+        if let Err(e) = make_private_file(path) {
+            eprintln!(
+                "[ConstructEngine] store: cannot restrict {} to its owner: {e}",
+                path.display()
+            );
+        }
         let conn = Connection::open(path)?;
         conn.busy_timeout(BUSY_TIMEOUT)?;
         // WAL + NORMAL: commits append to the WAL without an fsync each
@@ -1391,6 +1514,53 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
+    #[cfg(unix)]
+    fn mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cache_dir_and_files_are_owner_only() {
+        let base = temp_db("private").parent().unwrap().to_path_buf();
+        let dir = base.join("servers").join("x");
+        make_private_dir(&dir).unwrap();
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(mode(&base.join("servers")), 0o700);
+        let path = dir.join("cache.db");
+        let mut s = Store::open(&path).unwrap();
+        s.transaction(|tx| tx.upsert_entity("core://c/a", &entity(r#"{"n":1}"#), 1))
+            .unwrap();
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(&path.with_file_name("cache.db-wal")), 0o600);
+        assert_eq!(mode(&path.with_file_name("cache.db-shm")), 0o600);
+        drop(s);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_cache_files_lose_group_and_other_access() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = temp_db("tighten");
+        let dir = path.parent().unwrap().to_path_buf();
+        let set = |p: &Path, m: u32| {
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).unwrap()
+        };
+        write_v1_db(&path);
+        set(&dir, 0o755);
+        set(&path, 0o644);
+        make_private_dir(&dir).unwrap();
+        drop(Store::open(&path).unwrap());
+        assert_eq!((mode(&dir), mode(&path)), (0o700, 0o600));
+        // Owner bits are never added: a read-only file stays read-only.
+        set(&path, 0o444);
+        make_private_file(&path).unwrap();
+        assert_eq!(mode(&path), 0o400);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn v1_db_migrates_to_v2_and_v3() {
         let path = temp_db("v1");
@@ -1488,6 +1658,28 @@ mod tests {
             created_at: 1,
             read: false,
         }
+    }
+
+    #[test]
+    fn form_values_are_kept_per_app_and_scope() {
+        let s = Store::open_in_memory().unwrap();
+        assert!(s.form_values("a", "").unwrap().is_empty());
+        s.set_form_value("a", "", "view", Some("cards"), 1).unwrap();
+        s.set_form_value("a", "post", "view", Some("grid"), 1)
+            .unwrap();
+        s.set_form_value("b", "", "view", Some("list"), 1).unwrap();
+        s.set_form_value("a", "", "view", Some("tiles"), 2).unwrap();
+        s.set_form_value("a", "", "sort", Some("new"), 2).unwrap();
+        let a = s.form_values("a", "").unwrap();
+        assert_eq!(a.get("view").map(String::as_str), Some("tiles"));
+        assert_eq!(a.get("sort").map(String::as_str), Some("new"));
+        assert_eq!(a.len(), 2);
+        assert_eq!(s.form_values("a", "post").unwrap().len(), 1);
+        assert_eq!(s.form_values("b", "").unwrap()["view"], "list");
+        s.set_form_value("a", "", "view", None, 3).unwrap();
+        assert_eq!(s.form_values("a", "").unwrap().len(), 1);
+        // Forgetting what was never stored is fine.
+        s.set_form_value("c", "", "x", None, 3).unwrap();
     }
 
     #[test]

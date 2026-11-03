@@ -70,7 +70,7 @@ class MainActivity : ComponentActivity() {
 
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         Log.i(TAG, "notification permission ${if (granted) "granted" else "denied"}")
-        setUpNotifications(vm.controller)
+        setUpNotifications(vm.session)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -117,7 +117,7 @@ class MainActivity : ComponentActivity() {
             Box(Modifier.fillMaxSize().background(Color.White).safeDrawingPadding()) {
                 key(session) { ConstructApp(session.controller, server = server, mediaPicker = picker) }
             }
-            LaunchedEffect(session) { setUpNotifications(session.controller) }
+            LaunchedEffect(session) { setUpNotifications(session) }
         }
     }
 
@@ -150,25 +150,41 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         // The pod session may have appeared since (pod code entered, signed in): try again.
-        if (pushReadyFor !== vm.controller) setUpNotifications(vm.controller)
+        if (pushReadyFor !== vm.controller) setUpNotifications(vm.session)
     }
 
-    /** A tapped notification (D52): open its app and target. */
+    /**
+     * A tapped notification (D52): open its app and target. Only taps forwarded by [NotificationTapActivity] count
+     * (this activity is exported, so other apps could send the same extras), and only for the server that sent the
+     * notification; one from another server just brings the app up.
+     */
     private fun handleNotificationTap(intent: Intent?) {
         val app = intent?.getStringExtra(EXTRA_NOTIFICATION_APP) ?: return
         val target = intent.getStringExtra(EXTRA_NOTIFICATION_TARGET)
         val id = intent.getStringExtra(EXTRA_NOTIFICATION_ID)
+        val server = intent.getStringExtra(EXTRA_NOTIFICATION_SERVER)
+        val trusted = NotificationTaps.trusted(intent)
         intent.removeExtra(EXTRA_NOTIFICATION_APP) // not again on recreation
+        intent.removeExtra(EXTRA_NOTIFICATION_NONCE)
+        if (!trusted) {
+            Log.w(TAG, "notification extras without the tap nonce ignored")
+            return
+        }
+        if (server != Push.instanceFor(vm.session.baseUrl)) {
+            Log.i(TAG, "notification $id is from another server; not opened in this one")
+            return
+        }
         Log.i(TAG, "opening notification $id of $app")
         vm.controller.openNotification(app, target, id)
     }
 
     /**
-     * Notifications for [controller]'s pod (D52): ask for the permission once (Android 13+), make the Android
-     * channels from the pod's list, and register for Web Push with the pod's VAPID key. Needs a pod session; without
-     * one it quietly does nothing and [onResume] tries again.
+     * Notifications for [session]'s pod (D52): ask for the permission once (Android 13+), make the Android
+     * channels from the pod's list, and register that server's own push instance ([Push.instanceFor]) with the pod's
+     * VAPID key. Needs a pod session; without one it quietly does nothing and [onResume] tries again.
      */
-    private fun setUpNotifications(controller: ConstructController) {
+    private fun setUpNotifications(session: ConstructViewModel.Session) {
+        val controller = session.controller
         if (Build.VERSION.SDK_INT >= 33 && !AppNotifications.permitted(this)) {
             val prefs = getSharedPreferences("notifications", MODE_PRIVATE)
             if (!prefs.getBoolean("asked", false)) {
@@ -184,7 +200,7 @@ class MainActivity : ComponentActivity() {
                 if (isDestroyed) return@runOnUiThread
                 AppNotifications.syncChannels(this, channels, controller::appTitle)
                 if (key != null) {
-                    Push.register(this, key)
+                    Push.register(this, Push.instanceFor(session.baseUrl), key)
                     pushReadyFor = controller
                 }
             }
@@ -339,9 +355,13 @@ internal class ConstructViewModel(config: EngineConfig, private val appContext: 
         // Notifications (D52): live arrivals show as OS notifications while the app is in the background; the
         // push service hands endpoints and messages to this controller while it is alive.
         controller.setDeviceInfo("android", "${Build.MANUFACTURER} ${Build.MODEL}".trim())
-        controller.onNotification = { n -> if (!AppNotifications.foreground) AppNotifications.show(appContext, n) }
-        Push.controller = controller
-        Push.resend(appContext, controller)
+        val pushInstance = Push.instanceFor(config.baseUrl)
+        controller.onNotification = { n -> if (!AppNotifications.foreground) AppNotifications.show(appContext, n, pushInstance) }
+        // Only this server's own registration is handed over, never another server's endpoint (privacy: the same
+        // endpoint would link this device across servers).
+        Push.dropLegacyRegistration(appContext)
+        Push.live = Push.Live(pushInstance, controller)
+        Push.resend(appContext, pushInstance, controller)
         return Session(config.baseUrl, controller)
     }
 
@@ -399,7 +419,7 @@ internal class ConstructViewModel(config: EngineConfig, private val appContext: 
 
     override fun onCleared() {
         Log.i(TAG, "closing engine")
-        if (Push.controller === controller) Push.controller = null
+        if (Push.live?.controller === controller) Push.live = null
         controller.close()
     }
 }

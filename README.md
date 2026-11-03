@@ -227,9 +227,13 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 | `PIXELFED_ALLOW_ACCOUNT_CHANGE` | unset | `1`/`true`: on the default and listed instances any account may sign in and replace the stored one (no pinning). Instances typed under `*` always keep their first account. |
 | `CONSTRUCT_SESSION_TTL_DAYS` | `90` | Lifetime of sessions other than pod tokens, in days (1..=36500; other values warn and use 90). Pod tokens don't expire. |
 | `CONSTRUCT_VAPID_PRIVATE_KEY` | generated | Web Push signing key for notifications (D52): base64url of a 32-byte P-256 private key. Unset: the server generates one on first start and keeps it in `host.db` (devices subscribed with its public key keep working across restarts). Staging/production should set it as a secret so a lost volume doesn't orphan subscriptions. |
+| `CONSTRUCT_SECRETS_KEY` | unset | Seals upstream credentials (Pixelfed access/refresh tokens, OAuth client secrets) in the pod databases with AES-256-GCM: base64 of 32 random bytes (`openssl rand -base64 32`). Comma-separated: key rotation (the first seals, all open; values are re-sealed under the first when a pod opens). Unset: stored in plaintext, with a startup warning (an error on Fly). Setting it later seals existing rows when each pod opens. A sealed row whose key is missing or wrong reads as signed out (logged); the right key restores it. Malformed: the server refuses to start. Staging/production must set it as a secret (decision [`upstream-credentials-sealed-at-rest`](docs/decisions/upstream-credentials-sealed-at-rest.md)). The data dir and pod dirs are 0700 and the databases 0600 either way. |
 | `CONSTRUCT_VAPID_SUBJECT` | the repo URL | Contact (`mailto:` or `https:`) that push services may use to reach the operator. |
 | `CONSTRUCT_PUSH` | on | `off`: no Web Push (notifications still reach the inbox and open apps). |
 | `CONSTRUCT_UPLOAD_MAX_BYTES` | `20971520` (20 MB) | Largest file a client may upload to `POST /v1/uploads` (photos for a post, D49); at least 1024. |
+| `CONSTRUCT_POD_UPLOAD_QUOTA_BYTES` | `524288000` (500 MiB) | Most bytes all of an admin pod's uploads may hold together (then 507 `upload_quota_exceeded`, retried by clients). |
+| `CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES` | `26214400` (25 MiB) | The same for a temporary pod. |
+| `CONSTRUCT_MIN_FREE_DISK_BYTES` | `104857600` (100 MiB) | Free space kept on the data volume: below it uploads get 507 `low_disk_space` and new temporary pods 503 `low_disk_space`, so the volume never fills and every pod's other writes keep working. |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
 
 The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PROVIDER`, `CONSTRUCT_LLM_MODEL`,
@@ -280,7 +284,8 @@ paths, e.g. the Pixelfed media proxy).
 - **Temporary pods** (`CONSTRUCT_TEMP_PODS=1`, staging): every app, but Pixelfed only on the default instance (the
   fake on staging; no typed-in servers, so a visitor can't make the server contact hosts of their choosing), no family
   recipes, deleted with everything in them after `CONSTRUCT_TEMP_POD_HOURS`. At most 5 per client address an hour
-  (IPv6 per /64) and `CONSTRUCT_TEMP_POD_MAX` live. Use an admin pod to try a real Pixelfed server. Testing staging
+  (IPv6 per /64; 10 per /48) and `CONSTRUCT_TEMP_POD_MAX` live, with a smaller upload quota
+  (`CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES`). Use an admin pod to try a real Pixelfed server. Testing staging
   from a script:
 
   ```bash
@@ -325,8 +330,10 @@ adapter wrote, and a navigation target in that app's own layout routes.
   | `DELETE /v1/devices/{id}` | forget the device (the engine calls it on sign-out) |
   | `GET /v1/push/key` | `{"vapid_public_key"}` (404 `push_unavailable` with `CONSTRUCT_PUSH=off`) |
 
-  Push endpoints must be `https://` on a public host (any local URL with `CONSTRUCT_TEST_HOOKS=1`, for test
-  receivers); deliveries resolve only public addresses. 404/410 from the push service drops the subscription, as do 5
+  Push endpoints must be `https://` on the default port (443) of a public host name (any local URL with
+  `CONSTRUCT_TEST_HOOKS=1`, for test receivers); deliveries resolve only public addresses and follow no redirects. A
+  port rule rather than a domain allowlist keeps self-hosted UnifiedPush distributors working. Endpoints stored
+  before this rule are dropped on their next delivery. 404/410 from the push service drops the subscription, as do 5
   failures in a row. At most 20 devices and 60 deliveries a minute per pod.
 - **Try it:** `server pods notify-test <name>` (or, against the fake upstream, inject one with its admin API; see
   "Fake Pixelfed upstream").
@@ -468,15 +475,20 @@ client build. The engine and the clients know no app.
   layout switches between views with no new state. `layouts/pixelfed_home/0004.json` puts a List/Cards switch on
   the feed: two-column cards (cover photo, author, like count) that open a post screen
   (`pixelfed://posts/{id}`, data from `/v1/pixelfed/screens/post?id=`).
-- **Sticky (schema 10, [sticky-nodes](docs/decisions/sticky-nodes.md)):** `core://Sticky` (`content` any node)
+- **Remembered choices (schema 10, decision `remembered-form-values`):** `"remember": true` on a
+  `core://ChoiceChips` makes the device keep its value (engine `cache.db`, table `form_values`, per app and form:
+  `""` for the app's layout, else the screen id) and fill it in before the layout or screen first draws. Only a
+  value that is still one of the options comes back. Never sent to the pod; kept at sign-out.
+  `layouts/pixelfed_home/0006.json` remembers the List/Cards switch.
+- **Sticky (schema 11, [sticky-nodes](docs/decisions/sticky-nodes.md)):** `core://Sticky` (`content` any node)
   scrolls with the page until it reaches the top of the scrolling view, then stays pinned there while the rest of
   its parent scrolls under it (like CSS `position: sticky`), and scrolls away with the end of its parent. In the
   workspace it pins just below the menu and bell buttons; in a screen, right under the bar. It may not sit inside a
   List or Carousel template or another Sticky. `layouts/recipes/0005.json` pins the search box and category chips.
-- **Schema versions (D36, D38):** the engine sends `X-Construct-Schema: 10` (workspace fetches, data loads, the
+- **Schema versions (D36, D38):** the engine sends `X-Construct-Schema: 11` (workspace fetches, data loads, the
   apps API and the events stream). Every version records the schema it was written for (`"schema"` in its file). The pod serves each client
   the newest version it can draw, so an older app (no header = 1) keeps getting the last version without screens
-  or the new nodes. Screens and List/Image/TextField need `"schema": 2`; the building blocks need 3; `core://Tappable` needs 4; a List `filter` or `group_by` needs 5; the schema-6 vocabulary above needs 6; `action.auth.session` needs 7; List `columns`/`spacing_dp`/`padding_h_dp` and a form-based or `equals` Conditional need 8; the media picker and multi-line fields need 9; `core://Sticky` needs 10. `GET /v1/apps/{id}/versions[/{n}]` adds `schema`,
+  or the new nodes. Screens and List/Image/TextField need `"schema": 2`; the building blocks need 3; `core://Tappable` needs 4; a List `filter` or `group_by` needs 5; the schema-6 vocabulary above needs 6; `action.auth.session` needs 7; List `columns`/`spacing_dp`/`padding_h_dp` and a form-based or `equals` Conditional need 8; the photo-posting vocabulary (D49-D51) needs 9; a remembered `core://ChoiceChips` needs 10; `core://Sticky` needs 11. `GET /v1/apps/{id}/versions[/{n}]` adds `schema`,
   `compatible` and, when false, `incompatible` (`update_required`: written for a newer app; `retired`: written for
   a schema this app no longer draws) per version; the menu greys those rows out and won't pin them. "Latest" in the
   menu is always a version this app can draw; when the newest needs a newer app, the menu adds "Update the app to

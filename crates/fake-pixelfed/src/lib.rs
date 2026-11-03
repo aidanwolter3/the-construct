@@ -1637,6 +1637,21 @@ async fn create_app(
         )
             .into_response();
     }
+    // Public deployments (admin off, e.g. staging) only accept redirect URIs a
+    // Construct client uses, so the authorize page (and `auto=1`) can't be
+    // used to bounce visitors to an arbitrary site.
+    if !state.admin_enabled()
+        && let Some(bad) = redirect_uris.iter().find(|u| !client_redirect_uri(u))
+    {
+        tracing::warn!(redirect_uri = %bad, "app registration for a non-client redirect URI rejected");
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({
+                "error": "redirect_uris may only be construct:// or http(s) loopback URIs"
+            })),
+        )
+            .into_response();
+    }
     let scopes = match param(&params, "scopes") {
         "" => "read",
         s => s,
@@ -1665,6 +1680,41 @@ async fn create_app(
         },
     );
     Json(body).into_response()
+}
+
+/// A redirect URI a Construct client registers: `construct://…`, or `http(s)`
+/// to `127.0.0.1`, `localhost` or `[::1]` (any port and path). Anything else
+/// would make the authorize endpoint an open redirector.
+pub fn client_redirect_uri(uri: &str) -> bool {
+    if uri.starts_with("construct://") {
+        return true;
+    }
+    let Some(rest) = uri
+        .strip_prefix("http://")
+        .or_else(|| uri.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains(['@', '\\']) {
+        return false;
+    }
+    let host = match authority.strip_prefix("[::1]") {
+        Some(port) => return port.is_empty() || valid_port(port),
+        None => authority,
+    };
+    let (host, port) = host.split_once(':').unwrap_or((host, ""));
+    matches!(host, "127.0.0.1" | "localhost")
+        && (port.is_empty() || valid_port(&format!(":{port}")))
+}
+
+/// `:<1-65535>`.
+fn valid_port(s: &str) -> bool {
+    s.strip_prefix(':').is_some_and(|p| {
+        !p.is_empty()
+            && p.bytes().all(|b| b.is_ascii_digit())
+            && p.parse::<u16>().is_ok_and(|n| n > 0)
+    })
 }
 
 #[derive(Debug, Clone)]

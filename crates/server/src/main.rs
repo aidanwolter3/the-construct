@@ -33,6 +33,10 @@
 //! - `CONSTRUCT_VAPID_PRIVATE_KEY`, `CONSTRUCT_VAPID_SUBJECT`, `CONSTRUCT_PUSH=off`:
 //!   Web Push for notifications (D52); without a key the server makes one and
 //!   keeps it in `host.db`.
+//! - `CONSTRUCT_SECRETS_KEY`: base64 of 32 random bytes (comma-separated:
+//!   key rotation, first one seals) that seals upstream credentials in the
+//!   pod databases (`pod_core::secrets`). Unset: stored unsealed, with a
+//!   warning; a malformed value stops the server.
 //! - `PIXELFED_*`: see `PixelfedConfig::from_env` and README.
 //!
 //! A pod's layout files are synced into its database when the pod is first
@@ -85,6 +89,10 @@ fn main() -> std::process::ExitCode {
         .with_writer(std::io::stderr)
         .init();
     server::validate_fixtures();
+    if let Err(e) = init_secrets() {
+        eprintln!("server: {e}");
+        return std::process::ExitCode::FAILURE;
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
@@ -113,6 +121,27 @@ fn main() -> std::process::ExitCode {
             std::process::ExitCode::from(2)
         }
     }
+}
+
+/// Read `CONSTRUCT_SECRETS_KEY` once, before any pod opens, and say whether
+/// upstream credentials are sealed. A deploy without the key keeps working
+/// (credentials stay or become plaintext) but logs an error on Fly.
+fn init_secrets() -> Result<(), String> {
+    let secrets = server::secrets::Secrets::init_process()?;
+    if secrets.enabled() {
+        tracing::info!(key_ids = ?secrets.key_ids(), "upstream credentials are sealed at rest");
+    } else if std::env::var_os("FLY_APP_NAME").is_some() {
+        tracing::error!(
+            "CONSTRUCT_SECRETS_KEY is not set: upstream sign-in tokens are stored UNENCRYPTED. \
+             Set it with `flyctl secrets set CONSTRUCT_SECRETS_KEY=$(openssl rand -base64 32)`"
+        );
+    } else {
+        tracing::warn!(
+            "CONSTRUCT_SECRETS_KEY is not set: upstream sign-in tokens are stored unencrypted \
+             (fine for development)"
+        );
+    }
+    Ok(())
 }
 
 fn print_token(what: &str, name: &str, token: &str) {

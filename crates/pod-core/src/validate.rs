@@ -282,6 +282,7 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             field,
             options,
             padding_h_dp,
+            ..
         } => {
             if field.trim().is_empty() {
                 return Err("choice chips need a field".into());
@@ -371,7 +372,7 @@ fn check_values(node: &UiNode) -> Result<(), String> {
     }
 }
 
-/// `core://Sticky` (schema 10) pins to the top of a scrolling column, so it
+/// `core://Sticky` (schema 11) pins to the top of a scrolling column, so it
 /// must not sit inside a `core://List` or `core://Carousel` template (each
 /// item would pin within itself) or inside another `core://Sticky`.
 /// `inside` names the enclosing node that rules it out.
