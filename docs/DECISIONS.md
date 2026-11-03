@@ -1425,7 +1425,9 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   `GET /v1/workspaces/recipes` lists every recipe by category (the first of each carries `category_header`);
   `GET /v1/recipes/screens/recipe?id=<slug>` is the `recipes://recipes/{id}` screen's data (three lists whose first
   item carries `section`, and whose first item of a named group carries `group`).
-- **No client build:** only existing vocabulary (schema 3). Rows open with a "View" button because lists have no
-  tappable row; a tappable row or a dedicated icon would be new vocabulary.
+- **No client build:** only existing vocabulary (schema 3). Each list row is one line: a "View" button, then the
+  title (button first: a `core://Row` gives its first children their full width, so a long title after the button
+  wraps instead of squeezing it). Tapping the row itself needs new vocabulary (`on_click` on Row/Column, schema 4):
+  issue #15.
 - **Not yet:** editing recipes, search, scaling servings (the fields support it), access control (anyone who can
   reach the pod can read the recipes).

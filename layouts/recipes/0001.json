@@ -22,7 +22,7 @@
                 "content": {
                   "type": "core://Column",
                   "padding_h_dp": 16,
-                  "padding_v_dp": 8,
+                  "padding_v_dp": 4,
                   "children": [
                     {
                       "type": "core://Spacer",
@@ -37,31 +37,10 @@
                 }
               },
               {
-                "type": "core://Column",
-                "padding_h_dp": 16,
-                "padding_v_dp": 4,
-                "children": [
-                  {
-                    "type": "core://Text",
-                    "value_expr": "$item.title",
-                    "style": "Label"
-                  }
-                ]
-              },
-              {
                 "type": "core://Row",
                 "spacing_dp": 12,
                 "padding_h_dp": 16,
-                "padding_v_dp": 4,
                 "children": [
-                  {
-                    "type": "core://Text",
-                    "value_expr": "$item.yield_text",
-                    "style": "Secondary"
-                  },
-                  {
-                    "type": "core://Spacer"
-                  },
                   {
                     "type": "core://Button",
                     "label": "View",
@@ -70,6 +49,11 @@
                       "presentation": "Push",
                       "target_uri": "recipes://recipes/$item.id"
                     }
+                  },
+                  {
+                    "type": "core://Text",
+                    "value_expr": "$item.title",
+                    "style": "Label"
                   }
                 ]
               },

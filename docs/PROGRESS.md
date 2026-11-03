@@ -423,7 +423,8 @@ from a client (D32, D33).
 - `layouts/recipes/0001.json`: recipes by category, each opening a screen with ingredients (grouped), numbered
   steps (grouped), notes and the source.
 - Existing vocabulary only: no client build. Checked with the simulator against a local pod.
-- **Not yet:** editing, search, serving scaling, sign-in to read; a tappable list row instead of the View button.
+- **Not yet:** editing, search, serving scaling, sign-in to read; tappable list rows instead of the View button
+  (issue #15, schema 4).
 
 ### Deferred / known issues (M6/M7)
 - No idempotency keys on outbox POSTs: a request applied upstream but timed out client-side is re-sent (likes and
