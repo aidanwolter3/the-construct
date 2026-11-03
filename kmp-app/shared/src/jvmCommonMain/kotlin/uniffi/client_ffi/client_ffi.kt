@@ -866,6 +866,8 @@ internal open class UniffiVTableCallbackInterfaceUrlOpener(
 
 
 
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -920,6 +922,8 @@ fun uniffi_client_ffi_checksum_method_enginehandle_set_channel_enabled(
 fun uniffi_client_ffi_checksum_method_enginehandle_set_device_info(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_set_notification_listener(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_sign_ins(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_snapshot(
 ): Short
@@ -1050,6 +1054,8 @@ fun uniffi_client_ffi_fn_method_enginehandle_set_device_info(`ptr`: Pointer,`pla
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_set_notification_listener(`ptr`: Pointer,`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_client_ffi_fn_method_enginehandle_sign_ins(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_snapshot(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_stage_attachment(`ptr`: Pointer,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1207,7 +1213,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_dispatch() != 57352.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_client_ffi_checksum_method_enginehandle_forget_session() != 37071.toShort()) {
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_forget_session() != 53423.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_handle_auth_redirect() != 36756.toShort()) {
@@ -1250,6 +1256,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_set_notification_listener() != 51107.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_sign_ins() != 11211.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_snapshot() != 50695.toShort()) {
@@ -1765,7 +1774,7 @@ public interface EngineHandleInterface {
     fun `dispatch`(`intentJson`: kotlin.String)
     
     /**
-     * Forget the session on this device only ("Leave this pod", D46): no
+     * Forget the session on this device only (Settings' "Leave pod", D46): no
      * server call; private data purged and the workspace fetched again.
      */
     fun `forgetSession`()
@@ -1853,6 +1862,12 @@ public interface EngineHandleInterface {
      * Set (replace) the listener for notifications that arrive live.
      */
     fun `setNotificationListener`(`listener`: NotificationListener)
+    
+    /**
+     * The sign-ins on this device's pod session (`GET /v1/auth/sign-ins`);
+     * `{"sign_ins":[]}` without a session.
+     */
+    fun `signIns`(): kotlin.String
     
     /**
      * The current snapshot.
@@ -2050,7 +2065,7 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
 
     
     /**
-     * Forget the session on this device only ("Leave this pod", D46): no
+     * Forget the session on this device only (Settings' "Leave pod", D46): no
      * server call; private data purged and the workspace fetched again.
      */override fun `forgetSession`()
         = 
@@ -2287,6 +2302,23 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
 }
     }
     
+    
+
+    
+    /**
+     * The sign-ins on this device's pod session (`GET /v1/auth/sign-ins`);
+     * `{"sign_ins":[]}` without a session.
+     */
+    @Throws(LayoutApiException::class)override fun `signIns`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LayoutApiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_sign_ins(
+        it, _status)
+}
+    }
+    )
+    }
     
 
     

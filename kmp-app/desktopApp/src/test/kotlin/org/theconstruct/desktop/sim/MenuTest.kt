@@ -79,11 +79,14 @@ class MenuTest {
     }
 
     @Test
-    fun menuListsAppsConnectionAccountAndServer() {
+    fun menuListsAppsAndSettingsHoldsThePodAndSignIns() {
         val r = runner(feed()).ok(
-            "open-menu; assert-text Pixelfed demo; assert-text Latest · v3; assert-text Online; " +
-                "assert-text Not signed in; assert-text Staging; close-menu; assert-no-text Connection",
+            "open-menu; assert-text Pixelfed demo; assert-text Latest · v3; assert-text Settings; assert-text Online; " +
+                "assert-no-text Not signed in; assert-no-text Staging; " +
+                "open-settings; assert-text Your pod; assert-text Online; assert-text Staging; assert-text Not signed in; " +
+                "close-menu; assert-no-text Your pod; assert-no-text Version history of Pixelfed",
         )
+        assertEquals("0 sign-in(s)", r.steps[7].message)
         assertEquals("2 app(s)", r.steps[0].message)
     }
 
@@ -190,8 +193,9 @@ class MenuTest {
             assertTrue(has("menu-badge"), "offline")
         }
         runner(fake, controller).ok(
-            "click Increment; open-menu; assert-text Offline; assert-text 1 pending; " +
-                "assert-text Can't reach your pod; assert-text Version history of Home",
+            "click Increment; open-menu; assert-text Offline · 1 pending; assert-text Version history of Home; " +
+                "assert-text Can't reach your pod; open-settings; assert-text Offline; assert-text 1 pending; " +
+                "assert-text Changes are saved and sent when you're back online",
         )
         fake.setOnline(true)
         compose(controller) { assertFalse(has("menu-badge")) }
@@ -250,7 +254,7 @@ class MenuTest {
         assertEquals("Couldn't switch to https://example.com: boom", error)
         val server = ServerChoice("https://staging.example", listOf(ServerOption("staging", "Staging", "https://staging.example")), error = error) {}
         compose(controller, server) {
-            controller.menu.openMenu()
+            controller.menu.showSettings()
             waitForIdle()
             onNode(hasTestTag("server-error"), useUnmergedTree = true).assertExists()
             onNode(hasText(error)).assertExists()
@@ -326,7 +330,43 @@ class MenuTest {
     fun backClosesThePickerThenTheMenu() {
         val fake = feed()
         val controller = ConstructController(fake, fake.appId)
-        runner(fake, controller).ok("open-history Pixelfed; back; assert-text Connection; back; assert-no-text Connection")
+        runner(fake, controller).ok("open-history Pixelfed; back; assert-text Version history of Pixelfed; back; assert-no-text Version history of Pixelfed")
         assertFalse(controller.menu.open)
+    }
+
+    @Test
+    fun aSignInOpensItsDetailAndBackWalksOutLevelByLevel() {
+        val fake = FakeEngineBridge(
+            bundle("pixelfed_home_feed_bundle.json"),
+            authJson = """{"state":"signed_in","username":"constructdemo"}""",
+        )
+        val controller = ConstructController(fake, fake.appId)
+        val r = runner(fake, controller).ok(
+            "open-settings; assert-text Pixelfed; assert-text @constructdemo · 127.0.0.1:8081; " +
+                "click tag:sign-in-pixelfed; assert-text Server; assert-text 127.0.0.1:8081; assert-text Username; " +
+                "assert-text Used by; back; assert-text Sign-ins; back; assert-text Version history of Pixelfed; " +
+                "assert-no-text Sign-ins; back; assert-no-text Version history of Pixelfed",
+        )
+        assertEquals("1 sign-in(s)", r.steps[0].message)
+        assertFalse(controller.menu.open)
+        // close-menu walks out of a detail page too.
+        runner(fake, controller).ok("open-settings; click tag:sign-in-pixelfed; close-menu; assert-no-text Used by")
+        assertFalse(controller.menu.open)
+    }
+
+    @Test
+    fun settingsFallsBackToTheEngineAccountWhenThePodListsNone() {
+        // A pod without `/v1/auth/sign-ins` lists nothing (the bridge default): the engine's own account still shows, with Sign out.
+        val fake = FakeEngineBridge(
+            bundle("pixelfed_home_feed_bundle.json"),
+            authJson = """{"state":"signed_in","username":"constructdemo"}""",
+        )
+        val bridge = object : ConstructEngineBridge by fake {
+            override fun signIns(): String = """{"sign_ins":[]}"""
+        }
+        val controller = ConstructController(bridge, fake.appId)
+        runner(fake, controller).ok(
+            "open-settings; assert-text Signed in as @constructdemo; click tag:menu-sign-out; assert-text Not signed in",
+        )
     }
 }

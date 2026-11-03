@@ -194,6 +194,30 @@ pub trait AppAdapter: Any + Send + Sync {
         let _ = pod;
         Box::pin(async {})
     }
+
+    /// The upstream account behind sign-in `sign_in` (one of
+    /// [`Self::sign_ins`]) on `session`, which has it: what the client's
+    /// Settings list shows (`GET /v1/auth/sign-ins`). Keep it to stored
+    /// data, no upstream calls. Default: nothing known (the row shows only
+    /// the provider's title).
+    fn sign_in_account<'a>(
+        &'a self,
+        pod: &'a Pod,
+        sign_in: &'a str,
+        session: &'a Session,
+    ) -> BoxFuture<'a, Option<SignInAccount>> {
+        let _ = (pod, sign_in, session);
+        Box::pin(async { None })
+    }
+}
+
+/// The account behind a session's sign-in ([`AppAdapter::sign_in_account`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SignInAccount {
+    /// The upstream server's base URL, e.g. `https://pixelfed.social`.
+    pub server: Option<String>,
+    /// The upstream username, without a leading `@`.
+    pub username: Option<String>,
 }
 
 /// What [`AppAdapter::hydrate`] returns.
@@ -253,6 +277,8 @@ pub struct SignInProvider {
     /// Unique across adapters, e.g. `pixelfed`. Recorded on sessions
     /// (`session_sign_ins`), so never change it once shipped.
     pub id: &'static str,
+    /// Shown in the client's list of sign-ins, e.g. `Pixelfed`.
+    pub title: &'static str,
 }
 
 /// What an adapter learns about a workspace request.
@@ -303,7 +329,7 @@ pub struct Catalog {
     files: Vec<LayoutSource>,
     legacy: Vec<(&'static str, u32)>,
     /// `(sign-in id, index into adapters)`.
-    sign_ins: Vec<(&'static str, usize)>,
+    sign_ins: Vec<(SignInProvider, usize)>,
 }
 
 impl Catalog {
@@ -314,7 +340,7 @@ impl Catalog {
         let mut apps: Vec<(AppInfo, usize)> = Vec::new();
         let mut files = Vec::new();
         let mut legacy = Vec::new();
-        let mut sign_ins: Vec<(&'static str, usize)> = Vec::new();
+        let mut sign_ins: Vec<(SignInProvider, usize)> = Vec::new();
         let mut names: Vec<&'static str> = Vec::new();
         for (i, a) in adapters.iter().enumerate() {
             let name = a.name();
@@ -329,17 +355,17 @@ impl Catalog {
                 apps.push((app, i));
             }
             for p in a.sign_ins() {
-                if sign_ins.iter().any(|(id, _)| *id == p.id) {
+                if sign_ins.iter().any(|(s, _)| s.id == p.id) {
                     return Err(format!("sign-in '{}' is provided by two adapters", p.id));
                 }
-                sign_ins.push((p.id, i));
+                sign_ins.push((p, i));
             }
             files.extend_from_slice(a.layout_files());
             legacy.extend_from_slice(a.legacy_files());
         }
         for (app, _) in &apps {
             if let AuthPolicy::SignIn(id) = app.auth
-                && !sign_ins.iter().any(|(s, _)| *s == id)
+                && !sign_ins.iter().any(|(s, _)| s.id == id)
             {
                 return Err(format!(
                     "app '{}' requires sign-in '{id}', which no adapter provides",
@@ -426,8 +452,16 @@ impl Catalog {
 
     /// The adapter providing sign-in `id`.
     pub fn sign_in_adapter(&self, id: &str) -> Option<&Arc<dyn AppAdapter>> {
-        let (_, i) = self.sign_ins.iter().find(|(s, _)| *s == id)?;
+        let (_, i) = self.sign_ins.iter().find(|(s, _)| s.id == id)?;
         self.adapters.get(*i)
+    }
+
+    /// Sign-in `id` as its adapter declared it.
+    pub fn sign_in(&self, id: &str) -> Option<&SignInProvider> {
+        self.sign_ins
+            .iter()
+            .find(|(s, _)| s.id == id)
+            .map(|(s, _)| s)
     }
 
     /// Whether `path` is under an adapter's [`AppAdapter::public_paths`]

@@ -90,7 +90,10 @@ impl AppAdapter for Gated {
         GATED_FILES
     }
     fn sign_ins(&self) -> Vec<SignInProvider> {
-        vec![SignInProvider { id: "test" }]
+        vec![SignInProvider {
+            id: "test",
+            title: "Test service",
+        }]
     }
     fn migrations(&self) -> &'static [Migration] {
         GATED_MIGRATIONS
@@ -286,6 +289,47 @@ async fn logout_ends_the_session_and_its_sign_ins() {
     assert_eq!(logout("good").await, StatusCode::OK);
     assert!(state.store().session_sign_ins(&hash).unwrap().is_empty());
     assert_eq!(logout("good").await, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn sign_ins_lists_the_session_sign_ins() {
+    let state = state();
+    let store = state.store();
+    store
+        .transaction(|tx| open_session_on(tx, &session_hash("good"), "test", 86_400))
+        .unwrap();
+    store.create_session(&session_hash("bare")).unwrap();
+    // A sign-in no adapter provides any more is left out.
+    store
+        .attach_sign_in(&session_hash("good"), "retired")
+        .unwrap();
+    let (status, body, _) = get_json(&state, "/v1/auth/sign-ins", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({ "sign_ins": [] }));
+    let (status, body, _) = get_json(&state, "/v1/auth/sign-ins", Some("bare")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({ "sign_ins": [] }));
+    let (status, _, _) = get_json(&state, "/v1/auth/sign-ins", Some("stale")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // The default account lookup knows nothing: title and apps only.
+    let (status, body, _) = get_json(&state, "/v1/auth/sign-ins", Some("good")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        json!({ "sign_ins": [{
+            "id": "test",
+            "title": "Test service",
+            "apps": [{ "id": "gated", "title": "Gated" }],
+        }] })
+    );
+    // A dev app is listed only when dev apps are shown, like `GET /v1/apps`.
+    let hidden = Arc::new(AppState::in_memory(vec![open_app(), Arc::new(Gated)]));
+    hidden
+        .store()
+        .transaction(|tx| open_session_on(tx, &session_hash("good"), "test", 86_400))
+        .unwrap();
+    let (_, body, _) = get_json(&hidden, "/v1/auth/sign-ins", Some("good")).await;
+    assert_eq!(body["sign_ins"][0]["apps"], json!([]));
 }
 
 /// The core knows no app (D40): outside comments, no source file names one.

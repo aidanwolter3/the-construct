@@ -347,9 +347,15 @@ async fn logout_keeps_the_pod_token_and_rotation_replaces_it() {
     let env = env().await;
     let token = env.create("me", false).await;
     sign_in(&env, &token).await;
+    let (_, _, body) = get(&env.url("/v1/auth/sign-ins"), Some(&token)).await;
+    assert_eq!(body["sign_ins"][0]["id"], "pixelfed", "{body}");
+    assert_eq!(body["sign_ins"][0]["username"], "constructdemo");
     let (status, body) = post(&env.url("/v1/auth/logout"), Some(&token), Value::Null).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["session_kept"], true);
+    // Signed out of Pixelfed, still in the pod: no sign-ins left.
+    let (status, _, body) = get(&env.url("/v1/auth/sign-ins"), Some(&token)).await;
+    assert_eq!((status, body), (StatusCode::OK, json!({ "sign_ins": [] })));
     let (status, header, body) = get(&env.url("/v1/workspaces/pixelfed_home"), Some(&token)).await;
     assert_eq!((status, header), (StatusCode::OK, None), "{body}");
     assert!(

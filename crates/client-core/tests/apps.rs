@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use client_core::catalog::{LAYOUTS_NOT_A_POD, LAYOUTS_OFFLINE};
-use client_core::{ConstructEngine, EngineConfig, LayoutApiError};
+use client_core::{ConstructEngine, EngineConfig, LayoutApiError, SIGN_INS_UNSUPPORTED};
 use protocol::UiNode;
 use serde_json::{Value, json};
 use server::{AppState, layouts};
@@ -279,6 +279,37 @@ fn a_server_that_is_not_a_pod_says_so() {
     let err = e.list_apps().unwrap_err();
     assert_eq!(err.reason(), LAYOUTS_NOT_A_POD);
     assert!(matches!(err, LayoutApiError::Server { .. }), "{err:?}");
+}
+
+#[test]
+fn sign_ins_without_a_session_needs_no_request_and_an_old_pod_says_so() {
+    // No session: answered locally, even with no server at all.
+    let e = engine("http://127.0.0.1:9", "pixelfed_home");
+    assert_eq!(parse(&e.sign_ins().unwrap()), json!({ "sign_ins": [] }));
+    // With a session, a pod without `/v1/auth/sign-ins` (404) gets its own sentence.
+    let (base, _rt) = web_server(404);
+    let store = Arc::new(client_core::MemoryStore::default());
+    client_core::SecureStore::set(
+        store.as_ref(),
+        &client_core::auth::session_key(&base),
+        r#"{"token":"t"}"#,
+    );
+    let e = ConstructEngine::init_with_options(
+        "",
+        &base,
+        "pixelfed_home",
+        client_core::EngineOptions {
+            config: fast_config(),
+            secure_store: Some(store as Arc<dyn client_core::SecureStore>),
+            ..client_core::EngineOptions::default()
+        },
+    );
+    assert_eq!(
+        e.sign_ins().unwrap_err(),
+        LayoutApiError::NotFound {
+            reason: SIGN_INS_UNSUPPORTED.into()
+        }
+    );
 }
 
 #[test]

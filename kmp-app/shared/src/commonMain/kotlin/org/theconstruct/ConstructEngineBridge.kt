@@ -51,7 +51,7 @@ interface ConstructEngineBridge {
     /** Signs out (non-blocking). No-op for fakes without sign-in. */
     fun logout() {}
 
-    /** Forgets the session on this device only ("Leave this pod", D46). No-op for fakes without sign-in. */
+    /** Forgets the session on this device only (Settings' "Leave pod", D46). No-op for fakes without sign-in. */
     fun forgetSession() {}
 
     /**
@@ -76,6 +76,12 @@ interface ConstructEngineBridge {
 
     /** `GET /v1/apps/{appId}/versions/{version}`: the version's metadata plus its full `layout` (a workspace [UiNode]). */
     fun appVersion(appId: String, version: Long): String = throw appsUnavailable()
+
+    /**
+     * `GET /v1/auth/sign-ins` (Settings): `{"sign_ins":[{"id","title","server"?,"username"?,"apps":[{"id",
+     * "title"}]}]}`; `{"sign_ins":[]}` without a session. BLOCKING, like the apps calls. Default: none.
+     */
+    fun signIns(): String = """{"sign_ins":[]}"""
 
     // Notifications from apps (D52, docs/NOTIFICATIONS.md). The blocking calls (list, mark read, channels, push key) are
     // like the apps calls: off the UI thread, pod JSON in, [LayoutApiException] out. The defaults make a fake without

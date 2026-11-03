@@ -259,7 +259,7 @@ class ConstructController internal constructor(
         }
     }
 
-    /** Leaves the pod on this device (the menu's "Leave this pod", D46): the engine forgets its session and refetches. */
+    /** Leaves the pod on this device (Settings' "Leave pod", D46): the engine forgets its session and refetches. */
     fun leavePod() {
         try {
             bridge.forgetSession()

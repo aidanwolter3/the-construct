@@ -560,3 +560,15 @@ new layout files; diffs between versions.
   (`server/tests/host.rs`), client-core, shared and simulator tests.
 - Needs the developer's devices: Android permission prompt, channels and push with the app killed (ntfy and the FCM
   fallback), the desktop tray, and a real Pixelfed instance's notification types.
+
+## Settings page and sign-ins list
+
+- The drawer lists only the apps, with a Settings row (and connection status) at the bottom. Settings holds the pod
+  (connection, server picker, Leave pod), the sign-ins (each with a detail page: server, username, apps, Sign out)
+  and the Notifications row.
+- Pod: `GET /v1/auth/sign-ins`, `SignInProvider::title`, `AppAdapter::sign_in_account` (Pixelfed: instance +
+  username). Engine/FFI: `sign_ins()`. Simulator: `open-settings`; `set-server`, `close-menu` and
+  `open-notification-settings` go through Settings.
+- Tests: pod-core adapters, server (`pixelfed.rs`, `host.rs`), client-core (`apps.rs`, `pod_host.rs`), simulator
+  menu and feed tests.
+- Needs a device check (Android, macOS window): the drawer and Settings at real sizes and Back on Android.

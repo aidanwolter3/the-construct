@@ -61,9 +61,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // The hamburger menu: a small button over the top-left corner of the layout (badged when offline, when mutations wait
-// to be sent, or when a pinned version has a newer one) opens a Material3 modal drawer with the sections Apps (each
-// app's version history opens the version picker), Connection, Account and Server. Shared Compose: desktop, Android
-// and the simulator run the same code. Test tags are listed in README "Simulation mode".
+// to be sent, or when a pinned version has a newer one) opens a Material3 modal drawer with the Apps (each app's
+// version history opens the version picker) and, at the bottom, a Settings row with the connection status. Settings
+// (docs/decisions/settings-page-and-sign-ins.md) holds the pod (connection, server, leaving the pod), the list of
+// sign-ins, each with a detail page, and the notification settings. Shared Compose: desktop, Android and the
+// simulator run the same code. Test tags are listed in README "The menu".
 
 /** Start padding the workspace title gets so it sits beside the menu button (8 dp margin + 40 dp button + 8 dp). */
 internal val MENU_BUTTON_INSET = 56.dp
@@ -87,6 +89,22 @@ class MenuState internal constructor(private val controller: ConstructController
 
     /** The app whose version picker is shown in the drawer, or null for the sections. */
     var historyAppId by mutableStateOf<String?>(null)
+        private set
+
+    /** The drawer shows the Settings page. */
+    var settingsOpen by mutableStateOf(false)
+        private set
+
+    /** The sign-in whose detail page Settings shows, or null for the Settings page itself. */
+    var signInDetail by mutableStateOf<String?>(null)
+        private set
+
+    /** The session's sign-ins, loaded when Settings opens and whenever the sign-in state changes. */
+    var signIns: Load<List<SignInSummary>> by mutableStateOf(Load.Loading)
+        private set
+
+    /** Bumped when Settings opens and by Try again: the sign-ins load is keyed on it. */
+    var signInsToken by mutableStateOf(0)
         private set
 
     var apps: Load<List<AppSummary>> by mutableStateOf(Load.Loading)
@@ -131,6 +149,8 @@ class MenuState internal constructor(private val controller: ConstructController
         open = false
         historyAppId = null
         notificationSettingsOpen = false
+        settingsOpen = false
+        signInDetail = null
         selectError = null
         appError = null
         serverExpanded = false
@@ -145,7 +165,7 @@ class MenuState internal constructor(private val controller: ConstructController
         historyToken++
     }
 
-    /** Shows the notification settings (also opening the drawer); they reload each time. */
+    /** Shows the notification settings (also opening the drawer); they reload each time. Back returns to Settings. */
     fun showNotificationSettings() {
         if (!open) openMenu()
         historyAppId = null
@@ -153,16 +173,53 @@ class MenuState internal constructor(private val controller: ConstructController
         controller.inbox.retryChannels()
     }
 
-    /** Back closes the innermost level: the custom URL field, the version picker or notification settings, the drawer. */
+    /** Opens Settings (also opening the drawer). */
+    fun showSettings() {
+        if (!open) openMenu()
+        historyAppId = null
+        settingsOpen = true
+        signInDetail = null
+        signInsToken++
+    }
+
+    /** Opens the detail page of sign-in [id] inside Settings. */
+    fun showSignIn(id: String) {
+        if (!settingsOpen) showSettings()
+        signInDetail = id
+    }
+
+    /**
+     * Back closes the innermost level: the custom URL field, notification settings, a sign-in's detail, Settings (and
+     * its server list), the version picker, then the drawer.
+     */
     fun back() {
         when {
             customUrl != null -> customUrl = null
             notificationSettingsOpen -> notificationSettingsOpen = false
+            signInDetail != null -> signInDetail = null
+            settingsOpen -> {
+                settingsOpen = false
+                serverExpanded = false
+            }
             historyAppId != null -> {
                 historyAppId = null
                 selectError = null
             }
             else -> closeMenu()
+        }
+    }
+
+    fun retrySignIns() {
+        signInsToken++
+    }
+
+    /** (Re)loads the sign-ins; a failed reload keeps the last list. */
+    internal suspend fun loadSignIns() {
+        if (signIns !is Load.Ready) signIns = Load.Loading
+        try {
+            signIns = Load.Ready(controller.apps.signIns())
+        } catch (e: LayoutApiException) {
+            if (signIns !is Load.Ready) signIns = Load.Failed(e.message)
         }
     }
 
@@ -344,12 +401,13 @@ internal fun MenuDrawer(
             ModalDrawerSheet(Modifier.width(304.dp)) {
                 if (shown) {
                     val historyId = menu.historyAppId
-                    if (menu.notificationSettingsOpen) {
-                        NotificationSettings(controller, notificationSettingsExtra)
-                    } else if (historyId != null) {
-                        VersionPicker(controller, state, pin, historyId)
-                    } else {
-                        MenuSections(controller, state, pin, server)
+                    val signInId = menu.signInDetail
+                    when {
+                        menu.notificationSettingsOpen -> NotificationSettings(controller, notificationSettingsExtra)
+                        historyId != null -> VersionPicker(controller, state, pin, historyId)
+                        menu.settingsOpen && signInId != null -> SignInDetail(controller, state, signInId)
+                        menu.settingsOpen -> SettingsPage(controller, state, server)
+                        else -> MenuSections(controller, state, pin)
                     }
                 }
             }
@@ -358,30 +416,127 @@ internal fun MenuDrawer(
     )
 }
 
+/** The drawer's first level (`menu-drawer`): the apps, and the Settings row (`menu-settings`) pinned to the bottom. */
 @Composable
-private fun MenuSections(controller: ConstructController, state: ConstructState, pin: PinnedVersion?, server: ServerChoice?) {
+private fun MenuSections(controller: ConstructController, state: ConstructState, pin: PinnedVersion?) {
     val menu = controller.menu
     LaunchedEffect(menu.appsToken) { menu.loadApps() }
     // Back online after a load that couldn't reach the pod: refresh the list.
     LaunchedEffect(state.isOnline) {
         if (state.isOnline == true && menu.appsFailedOffline) menu.retryApps()
     }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("menu-drawer").padding(bottom = 16.dp)) {
-        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "The Construct",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f).semantics { heading() },
-            )
-            IconButton(onClick = menu::closeMenu, modifier = Modifier.testTag("menu-close")) {
-                Icon(ConstructIcons.Close, contentDescription = "Close menu", modifier = Modifier.size(22.dp))
+    Column(Modifier.fillMaxSize().testTag("menu-drawer")) {
+        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 8.dp)) {
+            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "The Construct",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f).semantics { heading() },
+                )
+                IconButton(onClick = menu::closeMenu, modifier = Modifier.testTag("menu-close")) {
+                    Icon(ConstructIcons.Close, contentDescription = "Close menu", modifier = Modifier.size(22.dp))
+                }
+            }
+            if (newerVersionAvailable(state, pin)) NewerVersionBanner(controller, state, pin!!)
+
+            SectionTitle("Apps")
+            AppsSection(controller, state, pin)
+        }
+        SectionDivider()
+        SettingsRow(state, onClick = menu::showSettings)
+    }
+}
+
+/** "Settings" with the connection status on the right (a dot plus Online / Offline / Connecting…, and "N pending"). */
+@Composable
+private fun SettingsRow(state: ConstructState, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(28.dp)
+    Row(
+        Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 16.dp).heightIn(min = 56.dp)
+            .clip(shape).clickable(onClick = onClick).testTag("menu-settings").padding(start = 16.dp, end = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(ConstructIcons.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(14.dp))
+        Text("Settings", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        StatusDot(statusColor(state.isOnline), size = 8)
+        Spacer(Modifier.width(6.dp))
+        Text(
+            connectionLabel(state.isOnline) + if (state.pendingActions > 0) " · ${state.pendingActions} pending" else "",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+    }
+}
+
+private fun connectionLabel(online: Boolean?): String = when (online) {
+    true -> "Online"
+    false -> "Offline"
+    null -> "Connecting…"
+}
+
+private fun statusColor(online: Boolean?): Color = if (online == true) Color(0xFF2E7D32) else Color(0xFF9E9E9E)
+
+@Composable
+private fun StatusDot(color: Color, size: Int = 10) {
+    Box(Modifier.size(size.dp).background(color, CircleShape))
+}
+
+/** A sub-page's header: Back (`menu-back`) and a title, with an optional line under it. */
+@Composable
+private fun PageHeader(title: String, onBack: () -> Unit, subtitle: String? = null) {
+    Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onBack, modifier = Modifier.testTag("menu-back")) {
+            Icon(ConstructIcons.ArrowBack, contentDescription = "Back", modifier = Modifier.size(22.dp))
+        }
+        Column(Modifier.weight(1f).padding(start = 4.dp)) {
+            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
+            if (subtitle != null) {
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        if (newerVersionAvailable(state, pin)) NewerVersionBanner(controller, state, pin!!)
+    }
+}
 
-        SectionTitle("Apps")
-        AppsSection(controller, state, pin)
+/**
+ * Settings (`settings`): "Your pod" (connection, the platform's server picker, "Pod open on this device" with
+ * Leave pod), "Sign-ins" (the session's sign-ins, each opening its detail; or the sign-in state and a Sign in button
+ * when there are none) and the Notifications row (`menu-notifications`, D52).
+ */
+@Composable
+private fun SettingsPage(controller: ConstructController, state: ConstructState, server: ServerChoice?) {
+    val menu = controller.menu
+    val auth = state.auth
+    // Reloaded when Settings opens, on Try again, and when a sign-in or sign-out finishes.
+    LaunchedEffect(menu.signInsToken, auth.state, auth.username, auth.session) { menu.loadSignIns() }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("settings").padding(bottom = 16.dp)) {
+        PageHeader("Settings", onBack = menu::back)
+
+        SectionTitle("Your pod")
+        ConnectionSection(state)
+        if (server != null) ServerSection(menu, server)
+        if (auth.session) {
+            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Pod open on this device",
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f).padding(vertical = 10.dp),
+                )
+                TextButton(
+                    onClick = {
+                        controller.menu.closeMenu()
+                        controller.leavePod()
+                    },
+                    modifier = Modifier.testTag("menu-leave-pod"),
+                ) { Text("Leave pod", color = MaterialTheme.colorScheme.error) }
+            }
+        }
+
+        SectionDivider()
+        SectionTitle("Sign-ins")
+        SignInsSection(controller, state)
 
         SectionDivider()
         Row(
@@ -394,20 +549,162 @@ private fun MenuSections(controller: ConstructController, state: ConstructState,
             Text("Notifications", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
             Icon(ConstructIcons.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
 
-        SectionDivider()
-        SectionTitle("Connection")
-        ConnectionSection(state)
-
-        SectionDivider()
-        SectionTitle("Account")
-        AccountSection(controller, state)
-
-        if (server != null) {
-            SectionDivider()
-            SectionTitle("Server")
-            ServerSection(menu, server)
+@Composable
+private fun SignInsSection(controller: ConstructController, state: ConstructState) {
+    val menu = controller.menu
+    val auth = state.auth
+    val listed = (menu.signIns as? Load.Ready)?.value.orEmpty()
+    Column(Modifier.fillMaxWidth().testTag("menu-account")) {
+        listed.forEach { signIn ->
+            SignInRow(signIn, onClick = { menu.showSignIn(signIn.id) })
         }
+        when (auth.state) {
+            "pending" -> Text(
+                auth.message ?: "Signing in…",
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+            )
+            "signed_in" -> if (listed.isEmpty() && menu.signIns !is Load.Loading) {
+                // The pod didn't list it (unreachable, or too old to list sign-ins): what this device knows.
+                Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Signed in as " + (auth.username?.let { "@$it" } ?: "your account"),
+                        style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(vertical = 10.dp),
+                    )
+                    TextButton(onClick = controller::logout, modifier = Modifier.testTag("menu-sign-out")) { Text("Sign out") }
+                }
+            }
+            else -> if (listed.isEmpty()) NotSignedInRow(controller, state)
+        }
+        when (val s = menu.signIns) {
+            Load.Loading -> if (listed.isEmpty() && auth.state != "pending") LoadingRow("Loading sign-ins…")
+            is Load.Failed -> if (state.isOnline == true) InlineError(s.message, tag = "sign-ins-error", onRetry = menu::retrySignIns)
+            is Load.Ready -> Unit
+        }
+    }
+}
+
+/** "Not signed in" (or why the last sign-in failed) with Sign in (`menu-sign-in`) when the screen offers one. */
+@Composable
+private fun NotSignedInRow(controller: ConstructController, state: ConstructState) {
+    val auth = state.auth
+    val signIn = findSignInIntent(state.workspace)
+    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            if (auth.state == "error") "Sign-in failed" + (auth.error?.let { ": $it" } ?: "") else "Not signed in",
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (auth.state == "error") MaterialTheme.colorScheme.error else Color.Unspecified,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).padding(vertical = 10.dp),
+        )
+        if (signIn != null) {
+            TextButton(
+                onClick = {
+                    controller.menu.closeMenu()
+                    controller.dispatch(signIn)
+                },
+                modifier = Modifier.testTag("menu-sign-in"),
+            ) { Text("Sign in") }
+        }
+    }
+}
+
+/** One sign-in (`sign-in-<id>`): an initial, the service and "@user · server", opening its detail. */
+@Composable
+private fun SignInRow(signIn: SignInSummary, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(28.dp)
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp).heightIn(min = 56.dp).clip(shape)
+            .clickable(onClick = onClick).testTag("sign-in-${signIn.id}").padding(start = 8.dp, end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Initial(signIn.username ?: signIn.title, size = 36)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+            Text(signIn.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (signIn.subtitle.isNotEmpty()) {
+                Text(
+                    signIn.subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Icon(ConstructIcons.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+    }
+}
+
+/** A round badge with the first letter of [name]. */
+@Composable
+private fun Initial(name: String, size: Int) {
+    Box(
+        Modifier.size(size.dp).background(MaterialTheme.colorScheme.secondaryContainer, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            name.trimStart('@').take(1).uppercase(),
+            style = if (size > 48) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+        )
+    }
+}
+
+/**
+ * A sign-in's detail (`sign-in-detail`): server, username, the apps that use it, and Sign out (`menu-sign-out`). Sign
+ * out ends the session's sign-ins and keeps a pod token's session (D46), so the pod stays open on this device.
+ */
+@Composable
+private fun SignInDetail(controller: ConstructController, state: ConstructState, id: String) {
+    val menu = controller.menu
+    val signIn = (menu.signIns as? Load.Ready)?.value?.firstOrNull { it.id == id }
+    // Signed out meanwhile (here or elsewhere): back to the list.
+    LaunchedEffect(signIn == null) { if (signIn == null) menu.back() }
+    if (signIn == null) return
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("sign-in-detail").padding(bottom = 16.dp)) {
+        PageHeader(signIn.title, onBack = menu::back)
+        Column(
+            Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Initial(signIn.username ?: signIn.title, size = 64)
+            signIn.username?.let {
+                Text("@$it", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+            }
+        }
+        DetailRow("Server", signIn.serverHost ?: "Unknown")
+        DetailRow("Username", signIn.username?.let { "@$it" } ?: "Unknown")
+        if (signIn.apps.isNotEmpty()) DetailRow("Used by", signIn.apps.joinToString(", "))
+        Spacer(Modifier.size(8.dp))
+        TextButton(
+            onClick = {
+                menu.back()
+                controller.logout()
+            },
+            modifier = Modifier.padding(horizontal = 12.dp).testTag("menu-sign-out"),
+        ) { Text("Sign out of ${signIn.title}", color = MaterialTheme.colorScheme.error) }
+        Text(
+            if (state.auth.session) "Your pod stays open on this device." else "You can sign in again from the app.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 20.dp),
+        )
+    }
+}
+
+@Composable
+private fun DetailRow(label: String, value: String) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodyLarge)
     }
 }
 
@@ -537,16 +834,9 @@ private fun ConnectionSection(state: ConstructState) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp).testTag("menu-connection")) {
         val online = state.isOnline
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(10.dp).background(if (online == true) Color(0xFF2E7D32) else Color(0xFF9E9E9E), CircleShape))
+            StatusDot(statusColor(online))
             Spacer(Modifier.width(10.dp))
-            Text(
-                when (online) {
-                    true -> "Online"
-                    false -> "Offline"
-                    null -> "Connecting…"
-                },
-                style = MaterialTheme.typography.bodyLarge,
-            )
+            Text(connectionLabel(online), style = MaterialTheme.typography.bodyLarge)
             if (state.pendingActions > 0) {
                 Spacer(Modifier.width(16.dp))
                 Box(Modifier.size(10.dp).background(Color(0xFFF9A825), CircleShape))
@@ -564,66 +854,6 @@ private fun ConnectionSection(state: ConstructState) {
         }
         state.error?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 4.dp))
-        }
-    }
-}
-
-@Composable
-private fun AccountSection(controller: ConstructController, state: ConstructState) {
-    val auth = state.auth
-    Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 2.dp).testTag("menu-account")) {
-        val signIn = findSignInIntent(state.workspace)
-        when (auth.state) {
-            "signed_in" -> Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "Signed in as " + (auth.username?.let { "@$it" } ?: "your account"),
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = controller::logout, modifier = Modifier.testTag("menu-sign-out")) { Text("Sign out") }
-            }
-            "pending" -> Text(
-                auth.message ?: "Signing in…",
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(vertical = 10.dp),
-            )
-            else -> Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    if (auth.state == "error") "Sign-in failed" + (auth.error?.let { ": $it" } ?: "") else "Not signed in",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = if (auth.state == "error") MaterialTheme.colorScheme.error else Color.Unspecified,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(vertical = 10.dp),
-                )
-                if (signIn != null) {
-                    TextButton(
-                        onClick = {
-                            controller.menu.closeMenu()
-                            controller.dispatch(signIn)
-                        },
-                        modifier = Modifier.testTag("menu-sign-in"),
-                    ) { Text("Sign in") }
-                }
-            }
-        }
-        if (auth.session) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "Your pod is open on this device",
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.weight(1f).padding(vertical = 10.dp),
-                )
-                TextButton(
-                    onClick = {
-                        controller.menu.closeMenu()
-                        controller.leavePod()
-                    },
-                    modifier = Modifier.testTag("menu-leave-pod"),
-                ) { Text("Leave this pod") }
-            }
         }
     }
 }
@@ -793,15 +1023,7 @@ private fun VersionPicker(controller: ConstructController, state: ConstructState
     val pinnedHere = pinnedInPicker(state, pin, appId, isCurrent)
     val now = nowEpochSeconds()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("version-picker").padding(bottom = 16.dp)) {
-        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = menu::back, modifier = Modifier.testTag("menu-back")) {
-                Icon(ConstructIcons.ArrowBack, contentDescription = "Back", modifier = Modifier.size(22.dp))
-            }
-            Column(Modifier.weight(1f).padding(start = 4.dp)) {
-                Text("Versions", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
-                Text(title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
+        PageHeader("Versions", onBack = menu::back, subtitle = title)
         menu.selectError?.let { InlineError(it, tag = "version-error", onRetry = null) }
         val latest = latestOnScreen ?: h.versions.firstOrNull { it.compatible }?.version
         ChoiceRow(
