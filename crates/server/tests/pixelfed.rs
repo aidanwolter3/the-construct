@@ -8,8 +8,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use protocol::{ActionIntent, FieldUpdate, PresentationMode, UiNode, WorkspaceSpec};
 use reqwest::{StatusCode, redirect};
 use serde_json::{Value, json};
-use server::pixelfed::routes::session_hash;
-use server::store::PixelfedAccount;
+use server::WithPixelfed;
+use server::pixelfed::db::{PixelfedAccount, PixelfedStore};
+use server::session::session_hash;
 use server::{AppState, PixelfedConfig};
 use sha2::{Digest, Sha256};
 use tokio::task::JoinHandle;
@@ -98,7 +99,7 @@ async fn env_with(state: AppState) -> Env {
 }
 
 async fn env() -> Env {
-    env_with(AppState::in_memory()).await
+    env_with(server::state_in_memory()).await
 }
 
 async fn post_json(url: &str, bearer: Option<&str>, body: Value) -> (StatusCode, Value) {
@@ -554,10 +555,15 @@ async fn logout_ends_the_session() {
     signed_out_button(&serde_json::from_value(home).unwrap());
 }
 
-/// A pod whose store already has a session + upstream account for `instance`.
+/// A pod whose store already has a session (signed in to Pixelfed) + upstream
+/// account for `instance`.
 fn seeded_state(instance: &str, upstream_token: &str) -> AppState {
-    let state = AppState::in_memory().with_pixelfed(PixelfedConfig::new(instance, None));
+    let state = server::state_in_memory().with_pixelfed(PixelfedConfig::new(instance, None));
     state.store().create_session(&session_hash("tok")).unwrap();
+    state
+        .store()
+        .attach_sign_in(&session_hash("tok"), server::pixelfed::SIGN_IN)
+        .unwrap();
     state
         .store()
         .save_pixelfed_account(
@@ -657,7 +663,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 1));
     // A newer version replaces the feed layout; entities still come upstream.
-    let mut node = server::layouts::builtin("pixelfed_home").unwrap();
+    let mut node = server::layouts::builtin(&server::catalog(), "pixelfed_home").unwrap();
     if let UiNode::Workspace { title, .. } = &mut node {
         *title = "Custom".into();
     }
@@ -739,7 +745,7 @@ async fn media_proxy_neutralizes_non_media_content_types() {
             ),
     )
     .await;
-    let state = AppState::in_memory().with_pixelfed(PixelfedConfig {
+    let state = server::state_in_memory().with_pixelfed(PixelfedConfig {
         media_hosts: vec![origin.url.trim_start_matches("http://").to_owned()],
         ..PixelfedConfig::default()
     });
@@ -780,7 +786,7 @@ async fn media_proxy_neutralizes_non_media_content_types() {
 #[tokio::test]
 async fn session_tokens_are_stored_hashed() {
     let dir = tempfile::tempdir().unwrap();
-    let env = env_with(AppState::open_dir(dir.path()).unwrap()).await;
+    let env = env_with(server::open_dir(dir.path()).unwrap()).await;
     let session = sign_in(&env).await;
     assert!(session.len() >= 43);
     let conn = rusqlite::Connection::open(dir.path().join("server.db")).unwrap();
@@ -816,6 +822,66 @@ async fn session_tokens_are_stored_hashed() {
     );
 }
 
+/// Staging's upgrade (D40): a database from before sign-ins existed (v10, a
+/// signed-in session) keeps its session signed in to Pixelfed after v11.
+#[tokio::test]
+async fn a_session_from_before_v11_stays_signed_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = env_with(server::open_dir(dir.path()).unwrap()).await;
+    let session = sign_in(&env).await;
+    env.pod.handle.abort();
+    {
+        // Back to the v10 shape: no sign-in rows, no adapter versions.
+        let conn = rusqlite::Connection::open(dir.path().join("server.db")).unwrap();
+        conn.execute_batch(
+            "DROP TABLE session_sign_ins; DROP TABLE adapter_migrations; PRAGMA user_version = 10;",
+        )
+        .unwrap();
+    }
+    let state = server::open_dir(dir.path())
+        .unwrap()
+        .with_pixelfed(PixelfedConfig::new(&env.fake.url, None));
+    assert_eq!(
+        state
+            .store()
+            .session_sign_ins(&server::session::session_hash(&session))
+            .unwrap(),
+        [server::pixelfed::SIGN_IN]
+    );
+    let pod = spawn_pod(state).await;
+    let (status, body) = get_home(&pod.url, Some(&session)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        !body["queries"]["timeline:home"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Signing in again with a valid session keeps that session (one session
+/// collects every sign-in, D40); without one, a new session is made.
+#[tokio::test]
+async fn signing_in_with_a_session_keeps_it() {
+    let env = env().await;
+    let first = sign_in(&env).await;
+    let (code, verifier) = authorize(&env).await;
+    let (status, body) = post_json(
+        &format!("{}/v1/auth/pixelfed/token", env.pod.url),
+        Some(&first),
+        json!({ "instance_url": env.fake.url, "code": code, "code_verifier": verifier,
+                "redirect_uri": REDIRECT }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["session_token"], first.as_str());
+    let second = sign_in(&env).await;
+    assert_ne!(second, first);
+    for s in [&first, &second] {
+        assert_eq!(get_home(&env.pod.url, Some(s)).await.0, StatusCode::OK);
+    }
+}
+
 #[tokio::test]
 async fn foreign_instance_is_rejected() {
     let env = env().await;
@@ -843,7 +909,7 @@ async fn foreign_instance_is_rejected() {
 #[tokio::test]
 async fn public_url_is_used_for_authorize_and_accepted() {
     let fake = spawn_fake().await;
-    let pod = spawn_pod(AppState::in_memory().with_pixelfed(PixelfedConfig::new(
+    let pod = spawn_pod(server::state_in_memory().with_pixelfed(PixelfedConfig::new(
         &fake.url,
         Some("http://10.0.2.2:8081/"),
     )))
@@ -890,7 +956,7 @@ async fn bad_code_verifier_is_oauth_exchange_failed() {
 
 #[tokio::test]
 async fn demo_ack_accepts_pixelfed_demo_likes() {
-    let pod = spawn_pod(AppState::in_memory()).await;
+    let pod = spawn_pod(server::state_in_memory()).await;
     let demo: WorkspaceSpec = client()
         .get(format!("{}/v1/workspaces/pixelfed_demo", pod.url))
         .send()
@@ -942,7 +1008,7 @@ async fn home_feed_asks_upstream_for_reblogs() {
 #[tokio::test]
 async fn expired_upstream_token_is_refreshed() {
     let dir = tempfile::tempdir().unwrap();
-    let env = env_with(AppState::open_dir(dir.path()).unwrap()).await;
+    let env = env_with(server::open_dir(dir.path()).unwrap()).await;
     let session = sign_in(&env).await;
     let stored = |dir: &std::path::Path| -> (String, Option<String>, Option<i64>, Option<String>) {
         let conn = rusqlite::Connection::open(dir.join("server.db")).unwrap();
@@ -1019,7 +1085,7 @@ fn seed_other_owner(state: &AppState, instance: &str) {
         .store()
         .sign_in_pixelfed(instance, &other, &session_hash("tok"), false, 86_400)
         .unwrap();
-    assert_eq!(r, server::store::SignIn::Ok);
+    assert_eq!(r, server::pixelfed::db::SignIn::Ok);
 }
 
 async fn exchange(env: &Env) -> (StatusCode, Value) {
@@ -1035,7 +1101,7 @@ async fn exchange(env: &Env) -> (StatusCode, Value) {
 
 #[tokio::test]
 async fn another_account_cannot_take_over_the_pod() {
-    let env = env_custom(AppState::in_memory(), |_| {}, seed_other_owner).await;
+    let env = env_custom(server::state_in_memory(), |_| {}, seed_other_owner).await;
     let (status, body) = exchange(&env).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["error"], "account_not_owner");
@@ -1064,7 +1130,7 @@ async fn the_owner_may_sign_in_again() {
 async fn explicit_owner_and_allow_change_overrides() {
     // PIXELFED_OWNER_ACCOUNT_ID names someone else: 403 even on a fresh pod.
     let env = env_custom(
-        AppState::in_memory(),
+        server::state_in_memory(),
         |c| c.owner_account_id = Some("999".into()),
         |_, _| {},
     )
@@ -1075,7 +1141,7 @@ async fn explicit_owner_and_allow_change_overrides() {
 
     // PIXELFED_OWNER_ACCOUNT_ID names the signing-in account: it replaces a pinned owner.
     let env = env_custom(
-        AppState::in_memory(),
+        server::state_in_memory(),
         |c| c.owner_account_id = Some(FAKE_ACCOUNT.into()),
         seed_other_owner,
     )
@@ -1085,7 +1151,7 @@ async fn explicit_owner_and_allow_change_overrides() {
     // PIXELFED_ALLOW_ACCOUNT_CHANGE=1: any account replaces the stored one.
     let dir = tempfile::tempdir().unwrap();
     let env = env_custom(
-        AppState::open_dir(dir.path()).unwrap(),
+        server::open_dir(dir.path()).unwrap(),
         |c| c.allow_account_change = true,
         seed_other_owner,
     )
@@ -1105,7 +1171,7 @@ async fn explicit_owner_and_allow_change_overrides() {
 #[tokio::test]
 async fn sessions_expire_after_the_ttl() {
     let dir = tempfile::tempdir().unwrap();
-    let env = env_with(AppState::open_dir(dir.path()).unwrap()).await;
+    let env = env_with(server::open_dir(dir.path()).unwrap()).await;
     let session = sign_in(&env).await;
     assert_eq!(
         get_home(&env.pod.url, Some(&session)).await.0,
@@ -1139,7 +1205,7 @@ async fn sessions_expire_after_the_ttl() {
 #[tokio::test]
 async fn app_registration_only_for_allowed_redirect_uris() {
     let env = env_custom(
-        AppState::in_memory(),
+        server::state_in_memory(),
         |c| c.extra_redirects = vec!["myapp://signed-in".into()],
         |_, _| {},
     )
@@ -1211,7 +1277,7 @@ async fn stale_cached_app_is_re_registered() {
 async fn cached_app_is_kept_when_validation_is_inconclusive() {
     let dead = dead_url().await;
     let state = seeded_state(&dead, SEED);
-    let app = server::store::PixelfedApp {
+    let app = server::pixelfed::db::PixelfedApp {
         client_id: "cached-1".into(),
         client_secret: "s".into(),
     };
@@ -1275,7 +1341,7 @@ async fn media_proxy_ssrf_guards() {
             ),
     )
     .await;
-    let state = AppState::in_memory().with_pixelfed(PixelfedConfig {
+    let state = server::state_in_memory().with_pixelfed(PixelfedConfig {
         media_hosts: vec![origin.url.trim_start_matches("http://").to_owned()],
         ..PixelfedConfig::default()
     });

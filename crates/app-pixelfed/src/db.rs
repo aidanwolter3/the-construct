@@ -1,0 +1,400 @@
+//! The Pixelfed adapter's tables (core migrations v2-v4, which predate
+//! per-adapter migrations; D40): registered OAuth apps, the stored upstream
+//! account and its pinned owner, and the media proxy's keys.
+//!
+//! [`PixelfedStore`] adds these queries to the core's [`Store`].
+
+use pod_core::store::{Store, open_session_on};
+use pod_core::util::now_secs;
+use rusqlite::{Connection, OptionalExtension, params};
+
+use crate::adapter::SIGN_IN;
+
+/// Outcome of [`PixelfedStore::sign_in_pixelfed`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignIn {
+    /// Account stored and the session's `pixelfed` sign-in recorded.
+    Ok,
+    /// Another account owns this pod; nothing was changed.
+    NotOwner { owner: String },
+}
+
+/// A registered OAuth app on the upstream instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PixelfedApp {
+    pub client_id: String,
+    pub client_secret: String,
+}
+
+/// The stored upstream account (and its access token).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PixelfedAccount {
+    pub access_token: String,
+    pub account_id: String,
+    pub username: String,
+    /// Upstream refresh token (Pixelfed issues one; the fake too).
+    pub refresh_token: Option<String>,
+    /// Unix seconds when the access token expires, if the upstream said.
+    pub expires_at: Option<i64>,
+    /// The redirect_uri of the app (pixelfed_apps row) that issued the token.
+    pub redirect_uri: Option<String>,
+}
+
+fn save_account_on(
+    conn: &Connection,
+    instance: &str,
+    account: &PixelfedAccount,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO pixelfed_account
+             (instance, access_token, account_id, username, created_at,
+              refresh_token, expires_at, redirect_uri)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            instance,
+            account.access_token,
+            account.account_id,
+            account.username,
+            now_secs(),
+            account.refresh_token,
+            account.expires_at,
+            account.redirect_uri,
+        ],
+    )?;
+    Ok(())
+}
+
+/// The Pixelfed adapter's queries on the pod's store.
+pub trait PixelfedStore {
+    fn pixelfed_app(
+        &self,
+        instance: &str,
+        redirect_uri: &str,
+    ) -> rusqlite::Result<Option<PixelfedApp>>;
+    fn save_pixelfed_app(
+        &self,
+        instance: &str,
+        redirect_uri: &str,
+        app: &PixelfedApp,
+    ) -> rusqlite::Result<()>;
+    /// Forget a cached app (the upstream no longer knows it).
+    fn delete_pixelfed_app(&self, instance: &str, redirect_uri: &str) -> rusqlite::Result<()>;
+    fn pixelfed_account(&self, instance: &str) -> rusqlite::Result<Option<PixelfedAccount>>;
+    /// Store (replacing any previous) the upstream account for `instance`.
+    /// Does not touch the pinned owner (token refreshes use this).
+    fn save_pixelfed_account(
+        &self,
+        instance: &str,
+        account: &PixelfedAccount,
+    ) -> rusqlite::Result<()>;
+    /// The pinned owner's upstream account id, if anyone has signed in.
+    fn pixelfed_owner(&self, instance: &str) -> rusqlite::Result<Option<String>>;
+    /// Sign-in, atomically: if no owner is pinned (or `replace_owner`),
+    /// `account` becomes the owner; if another account is pinned, nothing
+    /// changes and [`SignIn::NotOwner`] is returned. Otherwise the account is
+    /// stored and the session `token_hash` gets the `pixelfed` sign-in (it is
+    /// created if new; sessions older than `session_ttl_secs` are pruned).
+    fn sign_in_pixelfed(
+        &self,
+        instance: &str,
+        account: &PixelfedAccount,
+        token_hash: &str,
+        replace_owner: bool,
+        session_ttl_secs: i64,
+    ) -> rusqlite::Result<SignIn>;
+    fn delete_pixelfed_account(&self, instance: &str) -> rusqlite::Result<()>;
+    /// Compare-and-delete: forget the stored account only if it still holds
+    /// `access_token` (a concurrent sign-in or refresh may have replaced it).
+    /// Returns whether a row was deleted.
+    fn delete_pixelfed_account_if_token(
+        &self,
+        instance: &str,
+        access_token: &str,
+    ) -> rusqlite::Result<bool>;
+    /// Remember proxy keys (idempotent).
+    fn save_media_keys<'a>(
+        &self,
+        keys: impl IntoIterator<Item = (&'a String, &'a String)>,
+    ) -> rusqlite::Result<()>;
+    fn media_url(&self, key: &str) -> rusqlite::Result<Option<String>>;
+}
+
+impl PixelfedStore for Store {
+    fn pixelfed_app(
+        &self,
+        instance: &str,
+        redirect_uri: &str,
+    ) -> rusqlite::Result<Option<PixelfedApp>> {
+        self.with_conn(|c| {
+            c.query_row(
+                "SELECT client_id, client_secret FROM pixelfed_apps
+                 WHERE instance = ?1 AND redirect_uri = ?2",
+                [instance, redirect_uri],
+                |r| {
+                    Ok(PixelfedApp {
+                        client_id: r.get(0)?,
+                        client_secret: r.get(1)?,
+                    })
+                },
+            )
+            .optional()
+        })
+    }
+
+    fn save_pixelfed_app(
+        &self,
+        instance: &str,
+        redirect_uri: &str,
+        app: &PixelfedApp,
+    ) -> rusqlite::Result<()> {
+        self.with_conn(|c| {
+            c.execute(
+                "INSERT OR REPLACE INTO pixelfed_apps (instance, redirect_uri, client_id, client_secret)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![instance, redirect_uri, app.client_id, app.client_secret],
+            )
+        })?;
+        Ok(())
+    }
+
+    fn delete_pixelfed_app(&self, instance: &str, redirect_uri: &str) -> rusqlite::Result<()> {
+        self.with_conn(|c| {
+            c.execute(
+                "DELETE FROM pixelfed_apps WHERE instance = ?1 AND redirect_uri = ?2",
+                [instance, redirect_uri],
+            )
+        })?;
+        Ok(())
+    }
+
+    fn pixelfed_account(&self, instance: &str) -> rusqlite::Result<Option<PixelfedAccount>> {
+        self.with_conn(|c| {
+            c.query_row(
+                "SELECT access_token, account_id, username, refresh_token, expires_at, redirect_uri
+                 FROM pixelfed_account WHERE instance = ?1",
+                [instance],
+                |r| {
+                    Ok(PixelfedAccount {
+                        access_token: r.get(0)?,
+                        account_id: r.get(1)?,
+                        username: r.get(2)?,
+                        refresh_token: r.get(3)?,
+                        expires_at: r.get(4)?,
+                        redirect_uri: r.get(5)?,
+                    })
+                },
+            )
+            .optional()
+        })
+    }
+
+    fn save_pixelfed_account(
+        &self,
+        instance: &str,
+        account: &PixelfedAccount,
+    ) -> rusqlite::Result<()> {
+        self.with_conn(|c| save_account_on(c, instance, account))
+    }
+
+    fn pixelfed_owner(&self, instance: &str) -> rusqlite::Result<Option<String>> {
+        self.with_conn(|c| {
+            c.query_row(
+                "SELECT account_id FROM pixelfed_owner WHERE instance = ?1",
+                [instance],
+                |r| r.get(0),
+            )
+            .optional()
+        })
+    }
+
+    fn sign_in_pixelfed(
+        &self,
+        instance: &str,
+        account: &PixelfedAccount,
+        token_hash: &str,
+        replace_owner: bool,
+        session_ttl_secs: i64,
+    ) -> rusqlite::Result<SignIn> {
+        self.transaction(|tx| {
+            let owner: Option<String> = tx
+                .query_row(
+                    "SELECT account_id FROM pixelfed_owner WHERE instance = ?1",
+                    [instance],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(owner) = owner
+                && owner != account.account_id
+                && !replace_owner
+            {
+                return Ok(SignIn::NotOwner { owner });
+            }
+            tx.execute(
+                "INSERT INTO pixelfed_owner (instance, account_id, created_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(instance) DO UPDATE SET account_id = excluded.account_id,
+                     created_at = CASE WHEN account_id = excluded.account_id THEN created_at
+                                       ELSE excluded.created_at END",
+                params![instance, account.account_id, now_secs()],
+            )?;
+            save_account_on(tx, instance, account)?;
+            open_session_on(tx, token_hash, SIGN_IN, session_ttl_secs)?;
+            Ok(SignIn::Ok)
+        })
+    }
+
+    fn delete_pixelfed_account(&self, instance: &str) -> rusqlite::Result<()> {
+        self.with_conn(|c| {
+            c.execute(
+                "DELETE FROM pixelfed_account WHERE instance = ?1",
+                [instance],
+            )
+        })?;
+        Ok(())
+    }
+
+    fn delete_pixelfed_account_if_token(
+        &self,
+        instance: &str,
+        access_token: &str,
+    ) -> rusqlite::Result<bool> {
+        Ok(self.with_conn(|c| {
+            c.execute(
+                "DELETE FROM pixelfed_account WHERE instance = ?1 AND access_token = ?2",
+                [instance, access_token],
+            )
+        })? > 0)
+    }
+
+    fn save_media_keys<'a>(
+        &self,
+        keys: impl IntoIterator<Item = (&'a String, &'a String)>,
+    ) -> rusqlite::Result<()> {
+        self.transaction(|tx| {
+            let mut stmt = tx.prepare_cached(
+                "INSERT OR IGNORE INTO pixelfed_media (key, url) VALUES (?1, ?2)",
+            )?;
+            for (key, url) in keys {
+                stmt.execute([key, url])?;
+            }
+            Ok(())
+        })
+    }
+
+    fn media_url(&self, key: &str) -> rusqlite::Result<Option<String>> {
+        self.with_conn(|c| {
+            c.query_row(
+                "SELECT url FROM pixelfed_media WHERE key = ?1",
+                [key],
+                |r| r.get(0),
+            )
+            .optional()
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn account(id: &str, token: &str) -> PixelfedAccount {
+        PixelfedAccount {
+            access_token: token.into(),
+            account_id: id.into(),
+            username: format!("u{id}"),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn v4_pins_an_existing_account_as_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.db");
+        {
+            // A v3 database with a stored account.
+            let mut conn = Connection::open(&path).unwrap();
+            pod_core::store::migrate_to(&mut conn, 3).unwrap();
+            save_account_on(&conn, "i", &account("7", "t")).unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        assert_eq!(s.pixelfed_owner("i").unwrap().as_deref(), Some("7"));
+    }
+
+    #[test]
+    fn sign_in_pins_the_first_owner() {
+        let s = Store::open_in_memory().unwrap();
+        let ttl = 86_400;
+        assert_eq!(
+            s.sign_in_pixelfed("i", &account("1", "a"), "h1", false, ttl)
+                .unwrap(),
+            SignIn::Ok
+        );
+        assert_eq!(s.session_sign_ins("h1").unwrap(), [SIGN_IN]);
+        assert_eq!(
+            s.sign_in_pixelfed("i", &account("2", "b"), "h2", false, ttl)
+                .unwrap(),
+            SignIn::NotOwner { owner: "1".into() }
+        );
+        // Nothing changed: account, owner, no session for the rejected sign-in.
+        assert_eq!(s.pixelfed_account("i").unwrap().unwrap().access_token, "a");
+        assert!(!s.session_exists("h2").unwrap());
+        // Same account again; then a forced replacement.
+        assert_eq!(
+            s.sign_in_pixelfed("i", &account("1", "c"), "h3", false, ttl)
+                .unwrap(),
+            SignIn::Ok
+        );
+        assert_eq!(
+            s.sign_in_pixelfed("i", &account("2", "d"), "h4", true, ttl)
+                .unwrap(),
+            SignIn::Ok
+        );
+        assert_eq!(s.pixelfed_owner("i").unwrap().as_deref(), Some("2"));
+        // Owners are per instance.
+        assert_eq!(s.pixelfed_owner("other").unwrap(), None);
+    }
+
+    #[test]
+    fn sign_in_adds_pixelfed_to_an_existing_session() {
+        let s = Store::open_in_memory().unwrap();
+        s.create_session("h").unwrap();
+        s.attach_sign_in("h", "other").unwrap();
+        s.sign_in_pixelfed("i", &account("1", "a"), "h", false, 86_400)
+            .unwrap();
+        assert_eq!(s.session_sign_ins("h").unwrap(), ["other", SIGN_IN]);
+    }
+
+    #[test]
+    fn sign_in_prunes_expired_sessions() {
+        let s = Store::open_in_memory().unwrap();
+        s.create_session("old").unwrap();
+        s.with_conn(|c| c.execute("UPDATE sessions SET created_at = created_at - 1000", []))
+            .unwrap();
+        s.sign_in_pixelfed("i", &account("1", "a"), "new", false, 999)
+            .unwrap();
+        assert!(!s.session_exists("old").unwrap());
+        assert!(s.session_valid("new", 999).unwrap());
+    }
+
+    #[test]
+    fn account_compare_and_delete() {
+        let s = Store::open_in_memory().unwrap();
+        s.save_pixelfed_account("i", &account("1", "new")).unwrap();
+        assert!(!s.delete_pixelfed_account_if_token("i", "old").unwrap());
+        assert!(s.pixelfed_account("i").unwrap().is_some());
+        assert!(s.delete_pixelfed_account_if_token("i", "new").unwrap());
+        assert!(s.pixelfed_account("i").unwrap().is_none());
+    }
+
+    #[test]
+    fn media_keys_round_trip() {
+        let s = Store::open_in_memory().unwrap();
+        let (k, u) = ("k".to_owned(), "https://x/a.jpg".to_owned());
+        s.save_media_keys([(&k, &u)]).unwrap();
+        s.save_media_keys([(&k, &u)]).unwrap();
+        assert_eq!(
+            s.media_url("k").unwrap().as_deref(),
+            Some("https://x/a.jpg")
+        );
+        assert_eq!(s.media_url("missing").unwrap(), None);
+    }
+}

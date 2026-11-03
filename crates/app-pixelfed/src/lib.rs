@@ -1,6 +1,9 @@
-//! Pixelfed adapter (M6): Mastodon-API JSON -> normalized Construct entities.
+//! The Pixelfed adapter (M6, D40): the `pixelfed_home` app, the `pixelfed`
+//! sign-in and the `pixelfed_demo` dev app, plugged into the pod through
+//! [`pod_core::AppAdapter`] ([`PixelfedAdapter`], [`apps::demo_adapter`]).
 //!
-//! Everything in this module (except [`upstream`] and [`routes`]) is pure: it
+//! Mastodon-API JSON -> normalized Construct entities: everything in this
+//! module (except [`upstream`], [`routes`], [`adapter`] and [`db`]) is pure: it
 //! turns upstream JSON into URI-keyed [`EntityRecord`]s and an ordered timeline.
 //! Input is parsed leniently (every optional Mastodon field may be absent or
 //! null; a status that cannot be parsed at all is skipped and logged).
@@ -18,9 +21,16 @@
 //! Every image URL is rewritten through [`MediaUrls`] to the pod's media proxy
 //! (or dropped to null when its origin is not in the [`MediaAllowlist`]).
 
+pub mod adapter;
+pub mod apps;
+pub mod config;
+pub mod db;
 pub mod layout;
 pub mod routes;
 pub mod upstream;
+
+pub use adapter::{PixelfedAdapter, SIGN_IN};
+pub use config::{DEFAULT_PIXELFED_URL, PixelfedConfig};
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -241,9 +251,7 @@ pub fn media_key(url: &str) -> String {
     hex(&Sha256::digest(url.as_bytes())[..16])
 }
 
-pub fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
+pub use pod_core::util::hex;
 
 /// The origins the media proxy may fetch (SSRF guard): media URLs come from
 /// upstream content, which a federated post can fill with any URL.
@@ -919,7 +927,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 mod tests {
     use super::*;
 
-    const FIXTURE: &str = include_str!("../../../../fixtures/pixelfed/timeline_home.json");
+    const FIXTURE: &str = include_str!("../../../fixtures/pixelfed/timeline_home.json");
     const BASE: &str = "http://127.0.0.1:8081";
     const PROXY: &str = "http://10.0.2.2:8080/v1/pixelfed/media";
 
@@ -1155,11 +1163,11 @@ mod tests {
     /// Real Pixelfed 0.15.2 responses recorded from the local instance
     /// (`scripts/pixelfed_dev.sh record`; D20).
     const RECORDED_REBLOGS: &str =
-        include_str!("../../../../fixtures/pixelfed/recorded/timeline_home_reblogs.json");
+        include_str!("../../../fixtures/pixelfed/recorded/timeline_home_reblogs.json");
     const RECORDED_PLAIN: &str =
-        include_str!("../../../../fixtures/pixelfed/recorded/timeline_home.json");
+        include_str!("../../../fixtures/pixelfed/recorded/timeline_home.json");
     const RECORDED_PE: &str =
-        include_str!("../../../../fixtures/pixelfed/recorded/timeline_home_pe.json");
+        include_str!("../../../fixtures/pixelfed/recorded/timeline_home_pe.json");
     const REAL_BASE: &str = "http://localhost:8090";
 
     fn normalize_recorded(json: &str) -> (Timeline, MediaUrls) {

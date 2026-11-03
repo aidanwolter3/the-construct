@@ -1364,3 +1364,41 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   outbox tests (`client-core/tests/outbox.rs`) used the pod's counter endpoints; they now run against a small
   in-test counter server with the same behaviour (422 below zero, injectable faults). The engine's default workspace
   id (`ConstructEngine::init`) is still `home`; clients always pass one.
+
+## D40: The pod core knows apps only through adapters
+
+- **Why:** the pod (`crates/server`) was generic in name only. `AppState` held the Pixelfed config and client,
+  `get_workspace` and the SSE handler special-cased `pixelfed_home`, `layouts::APPS`/`FILES` hard-coded the apps,
+  and sessions lived in the Pixelfed routes. D34 made the clients app-agnostic; this does the same for the server.
+- **Crates:** `pod-core` (library) is the generic pod: router, workspaces, layout files and versions, schema
+  negotiation, SSE, sessions and sign-ins, the store and its migrations, the fault hook. It names no app (a test
+  checks its source, outside comments and the frozen migrations). `app-pixelfed` (library) is the Pixelfed adapter:
+  upstream client, normalizing, auth/actions/comments/media routes, its tables and the `pixelfed_demo` dev app.
+  `server` keeps its package name (so `deploy/`, `scripts/` and `cargo run -p server` are unchanged) and is only
+  the composition: `server::adapters(config)` plus `main.rs`; its library re-exports `pod_core::*` and
+  `app_pixelfed as pixelfed` for tests.
+- **Compile-time adapters:** the binary links the adapter crates; no plugins, dylibs or separate services.
+- **The interface:** `pod_core::AppAdapter` (`adapter.rs`, documented for implementors): `name`, `apps`
+  (`AppInfo {id, title, icon, dev, auth}`), `layout_files`, `legacy_files`, `router`, `sign_ins`, `signed_out`,
+  `migrations` and `hydrate`, which returns `Hydration::{Data, Screen, StaleSession, Error}`. The core serves
+  layouts itself: an adapter returns only a `DataBundle` and the core adds the newest version the client can draw.
+  `Catalog::new` checks the adapter set at startup (unique adapter names, app ids and sign-in ids; every required
+  sign-in provided; every layout file belongs to an app). Handlers find their adapter with `AppState::adapter::<T>()`.
+- **Layout-only apps** use `pod_core::StaticAdapter` (layout files + a fixed bundle, optional extra routes);
+  `pixelfed_demo` is one (with `/v1/demo/ack`).
+- **Sign-ins:** one pod session is shared by every app. Adapters register sign-ins (`pixelfed`); an app declares the
+  one it requires (`AuthPolicy::SignIn("pixelfed")`) or none (`Public`). The core checks it before `hydrate`:
+  without it, the provider's signed-out screen (200 with no bearer, 401 + `X-Construct-Session: invalid` with one);
+  the SSE channel gives the same 401. Completing a sign-in records it on the session in the adapter's transaction
+  (`store::open_session_on`, keeping D17's owner check + account save + session atomic). A sign-in by a caller that
+  already has a valid session adds to that session and returns the same token. `POST /v1/auth/logout` moved to the
+  core and ends the session with all its sign-ins. `CONSTRUCT_SESSION_TTL_DAYS` is read by the core.
+- **Storage:** one SQLite file. Migrations v2-v4 (the `pixelfed_*` tables) stay in the core's list as frozen history;
+  only the adapter queries them (`app_pixelfed::db::PixelfedStore`, over `Store::with_conn`/`transaction`). v11
+  adds `adapter_migrations(adapter, version)` (each adapter's own append-only list, run at startup after the core's,
+  one IMMEDIATE transaction per step) and `session_sign_ins(token_hash, provider, created_at)`, giving every
+  existing session a `pixelfed` row, so staging users stay signed in. Older builds ignore both tables.
+- **Unchanged on the wire:** no URL, layout file or `SCHEMA_VERSION` changed; no client build needed. One edge case
+  changed: a workspace whose app has no layout version the client can draw is now 409 `no_compatible_version`
+  (before, `pixelfed_demo` fell back to the fixture's own layout and `pixelfed_home` panicked).
+- **Media proxy** stays Pixelfed-only (`app-pixelfed`) until a second app needs one.

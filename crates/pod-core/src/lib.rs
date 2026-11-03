@@ -1,0 +1,449 @@
+//! The Construct pod, without any app (D40).
+//!
+//! The core keeps its state in SQLite (see [`store`]), serves each app's
+//! workspace (`GET /v1/workspaces/:id`), the read-only apps and versions API
+//! and the layout push channel (see [`layouts`]), and owns sessions and
+//! sign-ins (see [`session`]). Workspace layouts are code
+//! (`layouts/<app>/NNNN.json`), synced into one append-only version history
+//! per app at startup; [`validate`] checks every layout file.
+//!
+//! Apps plug in through [`AppAdapter`]: the `server` binary builds the
+//! adapters and passes them to [`AppState::try_new`]. The core never names an
+//! app; adapters supply each app's data, routes, sign-ins and tables.
+
+pub mod adapter;
+pub mod layouts;
+pub mod session;
+pub mod static_app;
+pub mod store;
+pub mod util;
+pub mod validate;
+
+use std::path::Path as FsPath;
+use std::sync::{Arc, Mutex};
+
+use axum::{
+    Json, Router,
+    body::Bytes,
+    extract::{Path, Request, State},
+    http::{HeaderMap, Method, StatusCode, header},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use protocol::WorkspaceSpec;
+use serde_json::{Value, json};
+use store::Store;
+
+pub use adapter::{
+    AppAdapter, AppInfo, AuthPolicy, BoxFuture, Catalog, Hydration, Pod, RequestCtx, SignInProvider,
+};
+pub use session::{Caller, Session};
+pub use static_app::StaticAdapter;
+
+/// `WorkspaceSpec::version` of the bundles the pod builds.
+pub const BUNDLE_VERSION: &str = "1.0.0";
+
+/// A pending injected fault (test hook): the next `remaining` mutation
+/// requests get `status` without being applied.
+#[derive(Debug, Clone, Copy)]
+struct Fault {
+    status: StatusCode,
+    remaining: u32,
+}
+
+/// Shared server state; adapters reach it as [`Pod`].
+pub struct AppState {
+    store: Store,
+    catalog: Catalog,
+    test_hooks: bool,
+    fault: Mutex<Option<Fault>>,
+    /// Pod sessions older than this are invalid (`CONSTRUCT_SESSION_TTL_DAYS`).
+    session_ttl_secs: i64,
+    /// `CONSTRUCT_SHOW_DEV_APPS=1`: `GET /v1/apps` also lists the dev apps.
+    show_dev_apps: bool,
+    /// New app versions, fanned out to SSE subscribers.
+    layout_tx: tokio::sync::broadcast::Sender<layouts::LayoutEvent>,
+    /// SSE keepalive interval (15 s; shorter in tests).
+    sse_keepalive: std::time::Duration,
+    /// Set by [`AppState::shutdown`]: open SSE streams end.
+    shutdown: tokio::sync::watch::Sender<bool>,
+}
+
+impl AppState {
+    /// State over `store` serving `adapters`, after running their migrations
+    /// and syncing their layout files into the store ([`layouts::sync`]).
+    /// Panics with the error; see [`Self::try_new`].
+    pub fn new(store: Store, adapters: Vec<Arc<dyn AppAdapter>>) -> Self {
+        Self::try_new(store, adapters).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// [`Self::new`], returning the error (a bad adapter set, a failed
+    /// adapter migration, or a changed, out-of-order or invalid layout file)
+    /// instead of panicking.
+    pub fn try_new(store: Store, adapters: Vec<Arc<dyn AppAdapter>>) -> Result<Self, String> {
+        let catalog = Catalog::new(adapters)?;
+        for a in catalog.adapters() {
+            store
+                .migrate_adapter(a.name(), a.migrations())
+                .map_err(|e| format!("migrating the '{}' adapter's tables: {e}", a.name()))?;
+        }
+        let report = layouts::sync(&store, &catalog)?;
+        for warning in &report.missing {
+            tracing::warn!("{warning}");
+        }
+        for path in &report.adopted {
+            tracing::info!(file = %path, "layout file hash recorded (deployed before migration v8)");
+        }
+        for path in &report.adopted_schema {
+            tracing::info!(file = %path, "layout file schema recorded (deployed before migration v9)");
+        }
+        for (path, version) in &report.appended {
+            tracing::info!(file = %path, version, "layout file deployed as a new version");
+        }
+        Ok(Self {
+            store,
+            catalog,
+            test_hooks: false,
+            fault: Mutex::new(None),
+            session_ttl_secs: session::DEFAULT_SESSION_TTL_DAYS * 86_400,
+            show_dev_apps: false,
+            layout_tx: tokio::sync::broadcast::channel(layouts::CHANNEL_CAPACITY).0,
+            sse_keepalive: layouts::DEFAULT_KEEPALIVE,
+            shutdown: tokio::sync::watch::channel(false).0,
+        })
+    }
+
+    /// State backed by `<dir>/server.db` (the directory is created).
+    pub fn open_dir(
+        dir: &FsPath,
+        adapters: Vec<Arc<dyn AppAdapter>>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        std::fs::create_dir_all(dir)?;
+        Ok(Self::try_new(
+            Store::open(&dir.join("server.db"))?,
+            adapters,
+        )?)
+    }
+
+    /// Private in-memory database (tests).
+    pub fn in_memory(adapters: Vec<Arc<dyn AppAdapter>>) -> Self {
+        Self::new(Store::open_in_memory().expect("in-memory SQLite"), adapters)
+    }
+
+    /// `CONSTRUCT_SHOW_DEV_APPS=1`: `GET /v1/apps` also lists the dev apps
+    /// (their other endpoints work either way).
+    pub fn with_dev_apps(mut self, show: bool) -> Self {
+        self.show_dev_apps = show;
+        self
+    }
+
+    pub fn show_dev_apps(&self) -> bool {
+        self.show_dev_apps
+    }
+
+    /// Pod sessions older than this are invalid.
+    pub fn with_session_ttl_secs(mut self, secs: i64) -> Self {
+        self.session_ttl_secs = secs;
+        self
+    }
+
+    pub fn session_ttl_secs(&self) -> i64 {
+        self.session_ttl_secs
+    }
+
+    /// Override the SSE keepalive interval (tests).
+    pub fn with_sse_keepalive(mut self, interval: std::time::Duration) -> Self {
+        self.sse_keepalive = interval;
+        self
+    }
+
+    pub fn sse_keepalive(&self) -> std::time::Duration {
+        self.sse_keepalive
+    }
+
+    /// Enable `POST /v1/test/fault` (`CONSTRUCT_TEST_HOOKS=1`).
+    pub fn with_test_hooks(mut self, enabled: bool) -> Self {
+        self.test_hooks = enabled;
+        self
+    }
+
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
+
+    /// Every adapter's apps, files and sign-ins.
+    pub fn catalog(&self) -> &Catalog {
+        &self.catalog
+    }
+
+    /// The adapter of type `T`, if one is registered (how an adapter's route
+    /// handlers find their own configuration).
+    pub fn adapter<T: AppAdapter>(&self) -> Option<&T> {
+        self.catalog.adapters().iter().find_map(|a| {
+            let any: &dyn std::any::Any = a.as_ref();
+            any.downcast_ref::<T>()
+        })
+    }
+
+    /// Run a blocking store operation off the async workers.
+    pub async fn blocking<T: Send + 'static>(
+        self: &Pod,
+        f: impl FnOnce(&Store) -> rusqlite::Result<T> + Send + 'static,
+    ) -> Result<T, ApiError> {
+        blocking(self, f).await
+    }
+
+    /// Broadcast a new app version to SSE subscribers (no-op without any).
+    /// Nothing at runtime appends versions (they come with a deploy); tests
+    /// and tooling that append with [`layouts::append_version`] call this.
+    pub fn publish_layout(&self, workspace_id: &str, version: i64) {
+        let _ = self.layout_tx.send(layouts::LayoutEvent {
+            workspace_id: workspace_id.to_owned(),
+            version,
+        });
+    }
+
+    /// End all open SSE streams (call before graceful shutdown, which
+    /// otherwise waits for those never-ending responses).
+    pub fn shutdown(&self) {
+        self.shutdown.send_replace(true);
+    }
+
+    pub(crate) fn shutdown_signal(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.shutdown.subscribe()
+    }
+
+    pub fn subscribe_layouts(&self) -> tokio::sync::broadcast::Receiver<layouts::LayoutEvent> {
+        self.layout_tx.subscribe()
+    }
+
+    /// Consume one injected fault, if any is pending.
+    fn take_fault(&self) -> Option<StatusCode> {
+        let mut guard = self.fault.lock().unwrap_or_else(|e| e.into_inner());
+        let fault = guard.as_mut()?;
+        let status = fault.status;
+        fault.remaining -= 1;
+        if fault.remaining == 0 {
+            *guard = None;
+        }
+        Some(status)
+    }
+}
+
+/// Build the HTTP router: the core's routes plus every adapter's.
+pub fn app(state: Pod) -> Router {
+    let mut router = Router::new()
+        .route("/healthz", get(|| async { "ok" }))
+        .route("/v1/workspaces/{id}", get(get_workspace))
+        .merge(session::router())
+        .merge(layouts::router());
+    for a in state.catalog.adapters() {
+        router = router.merge(a.router());
+    }
+    if state.test_hooks {
+        router = router.route("/v1/test/fault", post(set_fault));
+    }
+    router
+        .route_layer(middleware::from_fn_with_state(state.clone(), fault_layer))
+        .with_state(state)
+}
+
+/// Run a blocking store operation off the async workers.
+pub async fn blocking<T: Send + 'static>(
+    state: &Pod,
+    f: impl FnOnce(&Store) -> rusqlite::Result<T> + Send + 'static,
+) -> Result<T, ApiError> {
+    let state = state.clone();
+    match tokio::task::spawn_blocking(move || f(&state.store)).await {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "store error");
+            Err(api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "store_error", "detail": e.to_string() }),
+            ))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "store task failed");
+            Err(api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "store_error" }),
+            ))
+        }
+    }
+}
+
+/// The signed-out screen for `app`, which requires `sign_in`.
+fn signed_out(state: &Pod, sign_in: &str, app: &AppInfo, req: &RequestCtx) -> WorkspaceSpec {
+    let adapter = state
+        .catalog
+        .sign_in_adapter(sign_in)
+        .expect("the catalog checked every app's sign-in");
+    adapter.signed_out(sign_in, app, req)
+}
+
+/// `GET /v1/workspaces/:id`: the app's data from its adapter
+/// ([`AppAdapter::hydrate`]) with the newest layout version the client can
+/// draw (`X-Construct-Layout-Version`). An app that requires a sign-in
+/// ([`AuthPolicy::SignIn`]) gets its signed-out screen instead when the
+/// caller lacks it: 200 without a bearer, 401 + `X-Construct-Session: invalid`
+/// with one, so the client learns its session is stale.
+async fn get_workspace(
+    State(state): State<Pod>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(r) = layouts::reject_invalid_workspace_id(&id) {
+        return r;
+    }
+    let (Some(app), Some(adapter)) = (
+        state.catalog.app(&id).copied(),
+        state.catalog.adapter_for(&id).cloned(),
+    ) else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "workspace_not_found", "id": id }),
+        );
+    };
+    let caller = match state.caller(&headers).await {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
+    };
+    let had_bearer = caller != Caller::Anonymous;
+    let req = RequestCtx {
+        schema: layouts::client_schema(&headers),
+        headers,
+        session: caller.clone().into_session(),
+    };
+    if let AuthPolicy::SignIn(sign_in) = app.auth
+        && !caller.has(sign_in)
+    {
+        let screen = signed_out(&state, sign_in, &app, &req);
+        return if had_bearer {
+            session::stale_session(screen)
+        } else {
+            Json(screen).into_response()
+        };
+    }
+    let bundle = match adapter.hydrate(&state, &id, &req).await {
+        Hydration::Data(bundle) => bundle,
+        Hydration::Screen(screen) => return Json(screen).into_response(),
+        Hydration::StaleSession(screen) => return session::stale_session(screen),
+        Hydration::Error(r) => return r,
+    };
+    let served = match layouts::active_for_client(&state, &id, &req.headers).await {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            return json_error(
+                StatusCode::CONFLICT,
+                json!({ "error": "no_compatible_version", "id": id,
+                        "detail": "no layout version of this app fits this client's schema" }),
+            );
+        }
+        Err(e) => return e.into_response(),
+    };
+    let spec = WorkspaceSpec {
+        version: BUNDLE_VERSION.into(),
+        workspace: served.layout,
+        entities: bundle.entities,
+        queries: bundle.queries,
+    };
+    (layouts::served_headers(served.version), Json(spec)).into_response()
+}
+
+/// A JSON error response, kept small so it can travel in `Result::Err`.
+pub type ApiError = (StatusCode, Json<Value>);
+
+pub fn api_error(status: StatusCode, body: Value) -> ApiError {
+    (status, Json(body))
+}
+
+pub fn json_error(status: StatusCode, body: Value) -> Response {
+    api_error(status, body).into_response()
+}
+
+/// Test hook: while a fault is pending, every POST except `/v1/test/*`
+/// returns the injected status without reaching its handler.
+async fn fault_layer(State(state): State<Pod>, req: Request, next: Next) -> Response {
+    if req.method() == Method::POST
+        && !req.uri().path().starts_with("/v1/test/")
+        && let Some(status) = state.take_fault()
+    {
+        tracing::info!(
+            path = %req.uri().path(),
+            status = status.as_u16(),
+            "injected fault: request not applied"
+        );
+        return json_error(
+            status,
+            json!({ "error": "injected_fault", "status": status.as_u16() }),
+        );
+    }
+    next.run(req).await
+}
+
+/// `POST /v1/test/fault {"status":503,"count":3}` (only with test hooks on).
+/// `count` 0 clears any pending fault.
+async fn set_fault(State(state): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
+    let payload = match parse_json_body(&headers, &body) {
+        Ok(v) => v,
+        Err(e) => return e.into_response(),
+    };
+    let status = payload["status"]
+        .as_u64()
+        .and_then(|s| u16::try_from(s).ok())
+        .and_then(|s| StatusCode::from_u16(s).ok())
+        .filter(|s| s.as_u16() >= 400);
+    let count = payload["count"]
+        .as_u64()
+        .and_then(|c| u32::try_from(c).ok());
+    let (Some(status), Some(count)) = (status, count) else {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "invalid_fault", "expected": {"status": "400..=599", "count": "u32"} }),
+        );
+    };
+    let fault = (count > 0).then_some(Fault {
+        status,
+        remaining: count,
+    });
+    *state.fault.lock().unwrap_or_else(|e| e.into_inner()) = fault;
+    tracing::info!(
+        status = status.as_u16(),
+        count,
+        "fault injection armed for the next mutations"
+    );
+    Json(json!({ "ok": true, "status": status.as_u16(), "count": count })).into_response()
+}
+
+/// An empty body is treated as `null` even when `Content-Type:
+/// application/json` is set (common for HTTP clients that add the header
+/// unconditionally). A non-empty body must be JSON-typed and valid; failures
+/// are reported as JSON errors like the other endpoints.
+pub fn parse_json_body(headers: &HeaderMap, body: &Bytes) -> Result<Value, ApiError> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(Value::Null);
+    }
+    let is_json = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .is_some_and(|mime| {
+            let mime = mime.trim();
+            mime.eq_ignore_ascii_case("application/json")
+                || (mime.starts_with("application/") && mime.ends_with("+json"))
+        });
+    if !is_json {
+        return Err(api_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            json!({ "error": "expected_application_json" }),
+        ));
+    }
+    serde_json::from_slice::<Value>(body).map_err(|e| {
+        api_error(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "invalid_json", "detail": e.to_string() }),
+        )
+    })
+}

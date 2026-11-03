@@ -8,8 +8,11 @@ changing architecture; `docs/PROGRESS.md` has history and next steps. `DESIGN.md
 
 ## Repo map
 - `crates/protocol` — wire types (`UiNode`, `ActionIntent`, `WorkspaceSpec`, `EntityRecord`).
-- `crates/server` — the pod (Axum + SQLite): workspaces, read-only app versions + SSE, Pixelfed adapter
-  (OAuth, feed, likes, media proxy). `validate.rs` checks layout files.
+- `crates/pod-core` — the generic pod (Axum + SQLite): workspaces, read-only app versions + SSE, sessions and
+  sign-ins, store. Knows apps only through `AppAdapter` (`adapter.rs`, D40). `validate.rs` checks layout files.
+- `crates/app-pixelfed` — the Pixelfed adapter (OAuth, feed, likes, comments, media proxy, `pixelfed_*` tables) and
+  the `pixelfed_demo` dev app (a `StaticAdapter`).
+- `crates/server` — the pod binary: `pod-core` + the compile-time adapters (`server::adapters`).
 - `crates/client-core` — engine: SQLite cache, outbox sync, PKCE sign-in, SSE subscriber.
 - `crates/client-ffi` — UniFFI bridge (Kotlin bindings live in `kmp-app/shared/src/jvmCommonMain`).
 - `crates/fake-pixelfed` — fake upstream (primary test target); `crates/e2e` — end-to-end suite.
@@ -72,14 +75,14 @@ Gradle's cache lock. `~/.construct-cloud-warmup.status` reads `running`, `done` 
 ## Layouts as code (only way to publish a new layout version)
 Add `layouts/<app>/NNNN.json` (`{"note": "...", "schema": N, "layout": {...}}`, next number, no gaps; `schema` =
 the current `protocol::SCHEMA_VERSION`), add one
-`layout_file!("<app>", "NNNN")` line to `layouts::FILES` in `crates/server/src/layouts.rs`, run `cargo test`,
+`layout_file!("<app>", "NNNN")` line to the app's file list (Pixelfed: `crates/app-pixelfed/src/apps.rs`), run `cargo test`,
 push. Never edit or renumber a deployed file (its `schema` included) — the server refuses to start. A breaking
 schema change retires old versions via `protocol::RETIRED`, not by editing files (D36). Clients are read-only for
 layout state.
 
 ## Conventions
-- The engine (client-core) and the shared UI must not know any app (D34/D35): app changes ship as layout files
-  (screens go in `Workspace.screens`) plus pod code. Only new generic vocabulary (node types, intents) needs a
+- The engine (client-core), the shared UI and `pod-core` must not know any app (D34/D35/D40): app changes ship as
+  layout files (screens go in `Workspace.screens`) plus adapter code (`crates/app-*`). Only new generic vocabulary (node types, intents) needs a
   client build, and it bumps `protocol::SCHEMA_VERSION`. After changing a pixelfed_home layout or the comments
   data, regenerate the simulator fixtures: `UPDATE_FIXTURES=1 cargo test -p server --test fixtures`.
 - Names: product "The Construct"; Kotlin package `org.theconstruct`; env vars `CONSTRUCT_*`; data dirs

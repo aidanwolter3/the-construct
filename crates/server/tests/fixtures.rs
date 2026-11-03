@@ -52,7 +52,7 @@ fn check_or_write(name: &str, want: &str) {
 }
 
 fn newest_layout() -> UiNode {
-    server::layouts::parse_files(server::layouts::FILES)
+    server::layouts::parse_files(&server::catalog(), &server::layout_files())
         .unwrap()
         .into_iter()
         .rfind(|f| f.app_id == "pixelfed_home")
@@ -119,11 +119,17 @@ async fn feed_fixture_is_the_pods_feed() {
     let allow = MediaAllowlist::new([FAKE_URL], []);
     let mut media = MediaUrls::new(PROXY, &allow);
     let normalized = normalize_timeline(timeline.as_array().unwrap(), &mut media);
-    let mut spec = server::pixelfed::layout::home_feed(normalized.entities, normalized.order);
-    for e in spec.entities.values_mut() {
+    let mut data = server::pixelfed::layout::home_feed(normalized.entities, normalized.order);
+    for e in data.entities.values_mut() {
         unproxy(e, &media);
     }
-    spec.workspace = newest_layout();
+    // What the core serves: the adapter's data under the newest layout.
+    let spec = protocol::WorkspaceSpec {
+        version: server::BUNDLE_VERSION.into(),
+        workspace: newest_layout(),
+        entities: data.entities,
+        queries: data.queries,
+    };
     let mut v = serde_json::to_value(&spec).unwrap();
     // Through text, so f32 fields are not widened (see layouts::node_value).
     v["workspace"] = server::layouts::node_value(&spec.workspace);

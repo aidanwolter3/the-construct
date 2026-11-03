@@ -1,12 +1,13 @@
 //! Layouts as code, the read-only apps / versions API and the layout push
 //! channel.
 //!
-//! The pod serves a few apps (one workspace each; only `pixelfed_home` is
-//! listed unless `CONSTRUCT_SHOW_DEV_APPS=1`). Each app has ONE linear,
-//! append-only layout history (`app_versions`, store migration v7). New
-//! versions come only from the developer: files `layouts/<app_id>/NNNN.json`
-//! in the repo, embedded in the binary ([`FILES`]) and appended at startup by
-//! [`sync`] before the server listens. No HTTP route changes a layout.
+//! The pod serves the apps its adapters register (one workspace each; dev
+//! apps are listed only with `CONSTRUCT_SHOW_DEV_APPS=1`). Each app has ONE
+//! linear, append-only layout history (`app_versions`, store migration v7).
+//! New versions come only from the developer: files
+//! `layouts/<app_id>/NNNN.json` in the repo, embedded in the binary by the
+//! app's adapter ([`crate::AppAdapter::layout_files`]) and appended at startup
+//! by [`sync`] before the server listens. No HTTP route changes a layout.
 //!
 //! # Adding a layout version
 //!
@@ -19,9 +20,10 @@
 //!    [`protocol::SCHEMA_VERSION`] (at least what its vocabulary needs,
 //!    [`protocol::required_schema`]); clients of other schemas are served the
 //!    newest version they can draw ([`protocol::compatibility`], D36).
-//! 2. Add one line to [`FILES`]: `layout_file!("pixelfed_home", "0002"),`
+//! 2. Add one line to the adapter's file list (for Pixelfed, `HOME_FILES` in
+//!    `crates/app-pixelfed/src/apps.rs`): `layout_file!("pixelfed_home", "0002"),`
 //!    (a test fails if a file in `layouts/` is not listed).
-//! 3. `cargo test -p server` (validates every file), deploy. On start the pod
+//! 3. `cargo test --workspace` (validates every file), deploy. On start the pod
 //!    appends it as the app's next version and pushes it to connected clients
 //!    on their next fetch.
 //!
@@ -64,7 +66,8 @@ use protocol::UiNode;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
-use crate::pixelfed::routes::{bearer, session_hash, unauthorized};
+use crate::adapter::{AppInfo, AuthPolicy, Catalog};
+use crate::session::{Caller, unauthorized};
 use crate::store::{AppVersion, FileVersion, Store, SyncReport};
 use crate::{ApiError, AppState, blocking, json_error};
 
@@ -80,43 +83,6 @@ pub const CHANNEL_CAPACITY: usize = 64;
 pub const DEFAULT_VERSIONS_LIMIT: i64 = 20;
 pub const MAX_VERSIONS_LIMIT: i64 = 100;
 
-/// An app the pod serves (one workspace).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct App {
-    pub id: &'static str,
-    pub title: &'static str,
-    /// Icon name for clients (`photo`).
-    pub icon: &'static str,
-    /// Listed by `GET /v1/apps` only with `CONSTRUCT_SHOW_DEV_APPS=1` (its
-    /// other endpoints always work: tests, CI and the simulator use them).
-    pub dev: bool,
-}
-
-/// Every app, in `GET /v1/apps` order.
-pub const APPS: [App; 2] = [
-    App {
-        id: crate::pixelfed::layout::WORKSPACE_ID,
-        title: "Pixelfed",
-        icon: "photo",
-        dev: false,
-    },
-    App {
-        id: "pixelfed_demo",
-        title: "Pixelfed demo",
-        icon: "photo",
-        dev: true,
-    },
-];
-
-pub fn app(id: &str) -> Option<&'static App> {
-    APPS.iter().find(|a| a.id == id)
-}
-
-/// Whether the workspace's layout is versioned (it is an app).
-pub fn is_versioned(workspace_id: &str) -> bool {
-    app(workspace_id).is_some()
-}
-
 // ---------- layout files ----------
 
 /// One embedded layout file: `layouts/<app>/<name>.json`.
@@ -127,27 +93,6 @@ pub struct LayoutSource {
     pub name: &'static str,
     pub text: &'static str,
 }
-
-/// `layout_file!("app", "NNNN")` embeds `layouts/app/NNNN.json`.
-macro_rules! layout_file {
-    ($app:literal, $name:literal) => {
-        LayoutSource {
-            app_id: $app,
-            name: $name,
-            text: include_str!(concat!("../../../layouts/", $app, "/", $name, ".json")),
-        }
-    };
-}
-
-/// Every layout file, per app in number order. Add new files here (see the
-/// module docs).
-pub const FILES: &[LayoutSource] = &[
-    layout_file!("pixelfed_home", "0001"),
-    layout_file!("pixelfed_home", "0002"),
-    layout_file!("pixelfed_home", "0003"),
-    layout_file!("pixelfed_demo", "0001"),
-    layout_file!("pixelfed_demo", "0002"),
-];
 
 /// A parsed, validated layout file.
 #[derive(Debug, Clone, PartialEq)]
@@ -233,7 +178,7 @@ fn is_known_intent(tag: &str) -> bool {
 
 /// `(JSON pointer, tag)` of each intent in `v` (the value of an `on_click`
 /// or `*_intent` key) whose `"intent"` tag is not known to this build.
-fn unknown_intent_tags(v: &Value, at: &str, out: &mut Vec<(String, String)>) {
+pub fn unknown_intent_tags(v: &Value, at: &str, out: &mut Vec<(String, String)>) {
     collect_unknown_intent_tags(v, at, false, out);
 }
 
@@ -266,20 +211,11 @@ fn collect_unknown_intent_tags(
     }
 }
 
-/// Files deployed with node types that were later removed (the `pixelfed://`
-/// widgets, D36). They still parse (as [`UiNode::Unknown`]) and are served to
-/// the clients that draw them; no other file may hold an unknown node type.
-pub const LEGACY_FILES: &[(&str, u32)] = &[
-    ("pixelfed_home", 1),
-    ("pixelfed_home", 2),
-    ("pixelfed_demo", 1),
-];
-
-/// Parse and validate one file (`Err` names the file).
-pub fn parse_file(src: &LayoutSource) -> Result<LayoutFile, String> {
+/// Parse and validate one file of an app in `catalog` (`Err` names the file).
+pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, String> {
     let path = format!("layouts/{}/{}.json", src.app_id, src.name);
     let fail = |e: String| format!("{path}: {e}");
-    if app(src.app_id).is_none() {
+    if !catalog.is_app(src.app_id) {
         return Err(fail(format!("'{}' is not an app", src.app_id)));
     }
     let number = match src.name.parse::<u32>() {
@@ -334,10 +270,10 @@ pub fn parse_file(src: &LayoutSource) -> Result<LayoutFile, String> {
         )));
     }
     // Node types this build doesn't know are only allowed where they were
-    // deployed before they were removed (D37): the `pixelfed://` widgets.
+    // deployed before they were removed (D37), the adapter's legacy files.
     let unknown = crate::validate::unknown_node_types(&parsed);
     if let Some(t) = unknown.first()
-        && !LEGACY_FILES.contains(&(src.app_id, number))
+        && !catalog.is_legacy(src.app_id, number)
     {
         return Err(fail(format!(
             "invalid layout: unknown node type '{t}' (a typo? this build does not know it)"
@@ -375,13 +311,13 @@ pub fn parse_file(src: &LayoutSource) -> Result<LayoutFile, String> {
 }
 
 /// Parse every source; per app the numbers must be exactly 1..=N.
-pub fn parse_files(sources: &[LayoutSource]) -> Result<Vec<LayoutFile>, String> {
+pub fn parse_files(catalog: &Catalog, sources: &[LayoutSource]) -> Result<Vec<LayoutFile>, String> {
     let mut files = sources
         .iter()
-        .map(parse_file)
+        .map(|s| parse_file(catalog, s))
         .collect::<Result<Vec<_>, _>>()?;
     files.sort_by(|a, b| (a.app_id.as_str(), a.number).cmp(&(b.app_id.as_str(), b.number)));
-    for a in APPS {
+    for a in catalog.apps() {
         for (expected, f) in (1..).zip(files.iter().filter(|f| f.app_id == a.id)) {
             if f.number != expected {
                 return Err(if f.number < expected {
@@ -398,19 +334,23 @@ pub fn parse_files(sources: &[LayoutSource]) -> Result<Vec<LayoutFile>, String> 
     Ok(files)
 }
 
-/// Append every new layout file (all apps, one transaction) to the store, and
-/// record the declared schema of files deployed before it existed;
-/// see the module docs. Blocking; idempotent. `Err` is the message to stop
-/// the start with.
-pub fn sync(store: &Store) -> Result<SyncReport, String> {
-    sync_sources(store, FILES)
+/// Append every new layout file of the catalog's apps (one transaction) to
+/// the store, and record the declared schema of files deployed before it
+/// existed; see the module docs. Blocking; idempotent. `Err` is the message
+/// to stop the start with.
+pub fn sync(store: &Store, catalog: &Catalog) -> Result<SyncReport, String> {
+    sync_sources(store, catalog, catalog.files())
 }
 
 /// [`sync`] over any set of sources (tests).
-pub fn sync_sources(store: &Store, sources: &[LayoutSource]) -> Result<SyncReport, String> {
-    let files = parse_files(sources)?;
-    let apps: Vec<(&str, Vec<FileVersion>)> = APPS
-        .iter()
+pub fn sync_sources(
+    store: &Store,
+    catalog: &Catalog,
+    sources: &[LayoutSource],
+) -> Result<SyncReport, String> {
+    let files = parse_files(catalog, sources)?;
+    let apps: Vec<(&str, Vec<FileVersion>)> = catalog
+        .apps()
         .map(|a| {
             let versions = files
                 .iter()
@@ -427,12 +367,13 @@ pub fn sync_sources(store: &Store, sources: &[LayoutSource]) -> Result<SyncRepor
 
 /// An app's first layout (its `0001.json`). Panics if the embedded files are
 /// invalid (the pod would not start either).
-pub fn builtin(workspace_id: &str) -> Option<UiNode> {
-    let src = FILES
+pub fn builtin(catalog: &Catalog, workspace_id: &str) -> Option<UiNode> {
+    let src = catalog
+        .files()
         .iter()
         .find(|f| f.app_id == workspace_id && f.name == "0001")?;
     Some(
-        parse_file(src)
+        parse_file(catalog, src)
             .expect("embedded layout files are valid")
             .layout,
     )
@@ -468,8 +409,12 @@ pub struct Served {
 
 /// The latest layout of an app; `None` if the workspace is not an app or has
 /// no versions (never after [`sync`]). Blocking.
-pub fn active(store: &Store, workspace_id: &str) -> rusqlite::Result<Option<Served>> {
-    if !is_versioned(workspace_id) {
+pub fn active(
+    store: &Store,
+    catalog: &Catalog,
+    workspace_id: &str,
+) -> rusqlite::Result<Option<Served>> {
+    if !catalog.is_app(workspace_id) {
         return Ok(None);
     }
     match store.app_latest(workspace_id)? {
@@ -520,10 +465,11 @@ pub fn newest_compatible(
 /// app or no version fits. Blocking.
 pub fn active_for(
     store: &Store,
+    catalog: &Catalog,
     workspace_id: &str,
     schema: u32,
 ) -> rusqlite::Result<Option<Served>> {
-    if !is_versioned(workspace_id) {
+    if !catalog.is_app(workspace_id) {
         return Ok(None);
     }
     let Some(latest) = store.app_latest_meta(workspace_id)? else {
@@ -558,12 +504,17 @@ pub async fn active_for_client(
 ) -> Result<Option<Served>, ApiError> {
     let ws = workspace_id.to_owned();
     let schema = client_schema(headers);
-    blocking(state, move |s| active_for(s, &ws, schema)).await
+    let st = state.clone();
+    blocking(state, move |s| active_for(s, st.catalog(), &ws, schema)).await
 }
 
 /// `(version, layout)`; see [`active`]. Blocking.
-pub fn latest(store: &Store, workspace_id: &str) -> rusqlite::Result<Option<(i64, UiNode)>> {
-    Ok(active(store, workspace_id)?.map(|s| (s.version, s.layout)))
+pub fn latest(
+    store: &Store,
+    catalog: &Catalog,
+    workspace_id: &str,
+) -> rusqlite::Result<Option<(i64, UiNode)>> {
+    Ok(active(store, catalog, workspace_id)?.map(|s| (s.version, s.layout)))
 }
 
 /// Append `layout` as the app's next version (source `manual`) WITHOUT a
@@ -659,11 +610,11 @@ pub fn router() -> Router<Arc<AppState>> {
 }
 
 /// 400 for a malformed id, 404 `app_not_found` for an unknown one.
-fn known_app(id: &str) -> Result<&'static App, Response> {
+fn known_app(catalog: &Catalog, id: &str) -> Result<AppInfo, Response> {
     if let Some(r) = reject_invalid_workspace_id(id) {
         return Err(r);
     }
-    app(id).ok_or_else(|| {
+    catalog.app(id).copied().ok_or_else(|| {
         json_error(
             StatusCode::NOT_FOUND,
             json!({ "error": "app_not_found", "id": id }),
@@ -699,9 +650,11 @@ fn version_json(v: &AppVersion, client: u32) -> Value {
 /// opening the app serves it (null if none fits).
 async fn list_apps(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     let schema = client_schema(&headers);
-    let shown: Vec<&'static App> = APPS
-        .iter()
+    let shown: Vec<AppInfo> = state
+        .catalog()
+        .apps()
         .filter(|a| !a.dev || state.show_dev_apps())
+        .copied()
         .collect();
     let ids: Vec<&'static str> = shown.iter().map(|a| a.id).collect();
     let latest = blocking(&state, move |s| {
@@ -757,7 +710,7 @@ async fn app_versions(
     Query(query): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Response {
-    let app = match known_app(&id) {
+    let app = match known_app(state.catalog(), &id) {
         Ok(a) => a,
         Err(r) => return r,
     };
@@ -813,7 +766,7 @@ async fn app_version(
     Path((id, n)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    let app = match known_app(&id) {
+    let app = match known_app(state.catalog(), &id) {
         Ok(a) => a,
         Err(r) => return r,
     };
@@ -880,21 +833,6 @@ fn layout_event(ev: &LayoutEvent) -> Event {
         .data(json!({ "workspace_id": ev.workspace_id, "version": ev.version }).to_string())
 }
 
-/// `None`: no bearer; `Some(valid)` otherwise.
-async fn valid_session(
-    state: &Arc<AppState>,
-    headers: &HeaderMap,
-) -> Result<Option<bool>, ApiError> {
-    let Some(token) = bearer(headers) else {
-        return Ok(None);
-    };
-    let hash = session_hash(token);
-    let ttl = state.pixelfed_config().session_ttl_secs;
-    blocking(state, move |s| s.session_valid(&hash, ttl))
-        .await
-        .map(Some)
-}
-
 fn workspace_not_found(id: &str) -> Response {
     if let Some(r) = reject_invalid_workspace_id(id) {
         return r;
@@ -942,20 +880,22 @@ async fn announced_async(
 /// reconnecting.
 ///
 /// Auth mirrors `GET /v1/workspaces/:id`: no bearer is fine (events carry only
-/// ids and numbers, no content); for `pixelfed_home` a bearer that is not a
-/// valid session is 401 so the client learns it is stale.
+/// ids and numbers, no content); for an app with [`AuthPolicy::SignIn`] a
+/// bearer that is not a valid session with that sign-in is 401 so the client
+/// learns it is stale.
 async fn events(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    if !is_versioned(&id) {
+    let Some(app) = state.catalog().app(&id).copied() else {
         return workspace_not_found(&id);
-    }
-    if id == crate::pixelfed::layout::WORKSPACE_ID {
-        match valid_session(&state, &headers).await {
-            Ok(Some(false)) => return unauthorized(),
-            Ok(_) => {}
+    };
+    if let AuthPolicy::SignIn(sign_in) = app.auth {
+        match state.caller(&headers).await {
+            Ok(Caller::Anonymous) => {}
+            Ok(c) if c.has(sign_in) => {}
+            Ok(_) => return unauthorized(),
             Err(e) => return e.into_response(),
         }
     }
@@ -1039,430 +979,4 @@ async fn events(
                 .text("keepalive"),
         )
         .into_response()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_file_in_layouts_is_embedded() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../layouts");
-        let mut on_disk = Vec::new();
-        for app_dir in std::fs::read_dir(&root).unwrap() {
-            let app_dir = app_dir.unwrap().path();
-            let app_id = app_dir.file_name().unwrap().to_str().unwrap().to_owned();
-            for f in std::fs::read_dir(&app_dir).unwrap() {
-                let name = f.unwrap().file_name().into_string().unwrap();
-                on_disk.push(format!("{app_id}/{name}"));
-            }
-        }
-        on_disk.sort();
-        let mut embedded: Vec<String> = FILES
-            .iter()
-            .map(|f| format!("{}/{}.json", f.app_id, f.name))
-            .collect();
-        embedded.sort();
-        assert_eq!(
-            on_disk, embedded,
-            "every file in layouts/ must be listed in layouts::FILES (and vice versa)"
-        );
-        for f in FILES {
-            let text =
-                std::fs::read_to_string(root.join(f.app_id).join(format!("{}.json", f.name)))
-                    .unwrap();
-            assert_eq!(text, f.text);
-        }
-    }
-
-    #[test]
-    fn every_file_parses_and_validates() {
-        let files = parse_files(FILES).unwrap();
-        for a in APPS {
-            assert!(
-                files.iter().any(|f| f.app_id == a.id && f.number == 1),
-                "{} has a 0001.json",
-                a.id
-            );
-        }
-    }
-
-    #[test]
-    fn first_files_are_the_original_builtin_layouts() {
-        let files = parse_files(FILES).unwrap();
-        for (app_id, note) in [
-            ("pixelfed_home", "Classic feed"),
-            ("pixelfed_demo", "Classic feed"),
-        ] {
-            let f = files
-                .iter()
-                .find(|f| f.app_id == app_id && f.number == 1)
-                .unwrap();
-            assert_eq!(Some(f.layout.clone()), builtin(app_id), "{app_id}");
-            assert_eq!(f.note, note);
-        }
-    }
-
-    fn src(app_id: &'static str, name: &'static str, text: &'static str) -> LayoutSource {
-        LayoutSource { app_id, name, text }
-    }
-
-    /// A small valid layout file for `pixelfed_demo` (schema 1: a title and
-    /// one action), the base the validation tests mutate.
-    const MINIMAL: &str = r#"{
-  "note": "Minimal",
-  "schema": 1,
-  "layout": {
-    "type": "core://Workspace",
-    "id": "pixelfed_demo",
-    "title": "Demo",
-    "slots": [
-      {
-        "slot_id": "main",
-        "provider_uri": "core://test",
-        "content": {
-          "type": "core://Container",
-          "orientation": "Vertical",
-          "padding_dp": 16,
-          "children": [
-            {
-              "type": "core://Text",
-              "style": "Title",
-              "value_expr": "Minimal demo"
-            },
-            {
-              "type": "core://Button",
-              "label": "Ack",
-              "on_click": {
-                "intent": "action.mutation.optimistic",
-                "endpoint": "/v1/demo/ack",
-                "entity_uri": "core://test/x",
-                "field": "n",
-                "payload": {},
-                "rollback_value": 0,
-                "value_expr": "0"
-              }
-            }
-          ]
-        }
-      }
-    ]
-  }
-}"#;
-
-    #[test]
-    fn invalid_files_are_refused_with_their_path() {
-        let ok = MINIMAL;
-        assert_eq!((FILES[1].app_id, FILES[1].name), ("pixelfed_home", "0002"));
-        let cases: [(LayoutSource, &str); 12] = [
-            (
-                src("pixelfed_demo", "0001", "{"),
-                "layouts/pixelfed_demo/0001.json: not valid JSON",
-            ),
-            (
-                src("pixelfed_demo", "1", ok),
-                "layouts/pixelfed_demo/1.json: file names are 4-digit",
-            ),
-            (
-                src("nope", "0001", ok),
-                "layouts/nope/0001.json: 'nope' is not an app",
-            ),
-            (
-                src("pixelfed_demo", "0001", r#"{"layout": {}}"#),
-                "\"note\" must be a non-empty string",
-            ),
-            (
-                src("pixelfed_demo", "0001", r#"{"note": "x"}"#),
-                "\"layout\" is missing",
-            ),
-            (
-                src(
-                    "pixelfed_demo",
-                    "0001",
-                    r#"{"note": "x", "layout": {}, "extra": 1}"#,
-                ),
-                "unknown key 'extra'",
-            ),
-            (
-                src(
-                    "pixelfed_demo",
-                    "0001",
-                    r#"{"note": "x", "layout": {"type": "core://Text", "value_expr": "", "style": "Body"}}"#,
-                ),
-                "layouts/pixelfed_demo/0001.json: invalid layout: root must stay a core://Workspace",
-            ),
-            (
-                src("pixelfed_home", "0001", ok),
-                "invalid layout: workspace id changed from 'pixelfed_home' to 'pixelfed_demo'",
-            ),
-            (
-                src(
-                    "pixelfed_demo",
-                    "0001",
-                    leak(ok.replacen("  \"schema\": 1,\n", "", 1)),
-                ),
-                "layouts/pixelfed_demo/0001.json: \"schema\" must be the client schema",
-            ),
-            (
-                src(
-                    "pixelfed_demo",
-                    "0001",
-                    leak(ok.replacen("\"schema\": 1", "\"schema\": 0", 1)),
-                ),
-                "\"schema\" must be the client schema the layout is written for, 1..=",
-            ),
-            (
-                src(
-                    "pixelfed_demo",
-                    "0001",
-                    leak(ok.replacen("\"schema\": 1", "\"schema\": 999", 1)),
-                ),
-                "\"schema\" must be",
-            ),
-            (
-                src(
-                    "pixelfed_home",
-                    "0001",
-                    leak(FILES[1].text.replacen("\"schema\": 2", "\"schema\": 1", 1)),
-                ),
-                "\"schema\" is 1 but the layout uses vocabulary from schema 2",
-            ),
-        ];
-        for (s, want) in cases {
-            let err = parse_files(&[s]).unwrap_err();
-            assert!(err.contains(want), "{err} does not contain {want}");
-        }
-        // Gaps and duplicates.
-        let err = parse_files(&[
-            src("pixelfed_demo", "0001", ok),
-            src("pixelfed_demo", "0003", ok),
-        ])
-        .unwrap_err();
-        assert_eq!(
-            err,
-            "layouts/pixelfed_demo/0003.json: layout files are numbered without gaps, expected 0002.json next"
-        );
-        let err = parse_files(&[src("pixelfed_demo", "0002", ok)]).unwrap_err();
-        assert!(err.contains("expected 0001.json next"), "{err}");
-        let err = parse_files(&[
-            src("pixelfed_demo", "0001", ok),
-            src("pixelfed_demo", "0001", ok),
-        ])
-        .unwrap_err();
-        assert!(err.contains("listed twice"), "{err}");
-        // Structural rules from the agent validator (endpoint prefix).
-        let bad = ok.replace("/v1/demo/ack", "https://evil/ack");
-        let bad: &'static str = Box::leak(bad.into_boxed_str());
-        let err = parse_files(&[src("pixelfed_demo", "0001", bad)]).unwrap_err();
-        assert!(
-            err.contains("must be a pod path starting with /v1/"),
-            "{err}"
-        );
-        // New intents are fine in developer-authored files.
-        let new_intent = ok.replace("/v1/demo/ack", "/v1/demo/other");
-        let new_intent: &'static str = Box::leak(new_intent.into_boxed_str());
-        parse_files(&[src("pixelfed_demo", "0001", new_intent)]).unwrap();
-    }
-
-    #[test]
-    fn removed_node_types_only_parse_in_their_deployed_files() {
-        let legacy = FILES
-            .iter()
-            .find(|f| f.app_id == "pixelfed_home" && f.name == "0001")
-            .unwrap();
-        // The deployed file still parses: its widgets are opaque unknown nodes.
-        let parsed = parse_file(legacy).unwrap();
-        assert_eq!(
-            crate::validate::unknown_node_types(&parsed.layout),
-            ["pixelfed://FeedList"]
-        );
-        // The same content as a new file is refused.
-        let err = parse_file(&src("pixelfed_home", "0004", legacy.text)).unwrap_err();
-        assert!(
-            err.contains("unknown node type 'pixelfed://FeedList'"),
-            "{err}"
-        );
-        // So is a typo'd type in a generic file.
-        let typo = leak(MINIMAL.replacen("\"core://Button\"", "\"core://Buton\"", 1));
-        let err = parse_file(&src("pixelfed_demo", "0003", typo)).unwrap_err();
-        assert!(err.contains("unknown node type 'core://Buton'"), "{err}");
-        // An unknown icon is refused too.
-        let feed = FILES
-            .iter()
-            .find(|f| f.app_id == "pixelfed_home" && f.name == "0003")
-            .unwrap()
-            .text;
-        let icon = leak(feed.replacen("\"chat_bubble\"", "\"chat_bubbles\"", 1));
-        let err = parse_file(&src("pixelfed_home", "0003", icon)).unwrap_err();
-        assert!(err.contains("unknown icon 'chat_bubbles'"), "{err}");
-    }
-
-    fn leak(s: String) -> &'static str {
-        Box::leak(s.into_boxed_str())
-    }
-
-    #[test]
-    fn unknown_intent_tags_are_refused_in_files() {
-        // The newest feed file: generic nodes, so its intents are typed.
-        let ok = FILES
-            .iter()
-            .find(|f| f.app_id == "pixelfed_home" && f.name == "0003")
-            .unwrap()
-            .text;
-        // A typo'd tag (would deserialize as ActionIntent::Unknown).
-        let typo = leak(ok.replacen(
-            "\"action.navigation.open\"",
-            "\"action.navigation.opne\"",
-            1,
-        ));
-        let err = parse_files(&[src("pixelfed_home", "0003", typo)]).unwrap_err();
-        assert!(
-            err.starts_with(
-                "layouts/pixelfed_home/0003.json: invalid layout: unknown action intent \
-                 'action.navigation.opne' at /layout/"
-            ),
-            "{err}"
-        );
-        // The pointer leads to the object holding the tag.
-        let at = err
-            .split(" at ")
-            .nth(1)
-            .and_then(|r| r.split(' ').next())
-            .unwrap();
-        let doc: Value = serde_json::from_str(typo).unwrap();
-        assert_eq!(doc.pointer(at).unwrap()["intent"], "action.navigation.opne");
-        // The removed agent intent and the fallback tag itself.
-        for tag in ["action.agent.prompt", "action.unknown"] {
-            let bad = leak(ok.replacen("\"action.mutation.optimistic\"", &format!("\"{tag}\""), 1));
-            let err = parse_files(&[src("pixelfed_home", "0003", bad)]).unwrap_err();
-            assert!(
-                err.contains(&format!("unknown action intent '{tag}'")),
-                "{err}"
-            );
-        }
-        // Every tag in the shipped files is known.
-        for f in FILES {
-            let mut found = Vec::new();
-            unknown_intent_tags(&serde_json::from_str(f.text).unwrap(), "", &mut found);
-            assert!(found.is_empty(), "{}/{}: {found:?}", f.app_id, f.name);
-        }
-    }
-
-    #[test]
-    fn file_hash_ignores_formatting_and_key_order_but_not_content() {
-        let one = MINIMAL;
-        let parsed = parse_file(&src("pixelfed_demo", "0001", one)).unwrap();
-        // Compact, keys sorted (serde_json's map), top-level keys reversed.
-        let v: Value = serde_json::from_str(one).unwrap();
-        let compact = leak(format!(
-            "{{\"layout\":{},\"schema\":1,\"note\":{}}}",
-            serde_json::to_string(&v["layout"]).unwrap(),
-            v["note"]
-        ));
-        let pretty = leak(serde_json::to_string_pretty(&v).unwrap());
-        for text in [compact, pretty] {
-            assert_eq!(
-                parse_file(&src("pixelfed_demo", "0001", text))
-                    .unwrap()
-                    .file_hash,
-                parsed.file_hash
-            );
-        }
-        // Note whitespace is trimmed before hashing (the served note is trimmed too).
-        let padded = leak(one.replacen("\"Minimal\"", "\"  Minimal \"", 1));
-        assert_eq!(
-            parse_file(&src("pixelfed_demo", "0001", padded))
-                .unwrap()
-                .file_hash,
-            parsed.file_hash
-        );
-        // Content changes change it: the note, a value, an added explicit default.
-        let renoted = leak(one.replacen("\"Minimal\"", "\"Minimal!\"", 1));
-        let retitled = leak(one.replace("Minimal demo", "Minimal v2"));
-        for text in [renoted, retitled] {
-            assert_ne!(
-                parse_file(&src("pixelfed_demo", "0001", text))
-                    .unwrap()
-                    .file_hash,
-                parsed.file_hash
-            );
-        }
-        assert_eq!(parsed.file_hash.len(), 64);
-        // `schema` is not hashed: it was added to files after they deployed
-        // (it is recorded and append-only on its own, see the store).
-        let v2 = leak(one.replacen("\"schema\": 1", "\"schema\": 2", 1));
-        let p2 = parse_file(&src("pixelfed_demo", "0001", v2)).unwrap();
-        assert_eq!((p2.file_hash, p2.schema), (parsed.file_hash, 2));
-    }
-
-    #[test]
-    fn sync_appends_new_files_once_and_refuses_changes() {
-        let store = Store::open_in_memory().unwrap();
-        let report = sync(&store).unwrap();
-        assert_eq!(report.appended.len(), FILES.len());
-        assert!(report.adopted.is_empty() && report.missing.is_empty());
-        assert_eq!(sync(&store).unwrap(), SyncReport::default(), "idempotent");
-        let (v, layout) = latest(&store, "pixelfed_home").unwrap().unwrap();
-        assert_eq!(v, 3, "0003: the generic feed");
-        assert!(crate::validate::unknown_node_types(&layout).is_empty());
-        // Each client gets the newest version it can draw.
-        for (schema, version) in [(1, 1), (2, 2), (protocol::SCHEMA_VERSION, 3)] {
-            let served = active_for(&store, "pixelfed_home", schema)
-                .unwrap()
-                .unwrap();
-            assert_eq!(served.version, version, "schema {schema}");
-            assert!(protocol::required_schema(&served.layout) <= schema);
-        }
-        // A third pixelfed_demo file.
-        let one = src("pixelfed_demo", "0003", MINIMAL);
-        let two_text = MINIMAL.replace("Minimal demo", "Minimal v2");
-        let two_text: &'static str = Box::leak(two_text.into_boxed_str());
-        let two = src("pixelfed_demo", "0003", two_text);
-        let mut sources = FILES.to_vec();
-        sources.push(two);
-        assert_eq!(
-            sync_sources(&store, &sources).unwrap().appended,
-            [("layouts/pixelfed_demo/0003.json".to_owned(), 3)]
-        );
-        // Changing a deployed file stops the start, naming it.
-        let mut changed = FILES.to_vec();
-        changed.push(src("pixelfed_demo", "0003", one.text));
-        assert_eq!(
-            sync_sources(&store, &changed).unwrap_err(),
-            "layouts/pixelfed_demo/0003.json changed after it was deployed as version 3; layout files are \
-             append-only. To recover, restore the deployed content of layouts/pixelfed_demo/0003.json \
-             (git log -p -- layouts/pixelfed_demo/0003.json) and put the change in a new file, 0004.json"
-        );
-        // Reformatting a file (same layout and note) is not a change.
-        let reformatted: Value = serde_json::from_str(two_text).unwrap();
-        let reformatted: &'static str = Box::leak(
-            serde_json::to_string(&reformatted)
-                .unwrap()
-                .into_boxed_str(),
-        );
-        let mut same = FILES.to_vec();
-        same.push(src("pixelfed_demo", "0003", reformatted));
-        assert_eq!(sync_sources(&store, &same).unwrap(), SyncReport::default());
-        // A rollback deploy without 0003.json starts, serving v3 unchanged.
-        let report = sync(&store).unwrap();
-        assert_eq!(
-            report.missing,
-            [
-                "layouts/pixelfed_demo/0003.json was deployed as version 3 but is missing from this build; \
-              serving the recorded history unchanged"
-            ]
-        );
-        assert!(report.appended.is_empty());
-        assert_eq!(latest(&store, "pixelfed_demo").unwrap().unwrap().0, 3);
-    }
-
-    #[test]
-    fn rfc3339_formats_utc() {
-        for secs in [0, 951_782_400, 1_793_620_960, 4_102_444_799] {
-            let s = rfc3339(secs);
-            assert_eq!(crate::pixelfed::parse_rfc3339(&s), Some(secs), "{s}");
-        }
-        assert_eq!(rfc3339(0), "1970-01-01T00:00:00Z");
-        assert_eq!(rfc3339(951_782_400), "2000-02-29T00:00:00Z");
-    }
 }

@@ -9,7 +9,7 @@ use reqwest::StatusCode;
 use serde_json::{Value, json};
 use server::AppState;
 use server::layouts;
-use server::pixelfed::routes::session_hash;
+use server::session::session_hash;
 use tokio::task::JoinHandle;
 
 struct Pod {
@@ -36,7 +36,7 @@ async fn spawn(state: AppState) -> Pod {
 }
 
 async fn pod() -> Pod {
-    spawn(AppState::in_memory()).await
+    spawn(server::state_in_memory()).await
 }
 
 fn client() -> reqwest::Client {
@@ -70,7 +70,7 @@ async fn get_as(pod: &Pod, path: &str, schema: Option<u32>) -> (StatusCode, Opti
 /// The layout of an app's newest file (what a current client is served on a
 /// fresh pod).
 fn newest_file(ws: &str) -> UiNode {
-    layouts::parse_files(layouts::FILES)
+    layouts::parse_files(&server::catalog(), &server::layout_files())
         .unwrap()
         .into_iter()
         .rfind(|f| f.app_id == ws)
@@ -104,7 +104,10 @@ fn is_rfc3339(v: &Value) -> bool {
 
 /// How many layout files an app has (its latest version on a fresh pod).
 fn files(app: &str) -> i64 {
-    layouts::FILES.iter().filter(|f| f.app_id == app).count() as i64
+    server::layout_files()
+        .iter()
+        .filter(|f| f.app_id == app)
+        .count() as i64
 }
 
 #[tokio::test]
@@ -126,7 +129,7 @@ async fn apps_lists_only_pixelfed_unless_dev_apps_are_shown() {
     );
     assert!(is_rfc3339(&a["updated_at"]), "{a}");
 
-    let dev = spawn(AppState::in_memory().with_dev_apps(true)).await;
+    let dev = spawn(server::state_in_memory().with_dev_apps(true)).await;
     deploy(&dev, "pixelfed_demo", "Two");
     let (_, _, body) = get(&dev, "/v1/apps").await;
     let got: Vec<(&str, &str, &str, i64)> = body["apps"]
@@ -236,7 +239,10 @@ async fn one_version_carries_its_layout() {
     assert_eq!(body["note"], "Classic feed");
     assert!(is_rfc3339(&body["created_at"]));
     let layout: UiNode = serde_json::from_value(body["layout"].clone()).unwrap();
-    assert_eq!(layout, layouts::builtin("pixelfed_home").unwrap());
+    assert_eq!(
+        layout,
+        layouts::builtin(&server::catalog(), "pixelfed_home").unwrap()
+    );
     // f32 fields are not widened on the way out.
     assert!(!body["layout"].to_string().contains("0000001"), "{body}");
     let deployed = files("pixelfed_home") + 1;
@@ -295,7 +301,7 @@ async fn workspace_get_serves_the_latest_app_version() {
                 .is_none()
         );
         let spec: WorkspaceSpec = resp.json().await.unwrap();
-        let file = layouts::parse_files(layouts::FILES)
+        let file = layouts::parse_files(&server::catalog(), &server::layout_files())
             .unwrap()
             .into_iter()
             .find(|f| f.app_id == ws && f.number == 1)
@@ -314,7 +320,7 @@ async fn workspace_get_serves_the_latest_app_version() {
 
 #[tokio::test]
 async fn client_reachable_layout_writes_and_old_catalog_routes_are_gone() {
-    let pod = spawn(AppState::in_memory().with_test_hooks(true)).await;
+    let pod = spawn(server::state_in_memory().with_test_hooks(true)).await;
     pod.state
         .store()
         .create_session(&session_hash("tok"))
@@ -380,9 +386,9 @@ async fn client_reachable_layout_writes_and_old_catalog_routes_are_gone() {
 async fn restart_on_the_same_database_appends_nothing() {
     let dir = tempfile::tempdir().unwrap();
     {
-        let state = AppState::open_dir(dir.path()).unwrap();
+        let state = server::open_dir(dir.path()).unwrap();
         assert_eq!(
-            layouts::latest(state.store(), "pixelfed_home")
+            layouts::latest(state.store(), state.catalog(), "pixelfed_home")
                 .unwrap()
                 .unwrap()
                 .0,
@@ -396,15 +402,21 @@ async fn restart_on_the_same_database_appends_nothing() {
         )
         .unwrap();
     }
-    let state = AppState::open_dir(dir.path()).unwrap();
+    let state = server::open_dir(dir.path()).unwrap();
     for (ws, want) in [
         ("pixelfed_home", files("pixelfed_home")),
         ("pixelfed_demo", files("pixelfed_demo") + 1),
     ] {
-        let (v, _) = layouts::latest(state.store(), ws).unwrap().unwrap();
+        let (v, _) = layouts::latest(state.store(), state.catalog(), ws)
+            .unwrap()
+            .unwrap();
         assert_eq!(v, want, "{ws}");
     }
-    assert!(layouts::latest(state.store(), "nope").unwrap().is_none());
+    assert!(
+        layouts::latest(state.store(), state.catalog(), "nope")
+            .unwrap()
+            .is_none()
+    );
 }
 
 /// A legacy (migrated) AI-edited version still holding the removed
@@ -493,7 +505,7 @@ const CHANGED: &str = "layouts/pixelfed_demo/0001.json changed after it was depl
 fn a_sync_error_stops_the_start() {
     let dir = tempfile::tempdir().unwrap();
     db_with_a_changed_file(dir.path());
-    let err = AppState::open_dir(dir.path()).err().unwrap().to_string();
+    let err = server::open_dir(dir.path()).err().unwrap().to_string();
     assert!(err.contains(CHANGED), "{err}");
     assert!(err.contains("To recover"), "{err}");
     // Nothing was appended for any app.
@@ -664,7 +676,7 @@ async fn sse_announces_the_newest_version_the_client_can_draw() {
 
     // Publish a copy of the version a schema-`n` client is served.
     let publish = |schema: u32| {
-        let mut layout = layouts::active_for(pod.state.store(), app, schema)
+        let mut layout = layouts::active_for(pod.state.store(), pod.state.catalog(), app, schema)
             .unwrap()
             .unwrap()
             .layout;
@@ -691,7 +703,7 @@ async fn sse_announces_the_newest_version_the_client_can_draw() {
 
 #[tokio::test]
 async fn sse_keepalive_comment() {
-    let pod = spawn(AppState::in_memory().with_sse_keepalive(Duration::from_millis(100))).await;
+    let pod = spawn(server::state_in_memory().with_sse_keepalive(Duration::from_millis(100))).await;
     let url = format!("{}/v1/workspaces/pixelfed_demo/events", pod.url);
     let mut sse = SseReader::connect(&url, None).await;
     assert_eq!(
@@ -705,9 +717,15 @@ async fn sse_keepalive_comment() {
 #[tokio::test]
 async fn sse_auth_matches_the_workspace_get() {
     let pod = pod().await;
-    pod.state
-        .store()
-        .create_session(&session_hash("tok"))
+    let store = pod.state.store();
+    store.create_session(&session_hash("tok")).unwrap();
+    store
+        .attach_sign_in(&session_hash("tok"), server::pixelfed::SIGN_IN)
+        .unwrap();
+    // A valid session without the app's sign-in (D40).
+    store.create_session(&session_hash("other")).unwrap();
+    store
+        .attach_sign_in(&session_hash("other"), "other")
         .unwrap();
     let url = format!("{}/v1/workspaces/pixelfed_home/events", pod.url);
     // No bearer: allowed (events carry only version numbers).
@@ -722,14 +740,12 @@ async fn sse_auth_matches_the_workspace_get() {
         signed_in.next_event().await,
         layout_msg("pixelfed_home", files("pixelfed_home"))
     );
-    // Stale bearer: 401, like GET /v1/workspaces/pixelfed_home.
-    let resp = client()
-        .get(&url)
-        .bearer_auth("stale")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    // Stale bearer, or a session without the `pixelfed` sign-in: 401, like
+    // GET /v1/workspaces/pixelfed_home.
+    for bearer in ["stale", "other"] {
+        let resp = client().get(&url).bearer_auth(bearer).send().await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "{bearer}");
+    }
     // Unknown workspace: 404; malformed: 400.
     let resp = client()
         .get(format!("{}/v1/workspaces/nope/events", pod.url))

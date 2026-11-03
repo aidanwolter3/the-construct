@@ -29,10 +29,12 @@ Quick links: [Server runtime configuration](#server-runtime-configuration),
 ```
 crates/protocol      UiNode / ActionIntent / WorkspaceSpec (hydration bundle) / EntityRecord; generic nodes
                      only (D37)
-crates/server        Axum server ("the pod"): GET /v1/workspaces/{pixelfed_home,pixelfed_demo}, SQLite state,
-                     Pixelfed adapter (auth, feed normalization, actions, media proxy),
-                     layouts as code (one linear version history per app, checked by `validate`),
-                     read-only apps API, SSE push
+crates/pod-core      the generic pod (Axum + SQLite, D40): GET /v1/workspaces/:id, sessions and sign-ins, layouts
+                     as code (one linear version history per app, checked by `validate`), read-only apps API, SSE
+                     push; knows apps only through the `AppAdapter` trait (and `StaticAdapter` for layout-only apps)
+crates/app-pixelfed  the Pixelfed adapter: pixelfed_home (auth, feed normalization, actions, comments, media proxy,
+                     its tables) and the pixelfed_demo dev app
+crates/server        "the pod" binary: pod-core serving the compile-time adapters (`server::adapters`)
 crates/client-core   ConstructEngine: fetches the workspace, holds state, applies optimistic mutations (SQLite cache +
                      outbox sync worker), OAuth2 PKCE sign-in (pod session in a secure store), read-only apps
                      API, SSE layout subscriber
@@ -285,8 +287,9 @@ The only way to change what the app looks like is a new layout file plus a deplo
    layout is written for: normally the current `protocol::SCHEMA_VERSION` (the pod refuses a value below what the
    layout's vocabulary needs, or above the current one). The layout root is the app's `core://Workspace`, and its
    id is the app id.
-2. Add one line to `layouts::FILES` in `crates/server/src/layouts.rs`: `layout_file!("pixelfed_home", "0002"),`.
-3. Run `cargo test` (`-p server` is enough). It validates every file (structure, size, slots, aspect ratios,
+2. Add one line to the app's file list in `crates/app-pixelfed/src/apps.rs` (`HOME_FILES` or `DEMO_FILES`):
+   `layout_file!("pixelfed_home", "0002"),`.
+3. Run `cargo test` (`-p app-pixelfed` is enough). It validates every file (structure, size, slots, aspect ratios,
    endpoints) and fails if a file in `layouts/` is not listed.
 4. Push to `main`. CI runs the checks and deploys the pod to staging. On start, the pod appends the file as the
    app's next version (logged as `layout file deployed as a new version`). Connected clients reconnect their SSE
@@ -395,7 +398,7 @@ A new layout version reaches an open app without a restart (the M7 push, now dri
 ```bash
 cargo run -p server                                                  # terminal 1
 cd kmp-app && CONSTRUCT_BASE_URL=http://127.0.0.1:8080 CONSTRUCT_WORKSPACE=pixelfed_demo ./gradlew :desktopApp:run   # terminal 2
-# add layouts/pixelfed_demo/0003.json + its layouts::FILES line (see "Adding a new layout version"), then restart
+# add layouts/pixelfed_demo/0003.json + its DEMO_FILES line (see "Adding a new layout version"), then restart
 # terminal 1: the app reconnects its event stream and shows v3 within a few seconds; the menu's Pixelfed demo history
 # lists it
 ```
@@ -526,9 +529,11 @@ scripts/e2e.sh --upstream real          # a real Pixelfed (default http://localh
 
 ## Pixelfed (pod adapter)
 
-The server (`server::pixelfed`, docs/DECISIONS.md D17) adapts one Pixelfed instance: it owns the upstream
-access token, normalizes the home timeline into Construct entities and serves the `pixelfed_home` workspace. The
-client only holds a pod session token and sends `Authorization: Bearer <session>`.
+The Pixelfed adapter (`crates/app-pixelfed`, docs/DECISIONS.md D17, D40) adapts one Pixelfed instance: it owns
+the upstream access token, normalizes the home timeline into Construct entities and supplies the `pixelfed_home`
+workspace's data (the core adds the layout). The client only holds a pod session token and sends
+`Authorization: Bearer <session>`. Sessions belong to the core and are shared by every app; signing in records the
+`pixelfed` sign-in on the session, which `pixelfed_home` requires.
 
 Configuration (`PIXELFED_*`, `CONSTRUCT_SESSION_TTL_DAYS`): see
 [Server runtime configuration](#server-runtime-configuration).
@@ -543,11 +548,13 @@ Endpoints:
 - `POST /v1/auth/pixelfed/token {instance_url, code, code_verifier, redirect_uri}` -> `{session_token,
   account:{id, username, display_name, avatar_url}}`. Upstream rejection -> 400 `oauth_exchange_failed`. An
   account other than the pinned owner -> 403 `account_not_owner` (the stored account is untouched).
-- `POST /v1/auth/logout` (bearer) -> `{ok:true}`; deletes the session (401 if it is not valid).
+  With a valid bearer, the sign-in is added to that session and its token is returned.
+- `POST /v1/auth/logout` (bearer, a core route) -> `{ok:true}`; deletes the session and its sign-ins (401 if it is
+  not valid).
 - `GET /v1/workspaces/pixelfed_home`: with a valid session, the home feed bundle (`queries["timeline:home"]` +
   posts/users/media entities, PostCard layout with like/bookmark optimistic mutations). Without a bearer: 200 with a
   signed-out bundle (a "Sign in with Pixelfed" `action.auth.login` button). With a bearer that no longer works
-  (unknown session, or the upstream rejected the stored token): 401 with the same signed-out bundle as the body and
+  (unknown session, a session without the `pixelfed` sign-in, or the upstream rejected the stored token): 401 with the same signed-out bundle as the body and
   `X-Construct-Session: invalid`, so the client drops its stale session. Upstream unreachable -> 502. The upstream
   request is `GET /api/v1/timelines/home?limit=20&include_reblogs=true` (Pixelfed hides boosts without it).
 - Upstream tokens: the pod stores the access token and, when the upstream issues them (Pixelfed does), the refresh

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+# The pod binary: reads env, builds the adapters (compile-time, D40) and serves
+# them with `pod-core`. The library is that composition, for tests.
+
 [lib]
 path = "src/lib.rs"
 
@@ -13,26 +16,23 @@ name = "server"
 path = "src/main.rs"
 
 [dependencies]
+pod-core = { path = "../pod-core" }
+app-pixelfed = { path = "../app-pixelfed" }
 protocol = { workspace = true }
-serde_json.workspace = true
-rusqlite.workspace = true
-# `http2` enables h2c (prior knowledge) alongside HTTP/1.1 per DESIGN.md M2.
 axum = { version = "0.8", features = ["http2"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
 serde.workspace = true
-# Async upstream client (Pixelfed). rustls only; `stream` for the media proxy.
+serde_json.workspace = true
+rusqlite.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 sha2 = "0.10"
 base64 = "0.22"
 getrandom = "0.3"
-# `stream::unfold` for the size-capped media proxy body.
 futures-util = { version = "0.3", default-features = false }
-# Layout agent (M7): RFC 6902 patches and the component registry (JSON Schema).
-zstd = "0.13"
-
-[dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3"

@@ -1,10 +1,9 @@
 //! Pod HTTP routes for the Pixelfed adapter (auth, home feed, actions, media).
 //!
-//! Auth model (docs/DECISIONS.md D17): the pod exchanges the client's PKCE
-//! code for the upstream token, stores it, and hands out a random pod session
-//! token (`Authorization: Bearer <session>`); only SHA-256(session) is stored.
-
-use std::sync::Arc;
+//! Auth model (docs/DECISIONS.md D17, D40): the pod exchanges the client's PKCE
+//! code for the upstream token, stores it, and records the `pixelfed` sign-in
+//! on a pod session (`Authorization: Bearer <session>`, owned by the core;
+//! only SHA-256(session) is stored).
 
 use axum::{
     Json, Router,
@@ -14,19 +13,21 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use pod_core::session::{Caller, bearer, new_session_token, session_hash, unauthorized};
+use pod_core::util::now_secs;
+use pod_core::{
+    ApiError, Hydration, Pod, RequestCtx, api_error, blocking, json_error, parse_json_body,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use super::upstream::{SCOPES, UpstreamError};
 use super::{
-    Account, MediaUrls, Status, hex, layout, normalize_account, normalize_comment,
-    normalize_comments, normalize_timeline, post_state,
+    Account, MediaUrls, Status, layout, normalize_account, normalize_comment, normalize_comments,
+    normalize_timeline, post_state,
 };
-use crate::store::{PixelfedAccount, PixelfedApp, SignIn};
-use crate::{ApiError, AppState, api_error, blocking, json_error, parse_json_body};
+use crate::adapter::{PixelfedAdapter, Runtime, SIGN_IN};
+use crate::db::{PixelfedAccount, PixelfedApp, PixelfedStore, SignIn};
 
 /// Path prefix of the media proxy.
 pub const MEDIA_PATH: &str = "/v1/pixelfed/media";
@@ -35,11 +36,10 @@ pub const MAX_MEDIA_BYTES: u64 = 25 * 1024 * 1024;
 /// Statuses fetched per home timeline request.
 const TIMELINE_LIMIT: u32 = 20;
 
-pub fn router() -> Router<Arc<AppState>> {
+pub fn router() -> Router<Pod> {
     Router::new()
         .route("/v1/auth/pixelfed/app", post(register_app))
         .route("/v1/auth/pixelfed/token", post(exchange_token))
-        .route("/v1/auth/logout", post(logout))
         .route("/v1/pixelfed/posts/like", post(like))
         .route("/v1/pixelfed/posts/bookmark", post(bookmark))
         .route("/v1/pixelfed/posts/comment", post(comment))
@@ -49,55 +49,29 @@ pub fn router() -> Router<Arc<AppState>> {
 
 // ---------- helpers ----------
 
-/// SHA-256 hex of a session token (what the sessions table stores).
-pub fn session_hash(token: &str) -> String {
-    hex(&Sha256::digest(token.as_bytes()))
+/// The Pixelfed adapter of this pod (registered by the `server` binary).
+fn adapter(state: &Pod) -> &PixelfedAdapter {
+    state
+        .adapter::<PixelfedAdapter>()
+        .expect("the Pixelfed routes are mounted by the Pixelfed adapter")
 }
 
-fn new_session_token() -> String {
-    let mut buf = [0u8; 32];
-    getrandom::fill(&mut buf).expect("OS random number generator");
-    URL_SAFE_NO_PAD.encode(buf)
-}
-
-pub(crate) fn bearer(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(header::AUTHORIZATION)?
-        .to_str()
-        .ok()?
-        .split_once(' ')
-        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
-        .map(|(_, t)| t.trim())
-        .filter(|t| !t.is_empty())
-}
-
-pub(crate) fn unauthorized() -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        [(header::WWW_AUTHENTICATE, "Bearer")],
-        Json(json!({ "error": "unauthorized" })),
-    )
-        .into_response()
-}
-
-/// The stored upstream account if the request carries a valid pod session.
+/// The stored upstream account if the request carries a valid pod session
+/// with the `pixelfed` sign-in.
 async fn signed_in_account(
-    state: &Arc<AppState>,
+    state: &Pod,
     headers: &HeaderMap,
 ) -> Result<Option<PixelfedAccount>, ApiError> {
-    let Some(token) = bearer(headers) else {
+    if !state.caller(headers).await?.has(SIGN_IN) {
         return Ok(None);
-    };
-    let hash = session_hash(token);
-    let instance = state.pixelfed.instance_url.clone();
-    let ttl = state.pixelfed.session_ttl_secs;
-    blocking(state, move |s| {
-        if !s.session_valid(&hash, ttl)? {
-            return Ok(None);
-        }
-        s.pixelfed_account(&instance)
-    })
-    .await
+    }
+    stored_account(state).await
+}
+
+/// The stored upstream account (single tenant: one per instance).
+async fn stored_account(state: &Pod) -> Result<Option<PixelfedAccount>, ApiError> {
+    let instance = adapter(state).runtime().config.instance_url.clone();
+    blocking(state, move |s| s.pixelfed_account(&instance)).await
 }
 
 /// `<scheme>://<Host>/v1/pixelfed/media`, from the request so that clients
@@ -123,7 +97,7 @@ fn proxy_base(headers: &HeaderMap) -> String {
     format!("{scheme}://{host}{MEDIA_PATH}")
 }
 
-async fn save_media_keys(state: &Arc<AppState>, media: MediaUrls) -> Result<(), ApiError> {
+async fn save_media_keys(state: &Pod, media: MediaUrls) -> Result<(), ApiError> {
     if media.keys.is_empty() {
         return Ok(());
     }
@@ -144,7 +118,7 @@ fn invalid_request(expected: Value) -> Response {
     )
 }
 
-fn instance_not_allowed(state: &AppState, got: &str) -> Response {
+fn instance_not_allowed(rt: &Runtime, got: &str) -> Response {
     tracing::warn!(
         instance_url = got,
         "auth request for a foreign instance rejected"
@@ -154,7 +128,7 @@ fn instance_not_allowed(state: &AppState, got: &str) -> Response {
         json!({
             "error": "instance_not_allowed",
             "instance_url": got,
-            "allowed": state.pixelfed.instance_url,
+            "allowed": rt.config.instance_url,
         }),
     )
 }
@@ -173,12 +147,6 @@ fn bad_gateway(e: &UpstreamError) -> Response {
     json_error(StatusCode::BAD_GATEWAY, body)
 }
 
-fn now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64)
-}
-
 /// The upstream rejected `stale.access_token` with 401: refresh it with the
 /// stored refresh token (serialized; a concurrent caller that already
 /// refreshed it gets the new token without a second upstream call).
@@ -186,11 +154,13 @@ fn now_secs() -> i64 {
 /// upstream rejected the refresh), so the caller signs out. `Err`: the
 /// upstream was unreachable / 5xx during the refresh (or the store failed).
 async fn refresh_account(
-    state: &Arc<AppState>,
+    state: &Pod,
     stale: &PixelfedAccount,
 ) -> Result<Option<PixelfedAccount>, UpstreamError> {
-    let _guard = state.pixelfed_refresh.lock().await;
-    let instance = state.pixelfed.instance_url.clone();
+    let pf = adapter(state);
+    let _guard = pf.refresh.lock().await;
+    let rt = pf.runtime();
+    let instance = rt.config.instance_url.clone();
     let store_err = |e: ApiError| UpstreamError::Unreachable(format!("pod store: {e:?}"));
     let current = {
         let i = instance.clone();
@@ -218,7 +188,7 @@ async fn refresh_account(
     let Some(app) = app else {
         return Ok(None);
     };
-    match state
+    match rt
         .upstream
         .refresh_token(&app.client_id, &app.client_secret, &refresh)
         .await
@@ -251,7 +221,7 @@ async fn refresh_account(
 /// token is rejected too) is returned as `Status(401)`. Also returns the
 /// access token of the last attempt (the one a surviving 401 rejected).
 async fn with_token<T, F, Fut>(
-    state: &Arc<AppState>,
+    state: &Pod,
     account: PixelfedAccount,
     call: F,
 ) -> (Result<T, UpstreamError>, String)
@@ -306,11 +276,8 @@ fn is_invalid_client(e: &UpstreamError) -> bool {
 // ---------- auth ----------
 
 /// `POST /v1/auth/pixelfed/app {instance_url, redirect_uri}`.
-async fn register_app(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
+async fn register_app(State(state): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
+    let rt = adapter(&state).runtime();
     let payload = match parse_json_body(&headers, &body) {
         Ok(v) => v,
         Err(e) => return e.into_response(),
@@ -321,10 +288,10 @@ async fn register_app(
     ) else {
         return invalid_request(json!({ "instance_url": "string", "redirect_uri": "string" }));
     };
-    if !state.pixelfed.accepts(instance_url) {
-        return instance_not_allowed(&state, instance_url);
+    if !rt.config.accepts(instance_url) {
+        return instance_not_allowed(&rt, instance_url);
     }
-    if !redirect_allowed(redirect_uri, &state.pixelfed.extra_redirects) {
+    if !redirect_allowed(redirect_uri, &rt.config.extra_redirects) {
         tracing::warn!(
             redirect_uri,
             "app registration for a disallowed redirect_uri rejected"
@@ -339,7 +306,7 @@ async fn register_app(
             }),
         );
     }
-    let instance = state.pixelfed.instance_url.clone();
+    let instance = rt.config.instance_url.clone();
     let redirect = redirect_uri.to_owned();
     let cached = {
         let (i, r) = (instance.clone(), redirect.clone());
@@ -353,7 +320,7 @@ async fn register_app(
     // a token call. Check it with a client_credentials grant; only a definite
     // invalid_client drops it (unreachable / 5xx / 429 / other: keep it).
     let cached = match cached {
-        Some(app) => match state
+        Some(app) => match rt
             .upstream
             .client_credentials(&app.client_id, &app.client_secret)
             .await
@@ -378,7 +345,7 @@ async fn register_app(
     };
     let app = match cached {
         Some(app) => app,
-        None => match state.upstream.register_app(&redirect).await {
+        None => match rt.upstream.register_app(&redirect).await {
             Ok(reg) => {
                 let app = PixelfedApp {
                     client_id: reg.client_id,
@@ -403,17 +370,14 @@ async fn register_app(
     Json(json!({
         "client_id": app.client_id,
         "scopes": SCOPES,
-        "authorize_endpoint": format!("{}/oauth/authorize", state.pixelfed.public_url),
+        "authorize_endpoint": format!("{}/oauth/authorize", rt.config.public_url),
     }))
     .into_response()
 }
 
 /// `POST /v1/auth/pixelfed/token {instance_url, code, code_verifier, redirect_uri}`.
-async fn exchange_token(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
+async fn exchange_token(State(state): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
+    let rt = adapter(&state).runtime();
     let payload = match parse_json_body(&headers, &body) {
         Ok(v) => v,
         Err(e) => return e.into_response(),
@@ -431,10 +395,10 @@ async fn exchange_token(
             "instance_url": "string", "code": "string", "code_verifier": "string", "redirect_uri": "string"
         }));
     };
-    if !state.pixelfed.accepts(instance_url) {
-        return instance_not_allowed(&state, instance_url);
+    if !rt.config.accepts(instance_url) {
+        return instance_not_allowed(&rt, instance_url);
     }
-    let instance = state.pixelfed.instance_url.clone();
+    let instance = rt.config.instance_url.clone();
     let app = {
         let (i, r) = (instance.clone(), redirect_uri.to_owned());
         match blocking(&state, move |s| s.pixelfed_app(&i, &r)).await {
@@ -456,7 +420,7 @@ async fn exchange_token(
             json!({ "error": "oauth_exchange_failed", "status": status.as_u16(), "detail": detail }),
         )
     };
-    let token = match state
+    let token = match rt
         .upstream
         .exchange_code(
             &app.client_id,
@@ -479,7 +443,7 @@ async fn exchange_token(
         }
         Err(e) => return bad_gateway(&e),
     };
-    let account: Account = match state.upstream.verify_credentials(&token.access_token).await {
+    let account: Account = match rt.upstream.verify_credentials(&token.access_token).await {
         Ok(v) => match Account::deserialize(&v) {
             Ok(a) => a,
             Err(e) => {
@@ -493,11 +457,11 @@ async fn exchange_token(
         }
         Err(e) => return bad_gateway(&e),
     };
-    let mut media = MediaUrls::new(&proxy_base(&headers), &state.media_allow);
+    let mut media = MediaUrls::new(&proxy_base(&headers), &rt.media_allow);
     let user = normalize_account(&account, &mut media);
     // Owner pinning (D17): only the owner's account may sign in, so another
     // user of the instance cannot replace the stored account.
-    let cfg = &state.pixelfed;
+    let cfg = &rt.config;
     let not_owner = || {
         tracing::warn!(account_id = %account.id, username = ?user.get_str("username"),
             "Pixelfed sign-in by an account that does not own this pod rejected");
@@ -515,7 +479,7 @@ async fn exchange_token(
         return not_owner();
     }
     let replace_owner = cfg.owner_account_id.is_some() || cfg.allow_account_change;
-    let ttl = cfg.session_ttl_secs;
+    let ttl = state.session_ttl_secs();
     let stored = PixelfedAccount {
         access_token: token.access_token,
         account_id: account.id.clone(),
@@ -524,7 +488,13 @@ async fn exchange_token(
         expires_at: token.expires_in.map(|s| now_secs().saturating_add(s)),
         redirect_uri: Some(redirect_uri.to_owned()),
     };
-    let session = new_session_token();
+    // A caller that already has a valid pod session keeps it and gains the
+    // `pixelfed` sign-in (one session collects every app's sign-ins, D40).
+    let session = match state.caller(&headers).await {
+        Ok(Caller::Signed(_)) => bearer(&headers).unwrap_or_default().to_owned(),
+        Ok(_) => new_session_token(),
+        Err(e) => return e.into_response(),
+    };
     let hash = session_hash(&session);
     {
         let i = instance.clone();
@@ -541,7 +511,7 @@ async fn exchange_token(
     if let Err(e) = save_media_keys(&state, media).await {
         return e.into_response();
     }
-    tracing::info!(account_id = %account.id, username = ?user.get_str("username"), "Pixelfed sign-in: session created");
+    tracing::info!(account_id = %account.id, username = ?user.get_str("username"), "Pixelfed sign-in: session signed in");
     Json(json!({
         "session_token": session,
         "account": {
@@ -554,61 +524,32 @@ async fn exchange_token(
     .into_response()
 }
 
-/// `POST /v1/auth/logout` (bearer): deletes the pod session. The stored
-/// upstream token is kept (single tenant; other sessions may use it).
-async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    let Some(token) = bearer(&headers) else {
-        return unauthorized();
-    };
-    let hash = session_hash(token);
-    match blocking(&state, move |s| s.delete_session(&hash)).await {
-        Ok(true) => {
-            tracing::info!("pod session deleted (logout)");
-            Json(json!({ "ok": true })).into_response()
-        }
-        Ok(false) => unauthorized(),
-        Err(e) => e.into_response(),
-    }
-}
-
 // ---------- home feed ----------
 
-/// Response header on a 401 from `GET /v1/workspaces/pixelfed_home`.
-pub const SESSION_HEADER: &str = "x-construct-session";
-
-/// `GET /v1/workspaces/pixelfed_home`. Without a bearer: 200 signed-out
-/// bundle. With a bearer that no longer gets a feed (unknown session, no
-/// stored account, or the upstream rejected the stored token): 401 with the
-/// signed-out bundle as the body and `X-Construct-Session: invalid`, so the
-/// client learns its session is stale (it clears it and refetches without
-/// the bearer). The signed-in feed's layout is the latest layout version
-/// (`X-Construct-Layout-Version`); the signed-out screen is not versioned.
-pub async fn home_workspace(state: &Arc<AppState>, headers: &HeaderMap) -> Response {
-    let had_bearer = bearer(headers).is_some();
+/// The data of `GET /v1/workspaces/pixelfed_home` ([`pod_core::AppAdapter::hydrate`];
+/// the core has checked the caller's session has the `pixelfed` sign-in).
+/// No stored account, or the upstream rejected the stored token: a stale
+/// session (401 with the signed-out screen, so the client clears its session).
+/// The core adds the latest layout version the client can draw.
+pub async fn home_feed(pf: &PixelfedAdapter, state: &Pod, req: &RequestCtx) -> Hydration {
+    let rt = pf.runtime();
+    let app = crate::apps::HOME;
     let signed_out = || {
-        let body = Json(layout::signed_out(&state.pixelfed.instance_url));
-        if had_bearer {
-            (
-                StatusCode::UNAUTHORIZED,
-                [
-                    (header::WWW_AUTHENTICATE, "Bearer"),
-                    (header::HeaderName::from_static(SESSION_HEADER), "invalid"),
-                ],
-                body,
-            )
-                .into_response()
-        } else {
-            body.into_response()
-        }
+        Hydration::StaleSession(layout::signed_out(
+            &rt.config.instance_url,
+            app.id,
+            app.title,
+        ))
     };
-    let account = match signed_in_account(state, headers).await {
+    let account = match stored_account(state).await {
         Ok(Some(a)) => a,
         Ok(None) => return signed_out(),
-        Err(e) => return e.into_response(),
+        Err(e) => return Hydration::Error(e.into_response()),
     };
     let username = account.username.clone();
-    let (result, last_token) = with_token(state, account, |token| async move {
-        state.upstream.home_timeline(&token, TIMELINE_LIMIT).await
+    let (result, last_token) = with_token(state, account, |token| {
+        let rt = &rt;
+        async move { rt.upstream.home_timeline(&token, TIMELINE_LIMIT).await }
     })
     .await;
     let statuses = match result {
@@ -617,7 +558,7 @@ pub async fn home_workspace(state: &Arc<AppState>, headers: &HeaderMap) -> Respo
             // The upstream token was revoked or expired and could not be
             // refreshed: forget it, but only if it is still the stored one (a
             // sign-in or refresh may have replaced it meanwhile).
-            let instance = state.pixelfed.instance_url.clone();
+            let instance = rt.config.instance_url.clone();
             let deleted = blocking(state, move |s| {
                 s.delete_pixelfed_account_if_token(&instance, &last_token)
             })
@@ -626,27 +567,19 @@ pub async fn home_workspace(state: &Arc<AppState>, headers: &HeaderMap) -> Respo
             tracing::warn!(%username, deleted, "upstream rejected the stored token; signed out");
             return signed_out();
         }
-        Err(e) => return bad_gateway(&e),
+        Err(e) => return Hydration::Error(bad_gateway(&e)),
     };
-    let mut media = MediaUrls::new(&proxy_base(headers), &state.media_allow);
+    let mut media = MediaUrls::new(&proxy_base(&req.headers), &rt.media_allow);
     let timeline = normalize_timeline(&statuses, &mut media);
     if let Err(e) = save_media_keys(state, media).await {
-        return e.into_response();
+        return Hydration::Error(e.into_response());
     }
     tracing::info!(
         posts = timeline.order.len(),
         entities = timeline.entities.len(),
         "pixelfed_home served"
     );
-    let served = match crate::layouts::active_for_client(state, layout::WORKSPACE_ID, headers).await
-    {
-        Ok(Some(v)) => v,
-        Ok(None) => unreachable!("pixelfed_home has versions after the layout sync"),
-        Err(e) => return e.into_response(),
-    };
-    let mut spec = layout::home_feed(timeline.entities, timeline.order);
-    spec.workspace = served.layout;
-    (crate::layouts::served_headers(served.version), Json(spec)).into_response()
+    Hydration::Data(layout::home_feed(timeline.entities, timeline.order))
 }
 
 // ---------- actions ----------
@@ -657,11 +590,11 @@ enum Toggle {
     Bookmark,
 }
 
-async fn like(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {
+async fn like(State(state): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
     toggle(state, headers, body, Toggle::Like).await
 }
 
-async fn bookmark(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {
+async fn bookmark(State(state): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
     toggle(state, headers, body, Toggle::Bookmark).await
 }
 
@@ -676,7 +609,8 @@ fn valid_status_id(id: &str) -> bool {
 /// 200 `{ok, id, is_liked, like_count, is_bookmarked}`. No session: 401;
 /// upstream 4xx: same status (the client rolls back); upstream 5xx or
 /// unreachable: 502 (the client retries).
-async fn toggle(state: Arc<AppState>, headers: HeaderMap, body: Bytes, kind: Toggle) -> Response {
+async fn toggle(state: Pod, headers: HeaderMap, body: Bytes, kind: Toggle) -> Response {
+    let rt = adapter(&state).runtime();
     let account = match signed_in_account(&state, &headers).await {
         Ok(Some(a)) => a,
         Ok(None) => return unauthorized(),
@@ -706,8 +640,8 @@ async fn toggle(state: Arc<AppState>, headers: HeaderMap, body: Bytes, kind: Tog
         (Toggle::Bookmark, false) => "unbookmark",
     };
     let (result, _) = with_token(&state, account, |token| {
-        let (state, id) = (&state, &id);
-        async move { state.upstream.status_action(&token, id, action).await }
+        let (rt, id) = (&rt, &id);
+        async move { rt.upstream.status_action(&token, id, action).await }
     })
     .await;
     match result {
@@ -770,10 +704,11 @@ fn comment_rejected(id: &str, status: StatusCode, detail: &str) -> Response {
 /// ([`normalize_comments`]). No session: 401; upstream 4xx: same status (404
 /// `post_not_found`); 5xx / unreachable: 502.
 async fn comments_screen(
-    State(state): State<Arc<AppState>>,
+    State(state): State<Pod>,
     headers: HeaderMap,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Response {
+    let rt = adapter(&state).runtime();
     let account = match signed_in_account(&state, &headers).await {
         Ok(Some(a)) => a,
         Ok(None) => return unauthorized(),
@@ -788,8 +723,8 @@ async fn comments_screen(
     }
     let own = account.account_id.clone();
     let (result, _) = with_token(&state, account, |token| {
-        let (state, id) = (&state, &id);
-        async move { state.upstream.status_context(&token, id).await }
+        let (rt, id) = (&rt, &id);
+        async move { rt.upstream.status_context(&token, id).await }
     })
     .await;
     let context = match result {
@@ -799,7 +734,7 @@ async fn comments_screen(
         }
         Err(e) => return bad_gateway(&e),
     };
-    let mut media = MediaUrls::new(&proxy_base(&headers), &state.media_allow);
+    let mut media = MediaUrls::new(&proxy_base(&headers), &rt.media_allow);
     let list = normalize_comments(&id, &context, &own, now_secs(), &mut media);
     if let Err(e) = save_media_keys(&state, media).await {
         return e.into_response();
@@ -823,7 +758,8 @@ async fn comments_screen(
 /// `client_id` (a client-made nonce, `[A-Za-z0-9_-]{8,64}`) becomes the upstream
 /// `Idempotency-Key`, so a retry after a lost response does not post twice where the
 /// upstream honours it.
-async fn comment(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {
+async fn comment(State(state): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
+    let rt = adapter(&state).runtime();
     let account = match signed_in_account(&state, &headers).await {
         Ok(Some(a)) => a,
         Ok(None) => return unauthorized(),
@@ -865,8 +801,8 @@ async fn comment(State(state): State<Arc<AppState>>, headers: HeaderMap, body: B
     };
     let own = account.account_id.clone();
     let (result, _) = with_token(&state, account, |token| {
-        let (state, id, key) = (&state, &id, key.as_deref());
-        async move { state.upstream.create_reply(&token, id, text, key).await }
+        let (rt, id, key) = (&rt, &id, key.as_deref());
+        async move { rt.upstream.create_reply(&token, id, text, key).await }
     })
     .await;
     let created = match result {
@@ -884,7 +820,7 @@ async fn comment(State(state): State<Arc<AppState>>, headers: HeaderMap, body: B
             )));
         }
     };
-    let mut media = MediaUrls::new(&proxy_base(&headers), &state.media_allow);
+    let mut media = MediaUrls::new(&proxy_base(&headers), &rt.media_allow);
     let comment = normalize_comment(&status, &id, 0, &own, now_secs(), &mut media);
     if let Err(e) = save_media_keys(&state, media).await {
         return e.into_response();
@@ -897,7 +833,8 @@ async fn comment(State(state): State<Arc<AppState>>, headers: HeaderMap, body: B
 
 /// `GET /v1/pixelfed/media/{key}`: streams a media/avatar URL the pod emitted.
 /// No auth: keys are opaque hashes of URLs that are public upstream anyway.
-async fn media(State(state): State<Arc<AppState>>, Path(key): Path<String>) -> Response {
+async fn media(State(state): State<Pod>, Path(key): Path<String>) -> Response {
+    let rt = adapter(&state).runtime();
     let not_found = || {
         json_error(
             StatusCode::NOT_FOUND,
@@ -914,7 +851,7 @@ async fn media(State(state): State<Arc<AppState>>, Path(key): Path<String>) -> R
     };
     // Normalization only emits keys for allowlisted URLs, but keys stored by
     // an older pod (or before the allowlist changed) are checked again here.
-    if !state.media_allow.allows(&url) {
+    if !rt.media_allow.allows(&url) {
         tracing::warn!(host = ?reqwest::Url::parse(&url).ok().and_then(|u| u.host_str().map(str::to_owned)),
             "media proxy refused a URL outside the allowlist");
         return json_error(
@@ -924,14 +861,14 @@ async fn media(State(state): State<Arc<AppState>>, Path(key): Path<String>) -> R
     }
     // URLs built with the public base (e.g. 10.0.2.2) are fetched via the
     // instance base the pod can reach.
-    let cfg = &state.pixelfed;
+    let cfg = &rt.config;
     let fetch_url = match url.strip_prefix(&cfg.public_url) {
         Some(rest) if cfg.public_url != cfg.instance_url && rest.starts_with('/') => {
             format!("{}{rest}", cfg.instance_url)
         }
         _ => url,
     };
-    let resp = match state.upstream.fetch_media(&fetch_url).await {
+    let resp = match rt.upstream.fetch_media(&fetch_url).await {
         Ok(r) => r,
         Err(UpstreamError::Status(StatusCode::NOT_FOUND | StatusCode::GONE, _)) => {
             return not_found();
