@@ -373,6 +373,7 @@ async fn bindings_must_fit_the_collection() {
         "define_collection",
         "apply_change",
         "edit_rows",
+        "add_row",
         "undo_edit",
         "export_collection",
         "create_app",
@@ -711,6 +712,37 @@ async fn row_edits_are_previewed_confirmed_and_undone() {
     )
     .await;
     assert!(err && e["at"] == "/edits/0", "{e}");
+}
+
+#[tokio::test]
+async fn add_row_writes_one_row_at_once_and_undoes() {
+    let pod = pod();
+    define_todos(&pod).await;
+    let app = create_app(&pod, "Todos", todo_layout("")).await;
+    let added = ok(
+        &pod,
+        "add_row",
+        json!({"collection": "todos", "values": {"title": "Oil change", "due": "2026-11-03"},
+        "note": "Logged the oil change"}),
+    )
+    .await;
+    assert_eq!(added["ok"], true, "{added}");
+    let rows = todos(&pod, &app).await;
+    assert_eq!(rows.len(), 1, "no preview step");
+    assert_eq!(rows[0].1["id"], added["id"]);
+    assert_eq!(rows[0].1["done"], false, "defaults fill the rest");
+    // A bad value names the field's place in the call.
+    let (err, e) = tool(
+        &pod,
+        "add_row",
+        json!({"collection": "todos", "values": {"title": "X", "due": "soon"}}),
+    )
+    .await;
+    assert!(err && e["at"] == "/values", "{e}");
+    let (err, _) = tool(&pod, "add_row", json!({"collection": "todos"})).await;
+    assert!(err, "values are required");
+    ok(&pod, "undo_edit", json!({"edit": added["edit"]})).await;
+    assert!(todos(&pod, &app).await.is_empty());
 }
 
 #[tokio::test]

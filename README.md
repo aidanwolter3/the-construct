@@ -381,7 +381,7 @@ a default) and the pod stores, validates and serves the rows. There is no logic:
 | `GET /v1/collections/<c>/export` | everything, deleted rows and kept-aside values included |
 
 - **MCP tools:** `list_collections`, `define_collection`, `describe_collection` (with layout snippets),
-  `apply_change`, `restore_collection_version`, `edit_rows`, `undo_edit`, `export_collection`.
+  `apply_change`, `restore_collection_version`, `edit_rows`, `add_row`, `undo_edit`, `export_collection`.
 - **Change sets:** `apply_change` sends the collection change and the app layouts that go with it. Every custom app
   using Collections is checked against the new definition; if one would break, nothing applies and the error names
   the app and the binding. Fields have permanent ids: a rename keeps the old name as an alias, a removal is soft
@@ -391,6 +391,8 @@ a default) and the pod stores, validates and serves the rows. There is no logic:
   aliases, removed fields are ignored, only a wrong type is refused.
 - **Row edits by Claude** (imports, backfills; Collections only): `edit_rows` first answers a preview (count and
   sample) and a confirm token, which Claude shows the user before applying; `undo_edit` reverts it as one step.
+  `add_row` writes one row the user just asked for ("log that I had the oil changed") at once, without the preview,
+  and is undoable the same way (decision `collections-add-row`).
 - **Caps per pod** (temporary pods too): 20 collections, 40 fields each, 5,000 rows and 4 MiB of values in all, 500
   rows per edit, 4,000 characters per text value.
 
