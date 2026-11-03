@@ -273,6 +273,15 @@ class ConstructController internal constructor(
      */
     fun dispatch(intent: ActionIntent) {
         val bound = bindForm(intent, navigation.activeForm()) ?: return
+        run(bound)
+    }
+
+    /** Carries out a bound intent; the steps of an `action.sequence` one after another, each as if tapped alone. */
+    private fun run(bound: ActionIntent) {
+        if (bound is ActionIntent.Sequence) {
+            bound.steps.forEach(::run)
+            return
+        }
         if (navigation.handle(bound)) return
         send(bound)
         if (bound is ActionIntent.Create) {

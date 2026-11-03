@@ -734,6 +734,11 @@ impl<'a> Caps<'a> {
                     self.entity(&format!("{at}/entity_uri"), u)?;
                 }
             }
+            "action.local.set" => {
+                if let Some(u) = field("entity_uri") {
+                    self.entity(&format!("{at}/entity_uri"), u)?;
+                }
+            }
             "action.data.load" => {
                 if let Some(p) = field("path") {
                     self.data_path(&format!("{at}/path"), p)?;

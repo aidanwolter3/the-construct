@@ -2391,8 +2391,23 @@ impl Inner {
                 return;
             }
         };
+        self.run(started, intent);
+    }
 
+    /// Carry out one parsed intent (each step of a sequence in turn).
+    fn run(self: &Arc<Self>, started: Instant, intent: ActionIntent) {
         match intent {
+            ActionIntent::Sequence { steps } => {
+                for step in steps {
+                    self.run(started, step);
+                }
+            }
+            ActionIntent::LocalSet {
+                entity_uri,
+                field,
+                value_expr,
+                also,
+            } => self.local_set(started, entity_uri, field, value_expr, also),
             ActionIntent::OptimisticMutate {
                 entity_uri,
                 field,
@@ -2565,6 +2580,61 @@ impl Inner {
         println!(
             "[ConstructEngine] mutate {entity_uri}#{field} = {value} (outbox #{outbox_id}, \
              {pending} pending); dispatch->notify {} us",
+            started.elapsed().as_micros()
+        );
+    }
+
+    /// `action.local.set`: set fields of a loaded entity on this device only
+    /// (memory and cache, no outbox row). Every expression is evaluated
+    /// against the entity as it was; if one fails, or the entity is not
+    /// loaded, nothing changes. The next load of the entity replaces it.
+    fn local_set(
+        &self,
+        started: Instant,
+        entity_uri: String,
+        field: String,
+        value_expr: String,
+        also: Vec<FieldUpdate>,
+    ) {
+        let snap = {
+            let mut guard = lock(&self.state);
+            let st = &mut *guard;
+            let Some(mut entity) = st.entities.get(&entity_uri).cloned() else {
+                eprintln!("[ConstructEngine] local set {entity_uri}#{field}: not loaded; ignored");
+                return;
+            };
+            let updates: Vec<(&str, &str)> = std::iter::once((field.as_str(), value_expr.as_str()))
+                .chain(
+                    also.iter()
+                        .map(|a| (a.field.as_str(), a.value_expr.as_str())),
+                )
+                .collect();
+            let mut values = Vec::with_capacity(updates.len());
+            for ((f, _), (_, result)) in updates.iter().zip(eval_updates(&entity, &updates)) {
+                match result {
+                    Ok(v) => values.push((f.to_string(), v)),
+                    Err(e) => {
+                        eprintln!("[ConstructEngine] local set {entity_uri}#{f}: {e}; no change");
+                        return;
+                    }
+                }
+            }
+            for (f, v) in values {
+                entity.set(f, v);
+            }
+            if let Some(store) = st.store.as_mut()
+                && let Err(e) = store.upsert_entity(&entity_uri, &entity, unix_now())
+            {
+                // Memory still changes: the cache is only the fallback.
+                eprintln!("[ConstructEngine] local set {entity_uri}: failed to cache ({e})");
+            }
+            st.entities.insert(entity_uri.clone(), entity);
+            st.seq += 1;
+            st.snapshot()
+        };
+        self.notify(snap);
+        println!(
+            "[ConstructEngine] local set {entity_uri}#{field}; dispatch->notify {} us",
             started.elapsed().as_micros()
         );
     }

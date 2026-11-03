@@ -438,6 +438,26 @@ sealed class ActionIntent {
     ) : ActionIntent()
 
     /**
+     * `action.sequence` (feature `action_sequence`): run [steps] in order as one tap. The whole sequence is bound at
+     * once (one `$nonce`), then each step is dispatched as if tapped alone: navigation steps here, the rest by the
+     * engine.
+     */
+    @Serializable
+    data class Sequence(val steps: List<ActionIntent>) : ActionIntent()
+
+    /**
+     * `action.local.set` (feature `local_set`): the engine sets [field] (and [also]) of [entityUri] on this device
+     * only, from [valueExpr] evaluated against the entity; nothing is sent, and the next load replaces it.
+     */
+    @Serializable
+    data class LocalSet(
+        @SerialName("entity_uri") val entityUri: String,
+        val field: String,
+        @SerialName("value_expr") val valueExpr: String,
+        val also: List<FieldUpdate> = emptyList(),
+    ) : ActionIntent()
+
+    /**
      * An intent whose `intent` tag this client does not know (e.g. the removed `action.agent.prompt`). [raw] is the full
      * original object; dispatching it forwards [raw] unchanged.
      */
@@ -567,6 +587,8 @@ object ActionIntentSerializer : TaggedUnionSerializer<ActionIntent>("org.thecons
         Variant("action.auth.session", ActionIntent.OpenSession::class, ActionIntent.OpenSession.serializer()),
         Variant("action.data.load", ActionIntent.LoadData::class, ActionIntent.LoadData.serializer()),
         Variant("action.mutation.create", ActionIntent.Create::class, ActionIntent.Create.serializer()),
+        Variant("action.sequence", ActionIntent.Sequence::class, ActionIntent.Sequence.serializer()),
+        Variant("action.local.set", ActionIntent.LocalSet::class, ActionIntent.LocalSet.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): ActionIntent = ActionIntent.Unknown(tag, raw)
