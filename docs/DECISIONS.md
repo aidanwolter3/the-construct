@@ -1427,7 +1427,7 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   item carries `section`, and whose first item of a named group carries `group`).
 - **No client build:** only existing vocabulary (schema 3). Each list row is one line: a "View" button, then the
   title (button first: a `core://Row` gives its first children their full width, so a long title after the button
-  wraps instead of squeezing it). Tapping the row itself needs new vocabulary (`on_click` on Row/Column, schema 4):
-  issue #15.
+  wraps instead of squeezing it). Tapping the row itself needs new vocabulary (a `core://Tappable` wrapper node that
+  makes any node tappable, schema 4): issue #15.
 - **Not yet:** editing recipes, search, scaling servings (the fields support it), access control (anyone who can
   reach the pod can read the recipes).
