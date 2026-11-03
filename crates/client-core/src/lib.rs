@@ -43,6 +43,7 @@
 //! ([`events`]) listens on the workspace's SSE push channel and refetches
 //! when a newer version is announced.
 
+pub mod attachments;
 pub mod auth;
 pub mod catalog;
 pub mod events;
@@ -58,13 +59,18 @@ use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use protocol::{ActionIntent, DataBundle, EntityRecord, FieldUpdate, UiNode, WorkspaceSpec};
+use protocol::{
+    ActionIntent, DataBundle, EntityRecord, FieldUpdate, Position, UiNode, WorkspaceSpec,
+};
 use serde_json::{Value, json};
 
 use auth::{LoopbackListener, PendingAuth, Pkce, Redirect, guarded};
 pub use auth::{MemoryStore, RedirectMode, SecureStore, UrlOpener};
 pub use catalog::LayoutApiError;
-use store::{AlsoUpdate, CreateInfo, DataLoad, NewOutboxRow, OutboxRow, Store, StoreOps};
+use store::{
+    AlsoUpdate, Attachment, AttachmentRef, CreateInfo, DataLoad, NewOutboxRow, OutboxRow, Store,
+    StoreOps,
+};
 
 const DEFAULT_WORKSPACE_ID: &str = "home";
 /// SQLite file name inside `storage_path`.
@@ -86,6 +92,17 @@ pub const LOAD_SIGNED_OUT: &str = "Sign in to see this.";
 pub const LOAD_NOT_FOUND: &str = "This isn't available anymore.";
 /// Timeout for a single outbox POST.
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
+/// Timeout for one attachment upload (`POST /v1/uploads`, D47).
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(60);
+/// Pod path attachments are uploaded to.
+pub const UPLOADS_PATH: &str = "/v1/uploads";
+/// An accepted create's attachment files are kept this long (the
+/// placeholder may still show them until its list is reloaded).
+const RELEASED_KEEP_SECS: i64 = 10 * 60;
+/// A staged attachment no pending create uses is deleted after this long.
+const UNUSED_KEEP_SECS: i64 = 24 * 60 * 60;
+/// Most attachments one create may carry.
+pub const MAX_ATTACHMENTS: usize = 20;
 /// `auth_json` until a sign-in flow sets it.
 pub const SIGNED_OUT_AUTH_JSON: &str = r#"{"state":"signed_out"}"#;
 /// Timeout for the sign-in calls to the pod (`/v1/auth/...`).
@@ -325,6 +342,7 @@ struct PendingCreate {
     row_id: i64,
     query_key: String,
     entity_uri: String,
+    at_start: bool,
 }
 
 impl PendingCreate {
@@ -335,6 +353,7 @@ impl PendingCreate {
                     row_id: r.id,
                     query_key: c.query_key.clone(),
                     entity_uri: r.entity_uri.clone(),
+                    at_start: c.at_start,
                 })
             })
             .collect()
@@ -441,10 +460,13 @@ struct State {
     /// Pending create rows (their temporary entities are listed).
     creates: Vec<PendingCreate>,
     /// Accepted creates still listed until a reload of their query
-    /// (`(query_key, entity_uri)`), so the item does not blink out.
-    settling: Vec<(String, String)>,
+    /// (`(query_key, entity_uri, at_start)`), so the item does not blink out.
+    settling: Vec<(String, String, bool)>,
     /// Queued by the flush of an accepted create.
     followups: Vec<Followup>,
+    /// Staged attachments (D47), by id; each is drawn as the local entity
+    /// `construct://attachments/<id>`.
+    attachments: BTreeMap<String, Attachment>,
 }
 
 impl State {
@@ -453,7 +475,21 @@ impl State {
             Some(ws) => serde_json::to_string(ws).unwrap_or_else(|_| "null".into()),
             None => "null".into(),
         };
-        let entities_json = serde_json::to_string(&self.entities).unwrap_or_else(|_| "{}".into());
+        let entities_json = if self.attachments.is_empty() {
+            serde_json::to_string(&self.entities).unwrap_or_else(|_| "{}".into())
+        } else {
+            let mut all = serde_json::to_value(&self.entities)
+                .ok()
+                .and_then(|v| match v {
+                    Value::Object(m) => Some(m),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            for a in self.attachments.values() {
+                all.insert(attachments::entity_uri(&a.id), attachment_entity(a));
+            }
+            Value::Object(all).to_string()
+        };
         let queries_json =
             serde_json::to_string(&self.effective_queries()).unwrap_or_else(|_| "{}".into());
         let loads_json = serde_json::to_string(&self.loads).unwrap_or_else(|_| "{}".into());
@@ -485,15 +521,19 @@ impl State {
                 out.insert(k.clone(), v.clone());
             }
         }
-        let temps = self
-            .settling
-            .iter()
-            .map(|(k, u)| (k, u))
-            .chain(self.creates.iter().map(|c| (&c.query_key, &c.entity_uri)));
-        for (key, uri) in temps {
+        let temps = self.settling.iter().map(|(k, u, s)| (k, u, *s)).chain(
+            self.creates
+                .iter()
+                .map(|c| (&c.query_key, &c.entity_uri, c.at_start)),
+        );
+        for (key, uri, at_start) in temps {
             let list = out.entry(key.clone()).or_default();
             if !list.contains(uri) {
-                list.push(uri.clone());
+                if at_start {
+                    list.insert(0, uri.clone());
+                } else {
+                    list.push(uri.clone());
+                }
             }
         }
         out
@@ -505,7 +545,7 @@ impl State {
         self.data
             .values()
             .flat_map(|d| d.entity_uris.iter().chain(d.queries.values().flatten()))
-            .chain(self.settling.iter().map(|(_, u)| u))
+            .chain(self.settling.iter().map(|(_, u, _)| u))
             .cloned()
             .collect()
     }
@@ -543,12 +583,14 @@ impl State {
             uris.dedup();
             let entities = store.load_entities(&uris)?;
             let creates = PendingCreate::from_rows(&pending);
-            Ok::<_, store::StoreError>((ws, entities, pending.len(), data, creates))
+            let attachments = store.load_attachments()?;
+            Ok::<_, store::StoreError>((ws, entities, pending.len(), data, creates, attachments))
         })();
         match loaded {
-            Ok((ws, entities, pending, data, creates)) => {
+            Ok((ws, entities, pending, data, creates, attachments)) => {
                 self.data = data;
                 self.creates = creates;
+                self.attachments = attachments.into_iter().map(|a| (a.id.clone(), a)).collect();
                 if ws.is_some() || !entities.is_empty() || pending > 0 {
                     println!(
                         "[ConstructEngine] loaded cached workspace '{workspace_id}' (layout: {}, {} \
@@ -610,7 +652,7 @@ impl State {
             }
         }
         // Settling creates of a workspace query are replaced by this answer.
-        self.settling.retain(|(k, _)| !queries.contains_key(k));
+        self.settling.retain(|(k, _, _)| !queries.contains_key(k));
         for uri in queries.values().flatten().chain(self.data_uris().iter()) {
             if !merged.contains_key(uri)
                 && let Some(local) = self.entities.get(uri)
@@ -675,11 +717,11 @@ impl State {
         }
         let (settled, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.settling)
             .into_iter()
-            .partition(|(k, _)| queries.contains_key(k));
+            .partition(|(k, _, _)| queries.contains_key(k));
         self.settling = keep;
         let settled: Vec<String> = settled
             .into_iter()
-            .map(|(_, u)| u)
+            .map(|(_, u, _)| u)
             .filter(|u| !fetched.contains_key(u))
             .collect();
         let load = DataLoad {
@@ -779,6 +821,24 @@ impl State {
             }
         }
         self.entities.retain(|u, _| keep.contains(u));
+        // Staged photos are the account's too; those a remaining (signed-out)
+        // create still needs stay.
+        let needed: std::collections::HashSet<String> = self
+            .store
+            .as_ref()
+            .and_then(|s| s.pending_outbox().ok())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|r| r.create.as_ref())
+            .flat_map(|c| c.attachments.iter().map(|a| a.id.clone()))
+            .collect();
+        let gone: Vec<String> = self
+            .attachments
+            .keys()
+            .filter(|id| !needed.contains(*id))
+            .cloned()
+            .collect();
+        self.delete_attachments(&gone);
         self.queries.clear();
         self.data.clear();
         self.loads.clear();
@@ -798,8 +858,56 @@ impl State {
         })?;
         self.entities.remove(&row.entity_uri);
         self.creates.retain(|c| c.row_id != row.id);
+        if let Some(c) = &row.create {
+            let ids: Vec<String> = c.attachments.iter().map(|a| a.id.clone()).collect();
+            self.delete_attachments(&ids);
+        }
         self.sync_pending_count();
         Ok(())
+    }
+
+    /// Delete staged attachments: their files, rows and local entities.
+    fn delete_attachments(&mut self, ids: &[String]) {
+        for id in ids {
+            if let Some(a) = self.attachments.remove(id) {
+                let _ = fs::remove_file(&a.path);
+                if let Some(Err(e)) = self.store.as_ref().map(|s| s.delete_attachment(id)) {
+                    eprintln!("[ConstructEngine] attachment {id}: failed to delete its row: {e}");
+                }
+            }
+        }
+    }
+
+    /// Delete attachments nobody needs any more: released ones after
+    /// [`RELEASED_KEEP_SECS`], unused staged ones after [`UNUSED_KEEP_SECS`].
+    /// Attachments a PENDING create carries are always kept.
+    fn sweep_attachments(&mut self, now: i64) {
+        if self.attachments.is_empty() {
+            return;
+        }
+        let pending = match self.store.as_ref().map(|s| s.pending_outbox()) {
+            Some(Ok(rows)) => rows,
+            _ => return,
+        };
+        let used: std::collections::HashSet<&str> = pending
+            .iter()
+            .filter_map(|r| r.create.as_ref())
+            .flat_map(|c| c.attachments.iter().map(|a| a.id.as_str()))
+            .collect();
+        let gone: Vec<String> = self
+            .attachments
+            .values()
+            .filter(|a| !used.contains(a.id.as_str()))
+            .filter(|a| match a.released_at {
+                Some(t) => now - t >= RELEASED_KEEP_SECS,
+                None => now - a.created_at >= UNUSED_KEEP_SECS,
+            })
+            .map(|a| a.id.clone())
+            .collect();
+        if !gone.is_empty() {
+            println!("[ConstructEngine] deleted {} old attachment(s)", gone.len());
+            self.delete_attachments(&gone);
+        }
     }
 
     /// Re-read the PENDING count from the store (after a delete).
@@ -1047,6 +1155,9 @@ struct Inner {
     /// Serializes reads/writes of `pending_key` (lock order: `pending_io`,
     /// then `flow`).
     pending_io: Mutex<()>,
+    /// Where staged attachments are written (`<storage>/attachments`, or a
+    /// temporary directory for an in-memory store).
+    attachments_dir: PathBuf,
 }
 
 impl Drop for Inner {
@@ -1163,6 +1274,99 @@ fn open_store(storage_path: &str) -> (Option<Store>, Arc<Mutex<()>>) {
     }
 }
 
+/// The schema-8 parts of an `action.mutation.create`.
+struct CreateOptions {
+    refresh_workspace: bool,
+    attachments: BTreeMap<String, Value>,
+    at_start: bool,
+}
+
+/// A staged attachment, as the engine reports it to the UI
+/// ([`ConstructEngine::stage_attachment`]).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct AttachmentInfo {
+    pub id: String,
+    /// `construct://attachments/<id>`, the local entity a Carousel draws.
+    pub uri: String,
+    /// A `file://` URL of the staged JPEG.
+    pub url: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// [`AttachmentInfo`] as JSON (what the FFI returns).
+pub fn attachment_info_json(info: &AttachmentInfo) -> Result<String, String> {
+    serde_json::to_string(info).map_err(|e| e.to_string())
+}
+
+/// The local entity of a staged attachment.
+fn attachment_entity(a: &Attachment) -> Value {
+    let aspect = if a.height > 0 {
+        f64::from(a.width) / f64::from(a.height)
+    } else {
+        1.0
+    };
+    json!({
+        "id": a.id,
+        "url": attachments::file_url(Path::new(&a.path)),
+        "preview_url": attachments::file_url(Path::new(&a.path)),
+        "aspect_ratio": (aspect * 1000.0).round() / 1000.0,
+        "width": a.width,
+        "height": a.height,
+        "local": true,
+    })
+}
+
+/// A create's `attachments` (form-bound: `{"photos": ["<id>", ...]}`) as
+/// refs, checked against the staged attachments: each value a list of
+/// staged, not yet sent ids, each id at most once, at most
+/// [`MAX_ATTACHMENTS`] in all.
+fn attachment_refs(
+    attachments: &BTreeMap<String, Value>,
+    staged: &BTreeMap<String, Attachment>,
+) -> Result<Vec<AttachmentRef>, String> {
+    let mut refs: Vec<AttachmentRef> = Vec::new();
+    for (name, ids) in attachments {
+        // An unbound form list (`"$form.photos"`) or one sent as a JSON string.
+        let parsed;
+        let ids = match ids {
+            Value::String(s) => {
+                parsed = serde_json::from_str::<Value>(s)
+                    .map_err(|_| format!("attachments '{name}' is not a list of ids"))?;
+                &parsed
+            }
+            v => v,
+        };
+        let Some(ids) = ids.as_array() else {
+            return Err(format!("attachments '{name}' is not a list of ids"));
+        };
+        for id in ids {
+            let Some(id) = id.as_str() else {
+                return Err(format!("attachments '{name}' holds a non-string id"));
+            };
+            match staged.get(id) {
+                Some(a) if a.released_at.is_none() => {}
+                _ => return Err(format!("attachment {id} is not staged")),
+            }
+            if refs.iter().any(|r| r.id == id) {
+                return Err(format!("attachment {id} is used twice"));
+            }
+            refs.push(AttachmentRef {
+                name: name.clone(),
+                id: id.to_owned(),
+                upload_id: None,
+            });
+        }
+    }
+    if refs.len() > MAX_ATTACHMENTS {
+        return Err(format!(
+            "{} attachments (at most {MAX_ATTACHMENTS})",
+            refs.len()
+        ));
+    }
+    Ok(refs)
+}
+
 /// Replace every JSON string exactly equal to [`VALUE_TOKEN`] inside
 /// `payload` with `value`.
 fn substitute_value_token(payload: Value, value: &Value) -> Value {
@@ -1244,12 +1448,22 @@ impl ConstructEngine {
         let session_key = auth::session_key(base);
 
         let (store, net) = open_store(storage_path);
+        let attachments_dir = if storage_path.is_empty() {
+            std::env::temp_dir().join(format!(
+                "construct-attachments-{}-{}",
+                std::process::id(),
+                auth::random_token(8)
+            ))
+        } else {
+            PathBuf::from(storage_path).join("attachments")
+        };
         let mut state = State {
             workspace_id: workspace_id.to_owned(),
             store,
             ..State::default()
         };
         state.load_cached(workspace_id);
+        state.sweep_attachments(unix_now());
         let stored = guarded("SecureStore.get", || secure_store.get(&session_key)).flatten();
         if let Some(session) = stored.as_deref().and_then(Session::parse) {
             println!(
@@ -1281,6 +1495,7 @@ impl ConstructEngine {
             flow: Mutex::new(None),
             session_io: Mutex::new(()),
             pending_io: Mutex::new(()),
+            attachments_dir,
         });
 
         // Both background threads hold only a Weak reference between
@@ -1396,9 +1611,142 @@ impl ConstructEngine {
     pub fn forget_session(&self) {
         self.inner.forget_session();
     }
+
+    /// Stage a picked photo for a create's `attachments` (D47): decoded,
+    /// turned upright, scaled to at most 2048 px, re-encoded as a JPEG without
+    /// metadata and kept under the engine's storage. Its local entity
+    /// `construct://attachments/<id>` appears in the snapshot. Blocking (call
+    /// it off the UI thread). `Err` is a short sentence for the user.
+    pub fn stage_attachment(&self, path: &str) -> Result<AttachmentInfo, String> {
+        self.inner.stage_attachment(path)
+    }
+
+    /// Forget a staged attachment the user removed before sending it.
+    pub fn discard_attachment(&self, id: &str) {
+        self.inner.discard_attachment(id);
+    }
 }
 
 impl Inner {
+    fn stage_attachment(&self, path: &str) -> Result<AttachmentInfo, String> {
+        let id = auth::random_token(16);
+        let staged = attachments::stage(Path::new(path), &self.attachments_dir, &id)?;
+        let a = Attachment {
+            id: id.clone(),
+            path: staged.path.to_string_lossy().into_owned(),
+            mime: attachments::STAGED_MIME.to_owned(),
+            size: i64::try_from(staged.size).unwrap_or(i64::MAX),
+            width: staged.width,
+            height: staged.height,
+            created_at: unix_now(),
+            released_at: None,
+        };
+        let snap = {
+            let mut st = lock(&self.state);
+            if let Some(Err(e)) = st.store.as_ref().map(|s| s.insert_attachment(&a)) {
+                let _ = fs::remove_file(&staged.path);
+                eprintln!("[ConstructEngine] attachment {id}: failed to save ({e})");
+                return Err("the photo couldn't be saved".into());
+            }
+            st.attachments.insert(id.clone(), a.clone());
+            st.sweep_attachments(a.created_at);
+            st.seq += 1;
+            st.snapshot()
+        };
+        self.notify(snap);
+        println!(
+            "[ConstructEngine] staged attachment {id} ({}x{}, {} KB)",
+            a.width,
+            a.height,
+            a.size / 1024
+        );
+        Ok(AttachmentInfo {
+            uri: attachments::entity_uri(&id),
+            url: attachments::file_url(Path::new(&a.path)),
+            id,
+            width: a.width,
+            height: a.height,
+        })
+    }
+
+    fn discard_attachment(&self, id: &str) {
+        let snap = {
+            let mut st = lock(&self.state);
+            let used = st
+                .store
+                .as_ref()
+                .and_then(|s| s.pending_outbox().ok())
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|r| r.create.as_ref())
+                .any(|c| c.attachments.iter().any(|a| a.id == id));
+            if used || !st.attachments.contains_key(id) {
+                return;
+            }
+            st.delete_attachments(&[id.to_owned()]);
+            st.seq += 1;
+            st.snapshot()
+        };
+        self.notify(snap);
+    }
+
+    /// Upload the attachments of a create row that have no upload id yet
+    /// (saving each id as it arrives), then return the payload with
+    /// `$attachments.<name>` replaced by the upload ids. A failed upload is
+    /// the row's flush result.
+    fn upload_attachments(
+        &self,
+        client: &reqwest::blocking::Client,
+        row: &OutboxRow,
+        token: Option<&str>,
+    ) -> Result<String, FlushResult> {
+        let Some(info) = row.create.as_ref().filter(|c| !c.attachments.is_empty()) else {
+            return Ok(row.payload_json.clone());
+        };
+        let mut info = info.clone();
+        let url = format!("{}{UPLOADS_PATH}", self.base_url);
+        for i in 0..info.attachments.len() {
+            if info.attachments[i].upload_id.is_some() {
+                continue;
+            }
+            let staged = lock(&self.state)
+                .attachments
+                .get(&info.attachments[i].id)
+                .cloned();
+            let Some(staged) = staged else {
+                return Err(FlushResult::Rejected(
+                    410,
+                    format!("attachment {} is gone", info.attachments[i].id),
+                ));
+            };
+            let upload_id = upload_file(client, &url, &staged, token)?;
+            println!(
+                "[ConstructEngine] outbox #{}: uploaded attachment {} -> {upload_id}",
+                row.id, staged.id
+            );
+            info.attachments[i].upload_id = Some(upload_id);
+            let st = lock(&self.state);
+            if let Some(Err(e)) = st.store.as_ref().map(|s| s.set_create_info(row.id, &info)) {
+                // Uploaded again on the next attempt (same key, same id).
+                eprintln!(
+                    "[ConstructEngine] outbox #{}: failed to save the upload id: {e}",
+                    row.id
+                );
+            }
+        }
+        let payload: Value = serde_json::from_str(&row.payload_json).unwrap_or(Value::Null);
+        let uploads = |name: &str| {
+            let ids: Vec<Value> = info
+                .attachments
+                .iter()
+                .filter(|a| a.name == name)
+                .filter_map(|a| a.upload_id.clone().map(Value::String))
+                .collect();
+            Some(Value::Array(ids))
+        };
+        Ok(attachments::substitute(payload, &uploads).to_string())
+    }
+
     /// Check whether the server is reachable (any HTTP response counts) and
     /// notify observers if `is_online` changed. Never touches the workspace
     /// or entities.
@@ -1700,7 +2048,10 @@ impl Inner {
             let sent = token
                 .as_deref()
                 .filter(|_| same_origin(&self.base_url, &url));
-            let result = post_json(client, &url, &row.payload_json, sent);
+            let result = match self.upload_attachments(client, &row, sent) {
+                Ok(body) => post_json(client, &url, &body, sent),
+                Err(r) => r,
+            };
             if let FlushResult::Unauthorized = result {
                 let (snap, blocked) = self.outbox_unauthorized(&row, &url, sent, token.as_deref());
                 drop(net);
@@ -1803,7 +2154,18 @@ impl Inner {
                     // Keep listing it until its query is reloaded.
                     st.creates.retain(|x| x.row_id != id);
                     st.settling
-                        .push((c.query_key.clone(), row.entity_uri.clone()));
+                        .push((c.query_key.clone(), row.entity_uri.clone(), c.at_start));
+                    let now = unix_now();
+                    for a in &c.attachments {
+                        if let Some(staged) = st.attachments.get_mut(&a.id) {
+                            staged.released_at = Some(now);
+                        }
+                        if let Some(Err(e)) =
+                            st.store.as_ref().map(|s| s.release_attachment(&a.id, now))
+                        {
+                            eprintln!("[ConstructEngine] attachment {}: {e}", a.id);
+                        }
+                    }
                     let paths: Vec<String> = st
                         .data
                         .iter()
@@ -1947,6 +2309,8 @@ impl Inner {
                 endpoint,
                 payload,
                 refresh_workspace,
+                attachments,
+                position,
                 ..
             } => self.create(
                 started,
@@ -1955,7 +2319,11 @@ impl Inner {
                 entity,
                 endpoint,
                 payload,
-                refresh_workspace,
+                CreateOptions {
+                    refresh_workspace,
+                    attachments,
+                    at_start: position == Position::Start,
+                },
             ),
             other => {
                 eprintln!(
@@ -2088,8 +2456,13 @@ impl Inner {
         entity: Value,
         endpoint: String,
         payload: Value,
-        refresh_workspace: bool,
+        options: CreateOptions,
     ) {
+        let CreateOptions {
+            refresh_workspace,
+            attachments,
+            at_start,
+        } = options;
         let entity = match EntityRecord::try_from(entity) {
             Ok(e) => e,
             Err(_) => {
@@ -2113,6 +2486,35 @@ impl Inner {
                 eprintln!("[ConstructEngine] create {entity_uri}: already exists; ignored");
                 return;
             }
+            let refs = match attachment_refs(&attachments, &st.attachments) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("[ConstructEngine] create {entity_uri}: {e}; ignored");
+                    return;
+                }
+            };
+            // `$attachments.<name>` in the placeholder: the local entities.
+            let entity = if refs.is_empty() {
+                entity
+            } else {
+                let local = |name: &str| {
+                    attachments.contains_key(name).then(|| {
+                        Value::Array(
+                            refs.iter()
+                                .filter(|r| r.name == name)
+                                .map(|r| Value::String(attachments::entity_uri(&r.id)))
+                                .collect(),
+                        )
+                    })
+                };
+                match EntityRecord::try_from(attachments::substitute(
+                    serde_json::to_value(&entity).unwrap_or_default(),
+                    &local,
+                )) {
+                    Ok(e) => e,
+                    Err(_) => entity,
+                }
+            };
             let Some(store) = st.store.as_mut() else {
                 eprintln!("[ConstructEngine] create {entity_uri}: no store; ignored");
                 return;
@@ -2131,6 +2533,8 @@ impl Inner {
                 create: Some(CreateInfo {
                     query_key: query_key.clone(),
                     refresh_workspace,
+                    at_start,
+                    attachments: refs,
                 }),
                 session_bound: st.session.is_some(),
             };
@@ -2153,6 +2557,7 @@ impl Inner {
                 row_id: id,
                 query_key: query_key.clone(),
                 entity_uri: entity_uri.clone(),
+                at_start,
             });
             st.pending_actions = st.pending_actions.saturating_add(1);
             st.seq += 1;
@@ -2289,6 +2694,21 @@ impl Inner {
                 Followup::Refresh => {
                     self.refresh();
                 }
+            }
+        }
+    }
+
+    /// The pod said our data changed (`event: data`, D48): refetch the
+    /// workspace, then every data path loaded so far.
+    fn reload_all(&self) {
+        self.refresh();
+        let paths: Vec<String> = lock(&self.state).data.keys().cloned().collect();
+        for path in paths {
+            if self.signal.is_shut_down() {
+                return;
+            }
+            if self.begin_load(&path) {
+                self.load_data(&path);
             }
         }
     }
@@ -3256,14 +3676,23 @@ fn post_json(
     if let Some(t) = token {
         req = req.bearer_auth(t);
     }
-    let resp = match req.send() {
-        Ok(r) => r,
-        Err(e) => return FlushResult::Network(e.to_string()),
-    };
+    match req.send() {
+        Ok(r) => classify(r).0,
+        Err(e) => FlushResult::Network(e.to_string()),
+    }
+}
+
+/// Classify an outbox response; a 2xx also returns its body.
+fn classify(resp: reqwest::blocking::Response) -> (FlushResult, String) {
     let code = resp.status().as_u16();
     if resp.status().is_success() {
-        return FlushResult::Accepted(code);
+        let body = resp.text().unwrap_or_default();
+        return (FlushResult::Accepted(code), body);
     }
+    (classify_error(code, resp), String::new())
+}
+
+fn classify_error(code: u16, resp: reqwest::blocking::Response) -> FlushResult {
     if code == 401 {
         return FlushResult::Unauthorized;
     }
@@ -3274,6 +3703,43 @@ fn post_json(
         FlushResult::Rejected(code, body)
     } else {
         FlushResult::ServerError(code, body)
+    }
+}
+
+/// `POST {base}/v1/uploads` with one staged file (D47). The attachment id is
+/// the idempotency key, so a retried upload gets the same upload id.
+fn upload_file(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    a: &Attachment,
+    token: Option<&str>,
+) -> Result<String, FlushResult> {
+    let bytes = match fs::read(&a.path) {
+        Ok(b) => b,
+        // The file is gone (storage cleared): this create can never be sent.
+        Err(e) => return Err(FlushResult::Rejected(410, format!("attachment file: {e}"))),
+    };
+    let mut req = client
+        .post(url)
+        .timeout(UPLOAD_TIMEOUT)
+        .header(reqwest::header::CONTENT_TYPE, a.mime.as_str())
+        .header("Idempotency-Key", a.id.as_str())
+        .body(bytes);
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let resp = req
+        .send()
+        .map_err(|e| FlushResult::Network(e.to_string()))?;
+    match classify(resp) {
+        (FlushResult::Accepted(code), body) => serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|v| v.get("upload_id")?.as_str().map(str::to_owned))
+            .ok_or(FlushResult::ServerError(
+                code,
+                format!("upload answer without an id: {body}"),
+            )),
+        (other, _) => Err(other),
     }
 }
 

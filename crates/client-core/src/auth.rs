@@ -296,6 +296,13 @@ impl Pkce {
     }
 }
 
+/// `bytes` random bytes (OS CSPRNG) as lowercase hex, e.g. an attachment id.
+pub fn random_token(bytes: usize) -> String {
+    let mut buf = vec![0u8; bytes];
+    getrandom::fill(&mut buf).expect("OS random number generator");
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// A random `state` value (32 unreserved characters, CSPRNG).
 pub fn random_state() -> String {
     random_unreserved(32)
