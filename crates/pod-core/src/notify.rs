@@ -822,16 +822,16 @@ pub(crate) fn router() -> Router<Pod> {
 }
 
 /// The caller's session, or the usual 401.
-async fn session_of(state: &Pod, headers: &HeaderMap) -> Result<crate::Session, Response> {
+async fn session_of(state: &Pod, headers: &HeaderMap) -> Result<crate::Session, Box<Response>> {
     match state.caller(headers).await {
         Ok(Caller::Signed(s)) => Ok(s),
-        Ok(other) => Err(match other {
+        Ok(other) => Err(Box::new(match other {
             // Notifications need a pod session, not an app sign-in: a
             // missing bearer is 401 like any private route.
             Caller::Anonymous => crate::session::unauthorized(),
             c => sign_in_required(&c),
-        }),
-        Err(e) => Err(e.into_response()),
+        })),
+        Err(e) => Err(Box::new(e.into_response())),
     }
 }
 
@@ -850,7 +850,7 @@ async fn list(
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
     if let Err(r) = session_of(&state, &headers).await {
-        return r;
+        return *r;
     }
     let limit = match q.get("limit").map(|v| v.trim().parse::<i64>()) {
         None => DEFAULT_LIMIT,
@@ -911,7 +911,7 @@ async fn list(
 /// `notifications_read` event on the pod's streams.
 async fn mark_read(State(state): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
     if let Err(r) = session_of(&state, &headers).await {
-        return r;
+        return *r;
     }
     let payload = match parse_json_body(&headers, &body) {
         Ok(v) => v,
@@ -983,7 +983,7 @@ async fn mark_read(State(state): State<Pod>, headers: HeaderMap, body: Bytes) ->
 /// ([`DEVICE_HEADER`]; the default without one).
 async fn channels(State(state): State<Pod>, headers: HeaderMap) -> Response {
     if let Err(r) = session_of(&state, &headers).await {
-        return r;
+        return *r;
     }
     let prefs = match device_id(&headers) {
         Some(d) => match blocking(&state, move |s| s.with_conn(|c| device_prefs_on(c, &d))).await {
@@ -1020,7 +1020,7 @@ async fn register_device(
 ) -> Response {
     let session = match session_of(&state, &headers).await {
         Ok(s) => s,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if !valid_device_id(&id) {
         return bad_request("device id is 8-64 letters, digits, '-' or '_'");
@@ -1128,7 +1128,7 @@ async fn delete_device(
     headers: HeaderMap,
 ) -> Response {
     if let Err(r) = session_of(&state, &headers).await {
-        return r;
+        return *r;
     }
     let result = blocking(&state, move |s| {
         s.transaction(|tx| {
@@ -1156,7 +1156,7 @@ async fn set_channels(
     body: Bytes,
 ) -> Response {
     if let Err(r) = session_of(&state, &headers).await {
-        return r;
+        return *r;
     }
     let payload = match parse_json_body(&headers, &body) {
         Ok(Value::Object(m)) => m,
@@ -1212,7 +1212,7 @@ async fn set_channels(
 /// `push_unavailable` when the server sends no Web Push.
 async fn push_key(State(state): State<Pod>, headers: HeaderMap) -> Response {
     if let Err(r) = session_of(&state, &headers).await {
-        return r;
+        return *r;
     }
     match state.push_sender() {
         Some(s) => Json(json!({ "vapid_public_key": s.public_key() })).into_response(),
