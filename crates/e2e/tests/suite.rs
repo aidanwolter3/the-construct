@@ -133,7 +133,7 @@ fn e2e_suite() {
         up.set_media_processing_polls(2);
         let photo = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/pixelfed/media/carousel-1.png"
+            "/../../fake-pixelfed/fixtures/media/carousel-1.png"
         );
         let staged = engine.stage_attachment(photo).expect("stage the photo");
         engine.dispatch(

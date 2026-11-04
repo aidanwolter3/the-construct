@@ -31,7 +31,7 @@ class PostingSimTest {
         outDir.deleteRecursively()
     }
 
-    private fun media(name: String): String = File(assertNotNull(findFixtureDir("pixelfed/media")), name).absolutePath
+    private fun media(name: String): String = File(assertNotNull(findPixelfedMedia()), name).absolutePath
 
     private fun fake() = FakeEngineBridge(BUNDLE, appId = "posting_test")
 

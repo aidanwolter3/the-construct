@@ -24,6 +24,8 @@ ENV CARGO_PROFILE_RELEASE_STRIP=true \
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+# A workspace member (the server's tests use it), so cargo needs its manifest.
+COPY fake-pixelfed ./fake-pixelfed
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS build
@@ -31,6 +33,7 @@ COPY --from=planner /src/recipe.json recipe.json
 RUN cargo chef cook --release --locked -p server --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY fake-pixelfed ./fake-pixelfed
 COPY fixtures ./fixtures
 # Layout files (layouts as code) are embedded in the binary at compile time.
 COPY layouts ./layouts

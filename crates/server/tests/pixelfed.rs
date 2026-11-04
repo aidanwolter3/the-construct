@@ -1,5 +1,5 @@
 //! Pixelfed adapter integration tests: the pod and the fake upstream
-//! (`crates/fake-pixelfed`) both run on random local ports.
+//! (`fake-pixelfed/`) both run on random local ports.
 
 use std::sync::Arc;
 

@@ -211,7 +211,7 @@ class PixelfedFeedTest {
 
     @Test
     fun fixtureInterceptorResolvesStorageAndProxyUrlsOnly() {
-        val media = assertNotNull(findFixtureDir("pixelfed/media"))
+        val media = assertNotNull(findPixelfedMedia())
         val i = FixtureMediaInterceptor(media)
         assertEquals(File(media, "carousel-2.png"), i.resolve("http://127.0.0.1:8081/storage/carousel-2.png"))
         assertEquals(File(media, "avatar-bob.png"), i.resolve("http://10.0.2.2:8080/v1/pixelfed/media/avatar-bob.png?x=1"))

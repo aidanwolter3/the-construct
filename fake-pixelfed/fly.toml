@@ -1,7 +1,7 @@
 # Fake Pixelfed upstream for the staging pod. Stateless (in-memory, fixtures compiled in), so it
 # may stop when idle; the Fly proxy starts it again on the next request (state resets, which is fine).
-# From the repo root:
-#   flyctl deploy . --config deploy/fly/fake-pixelfed.toml --dockerfile crates/fake-pixelfed/Dockerfile --remote-only
+# Deployed by .github/workflows/fake-pixelfed.yml when its files change on main. By hand, from the repo root:
+#   flyctl deploy . --config fake-pixelfed/fly.toml --dockerfile fake-pixelfed/Dockerfile --remote-only
 
 app = "the-construct-fake-pixelfed"
 primary_region = "dfw"
