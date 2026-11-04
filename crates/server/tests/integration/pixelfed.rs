@@ -1765,7 +1765,7 @@ async fn comments_screen_data_has_the_post_even_from_a_comment() {
         data["entities"][&post_uri]["caption"]
             .as_str()
             .unwrap()
-            .starts_with("Sunrise over Boulder"),
+            .starts_with("Sunrise over Millbrook"),
         "{data}"
     );
     let whole = thread_shape(&data, CAROUSEL);

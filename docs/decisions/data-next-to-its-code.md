@@ -34,4 +34,14 @@ Decision: each data file lives with the code that reads it, so its place says wh
   folder outside a `#[cfg(test)]` module or a `#[cfg(test)]` / `#[cfg(any(test, …))]` attribute. It is a line
   heuristic, not a parser: it treats everything after a `#[cfg(test)] mod` as test code.
 
-Older decisions name the old `fixtures/…` paths; this table is where those files are now.
+Test data is made up, never real: invented people, places, venues and groups, and `.example` domains for
+anything that isn't a real service the code talks to. The data used to borrow real names (the developer's own
+name as the demo post's author, real towns, a real comedy club and venue, a real improv troupe, a Meetup page);
+they were replaced with fictional ones. What stays real is reference data, not personal data: IANA time zones
+(`America/Denver`, whose daylight-saving dates the tests rely on), `pixelfed.social` where it is the sign-in
+placeholder or an instance address being parsed, and recognised ticket hosts such as `eventbrite.com`. The one
+deployed layout that names a real troupe in a placeholder (`layouts/watcher/0001.json`) can't be edited; newer
+versions no longer use it.
+
+Older decisions name the old `fixtures/…` paths and the old example names; this decision says where the files
+are now and what replaced the names.

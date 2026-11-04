@@ -25,6 +25,7 @@ issues. `docs/history/` is archived; don't treat it as current.
   ([docs/testing.md](docs/testing.md)).
 - Data files live next to the code that reads them (decision `data-next-to-its-code`): test data in
   `crates/*/tests/data/`, simulator data in `kmp-app/desktopApp/src/sim/resources/`; anything else ships.
+  Test data is made up: invented people and places and `.example` domains, never real personal data.
 
 ## Commands
 

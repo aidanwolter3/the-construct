@@ -706,7 +706,7 @@
         "like_count": 0,
         "meta": "@constructdemo · 15 h",
         "post_id": "781254316723458049",
-        "text": "Adding Boulder to the list."
+        "text": "Adding Millbrook to the list."
       },
       "pixelfed://comments/781300000000000107": {
         "author_handle": "@bob",
@@ -724,7 +724,7 @@
         "text": "Number 3 for me.\nThat blue!"
       },
       "pixelfed://media/781254316501123073": {
-        "alt_text": "Red sky over the Flatirons, number 1",
+        "alt_text": "Red sky over the ridge, number 1",
         "aspect_ratio": 1.0,
         "blurhash": "00Ojn}",
         "id": "781254316501123073",
@@ -755,7 +755,7 @@
         "author_handle": "@alice",
         "author_name": "Alice Lumen",
         "author_uri": "pixelfed://users/698765432100012345",
-        "caption": "Sunrise over Boulder, three ways & one coffee later #sunrise #colorado",
+        "caption": "Sunrise over Millbrook, three ways & one coffee later #sunrise #highlands",
         "content_warning": null,
         "content_warning_label": null,
         "cover_blurhash": "00Ojn}",
@@ -977,7 +977,7 @@
   "/v1/pixelfed/screens/post?id=781254316723458049": {
     "entities": {
       "pixelfed://media/781254316501123073": {
-        "alt_text": "Red sky over the Flatirons, number 1",
+        "alt_text": "Red sky over the ridge, number 1",
         "aspect_ratio": 1.0,
         "blurhash": "00Ojn}",
         "id": "781254316501123073",
@@ -1008,7 +1008,7 @@
         "author_handle": "@alice",
         "author_name": "Alice Lumen",
         "author_uri": "pixelfed://users/698765432100012345",
-        "caption": "Sunrise over Boulder, three ways & one coffee later #sunrise #colorado",
+        "caption": "Sunrise over Millbrook, three ways & one coffee later #sunrise #highlands",
         "content_warning": null,
         "content_warning_label": null,
         "cover_blurhash": "00Ojn}",

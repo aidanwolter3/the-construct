@@ -145,7 +145,7 @@ impl Mode {
 pub struct Filler {
     /// `s` and 10 base32 characters: rows and fill state name it.
     pub id: String,
-    /// What people see ("Improv Boulder").
+    /// What people see ("Improv Millbrook").
     pub title: String,
     #[serde(flatten)]
     pub source: Source,

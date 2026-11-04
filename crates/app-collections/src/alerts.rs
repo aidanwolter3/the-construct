@@ -1,6 +1,6 @@
 //! Alerts (decision `collection-fillers`): declarative rules that notify when
 //! a row matches, the Watcher's rules made general ("tell me when Improv
-//! Boulder lists a Budget Cuts show"). Data in the definition, not code:
+//! Millbrook lists a Brass Lanterns show"). Data in the definition, not code:
 //! phrases of which one (`any`), every one (`all`) or none (`none`) must
 //! appear in the row's text fields (ignoring case and spacing), optionally
 //! only rows of one filler (a site), on some days of the week or within
@@ -9,7 +9,7 @@
 //! A matching row notifies once per alert (`collections_alerts_sent`),
 //! after a fill and on the adapter's poll (so a row that comes into an
 //! alert's window later notifies then). Rows are served with
-//! `alert_matched` and `alert_names` ("Budget Cuts"), worked out when
+//! `alert_matched` and `alert_names` ("Brass Lanterns"), worked out when
 //! served. A row whose date has passed (more than six hours ago) no longer
 //! matches.
 //!
@@ -47,7 +47,7 @@ pub struct Alert {
     /// `a` and 10 base32 characters, unique across the pod: the
     /// notification channel's id for a custom app.
     pub id: String,
-    /// What people see ("Budget Cuts").
+    /// What people see ("Brass Lanterns").
     pub name: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub any: Vec<String>,
@@ -100,7 +100,7 @@ impl Alert {
         out
     }
 
-    /// One line for people: `"budget cuts" · not "class" · Fri, Sat`.
+    /// One line for people: `"brass lanterns" · not "class" · Fri, Sat`.
     pub fn summary(&self) -> String {
         let q = |v: &[String], join: &str| {
             v.iter()
@@ -270,7 +270,7 @@ pub fn of_filler<'a>(def: &'a Definition, filler: &'a str) -> impl Iterator<Item
 
 // ---------- ops ----------
 
-/// A list of phrases from an array, or from text (`"budget cuts, house
+/// A list of phrases from an array, or from text (`"brass lanterns, house
 /// team"`).
 fn phrases(v: &Value, key: &str) -> Result<Option<Vec<String>>, String> {
     let list: Vec<String> = match v {
@@ -874,12 +874,12 @@ mod tests {
         let mut def = events();
         add(
             &mut def,
-            &json!({"any": "Budget Cuts, house team", "none": ["class"], "days": ["fri"], "within_days": 7}),
+            &json!({"any": "Brass Lanterns, house team", "none": ["class"], "days": ["fri"], "within_days": 7}),
             0,
         )
         .unwrap();
         let a = def.alerts[0].clone();
-        assert_eq!(a.name, "Budget Cuts");
+        assert_eq!(a.name, "Brass Lanterns");
         assert_eq!(
             a.date_field.as_deref(),
             Some("f2"),
@@ -887,11 +887,11 @@ mod tests {
         );
         assert_eq!(
             a.summary(),
-            "\"Budget Cuts\" or \"house team\" · not \"class\" · Fri · within 7 days"
+            "\"Brass Lanterns\" or \"house team\" · not \"class\" · Fri · within 7 days"
         );
         let fri = row(
             json!({"f1": "Friday Improv", "f2": "2026-11-06T19:30-07:00",
-                             "f4": "Lineup: BUDGET  cuts, Sandwich"}),
+                             "f4": "Lineup: BRASS  lanterns, Teacup Riot"}),
         );
         let now = ts("2026-11-04T12:00Z");
         assert!(a.matches(&def, &fri, now));
@@ -922,7 +922,7 @@ mod tests {
         let mut other = fri.clone();
         other.filler = Some("s2".into());
         assert!(!def.alerts[0].matches(&def, &other, now));
-        assert_eq!(matching(&def, &fri, now), vec!["Budget Cuts".to_owned()]);
+        assert_eq!(matching(&def, &fri, now), vec!["Brass Lanterns".to_owned()]);
         assert!(check(&def).is_ok());
         let mut gone = def.clone();
         gone.fillers.clear();
@@ -936,21 +936,21 @@ mod tests {
         let e = model::row_entity(
             &def,
             "r1",
-            json!({"f1": "Show", "f2": "2026-11-06T19:30-07:00", "f3": "The End"})
+            json!({"f1": "Show", "f2": "2026-11-06T19:30-07:00", "f3": "The Back Room"})
                 .as_object()
                 .unwrap(),
             "",
             "",
         );
         let (t, b) = defaults(&def);
-        assert_eq!(render(&t, &e, "Budget Cuts", "Club"), "Show");
+        assert_eq!(render(&t, &e, "Brass Lanterns", "Club"), "Show");
         assert_eq!(
-            render(&b, &e, "Budget Cuts", "Club"),
-            "Fri Nov 6 · 7:30 PM — Budget Cuts"
+            render(&b, &e, "Brass Lanterns", "Club"),
+            "Fri Nov 6 · 7:30 PM — Brass Lanterns"
         );
         assert_eq!(
-            render("{start_text} · {venue} · {nope} — {alert}", &e, "BC", ""),
-            "Fri Nov 6 · 7:30 PM · The End — BC"
+            render("{start_text} · {venue} · {nope} — {alert}", &e, "BL", ""),
+            "Fri Nov 6 · 7:30 PM · The Back Room — BL"
         );
     }
 }

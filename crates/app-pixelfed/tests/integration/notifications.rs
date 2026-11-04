@@ -140,7 +140,7 @@ async fn first_poll_is_quiet_then_new_ones_alert() {
     assert_eq!(n.channel, "likes");
     assert!(!n.quiet);
     assert_eq!(n.title, "Alice Lumen liked your post");
-    assert!(n.body.starts_with("Sunrise over Boulder"), "{}", n.body);
+    assert!(n.body.starts_with("Sunrise over Millbrook"), "{}", n.body);
     assert_eq!(
         n.target_uri.as_deref(),
         Some(format!("pixelfed://posts/{CAROUSEL}").as_str())

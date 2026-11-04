@@ -93,7 +93,7 @@ How to write one: [layouts.md](layouts.md).
 ```json
 {
   "workspace": { "type": "core://Workspace", "id": "pixelfed_home", "title": "Pixelfed", "slots": [], "screens": [] },
-  "entities": { "pixelfed://posts/101": { "id": "101", "caption": "Sunrise over Boulder", "is_liked": false } },
+  "entities": { "pixelfed://posts/101": { "id": "101", "caption": "Sunrise over Millbrook", "is_liked": false } },
   "queries":  { "timeline:home": ["pixelfed://posts/101"] }
 }
 ```

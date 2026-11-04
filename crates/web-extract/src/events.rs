@@ -327,15 +327,15 @@ mod tests {
 
     #[test]
     fn ics_feed() {
-        let feed = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:abc@x\r\nSUMMARY:Budget Cuts\\, live\r\n\
-DTSTART;TZID=America/Denver:20261106T193000\r\nLOCATION:The End\\nLafayette\r\nDESCRIPTION:House te\r\n am night\r\n\
+        let feed = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:abc@x\r\nSUMMARY:Brass Lanterns\\, live\r\n\
+DTSTART;TZID=America/Denver:20261106T193000\r\nLOCATION:The Back Room\\nElmwood\r\nDESCRIPTION:House te\r\n am night\r\n\
 END:VEVENT\r\nBEGIN:VEVENT\r\nSUMMARY:Cancelled\r\nSTATUS:CANCELLED\r\nDTSTART:20261107\r\nEND:VEVENT\r\n\
 BEGIN:VEVENT\r\nSUMMARY:No date\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
         let ev = ics(feed);
         assert_eq!(ev.len(), 1);
-        assert_eq!(ev[0].title, "Budget Cuts, live");
+        assert_eq!(ev[0].title, "Brass Lanterns, live");
         assert_eq!(ev[0].start.iso(), "2026-11-06T19:30");
-        assert_eq!(ev[0].venue, "The End\nLafayette");
+        assert_eq!(ev[0].venue, "The Back Room\nElmwood");
         assert_eq!(ev[0].description, "House team night");
         assert_eq!(ev[0].source_id.as_deref(), Some("abc@x"));
         assert_eq!(ev[0].start.stored(), "2026-11-06T19:30-07:00");
@@ -375,15 +375,15 @@ END:VCALENDAR\r\n";
             {"@type":"Organization","name":"x"},
             {"@type":"ItemList","itemListElement":[{"@type":"ListItem","item":{"@type":"SocialEvent",
               "name":"Improv Night","startDate":"2026-11-06T19:30:00-07:00","url":"/e/1",
-              "location":{"@type":"Place","name":"The End","address":{"addressLocality":"Lafayette"}},
-              "description":"<p>Budget Cuts &amp; more</p>"}}]},
+              "location":{"@type":"Place","name":"The Back Room","address":{"addressLocality":"Elmwood"}},
+              "description":"<p>Brass Lanterns &amp; more</p>"}}]},
             {"@type":"Event","name":"Gone","startDate":"2026-11-07","eventStatus":"https://schema.org/EventCancelled"}]}
             </script>"#;
         let ev = jsonld(page, "https://example.org/group/events/");
         assert_eq!(ev.len(), 1);
         assert_eq!(ev[0].url, "https://example.org/e/1");
         assert_eq!(ev[0].source_id.as_deref(), Some("https://example.org/e/1"));
-        assert_eq!(ev[0].venue, "The End");
-        assert_eq!(ev[0].description, "Budget Cuts & more");
+        assert_eq!(ev[0].venue, "The Back Room");
+        assert_eq!(ev[0].description, "Brass Lanterns & more");
     }
 }

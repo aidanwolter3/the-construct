@@ -16,7 +16,7 @@ class InterpolateTest {
             put("count", 7)
         },
         "pixelfed://posts/101" to buildJsonObject {
-            put("caption", "Sunrise over Boulder")
+            put("caption", "Sunrise over Millbrook")
             put("is_liked", false)
             put("ratio", 1.5)
             put("gone", JsonNull)
@@ -25,7 +25,7 @@ class InterpolateTest {
 
     private val item = buildJsonObject {
         put("id", "101")
-        put("caption", "Sunrise over Boulder")
+        put("caption", "Sunrise over Millbrook")
         put("like_count", 89)
         put("media_uris", buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("pixelfed://media/501")) })
     }
@@ -44,7 +44,7 @@ class InterpolateTest {
 
     @Test
     fun stringsRenderWithoutQuotes() {
-        assertEquals("Sunrise over Boulder", interpolate("\${pixelfed://posts/101#caption}", entities))
+        assertEquals("Sunrise over Millbrook", interpolate("\${pixelfed://posts/101#caption}", entities))
     }
 
     @Test
@@ -63,7 +63,7 @@ class InterpolateTest {
 
     @Test
     fun itemExpressionsResolveAgainstItem() {
-        assertEquals("Sunrise over Boulder", interpolate("entity.caption", entities, item))
+        assertEquals("Sunrise over Millbrook", interpolate("entity.caption", entities, item))
         assertEquals("89", interpolate("\$item.like_count", entities, item))
         assertEquals("", interpolate("entity.missing", entities, item))
         // Not exactly a field reference: falls through to placeholder substitution / as-is.

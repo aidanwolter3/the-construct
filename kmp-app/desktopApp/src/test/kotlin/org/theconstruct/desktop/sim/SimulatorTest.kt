@@ -124,7 +124,7 @@ class SimulatorTest {
     @Test
     fun pixelfedFixtureRendersFixtureText() {
         val fake = FakeEngineBridge(bundle("pixelfed_home_bundle.json"))
-        val result = run(fake, "assert-text Sunrise over Boulder; assert-text @aidan; shot feed", screen = "desktop")
+        val result = run(fake, "assert-text Sunrise over Millbrook; assert-text @dana; shot feed", screen = "desktop")
         assertTrue(result.ok, result.steps.joinToString("\n") { it.logLine() })
         val img = image(result, 3)
         assertEquals(2560, img.width)

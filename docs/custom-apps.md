@@ -128,7 +128,7 @@ MCP tools: `collections_preview` (try a recipe without storing anything), `colle
 ## The Events app
 
 The **Events** app (app id `watcher`, `crates/app-watcher`) shows every upcoming event of the websites the user
-watches and notifies when one matches ("a show with Budget Cuts at Improv Boulder"). Its data is the system collection
+watches and notifies when one matches ("a show with Brass Lanterns at Improv Millbrook"). Its data is the system collection
 `events` (`source_id`, `title`, `start`, `end`, `venue`, `description`, `url`, `tickets_url`, `seen`): each website is a
 fetch filler, and each rule an alert on that filler. Claude adds and changes them with the Collections tools; the
 MCP instructions include the recipe. The app shows matches, sites with their health and alerts, a site's events, and

@@ -1350,7 +1350,7 @@ mod tests {
         );
         assert_eq!(
             carousel.get_str("caption"),
-            Some("Sunrise over Boulder, three ways & one coffee later #sunrise #colorado")
+            Some("Sunrise over Millbrook, three ways & one coffee later #sunrise #highlands")
         );
         assert_eq!(
             carousel.get_str("author_uri"),
