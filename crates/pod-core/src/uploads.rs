@@ -36,7 +36,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::util::{hex, now_secs};
-use crate::{ApiError, Pod, RequestCtx, Session, api_error, blocking, json_error, public_prefix};
+use crate::{ApiError, Pod, Session, api_error, blocking, json_error};
 
 /// Where uploads are posted and read.
 pub const UPLOADS_PATH: &str = "/v1/uploads";
@@ -379,13 +379,6 @@ impl Uploads<'_> {
         })
         .await
         .map(|_| ())
-    }
-
-    /// The URL a client loads upload `id` from without its bearer: absolute
-    /// when the request names its host (`base`, as adapters build media URLs),
-    /// under the pod's public prefix.
-    pub fn public_path(id: &str, req: &RequestCtx) -> String {
-        format!("{}{PUBLIC_PATH}{id}", public_prefix(&req.headers))
     }
 }
 

@@ -598,12 +598,6 @@ impl Catalog {
         self.app(id).is_some()
     }
 
-    /// The adapter serving app `id`.
-    pub fn adapter_for(&self, id: &str) -> Option<&Arc<dyn AppAdapter>> {
-        let (_, i) = self.apps.iter().find(|(a, _)| a.id == id)?;
-        self.adapters.get(*i)
-    }
-
     /// Data source `id` (an adapter name) and its manifest.
     pub fn source(&self, id: &str) -> Option<(&Arc<dyn AppAdapter>, &SourceManifest)> {
         let i = self.adapters.iter().position(|a| a.name() == id)?;

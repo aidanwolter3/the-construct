@@ -2,7 +2,7 @@
 
 A server-driven UI shell: a Rust protocol, server and client core, rendered by a Compose
 Multiplatform desktop app through UniFFI. The design is in [DESIGN.md](DESIGN.md), decisions
-are in [docs/DECISIONS.md](docs/DECISIONS.md) (D1–D52) and [docs/decisions/](docs/decisions/) (newer), and status is in [docs/PROGRESS.md](docs/PROGRESS.md).
+are in [docs/DECISIONS.md](docs/DECISIONS.md) (D1–D52) and [docs/decisions/](docs/decisions/) (newer); open work is in GitHub issues.
 
 > Renamed from Project Canvas (D31). There is no migration: the desktop cache moved from `~/.canvas` to
 > `~/.construct`, the local server's data dir default from `~/.canvas-server` to `~/.construct-server`, env vars
@@ -248,7 +248,6 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 
 The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PROVIDER`, `CONSTRUCT_LLM_MODEL`,
 `CONSTRUCT_LLM_FALLBACKS`, `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL` have no effect on the pod.
-`deploy/fly/pod.toml` still sets `CONSTRUCT_LLM_PROVIDER`; that is harmless.
 
 <a id="fake-pixelfed-environment"></a>`cargo run -p fake-pixelfed`:
 
@@ -725,7 +724,7 @@ A new layout version reaches an open app without a restart (the M7 push, now dri
 ```bash
 cargo run -p server                                                  # terminal 1
 cd kmp-app && CONSTRUCT_BASE_URL=http://127.0.0.1:8080 CONSTRUCT_WORKSPACE=pixelfed_demo ./gradlew :desktopApp:run   # terminal 2
-# add layouts/pixelfed_demo/0003.json + its DEMO_FILES line (see "Adding a new layout version"), then restart
+# add layouts/pixelfed_demo/0003.json (see "Adding a new layout version"; build.rs embeds it), then restart
 # terminal 1: the app reconnects its event stream and shows v3 within a few seconds; the menu's Pixelfed demo history
 # lists it
 ```
@@ -1034,7 +1033,7 @@ to a public instance. docs/DECISIONS.md D20.
 ```bash
 scripts/pixelfed_dev.sh up       # start colima if needed, compose up, wait healthy, first-run init
 scripts/pixelfed_dev.sh seed     # users + posts; prints the admin token (also dev/pixelfed/.seed/admin_token)
-scripts/pixelfed_dev.sh record   # re-record fixtures/pixelfed/recorded/*.json with the admin token
+scripts/pixelfed_dev.sh record   # re-record the home timelines in fixtures/pixelfed/recorded/ (admin token)
 scripts/pixelfed_dev.sh status   # | logs [svc] | down (keeps data) | reset (deletes all data)
 ```
 
@@ -1391,7 +1390,7 @@ picked in the menu. Enforcing HTTPS in the engine for release builds is a follow
 "The construct": a bright white space with a grey perspective grid floor and one cube standing on it. Every
 asset comes from one geometry definition in `scripts/gen_icons.py`; regenerate with `scripts/gen_icons.sh`
 (python3 with Pillow and numpy; `iconutil` on macOS for the `.icns`). Outputs: `assets/icon/` (SVG masters,
-`png/construct-{16..1024}.png`, `construct.icns`, `construct.ico`), the Android adaptive icon
+`png/construct-512.png` (Linux), `construct.icns`, `construct.ico`), the Android adaptive icon
 (`res/drawable/ic_launcher_{background,foreground,monochrome}.xml`, `mipmap-*`; the monochrome layer gives
 Android 13+ themed icons) and the desktop window/dock icon (`desktopApp/src/main/resources/icon/`). Don't
 edit the generated files by hand. Set `ICON_PREVIEW_DIR=<dir>` to also write previews of the adaptive layers.

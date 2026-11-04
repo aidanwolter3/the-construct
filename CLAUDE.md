@@ -3,7 +3,7 @@
 Server-driven UI: a Rust "pod" serves app layouts (JSON `UiNode` trees) plus normalized entities; native clients
 (macOS desktop, Android, headless simulator) render them with shared Compose code and a shared Rust engine.
 Apps today: Pixelfed (`pixelfed_home`), Recipes (`recipes`) and Watcher (`watcher`). Read `README.md` for details and `docs/DECISIONS.md` (D1–D52) and
-`docs/decisions/` (newer ones, one file each) before changing architecture; `docs/PROGRESS.md` has history and next steps; `docs/NOTIFICATIONS.md` is the notifications design (D52). `DESIGN.md` is the original design doc
+`docs/decisions/` (newer ones, one file each) before changing architecture; open work is in GitHub issues; `docs/NOTIFICATIONS.md` is the notifications design (D52). `DESIGN.md` is the original design doc
 (product renamed from "Project Canvas"; AI layout editing was built, then shelved — see D32/D33).
 
 ## Repo map

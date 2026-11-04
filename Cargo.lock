@@ -134,10 +134,8 @@ name = "app-pixelfed"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
  "fake-pixelfed",
  "futures-util",
- "getrandom 0.3.4",
  "pod-core",
  "protocol",
  "reqwest",
@@ -2127,11 +2125,9 @@ dependencies = [
  "getrandom 0.3.4",
  "pod-core",
  "protocol",
- "reqwest",
  "rusqlite",
  "serde_json",
  "sha2 0.10.9",
- "tempfile",
  "tokio",
  "tower",
  "tracing",

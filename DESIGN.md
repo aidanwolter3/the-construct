@@ -6,7 +6,8 @@
 > **Note:** the in-app AI agent flows below (user prompts, `action.agent.prompt` / `PromptAgent`,
 > `POST /v1/agent/modify_layout`, user rollback) are no longer the product. The pod now serves one app at its latest
 > layout version, layouts are developer-authored files in `layouts/` shipped with a deploy, and clients only read the
-> version history (docs/DECISIONS.md D32, D33). The agent code is kept, unrouted, for later.
+> version history (docs/DECISIONS.md D32, D33). The agent code was later deleted (D37), and hosting moved from Hetzner
+> to Fly.io (`deploy/`).
 
 **Project:** The Construct (Dynamic Intent Shell & Federated Server-Driven UI)
 
@@ -35,7 +36,7 @@ Contemporary mobile and desktop operating systems trap users in application silo
 
 ### 1.2 User Personas & Core Journeys
 
-#### Persona A: The Self-Hosting Power User (Aidan)
+#### Persona A: The Self-Hosting Power User
 
 * **Goal:** Run an autonomous, private backend on Hetzner with customized views, zero proprietary lock-in, and total control over data.
 * **Journey 1: Onboarding & Pod Binding**

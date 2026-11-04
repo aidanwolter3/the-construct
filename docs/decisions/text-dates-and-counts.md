@@ -18,7 +18,7 @@ Decision: two additive layout features on `core://Text`, drawn by the client fro
   year). Other values are drawn unchanged, so "Due $item.due" reads "Due tomorrow". With `past`, a text binding a
   date before today draws `past` instead ("Overdue"). Today is the device's local date (`localEpochDay`), read each
   time the text draws; the simulator's `-Ptoday=YYYY-MM-DD` pins it for repeatable screenshots
-  (`fixtures/custom_todos_bundle.json` is a todo app for it: `-Pworkspace=c-todos -Pfixture=… -Ptoday=2026-11-04`).
+  (`fixtures/custom_todos_bundle.json`, a todo app for it, was later removed as unused; it is in git history).
 - **`count`:** `count: {query_key, where?: [{field, equals}], zero_text?}`. The number of entities of that query
   the client holds that match every condition (each as a `core://List` `where`: `equals` may be `$form.<field>`, and
   a blank one matches everything) replaces each `$count` in `value_expr`. It is counted on the device, so it follows

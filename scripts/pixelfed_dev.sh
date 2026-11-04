@@ -13,7 +13,8 @@
 #           bob posts one image and alice boosts it (so the admin home timeline contains a reblog).
 #           Users/posts are skipped if they already exist; fresh tokens are minted on every run.
 #           Tokens: dev/pixelfed/.seed/{admin,alice,bob}_token (gitignored).
-#   record  save real API responses (admin token) to fixtures/pixelfed/recorded/
+#   record  save the home timeline (plain, with boosts, with _pe=1; admin token) to fixtures/pixelfed/recorded/,
+#           which app-pixelfed's normalization tests read
 #   status  colima + compose status and an API probe
 #   logs    follow compose logs (extra args go to `docker compose logs`, e.g. `logs app`)
 #
@@ -193,24 +194,14 @@ EOF
 }
 
 cmd_record() {
-  local at fav_id
+  local at
   at="$(cat "$SEED_DIR/admin_token" 2>/dev/null)" || { log "run seed first"; exit 1; }
   mkdir -p "$REC_DIR"
-  api "$at" GET /api/v1/accounts/verify_credentials | python3 -m json.tool >"$REC_DIR/verify_credentials.json"
-  curl -fsS -D "$REC_DIR/timeline_home.headers.txt" -o "$REC_DIR/timeline_home.raw" \
-    -H "Authorization: Bearer $at" "$URL/api/v1/timelines/home?limit=20"
-  python3 -m json.tool <"$REC_DIR/timeline_home.raw" >"$REC_DIR/timeline_home.json"; rm "$REC_DIR/timeline_home.raw"
+  api "$at" GET "/api/v1/timelines/home?limit=20" | python3 -m json.tool >"$REC_DIR/timeline_home.json"
   # Boosts are excluded from the home timeline unless include_reblogs=true (or the user setting enable_reblogs).
   api "$at" GET "/api/v1/timelines/home?limit=20&include_reblogs=true" | python3 -m json.tool >"$REC_DIR/timeline_home_reblogs.json"
   # Same timeline with Pixelfed's extended entities (?_pe=1: pf_type, liked_by, media mime/orientation, ...).
   api "$at" GET "/api/v1/timelines/home?limit=20&_pe=1" | python3 -m json.tool >"$REC_DIR/timeline_home_pe.json"
-  api "$at" GET "/api/v1/accounts/verify_credentials?_pe=1" | python3 -m json.tool >"$REC_DIR/verify_credentials_pe.json"
-  # Favourite/bookmark the carousel post (first status with 3 attachments), then undo.
-  fav_id="$(json '[s["id"] for s in d if len(s["media_attachments"]) == 3][0]' <"$REC_DIR/timeline_home.json")"
-  api "$at" POST "/api/v1/statuses/$fav_id/favourite" | python3 -m json.tool >"$REC_DIR/favourite.json"
-  api "$at" POST "/api/v1/statuses/$fav_id/unfavourite" | python3 -m json.tool >"$REC_DIR/unfavourite.json"
-  api "$at" POST "/api/v1/statuses/$fav_id/bookmark" | python3 -m json.tool >"$REC_DIR/bookmark.json"
-  api "$at" POST "/api/v1/statuses/$fav_id/unbookmark" >/dev/null
   log "recorded into $REC_DIR"
 }
 
