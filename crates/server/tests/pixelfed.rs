@@ -301,6 +301,7 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
             protocol::SCHEMA_HEADER,
             protocol::SCHEMA_VERSION.to_string(),
         )
+        .header(protocol::FEATURES_HEADER, protocol::features_header())
         .bearer_auth(&session)
         .send()
         .await
@@ -750,11 +751,12 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
             protocol::SCHEMA_HEADER,
             protocol::SCHEMA_VERSION.to_string(),
         )
+        .header(protocol::FEATURES_HEADER, protocol::features_header())
         .send()
         .await
         .unwrap();
-    // A schema header but no features: 0008 (0009 needs `action_sequence`).
-    assert_eq!(version(&resp).as_deref(), Some("8"));
+    // A current client: 0009.
+    assert_eq!(version(&resp).as_deref(), Some("9"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 4));
     // A newer version replaces the feed layout; entities still come upstream.

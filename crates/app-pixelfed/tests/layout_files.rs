@@ -415,7 +415,7 @@ fn sync_appends_new_files_once_and_refuses_changes() {
         .unwrap();
     assert_eq!(
         v, 9,
-        "0009: Share is action.sequence [create, back] (decision create-dismiss-is-a-sequence)"
+        "0009: Share is action.sequence [create, back] (decision named-vocabulary)"
     );
     assert!(pod_core::validate::unknown_node_types(&layout).is_empty());
     // Each client gets the newest version it can draw.
@@ -427,7 +427,7 @@ fn sync_appends_new_files_once_and_refuses_changes() {
         (9, 5),
         (10, 6),
         (11, 6),
-        (protocol::SCHEMA_VERSION, 8),
+        (12, 8),
     ] {
         let served = active_for(
             &store,
@@ -440,7 +440,8 @@ fn sync_appends_new_files_once_and_refuses_changes() {
         assert_eq!(served.version, version, "schema {schema}");
         assert!(protocol::required_schema(&served.layout) <= schema);
     }
-    // 0009 needs feature `action_sequence`; this build has it.
+    // 0009 needs feature `action_sequence`; this build has it. (It no longer
+    // draws 0005-0008, which use `dismiss`: decision `named-vocabulary`.)
     let served = active_for(
         &store,
         &catalog(),

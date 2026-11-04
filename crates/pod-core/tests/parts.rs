@@ -40,7 +40,7 @@ fn file(n: u32, card: &str, with_card_part: bool) -> LayoutSource {
               "item_template": {{"type": "core://Button", "label": "{card}", "on_click": {{
                 "intent": "action.mutation.optimistic", "entity_uri": "$item.uri", "field": "liked",
                 "value_expr": "true", "rollback_value": false, "endpoint": "/v1/a/act", "payload": {{}}}}}}}}}}]}}{parts}}}"#,
-        schema = protocol::SCHEMA_VERSION
+        schema = protocol::LAYOUT_SCHEMA
     );
     LayoutSource {
         app_id: "a_home",
@@ -160,7 +160,8 @@ async fn call(pod: &Pod, method: &str, path: &str, body: Option<Value>) -> (Stat
         .header(
             protocol::SCHEMA_HEADER,
             protocol::SCHEMA_VERSION.to_string(),
-        );
+        )
+        .header(protocol::FEATURES_HEADER, protocol::features_header());
     let body = match body {
         Some(b) => {
             req = req.header("content-type", "application/json");

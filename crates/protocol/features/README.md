@@ -14,4 +14,6 @@ To add a feature, e.g. a new node `core://Foo`:
    `x-construct-features`; the pod serves layouts that use `core://Foo` only to them, and older clients get
    the newest version they can draw.
 
-A breaking change (old layouts stop drawing) still bumps `SCHEMA_VERSION` and adds a `RETIRED` entry.
+The base vocabulary of schemas 1–12 is named in `protocol::BASE_FEATURES` (decision `named-vocabulary`).
+To remove vocabulary, record the removal there (the schema that removed it) and stop drawing it: clients of
+that schema no longer list it, the pod retires only the versions that use it, and older clients keep them.

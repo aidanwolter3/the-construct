@@ -51,10 +51,12 @@ async fn get(state: &Arc<AppState>, path: &str) -> (StatusCode, serde_json::Valu
 }
 
 async fn get_as(state: &Arc<AppState>, path: &str, schema: u32) -> (StatusCode, serde_json::Value) {
-    let req = Request::get(path)
-        .header(protocol::SCHEMA_HEADER, schema.to_string())
-        .body(Body::empty())
-        .unwrap();
+    let mut req = Request::get(path).header(protocol::SCHEMA_HEADER, schema.to_string());
+    // A current client lists everything it draws (decision `named-vocabulary`).
+    if schema >= protocol::NAMED_SCHEMA {
+        req = req.header(protocol::FEATURES_HEADER, protocol::features_header());
+    }
+    let req = req.body(Body::empty()).unwrap();
     let resp = pod_core::app(state.clone()).oneshot(req).await.unwrap();
     let status = resp.status();
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();

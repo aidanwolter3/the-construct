@@ -620,6 +620,26 @@ pub fn custom_layout(
             format!("unknown action intent '{tag}'"),
         ));
     }
+    // Vocabulary current clients no longer draw (decision
+    // `named-vocabulary`) is never written again.
+    let drawn = protocol::drawn_features();
+    if let Some(f) = protocol::required_features(&node)
+        .into_iter()
+        .find(|f| !drawn.contains(f))
+    {
+        let (key, hint) = match f {
+            "create_dismiss" => (
+                "dismiss",
+                "; to close the screen after a create, put it in an action.sequence followed by action.navigation.back",
+            ),
+            _ => ("", ""),
+        };
+        let at = find_pointer(doc, "", &|k, _| k == key).unwrap_or_default();
+        return Err(LayoutError::new(
+            &at,
+            format!("'{f}' was removed from the layout vocabulary{hint}"),
+        ));
+    }
     let caps = Caps::new(sources);
     caps.walk(doc, "")?;
     Ok(node)

@@ -119,6 +119,7 @@ impl Env {
                 protocol::SCHEMA_HEADER,
                 protocol::SCHEMA_VERSION.to_string(),
             )
+            .header(protocol::FEATURES_HEADER, protocol::features_header())
             .send()
             .await
             .unwrap();

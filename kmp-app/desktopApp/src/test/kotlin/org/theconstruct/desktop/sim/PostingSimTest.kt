@@ -19,8 +19,9 @@ import kotlin.test.assertTrue
 
 /**
  * Photo posting (DECISIONS D49–D51, docs/POSTING.md) through the generic pieces: `core://MediaPicker`, the simulator's
- * `pick`, a create with `attachments` / `position: start` / `dismiss`, and the fake pod finishing the post on `wait`.
- * The layout mirrors the compose screen of layouts/pixelfed_home/0004.json on a minimal feed.
+ * `pick`, a create with `attachments` / `position: start` followed by `action.navigation.back` in an `action.sequence`,
+ * and the fake pod finishing the post on `wait`. The layout mirrors the compose screen of layouts/pixelfed_home/0009.json
+ * on a minimal feed.
  */
 class PostingSimTest {
     private val outDir: File = Files.createTempDirectory("construct-posting-test").toFile()
@@ -155,12 +156,12 @@ class PostingSimTest {
    "content":{"type":"core://Column","spacing_dp":12,"padding_h_dp":16,"padding_v_dp":12,"children":[
      {"type":"core://MediaPicker","field":"photos","max_items":4,"label":"Add photos"},
      {"type":"core://TextField","field":"caption","placeholder":"Write a caption…","max_length":2000,"lines":4}]},
-   "footer":{"type":"core://Button","label":"Share","on_click":{"intent":"action.mutation.create","query_key":"timeline:home",
+   "footer":{"type":"core://Button","label":"Share","on_click":{"intent":"action.sequence","steps":[{"intent":"action.mutation.create","query_key":"timeline:home",
      "position":"start","entity_uri":"pixelfed://posts/pending-${'$'}nonce",
      "entity":{"author_name":"You","caption":"${'$'}form?.caption","media_uris":"${'$'}attachments.photos","pending_label":"Posting…"},
      "attachments":{"photos":"${'$'}form.photos"},"endpoint":"/v1/pixelfed/posts/create",
      "payload":{"caption":"${'$'}form?.caption","media":"${'$'}attachments.photos","client_id":"${'$'}nonce"},
-     "refresh_workspace":true,"dismiss":true}}}]},
+     "refresh_workspace":true},{"intent":"action.navigation.back"}]}}}]},
  "entities":{"x://posts/old":{"id":"1","caption":"An older post","like_count":3,"media_uris":[]}},
  "queries":{"timeline:home":["x://posts/old"]}}
 """

@@ -93,11 +93,11 @@ Staging needs a pod token (D46). Make a temporary one (24 h, deleted afterwards;
   (`.claude/skills/ticket`); each issue starts with a link that opens a new session on it.
 
 ## Layouts as code (only way to publish a new layout version)
-Add `layouts/<app>/NNNN.json` (`{"note": "...", "schema": N, "layout": {...}}`, next number, no gaps; `schema` =
-the current `protocol::SCHEMA_VERSION`), run `cargo test`, push. There is no file list to edit (each adapter's
+Add `layouts/<app>/NNNN.json` (`{"note": "...", "schema": 12, "layout": {...}}`, next number, no gaps; `schema` =
+`protocol::LAYOUT_SCHEMA`, 12: newer vocabulary is named features, decision `named-vocabulary`), run `cargo test`, push. There is no file list to edit (each adapter's
 `build.rs` embeds the directory). Each file is a whole snapshot: if another PR took your number (add/add
-conflict), merge both layouts into the next number. Never edit or renumber a deployed file (its `schema` included) — the server refuses to start. A breaking
-schema change retires old versions via `protocol::RETIRED`, not by editing files (D36). Clients are read-only for
+conflict), merge both layouts into the next number. Never edit or renumber a deployed file (its `schema` included) — the server refuses to start. Vocabulary is
+removed by name (`protocol::BASE_FEATURES`, decision `named-vocabulary`), never by editing files. Clients are read-only for
 layout state.
 
 ## Conventions
@@ -105,7 +105,7 @@ layout state.
   layout files (screens go in `Workspace.screens`) plus adapter code (`crates/app-*`). Only new generic vocabulary (node types, intents) needs a
   client build. Additive vocabulary is a named layout feature: one file `crates/protocol/features/<name>.md` plus
   an arm in `protocol::required_features` (see that folder's README). Don't bump `protocol::SCHEMA_VERSION`: it
-  changes only for a breaking change, with a `RETIRED` entry (docs/decisions/layout-features.md). After changing a pixelfed_home layout or the comments
+  changes only when the negotiation itself changes (docs/decisions/named-vocabulary.md). After changing a pixelfed_home layout or the comments
   data, regenerate the simulator fixtures: `UPDATE_FIXTURES=1 cargo test -p server --test fixtures`.
 - Names: product "The Construct"; Kotlin package `org.theconstruct`; env vars `CONSTRUCT_*`; data dirs
   `~/.construct*`; OAuth redirect `construct://oauth`. Server env vars: README "Server runtime configuration".

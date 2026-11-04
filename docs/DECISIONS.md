@@ -1718,7 +1718,7 @@ Superseded in part (`hydrate` became a manifest plus named feeds) by
 
 ## D51: Schema 9: media picker, multi-line fields, richer creates
 
-> Superseded in part by [create-dismiss-is-a-sequence](decisions/create-dismiss-is-a-sequence.md): `dismiss` is legacy; new layouts write `action.sequence [create, action.navigation.back]`.
+> Superseded in part by [named-vocabulary](decisions/named-vocabulary.md): schema 13 removed `dismiss` (feature `create_dismiss`); layouts write `action.sequence [create, action.navigation.back]`.
 
 - `core://MediaPicker {field, max_items, label?}` (D49).
 - `core://TextField.lines`: a multi-line field without `on_submit` (amends D43's single-line rule).

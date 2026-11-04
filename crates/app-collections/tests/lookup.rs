@@ -78,6 +78,7 @@ async fn call(pod: &Pod, method: &str, path: &str, body: Option<Value>) -> (Stat
             protocol::SCHEMA_HEADER,
             protocol::SCHEMA_VERSION.to_string(),
         )
+        .header(protocol::FEATURES_HEADER, protocol::features_header())
         .header("authorization", format!("Bearer {bearer}"));
     let body = match body {
         Some(b) => {

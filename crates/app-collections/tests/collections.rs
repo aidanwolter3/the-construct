@@ -414,11 +414,14 @@ async fn bindings_must_fit_the_collection() {
         None,
     )
     .await;
-    assert_eq!(
-        v["versions"][0]["features"],
-        json!(["count", "date_format", "todo_icons"]),
-        "{v}"
-    );
+    let additive: Vec<&str> = v["versions"][0]["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f.as_str())
+        .filter(|f| protocol::FEATURES.contains(f))
+        .collect();
+    assert_eq!(additive, ["count", "date_format", "todo_icons"], "{v}");
 }
 
 #[tokio::test]

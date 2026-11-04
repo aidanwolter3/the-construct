@@ -37,26 +37,42 @@
 //!   scrolls, docs/decisions/sticky-nodes.md). Additive.
 //! - 12: `core://List` `focus` (scroll to one item and tint it,
 //!   docs/decisions/list-focus.md). Additive.
+//! - 13: named vocabulary (docs/decisions/named-vocabulary.md). Everything
+//!   schemas 1–12 added has a name ([`BASE_FEATURES`]), and a client of
+//!   schema 13 lists every feature it draws in [`FEATURES_HEADER`], base
+//!   vocabulary included. It no longer lists `create_dismiss`
+//!   (`action.mutation.create` `dismiss`, now `action.sequence [create,
+//!   action.navigation.back]`), so only the versions that use it are
+//!   retired for it. Older clients still get every layout that uses only
+//!   what they draw: their base vocabulary is implied by their schema.
 //!
-//! # Additive changes: features, not numbers
+//! # Features, not numbers
 //!
 //! After 12, additive vocabulary no longer bumps [`SCHEMA_VERSION`] (one
 //! shared counter made every parallel change conflict,
 //! docs/decisions/layout-features.md). Each addition is a named feature, one
 //! file `crates/protocol/features/<name>.md` (see its README), mapped from the
-//! nodes that use it in [`node_features`] / [`intent_features`]. A client
-//! sends the features it draws in [`FEATURES_HEADER`]; a layout needs the
-//! features [`required_features`] finds in it, worked out by the pod (layout
-//! files don't declare them). [`ClientCaps::can_draw`] checks both.
+//! nodes that use it in [`node_features`] / [`intent_features`]. The base
+//! vocabulary of schemas 1–12 is named in [`BASE_FEATURES`]. A client sends
+//! the features it draws in [`FEATURES_HEADER`]; a layout needs the features
+//! [`required_features`] finds in it, worked out by the pod (layout files
+//! don't declare them). A client draws a layout when the layout's features
+//! are a subset of its own; [`ClientCaps::can_draw`] checks that and the
+//! schema floor ([`RETIRED`]).
 //!
-//! # A breaking schema change
+//! # Removing vocabulary
 //!
-//! Bump [`SCHEMA_VERSION`], then add `(new version, oldest layout schema it
-//! still draws)` to [`RETIRED`]. That marks every older layout version
-//! incompatible for clients of the new schema (greyed out in their version
-//! picker, never served to them) without touching the layout files. Apps whose
-//! old layouts would still draw need a new version file declaring the new
-//! schema.
+//! A client stops listing the feature, and its entry in [`BASE_FEATURES`]
+//! (or a new entry for an additive feature) records the schema that removed
+//! it; that schema's clients see versions using it as retired. Nothing else
+//! is retired, and older clients keep getting new versions. The removed field
+//! stays in these types so the pod serves old versions unchanged to the
+//! clients that still draw them. [`SCHEMA_VERSION`] moves only when the
+//! negotiation itself changes, as 13 did.
+//!
+//! [`RETIRED`] is the older, coarse tool: schema 3 dropped every
+//! `pixelfed://` widget (D37), so `(3, 3)` marks every layout written for an
+//! older schema incompatible.
 
 use std::collections::BTreeSet;
 
@@ -69,10 +85,10 @@ pub const SCHEMA_HEADER: &str = "x-construct-schema";
 /// Request header carrying the features the client draws, comma-separated
 /// ([`FEATURES`]). Absent means none.
 pub const FEATURES_HEADER: &str = "x-construct-features";
-/// The schema version this build draws: the base vocabulary. Bumped only by a
-/// breaking change (with a [`RETIRED`] entry); additive vocabulary is a
-/// feature ([`FEATURES`]).
-pub const SCHEMA_VERSION: u32 = 12;
+/// The schema version this build speaks. From 13 ([`NAMED_SCHEMA`]) the
+/// features header lists everything a client draws, so vocabulary is added
+/// and removed by name ([`BASE_FEATURES`], [`FEATURES`]), not by number.
+pub const SCHEMA_VERSION: u32 = 13;
 
 /// Breaking changes, oldest first: `(client schema, oldest layout schema it
 /// draws)`. A client of schema `c` draws layouts written for schemas
@@ -136,25 +152,29 @@ pub struct ClientCaps {
 }
 
 impl ClientCaps {
-    /// What this build draws ([`SCHEMA_VERSION`], [`FEATURES`]).
+    /// What this build draws ([`SCHEMA_VERSION`], [`drawn_features`]).
     pub fn this_build() -> Self {
         Self {
             schema: SCHEMA_VERSION,
-            features: FEATURES.iter().map(|f| (*f).to_owned()).collect(),
+            features: drawn_features().into_iter().map(str::to_owned).collect(),
         }
     }
 
-    /// A client of `schema` with no features.
+    /// A client of `schema` that sends no features: it draws the base
+    /// vocabulary of its schema ([`implied_features`]), nothing else.
     pub fn schema(schema: u32) -> Self {
         Self {
             schema,
-            features: BTreeSet::new(),
+            features: implied_features(schema),
         }
     }
 
-    /// `self` with the features of a [`FEATURES_HEADER`] value.
+    /// `self` with the features of a [`FEATURES_HEADER`] value too (a client
+    /// before [`NAMED_SCHEMA`] lists only additive ones; its base vocabulary
+    /// stays implied).
     pub fn with_features_header(mut self, value: &str) -> Self {
-        self.features = parse_features(value);
+        self.features = implied_features(self.schema);
+        self.features.extend(parse_features(value));
         self
     }
 
@@ -162,19 +182,33 @@ impl ClientCaps {
     /// `features`, and why not.
     pub fn can_draw<S: AsRef<str>>(&self, schema: u32, features: &[S]) -> Compatibility {
         match compatibility(schema, self.schema) {
-            Compatibility::Compatible
-                if features.iter().any(|f| !self.features.contains(f.as_ref())) =>
-            {
-                Compatibility::UpdateRequired
+            Compatibility::Compatible => {
+                let mut missing = features
+                    .iter()
+                    .map(AsRef::as_ref)
+                    .filter(|f| !self.features.contains(*f))
+                    .peekable();
+                if missing.peek().is_none() {
+                    Compatibility::Compatible
+                } else if missing.any(|f| {
+                    base(f)
+                        .and_then(|(_, r)| r)
+                        .is_some_and(|r| r <= self.schema)
+                }) {
+                    // Vocabulary removed by this client's schema: never again.
+                    Compatibility::Retired
+                } else {
+                    Compatibility::UpdateRequired
+                }
             }
             c => c,
         }
     }
 }
 
-/// The [`FEATURES_HEADER`] value of this build.
+/// The [`FEATURES_HEADER`] value of this build ([`drawn_features`]).
 pub fn features_header() -> String {
-    FEATURES.join(",")
+    drawn_features().join(",")
 }
 
 /// The feature names of a [`FEATURES_HEADER`] value (blank entries dropped).
@@ -187,7 +221,121 @@ pub fn parse_features(value: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// The features `node` (and everything under it) uses, sorted.
+/// The base vocabulary by name (docs/decisions/named-vocabulary.md):
+/// `(feature, schema that added it, schema that removed it)`. Everything a
+/// numbered schema gated has a name, so a client of schema 13 or later can
+/// list exactly what it draws, and vocabulary can be removed by a client no
+/// longer listing it. Names go on the wire: never rename or reuse one.
+pub const BASE_FEATURES: &[(&str, u32, Option<u32>)] = &[
+    // Schema 1.
+    ("workspace", 1, None),
+    ("container", 1, None),
+    ("text", 1, None),
+    ("button", 1, None),
+    ("navigate", 1, None),
+    ("navigate_back", 1, None),
+    ("optimistic_mutation", 1, None),
+    ("auth_login", 1, None),
+    // Schema 2.
+    ("screens", 2, None),
+    ("list", 2, None),
+    ("image", 2, None),
+    ("text_field", 2, None),
+    ("load_data", 2, None),
+    ("create", 2, None),
+    // Schema 3 (D36, D37).
+    ("row", 3, None),
+    ("column", 3, None),
+    ("spacer", 3, None),
+    ("divider", 3, None),
+    ("conditional", 3, None),
+    ("carousel", 3, None),
+    ("icon_button", 3, None),
+    ("chip", 3, None),
+    ("badge", 3, None),
+    ("text_label_styles", 3, None),
+    // Schema 4 (D42).
+    ("tappable", 4, None),
+    // Schema 5 (D43).
+    ("list_filter", 5, None),
+    ("list_group_by", 5, None),
+    // Schema 6 (D44).
+    ("box", 6, None),
+    ("choice_chips", 6, None),
+    ("list_where", 6, None),
+    ("align", 6, None),
+    ("text_display", 6, None),
+    ("icons_flame_timer", 6, None),
+    // Schema 7 (D46).
+    ("auth_session", 7, None),
+    // Schema 8 (D48).
+    ("list_grid", 8, None),
+    ("conditional_form", 8, None),
+    // Schema 9 (D49, D51).
+    ("media_picker", 9, None),
+    ("text_field_lines", 9, None),
+    ("create_attachments", 9, None),
+    ("create_position", 9, None),
+    ("create_dismiss", 9, Some(13)),
+    ("form_optional", 9, None),
+    ("icons_post", 9, None),
+    // Schema 10.
+    ("choice_chips_remember", 10, None),
+    // Schema 11.
+    ("sticky", 11, None),
+    // Schema 12.
+    ("list_focus", 12, None),
+];
+
+/// The schema from which clients list every feature they draw: a client of
+/// this schema or later draws exactly its [`FEATURES_HEADER`]; an older one
+/// also draws the base vocabulary of its schema ([`implied_features`]).
+pub const NAMED_SCHEMA: u32 = 13;
+
+/// The schema layouts are written for: the last numbered vocabulary. Newer
+/// vocabulary is named features, so a new layout file declares this and any
+/// client that draws its features, older or newer, gets it.
+pub const LAYOUT_SCHEMA: u32 = NAMED_SCHEMA - 1;
+
+/// `(added, removed)` of a base feature; `None` for an additive one (a
+/// `features/*.md` file) or an unknown name.
+fn base(name: &str) -> Option<(u32, Option<u32>)> {
+    BASE_FEATURES
+        .iter()
+        .find(|(n, _, _)| *n == name)
+        .map(|(_, a, r)| (*a, *r))
+}
+
+/// The base vocabulary a client of `schema` draws without naming it (it
+/// predates [`NAMED_SCHEMA`]): what was added by then and not yet removed.
+/// Empty from [`NAMED_SCHEMA`] on.
+pub fn implied_features(schema: u32) -> BTreeSet<String> {
+    if schema >= NAMED_SCHEMA {
+        return BTreeSet::new();
+    }
+    BASE_FEATURES
+        .iter()
+        .filter(|(_, added, removed)| *added <= schema && removed.is_none_or(|r| r > schema))
+        .map(|(n, _, _)| (*n).to_owned())
+        .collect()
+}
+
+/// Every feature this build draws: the base vocabulary it still has and the
+/// additive features ([`FEATURES`]), sorted. What it sends in
+/// [`FEATURES_HEADER`].
+pub fn drawn_features() -> Vec<&'static str> {
+    let mut out: BTreeSet<&'static str> = FEATURES.iter().copied().collect();
+    out.extend(
+        BASE_FEATURES
+            .iter()
+            .filter(|(_, _, removed)| removed.is_none_or(|r| r > SCHEMA_VERSION))
+            .map(|(n, _, _)| *n),
+    );
+    out.into_iter().collect()
+}
+
+/// The features `node` (and everything under it) uses, sorted: base
+/// vocabulary ([`BASE_FEATURES`]) and additive features alike.
 pub fn required_features(node: &UiNode) -> Vec<&'static str> {
     let mut out = BTreeSet::new();
     for n in node.walk() {
@@ -203,19 +351,107 @@ pub fn required_features(node: &UiNode) -> Vec<&'static str> {
 /// feature, e.g. `if let UiNode::Foo { .. } = node { out.insert(feature::FOO); }`
 /// (`crates/protocol/features/README.md`).
 fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
+    let mut add = |f: &'static str| {
+        out.insert(f);
+    };
     match node {
-        UiNode::Progress { .. } => {
-            out.insert(crate::feature::PROGRESS);
+        UiNode::Workspace { screens, .. } => {
+            add("workspace");
+            if !screens.is_empty() {
+                add("screens");
+            }
         }
-        UiNode::Text { format, count, .. } => {
+        UiNode::Container { .. } => add("container"),
+        UiNode::Text {
+            style,
+            format,
+            count,
+            ..
+        } => {
+            add("text");
+            match style {
+                TextStyle::Label | TextStyle::Secondary => add("text_label_styles"),
+                TextStyle::Display => add("text_display"),
+                _ => {}
+            }
             if format.is_some() {
-                out.insert(crate::feature::DATE_FORMAT);
+                add(crate::feature::DATE_FORMAT);
             }
             if count.is_some() {
-                out.insert(crate::feature::COUNT);
+                add(crate::feature::COUNT);
             }
         }
-        _ => {}
+        UiNode::Button { .. } => add("button"),
+        UiNode::List {
+            filter,
+            group_by,
+            where_,
+            columns,
+            spacing_dp,
+            padding_h_dp,
+            focus,
+            ..
+        } => {
+            add("list");
+            if filter.is_some() {
+                add("list_filter");
+            }
+            if group_by.is_some() {
+                add("list_group_by");
+            }
+            if where_.is_some() {
+                add("list_where");
+            }
+            if *columns > 1 || *spacing_dp > 0 || *padding_h_dp > 0 {
+                add("list_grid");
+            }
+            if focus.is_some() {
+                add("list_focus");
+            }
+        }
+        UiNode::Image { .. } => add("image"),
+        UiNode::TextField { lines, .. } => {
+            add("text_field");
+            if lines.is_some() {
+                add("text_field_lines");
+            }
+        }
+        UiNode::Row { align, .. } => {
+            add("row");
+            if align.is_some() {
+                add("align");
+            }
+        }
+        UiNode::Column { align, .. } => {
+            add("column");
+            if *align != Align::Start {
+                add("align");
+            }
+        }
+        UiNode::Spacer { .. } => add("spacer"),
+        UiNode::Divider {} => add("divider"),
+        UiNode::Conditional { value, equals, .. } => {
+            add("conditional");
+            if equals.is_some() || value.starts_with("$form.") {
+                add("conditional_form");
+            }
+        }
+        UiNode::Carousel { .. } => add("carousel"),
+        UiNode::IconButton { .. } => add("icon_button"),
+        UiNode::Chip { .. } => add("chip"),
+        UiNode::Badge { .. } => add("badge"),
+        UiNode::Tappable { .. } => add("tappable"),
+        UiNode::Box { .. } => add("box"),
+        UiNode::ChoiceChips { remember, .. } => {
+            add("choice_chips");
+            if *remember {
+                add("choice_chips_remember");
+            }
+        }
+        UiNode::MediaPicker { .. } => add("media_picker"),
+        UiNode::Sticky { .. } => add("sticky"),
+        UiNode::Progress { .. } => add(crate::feature::PROGRESS),
+        UiNode::Unknown(_) => {}
     }
     let icons: [Option<&str>; 2] = match node {
         UiNode::IconButton {
@@ -225,126 +461,75 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
         UiNode::Badge { icon, .. } => [Some(icon), None],
         _ => [None, None],
     };
-    if icons.into_iter().flatten().any(|i| TODO_ICONS.contains(&i)) {
-        out.insert(crate::feature::TODO_ICONS);
+    for i in icons.into_iter().flatten() {
+        if TODO_ICONS.contains(&i) {
+            add(crate::feature::TODO_ICONS);
+        } else if ICONS_9.contains(&i) {
+            add("icons_post");
+        } else if ICONS_6.contains(&i) {
+            add("icons_flame_timer");
+        }
     }
 }
 
 /// Icons of the `todo_icons` feature.
 const TODO_ICONS: [&str; 4] = ["check", "check_box", "check_box_outline_blank", "delete"];
-
-/// The features one action intent uses; see [`node_features`].
-fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
-    match intent {
-        ActionIntent::Sequence { .. } => {
-            out.insert(crate::feature::ACTION_SEQUENCE);
-        }
-        ActionIntent::LocalSet { .. } => {
-            out.insert(crate::feature::LOCAL_SET);
-        }
-        ActionIntent::OpenLink { .. } => {
-            out.insert(crate::feature::OPEN_LINK);
-        }
-        _ => {}
-    }
-}
-
-fn intent_schema(i: &ActionIntent) -> u32 {
-    // `$form?.<field>` (schema 9) anywhere in the intent.
-    let optional_form = serde_json::to_string(i).is_ok_and(|j| j.contains("$form?."));
-    let own = match i {
-        ActionIntent::Create {
-            attachments,
-            position,
-            dismiss,
-            ..
-        } if !attachments.is_empty() || *position != Position::End || *dismiss => 9,
-        ActionIntent::LoadData { .. } | ActionIntent::Create { .. } => 2,
-        ActionIntent::OpenSession { .. } => 7,
-        _ => 1,
-    };
-    if optional_form { own.max(9) } else { own }
-}
-
 /// Icons added in schema 6 (D44).
 const ICONS_6: [&str; 2] = ["flame", "timer"];
 /// Icons added in schema 9 (D51).
 const ICONS_9: [&str; 3] = ["add_photo", "add", "refresh"];
 
-fn icon_schema(icon: &str) -> u32 {
-    if ICONS_9.contains(&icon) {
-        9
-    } else if ICONS_6.contains(&icon) {
-        6
-    } else {
-        3
+/// The features one action intent uses; see [`node_features`].
+fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
+    let mut add = |f: &'static str| {
+        out.insert(f);
+    };
+    // `$form?.<field>` anywhere in the intent (a sequence's steps are
+    // intents of their own).
+    if !matches!(intent, ActionIntent::Sequence { .. })
+        && serde_json::to_string(intent).is_ok_and(|j| j.contains("$form?."))
+    {
+        add("form_optional");
     }
-}
-
-fn node_schema(node: &UiNode) -> u32 {
-    match node {
-        UiNode::Sticky { .. } => 11,
-        UiNode::List { focus: Some(_), .. } => 12,
-        UiNode::ChoiceChips { remember: true, .. } => 10,
-        UiNode::MediaPicker { .. } => 9,
-        UiNode::TextField { lines: Some(_), .. } => 9,
-        UiNode::Chip { icon: Some(i), .. } | UiNode::Badge { icon: i, .. } => icon_schema(i),
-        UiNode::IconButton {
-            icon, active_icon, ..
-        } => icon_schema(icon).max(active_icon.as_deref().map_or(3, icon_schema)),
-        UiNode::List {
-            columns,
-            spacing_dp,
-            padding_h_dp,
+    match intent {
+        ActionIntent::Navigate { .. } => add("navigate"),
+        ActionIntent::NavigateBack => add("navigate_back"),
+        ActionIntent::OptimisticMutate { .. } => add("optimistic_mutation"),
+        ActionIntent::AuthLogin { .. } => add("auth_login"),
+        ActionIntent::OpenSession { .. } => add("auth_session"),
+        ActionIntent::LoadData { .. } => add("load_data"),
+        ActionIntent::Create {
+            attachments,
+            position,
+            dismiss,
             ..
-        } if *columns > 1 || *spacing_dp > 0 || *padding_h_dp > 0 => 8,
-        UiNode::Conditional { value, equals, .. }
-            if equals.is_some() || value.starts_with("$form.") =>
-        {
-            8
+        } => {
+            add("create");
+            if !attachments.is_empty() {
+                add("create_attachments");
+            }
+            if *position != Position::End {
+                add("create_position");
+            }
+            if *dismiss {
+                add("create_dismiss");
+            }
         }
-        UiNode::Box { .. }
-        | UiNode::ChoiceChips { .. }
-        | UiNode::Text {
-            style: TextStyle::Display,
-            ..
-        } => 6,
-        UiNode::List {
-            where_: Some(_), ..
-        } => 6,
-        UiNode::Column { align, .. } if *align != Align::Start => 6,
-        UiNode::Row { align: Some(_), .. } => 6,
-        UiNode::Workspace { screens, .. } if !screens.is_empty() => 2,
-        UiNode::List {
-            filter, group_by, ..
-        } if filter.is_some() || group_by.is_some() => 5,
-        UiNode::List { .. } | UiNode::Image { .. } | UiNode::TextField { .. } => 2,
-        UiNode::Text {
-            style: TextStyle::Label | TextStyle::Secondary,
-            ..
-        } => 3,
-        UiNode::Row { .. }
-        | UiNode::Column { .. }
-        | UiNode::Spacer { .. }
-        | UiNode::Divider {}
-        | UiNode::Conditional { .. }
-        | UiNode::Carousel { .. }
-        | UiNode::Chip { .. } => 3,
-        UiNode::Tappable { .. } => 4,
-        _ => 1,
+        ActionIntent::Sequence { .. } => add(crate::feature::ACTION_SEQUENCE),
+        ActionIntent::LocalSet { .. } => add(crate::feature::LOCAL_SET),
+        ActionIntent::OpenLink { .. } => add(crate::feature::OPEN_LINK),
+        ActionIntent::Unknown => {}
     }
 }
 
-/// The lowest schema version that can draw `node` (and its screens).
+/// The lowest schema version that can draw `node` (and its screens): the
+/// newest schema that added base vocabulary it uses ([`BASE_FEATURES`];
+/// additive features don't raise it).
 pub fn required_schema(node: &UiNode) -> u32 {
-    node.walk()
+    required_features(node)
         .into_iter()
-        .map(|n| {
-            n.own_intents()
-                .into_iter()
-                .map(intent_schema)
-                .fold(node_schema(n), u32::max)
-        })
+        .filter_map(base)
+        .map(|(added, _)| added)
         .fold(1, u32::max)
 }
 
@@ -609,27 +794,95 @@ mod tests {
         use Compatibility::*;
         let old = ClientCaps::schema(12);
         let new = ClientCaps::schema(12).with_features_header(" foo, ,bar ");
-        assert_eq!(
-            new.features.iter().map(String::as_str).collect::<Vec<_>>(),
-            ["bar", "foo"]
-        );
+        // A schema-12 client lists only additive features; its base
+        // vocabulary is implied.
+        assert!(new.features.contains("foo") && new.features.contains("bar"));
+        assert!(new.features.contains("list_focus") && old.features.contains("create_dismiss"));
+        assert!(!old.features.contains("foo"));
         let none: [&str; 0] = [];
         assert_eq!(old.can_draw(12, &none), Compatible);
+        assert_eq!(old.can_draw(12, &["list", "sticky"]), Compatible);
         assert_eq!(old.can_draw(12, &["foo"]), UpdateRequired);
         assert_eq!(new.can_draw(11, &["foo"]), Compatible);
         assert_eq!(new.can_draw(12, &["foo", "bar"]), Compatible);
         assert_eq!(new.can_draw(12, &["foo", "baz"]), UpdateRequired);
+        // An older client lacks newer base vocabulary.
+        assert_eq!(
+            ClientCaps::schema(10).can_draw(10, &["sticky"]),
+            UpdateRequired
+        );
         // The schema still decides first: a retired layout stays retired.
         assert_eq!(new.can_draw(2, &none), Retired);
-        assert_eq!(new.can_draw(13, &["foo"]), UpdateRequired);
+        assert_eq!(new.can_draw(14, &["foo"]), UpdateRequired);
         // This build draws every feature it knows, by name.
         let this = ClientCaps::this_build();
         assert_eq!(this.schema, SCHEMA_VERSION);
         assert_eq!(parse_features(&features_header()), this.features);
         assert!(FEATURES.windows(2).all(|w| w[0] < w[1]), "sorted");
-        // Nothing before features needs one.
+        // Base vocabulary is named too; additive features only from files.
         let sticky = node(json!({"type": "core://Sticky", "content": {"type": "core://Divider"}}));
-        assert!(required_features(&sticky).is_empty());
+        assert_eq!(required_features(&sticky), ["divider", "sticky"]);
+    }
+
+    /// Decision `named-vocabulary`: a client from schema 13 lists everything
+    /// it draws, so vocabulary goes away by a client no longer listing it.
+    #[test]
+    fn named_clients_draw_exactly_what_they_list() {
+        use Compatibility::*;
+        // Names are unique, valid header tokens, never additive names too.
+        let mut names: Vec<&str> = BASE_FEATURES.iter().map(|(n, _, _)| *n).collect();
+        names.sort_unstable();
+        assert!(names.windows(2).all(|w| w[0] != w[1]), "unique");
+        for (n, added, removed) in BASE_FEATURES {
+            assert!(!FEATURES.contains(n), "{n}");
+            assert!(n.chars().all(|c| c.is_ascii_lowercase() || c == '_'), "{n}");
+            assert!(
+                *added <= 12,
+                "{n}: base vocabulary ends at 12; add features/*.md"
+            );
+            assert!(
+                removed.is_none_or(|r| r > *added && r <= SCHEMA_VERSION),
+                "{n}"
+            );
+        }
+        // Schema 13 removed `create_dismiss`: this build doesn't list it.
+        assert!(!drawn_features().contains(&"create_dismiss"));
+        assert!(implied_features(13).is_empty());
+        assert!(implied_features(12).contains("create_dismiss"));
+        assert!(!implied_features(8).contains("create_dismiss"));
+        let create = |dismiss: bool| {
+            node(
+                json!({"type": "core://Button", "label": "Share", "on_click": {
+                "intent": "action.mutation.create", "query_key": "q", "entity_uri": "x://p/$nonce",
+                "entity": {}, "endpoint": "/v1/x", "payload": {}, "dismiss": dismiss}}),
+            )
+        };
+        let legacy = required_features(&create(true));
+        let plain = required_features(&create(false));
+        assert_eq!(legacy, ["button", "create", "create_dismiss"]);
+        assert_eq!(plain, ["button", "create"]);
+        assert_eq!(required_schema(&create(true)), 9);
+        let this = ClientCaps::this_build();
+        let twelve = ClientCaps::schema(12).with_features_header(&FEATURES.join(","));
+        // The old client draws both; this build only the one without dismiss.
+        assert_eq!(twelve.can_draw(9, &legacy), Compatible);
+        assert_eq!(twelve.can_draw(12, &plain), Compatible);
+        assert_eq!(this.can_draw(9, &legacy), Retired);
+        assert_eq!(this.can_draw(12, &plain), Compatible);
+        // A named client draws only what it lists, whatever its schema.
+        let bare = ClientCaps::schema(13).with_features_header("workspace,text");
+        assert_eq!(bare.can_draw(3, &["workspace", "text"]), Compatible);
+        assert_eq!(bare.can_draw(3, &["workspace", "button"]), UpdateRequired);
+        // Inside a sequence too, and the field still round-trips (the pod
+        // serves old versions unchanged to the clients that draw them).
+        let nested = node(json!({"type": "core://Button", "label": "Go", "on_click": {
+            "intent": "action.sequence", "steps": [
+                {"intent": "action.mutation.create", "query_key": "q", "entity_uri": "x://p/$nonce",
+                 "entity": {}, "endpoint": "/v1/x", "payload": {}, "dismiss": true}]}}));
+        assert!(required_features(&nested).contains(&"create_dismiss"));
+        let again: UiNode =
+            serde_json::from_str(&serde_json::to_string(&create(true)).unwrap()).unwrap();
+        assert_eq!(again, create(true));
     }
 
     #[test]

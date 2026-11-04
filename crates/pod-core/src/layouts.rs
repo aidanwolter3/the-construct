@@ -18,10 +18,11 @@
 //!    is contiguous from 0001), and edit it. The format is
 //!    `{"note": "short changelog line", "schema": N, "layout": <UiNode>}`;
 //!    the layout root is the app's `core://Workspace` (id = the app id).
-//!    `schema` is the client schema the layout is written for, normally
-//!    [`protocol::SCHEMA_VERSION`] (at least what its vocabulary needs,
-//!    [`protocol::required_schema`]); clients of other schemas are served the
-//!    newest version they can draw ([`protocol::compatibility`], D36).
+//!    `schema` is the client schema the layout is written for: 12 for a new
+//!    file (at least what its vocabulary needs, [`protocol::required_schema`];
+//!    numbered vocabulary ends at 12, decision `named-vocabulary`, so 12 lets
+//!    every client that draws its features have it). Clients are served the
+//!    newest version they can draw ([`protocol::ClientCaps::can_draw`]).
 //! 2. Nothing to list: the adapter's `build.rs` embeds every
 //!    `layouts/<app_id>/*.json` (`crates/pod-core/build_support/`). The
 //!    layout features a file uses are worked out, not declared
@@ -317,13 +318,13 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
         .get("schema")
         .and_then(Value::as_u64)
         .and_then(|n| u32::try_from(n).ok())
-        .filter(|n| (1..=protocol::SCHEMA_VERSION).contains(n))
+        .filter(|n| (1..=protocol::LAYOUT_SCHEMA).contains(n))
         .ok_or_else(|| {
             fail(format!(
                 "\"schema\" must be the client schema the layout is written for, 1..={} \
-                 (normally the current one, {})",
-                protocol::SCHEMA_VERSION,
-                protocol::SCHEMA_VERSION
+                 (normally {}: newer vocabulary is named features, not numbers)",
+                protocol::LAYOUT_SCHEMA,
+                protocol::LAYOUT_SCHEMA
             ))
         })?;
     let needs = protocol::required_schema(&parsed);
@@ -564,7 +565,11 @@ pub fn active_for(
             latest = latest.version,
             served = v.version,
             schema = client.schema,
-            features = ?client.features,
+            missing = ?latest
+                .features
+                .iter()
+                .filter(|f| !client.features.contains(*f))
+                .collect::<Vec<_>>(),
             "served an older layout version the client can draw"
         );
     }

@@ -34,7 +34,7 @@ fn layout(id: &'static str, endpoint: &str, data: &str) -> LayoutSource {
             "intent": "action.mutation.optimistic", "entity_uri": "{id}://x", "field": "n",
             "value_expr": "1", "rollback_value": 0, "endpoint": "{endpoint}",
             "payload": {{}}}}}}}}]}}}}"#,
-        schema = protocol::SCHEMA_VERSION
+        schema = protocol::LAYOUT_SCHEMA
     );
     LayoutSource {
         app_id: id,
@@ -290,10 +290,12 @@ fn a_layout_file_may_only_use_its_sources_routes() {
 }
 
 async fn get_json(pod: &Pod, path: &str, bearer: Option<&str>) -> (StatusCode, Value) {
-    let mut req = Request::get(path).header(
-        protocol::SCHEMA_HEADER,
-        protocol::SCHEMA_VERSION.to_string(),
-    );
+    let mut req = Request::get(path)
+        .header(
+            protocol::SCHEMA_HEADER,
+            protocol::SCHEMA_VERSION.to_string(),
+        )
+        .header(protocol::FEATURES_HEADER, protocol::features_header());
     if let Some(t) = bearer {
         req = req.header("authorization", format!("Bearer {t}"));
     }

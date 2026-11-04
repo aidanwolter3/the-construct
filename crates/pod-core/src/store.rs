@@ -236,6 +236,10 @@ const MIGRATIONS: &[Migration] = &[
      ALTER TABLE app_versions ADD COLUMN author TEXT;
      ALTER TABLE app_versions ADD COLUMN meta_json TEXT;",
     ),
+    // v17 (decision `named-vocabulary`): `features` names the base
+    // vocabulary too, so a version's features are everything it uses.
+    // Worked out again for every stored version.
+    Migration::Rust(migrate_v17),
 ];
 
 /// A pod setting inside a transaction (an adapter migration reads its
@@ -272,6 +276,22 @@ fn migrate_v9(tx: &Transaction<'_>) -> rusqlite::Result<()> {
 /// read.
 fn schema_of_json(json: &str) -> u32 {
     serde_json::from_str::<protocol::UiNode>(json).map_or(1, |n| protocol::required_schema(&n))
+}
+
+fn migrate_v17(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    let rows: Vec<(String, i64, String)> = {
+        let mut stmt = tx.prepare("SELECT app_id, version, hash FROM app_versions")?;
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    for (app_id, version, hash) in rows {
+        let features = features_of_json(&get_blob(tx, &hash)?);
+        tx.execute(
+            "UPDATE app_versions SET features = ?1 WHERE app_id = ?2 AND version = ?3",
+            params![features, app_id, version],
+        )?;
+    }
+    Ok(())
 }
 
 /// The layout features a stored layout uses ([`protocol::required_features`]),
@@ -1380,7 +1400,7 @@ impl Store {
                 .iter()
                 .all(|n| protocol::NODE_TYPES.contains(&n.type_tag().as_ref()))
         });
-        let schema = if current { protocol::SCHEMA_VERSION } else { 1 };
+        let schema = if current { protocol::LAYOUT_SCHEMA } else { 1 };
         append_app_version_on(&self.conn(), app_id, json, source, note, None, schema)
     }
 
@@ -1452,9 +1472,9 @@ mod tests {
             s.append_app_version("a", layout, SOURCE_MANUAL, None)
                 .unwrap();
         }
-        // No layout before features uses one.
+        // Base vocabulary is named too (decision `named-vocabulary`).
         let v1 = s.app_versions("a", None, 10).unwrap();
-        assert!(v1.iter().all(|v| v.features.is_empty()));
+        assert!(v1.iter().all(|v| v.features == ["workspace"]));
         // Stand in for a layout using vocabulary that is a feature.
         s.conn()
             .execute(
@@ -1463,8 +1483,8 @@ mod tests {
             )
             .unwrap();
         let newest = |header: &str| {
-            let client =
-                protocol::ClientCaps::schema(protocol::SCHEMA_VERSION).with_features_header(header);
+            // A schema-12 client: its base vocabulary is implied.
+            let client = protocol::ClientCaps::schema(12).with_features_header(header);
             crate::layouts::newest_compatible(&s, "a", &client)
                 .unwrap()
                 .map(|v| v.version)
@@ -1474,6 +1494,48 @@ mod tests {
         assert_eq!(newest("zap,foo,other"), Some(3));
         let (v3, _) = s.app_version("a", 3).unwrap().unwrap();
         assert_eq!(v3.features, ["foo", "zap"]);
+        // A named client draws exactly what it lists.
+        let named = |header: &str| {
+            let client = protocol::ClientCaps::schema(13).with_features_header(header);
+            crate::layouts::newest_compatible(&s, "a", &client)
+                .unwrap()
+                .map(|v| v.version)
+        };
+        assert_eq!(named("foo,zap"), Some(3));
+        assert_eq!(named("workspace"), Some(2));
+        assert_eq!(named(""), None);
+    }
+
+    /// v17 names every version's base vocabulary, so a version using
+    /// removed vocabulary (`create_dismiss`) is retired for current clients.
+    #[test]
+    fn v17_names_the_base_vocabulary_of_stored_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.db");
+        let share = r#"{"type":"core://Workspace","id":"a","title":"A","slots":[{"slot_id":"s","provider_uri":"p","content":{"type":"core://Button","label":"Share","on_click":{"intent":"action.mutation.create","query_key":"q","entity_uri":"x://p/$nonce","entity":{},"endpoint":"/e","payload":{},"dismiss":true}}}]}"#;
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            migrate(&mut conn, 16).unwrap();
+            let hash = put_blob(&conn, share).unwrap();
+            conn.execute(
+                "INSERT INTO app_versions (app_id, version, hash, source, created_at, schema, features)
+                 VALUES ('a', 1, ?1, 'manual', 0, 9, '')",
+                [hash],
+            )
+            .unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        let (v, _) = s.app_version("a", 1).unwrap().unwrap();
+        assert_eq!(
+            v.features,
+            ["button", "create", "create_dismiss", "workspace"]
+        );
+        let old = protocol::ClientCaps::schema(12).with_features_header("action_sequence");
+        assert_eq!(v.compatibility(&old), protocol::Compatibility::Compatible);
+        assert_eq!(
+            v.compatibility(&protocol::ClientCaps::this_build()),
+            protocol::Compatibility::Retired
+        );
     }
 
     #[test]

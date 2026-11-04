@@ -24,7 +24,8 @@ pub use notify::{
     NotificationList, PushPayload, ReadEvent, channel_key,
 };
 pub use schema::{
-    ClientCaps, Compatibility, FEATURES, FEATURES_HEADER, RETIRED, SCHEMA_HEADER, SCHEMA_VERSION,
-    compatibility, feature, features_header, oldest_layout_schema, parse_features,
-    required_features, required_schema,
+    BASE_FEATURES, ClientCaps, Compatibility, FEATURES, FEATURES_HEADER, LAYOUT_SCHEMA,
+    NAMED_SCHEMA, RETIRED, SCHEMA_HEADER, SCHEMA_VERSION, compatibility, drawn_features, feature,
+    features_header, implied_features, oldest_layout_schema, parse_features, required_features,
+    required_schema,
 };
