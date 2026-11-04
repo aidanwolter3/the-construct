@@ -133,7 +133,25 @@ class SimScriptTest {
         assertFailsWith<ScriptParseException> { parseScript("wait-images soon") }
         assertFailsWith<ScriptParseException> { parseScript("swipe-left") }
         assertFailsWith<ScriptParseException> { parseScript("scroll-to") }
-        assertFailsWith<ScriptParseException> { parseScript("swipe-up x") }
+        assertFailsWith<ScriptParseException> { parseScript("swipe-sideways x") }
+    }
+
+    @Test
+    fun launcherCommands() {
+        val steps = parseScript("swipe-up tag:home-apps; swipe-down Home; long-press tag:app:recipes; assert-launched com.android.camera2")
+        assertEquals("up", assertIs<SimStep.Swipe>(steps[0]).direction)
+        assertEquals("swipe-up", steps[0].command)
+        assertEquals("down", assertIs<SimStep.Swipe>(steps[1]).direction)
+        assertEquals("tag:app:recipes", assertIs<SimStep.LongPress>(steps[2]).target)
+        assertEquals("com.android.camera2", assertIs<SimStep.AssertLaunched>(steps[3]).packageName)
+        assertFailsWith<ScriptParseException> { parseScript("long-press") }
+        assertFailsWith<ScriptParseException> { parseScript("assert-launched") }
+    }
+
+    @Test
+    fun deviceAppsFixtureParses() {
+        val apps = parseDeviceApps("""[{"package":"com.a","label":"A"},{"package":"com.b","label":"B b"}]""")
+        assertEquals(listOf(org.theconstruct.DeviceApp("com.a", "A"), org.theconstruct.DeviceApp("com.b", "B b")), apps)
     }
 
     @Test

@@ -34,6 +34,10 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import org.theconstruct.AuthRedirects
+import org.theconstruct.BundledLayouts
+import org.theconstruct.DeviceApp
+import org.theconstruct.prefersDarkSystemBars
+import androidx.compose.runtime.collectAsState
 import org.theconstruct.ConstructApp
 import org.theconstruct.ConstructController
 import org.theconstruct.ConstructEngineBridge
@@ -149,11 +153,25 @@ class MainActivity : ComponentActivity() {
             )
             // The system Photo Picker, registered with this activity's result registry (core://MediaPicker).
             val picker = rememberAndroidMediaPicker()
+            // A launcher home layout (chrome hidden) is dark: the bars and the area behind them follow it.
+            val state by session.controller.state.collectAsState()
+            val dark = state.prefersDarkSystemBars()
+            LaunchedEffect(dark) {
+                val style = if (dark) {
+                    SystemBarStyle.dark(AndroidColor.TRANSPARENT)
+                } else {
+                    SystemBarStyle.light(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT)
+                }
+                enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+            }
             // The shared UI's menu button sits at the top-left of this padded box, clear of the system bars.
-            Box(Modifier.fillMaxSize().background(Color.White).safeDrawingPadding()) {
+            Box(Modifier.fillMaxSize().background(if (dark) Color(0xFF0A0C0F) else Color.White).safeDrawingPadding()) {
                 key(session) { ConstructApp(session.controller, server = server, mediaPicker = picker) }
             }
-            LaunchedEffect(session) { setUpNotifications(session) }
+            LaunchedEffect(session) {
+                setUpNotifications(session)
+                refreshDeviceApps(session.controller)
+            }
         }
     }
 
@@ -171,6 +189,13 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         handleAuthRedirect(intent)
         handleNotificationTap(intent)
+        // Home pressed while The Construct is the launcher: back to the home app, its screens closed.
+        if (intent.action == Intent.ACTION_MAIN && intent.hasCategory(Intent.CATEGORY_HOME)) {
+            val controller = vm.controller
+            controller.menu.closeMenu()
+            controller.inbox.close()
+            if (!controller.goHome()) while (controller.navigation.back()) Unit
+        }
     }
 
     override fun onStart() {
@@ -187,6 +212,25 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // The pod session may have appeared since (pod code entered, signed in): try again.
         if (pushReadyFor !== vm.controller) setUpNotifications(vm.session)
+        refreshDeviceApps(vm.controller)
+    }
+
+    /** The launcher (feature `device_apps`): the apps this phone can start, read off the main thread. */
+    private fun refreshDeviceApps(controller: ConstructController) {
+        val pm = packageManager
+        val own = packageName
+        Thread({
+            val apps = try {
+                val query = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                pm.queryIntentActivities(query, 0)
+                    .filter { it.activityInfo.packageName != own }
+                    .map { DeviceApp(it.activityInfo.packageName, it.loadLabel(pm).toString()) }
+            } catch (e: Exception) {
+                Log.w(TAG, "cannot list the installed apps: $e")
+                return@Thread
+            }
+            controller.setDeviceApps(apps)
+        }, "construct-device-apps").start()
     }
 
     /**
@@ -387,9 +431,20 @@ internal class ConstructViewModel(config: EngineConfig, private val appContext: 
         Log.i(TAG, "starting base_url=${config.baseUrl} workspace=${config.workspace} storage=${config.storageDir}")
         config.storageDir.mkdirs()
         val open = { workspace: String -> openEngine(config, workspace) }
+        val home = BuildConfig.CONSTRUCT_WORKSPACE
         val controller = ConstructController(
-            open(config.workspace), config.workspace, defaultAppId = BuildConfig.CONSTRUCT_WORKSPACE, openBridge = open,
+            open(config.workspace), config.workspace, defaultAppId = home, openBridge = open,
+            // The launcher: Back at another app's root goes home; home draws its bundled layout until the pod answers.
+            homeAppId = home, fallbackLayouts = BundledLayouts.forApps(home),
         )
+        controller.deviceLauncher = { pkg ->
+            val launch = appContext.packageManager.getLaunchIntentForPackage(pkg)
+            if (launch == null) {
+                Log.w(TAG, "no launch intent for $pkg")
+            } else {
+                appContext.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+        }
         // Notifications (D52): live arrivals show as OS notifications while the app is in the background; the
         // push service hands endpoints and messages to this controller while it is alive.
         controller.setDeviceInfo("android", "${Build.MANUFACTURER} ${Build.MODEL}".trim())

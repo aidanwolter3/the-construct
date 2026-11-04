@@ -3,6 +3,11 @@ package org.theconstruct
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.material3.LocalContentColor
@@ -106,7 +111,16 @@ fun RenderUiNode(
 ) {
     val dispatch: (ActionIntent) -> Unit = { onDispatch(bindIntent(it, item)) }
     when (node) {
-        is UiNode.Workspace -> {
+        is UiNode.Workspace -> if (node.chrome == Chrome.Hidden) {
+            // Feature `hidden_chrome`: only the slots, filling the screen (a `core://Backdrop` scrolls its own).
+            Column(modifier.fillMaxSize()) {
+                node.slots.forEach { slot ->
+                    key(slot.slotId) {
+                        RenderUiNode(slot.content, entities, onDispatch, Modifier.weight(1f).fillMaxWidth(), item)
+                    }
+                }
+            }
+        } else {
             val scroll = rememberScrollState()
             // `core://Sticky` content pins below the menu and bell buttons drawn over the top corners.
             val sticky = remember(scroll) { StickyScroll(scroll, topInset = STICKY_WORKSPACE_INSET) }
@@ -163,7 +177,12 @@ fun RenderUiNode(
                     fontWeight = FontWeight.SemiBold,
                 )
             },
-            color = if (node.style == TextStyle.Secondary) MutedText else Color.Unspecified,
+            color = when {
+                node.style == TextStyle.Secondary -> if (LocalInBackdrop.current) MaterialTheme.colorScheme.onSurfaceVariant else MutedText
+                node.style == TextStyle.Caption && LocalInBackdrop.current -> MaterialTheme.colorScheme.primary
+                else -> Color.Unspecified
+            },
+            letterSpacing = if (node.style == TextStyle.Caption && LocalInBackdrop.current) 1.5.sp else TextUnit.Unspecified,
             modifier = modifier,
         )
 
@@ -228,7 +247,15 @@ fun RenderUiNode(
         is UiNode.Tappable -> {
             val description = node.contentDescription?.let { interpolate(it, entities, item) }
             val tag = node.tag?.let { bindItemTokens(it, item) }
-            var mod = modifier.clickable(onClickLabel = description) { dispatch(node.onClick) }
+            val longPress = node.onLongPress
+            var mod = if (longPress == null) {
+                modifier.clickable(onClickLabel = description) { dispatch(node.onClick) }
+            } else {
+                modifier.combinedClickable(
+                    onClickLabel = description,
+                    onLongClick = { dispatch(longPress) },
+                ) { dispatch(node.onClick) }
+            }
             if (description != null) mod = mod.semantics { contentDescription = description }
             if (tag != null) mod = mod.testTag(tag)
             RenderUiNode(node.content, entities, onDispatch, mod, item)
@@ -246,11 +273,19 @@ fun RenderUiNode(
             val size = (node.sizeDp ?: PROGRESS_DEFAULT_SIZE_DP).dp
             CircularProgressIndicator(
                 modifier = modifier.size(size).semantics { contentDescription = "In progress" },
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (LocalInBackdrop.current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 // A thin ring at any size: about an eighth of the diameter, at least 1.5 dp.
                 strokeWidth = maxOf(1.5.dp, size / 8),
             )
         }
+
+        is UiNode.Backdrop -> NodeBackdrop(node, entities, onDispatch, item, modifier)
+
+        is UiNode.Clock -> NodeClock(node, modifier)
+
+        is UiNode.Swipe -> NodeSwipe(node, entities, onDispatch, dispatch, item, modifier)
+
+        is UiNode.OnAppear -> NodeOnAppear(node, dispatch)
 
         is UiNode.Unknown -> Text(
             "Unsupported component: ${node.type.ifEmpty { "<missing type>" }}",
@@ -512,6 +547,14 @@ private fun FormTextField(node: UiNode.TextField, dispatch: (ActionIntent) -> Un
     val submit = node.onSubmit
     val lines = node.lines?.coerceIn(1, MAX_TEXT_FIELD_LINES)
     val singleLine = submit == null && (lines == null || lines == 1)
+    // Feature `autofocus`: focus (and so the keyboard) once, when the field first appears.
+    val focus = remember { FocusRequester() }
+    if (node.autofocus) {
+        LaunchedEffect(Unit) {
+            withFrameNanos { }
+            runCatching { focus.requestFocus() }
+        }
+    }
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
             value = value,
@@ -532,7 +575,7 @@ private fun FormTextField(node: UiNode.TextField, dispatch: (ActionIntent) -> Un
             } else {
                 null
             },
-            modifier = Modifier.weight(1f).testTag("textfield:${node.field}"),
+            modifier = Modifier.weight(1f).focusRequester(focus).testTag("textfield:${node.field}"),
         )
         if (submit != null) {
             IconButton(

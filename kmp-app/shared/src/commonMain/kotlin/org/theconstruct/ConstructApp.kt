@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 /**
  * UI state derived from engine snapshots. [workspace] is null until the engine has a layout.
@@ -58,7 +59,48 @@ data class ConstructState(
     val engine: Int = 0,
     /** Data path loads (D34), from `loads_json`. */
     val loads: Map<String, LoadState> = emptyMap(),
+    /**
+     * [workspace] is the app's bundled layout ([BundledLayouts]), not the engine's: the engine has none yet (first
+     * start offline, the pod unreachable or without the app). The engine's first workspace replaces it.
+     */
+    val fallback: Boolean = false,
 )
+
+/** An app installed on the device (feature `device_apps`), listed in the query [DEVICE_APPS_QUERY]. */
+data class DeviceApp(val packageName: String, val label: String)
+
+/** The query the client fills with the device's apps (feature `device_apps`); never sent to the pod. */
+const val DEVICE_APPS_QUERY = "device:apps"
+
+private const val DEVICE_APP_SCHEME = "device://apps/"
+
+/** The entity URI of a device app. */
+fun deviceAppUri(packageName: String): String = DEVICE_APP_SCHEME + packageName
+
+/**
+ * [state] with [apps] as the `device:apps` query (sorted by label, case ignored) and their `device://apps/<package>`
+ * entities (`package`, `label`, `letter`, `kind: "device"`), replacing any listed before.
+ */
+fun mergeDeviceApps(state: ConstructState, apps: List<DeviceApp>): ConstructState {
+    val sorted = apps.filter { it.packageName.isNotBlank() }.distinctBy { it.packageName }
+        .sortedWith(compareBy<DeviceApp> { it.label.lowercase() }.thenBy { it.packageName })
+    val own = sorted.associate { a ->
+        val first = a.label.trim().firstOrNull()
+        val letter = if (first != null && first.isLetter()) first.uppercaseChar().toString() else "#"
+        deviceAppUri(a.packageName) to JsonObject(
+            mapOf(
+                "package" to JsonPrimitive(a.packageName),
+                "label" to JsonPrimitive(a.label),
+                "letter" to JsonPrimitive(letter),
+                "kind" to JsonPrimitive("device"),
+            ),
+        )
+    }
+    return state.copy(
+        entities = state.entities.filterKeys { !it.startsWith(DEVICE_APP_SCHEME) } + own,
+        queries = state.queries + (DEVICE_APPS_QUERY to sorted.map { deviceAppUri(it.packageName) }),
+    )
+}
 
 /**
  * Bridges a [ConstructEngineBridge] to Compose. Snapshot callbacks may arrive on any thread;
@@ -85,6 +127,10 @@ class ConstructController internal constructor(
     appId: String?,
     io: CoroutineDispatcher,
     private val defaultAppId: String? = null,
+    /** The launcher's home app: a system Back at the root of another app opens it ([goHome]); null: not a launcher. */
+    val homeAppId: String? = null,
+    /** Bundled layouts by app id ([BundledLayouts]), drawn while that app's engine has no workspace yet. */
+    private val fallbackLayouts: Map<String, UiNode> = emptyMap(),
     private val openBridge: ((appId: String) -> ConstructEngineBridge)? = null,
 ) {
     /**
@@ -95,8 +141,10 @@ class ConstructController internal constructor(
         bridge: ConstructEngineBridge,
         appId: String? = null,
         defaultAppId: String? = null,
+        homeAppId: String? = null,
+        fallbackLayouts: Map<String, UiNode> = emptyMap(),
         openBridge: ((appId: String) -> ConstructEngineBridge)? = null,
-    ) : this(bridge, appId, layoutIoDispatcher, defaultAppId, openBridge)
+    ) : this(bridge, appId, layoutIoDispatcher, defaultAppId, homeAppId, fallbackLayouts, openBridge)
 
     private val _notice = MutableStateFlow<String?>(null)
 
@@ -109,6 +157,10 @@ class ConstructController internal constructor(
 
     @Volatile
     private var bridge: ConstructEngineBridge = bridge
+
+    /** The device's apps ([setDeviceApps]), merged into every state. */
+    @Volatile
+    private var deviceApps: List<DeviceApp> = emptyList()
 
     private val _state = MutableStateFlow(ConstructState())
     val state: StateFlow<ConstructState> = _state.asStateFlow()
@@ -175,7 +227,73 @@ class ConstructController internal constructor(
     val isClosed: Boolean get() = closed
 
     init {
+        _state.value = withLocal(_state.value)
         subscribe(bridge, 0)
+    }
+
+    /**
+     * What the client adds to the engine's state: the current app's bundled layout while the engine has none (and the
+     * app isn't gone), and the device's apps (feature `device_apps`).
+     */
+    private fun withLocal(s: ConstructState): ConstructState {
+        var out = s
+        if (out.workspace == null && !out.activeLayout.gone) {
+            val fallback = (_appId.value ?: out.activeLayout.appId)?.let(fallbackLayouts::get)
+            if (fallback != null) out = out.copy(workspace = fallback, fallback = true)
+        }
+        val apps = deviceApps
+        if (apps.isNotEmpty() || out.queries.containsKey(DEVICE_APPS_QUERY)) out = mergeDeviceApps(out, apps)
+        return out
+    }
+
+    /** The device's apps (feature `device_apps`): listed in `device:apps` at once and in every later state. */
+    fun setDeviceApps(apps: List<DeviceApp>) {
+        deviceApps = apps.toList()
+        _state.update { withLocal(it) }
+    }
+
+    private val _launchedApps = MutableStateFlow<List<String>>(emptyList())
+
+    /** The device apps `action.device.launch` started, oldest first (the simulator's `assert-launched` reads them). */
+    val launchedApps: StateFlow<List<String>> = _launchedApps.asStateFlow()
+
+    /** Starts a device app by package (the platform's; default: nothing). */
+    @Volatile
+    var deviceLauncher: (String) -> Unit = {}
+
+    private fun launchDeviceApp(packageName: String) {
+        val p = packageName.trim()
+        if (p.isEmpty() || p.startsWith("\$")) {
+            println("[Construct] action.device.launch: no package ($p); ignored")
+            return
+        }
+        _launchedApps.value = _launchedApps.value + p
+        try {
+            deviceLauncher(p)
+        } catch (t: Throwable) {
+            println("[Construct] launching $p failed: $t")
+        }
+    }
+
+    /** `action.app.open`: closes the menu and inbox and opens [id] (blank or unbound: nothing). */
+    private fun openAppFromLayout(id: String) {
+        val app = id.trim()
+        if (app.isEmpty() || app.startsWith("\$")) {
+            println("[Construct] action.app.open: no app id ($app); ignored")
+            return
+        }
+        menu.closeMenu()
+        inbox.close()
+        if (!openApp(app)) println("[Construct] cannot open app $app")
+    }
+
+    /** Opens the home app ([homeAppId]) unless it is on screen; false when there is none or it can't be opened. */
+    fun goHome(): Boolean {
+        val home = homeAppId ?: return false
+        if (home == currentAppId()) return false
+        menu.closeMenu()
+        inbox.close()
+        return openApp(home)
     }
 
     private fun subscribe(b: ConstructEngineBridge, engine: Int) {
@@ -231,7 +349,7 @@ class ConstructController internal constructor(
             when {
                 cur.engine != engine || snapshot.seq <= cur.seq -> cur
                 // Unknown connectivity keeps the last answer (carried over by openApp): no offline flash on a switch.
-                decoded != null -> decoded.copy(isOnline = decoded.isOnline ?: cur.isOnline)
+                decoded != null -> withLocal(decoded.copy(isOnline = decoded.isOnline ?: cur.isOnline))
                 else -> cur.copy(
                     auth = AuthInfo.parse(snapshot.authJson),
                     isOnline = snapshot.isOnline ?: cur.isOnline,
@@ -285,9 +403,27 @@ class ConstructController internal constructor(
             bound.steps.forEach(::run)
             return
         }
-        if (bound is ActionIntent.OpenLink) {
-            openLink(bound.url)
-            return
+        when (bound) {
+            is ActionIntent.OpenLink -> {
+                openLink(bound.url)
+                return
+            }
+            is ActionIntent.OpenApp -> {
+                openAppFromLayout(bound.appId)
+                return
+            }
+            is ActionIntent.LaunchDeviceApp -> {
+                launchDeviceApp(bound.packageName)
+                return
+            }
+            is ActionIntent.OpenShell -> {
+                when (bound.panel) {
+                    ShellPanel.Menu -> menu.openMenu()
+                    ShellPanel.Inbox -> inbox.openInbox()
+                }
+                return
+            }
+            else -> {}
         }
         if (navigation.handle(bound)) return
         send(bound)
@@ -559,7 +695,7 @@ class ConstructController internal constructor(
             if (!keepNotice) _notice.value = null
             _pinned.value = null
             navigation.clear()
-            _state.value = ConstructState(isOnline = _state.value.isOnline, engine = engine)
+            _state.value = withLocal(ConstructState(isOnline = _state.value.isOnline, engine = engine))
             // A target for the app being opened is re-keyed to its new engine ([openNotification] sets it after this).
             pendingTarget.value = null
             subscribe(next, engine)
@@ -642,16 +778,27 @@ fun ConstructApp(
                                 RenderUiNode(workspace, state.entities, controller::dispatch, Modifier.fillMaxSize())
                             }
                         }
-                        MenuButton(
-                            badge = showMenuBadge(state, pin),
-                            onClick = controller.menu::openMenu,
-                            modifier = Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 8.dp),
-                        )
-                        BellButton(
-                            unread = unread.total,
-                            onClick = controller.inbox::openInbox,
-                            modifier = Modifier.align(Alignment.TopEnd).padding(end = 8.dp, top = 8.dp),
-                        )
+                        // Feature `hidden_chrome`: a layout that hides the client's buttons opens them itself.
+                        if ((workspace as? UiNode.Workspace)?.chrome != Chrome.Hidden) {
+                            MenuButton(
+                                badge = showMenuBadge(state, pin),
+                                onClick = controller.menu::openMenu,
+                                modifier = Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 8.dp),
+                            )
+                            BellButton(
+                                unread = unread.total,
+                                onClick = controller.inbox::openInbox,
+                                modifier = Modifier.align(Alignment.TopEnd).padding(end = 8.dp, top = 8.dp),
+                            )
+                        }
+                        // A launcher: Back at the root of another app goes home (screens, menu and inbox handle
+                        // their own Back first).
+                        val appOnScreen by controller.appId.collectAsState()
+                        val home = controller.homeAppId
+                        PlatformBackHandler(
+                            enabled = home != null && (appOnScreen ?: state.activeLayout.appId) != home &&
+                                controller.navigation.stack.isEmpty() && !controller.menu.open && !controller.inbox.open,
+                        ) { controller.goHome() }
                         // An open screen covers the layout and the buttons; the drawer still opens over it.
                         ScreenHost(controller, state)
                         notice?.takeUnless { state.activeLayout.gone }?.let {

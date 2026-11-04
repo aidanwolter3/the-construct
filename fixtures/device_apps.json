@@ -1,0 +1,74 @@
+[
+  {
+    "package": "com.android.calendar",
+    "label": "Calendar"
+  },
+  {
+    "package": "com.android.camera2",
+    "label": "Camera"
+  },
+  {
+    "package": "com.android.chrome",
+    "label": "Chrome"
+  },
+  {
+    "package": "com.android.deskclock",
+    "label": "Clock"
+  },
+  {
+    "package": "com.google.android.gm",
+    "label": "Gmail"
+  },
+  {
+    "package": "com.google.android.keep",
+    "label": "Keep Notes"
+  },
+  {
+    "package": "com.google.android.apps.maps",
+    "label": "Maps"
+  },
+  {
+    "package": "com.google.android.apps.messaging",
+    "label": "Messages"
+  },
+  {
+    "package": "com.google.android.dialer",
+    "label": "Phone"
+  },
+  {
+    "package": "com.google.android.apps.photos",
+    "label": "Photos"
+  },
+  {
+    "package": "com.android.vending",
+    "label": "Play Store"
+  },
+  {
+    "package": "com.google.android.apps.recorder",
+    "label": "Recorder"
+  },
+  {
+    "package": "com.reddit.frontpage",
+    "label": "Reddit"
+  },
+  {
+    "package": "com.android.settings",
+    "label": "Settings"
+  },
+  {
+    "package": "com.spotify.music",
+    "label": "Spotify"
+  },
+  {
+    "package": "com.google.android.youtube",
+    "label": "YouTube"
+  },
+  {
+    "package": "com.strava",
+    "label": "Strava"
+  },
+  {
+    "package": "org.wikipedia",
+    "label": "Wikipedia"
+  }
+]

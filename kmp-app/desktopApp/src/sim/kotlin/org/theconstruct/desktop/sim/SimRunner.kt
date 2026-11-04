@@ -19,6 +19,9 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
+import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.test.swipeDown
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.onFirst
@@ -45,6 +48,7 @@ import org.theconstruct.ImageLoads
 import org.theconstruct.LayoutCalls
 import org.theconstruct.MediaCalls
 import org.theconstruct.LocalBackPresses
+import org.theconstruct.LocalClockSeconds
 import org.theconstruct.MenuState
 import org.theconstruct.ServerChoice
 import androidx.compose.ui.semantics.SemanticsActions
@@ -114,6 +118,8 @@ class SimRunner(
     private val notify: ((app: String, channel: String, title: String) -> Unit)? = null,
     /** The server the menu shows at first; `set-server` records the choice (the simulator never switches servers). */
     server: String = SIM_SERVERS.first().url,
+    /** What `core://Clock` shows, in epoch seconds (default: the real time). */
+    private val clock: () -> Long = { System.currentTimeMillis() / 1000 },
     /** The photo picker `core://MediaPicker` opens; `pick` queues its files. */
     val mediaPicker: SimMediaPicker = SimMediaPicker(log),
     /** Fixture mode: the fake pod finishes the posts in flight ([FakeEngineBridge.settle]); run by `wait` and `idle`. */
@@ -158,7 +164,10 @@ class SimRunner(
                     val backPresses = BackPresses()
                     this@SimRunner.backPresses = backPresses
                     setContent {
-                        CompositionLocalProvider(LocalBackPresses provides backPresses) { ConstructApp(controller, server = serverChoice, mediaPicker = mediaPicker, openLink = {}) }
+                        CompositionLocalProvider(
+                            LocalBackPresses provides backPresses,
+                            LocalClockSeconds provides clock,
+                        ) { ConstructApp(controller, server = serverChoice, mediaPicker = mediaPicker, openLink = {}) }
                     }
                     waitForIdle()
                     while (i < steps.size) {
@@ -232,7 +241,14 @@ class SimRunner(
             is SimStep.Swipe -> {
                 waitForIdle()
                 val (node, how) = findTarget(step.target)
-                node.performTouchInput { if (step.direction == "left") swipeLeft() else swipeRight() }
+                node.performTouchInput {
+                    when (step.direction) {
+                        "left" -> swipeLeft()
+                        "right" -> swipeRight()
+                        "up" -> swipeUp()
+                        else -> swipeDown()
+                    }
+                }
                 waitForIdle()
                 return how to null
             }
@@ -279,6 +295,19 @@ class SimRunner(
             is SimStep.AssertText -> {
                 awaitCondition("text '${step.text}' to be present") { hasAnyText(step.text) }
                 return "" to null
+            }
+            is SimStep.LongPress -> {
+                waitForIdle()
+                val (node, how) = findTarget(step.target)
+                node.performTouchInput { longClick() }
+                waitForIdle()
+                return how to null
+            }
+            is SimStep.AssertLaunched -> {
+                awaitCondition("device app '${step.packageName}' to be launched") {
+                    step.packageName in controller.launchedApps.value
+                }
+                return "launched ${step.packageName}" to null
             }
             is SimStep.AssertLink -> {
                 awaitCondition("a link containing '${step.text}' to be opened") {

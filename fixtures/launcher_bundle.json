@@ -1,0 +1,826 @@
+{
+  "version": "1.0.0",
+  "workspace": {
+    "type": "core://Workspace",
+    "id": "launcher",
+    "title": "Home",
+    "chrome": "hidden",
+    "slots": [
+      {
+        "slot_id": "home",
+        "provider_uri": "core://home",
+        "content": {
+          "type": "core://Swipe",
+          "on_swipe_up": {
+            "intent": "action.navigation.open",
+            "target_uri": "home://drawer",
+            "presentation": "Push"
+          },
+          "on_swipe_down": {
+            "intent": "action.shell.open",
+            "panel": "inbox"
+          },
+          "content": {
+            "type": "core://Backdrop",
+            "content": {
+              "type": "core://Column",
+              "children": [
+                {
+                  "type": "core://Spacer",
+                  "size_dp": 40
+                },
+                {
+                  "type": "core://Clock",
+                  "format": "time"
+                },
+                {
+                  "type": "core://Clock",
+                  "format": "date"
+                },
+                {
+                  "type": "core://Spacer",
+                  "size_dp": 56
+                },
+                {
+                  "type": "core://List",
+                  "query_key": "home:pins",
+                  "empty_text": "Nothing pinned yet. Swipe up, then long-press an app to pin it here.",
+                  "item_template": {
+                    "type": "core://Conditional",
+                    "value": "$item.unpinned",
+                    "content": {
+                      "type": "core://Column",
+                      "children": [
+                        {
+                          "type": "core://Conditional",
+                          "value": "$item.kind",
+                          "content": {
+                            "type": "core://Tappable",
+                            "on_click": {
+                              "intent": "action.app.open",
+                              "app_id": "$item.target"
+                            },
+                            "content": {
+                              "type": "core://Row",
+                              "children": [
+                                {
+                                  "type": "core://Text",
+                                  "value_expr": "$item.title",
+                                  "style": "Headline"
+                                },
+                                {
+                                  "type": "core://Conditional",
+                                  "value": "$item.kind",
+                                  "content": {
+                                    "type": "core://Text",
+                                    "value_expr": "◇",
+                                    "style": "Secondary"
+                                  },
+                                  "equals": "construct"
+                                }
+                              ],
+                              "spacing_dp": 10,
+                              "padding_v_dp": 6
+                            },
+                            "on_long_press": {
+                              "intent": "action.mutation.optimistic",
+                              "entity_uri": "$item.uri",
+                              "field": "unpinned",
+                              "value_expr": "true",
+                              "rollback_value": false,
+                              "endpoint": "/v1/home/pins/remove",
+                              "payload": {
+                                "id": "$item.id"
+                              }
+                            },
+                            "content_description": "$item.title",
+                            "tag": "pin:$item.target"
+                          },
+                          "equals": "construct"
+                        },
+                        {
+                          "type": "core://Conditional",
+                          "value": "$item.kind",
+                          "content": {
+                            "type": "core://Tappable",
+                            "on_click": {
+                              "intent": "action.device.launch",
+                              "package": "$item.target"
+                            },
+                            "content": {
+                              "type": "core://Row",
+                              "children": [
+                                {
+                                  "type": "core://Text",
+                                  "value_expr": "$item.title",
+                                  "style": "Headline"
+                                },
+                                {
+                                  "type": "core://Conditional",
+                                  "value": "$item.kind",
+                                  "content": {
+                                    "type": "core://Text",
+                                    "value_expr": "◇",
+                                    "style": "Secondary"
+                                  },
+                                  "equals": "construct"
+                                }
+                              ],
+                              "spacing_dp": 10,
+                              "padding_v_dp": 6
+                            },
+                            "on_long_press": {
+                              "intent": "action.mutation.optimistic",
+                              "entity_uri": "$item.uri",
+                              "field": "unpinned",
+                              "value_expr": "true",
+                              "rollback_value": false,
+                              "endpoint": "/v1/home/pins/remove",
+                              "payload": {
+                                "id": "$item.id"
+                              }
+                            },
+                            "content_description": "$item.title",
+                            "tag": "pin:$item.target"
+                          },
+                          "equals": "device"
+                        }
+                      ]
+                    },
+                    "equals": "false"
+                  }
+                },
+                {
+                  "type": "core://Spacer",
+                  "size_dp": 24
+                },
+                {
+                  "type": "core://List",
+                  "query_key": "home:requests",
+                  "spacing_dp": 8,
+                  "item_template": {
+                    "type": "core://Tappable",
+                    "on_click": {
+                      "intent": "action.navigation.open",
+                      "target_uri": "home://requests/$item.id",
+                      "presentation": "Push"
+                    },
+                    "content": {
+                      "type": "core://Box",
+                      "background": "#14181C",
+                      "border_color": "#232A31",
+                      "corner_dp": 14,
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 12,
+                      "content": {
+                        "type": "core://Column",
+                        "children": [
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.title",
+                            "style": "Label"
+                          },
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.status_text",
+                            "style": "Secondary"
+                          }
+                        ],
+                        "spacing_dp": 2
+                      }
+                    },
+                    "content_description": "$item.title",
+                    "tag": "request:$item.id"
+                  }
+                }
+              ],
+              "padding_h_dp": 32
+            },
+            "footer": {
+              "type": "core://Column",
+              "children": [
+                {
+                  "type": "core://IconButton",
+                  "icon": "add",
+                  "content_description": "Make a new app",
+                  "size_dp": 56,
+                  "on_click": {
+                    "intent": "action.navigation.open",
+                    "target_uri": "home://new",
+                    "presentation": "Push"
+                  },
+                  "tag": "home-new"
+                },
+                {
+                  "type": "core://Tappable",
+                  "on_click": {
+                    "intent": "action.navigation.open",
+                    "target_uri": "home://drawer",
+                    "presentation": "Push"
+                  },
+                  "content": {
+                    "type": "core://Text",
+                    "value_expr": "Swipe up for apps",
+                    "style": "Secondary"
+                  },
+                  "tag": "home-apps"
+                }
+              ],
+              "spacing_dp": 12,
+              "padding_v_dp": 16,
+              "align": "Center"
+            }
+          }
+        }
+      }
+    ],
+    "screens": [
+      {
+        "id": "drawer",
+        "route": "home://drawer",
+        "title": "Apps",
+        "chrome": "hidden",
+        "content": {
+          "type": "core://Swipe",
+          "on_swipe_down": {
+            "intent": "action.navigation.back"
+          },
+          "content": {
+            "type": "core://Backdrop",
+            "content": {
+              "type": "core://Column",
+              "children": [
+                {
+                  "type": "core://Spacer",
+                  "size_dp": 24
+                },
+                {
+                  "type": "core://TextField",
+                  "field": "q",
+                  "placeholder": "Search apps",
+                  "autofocus": true
+                },
+                {
+                  "type": "core://Spacer",
+                  "size_dp": 8
+                },
+                {
+                  "type": "core://Text",
+                  "value_expr": "YOUR CONSTRUCT",
+                  "style": "Caption"
+                },
+                {
+                  "type": "core://List",
+                  "query_key": "home:apps",
+                  "filter": {
+                    "value": "$form.q",
+                    "fields": [
+                      "title"
+                    ],
+                    "no_match_text": ""
+                  },
+                  "item_template": {
+                    "type": "core://Tappable",
+                    "on_click": {
+                      "intent": "action.app.open",
+                      "app_id": "$item.id"
+                    },
+                    "content": {
+                      "type": "core://Row",
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.title",
+                          "style": "Title"
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "◇",
+                          "style": "Secondary"
+                        }
+                      ],
+                      "spacing_dp": 8,
+                      "padding_v_dp": 10
+                    },
+                    "on_long_press": {
+                      "intent": "action.sequence",
+                      "steps": [
+                        {
+                          "intent": "action.mutation.create",
+                          "query_key": "home:pins",
+                          "entity_uri": "home://pins/$nonce",
+                          "entity": {
+                            "id": "$nonce",
+                            "kind": "construct",
+                            "target": "$item.id",
+                            "title": "$item.title",
+                            "unpinned": false
+                          },
+                          "endpoint": "/v1/home/pins",
+                          "payload": {
+                            "id": "$nonce",
+                            "kind": "construct",
+                            "target": "$item.id",
+                            "title": "$item.title"
+                          },
+                          "refresh_workspace": true
+                        },
+                        {
+                          "intent": "action.navigation.back"
+                        }
+                      ]
+                    },
+                    "content_description": "$item.title",
+                    "tag": "app:$item.id"
+                  }
+                },
+                {
+                  "type": "core://Spacer",
+                  "size_dp": 8
+                },
+                {
+                  "type": "core://Text",
+                  "value_expr": "ON THIS PHONE",
+                  "style": "Caption"
+                },
+                {
+                  "type": "core://List",
+                  "query_key": "device:apps",
+                  "filter": {
+                    "value": "$form.q",
+                    "fields": [
+                      "label"
+                    ],
+                    "no_match_text": ""
+                  },
+                  "empty_text": "",
+                  "item_template": {
+                    "type": "core://Tappable",
+                    "on_click": {
+                      "intent": "action.device.launch",
+                      "package": "$item.package"
+                    },
+                    "content": {
+                      "type": "core://Row",
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.label",
+                          "style": "Title"
+                        }
+                      ],
+                      "padding_v_dp": 10
+                    },
+                    "on_long_press": {
+                      "intent": "action.sequence",
+                      "steps": [
+                        {
+                          "intent": "action.mutation.create",
+                          "query_key": "home:pins",
+                          "entity_uri": "home://pins/$nonce",
+                          "entity": {
+                            "id": "$nonce",
+                            "kind": "device",
+                            "target": "$item.package",
+                            "title": "$item.label",
+                            "unpinned": false
+                          },
+                          "endpoint": "/v1/home/pins",
+                          "payload": {
+                            "id": "$nonce",
+                            "kind": "device",
+                            "target": "$item.package",
+                            "title": "$item.label"
+                          },
+                          "refresh_workspace": true
+                        },
+                        {
+                          "intent": "action.navigation.back"
+                        }
+                      ]
+                    },
+                    "content_description": "$item.label",
+                    "tag": "device-app:$item.package"
+                  }
+                },
+                {
+                  "type": "core://Spacer",
+                  "size_dp": 16
+                },
+                {
+                  "type": "core://Tappable",
+                  "on_click": {
+                    "intent": "action.navigation.open",
+                    "target_uri": "home://new",
+                    "presentation": "Replace"
+                  },
+                  "content": {
+                    "type": "core://Row",
+                    "children": [
+                      {
+                        "type": "core://Text",
+                        "value_expr": "+",
+                        "style": "Title"
+                      },
+                      {
+                        "type": "core://Text",
+                        "value_expr": "Make a new app with Claude",
+                        "style": "Body"
+                      }
+                    ],
+                    "spacing_dp": 10,
+                    "padding_v_dp": 10
+                  },
+                  "tag": "drawer-new"
+                },
+                {
+                  "type": "core://Tappable",
+                  "on_click": {
+                    "intent": "action.shell.open",
+                    "panel": "menu"
+                  },
+                  "content": {
+                    "type": "core://Text",
+                    "value_expr": "Settings and app versions",
+                    "style": "Secondary"
+                  },
+                  "tag": "drawer-settings"
+                },
+                {
+                  "type": "core://Spacer",
+                  "size_dp": 24
+                }
+              ],
+              "padding_h_dp": 24
+            }
+          }
+        }
+      },
+      {
+        "id": "new",
+        "route": "home://new",
+        "title": "New app",
+        "chrome": "hidden",
+        "content": {
+          "type": "core://Backdrop",
+          "content": {
+            "type": "core://Column",
+            "children": [
+              {
+                "type": "core://Spacer",
+                "size_dp": 48
+              },
+              {
+                "type": "core://Text",
+                "value_expr": "NEW APP",
+                "style": "Caption"
+              },
+              {
+                "type": "core://Text",
+                "value_expr": "What do you want to make?",
+                "style": "Headline"
+              },
+              {
+                "type": "core://TextField",
+                "field": "prompt",
+                "lines": 6,
+                "autofocus": true,
+                "placeholder": "Describe it: what it keeps track of, what it shows, when it should remind you."
+              },
+              {
+                "type": "core://Text",
+                "value_expr": "Claude builds it in your construct. It opens when it's ready.",
+                "style": "Secondary"
+              }
+            ],
+            "spacing_dp": 16,
+            "padding_h_dp": 24
+          },
+          "footer": {
+            "type": "core://Row",
+            "children": [
+              {
+                "type": "core://Tappable",
+                "on_click": {
+                  "intent": "action.navigation.back"
+                },
+                "content": {
+                  "type": "core://Text",
+                  "value_expr": "Cancel",
+                  "style": "Body"
+                },
+                "tag": "new-cancel"
+              },
+              {
+                "type": "core://Spacer"
+              },
+              {
+                "type": "core://Button",
+                "label": "Make it",
+                "on_click": {
+                  "intent": "action.sequence",
+                  "steps": [
+                    {
+                      "intent": "action.mutation.create",
+                      "query_key": "home:request:$nonce",
+                      "entity_uri": "home://requests/$nonce",
+                      "entity": {
+                        "id": "$nonce",
+                        "prompt": "$form.prompt",
+                        "title": "$form.prompt",
+                        "status": "queued",
+                        "status_text": "Saved. Claude starts on it as soon as the pod has it.",
+                        "app_id": "",
+                        "app_title": "",
+                        "error": ""
+                      },
+                      "endpoint": "/v1/home/requests",
+                      "payload": {
+                        "id": "$nonce",
+                        "prompt": "$form.prompt"
+                      },
+                      "refresh_workspace": true
+                    },
+                    {
+                      "intent": "action.navigation.open",
+                      "target_uri": "home://requests/$nonce",
+                      "presentation": "Replace"
+                    }
+                  ]
+                }
+              }
+            ],
+            "padding_h_dp": 24,
+            "padding_v_dp": 16
+          }
+        }
+      },
+      {
+        "id": "request",
+        "route": "home://requests/{id}",
+        "title": "Building",
+        "chrome": "hidden",
+        "data": "/v1/home/screens/request?id=$route.id",
+        "content": {
+          "type": "core://Backdrop",
+          "content": {
+            "type": "core://Column",
+            "children": [
+              {
+                "type": "core://Spacer",
+                "size_dp": 96
+              },
+              {
+                "type": "core://List",
+                "query_key": "home:request:$route.id",
+                "empty_text": "Starting…",
+                "item_template": {
+                  "type": "core://Column",
+                  "children": [
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.status",
+                      "content": {
+                        "type": "core://Text",
+                        "value_expr": "CLAUDE IS BUILDING",
+                        "style": "Caption"
+                      },
+                      "equals": "building"
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.status",
+                      "content": {
+                        "type": "core://Text",
+                        "value_expr": "WAITING TO START",
+                        "style": "Caption"
+                      },
+                      "equals": "queued"
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.status",
+                      "content": {
+                        "type": "core://Text",
+                        "value_expr": "READY",
+                        "style": "Caption"
+                      },
+                      "equals": "ready"
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.status",
+                      "content": {
+                        "type": "core://Text",
+                        "value_expr": "COULDN'T BUILD IT",
+                        "style": "Caption"
+                      },
+                      "equals": "failed"
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.title",
+                      "style": "Headline"
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.status",
+                      "content": {
+                        "type": "core://Row",
+                        "children": [
+                          {
+                            "type": "core://Progress",
+                            "size_dp": 18
+                          },
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.status_text",
+                            "style": "Body"
+                          }
+                        ],
+                        "spacing_dp": 12
+                      },
+                      "equals": "queued"
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.status",
+                      "content": {
+                        "type": "core://Row",
+                        "children": [
+                          {
+                            "type": "core://Progress",
+                            "size_dp": 18
+                          },
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.status_text",
+                            "style": "Body"
+                          }
+                        ],
+                        "spacing_dp": 12
+                      },
+                      "equals": "building"
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.status",
+                      "content": {
+                        "type": "core://Column",
+                        "children": [
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.status_text",
+                            "style": "Body"
+                          },
+                          {
+                            "type": "core://OnAppear",
+                            "intent": {
+                              "intent": "action.app.open",
+                              "app_id": "$item.app_id"
+                            }
+                          },
+                          {
+                            "type": "core://Button",
+                            "label": "Open $item.app_title",
+                            "on_click": {
+                              "intent": "action.app.open",
+                              "app_id": "$item.app_id"
+                            }
+                          }
+                        ],
+                        "spacing_dp": 12
+                      },
+                      "equals": "ready"
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.status",
+                      "content": {
+                        "type": "core://Text",
+                        "value_expr": "$item.error",
+                        "style": "Body"
+                      },
+                      "equals": "failed"
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "You asked for: $item.prompt",
+                      "style": "Secondary"
+                    }
+                  ],
+                  "spacing_dp": 14
+                }
+              }
+            ],
+            "padding_h_dp": 28
+          },
+          "footer": {
+            "type": "core://Row",
+            "children": [
+              {
+                "type": "core://Tappable",
+                "on_click": {
+                  "intent": "action.navigation.back"
+                },
+                "content": {
+                  "type": "core://Text",
+                  "value_expr": "Keep using your phone",
+                  "style": "Secondary"
+                },
+                "tag": "request-leave"
+              }
+            ],
+            "padding_h_dp": 28,
+            "padding_v_dp": 20
+          }
+        }
+      }
+    ]
+  },
+  "entities": {
+    "home://apps/pixelfed_home": {
+      "id": "pixelfed_home",
+      "title": "Pixelfed",
+      "letter": "P",
+      "kind": "construct"
+    },
+    "home://apps/recipes": {
+      "id": "recipes",
+      "title": "Recipes",
+      "letter": "R",
+      "kind": "construct"
+    },
+    "home://apps/watcher": {
+      "id": "watcher",
+      "title": "Watcher",
+      "letter": "W",
+      "kind": "construct"
+    },
+    "home://apps/plant-care": {
+      "id": "plant-care",
+      "title": "Plant care",
+      "letter": "P",
+      "kind": "construct"
+    },
+    "home://pins/p1": {
+      "id": "p1",
+      "kind": "device",
+      "target": "com.google.android.apps.messaging",
+      "title": "Messages",
+      "unpinned": false
+    },
+    "home://pins/p2": {
+      "id": "p2",
+      "kind": "device",
+      "target": "com.android.camera2",
+      "title": "Camera",
+      "unpinned": false
+    },
+    "home://pins/p3": {
+      "id": "p3",
+      "kind": "device",
+      "target": "com.google.android.apps.maps",
+      "title": "Maps",
+      "unpinned": false
+    },
+    "home://pins/p4": {
+      "id": "p4",
+      "kind": "construct",
+      "target": "pixelfed_home",
+      "title": "Pixelfed",
+      "unpinned": false
+    },
+    "home://pins/p5": {
+      "id": "p5",
+      "kind": "construct",
+      "target": "recipes",
+      "title": "Recipes",
+      "unpinned": false
+    },
+    "home://pins/p6": {
+      "id": "p6",
+      "kind": "construct",
+      "target": "watcher",
+      "title": "Watcher",
+      "unpinned": false
+    }
+  },
+  "queries": {
+    "home:apps": [
+      "home://apps/pixelfed_home",
+      "home://apps/plant-care",
+      "home://apps/recipes",
+      "home://apps/watcher"
+    ],
+    "home:pins": [
+      "home://pins/p1",
+      "home://pins/p2",
+      "home://pins/p3",
+      "home://pins/p4",
+      "home://pins/p5",
+      "home://pins/p6"
+    ],
+    "home:requests": []
+  }
+}

@@ -12,12 +12,19 @@ sealed class SimStep(val command: String, val arg: String = "") {
     class AssertNoText(val text: String) : SimStep("assert-no-text", text)
     /** Fails unless an `action.link.open` opened a link containing [text] (no browser opens in the simulator). */
     class AssertLink(val text: String) : SimStep("assert-link", text)
+    /** Fails unless an `action.device.launch` started the device app [packageName] (feature `device_apps`). */
+    class AssertLaunched(val packageName: String) : SimStep("assert-launched", packageName)
+    /** Long-presses the node [target] selects (`core://Tappable`'s `on_long_press`, feature `gestures`). */
+    class LongPress(val target: String) : SimStep("long-press", target)
     class WaitText(val timeoutMs: Long, val text: String) : SimStep("wait-text", "$timeoutMs $text")
     object Offline : SimStep("offline")
     object Online : SimStep("online")
     class Screen(val spec: ScreenSpec) : SimStep("screen", spec.label)
     class WaitImages(val timeoutMs: Long) : SimStep("wait-images", timeoutMs.toString())
-    /** Swipes the node [target] selects (see README) towards [direction]: left shows the next carousel page. */
+    /**
+     * Swipes the node [target] selects (see README) towards [direction]: left shows the next carousel page; up and down
+     * drive `core://Swipe` (feature `gestures`).
+     */
     class Swipe(val direction: String, val target: String) : SimStep("swipe-$direction", target)
     class ScrollTo(val target: String) : SimStep("scroll-to", target)
     /** Replaces the text of the text field [target] selects with [text]. */
@@ -116,6 +123,8 @@ fun parseScript(script: String): List<SimStep> {
             "assert-text" -> SimStep.AssertText(requireArg("the expected text"))
             "assert-no-text" -> SimStep.AssertNoText(requireArg("the text that must be absent"))
             "assert-link" -> SimStep.AssertLink(requireArg("text the opened link contains"))
+            "assert-launched" -> SimStep.AssertLaunched(requireArg("a device app package"))
+            "long-press" -> SimStep.LongPress(requireArg("a target (text, content description or tag:<testTag>)"))
             "wait-text" -> {
                 val a = requireArg("a timeout in ms and the text")
                 val ms = a.substringBefore(' ').toLongOrNull()?.takeIf { it in 0..MAX_WAIT_MS }
@@ -129,7 +138,7 @@ fun parseScript(script: String): List<SimStep> {
                 if (arg.isEmpty()) DEFAULT_WAIT_IMAGES_MS else arg.toLongOrNull()?.takeIf { it in 0..MAX_WAIT_MS }
                     ?: throw ScriptParseException("${where()}: 'wait-images' takes an optional timeout in ms in 0..$MAX_WAIT_MS"),
             )
-            "swipe-left", "swipe-right" -> SimStep.Swipe(command.removePrefix("swipe-"), requireArg("a target (text, content description or tag:<testTag>)"))
+            "swipe-left", "swipe-right", "swipe-up", "swipe-down" -> SimStep.Swipe(command.removePrefix("swipe-"), requireArg("a target (text, content description or tag:<testTag>)"))
             "scroll-to" -> SimStep.ScrollTo(requireArg("a target (text, content description or tag:<testTag>)"))
             "type" -> {
                 val a = requireArg("a target and the text to type")
@@ -197,7 +206,8 @@ fun parseScript(script: String): List<SimStep> {
             )
             else -> throw ScriptParseException(
                 "${where()}: unknown command '$command' (expected one of: " +
-                    "shot, click, wait, idle, assert-text, assert-no-text, wait-text, wait-images, swipe-left, swipe-right, " +
+                    "shot, click, long-press, wait, idle, assert-text, assert-no-text, assert-link, assert-launched, wait-text, " +
+                    "wait-images, swipe-left, swipe-right, swipe-up, swipe-down, " +
                     "scroll-to, type, back, pick, open-menu, close-menu, open-settings, open-app, open-history, select-version, set-server, " +
                     "publish-version, notify, open-inbox, close-inbox, click-notification, open-notification-settings, " +
                     "toggle-channel, offline, online, screen)",

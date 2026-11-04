@@ -207,6 +207,14 @@ internal fun NodeIconButton(node: UiNode.IconButton, item: JsonObject?, dispatch
     val description = if (active) node.activeContentDescription ?: node.contentDescription else node.contentDescription
     val tint = (if (active) parseHexColor(node.activeTint) else null) ?: MaterialTheme.colorScheme.onSurface
     val tag = node.tag?.let { bindItemTokens(it, item) }
+    val size = node.sizeDp ?: 24
+    if (LocalInBackdrop.current && size >= 44) {
+        BackdropCircleButton(
+            ConstructIcons.named(name), description, size, { dispatch(node.onClick) },
+            modifier.let { m -> tag?.let { m.testTag(it) } ?: m },
+        )
+        return
+    }
     IconButton(
         onClick = { dispatch(node.onClick) },
         modifier = modifier.let { m -> tag?.let { m.testTag(it) } ?: m },

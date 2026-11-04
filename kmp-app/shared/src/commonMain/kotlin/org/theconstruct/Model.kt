@@ -67,6 +67,29 @@ enum class PresentationMode { Push, Modal, Replace }
 @Serializable
 enum class ImageShape { Square, Rounded, Circle }
 
+/** How much of the client's own UI a workspace or screen shows (feature `hidden_chrome`). */
+@Serializable
+enum class Chrome {
+    @SerialName("full") Full,
+
+    /** Only the layout: no title, bar or the client's buttons. */
+    @SerialName("hidden") Hidden,
+}
+
+/** What a `core://Clock` shows (feature `clock`). */
+@Serializable
+enum class ClockFormat {
+    @SerialName("time") Time,
+    @SerialName("date") Date,
+}
+
+/** A panel of the client that `action.shell.open` opens (feature `hidden_chrome`). */
+@Serializable
+enum class ShellPanel {
+    @SerialName("menu") Menu,
+    @SerialName("inbox") Inbox,
+}
+
 /** Where `action.mutation.create` lists its new entity (schema 9): at the start or (default) the end of its query. */
 @Serializable
 enum class CreatePosition {
@@ -87,6 +110,8 @@ data class Screen(
     val data: String? = null,
     val content: UiNode,
     val footer: UiNode? = null,
+    /** Feature `hidden_chrome`: [Chrome.Hidden] draws no bar; the content fills the screen without scrolling. */
+    val chrome: Chrome = Chrome.Full,
 )
 
 /** `core://List` indentation: `item[field] * stepDp`, at most [max] steps (default 4). */
@@ -148,6 +173,8 @@ sealed class UiNode {
         val slots: List<SlotSpec>,
         /** Screens this app can open (D34); omitted when empty. */
         val screens: List<Screen> = emptyList(),
+        /** Feature `hidden_chrome`: [Chrome.Hidden] draws only the slots, filling the screen. */
+        val chrome: Chrome = Chrome.Full,
     ) : UiNode()
 
     @Serializable
@@ -219,6 +246,8 @@ sealed class UiNode {
         @SerialName("on_submit") val onSubmit: ActionIntent? = null,
         /** Schema 9 (D51): without [onSubmit], a field of up to this many lines (e.g. a caption). */
         val lines: Int? = null,
+        /** Feature `autofocus`: focus the field (and open the keyboard) when it first appears. */
+        val autofocus: Boolean = false,
     ) : UiNode()
 
     // Schema 3 (DECISIONS D36): generic building blocks for composing any app on the pod.
@@ -305,6 +334,8 @@ sealed class UiNode {
         val content: UiNode,
         @SerialName("content_description") val contentDescription: String? = null,
         val tag: String? = null,
+        /** Feature `gestures`: dispatched on a long press instead of [onClick]. */
+        @SerialName("on_long_press") val onLongPress: ActionIntent? = null,
     ) : UiNode()
 
     /**
@@ -365,6 +396,37 @@ sealed class UiNode {
      */
     @Serializable
     data class Progress(@SerialName("size_dp") val sizeDp: Int? = null) : UiNode()
+
+    /**
+     * `core://Backdrop` (feature `backdrop`): a dark sketchpad that fills its space: [background] under a perspective
+     * grid of [cellDp] squares tilted back [tiltDeg] in [gridColor]; [content] scrolls over it, [footer] stays at the
+     * bottom, and both are drawn in a dark theme ([LauncherNodes]).
+     */
+    @Serializable
+    data class Backdrop(
+        val content: UiNode,
+        val footer: UiNode? = null,
+        val background: String? = null,
+        @SerialName("grid_color") val gridColor: String? = null,
+        @SerialName("tilt_deg") val tiltDeg: Int? = null,
+        @SerialName("cell_dp") val cellDp: Int? = null,
+    ) : UiNode()
+
+    /** `core://Clock` (feature `clock`): the device's local time or date, kept current. */
+    @Serializable
+    data class Clock(val format: ClockFormat = ClockFormat.Time) : UiNode()
+
+    /** `core://Swipe` (feature `gestures`): [content] that dispatches an intent on a vertical swipe over it. */
+    @Serializable
+    data class Swipe(
+        val content: UiNode,
+        @SerialName("on_swipe_up") val onSwipeUp: ActionIntent? = null,
+        @SerialName("on_swipe_down") val onSwipeDown: ActionIntent? = null,
+    ) : UiNode()
+
+    /** `core://OnAppear` (feature `on_appear`): draws nothing; dispatches [intent] once each time it appears. */
+    @Serializable
+    data class OnAppear(val intent: ActionIntent) : UiNode()
 
     /** A node whose `type` this client does not know. [raw] is the full original object. */
     data class Unknown(val type: String, val raw: JsonObject) : UiNode()
@@ -470,6 +532,21 @@ sealed class ActionIntent {
      */
     @Serializable
     data class OpenLink(val url: String) : ActionIntent()
+
+    /** `action.app.open` (feature `app_open`): show the pod's app [appId]. Handled here, never sent to the engine. */
+    @Serializable
+    data class OpenApp(@SerialName("app_id") val appId: String) : ActionIntent()
+
+    /**
+     * `action.device.launch` (feature `device_apps`): start the device app [packageName] (an entry of the client-filled
+     * `device:apps` query). Handled here, never sent to the engine.
+     */
+    @Serializable
+    data class LaunchDeviceApp(@SerialName("package") val packageName: String) : ActionIntent()
+
+    /** `action.shell.open` (feature `hidden_chrome`): open the client's menu or inbox. Handled here. */
+    @Serializable
+    data class OpenShell(val panel: ShellPanel) : ActionIntent()
 
     /**
      * An intent whose `intent` tag this client does not know (e.g. the removed `action.agent.prompt`). [raw] is the full
@@ -587,6 +664,10 @@ object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode
         Variant("core://MediaPicker", UiNode.MediaPicker::class, UiNode.MediaPicker.serializer()),
         Variant("core://Sticky", UiNode.Sticky::class, UiNode.Sticky.serializer()),
         Variant("core://Progress", UiNode.Progress::class, UiNode.Progress.serializer()),
+        Variant("core://Backdrop", UiNode.Backdrop::class, UiNode.Backdrop.serializer()),
+        Variant("core://Clock", UiNode.Clock::class, UiNode.Clock.serializer()),
+        Variant("core://Swipe", UiNode.Swipe::class, UiNode.Swipe.serializer()),
+        Variant("core://OnAppear", UiNode.OnAppear::class, UiNode.OnAppear.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): UiNode = UiNode.Unknown(tag, raw)
@@ -605,6 +686,9 @@ object ActionIntentSerializer : TaggedUnionSerializer<ActionIntent>("org.thecons
         Variant("action.sequence", ActionIntent.Sequence::class, ActionIntent.Sequence.serializer()),
         Variant("action.local.set", ActionIntent.LocalSet::class, ActionIntent.LocalSet.serializer()),
         Variant("action.link.open", ActionIntent.OpenLink::class, ActionIntent.OpenLink.serializer()),
+        Variant("action.app.open", ActionIntent.OpenApp::class, ActionIntent.OpenApp.serializer()),
+        Variant("action.device.launch", ActionIntent.LaunchDeviceApp::class, ActionIntent.LaunchDeviceApp.serializer()),
+        Variant("action.shell.open", ActionIntent.OpenShell::class, ActionIntent.OpenShell.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): ActionIntent = ActionIntent.Unknown(tag, raw)

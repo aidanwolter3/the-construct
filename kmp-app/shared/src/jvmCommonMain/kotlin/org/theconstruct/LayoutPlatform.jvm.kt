@@ -35,3 +35,10 @@ internal actual fun formatShortDate(epochSeconds: Long): String =
 
 internal actual fun formatDayHeader(epochSeconds: Long): String =
     (if (thisYear(epochSeconds)) DAY_HEADER else DAY_HEADER_YEAR).format(local(epochSeconds))
+
+private val CLOCK_TIME = DateTimeFormatter.ofPattern("h:mm", Locale.getDefault())
+private val CLOCK_DATE = DateTimeFormatter.ofPattern("EEEE, MMMM d", Locale.getDefault())
+
+internal actual fun formatClockTime(epochSeconds: Long): String = CLOCK_TIME.format(local(epochSeconds))
+
+internal actual fun formatClockDate(epochSeconds: Long): String = CLOCK_DATE.format(local(epochSeconds))

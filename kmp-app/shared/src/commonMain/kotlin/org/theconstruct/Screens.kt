@@ -322,7 +322,18 @@ internal fun ScreenHost(controller: ConstructController, state: ConstructState) 
                 LocalFormMemory provides remember(scope) { FormMemory { f, v -> nav.remember(scope, f, v) } },
                 LocalConstructQueries provides state.queries,
             ) {
-                Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                if (entry.screen.chrome == Chrome.Hidden) {
+                    // Feature `hidden_chrome`: no bar; the content fills the screen (a `core://Backdrop` scrolls its
+                    // own) and the footer sits below it. Back is the system's.
+                    Column(Modifier.fillMaxSize()) {
+                        val load = entry.screen.data?.let { state.loads[it] }
+                        LoadErrorRow(load, onRetry = nav::retry)
+                        RenderUiNode(entry.screen.content, state.entities, controller::dispatch, Modifier.weight(1f).fillMaxWidth())
+                        entry.screen.footer?.let { footer ->
+                            RenderUiNode(footer, state.entities, controller::dispatch, Modifier.fillMaxWidth())
+                        }
+                    }
+                } else Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
                     Column(Modifier.fillMaxSize().widthIn(max = FEED_MAX_WIDTH)) {
                         val load = entry.screen.data?.let { state.loads[it] }
                         Row(

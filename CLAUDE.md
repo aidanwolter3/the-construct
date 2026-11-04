@@ -2,7 +2,7 @@
 
 Server-driven UI: a Rust "pod" serves app layouts (JSON `UiNode` trees) plus normalized entities; native clients
 (macOS desktop, Android, headless simulator) render them with shared Compose code and a shared Rust engine.
-Apps today: Pixelfed (`pixelfed_home`), Recipes (`recipes`) and Watcher (`watcher`). Read `README.md` for details and `docs/DECISIONS.md` (D1–D52) and
+Apps today: Pixelfed (`pixelfed_home`), Recipes (`recipes`), Watcher (`watcher`) and the Launcher (`launcher`, the home screen). Read `README.md` for details and `docs/DECISIONS.md` (D1–D52) and
 `docs/decisions/` (newer ones, one file each) before changing architecture; `docs/PROGRESS.md` has history and next steps; `docs/NOTIFICATIONS.md` is the notifications design (D52). `DESIGN.md` is the original design doc
 (product renamed from "Project Canvas"; AI layout editing was built, then shelved — see D32/D33).
 
@@ -15,6 +15,8 @@ Apps today: Pixelfed (`pixelfed_home`), Recipes (`recipes`) and Watcher (`watche
 - `crates/app-recipes` — the recipes adapter (`recipes_*` tables, the recipe import migration, D41).
 - `crates/app-collections` — Collections: data custom apps declare over MCP (`collections_*` tables, change sets,
   row edits; decision `collections`).
+- `crates/app-home` — the launcher (`launcher` app): pins, the pod's app list, and + requests Claude builds into
+  custom apps (`home_*` tables; decision `launcher-home-app`).
 - `crates/app-watcher` — the watcher: polls websites for events (ics / JSON-LD / LLM extractors), matches rules,
   notifies (`watcher_*` tables; decision `watcher`).
 - `crates/pod-host` — one server, many pods (D46): `host.db`, pod tokens, temporary pods, routing by bearer token.

@@ -1,6 +1,13 @@
 package org.theconstruct.desktop.sim
 
+import org.theconstruct.BundledLayouts
 import org.theconstruct.ConstructController
+import org.theconstruct.DeviceApp
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import java.time.ZoneId
 import org.theconstruct.engine.UniffiEngineBridge
 import java.io.File
 import java.nio.file.Files
@@ -50,8 +57,11 @@ const val LIVE_DEFAULT_BASE_URL = "https://the-construct-pod.fly.dev"
 
 private val KNOWN_OPTIONS = setOf(
     "workspace", "screen", "script", "scriptFile", "mode", "fixture", "baseUrl", "out", "density", "timeoutMs",
-    "storage", "pixelfedLogin",
+    "storage", "pixelfedLogin", "deviceApps", "home", "clock",
 )
+
+/** The launcher's home app (README "Launcher"): with `-Pworkspace=launcher` it is also the simulator's home app. */
+const val HOME_WORKSPACE = "launcher"
 
 // Kept reachable for the whole run: the bridge owns the engine handle and the JNA callback observers.
 private var liveBridge: UniffiEngineBridge? = null
@@ -118,6 +128,28 @@ private fun runCli(args: Array<String>): Int {
     }.absoluteFile
     requireWritableDir(outDir)
 
+    // The launcher (feature `device_apps`): the device's apps, the home app Back returns to, its bundled layout.
+    val homeApp = opts["home"] ?: HOME_WORKSPACE.takeIf { workspace == HOME_WORKSPACE }
+    val deviceAppsFile = opts["deviceApps"]?.let(::path) ?: if (homeApp != null) findFixture("device_apps.json", cwd) else null
+    val deviceApps = deviceAppsFile?.let {
+        if (!it.isFile) throw UsageException("deviceApps file not found: $it")
+        try {
+            parseDeviceApps(it.readText())
+        } catch (e: Exception) {
+            throw UsageException("bad deviceApps $it: ${e.message}")
+        }
+    }.orEmpty()
+    val fallbackLayouts = BundledLayouts.forApps(homeApp)
+    // `core://Clock`: real time, or a fixed local time for repeatable screenshots (default 9:41 for the home app).
+    val clockSeconds: Long? = when (val c = opts["clock"] ?: if (homeApp != null) "2026-11-04T09:41" else "real") {
+        "real" -> null
+        else -> try {
+            LocalDateTime.parse(c).atZone(ZoneId.systemDefault()).toEpochSecond()
+        } catch (e: Exception) {
+            throw UsageException("bad clock '$c' (expected real or a local time like 2026-11-04T09:41)")
+        }
+    }
+
     val controller: ConstructController
     var setOnline: ((Boolean) -> Unit)? = null
     var publishVersion: ((String) -> Long)? = null
@@ -139,7 +171,7 @@ private fun runCli(args: Array<String>): Int {
         var current = try {
             FakeEngineBridge(
                 fixture.readText(), appId = appId, screenData = screenData, notifications = notifications,
-                formValues = formValues,
+                formValues = formValues, lenient = homeApp != null,
             )
         } catch (e: Exception) {
             throw UsageException("bad fixture $fixture: ${e.message}")
@@ -153,10 +185,14 @@ private fun runCli(args: Array<String>): Int {
             FakeEngineBridge(
                 defaultFixture(id, cwd).readText(), online = current.online, appId = id, apps = current.apps,
                 screenData = screenData, notifications = notifications, formValues = formValues,
+                lenient = homeApp != null,
             )
                 .also { current = it }
         }
-        controller = ConstructController(current, current.appId, defaultAppId = DEFAULT_WORKSPACE, openBridge = openBridge)
+        controller = ConstructController(
+            current, current.appId, defaultAppId = homeApp ?: DEFAULT_WORKSPACE, openBridge = openBridge,
+            homeAppId = homeApp, fallbackLayouts = fallbackLayouts,
+        )
     } else {
         // Same default as the desktop app (the staging pod); pass -PbaseUrl=http://127.0.0.1:8080 for a local server.
         val baseUrl = opts["baseUrl"] ?: LIVE_DEFAULT_BASE_URL
@@ -181,17 +217,29 @@ private fun runCli(args: Array<String>): Int {
             urlOpener = opener,
         ).also { liveBridge = it }
         // open-app: a new engine for that app on the same server and storage (the controller closes the old one).
-        controller = ConstructController(open(workspace), workspace, defaultAppId = DEFAULT_WORKSPACE, openBridge = ::open)
+        controller = ConstructController(
+            open(workspace), workspace, defaultAppId = homeApp ?: DEFAULT_WORKSPACE, openBridge = ::open,
+            homeAppId = homeApp, fallbackLayouts = fallbackLayouts,
+        )
         val deadline = System.nanoTime() + timeoutMs * 1_000_000
-        while (controller.state.value.workspace == null && System.nanoTime() < deadline) Thread.sleep(50)
+        while ((controller.state.value.workspace == null || controller.state.value.fallback) && System.nanoTime() < deadline) {
+            Thread.sleep(50)
+        }
         val s = controller.state.value
-        if (s.workspace == null) {
+        if (s.fallback) {
+            println("[sim] WARNING: workspace '$workspace' did not load within $timeoutMs ms (online=${s.isOnline}); showing its bundled layout")
+        } else if (s.workspace == null) {
             println("[sim] WARNING: workspace '$workspace' did not load within $timeoutMs ms (online=${s.isOnline}); continuing, shots will show Loading/Offline")
         } else {
             println("[sim] workspace loaded (online=${s.isOnline})")
         }
     }
 
+    if (deviceApps.isNotEmpty()) {
+        controller.setDeviceApps(deviceApps)
+        println("[sim] ${deviceApps.size} device app(s) from $deviceAppsFile")
+    }
+    controller.deviceLauncher = { println("[sim] launch device app: $it (recorded)") }
     println("[sim] ${steps.size} step(s), out=$outDir")
     val result = SimRunner(
         controller = controller,
@@ -203,6 +251,7 @@ private fun runCli(args: Array<String>): Int {
         publishVersion = publishVersion,
         notify = notify,
         settle = settle,
+        clock = clockSeconds?.let { fixed -> { fixed } } ?: { System.currentTimeMillis() / 1000 },
         server = if (mode == "live") opts["baseUrl"] ?: LIVE_DEFAULT_BASE_URL else SimRunner.SIM_SERVERS.first().url,
     ).run(steps)
     if (result.ok) {
@@ -236,6 +285,7 @@ fun defaultFixture(workspace: String, from: File): File {
         "pixelfed_demo" -> "pixelfed_home_bundle.json"
         "pixelfed_home" -> "pixelfed_home_feed_bundle.json"
         FakeAppCatalog.KITCHEN -> "custom_kitchen_bundle.json"
+        HOME_WORKSPACE -> "launcher_bundle.json"
         else -> throw UsageException("no default fixture for workspace '$workspace'; pass -Pfixture=<bundle.json> or use live mode")
     }
     return findFixture(name, from) ?: throw UsageException("fixtures/$name not found above $from")
@@ -250,3 +300,10 @@ fun findFixtureDir(name: String, from: File = File("").absoluteFile): File? =
     generateSequence(from.absoluteFile) { it.parentFile }
         .map { File(it, "fixtures/$name") }
         .firstOrNull { it.isDirectory }
+
+/** `-PdeviceApps` (fixtures/device_apps.json): `[{"package": "com.android.camera", "label": "Camera"}, ...]`. */
+fun parseDeviceApps(json: String): List<DeviceApp> =
+    Json.parseToJsonElement(json).jsonArray.map {
+        val o = it.jsonObject
+        DeviceApp(o.getValue("package").jsonPrimitive.content, o.getValue("label").jsonPrimitive.content)
+    }

@@ -5,6 +5,14 @@
     <!-- Notifications from apps (DECISIONS D52); asked for at runtime on Android 13+. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- The launcher (feature device_apps): list the apps a launcher can start (Android 11+ package visibility). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <!-- Cleartext HTTP only to the dev server (10.0.2.2 / localhost / 127.0.0.1), in all builds since the menu's
          server picker ships in release too: res/xml/network_security_config.xml (DECISIONS D11, D29). -->
     <!-- No backups or device-to-device transfers (security audit #31, L10): cache.db and the `push` preferences
@@ -30,6 +38,13 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- The Construct can be the phone's home screen (docs/decisions/launcher-home-app.md): Home opens the
+                 home app (BuildConfig.CONSTRUCT_WORKSPACE). -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

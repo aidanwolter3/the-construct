@@ -86,6 +86,12 @@ class FakeEngineBridge(
     val notifications: FakeNotifications? = null,
     /** The device's remembered form values (schema 10), shared by the run's bridges like an engine's cache.db. */
     val formValues: FakeFormValues = FakeFormValues(),
+    /**
+     * The fake pod accepts creates that no data path lists when they refresh the workspace (they stay listed, as a
+     * pod that keeps them in its feed), and answers data paths it has no fixture for with no data (the launcher's
+     * home app: pins and build requests). Off: such creates are rejected and such loads fail, as before.
+     */
+    private val lenient: Boolean = false,
 ) : ConstructEngineBridge {
     /** [prevValues]: field -> value before this row was applied (null = absent). */
     private class Row(val intent: ActionIntent.OptimisticMutate, var prevValues: Map<String, JsonElement?>)
@@ -539,6 +545,12 @@ class FakeEngineBridge(
             return
         }
         val bundle = serverData[path]
+        if (bundle == null && lenient) {
+            loadedQueries[path] = emptyMap()
+            loads[path] = loadJson("ready", null)
+            println("[sim] loaded $path (no fixture data: empty)")
+            return
+        }
         if (bundle == null) {
             loads[path] = loadJson("error", "This isn't available anymore.")
             return
@@ -569,6 +581,13 @@ class FakeEngineBridge(
     private fun sendCreateLocked(row: CreateRow) {
         val i = row.intent
         val paths = serverData.filterValues { (it["queries"] as? JsonObject)?.containsKey(i.queryKey) == true }.keys
+        if (paths.isEmpty() && lenient && i.refreshWorkspace) {
+            // Kept in the workspace's query under the client's URI, as the pod lists it from its own tables.
+            postedLast[i.queryKey] = postedLast[i.queryKey].orEmpty() + i.entityUri
+            server[i.entityUri] = i.entity as JsonObject
+            println("[sim] sent ${i.endpoint}: ${i.entityUri} kept in ${i.queryKey}")
+            return
+        }
         if (paths.isEmpty()) {
             println("[sim] server rejected ${i.endpoint} (no data path lists ${i.queryKey}); removing ${i.entityUri}")
             entities.remove(i.entityUri)

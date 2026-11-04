@@ -530,7 +530,7 @@
                         "prompt": "$form.prompt",
                         "title": "$form.prompt",
                         "status": "queued",
-                        "status_text": "Saved. Claude starts as soon as you're online.",
+                        "status_text": "Saved. Claude starts on it as soon as the pod has it.",
                         "app_id": "",
                         "app_title": "",
                         "error": ""

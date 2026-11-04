@@ -243,6 +243,7 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 | `CONSTRUCT_MIN_FREE_DISK_BYTES` | `104857600` (100 MiB) | Free space kept on the data volume: below it uploads get 507 `low_disk_space` and new temporary pods 503 `low_disk_space`, so the volume never fills and every pod's other writes keep working. |
 | `CONSTRUCT_PUBLIC_URL` | from each request's `Host` | The base URL clients reach the server at, for the OAuth metadata Claude reads (decision `mcp-connector`), e.g. `https://the-construct-pod.fly.dev`. Unset: the request's `Host`, `https` behind Fly or with `X-Forwarded-Proto: https`. |
 | `CONSTRUCT_WATCHER_LLM_MODEL` | `CONSTRUCT_INFER_MODEL`, else `claude-opus-5-5` | The model of the watcher's `llm` extractor (decision [`watcher`](docs/decisions/watcher.md)). The extractor uses the same key and endpoint as Collections, `CONSTRUCT_INFER_API_KEY` and `CONSTRUCT_INFER_URL`; without the key, `llm` is off (`auto` stops at `ics`/`jsonld`, and an `llm` site reports it in its health). The model runs only when a watched page changed. |
+| `CONSTRUCT_HOME_BUILDER_MODEL` | `CONSTRUCT_INFER_MODEL`, else `claude-opus-5-5` | The model that builds the apps asked for with + on the launcher's home screen (decision [`launcher-home-app`](docs/decisions/launcher-home-app.md)), with `CONSTRUCT_INFER_API_KEY` and `CONSTRUCT_INFER_URL`. Without the key a request fails with "App building isn't set up on this pod yet." Temporary pods never build (pod setting `home.build=0`). |
 | `CONSTRUCT_WATCHER_PRIVATE_HOSTS` | unset | `1`: watched websites may be on private addresses (local development). Otherwise only public addresses are fetched. |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
 
@@ -436,6 +437,32 @@ highlighted) but doesn't edit them.
 - **Caps per pod:** 50 sites, 100 rules; events are kept 30 days after they are over.
 - **Try it locally:** `CONSTRUCT_WATCHER_PRIVATE_HOSTS=1 cargo run -p server`, serve a page with an `.ics` or JSON-LD
   events, and add it and a rule with `POST /v1/watcher/targets/create` and `…/rules/create` (or Claude's MCP tools).
+
+## Launcher (home screen)
+
+The `launcher` app (`crates/app-home`, decision [`launcher-home-app`](docs/decisions/launcher-home-app.md)) makes The
+Construct a phone's home screen. Its screens are layout files (`layouts/launcher/NNNN.json`):
+
+- **Home:** the clock, the pinned apps and a + button.
+- **Swipe up:** search every app, the pod's (`home:apps`) and the phone's (`device:apps`, filled in by the client
+  and never sent to the pod). Long-press an app to pin it; long-press a pinned one to unpin it.
+- **+:** describe an app. `POST /v1/home/requests {id, prompt}` has Claude build a custom app on the pod with the
+  pod's own MCP tools (an allowlist; `CONSTRUCT_HOME_BUILDER_MODEL`). The request screen
+  (`/v1/home/screens/request?id=`) follows the build live and opens the app when it is ready.
+
+Tables: `home_pins` and `home_requests`. Until the pod answers, the client draws the layout bundled at build time:
+`:shared:generateBundledLayouts` embeds each app's newest `layouts/<app>/NNNN.json`. So home works on a first launch
+with no network.
+
+**Android:** the default workspace is `launcher` (`-PconstructWorkspace`). MainActivity declares a HOME intent filter,
+so Android offers The Construct as the home app (Settings → Apps → Default apps → Home app). The phone's apps are
+listed through a `<queries>` MAIN/LAUNCHER entry (no QUERY_ALL_PACKAGES).
+
+```bash
+# the launcher in the simulator, with the bundled fixture
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=launcher \
+  -Pscript="shot home; swipe-up tag:backdrop; type tag:textfield:q re; shot search"
+```
 
 ## Notifications
 
@@ -1163,6 +1190,9 @@ Flags (all optional):
 | `-Pout` | `kmp-app/desktopApp/build/sim/<yyyyMMdd-HHmmss>` | Output directory. |
 | `-PpixelfedLogin` | | Live mode only: `<e-mail or seed username>:<password>` for a real Pixelfed (below). |
 | `-Pstorage` | fresh temp dir | Live mode only: engine storage dir (holds `cache.db`). It is kept after the run, so a second run with the same dir exercises restart persistence. The temp default is deleted on exit. |
+| `-PdeviceApps` | `fixtures/device_apps.json` for `launcher` | The device's installed apps, `[{"package","label"}]`, listed in the `device:apps` query in both modes. |
+| `-Phome` | `launcher` with `-Pworkspace=launcher` | The home app: Back at another app's root returns to it, and its bundled layout draws until it loads. |
+| `-Pclock` | `2026-11-04T09:41` for `launcher`, else `real` | What `core://Clock` shows: `real` or a local ISO time. |
 
 Relative paths (`-Pfixture`, `-PscriptFile`, `-Pout`, `-Pstorage`) resolve against the **repo root**, the task's working
 directory, so `-Pfixture=fixtures/pixelfed_home_bundle.json` works.
@@ -1217,6 +1247,9 @@ entries starting with `#` are comments. An argument cannot contain `;`, and sinc
 | `assert-text <text>` | Fails unless some node's text or content description contains `<text>`. Retries for up to 2 s. |
 | `assert-no-text <text>` | The inverse of `assert-text`. |
 | `assert-link <text>` | Fails unless an `action.link.open` opened a link containing `<text>` (no browser opens in the simulator); reports the link. Retries for up to 2 s. |
+| `swipe-up <target>` / `swipe-down <target>` | Touch-swipes the node vertically (drives `core://Swipe`; `tag:backdrop` is a launcher's whole screen). |
+| `long-press <target>` | Long-presses the node (`core://Tappable`'s `on_long_press`). |
+| `assert-launched <package>` | Fails unless an `action.device.launch` started that device app (nothing opens in the simulator). |
 | `wait-text <ms> <text>` | Like `assert-text` with a custom timeout (at most 600000), e.g. `wait-text 15000 Alice Lumen` while a live feed loads. |
 | `wait-images [ms]` | Waits until no image is loading (default 10000 ms, at most 600000). Works in both modes. |
 | `swipe-left <target>` / `swipe-right <target>` | Touch-swipes the selected node; `swipe-left` on a carousel shows the next page. |

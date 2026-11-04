@@ -90,7 +90,7 @@ val simulate by tasks.registering(JavaExec::class) {
     jvmArgs("-Djava.awt.headless=true")
     systemProperty("construct.sim.defaultOutRoot", layout.buildDirectory.dir("sim").get().asFile.absolutePath)
     // Forward -P<name>=<value> as --<name>=<value>.
-    val names = listOf("workspace", "screen", "script", "scriptFile", "fixture", "baseUrl", "mode", "out", "density", "timeoutMs", "storage", "pixelfedLogin")
+    val names = listOf("workspace", "screen", "script", "scriptFile", "fixture", "baseUrl", "mode", "out", "density", "timeoutMs", "storage", "pixelfedLogin", "deviceApps", "home", "clock")
     // providers.gradleProperty reads only -P / gradle.properties (project.findProperty("script")
     // would pick up an unrelated built-in project property).
     val forwarded = names.mapNotNull { n -> providers.gradleProperty(n).orNull?.let { "--$n=$it" } }
