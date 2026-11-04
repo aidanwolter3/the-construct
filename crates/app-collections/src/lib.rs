@@ -10,7 +10,10 @@
 //! A field may be computed from the row's other fields ([`compute`],
 //! decision `collection-computed-fields`): by a small expression, by rules
 //! kept in another collection ([`lookup`], decision `collection-lookups`),
-//! or by a model's answer to a prompt about them, tried in order.
+//! or by a model's answer to a prompt about them, tried in order. A
+//! collection may have a filler ([`filler`], [`fill`], decision
+//! `collection-fillers`) that keeps its rows current from the web: a
+//! declarative fetch recipe or an agent with web search.
 //!
 //! What layouts use (the same for every collection `<c>`):
 //!
@@ -22,6 +25,7 @@
 //! | `POST /v1/collections/<c>/update {id, <field>: value, deleted?}` | change fields (`action.mutation.optimistic`) |
 //! | `POST /v1/collections/<c>/delete {id}` | delete a row (soft: restorable for 30 days) |
 //! | `GET /v1/collections/<c>/export` | everything, for keeping a copy |
+//! | `POST /v1/collections/<c>/refresh {}` | fill a filled collection now (in the background) |
 //!
 //! Rows are entities `collections://<c>/<id>` with every field by name,
 //! plus `id`, `deleted` (always `false` when served: a layout's list hides
@@ -34,11 +38,14 @@
 //! change still arrives. The MCP tools ([`mcp`]) define and change
 //! collections (atomically with the apps that show them) and edit rows.
 
+pub mod agent;
 pub mod bindings;
 pub mod changes;
 pub mod compute;
 pub mod db;
 pub mod expr;
+pub mod fill;
+pub mod filler;
 pub mod lookup;
 mod mcp;
 pub mod model;
@@ -90,6 +97,13 @@ pub struct Caps {
     pub edit_rows: usize,
     /// Characters of one text value.
     pub text_chars: usize,
+    /// Rows one fill may write.
+    pub fill_items: usize,
+    /// Pages one `url_field` fill fetches.
+    pub fill_urls: usize,
+    /// Agent fills per day across the pod (the operator's ceiling; one
+    /// filler's `fills_per_day` is at most this).
+    pub agent_fills_per_day: u32,
 }
 
 impl Default for Caps {
@@ -101,6 +115,9 @@ impl Default for Caps {
             bytes: 4 * 1024 * 1024,
             edit_rows: 500,
             text_chars: 4_000,
+            fill_items: 200,
+            fill_urls: 20,
+            agent_fills_per_day: 20,
         }
     }
 }
@@ -139,6 +156,11 @@ pub const MANIFEST: SourceManifest = SourceManifest {
             query_keys: &[],
             doc: "Delete a row: payload {id: \"$item.id\"}, as a mutation of field \"deleted\" to true (hide it with the List's where: {field: \"deleted\", equals: \"false\"}).",
         },
+        PathSpec {
+            pattern: "/v1/collections/{collection}/refresh",
+            query_keys: &[],
+            doc: "Fill a collection that has a filler now (a \"Refresh\" button): payload {}; the rows update when the fill ends.",
+        },
     ],
     entities: &[EntityDoc {
         uri: "collections://{collection}/{id}",
@@ -164,17 +186,73 @@ pub const MANIFEST: SourceManifest = SourceManifest {
 };
 
 /// The Collections adapter: no apps of its own; custom apps use it.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct CollectionsAdapter {
     caps: Caps,
     /// What answers `model`-computed fields (none: they keep their
     /// default).
     model: Option<Arc<dyn compute::FieldModel>>,
+    /// What answers `agent` fillers (none: they report themselves
+    /// unavailable).
+    agent: Option<Arc<dyn agent::FillAgent>>,
+    /// Fetch fillers may read private hosts (tests; the server sets it from
+    /// `CONSTRUCT_FILL_PRIVATE_HOSTS=1`).
+    allow_private_hosts: bool,
+    fetch_client: reqwest::Client,
+}
+
+impl Default for CollectionsAdapter {
+    fn default() -> Self {
+        Self {
+            caps: Caps::default(),
+            model: None,
+            agent: None,
+            allow_private_hosts: false,
+            fetch_client: fetch_client(false),
+        }
+    }
+}
+
+/// The HTTP client of fetch fillers: public hosts only unless allowed.
+fn fetch_client(allow_private: bool) -> reqwest::Client {
+    let b = if allow_private {
+        pod_core::net::builder(web_extract::fetch::FETCH_TIMEOUT)
+    } else {
+        pod_core::net::public_builder(web_extract::fetch::FETCH_TIMEOUT)
+    };
+    b.build().expect("an HTTP client")
 }
 
 impl CollectionsAdapter {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// With `agent` answering `agent` fillers
+    /// ([`agent::MessagesAgent::from_env`] in the server; a fake in tests).
+    pub fn with_agent(mut self, agent: Option<Arc<dyn agent::FillAgent>>) -> Self {
+        self.agent = agent;
+        self
+    }
+
+    /// Let fetch fillers read private hosts (tests, or the operator's
+    /// `CONSTRUCT_FILL_PRIVATE_HOSTS=1`).
+    pub fn with_private_hosts(mut self, allow: bool) -> Self {
+        self.allow_private_hosts = allow;
+        self.fetch_client = fetch_client(allow);
+        self
+    }
+
+    pub fn allow_private_hosts(&self) -> bool {
+        self.allow_private_hosts
+    }
+
+    pub fn fetch_client(&self) -> &reqwest::Client {
+        &self.fetch_client
+    }
+
+    pub fn agent(&self) -> Option<&Arc<dyn agent::FillAgent>> {
+        self.agent.as_ref()
     }
 
     /// With other limits (tests).
@@ -223,6 +301,7 @@ impl AppAdapter for CollectionsAdapter {
             .route("/v1/collections/{collection}/update", post(update_route))
             .route("/v1/collections/{collection}/delete", post(delete_route))
             .route("/v1/collections/{collection}/export", get(export_route))
+            .route("/v1/collections/{collection}/refresh", post(refresh_route))
     }
 
     fn migrations(&self) -> &'static [Migration] {
@@ -241,16 +320,27 @@ impl AppAdapter for CollectionsAdapter {
     ) -> BoxFuture<'a, Hydration> {
         Box::pin(async move {
             let name = feed.to_owned();
+            let now = pod_core::util::now_secs();
             let found = pod
                 .blocking(move |s| {
                     s.with_conn(|c| match db::latest_def(c, &name)? {
-                        Some((_, def)) => db::bundle(c, &def).map(Some),
+                        Some((_, def)) => {
+                            // Opening an app fills a stale collection.
+                            let due = def.filler.is_some()
+                                && fill::due_on_open(&def, &fill::state(c, &name)?, now);
+                            Ok(Some((db::bundle(c, &def)?, due)))
+                        }
                         None => Ok(None),
                     })
                 })
                 .await;
             match found {
-                Ok(Some(bundle)) => Hydration::Data(bundle),
+                Ok(Some((bundle, due))) => {
+                    if due {
+                        fill::spawn(pod, feed, false);
+                    }
+                    Hydration::Data(bundle)
+                }
                 Ok(None) => Hydration::Error(not_found(feed)),
                 Err(e) => Hydration::Error(e.into_response()),
             }
@@ -300,6 +390,19 @@ impl AppAdapter for CollectionsAdapter {
     ) -> BoxFuture<'a, PollOutcome> {
         Box::pin(async move {
             let next = remind::run(pod, pod_core::util::now_secs()).await;
+            // Scheduled fills run in the background (an agent can take
+            // longer than the poll may).
+            let p = pod.clone();
+            tokio::spawn(async move { fill::run_due(&p).await });
+            let scheduled = pod
+                .blocking(|s| s.with_conn(fill::any_scheduled))
+                .await
+                .unwrap_or(false);
+            let next = if scheduled {
+                next.min(remind::MAX_WAIT)
+            } else {
+                next
+            };
             PollOutcome {
                 next_in: Some(next),
                 ..Default::default()
@@ -482,6 +585,16 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
         };
+        let op_name = match op {
+            RowOp::Create => "create",
+            RowOp::Update if body.get("deleted") == Some(&json!(false)) => "restore",
+            RowOp::Update if body.get("deleted") == Some(&json!(true)) => "delete",
+            RowOp::Update => "update",
+            RowOp::Delete => "delete",
+        };
+        if let Err(e) = filler::check_write(&def, &body, op_name) {
+            return Ok(Err(fail(StatusCode::CONFLICT, "filled_by_filler", e)));
+        }
         if op == RowOp::Create {
             let client_id = str_of("client_id").map(str::to_owned);
             if let Some(c) = &client_id {
@@ -634,6 +747,26 @@ async fn delete_route(
     body: Bytes,
 ) -> Response {
     row_route(pod, collection, RowOp::Delete, headers, body).await
+}
+
+async fn refresh_route(State(pod): State<Pod>, Path(collection): Path<String>) -> Response {
+    let name = collection.clone();
+    let found = pod
+        .blocking(move |s| s.with_conn(|c| db::latest_def(c, &name)))
+        .await;
+    match found {
+        Ok(Some((_, def))) if def.filler.is_some() => {
+            fill::spawn(&pod, &collection, true);
+            Json(json!({ "ok": true, "refreshing": true })).into_response()
+        }
+        Ok(Some(_)) => refusal(fail(
+            StatusCode::CONFLICT,
+            "no_filler",
+            format!("collection '{collection}' has no filler to refresh"),
+        )),
+        Ok(None) => not_found(&collection),
+        Err(e) => e.into_response(),
+    }
 }
 
 async fn rows_route(State(pod): State<Pod>, Path(collection): Path<String>) -> Response {

@@ -1,0 +1,22 @@
+[package]
+name = "web-extract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Fetching web pages and reading structured data out of them, shared by the
+# watcher (events) and Collections' fetch fillers (decision
+# `collection-fillers`): a conditional GET with size caps, the readable text
+# and JSON-LD of a page, and the generic item extractors (json, jsonld, rss,
+# ics, embedded-json, CSS selectors) with a small path language.
+
+[dependencies]
+pod-core = { path = "../pod-core" }
+serde_json.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# CSS selectors over parsed HTML (the `selectors` extractor).
+scraper = "0.20"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }

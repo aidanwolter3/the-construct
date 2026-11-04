@@ -11,12 +11,13 @@ publish.workspace = true
 
 [dependencies]
 pod-core = { path = "../pod-core" }
+web-extract = { path = "../web-extract" }
 protocol = { workspace = true }
 serde_json.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 axum = { version = "0.8", features = ["http2"] }
-tokio = { version = "1", features = ["rt", "time"] }
+tokio = { version = "1", features = ["rt", "time", "sync"] }
 tracing = "0.1"
 sha2 = "0.10"
 getrandom = "0.3"
@@ -25,6 +26,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 regex = "1"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

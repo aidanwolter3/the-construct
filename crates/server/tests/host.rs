@@ -704,6 +704,7 @@ fn temporary_pods_fetch_nothing_and_ask_no_model() {
     for key in [
         app_watcher::check::FETCH_SETTING,
         app_collections::compute::MODEL_SETTING,
+        app_collections::fill::FILL_SETTING,
     ] {
         assert!(
             settings.iter().any(|(k, v)| k == key && v == "0"),

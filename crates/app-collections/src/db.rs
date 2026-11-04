@@ -13,6 +13,11 @@
 //!   `collection-computed-fields`) as JSON, by collection, field id and the
 //!   normalized source values, so each input is asked about once; a
 //!   person's edit of the field replaces the answer.
+//! - `collections_fills`: each filled collection's fill state (decision
+//!   `collection-fillers`): validators and body hash of the last fetch,
+//!   health, the next scheduled fill and an agent's fills today.
+//! - `collections_secrets`: values fetch recipes send in headers
+//!   (`{secret:<name>}`), sealed with the server key; never shown back.
 //! - `collections_reminders_sent`: which row a reminder (decision
 //!   `collection-reminders`) already notified about, for which date, so
 //!   each fires once even after the core's notification retention.
@@ -33,7 +38,34 @@ pub static MIGRATIONS: &[Migration] = &[
     Migration::Sql(COMPUTED),
     // 3: reminders already sent (decision `collection-reminders`).
     Migration::Sql(REMINDERS),
+    // 4: fill state and secrets (decision `collection-fillers`).
+    Migration::Sql(FILLS),
 ];
+
+const FILLS: &str = "
+CREATE TABLE collections_fills (
+    collection   TEXT PRIMARY KEY NOT NULL,
+    fingerprint  TEXT NOT NULL DEFAULT '',
+    next_at      INTEGER,
+    etag         TEXT,
+    last_modified TEXT,
+    content_hash TEXT,
+    last_fill_at INTEGER,
+    last_ok_at   INTEGER,
+    last_error   TEXT,
+    failures     INTEGER NOT NULL DEFAULT 0,
+    empty_runs   INTEGER NOT NULL DEFAULT 0,
+    last_rows    INTEGER,
+    last_skipped INTEGER,
+    day          TEXT,
+    day_fills    INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE collections_secrets (
+    name       TEXT PRIMARY KEY NOT NULL,
+    value      TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+";
 
 const REMINDERS: &str = "
 CREATE TABLE collections_reminders_sent (

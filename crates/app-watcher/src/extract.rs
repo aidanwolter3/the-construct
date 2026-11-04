@@ -232,17 +232,7 @@ fn venue_of(v: &Value) -> String {
     }
 }
 
-/// Make `url` absolute against `base` (pages often give paths).
-pub fn absolute(base: &str, url: &str) -> String {
-    let url = url.trim();
-    if url.is_empty() {
-        return String::new();
-    }
-    match reqwest::Url::parse(base).and_then(|b| b.join(url)) {
-        Ok(u) if matches!(u.scheme(), "http" | "https") => u.to_string(),
-        _ => String::new(),
-    }
-}
+pub use web_extract::fetch::absolute;
 
 fn walk_ld(v: &Value, base: &str, out: &mut Vec<RawEvent>) {
     if out.len() >= MAX_EVENTS {

@@ -15,6 +15,8 @@
 //! | `{op: add_reminder, field, title, body?, at?, unless?, label?, app?}` | notify when a row's date is reached (decision `collection-reminders`) |
 //! | `{op: update_reminder, reminder, ...}` | change what it names |
 //! | `{op: remove_reminder, reminder}` | stop it |
+//! | `{op: set_filler, filler}` | what keeps the rows current (decision `collection-fillers`; [`crate::filler::parse`]) |
+//! | `{op: remove_filler}` | stop filling (the rows stay) |
 
 use serde_json::Value;
 
@@ -30,6 +32,14 @@ pub struct Planned {
     pub convert: Vec<String>,
     pub compute: Vec<String>,
     pub recompute: Vec<String>,
+}
+
+impl Planned {
+    /// Whether the filler is new or changed against `before` (a fill then
+    /// starts).
+    pub fn filler_changed(&self, before: &Definition) -> bool {
+        self.def.filler.is_some() && self.def.filler != before.filler
+    }
 }
 
 /// The field an op names (by name or alias, live or, for `restore_field`,
@@ -56,6 +66,7 @@ fn find<'a>(def: &'a mut Definition, name: &str, removed: bool) -> Result<&'a mu
 
 /// Apply change `ops` to `def` (`others`: every collection's live
 /// definition, which lookups read). `Err((op index, why))`.
+#[allow(clippy::too_many_arguments)]
 pub fn plan(
     def: &Definition,
     ops: &[Value],
@@ -63,12 +74,22 @@ pub fn plan(
     now: i64,
     max_chars: usize,
     max_fields: usize,
+    allow_private: bool,
 ) -> Result<Planned, (usize, String)> {
     let mut def = def.clone();
     let before = def.clone();
     let mut recompute = Vec::new();
     for (i, op) in ops.iter().enumerate() {
-        apply_op(&mut def, op, others, &mut recompute, now, max_chars).map_err(|e| (i, e))?;
+        apply_op(
+            &mut def,
+            op,
+            others,
+            &mut recompute,
+            now,
+            max_chars,
+            allow_private,
+        )
+        .map_err(|e| (i, e))?;
     }
     model::check_definition(&def, max_fields).map_err(|e| (ops.len().saturating_sub(1), e))?;
     let compute = to_compute(&before, &def);
@@ -117,6 +138,7 @@ fn apply_op(
     recompute: &mut Vec<String>,
     now: i64,
     max_chars: usize,
+    allow_private: bool,
 ) -> Result<(), String> {
     let arg = |k: &str| op[k].as_str().map(str::trim).unwrap_or("");
     match op["op"].as_str().unwrap_or("") {
@@ -231,9 +253,21 @@ fn apply_op(
         "add_reminder" => crate::remind::add(def, op, now)?,
         "update_reminder" => crate::remind::update(def, op)?,
         "remove_reminder" => crate::remind::remove(def, op)?,
+        "set_filler" => {
+            let Some(spec) = op.get("filler").filter(|f| !f.is_null()) else {
+                return Err("set_filler needs \"filler\" (remove_filler stops filling)".into());
+            };
+            def.filler = crate::filler::parse(def, spec, allow_private)?;
+        }
+        "remove_filler" => {
+            if def.filler.is_none() {
+                return Err(format!("'{}' has no filler", def.name));
+            }
+            def.filler = None;
+        }
         other => {
             return Err(format!(
-                "unknown op '{other}' (add_field, rename_field, remove_field, restore_field, update_field, recompute_field, set_order, set_title, add_reminder, update_reminder, remove_reminder)"
+                "unknown op '{other}' (add_field, rename_field, remove_field, restore_field, update_field, recompute_field, set_order, set_title, add_reminder, update_reminder, remove_reminder, set_filler, remove_filler)"
             ));
         }
     }
@@ -311,6 +345,10 @@ pub fn restore(
         .collect();
     def.reminders
         .retain(|r| r.sources().iter().all(|id| live.contains(id)));
+    // A filler that no longer fits the fields stops (set it again).
+    if crate::filler::check(&def, u32::MAX).is_err() {
+        def.filler = None;
+    }
     model::check_definition(&def, max_fields)?;
     Ok(Planned {
         convert: to_convert(current, &def),
@@ -333,7 +371,15 @@ mod tests {
         max_chars: usize,
         max_fields: usize,
     ) -> Result<Planned, (usize, String)> {
-        plan(def, ops, &Defs::default(), now, max_chars, max_fields)
+        plan(
+            def,
+            ops,
+            &Defs::default(),
+            now,
+            max_chars,
+            max_fields,
+            false,
+        )
     }
 
     fn todos() -> Definition {
@@ -354,6 +400,7 @@ mod tests {
             descending: false,
             next_field: 4,
             reminders: Vec::new(),
+            filler: None,
         }
     }
 

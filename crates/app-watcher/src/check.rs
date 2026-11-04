@@ -6,7 +6,6 @@
 use std::time::Duration;
 
 use pod_core::{NewNotification, Pod};
-use reqwest::{StatusCode, header};
 
 use crate::db::{self, CheckResult, Target};
 use crate::extract::{self, Kind, RawEvent};
@@ -14,10 +13,8 @@ use crate::html;
 use crate::when::{Zone, civil_from_days};
 use crate::{APP_ID, CHANNEL, NAME, WatcherAdapter};
 
-/// Largest page read.
-pub const MAX_BODY: usize = 3 * 1024 * 1024;
-/// One fetch's timeout.
-pub const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+pub use web_extract::fetch::{FETCH_TIMEOUT, FetchError, Fetched, MAX_BODY};
+
 /// One model call's timeout.
 pub const LLM_TIMEOUT: Duration = Duration::from_secs(180);
 /// Event pages fetched per check (targets with `details`).
@@ -31,95 +28,15 @@ const LOUD_PER_RUN: usize = 10;
 /// make, must not make the server fetch URLs of their choosing).
 pub const FETCH_SETTING: &str = "watcher.fetch";
 
-/// A fetch that went wrong.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FetchError {
-    pub message: String,
-    /// The server asked to wait this long (`Retry-After`, seconds).
-    pub retry_after: Option<i64>,
-}
-
-fn fail(message: impl Into<String>) -> FetchError {
-    FetchError {
-        message: message.into(),
-        retry_after: None,
-    }
-}
-
-/// What a fetch answered.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Fetched {
-    NotModified,
-    Body {
-        bytes: Vec<u8>,
-        etag: Option<String>,
-        last_modified: Option<String>,
-    },
-}
-
-/// GET `url`, sending the validators of the last fetch.
+/// GET `url`, sending the validators of the last fetch (the shared fetch,
+/// [`web_extract::fetch::fetch`]).
 pub async fn fetch(
     client: &reqwest::Client,
     url: &str,
     etag: Option<&str>,
     last_modified: Option<&str>,
 ) -> Result<Fetched, FetchError> {
-    let mut req = client.get(url).header(
-        header::ACCEPT,
-        "text/html,application/xhtml+xml,text/calendar,application/ld+json;q=0.9,*/*;q=0.8",
-    );
-    if let Some(e) = etag {
-        req = req.header(header::IF_NONE_MATCH, e);
-    }
-    if let Some(m) = last_modified {
-        req = req.header(header::IF_MODIFIED_SINCE, m);
-    }
-    let mut resp = req.send().await.map_err(|e| {
-        let e = if e.is_timeout() {
-            "timed out".to_owned()
-        } else if e.is_connect() {
-            "could not connect".to_owned()
-        } else {
-            e.to_string()
-        };
-        fail(e)
-    })?;
-    let status = resp.status();
-    if status == StatusCode::NOT_MODIFIED {
-        return Ok(Fetched::NotModified);
-    }
-    if !status.is_success() {
-        let retry_after = resp
-            .headers()
-            .get(header::RETRY_AFTER)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().parse::<i64>().ok())
-            .filter(|s| *s > 0);
-        return Err(FetchError {
-            message: format!("the site answered {status}"),
-            retry_after,
-        });
-    }
-    let header_of = |h: header::HeaderName| {
-        resp.headers()
-            .get(h)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned)
-    };
-    let etag = header_of(header::ETAG);
-    let last_modified = header_of(header::LAST_MODIFIED);
-    let mut bytes = Vec::new();
-    while let Some(chunk) = resp.chunk().await.map_err(|e| fail(e.to_string()))? {
-        if bytes.len() + chunk.len() > MAX_BODY {
-            return Err(fail(format!("the page is over {} MiB", MAX_BODY >> 20)));
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    Ok(Fetched::Body {
-        bytes,
-        etag,
-        last_modified,
-    })
+    web_extract::fetch::fetch(client, url, etag, last_modified, &[]).await
 }
 
 /// Today's date (`YYYY-MM-DD`) in `zone` (else UTC).

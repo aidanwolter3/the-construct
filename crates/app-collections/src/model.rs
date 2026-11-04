@@ -311,6 +311,9 @@ pub struct Definition {
     /// `collection-reminders`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reminders: Vec<crate::remind::Reminder>,
+    /// What keeps the rows current (decision `collection-fillers`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filler: Option<crate::filler::Filler>,
 }
 
 impl Definition {
@@ -438,6 +441,7 @@ impl Definition {
             "order_by": order_json(self.order_fields().map(|f| f.name.clone()).collect()),
             "descending": self.descending,
             "reminders": self.reminders.iter().map(|r| r.describe(self)).collect::<Vec<_>>(),
+            "filler": self.filler.as_ref().map(|f| f.describe(self)),
         })
     }
 }
@@ -1056,6 +1060,7 @@ pub fn check_definition(def: &Definition, max_fields: usize) -> Result<(), Strin
         }
     }
     crate::remind::check(def)?;
+    crate::filler::check(def, u32::MAX)?;
     if def.order_by.len() > MAX_ORDER_KEYS {
         return Err(format!(
             "rows are ordered by at most {MAX_ORDER_KEYS} fields"
@@ -1269,6 +1274,7 @@ mod tests {
             descending: false,
             next_field: 4,
             reminders: Vec::new(),
+            filler: None,
         }
     }
 

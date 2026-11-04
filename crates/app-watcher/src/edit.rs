@@ -89,19 +89,7 @@ fn integer(body: &Value, key: &str) -> Result<Option<i64>, Refusal> {
 /// Check a target URL: `http(s)://`, and a public host unless the server
 /// allows private ones.
 pub fn check_url(adapter: &WatcherAdapter, url: &str) -> Result<String, Refusal> {
-    let parsed =
-        reqwest::Url::parse(url.trim()).map_err(|_| invalid(format!("\"{url}\" is not a URL")))?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err(invalid("the URL must start with http:// or https://"));
-    }
-    let host = parsed.host_str().unwrap_or("");
-    if !adapter.config().allow_private_hosts && !pod_core::net::is_public_host(host) {
-        return Err(invalid(format!("\"{host}\" is not a public website")));
-    }
-    if url.len() > 2_000 {
-        return Err(invalid("the URL is at most 2000 characters"));
-    }
-    Ok(parsed.to_string())
+    web_extract::fetch::check_url(url, adapter.config().allow_private_hosts).map_err(invalid)
 }
 
 /// Apply the target fields present in `body` to `t`.

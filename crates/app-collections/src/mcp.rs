@@ -38,7 +38,19 @@ order_by may list several fields ([\"section\", \"done\"]; a choice sorts by the
 A collection can remind the user: apply_change {op: add_reminder, field: <a date field>, title: \"Due today: \
 {title}\", unless: {field: \"done\", equals: true}, at?: \"09:00\"} sends a notification from the app showing \
 the collection once a row's date is reached (at that time of day in the user's time zone), unless the row \
-then matches unless. Set the zone first with set_time_zone (ask the user if you don't know it).";
+then matches unless. Set the zone first with set_time_zone (ask the user if you don't know it). \
+A collection can keep itself current from the web with a filler (define_collection filler, or apply_change \
+{op: set_filler}): {kind: \"fetch\", url, extract: json|embedded-json|jsonld|rss|ics|selectors, items?, \
+types?, map: {field: path}} is a recipe the pod runs on a schedule with no model call, so prefer it: try the \
+page with collections_preview first (without map it shows sample items to write paths from), pick the \
+cheapest extractor that gives the fields (an API's json, then jsonld, rss or ics, then embedded-json, then \
+CSS selectors), then save the filler. {kind: \"agent\", prompt} has a model with web search answer the rows \
+(each fill costs model calls; budgeted by fills_per_day): use it only when no page holds the data. Combine \
+them for shopping: an agent finds the items once, a fetch filler with url_field keeps each row's price \
+current. every_minutes schedules fills; on_open_minutes fills when the app opens and the data is older. \
+collections_status shows each filler's health: say so when one is failing or finds nothing. An API key goes \
+in with collections_set_secret and is sent as a header value \"{secret:<name>}\"; ask the user for it and \
+never repeat it.";
 
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({
@@ -67,6 +79,8 @@ pub fn tools() -> Vec<Value> {
         "required": ["name", "type"] });
     let order = json!({ "description": "A field, or a list of fields (first key first), rows are listed by (else oldest first). A choice sorts by the order of its options; empty values last.",
         "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] });
+    let filler = json!({ "type": ["object", "null"],
+        "description": "What keeps the rows current from the web (decision collection-fillers). kind \"fetch\" (a recipe, no model call per fill): {kind, url (one page) | url_field (a text field holding each row's own page; that row is filled from it), extract: json | embedded-json (a page's <script id=script, default __NEXT_DATA__>) | jsonld (schema.org objects of types, e.g. [\"Product\"]) | rss (items {title, link, description, published, updated, id, author, category}) | ics (VEVENT properties lowercase: summary, dtstart, location, ...) | selectors (CSS), items? (json/embedded-json: a path to the list; selectors: a CSS selector per item), types?, script?, map: {field: path} (paths: a.b, a[0], a[*]; a list key is looked into, so offers.price works; selectors: a CSS selector inside the item, sel@attr for an attribute, @attr for the item's own), headers? {name: value, value may be \"Bearer {secret:<name>}\"}}. kind \"agent\" (a model with web search and fetch answers the rows; costs model calls): {kind, prompt, fields? (default every field that isn't computed), max_searches? (default 5, at most 20), max_fetches? (default 10, at most 30), fills_per_day? (default 4)}. Both: mode? replace (default: the rows are the latest answer; rows it no longer lists are deleted; apps can't add or delete rows) | upsert (adds and updates rows by key, keeps others; people may add rows), key? (a filled field identifying a row; with replace, rows keep their ids and unfilled fields), every_minutes? (fetch: 15..10080; agent: 60..10080), on_open_minutes? (1..1440: fill when an app showing it opens and the last fill is older). Values are coerced to the fields' types (prices like \"$1,299\" and feed dates are read); a value that doesn't fit is skipped. Filled fields can't be set by hand. null: no filler." });
     let apps = json!({ "type": "array", "description": "Custom app layouts that change with it: [{app, layout | json_patch, base_version?, note?}]",
         "items": { "type": "object", "properties": { "app": { "type": "string" }, "layout": { "type": "object" },
             "json_patch": { "type": "array", "items": { "type": "object" } }, "base_version": { "type": "integer" }, "note": { "type": "string" } },
@@ -84,7 +98,7 @@ pub fn tools() -> Vec<Value> {
             json!({ "name": collection, "title": { "type": "string" },
                     "fields": { "type": "array", "items": field },
                     "order_by": order,
-                    "descending": { "type": "boolean" }, "note": note }),
+                    "descending": { "type": "boolean" }, "filler": filler.clone(), "note": note }),
             &["name", "fields"],
         ),
         tool(
@@ -95,7 +109,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "apply_change",
-            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, optional?, default?, compute?} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title} | {op: add_reminder, field, title, body?, at?, unless?, label?, app?} | {op: update_reminder, reminder: id, ...} | {op: remove_reminder, reminder: id}]. A reminder notifies the user once per row when its date field is reached: on that date at at (HH:MM, default 09:00) in the pod's time zone (set_time_zone), unless the row then has unless {field, equals} (e.g. {field: \"done\", equals: true}); dates before the day it was added never notify, and a reminder more than 7 days late is dropped. title and body are the notification's text with {field} replaced by the row's value; label names it in the user's notification settings (default \"<Title>: <field>\"); app (a custom app id) is the app it comes from and opens, default the oldest custom app with the collection as a feed (with none, nothing is sent). describe_collection lists reminders with their ids. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. A lookup is not recomputed when its rules change: after editing them, recompute_field computes the field again for every row (a row only the model could answer keeps its value). Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
+            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, optional?, default?, compute?} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title} | {op: add_reminder, field, title, body?, at?, unless?, label?, app?} | {op: update_reminder, reminder: id, ...} | {op: remove_reminder, reminder: id} | {op: set_filler, filler} | {op: remove_filler}]. set_filler sets what keeps the rows current (as define_collection's filler) and starts a fill; remove_filler stops filling and keeps the rows. A reminder notifies the user once per row when its date field is reached: on that date at at (HH:MM, default 09:00) in the pod's time zone (set_time_zone), unless the row then has unless {field, equals} (e.g. {field: \"done\", equals: true}); dates before the day it was added never notify, and a reminder more than 7 days late is dropped. title and body are the notification's text with {field} replaced by the row's value; label names it in the user's notification settings (default \"<Title>: <field>\"); app (a custom app id) is the app it comes from and opens, default the oldest custom app with the collection as a feed (with none, nothing is sent). describe_collection lists reminders with their ids. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. A lookup is not recomputed when its rules change: after editing them, recompute_field computes the field again for every row (a row only the model could answer keeps its value). Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
             json!({ "collection": collection, "base_version": { "type": "integer", "description": "The definition version you read" },
                     "changes": { "type": "array", "items": { "type": "object" } }, "apps": apps, "note": note }),
             &["collection", "changes"],
@@ -126,6 +140,34 @@ pub fn tools() -> Vec<Value> {
             &["edit"],
         ),
         tool(
+            "collections_preview",
+            "Try a fetch recipe now and store nothing: fetch the page, extract and map, and answer the rows (or, without map, sample items to write the paths from). Pass the recipe's {url, extract, items?, types?, script?, map?, headers?}, or collection to try that collection's filler (a url_field filler tries its first row's page). Use it before set_filler, and when collections_status says a filler finds nothing.",
+            json!({ "collection": collection, "url": { "type": "string" }, "extract": { "type": "string", "enum": web_extract::items::Kind::ALL },
+                    "items": { "type": "string" }, "types": { "type": "array", "items": { "type": "string" } },
+                    "script": { "type": "string" }, "map": { "type": "object", "description": "{name: path}" },
+                    "headers": { "type": "object" } }),
+            &[],
+        ),
+        tool(
+            "collections_status",
+            "Each filled collection's filler health: state (pending, ok, failing, empty, off, unavailable), detail, last and next fill, items found, agent fills today. Say so when one is failing or finds no items.",
+            json!({ "collection": collection }),
+            &[],
+        ),
+        tool(
+            "collections_refresh",
+            "Fill a collection from its filler now (refetching even an unchanged page) and answer what changed. An agent filler counts toward its fills_per_day and runs in the background.",
+            json!({ "collection": collection }),
+            &["collection"],
+        ),
+        tool(
+            "collections_set_secret",
+            "Store a value a fetch recipe sends in a header (an API key), sealed on the pod: headers name it as \"{secret:<name>}\". It is never shown back. value null forgets it. Answers the stored names.",
+            json!({ "name": { "type": "string", "description": "[a-z][a-z0-9_]*" },
+                    "value": { "type": ["string", "null"] } }),
+            &["name", "value"],
+        ),
+        tool(
             "export_collection",
             "Everything in a collection, deleted rows, removed fields' values and values kept aside included: the pod is the only copy of this data.",
             json!({ "collection": collection }),
@@ -143,9 +185,13 @@ pub fn call<'a>(
     let caps = adapter.caps;
     Some(match tool {
         "list_collections" => Box::pin(list(pod)),
-        "define_collection" => Box::pin(define(pod, caps, args)),
+        "define_collection" => Box::pin(define(pod, adapter, args)),
         "describe_collection" => Box::pin(describe(pod, args)),
-        "apply_change" => Box::pin(apply_change(pod, caps, args)),
+        "apply_change" => Box::pin(apply_change(pod, adapter, args)),
+        "collections_preview" => Box::pin(preview(pod, adapter, args)),
+        "collections_status" => Box::pin(status(pod, args)),
+        "collections_refresh" => Box::pin(refresh(pod, args)),
+        "collections_set_secret" => Box::pin(set_secret(pod, args)),
         "restore_collection_version" => Box::pin(restore_version(pod, caps, args)),
         "edit_rows" => Box::pin(edit_rows(pod, caps, args)),
         "add_row" => Box::pin(add_row(pod, caps, args)),
@@ -233,7 +279,8 @@ async fn list(pod: &Pod) -> Result<Value, Value> {
     Ok(json!({ "collections": out }))
 }
 
-async fn define(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Value> {
+async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result<Value, Value> {
+    let caps = adapter.caps;
     let name = str_arg(args, "name")?.to_owned();
     let Some(specs) = args["fields"].as_array() else {
         return Err(bad("\"fields\" is a list of {name, type, ...}"));
@@ -256,6 +303,7 @@ async fn define(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Val
         next_field: fields.len() as u32 + 1,
         fields,
         reminders: Vec::new(),
+        filler: None,
         order_by: Vec::new(),
         descending: args["descending"].as_bool().unwrap_or(false),
     };
@@ -275,8 +323,16 @@ async fn define(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Val
     }
     let order = model::order_names(args.get("order_by")).map_err(bad)?;
     def.order_by = model::resolve_order(&def, &order).map_err(bad)?;
+    if let Some(spec) = args.get("filler") {
+        def.filler = crate::filler::parse(&def, spec, adapter.allow_private_hosts()).map_err(
+            |e| json!({ "error": "invalid_filler", "at": "/filler", "detail": e, "status": 400 }),
+        )?;
+    }
     model::check_definition(&def, caps.fields)
         .map_err(|e| json!({ "error": "invalid_definition", "detail": e, "status": 400 }))?;
+    crate::filler::check(&def, caps.agent_fills_per_day).map_err(
+        |e| json!({ "error": "invalid_filler", "at": "/filler", "detail": e, "status": 400 }),
+    )?;
     let mut with_new = others.clone();
     with_new.insert(def.name.clone(), def.clone());
     model::check_lookups(&def, &with_new)
@@ -306,11 +362,16 @@ async fn define(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Val
         )?))
     })
     .await?;
-    Ok(json!({
+    let mut out = json!({
         "ok": true, "collection": name, "version": version,
         "definition": def.describe(pod_core::util::now_secs(), KEEP_SECS, &with_new),
         "next": format!("Make an app with create_app and feeds [[\"collections\", \"{name}\"]]; describe_collection has layout snippets."),
-    }))
+    });
+    if def.filler.is_some() {
+        crate::fill::spawn(pod, &name, true);
+        out["filling"] = json!("a first fill started; collections_status shows how it went");
+    }
+    Ok(out)
 }
 
 fn title_case(name: &str) -> String {
@@ -425,11 +486,12 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
                     .collect();
                 let lookups = crate::lookup::report(c, &def)?;
                 let others = db::defs_by_name(c)?;
+                let fill_state = crate::fill::state(c, &lookup)?;
                 Ok(Some((
                     latest,
                     shown,
                     rows,
-                    (aside, computed, lookups, others),
+                    (aside, computed, lookups, others, (def.clone(), fill_state)),
                     db::def_history(c, &lookup, 20)?,
                     db::recent_edits(c, &lookup)?,
                     users(&apps, &lookup),
@@ -438,8 +500,15 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
         })
         .await
         .map_err(db_err)?;
-    let Some((latest, shown, rows, (aside, computed, lookups, others), history, edits, used_by)) =
-        found
+    let Some((
+        latest,
+        shown,
+        rows,
+        (aside, computed, lookups, others, (live, fill_state)),
+        history,
+        edits,
+        used_by,
+    )) = found
     else {
         return Err(missing(&name));
     };
@@ -458,8 +527,266 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
         "history": history,
         "recent_edits": edits,
         "used_by": used_by,
+        "fill": fill_health(pod, &live, &fill_state).await,
         "layout_hints": hints(&def),
     }))
+}
+
+/// `def`'s filler health ([`crate::fill::health`]).
+async fn fill_health(pod: &Pod, def: &Definition, st: &crate::fill::State) -> Value {
+    if def.filler.is_none() {
+        return Value::Null;
+    }
+    let off = !crate::fill::allowed(pod).await;
+    let agent = pod
+        .adapter::<CollectionsAdapter>()
+        .is_some_and(|a| a.agent().is_some());
+    crate::fill::health(def, st, pod_core::util::now_secs(), off, agent)
+}
+
+async fn status(pod: &Pod, args: &Value) -> Result<Value, Value> {
+    let only = args["collection"].as_str().map(str::to_owned);
+    let rows = pod
+        .blocking(|s| {
+            s.with_conn(|c| {
+                let mut out = Vec::new();
+                for (_, def) in db::all_defs(c)? {
+                    if def.filler.is_some() {
+                        let st = crate::fill::state(c, &def.name)?;
+                        out.push((def, st));
+                    }
+                }
+                Ok((out, crate::fill::secret_names(c)?))
+            })
+        })
+        .await
+        .map_err(db_err)?;
+    let (rows, secrets) = rows;
+    let mut out = Vec::new();
+    for (def, st) in rows {
+        if only.as_ref().is_some_and(|o| *o != def.name) {
+            continue;
+        }
+        out.push(fill_health(pod, &def, &st).await);
+    }
+    if let Some(o) = &only
+        && out.is_empty()
+    {
+        return Err(
+            json!({ "error": "no_filler", "collection": o, "status": 404,
+            "detail": "that collection has no filler (or doesn't exist)" }),
+        );
+    }
+    Ok(json!({ "fillers": out, "secrets": secrets }))
+}
+
+async fn refresh(pod: &Pod, args: &Value) -> Result<Value, Value> {
+    let name = str_arg(args, "collection")?.to_owned();
+    let (_, def) = current(pod, &name).await?;
+    let Some(f) = &def.filler else {
+        return Err(
+            json!({ "error": "no_filler", "collection": name, "status": 409,
+            "detail": "set one with apply_change {op: set_filler}" }),
+        );
+    };
+    if f.is_agent() {
+        crate::fill::spawn(pod, &name, true);
+        return Ok(json!({ "ok": true, "started": true,
+            "detail": "the agent is filling in the background (it can take minutes); collections_status shows how it went" }));
+    }
+    let out = crate::fill::fill(pod, &name, true).await;
+    let mut v = out.to_json();
+    v["collection"] = json!(name);
+    Ok(v)
+}
+
+async fn set_secret(pod: &Pod, args: &Value) -> Result<Value, Value> {
+    let name = str_arg(args, "name")?.to_owned();
+    if !crate::filler::valid_secret_name(&name) {
+        return Err(bad(
+            "a secret's name is [a-z][a-z0-9_]*, at most 40 characters",
+        ));
+    }
+    let value = match &args["value"] {
+        Value::Null => None,
+        Value::String(v) if !v.trim().is_empty() && v.len() <= 4_000 => Some(v.trim().to_owned()),
+        _ => {
+            return Err(bad(
+                "\"value\" is the secret (1..=4000 characters) or null to forget it",
+            ));
+        }
+    };
+    let now = pod_core::util::now_secs();
+    let n = name.clone();
+    let names = pod
+        .blocking(move |s| {
+            crate::fill::set_secret(s, &n, value.as_deref(), now)?;
+            s.with_conn(crate::fill::secret_names)
+        })
+        .await
+        .map_err(db_err)?;
+    Ok(json!({ "ok": true, "secret": name, "secrets": names,
+        "detail": "stored sealed; a filler's header sends it as {secret:<name>}" }))
+}
+
+/// Most rows or sample items a preview shows.
+const PREVIEW_ROWS: usize = 10;
+
+async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result<Value, Value> {
+    if !crate::fill::allowed(pod).await {
+        return Err(fail(
+            StatusCode::FORBIDDEN,
+            "fill_off",
+            crate::fill::FILL_OFF,
+        ));
+    }
+    // The recipe: a collection's filler, or the arguments.
+    let (url, spec, map, headers, def) = if let Some(name) = args["collection"].as_str() {
+        let (_, def) = current(pod, name).await?;
+        let Some(f) = def.filler.clone() else {
+            return Err(bad(format!(
+                "'{name}' has no filler; pass a recipe instead"
+            )));
+        };
+        let crate::filler::Source::Fetch {
+            url,
+            url_field,
+            headers,
+            map,
+            ..
+        } = &f.source
+        else {
+            return Err(bad(
+                "an agent filler can't be previewed (collections_refresh runs it)",
+            ));
+        };
+        let url = match (url, url_field) {
+            (Some(u), _) => u.clone(),
+            (None, Some(field)) => {
+                let (n, field) = (name.to_owned(), field.clone());
+                pod.blocking(move |s| s.with_conn(|c| db::all_rows(c, &n, false)))
+                    .await
+                    .map_err(db_err)?
+                    .into_iter()
+                    .find_map(|r| {
+                        r.values
+                            .get(&field)
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .ok_or_else(|| bad("no row has a URL yet"))?
+            }
+            _ => return Err(bad("the filler has no URL")),
+        };
+        let map: Vec<(String, String)> = map
+            .iter()
+            .map(|(id, p)| (def.name_of(id), p.clone()))
+            .collect();
+        (url, f.extract_spec(), map, headers.clone(), Some(def))
+    } else {
+        let url = str_arg(args, "url")?.to_owned();
+        let kind = web_extract::items::Kind::parse(args["extract"].as_str().unwrap_or(""))
+            .ok_or_else(|| {
+                bad(format!(
+                    "\"extract\" is one of {}",
+                    web_extract::items::Kind::ALL.join(", ")
+                ))
+            })?;
+        let types = match &args["types"] {
+            Value::String(t) => vec![t.clone()],
+            Value::Array(a) => a
+                .iter()
+                .filter_map(|t| t.as_str().map(str::to_owned))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let spec = web_extract::items::Spec {
+            kind,
+            items: args["items"].as_str().unwrap_or("").to_owned(),
+            types,
+            script: args["script"].as_str().unwrap_or("").to_owned(),
+        };
+        let map: Vec<(String, String)> = args["map"]
+            .as_object()
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let headers = args["headers"]
+            .as_object()
+            .map(|h| {
+                h.iter()
+                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        (url, Some(spec), map, headers, None)
+    };
+    let Some(spec) = spec else {
+        return Err(bad("unknown extractor"));
+    };
+    let url = web_extract::fetch::check_url(&url, adapter.allow_private_hosts()).map_err(bad)?;
+    if spec.kind == web_extract::items::Kind::Selectors && map.is_empty() {
+        return Err(bad(
+            "the selectors extractor needs map: {name: CSS selector}",
+        ));
+    }
+    web_extract::items::check(&spec, &map).map_err(bad)?;
+    let mut sent = std::collections::BTreeMap::new();
+    for (k, v) in headers {
+        sent.insert(k, v);
+    }
+    let headers = crate::fill::resolve_headers_for(pod, &sent).map_err(bad)?;
+    let fetched = web_extract::fetch::fetch(adapter.fetch_client(), &url, None, None, &headers)
+        .await
+        .map_err(|e| fail(StatusCode::BAD_GATEWAY, "fetch_failed", e.message))?;
+    let web_extract::fetch::Fetched::Body { bytes, .. } = fetched else {
+        return Err(fail(
+            StatusCode::BAD_GATEWAY,
+            "fetch_failed",
+            "the site answered 304",
+        ));
+    };
+    let body = String::from_utf8_lossy(&bytes);
+    let mut out = json!({ "url": url, "extract": spec.kind.name(), "bytes": bytes.len() });
+    if map.is_empty() {
+        // Sample items to write the paths from.
+        let items = crate::fill::sample_items(&spec, &body).map_err(bad)?;
+        out["items"] = json!(items.len());
+        out["sample_items"] = json!(items.into_iter().take(3).collect::<Vec<_>>());
+        out["next"] = json!("write map: {field: path into an item} and preview again");
+        return Ok(out);
+    }
+    let rows = web_extract::items::extract(&spec, &body, &url, &map).map_err(bad)?;
+    out["items"] = json!(rows.len());
+    if let Some(def) = &def {
+        // As the collection would store them.
+        let by_id: Vec<Map<String, Value>> = rows
+            .iter()
+            .map(|r| {
+                r.iter()
+                    .filter_map(|(n, v)| def.field(n).map(|f| (f.id.clone(), v.clone())))
+                    .collect()
+            })
+            .collect();
+        let (vals, skipped) = crate::fill::coerce_preview(def, by_id, adapter.caps.text_chars);
+        out["rows"] = json!(
+            vals.iter()
+                .take(PREVIEW_ROWS)
+                .map(|v| model::by_name(def, v))
+                .collect::<Vec<_>>()
+        );
+        out["values_skipped"] = json!(skipped);
+    } else {
+        out["rows"] = json!(rows.into_iter().take(PREVIEW_ROWS).collect::<Vec<_>>());
+    }
+    if out["items"] == 0 {
+        out["detail"] =
+            json!("no items: check items/types (preview without map shows what the page has)");
+    }
+    Ok(out)
 }
 
 // ---------- change sets ----------
@@ -668,7 +995,12 @@ async fn current(pod: &Pod, name: &str) -> Result<(i64, Definition), Value> {
         .ok_or_else(|| missing(name))
 }
 
-async fn apply_change(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Value> {
+async fn apply_change(
+    pod: &Pod,
+    adapter: &CollectionsAdapter,
+    args: &Value,
+) -> Result<Value, Value> {
+    let caps = adapter.caps;
     let name = str_arg(args, "collection")?.to_owned();
     let Some(ops) = args["changes"].as_array() else {
         return Err(bad("\"changes\" is a list of ops"));
@@ -686,8 +1018,12 @@ async fn apply_change(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Valu
             "detail": "the collection changed since that version; describe_collection and reapply" }),
         );
     }
-    let planned = changes::plan(&def, ops, &others, pod_core::util::now_secs(), caps.text_chars, caps.fields)
+    let planned = changes::plan(&def, ops, &others, pod_core::util::now_secs(), caps.text_chars, caps.fields, adapter.allow_private_hosts())
         .map_err(|(i, e)| json!({ "error": "invalid_change", "at": format!("/changes/{i}"), "detail": e, "status": 400 }))?;
+    crate::filler::check(&planned.def, caps.agent_fills_per_day)
+        .map_err(|e| json!({ "error": "invalid_change", "detail": e, "status": 400 }))?;
+    let filler_changed = planned.filler_changed(&def);
+    let filler_removed = def.filler.is_some() && planned.def.filler.is_none();
     for r in &planned.def.reminders {
         if let Some(app) = r.app.clone() {
             let exists = pod
@@ -702,7 +1038,18 @@ async fn apply_change(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Valu
         }
     }
     let note = note_arg(args, "Changed");
-    commit(pod, caps, &name, version, planned, args, note).await
+    let mut out = commit(pod, caps, &name, version, planned, args, note).await?;
+    if filler_removed {
+        let n = name.clone();
+        let _ = pod
+            .blocking(move |s| s.with_conn(|c| crate::fill::clear_state(c, &n)))
+            .await;
+    }
+    if filler_changed {
+        crate::fill::spawn(pod, &name, true);
+        out["filling"] = json!("a fill started; collections_status shows how it went");
+    }
+    Ok(out)
 }
 
 async fn restore_version(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Value> {
@@ -815,6 +1162,9 @@ async fn edit(
             let values = e["values"].as_object().cloned().unwrap_or_default();
             hasher.update(e.to_string());
             let invalid = |detail: String| Ok(Err(json!({ "error": "invalid_edit", "at": at, "detail": detail, "status": 422 })));
+            if let Err(d) = crate::filler::check_write(&def, &values, op) {
+                return invalid(d);
+            }
             if op == "create" {
                 let mut row = Row {
                     id: db::new_id("r"),

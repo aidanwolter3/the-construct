@@ -15,7 +15,8 @@
 //! - a mutation of `collections://<c>/...` (or of `$item.uri` in such a
 //!   list): its `field`, `also[].field` and `entity.<f>` in `value_expr`;
 //!   a create's `entity` keys;
-//! - the payload keys of `/v1/collections/<c>/{create,update,delete}`.
+//! - the payload keys of `/v1/collections/<c>/{create,update,delete}`
+//!   (`refresh` takes none).
 
 use std::collections::HashMap;
 
@@ -294,7 +295,7 @@ impl<'a> Checker<'a> {
                 ));
             }
             if let Some(p) = payload
-                && op != "delete"
+                && !matches!(op, "delete" | "refresh")
             {
                 for k in p.keys() {
                     if matches!(k.as_str(), "id" | "client_id") {
@@ -384,6 +385,7 @@ mod tests {
             descending: false,
             next_field: 3,
             reminders: Vec::new(),
+            filler: None,
         };
         def.fields[0].aliases.push("name".into());
         HashMap::from([("todos".to_owned(), def)])

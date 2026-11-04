@@ -616,6 +616,7 @@ mod tests {
             descending: false,
             next_field: 4,
             reminders: Vec::new(),
+            filler: None,
         }
     }
 

@@ -23,7 +23,7 @@ pub mod check;
 pub mod db;
 pub mod edit;
 pub mod extract;
-pub mod html;
+pub use web_extract::html;
 mod mcp;
 pub mod rules;
 pub mod when;
