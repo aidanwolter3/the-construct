@@ -106,6 +106,7 @@ fn main() -> std::process::ExitCode {
         eprintln!("server: {e}");
         return std::process::ExitCode::FAILURE;
     }
+    log_home_builder();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
@@ -134,6 +135,18 @@ fn main() -> std::process::ExitCode {
             );
             std::process::ExitCode::from(2)
         }
+    }
+}
+
+/// Say whether the launcher's + can build apps (the same environment
+/// [`server::adapters`] reads), so a missing key shows at startup rather
+/// than as a failed request.
+fn log_home_builder() {
+    match server::home::BuilderConfig::from_env() {
+        Some(c) => tracing::info!(model = %c.model, url = %c.url, "launcher: building apps with +"),
+        None => tracing::warn!(
+            "launcher: CONSTRUCT_INFER_API_KEY is not set, so + answers \"App building isn't set up on this pod yet.\""
+        ),
     }
 }
 
