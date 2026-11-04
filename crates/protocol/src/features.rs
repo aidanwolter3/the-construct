@@ -131,10 +131,17 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
         out.insert(f);
     };
     match node {
-        UiNode::Workspace { screens, .. } => {
+        UiNode::Workspace {
+            screens,
+            title_scrolls,
+            ..
+        } => {
             add(feature::WORKSPACE);
             if !screens.is_empty() {
                 add(feature::SCREENS);
+            }
+            if *title_scrolls {
+                add(feature::TITLE_SCROLLS);
             }
         }
         UiNode::Container { .. } => add(feature::CONTAINER),
@@ -628,6 +635,27 @@ mod tests {
         let sticky = node(json!({"type": "core://Sticky", "content": {"type": "core://Divider"}}));
         assert_eq!(required_features(&sticky), ["divider", "sticky"]);
         assert_eq!(this.can_draw(&required_features(&sticky)), Compatible);
+    }
+
+    /// Decision `pinned-app-title`: only a title that scrolls away needs
+    /// the feature; a pinned one (the default) is plain `workspace`.
+    #[test]
+    fn a_scrolling_title_needs_its_feature() {
+        let ws = |scrolls: bool| {
+            node(
+                json!({"type": "core://Workspace", "id": "a", "title": "A", "slots": [],
+                        "title_scrolls": scrolls}),
+            )
+        };
+        assert_eq!(required_features(&ws(false)), ["workspace"]);
+        assert_eq!(required_features(&ws(true)), ["title_scrolls", "workspace"]);
+        // Written only when set.
+        let v = serde_json::to_value(ws(false)).unwrap();
+        assert!(v.get("title_scrolls").is_none());
+        assert_eq!(
+            serde_json::to_value(ws(true)).unwrap()["title_scrolls"],
+            true
+        );
     }
 
     /// Decision `named-vocabulary`: `dismiss` is removed; only the layouts

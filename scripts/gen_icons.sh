@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Regenerates every app icon asset from one geometry definition (scripts/gen_icons.py):
-#   assets/icon/*.svg, assets/icon/png/construct-*.png, assets/icon/construct.{icns,ico},
+#   assets/icon/*.svg, assets/icon/png/construct-512.png, assets/icon/construct.{icns,ico},
 #   Android adaptive icon (res/drawable/ic_launcher_*.xml, mipmap-*), desktop resources/icon/*.png.
 # Needs python3 with Pillow and numpy; iconutil (macOS) for the .icns.
 set -euo pipefail

@@ -689,12 +689,13 @@ async fn sse_announces_the_newest_version_the_client_can_draw() {
     let app = "pixelfed_home";
     let url = format!("{}/v1/workspaces/{app}/events", pod.url);
     // 0005-0008 use the create's `dismiss` (feature `create_dismiss`, now
-    // removed); 0009 writes Share as an `action.sequence`.
+    // removed); 0009 writes Share as an `action.sequence`, and 0010 lets the
+    // title scroll (feature `title_scrolls`).
     let old = before_sequences();
     let mut before = SseReader::connect_as(&url, None, Some(&old)).await;
     let mut current = SseReader::connect(&url, None).await;
     assert_eq!(before.next_event().await, layout_msg(app, 8));
-    assert_eq!(current.next_event().await, layout_msg(app, 9));
+    assert_eq!(current.next_event().await, layout_msg(app, 10));
 
     // Publish a copy of the version `client` is served.
     let publish = |client: protocol::ClientCaps| {
@@ -710,12 +711,12 @@ async fn sse_announces_the_newest_version_the_client_can_draw() {
         v
     };
     // A copy of 0008: the older client, not this build.
-    assert_eq!(publish(protocol::ClientCaps::from_header(&old)), 10);
-    assert_eq!(before.next_event().await, layout_msg(app, 10));
-    // A copy of 0009: this build, whose next event is the next version it
+    assert_eq!(publish(protocol::ClientCaps::from_header(&old)), 11);
+    assert_eq!(before.next_event().await, layout_msg(app, 11));
+    // A copy of 0010: this build, whose next event is the next version it
     // can draw.
-    assert_eq!(publish(protocol::ClientCaps::this_build()), 11);
-    assert_eq!(current.next_event().await, layout_msg(app, 11));
+    assert_eq!(publish(protocol::ClientCaps::this_build()), 12);
+    assert_eq!(current.next_event().await, layout_msg(app, 12));
 }
 
 #[tokio::test]
@@ -839,6 +840,7 @@ async fn versions_say_whether_the_client_can_draw_them() {
     assert_eq!(
         rows(&current),
         [
+            (10, None),
             (9, None),
             (8, retired.clone()),
             (7, retired.clone()),
@@ -850,15 +852,23 @@ async fn versions_say_whether_the_client_can_draw_them() {
             (1, retired.clone())
         ]
     );
-    assert_eq!(current["latest_compatible_version"], json!(9));
-    let v9 = &current["versions"][0]["features"];
+    assert_eq!(current["latest_compatible_version"], json!(10));
+    let v10 = &current["versions"][0]["features"];
+    assert!(
+        v10.as_array().unwrap().contains(&json!("title_scrolls")),
+        "{v10}"
+    );
+    let v9 = &current["versions"][1]["features"];
     assert!(
         v9.as_array().unwrap().contains(&json!("action_sequence")),
         "{v9}"
     );
-    // A build from before sequences: 0003-0008, not 0009.
+    // A build from before sequences: 0003-0008, not 0009 or 0010.
     let before = page(Some(before_sequences())).await;
-    assert_eq!(rows(&before)[..2], [(9, update.clone()), (8, None)]);
+    assert_eq!(
+        rows(&before)[..3],
+        [(10, update.clone()), (9, update.clone()), (8, None)]
+    );
     assert_eq!(before["latest_compatible_version"], json!(8));
     // A client that lists nothing draws nothing; a caller that sends no
     // header at all (a tool) is shown everything.
@@ -893,16 +903,16 @@ async fn apps_say_the_newest_version_the_client_can_draw() {
         async move { req.send().await.unwrap().json::<Value>().await.unwrap() }
     };
     for (features, want) in [
-        (Some(protocol::features_header()), json!(9)),
+        (Some(protocol::features_header()), json!(10)),
         (Some(before_sequences()), json!(8)),
         (Some(String::new()), Value::Null),
-        (None, json!(9)),
+        (None, json!(10)),
     ] {
         let body = apps(features.clone()).await;
         let a = &body["apps"][0];
         assert_eq!(
             (&a["latest_version"], &a["latest_compatible_version"]),
-            (&json!(9), &want),
+            (&json!(10), &want),
             "{features:?}"
         );
     }

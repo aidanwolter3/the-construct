@@ -20,8 +20,6 @@ tracing = "0.1"
 # Async upstream client (Pixelfed). rustls only; `stream` for the media proxy.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "multipart"] }
 sha2 = "0.10"
-base64 = "0.22"
-getrandom = "0.3"
 # `stream::unfold` for the size-capped media proxy body.
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 

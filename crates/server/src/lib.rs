@@ -78,15 +78,6 @@ pub fn check_open_pod(addr: &str, on_fly: bool, insecure_opt_in: bool) -> Result
     Ok(())
 }
 
-/// The per-pod settings for a new pod (D46): the recipes family collection
-/// is imported only into pods made with `import_recipes`.
-pub fn new_pod_settings(import_recipes: bool) -> Vec<(String, String)> {
-    vec![(
-        app_recipes::db::IMPORT_FAMILY_SETTING.to_owned(),
-        if import_recipes { "1" } else { "0" }.to_owned(),
-    )]
-}
-
 /// Extra settings of temporary pods (anyone can make one, D46): Pixelfed
 /// only on the default instance, no watcher fetches and no collection
 /// `model` computes, so a visitor can't make the server contact hosts of

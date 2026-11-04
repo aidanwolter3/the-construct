@@ -171,6 +171,8 @@ sealed class UiNode {
         val slots: List<SlotSpec>,
         /** Screens this app can open (D34); omitted when empty. */
         val screens: List<Screen> = emptyList(),
+        /** The title scrolls away with the content (feature `title_scrolls`); by default it is pinned in a top bar. */
+        @SerialName("title_scrolls") val titleScrolls: Boolean = false,
     ) : UiNode()
 
     @Serializable

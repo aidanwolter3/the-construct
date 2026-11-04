@@ -36,7 +36,6 @@ async fn env(storage: StorageLimits) -> Env {
             hours: 1,
             max_live: 5,
         }),
-        new_pod_settings: server::new_pod_settings(false),
         temporary_pod_settings: server::temporary_pod_settings(),
         storage,
         ..HostConfig::default()

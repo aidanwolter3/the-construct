@@ -421,6 +421,7 @@ fn default_signed_out(sign_in: &str, app: &AppInfo) -> WorkspaceSpec {
             id: app.id.into(),
             title: app.title.into(),
             screens: Vec::new(),
+            title_scrolls: false,
             slots: vec![SlotSpec {
                 slot_id: "auth".into(),
                 provider_uri: format!("core://auth/{sign_in}"),
@@ -595,12 +596,6 @@ impl Catalog {
     /// Whether the workspace is an app (has a versioned layout).
     pub fn is_app(&self, id: &str) -> bool {
         self.app(id).is_some()
-    }
-
-    /// The adapter serving app `id`.
-    pub fn adapter_for(&self, id: &str) -> Option<&Arc<dyn AppAdapter>> {
-        let (_, i) = self.apps.iter().find(|(a, _)| a.id == id)?;
-        self.adapters.get(*i)
     }
 
     /// Data source `id` (an adapter name) and its manifest.

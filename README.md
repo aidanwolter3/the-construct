@@ -2,7 +2,7 @@
 
 A server-driven UI shell: a Rust protocol, server and client core, rendered by a Compose
 Multiplatform desktop app through UniFFI. The design is in [DESIGN.md](DESIGN.md), decisions
-are in [docs/DECISIONS.md](docs/DECISIONS.md) (D1–D52) and [docs/decisions/](docs/decisions/) (newer), and status is in [docs/PROGRESS.md](docs/PROGRESS.md).
+are in [docs/DECISIONS.md](docs/DECISIONS.md) (D1–D52) and [docs/decisions/](docs/decisions/) (newer); open work is in GitHub issues.
 
 > Renamed from Project Canvas (D31). There is no migration: the desktop cache moved from `~/.canvas` to
 > `~/.construct`, the local server's data dir default from `~/.canvas-server` to `~/.construct-server`, env vars
@@ -34,8 +34,8 @@ crates/pod-core      the generic pod (Axum + SQLite, D40): GET /v1/workspaces/:i
                      push; knows apps only through the `AppAdapter` trait (and `StaticAdapter` for layout-only apps)
 crates/app-pixelfed  the Pixelfed adapter: pixelfed_home (auth, feed normalization, actions, comments, media proxy,
                      its tables) and the pixelfed_demo dev app
-crates/app-recipes   the recipes adapter (D41): the family recipe collection in recipes_* tables, imported by
-                     migration from data/import-0001.json (made by scripts/recipes_from_pdf.py)
+crates/app-recipes   the recipes adapter (D41): a recipe collection in recipes_* tables; new pods start empty
+                     (decision `recipes-start-empty`); tests seed data/test-seed.json (made-up recipes)
 crates/app-collections  Collections: data custom apps declare over MCP (collections_* tables)
 crates/app-watcher   the watcher (issue #58): polls websites for events (ics, JSON-LD, LLM extractors), matches
                      rules, notifies; the watcher app
@@ -251,7 +251,6 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 
 The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PROVIDER`, `CONSTRUCT_LLM_MODEL`,
 `CONSTRUCT_LLM_FALLBACKS`, `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL` have no effect on the pod.
-`deploy/fly/pod.toml` still sets `CONSTRUCT_LLM_PROVIDER`; that is harmless.
 
 <a id="fake-pixelfed-environment"></a>`cargo run -p fake-pixelfed`:
 
@@ -284,7 +283,7 @@ paths, e.g. the Pixelfed media proxy).
 - **Admin** (on the server; on Fly `fly ssh console -a the-construct-pod -C "/server pods …"`):
 
   ```bash
-  server pods create <name> [--import-recipes]   # prints the pod code once; --import-recipes: the family collection
+  server pods create <name>                      # prints the pod code once
   server pods adopt <name> <path/to/server.db>   # a pre-D46 single-pod database becomes a pod (copied, checked first)
   server pods remove-adopted [dir]               # delete the renamed originals adopt left behind (default: data dir)
   server pods rotate <name>                      # new code; the old one stops working, app sign-ins end
@@ -298,8 +297,8 @@ paths, e.g. the Pixelfed media proxy).
 
   Pod codes never go into git or config files; keep yours in a password manager.
 - **Temporary pods** (`CONSTRUCT_TEMP_PODS=1`, staging): every app, but Pixelfed only on the default instance (the
-  fake on staging; no typed-in servers, so a visitor can't make the server contact hosts of their choosing), no family
-  recipes, deleted with everything in them after `CONSTRUCT_TEMP_POD_HOURS`. At most 5 per client address an hour
+  fake on staging; no typed-in servers, so a visitor can't make the server contact hosts of their choosing), no
+  recipes (no new pod has any), deleted with everything in them after `CONSTRUCT_TEMP_POD_HOURS`. At most 5 per client address an hour
   (IPv6 per /64; 10 per /48) and `CONSTRUCT_TEMP_POD_MAX` live, with a smaller upload quota
   (`CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES`). Use an admin pod to try a real Pixelfed server. Testing staging
   from a script:
@@ -746,7 +745,7 @@ A new layout version reaches an open app without a restart (the M7 push, now dri
 ```bash
 cargo run -p server                                                  # terminal 1
 cd kmp-app && CONSTRUCT_BASE_URL=http://127.0.0.1:8080 CONSTRUCT_WORKSPACE=pixelfed_demo ./gradlew :desktopApp:run   # terminal 2
-# add layouts/pixelfed_demo/0003.json + its DEMO_FILES line (see "Adding a new layout version"), then restart
+# add layouts/pixelfed_demo/0003.json (see "Adding a new layout version"; build.rs embeds it), then restart
 # terminal 1: the app reconnects its event stream and shows v3 within a few seconds; the menu's Pixelfed demo history
 # lists it
 ```
@@ -1055,7 +1054,7 @@ to a public instance. docs/DECISIONS.md D20.
 ```bash
 scripts/pixelfed_dev.sh up       # start colima if needed, compose up, wait healthy, first-run init
 scripts/pixelfed_dev.sh seed     # users + posts; prints the admin token (also dev/pixelfed/.seed/admin_token)
-scripts/pixelfed_dev.sh record   # re-record fixtures/pixelfed/recorded/*.json with the admin token
+scripts/pixelfed_dev.sh record   # re-record the home timelines in fixtures/pixelfed/recorded/ (admin token)
 scripts/pixelfed_dev.sh status   # | logs [svc] | down (keeps data) | reset (deletes all data)
 ```
 
@@ -1412,7 +1411,7 @@ picked in the menu. Enforcing HTTPS in the engine for release builds is a follow
 "The construct": a bright white space with a grey perspective grid floor and one cube standing on it. Every
 asset comes from one geometry definition in `scripts/gen_icons.py`; regenerate with `scripts/gen_icons.sh`
 (python3 with Pillow and numpy; `iconutil` on macOS for the `.icns`). Outputs: `assets/icon/` (SVG masters,
-`png/construct-{16..1024}.png`, `construct.icns`, `construct.ico`), the Android adaptive icon
+`png/construct-512.png` (Linux), `construct.icns`, `construct.ico`), the Android adaptive icon
 (`res/drawable/ic_launcher_{background,foreground,monochrome}.xml`, `mipmap-*`; the monochrome layer gives
 Android 13+ themed icons) and the desktop window/dock icon (`desktopApp/src/main/resources/icon/`). Don't
 edit the generated files by hand. Set `ICON_PREVIEW_DIR=<dir>` to also write previews of the adaptive layers.

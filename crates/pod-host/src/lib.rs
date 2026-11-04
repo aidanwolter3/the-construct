@@ -145,10 +145,6 @@ pub struct HostConfig {
     /// pod (created if missing). Development and tests only.
     pub open_pod: Option<String>,
     pub temporary: Option<TemporaryPods>,
-    /// Settings written into every pod this host creates before its
-    /// adapters' migrations run (e.g. turning a data import off), unless the
-    /// admin asks otherwise.
-    pub new_pod_settings: Vec<(String, String)>,
     /// Extra settings for temporary pods (anyone can make one), e.g. keeping
     /// an adapter from contacting hosts the visitor picks.
     pub temporary_pod_settings: Vec<(String, String)>,
@@ -198,7 +194,6 @@ impl HostConfig {
             // `off` locks even a loopback server (see the binary's default).
             open_pod: var("CONSTRUCT_OPEN_POD").filter(|v| v != "off"),
             temporary,
-            new_pod_settings: Vec::new(),
             temporary_pod_settings: Vec::new(),
             trust_fly_client_ip: var("FLY_APP_NAME").is_some(),
             storage: StorageLimits::from_env(),
@@ -321,7 +316,6 @@ impl Host {
             let id = match host.store.pod_by_name(&name).map_err(|e| e.to_string())? {
                 Some(p) => p.id,
                 None => {
-                    // Today's single-pod behaviour: no settings (all imports run).
                     let made = host.make_pod(&name, PodKind::Admin, None, &[])?;
                     tracing::info!(pod = %name, "open pod created");
                     made.id
@@ -351,8 +345,7 @@ impl Host {
     }
 
     /// Create a pod (blocking: opens its database and runs the migrations).
-    /// `settings` (with [`HostConfig::new_pod_settings`] under them) are
-    /// written before the adapters' migrations.
+    /// `settings` are written before the adapters' migrations.
     pub fn create_pod(
         &self,
         name: &str,
@@ -360,12 +353,7 @@ impl Host {
         lifetime: Option<Duration>,
         settings: &[(String, String)],
     ) -> Result<NewPod, String> {
-        let mut all = self.config.new_pod_settings.clone();
-        for (k, v) in settings {
-            all.retain(|(key, _)| key != k);
-            all.push((k.clone(), v.clone()));
-        }
-        self.make_pod(name, kind, lifetime, &all)
+        self.make_pod(name, kind, lifetime, settings)
     }
 
     fn make_pod(

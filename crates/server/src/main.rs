@@ -5,7 +5,7 @@
 //! `server` (or `server serve`) runs the host. `server pods …` manages pods
 //! (run it on the server, e.g. `fly ssh console -C "/server pods list"`):
 //!
-//! - `pods create <name> [--import-recipes]`: a new pod; prints its token once.
+//! - `pods create <name>`: a new pod; prints its token once.
 //! - `pods adopt <name> <path/to/server.db>`: make a pre-D46 single-pod
 //!   database a pod (copied and checked first; the original is renamed).
 //! - `pods remove-adopted [dir]`: delete those renamed originals (default: the
@@ -126,7 +126,7 @@ fn main() -> std::process::ExitCode {
         },
         _ => {
             eprintln!(
-                "usage: server [serve]\n       server pods create <name> [--import-recipes]\n       \
+                "usage: server [serve]\n       server pods create <name>\n       \
                  server pods adopt <name> <path/to/server.db>\n       server pods remove-adopted [dir]\n       \
                  server pods rotate <name>\n       \
                  server pods delete <name>\n       server pods notify-test <name>\n       \
@@ -173,24 +173,10 @@ fn print_token(what: &str, name: &str, token: &str) {
 /// running server sees new tokens at once (it reads them per request).
 fn pods(args: &[&str]) -> Result<(), String> {
     let dir = data_dir();
-    let config = HostConfig {
-        new_pod_settings: server::new_pod_settings(false),
-        ..HostConfig::default()
-    };
-    let host = Host::open(&dir, factory()?, config)?;
+    let host = Host::open(&dir, factory()?, HostConfig::default())?;
     match args {
-        ["create", name, flags @ ..] => {
-            let import = match flags {
-                [] => false,
-                ["--import-recipes"] => true,
-                _ => return Err(format!("unknown flags {flags:?}")),
-            };
-            let pod = host.create_pod(
-                name,
-                PodKind::Admin,
-                None,
-                &server::new_pod_settings(import),
-            )?;
+        ["create", name] => {
+            let pod = host.create_pod(name, PodKind::Admin, None, &[])?;
             print_token("Created", &pod.name, &pod.token);
         }
         ["adopt", name, path] => {
@@ -309,7 +295,6 @@ async fn serve() -> Result<(), String> {
     );
     let addr = std::env::var("CONSTRUCT_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_owned());
     let mut config = HostConfig {
-        new_pod_settings: server::new_pod_settings(false),
         temporary_pod_settings: server::temporary_pod_settings(),
         ..HostConfig::from_env()
     };

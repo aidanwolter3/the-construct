@@ -38,7 +38,6 @@ fn sse_ends_cleanly_on(signal: &str) {
         .env("CONSTRUCT_DATA_DIR", dir.path())
         // A caller without a pod token uses this pod (D46).
         .env("CONSTRUCT_OPEN_POD", "dev")
-        .env_remove("ANTHROPIC_API_KEY")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

@@ -16,10 +16,7 @@ async fn host(dir: &std::path::Path) -> Arc<Host> {
         86_400,
         false,
     );
-    let config = HostConfig {
-        new_pod_settings: server::new_pod_settings(false),
-        ..HostConfig::default()
-    };
+    let config = HostConfig::default();
     let path = dir.to_owned();
     let host = tokio::task::spawn_blocking(move || Host::open(&path, factory, config))
         .await
