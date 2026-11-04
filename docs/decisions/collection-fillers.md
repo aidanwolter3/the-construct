@@ -1,140 +1,141 @@
-# Collections can be filled by the pod from a fetch recipe or an agent, not only by people
+# Collections fill themselves from the web with fillers and alerts; the Watcher becomes the Events app on them
 
-Date: 2026-11-04. Status: proposed, nothing built yet. Related: D40, D52,
-[custom-apps-and-data-sources](custom-apps-and-data-sources.md), [collections](collections.md),
-[collection-computed-fields](collection-computed-fields.md), [collection-reminders](collection-reminders.md),
-[watcher](watcher.md), [watcher-rules-per-site](watcher-rules-per-site.md),
-[upstream-credentials-sealed-at-rest](upstream-credentials-sealed-at-rest.md).
+Date: 2026-11-04. Related: D40, D52, [custom-apps-and-data-sources](custom-apps-and-data-sources.md),
+[collections](collections.md), [collection-computed-fields](collection-computed-fields.md),
+[collection-reminders](collection-reminders.md), [watcher](watcher.md) (superseded here),
+[watcher-rules-per-site](watcher-rules-per-site.md) (superseded here),
+[upstream-credentials-sealed-at-rest](upstream-credentials-sealed-at-rest.md), [text-dates-and-counts](text-dates-and-counts.md).
 
-A user wants short-lived custom apps over live data from the web: up-to-date election results, or the prices of a
+A user wants short-lived custom apps over live data from the web: up-to-date election results, the prices of a
 few things they are shopping for. No built-in source has that data, and writing one is adapter code the developer
-ships. Collections can hold it, but only people and Claude write rows (the app's actions, `add_row`, `edit_rows`),
-so nothing keeps it current while nobody is talking to Claude.
+ships. Collections could hold it, but only people and Claude wrote rows, so nothing kept it current.
 
-The pod already has one piece of this. The Watcher fetches pages on a schedule from the pod (so it runs with no
-client open), skips unchanged pages (`ETag`, body hash), extracts with fixed, cheap extractors (`ics`, `jsonld`)
-and calls a model only as a fallback. But it writes into its own tables, and its output has one shape (events).
+The Watcher already did this for one shape of data: it fetched websites on a schedule from the pod, skipped
+unchanged pages, extracted events with cheap extractors (a model only as a fallback), matched rules and notified.
+But it had its own tables, its own pipeline and its own rules, and its output had one shape.
 
-How data reaches a layout today:
+How data reaches a layout:
 
-- **Live adapters** (Pixelfed): each feed request goes upstream with the signed-in person's own login, and the
-  answer is mapped to entities. The pod stores no posts; writes (likes, comments) go upstream through the
-  adapter's actions. The data belongs to one person and is fresh on every open.
-- **Stored sources**: Collections (generic, declared over MCP), Recipes (`recipes_*`) and the Watcher
-  (`watcher_*`), each in its own tables.
+- **Live adapters** (Pixelfed): each feed request goes upstream with the signed-in person's login. The data is
+  that person's, fresh on every open; writes go upstream.
+- **Stored sources**: Collections, Recipes (`recipes_*`) and, before this, the Watcher (`watcher_*`).
 
-Layouts don't see the difference: every source offers feeds, data paths and actions answering the same entities
-(decision `custom-apps-and-data-sources`). The missing piece is one level down, in how stored data is *filled*.
+Layouts don't see the difference: every source offers feeds, data paths and actions answering the same entities.
+The missing piece was one level down, in how stored rows are *filled*.
 
 Considered:
 
-- **Claude writes a data source** (code that fetches and maps). Rejected again, for the reasons in #45 and
-  decision `collections`: code, upstream calls and secrets from a prompt.
-- **Stored JavaScript** that fetches and returns rows. Rejected as the first step for the same reason. A narrow
-  form stays open as a later escape hatch (below).
-- **A model call on every refresh** ("summarize the latest results"). Rejected as the default: cost grows with
-  refresh rate × collections × pods, and answers drift between runs. A model is used when a recipe is *written*
-  and as an explicit, budgeted kind of filler, never by default.
-- **Fetching on the clients.** Rejected as for the Watcher: refreshes must run while no client is open, and
-  browsers' CORS and per-device work would duplicate it per device.
-- **Moving Pixelfed into a filled collection.** Rejected: its data is per person, a timeline is a moving window
-  rather than data to keep, and writes would need write-through to Pixelfed and back. Live adapters stay
-  adapters.
+- **Claude writes a data source** (code that fetches and maps). Rejected, as in #45 and decision `collections`:
+  code, upstream calls and secrets from a prompt.
+- **Stored JavaScript** that fetches and returns rows. Rejected for the same reason; a pure, sandboxed transform
+  stays open as a later step if recipes prove too weak.
+- **A model call on every refresh.** Rejected as the default: cost grows with refresh rate × collections × pods,
+  and answers drift between runs. A model writes the recipe (through Claude), and is an explicit, budgeted kind.
+- **Fetching on the clients.** Rejected as for the Watcher: fills must run while no client is open.
+- **Moving Pixelfed into a filled collection.** Rejected: its data is per person and its writes go upstream.
+- **Keeping the Watcher next to fillers.** Rejected: two pipelines that fetch, extract, schedule, report health
+  and notify. Its parts were already the general ones.
 
-Decision: a collection may name a **filler**, the thing that writes its rows. People and Claude remain the default
-(no filler). A filler is data, not code: Claude declares it over MCP, the pod runs it. Two kinds to start, plus the
-Watcher moved onto the same mechanism later.
+Decision: a collection may have **fillers**, which write its rows, and **alerts**, which notify when a row matches.
+Both are data in the definition: Claude declares them over MCP, the pod runs them. The Watcher becomes the
+**Events** app on a system collection with one filler per website.
 
 ## Fillers
 
-A filler is stored with the collection definition (`collections_*`, a new migration of the `collections` adapter)
-as `{kind, …, schedule, mode}`:
+`definition.fillers`, at most 50 per collection, each `{id, title, kind, …, mode, key?, every_minutes?,
+on_open_minutes?, upcoming?}` (`crates/app-collections/src/filler.rs`; run by `fill.rs`). Each row remembers the
+filler that wrote it (`collections_rows.filler`), and a filler only touches its own rows, so several sites fill one
+collection side by side.
 
-- **`schedule`**: an interval (15 min to 7 days, as Watcher targets) and/or `on_open: <minutes>`: when an app
-  showing the collection is opened and the last fill is older than that, a fill starts in the background. The
-  refreshed rows reach devices through the usual data event. `on_open` is what makes results night work without
-  polling every few minutes all day.
-- **`mode`**: `replace` (the rows are the latest answer: a results table) or `upsert` by a key field (rows keep
-  their identity and any fields people set: a shopping list whose `price` is refreshed but whose `notes` and
-  `bought` are the person's). Fields the filler writes are marked filled; the app's actions and `edit_rows` may
-  not change them, so a refresh never overwrites a person's edit silently.
-- **Health**, as the Watcher's: pending, ok, failing (with the error), empty; reported by `describe_collection`
-  and a new `collections_status` MCP tool, so Claude says so when a filler breaks. Errors back off as the
-  Watcher's do, at least `Retry-After`.
+- **`fetch`** (no model call per fill): `url`, or `url_field` (each row's own page fills that row), `extract`,
+  `items`, `types`, `script`, `zone`, `map` (field → path, or CSS selector), `headers` (a value may name a sealed
+  secret, `{secret:<name>}`), `details`, `hint`.
+  - Extractors (`crates/web-extract`, shared): `events` (the Watcher's: an ics feed with `TZID`s resolved, or a
+    page's schema.org events; normalized to `id`, `title`, `start`, `end`, `venue`, `description` as plain text,
+    `url`, `tickets_url`), `json`, `embedded-json` (`<script id>`, default `__NEXT_DATA__`), `jsonld` (any
+    schema.org `types`), `rss` (and Atom), `ics` (raw `VEVENT` properties), `selectors` (CSS), and `llm`: a model
+    reads the page's text and answers the fields (`fields`, `hint`), only when the page changed.
+  - A small path language picks items and values (`races[*].candidates`, `offers.price`; a key holding a list is
+    looked into).
+  - Fetch is the Watcher's: conditional `GET`, size and time caps, public hosts only (unless the operator's
+    `CONSTRUCT_FILL_PRIVATE_HOSTS=1`), at least a second between requests to one host from a pod. A 304 or an
+    unchanged body ends the fill with no work, unless the recipe changed (its fingerprint).
+  - Values are coerced to the fields' types; web forms are read (`$1,299.00` as a number, RFC 2822 and iCalendar
+    dates, a schema.org enumeration URL as a choice); a time without an offset is placed in `zone`. A value that
+    doesn't fit is skipped and counted.
+  - `upcoming` (a date or datetime field) leaves out items that have passed. `details` (`link`, `extract`, `map`,
+    `text`) reads each new row's own page, at most 10 a fill (the Watcher's event pages, for lineups).
+- **`agent`** (costs model calls): `prompt`, `fields`, `max_searches` (≤ 20), `max_fetches` (≤ 30),
+  `fills_per_day`. One fill is a Messages API conversation with the server-side web search and fetch tools, ending
+  in a strict `save_rows` tool whose schema is the fields; `pause_turn` resumes. Budgets: the filler's
+  `fills_per_day` and the pod's `CONSTRUCT_FILL_AGENT_DAILY` (default 20). Behind the `FillAgent` trait (tests use a
+  fake), which also reads pages for `llm`.
+- **Modes:** `replace` (the filler's rows are its latest answer; with a `key` rows keep their ids and unfilled
+  fields; rows it no longer lists are deleted for good, not kept 30 days: they were never anyone's) or `upsert` by
+  `key` (rows not in the answer stay; a person's delete sticks).
+- **Locks:** fields a filler writes can't be set by apps or `edit_rows`; a `replace` filler's rows can't be added,
+  deleted or restored by hand. Computed fields compute on filled rows as after any write.
+- **When:** `every_minutes` (fetch 15…10080, agent 60…10080) through the adapter's poll; `on_open_minutes`, and an
+  overdue schedule, when an app showing the collection opens; `collections_refresh`; a layout's
+  `POST /v1/collections/<c>/refresh {filler?}`; and after a filler is set. Failures back off (doubling from the
+  interval, at most a day, at least `Retry-After`).
+- **Health** per filler: pending, ok, failing, empty (three fills found nothing), off, unavailable (no model).
+  Stored in `collections_fills` with the validators, body hash and model fills today.
+- **Temporary pods** get `collections.fill = 0`: they can't fetch or ask a model.
 
-### `fetch`: a declarative recipe
+## Alerts
 
-`{kind: "fetch", url, params?, headers?, secret?, extract, map}`:
+`definition.alerts`, at most 100 per collection (`alerts.rs`): `any`, `all`, `none` phrases (case and spacing
+ignored) over the text fields (or `fields`), optionally only one filler's rows, `days` and `within_days` on a date
+or datetime field; a dated row stops matching six hours after its date. A matching row notifies once per alert
+(`collections_alerts_sent`), after a fill and on the poll; a row matching several alerts notifies once per run; more
+than 10 in a run arrive quietly. Text: templates with `{field}`, served keys (`{start_text}`), `{alert}` and
+`{filler}`. An alert is a channel of the custom app showing the collection (as reminders); a system collection's
+alerts use its built-in app's channel. Rows are served with `alert_matched` and `alert_names`.
 
-- **Fetch** is the Watcher's: `GET`, conditional headers, a body hash that ends an unchanged fill with no work,
-  size and time caps, public addresses only (`pod_core::net::public_builder`). `secret` names a sealed credential
-  (decision `upstream-credentials-sealed-at-rest`) sent as one header, for APIs that need a key; it is never
-  shown to layouts, MCP or the recipe.
-- **Extract**, a fixed set: `json`, `jsonld` (any schema.org type, not only `Event`: `Product`/`Offer` give
-  price and availability on most shop pages), `rss`, `ics`, `embedded-json` (page state such as Next.js'
-  `__NEXT_DATA__`) and `selectors` (CSS selectors for plain HTML). The Watcher's extractors move into a shared
-  crate so both use one implementation.
-- **Map**: a path per field into each extracted item (a small JSONPath subset: `results[*].candidate`,
-  `offers.price`), coerced to the field's type as computed fields are. Computed fields (`expr`, `lookup`,
-  `model`) then run on the filled rows as on any other, so a recipe needs no transforms of its own.
-- **Several URLs**: `urls` (a list, or a field of another collection: "fetch each product page in `wishlist`")
-  for the shopping case, capped per fill.
+## Datetimes and what layouts get
 
-Claude writes a recipe with a new `collections_preview` MCP tool (fetch, extract and map now, store nothing,
-show the rows), as `watcher_preview` does, and picks the cheapest extractor that gives the fields. **The model
-writes the scraper; it does not run it.** Each later fill is an HTTP request.
+- A **`datetime`** field type: `2026-11-06T19:30-07:00` (the source's wall clock with its offset when known, or a
+  date alone), ordered by instant, served with `<name>_date` (`YYYY-MM-DD`, for `date_format`), `<name>_time`
+  (`7:30 PM`) and `<name>_text` (`Fri Nov 6 · 7:30 PM`), written by the pod as the Watcher did (clients format only
+  plain dates, decision `text-dates-and-counts`).
+- The collection feed also fills `collection:<c>:fillers` (each filler's title, URL, health, `failing`,
+  `alerts_text`) and `collection:<c>:alerted`. New data paths: `/v1/collections/<c>/fillers/<f>` (the filler, its
+  rows, its alerts) and `/v1/collections/<c>/row?id=<id>` (one row's screen).
+- MCP: `define_collection` takes `fillers` and `alerts`; `apply_change` ops `set_filler` (add, or change by id),
+  `remove_filler` (its rows stay, unlocked; its alerts go), `add_alert`, `update_alert`, `remove_alert`; new tools
+  `collections_preview` (try a recipe, nothing stored; without a map, sample items to write paths from),
+  `collections_status`, `collections_refresh`, `collections_set_secret` (sealed with the server key, never shown
+  back).
 
-### `agent`: a model with a prompt and a budget
+## The Events app
 
-`{kind: "agent", prompt, tools: ["web_search", "fetch"], budget}` for data that has no stable page to read:
-"the five best-reviewed 27-inch monitors under $400 and where each is cheapest". A fill runs a model with
-those tools (the Messages API, behind a trait with a fake for tests, as `FieldModel`), and its answer must fit
-the collection's fields as structured output; rows that don't parse are dropped and counted in health.
+The Watcher's app keeps its id (`watcher`), so it stays where people pinned it, and its notification channel
+(`matches`), so their choice holds; it is titled **Events**. Its feed is the system collection `events`
+(`source_id`, `title`, `start`, `end`, `venue`, `description`, `url`, `tickets_url`, `seen`), which every pod gets
+on start. A system collection's fields can't be renamed, removed or retyped (the app reads them); fields can be
+added. Layout 0003 shows Matches, Sites (health, alerts), a site's events and an event, from collection queries.
 
-- **Budget** is required: a maximum number of fills a day and of tool calls per fill. The default schedule is
-  manual (Claude or a "Refresh" action starts it); an interval is allowed but counted against the budget.
-- The operator configures the model as for `model` computes; without one, agent fillers report themselves
-  unavailable.
-- The usual pattern is both kinds: an agent finds the items once (or weekly) and a fetch recipe keeps their
-  prices current, upserting by URL.
-
-### Not code, for now
-
-If recipes prove too weak (joining two responses, reshaping odd data), the next step is a **pure transform**:
-`transform(body) -> rows`, JavaScript run in an embedded sandbox (QuickJS or WASM) with no network, secrets,
-clock or randomness, and CPU and memory limits; the pod still does every fetch, only to the recipe's hosts. That
-reverses "no code from a prompt" and needs its own decision; this one doesn't take it.
-
-## The Watcher
-
-Later, the Watcher becomes a filled collection plus rules: its targets are `fetch` fillers with the event
-extractors into a pod-owned `events` collection (`upsert` by event id), and its rules are evaluated over rows, as
-collection reminders are. That gives custom apps its events for free and leaves one fetch path to harden. It is a
-separate migration with its own decision, since its tables, health and notifications are deployed.
-
-## Limits and safety
-
-- **Temporary pods**: fillers off (a pod setting `collections.fill = 0` at creation, next to `watcher.fetch` and
-  `collections.model`): anyone can make one, so it must not make the server fetch URLs or spend the model key.
-- **Caps** per pod (temporary pods excluded): 20 fillers, the Watcher's fetch caps per fill, the existing row and
-  size caps of decision `collections` (a fill that would exceed them stops and reports it), and an agent budget
-  ceiling per pod set by the operator.
-- **Upstream politeness**: a minimum interval per host across a pod's fillers, a fixed `User-Agent` naming The
-  Construct, and `Retry-After` honoured. Sites that render with JavaScript or block bots stay out of reach until
-  headless fetching exists (a "Not yet" of decision `watcher`).
+- **The move:** when a pod starts, its live Watcher sites become fetch fillers (`ics`/`jsonld`/`auto` → `events`,
+  `llm` → `llm`; zone, interval, `details`) and its live rules become alerts for their site (a venue becomes a phrase
+  the event must contain), once (`watcher.imported`). Each moved filler's first fill records its matches without
+  notifying, so nothing is announced twice. Seen marks don't move.
+- The Watcher's pipeline, extractors, rules and MCP tools are gone (Claude uses the Collections tools; the MCP
+  instructions give the recipe for a site). Its routes stay declared for layouts 0001 and 0002 and answer 410; its
+  `watcher_*` tables stay, unread, for their migrations.
 
 ## Consequences
 
-- No protocol change and no client build: filled collections are ordinary collection feeds; "Refresh" is an
-  action of the collections source.
-- New in the `collections` adapter: a migration (filler definition, fill state), the scheduler (the adapter's
-  poll, as the Watcher's), `collections_preview` and `collections_status`, and `define_collection` /
-  `apply_change` ops to set and remove a filler.
-- The Watcher's extractors and fetch code move to a shared crate.
+- No protocol change and no client build: new data and layout files only. Clients that can't draw layout 0003
+  (no `open_link`) keep 0001, which now shows nothing.
+- Schema: `collections` adapter migration 4 (a `filler` column on rows, `collections_fills`,
+  `collections_alerts_sent`, `collections_secrets`), additive on staging's databases.
+- The pod's outbound calls grow: fetch fillers (public hosts only) and model fills (budgeted).
 
-Not yet decided:
+Not done yet:
 
-- the JSONPath subset, and whether `map` needs anything an `expr` compute can't do afterwards;
-- whether an agent filler may write to several collections in one fill;
-- whether filled rows keep history (the previous value of `price`) or only the latest;
-- how a person sees a filler's health in the app (a generic part, or only through Claude).
+- A sandboxed transform for data recipes can't reshape (its own decision: code from a prompt).
+- Headless fetching for pages that render with JavaScript; sites that block bots stay out of reach.
+- Keeping a filled value's history (a price over time); a filler writing several collections.
+- Seeing and editing fillers and alerts in an app (they are Claude's, as the Watcher's sites were).
+- Dropping the `watcher_*` tables once every pod has moved.

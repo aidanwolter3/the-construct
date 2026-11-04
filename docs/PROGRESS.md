@@ -683,3 +683,22 @@ new layout files; diffs between versions.
   Kotlin `openLinkOpensHttpLinksAndNeverReachesTheEngine`. Needs a device check: the buttons open the browser on
   Android and macOS (a new app build; older builds keep layout 0001).
 
+
+## Collection fillers and alerts; the Watcher becomes the Events app
+
+- Decision `collection-fillers`: a collection may have fillers that keep its rows current from the web (`fetch`
+  recipes with the events, json, embedded-json, jsonld, rss, ics, selectors and llm extractors; `agent`, a model with
+  web search, budgeted) and alerts that notify once when a row matches. Several fillers per collection, each writing
+  its own rows; `replace`/`upsert` by key; filled fields locked; schedules, open-the-app refreshes, health, backoff,
+  sealed header secrets. A `datetime` field type served with `_date`, `_time` and `_text`.
+- New crate `web-extract` (the watcher's fetch, HTML and event extraction, plus the generic extractors and a path
+  language). Collections migration 4 (row filler column, fill state, alerts sent, secrets).
+- The Watcher becomes the Events app (same app id and channel) over the system collection `events`: one filler per
+  website, an alert per rule. Pods move their Watcher sites and rules in once, with a quiet first fill. Layout 0003.
+  The Watcher's pipeline and MCP tools are gone; its routes answer 410 for layouts 0001/0002.
+- MCP: `collections_preview`, `collections_status`, `collections_refresh`, `collections_set_secret`; `apply_change`
+  ops for fillers and alerts. Temporary pods get `collections.fill = 0`.
+- Tests: web-extract unit tests (extractors, paths, URL checks, events); collections unit tests (filler specs, locks,
+  alerts, normalizing, schedules) and `tests/fillers.rs` against a local fake website and a fake model;
+  `app-watcher/tests/events.rs` (the move, quiet first fill, notifications, screens, field locks, 410s). Needs a
+  device check: the Events app on Android and in the macOS window, and a real notification.
