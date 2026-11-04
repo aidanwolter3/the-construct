@@ -410,6 +410,8 @@ fn default_signed_out(sign_in: &str, app: &AppInfo) -> WorkspaceSpec {
                     children: vec![UiNode::Text {
                         value_expr: format!("Sign in ({sign_in}) to open {}.", app.title),
                         style: TextStyle::Body,
+                        format: None,
+                        count: None,
                     }],
                 },
             }],

@@ -44,6 +44,8 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
                     UiNode::Text {
                         value_expr: "$item.author_name".into(),
                         style: TextStyle::Label,
+                        format: None,
+                        count: None,
                     },
                 ],
             },
@@ -135,6 +137,8 @@ fn full_workspace() -> UiNode {
                         UiNode::Text {
                             value_expr: "The Construct".into(),
                             style: TextStyle::Headline,
+                            format: None,
+                            count: None,
                         },
                         UiNode::Button {
                             label: "Back".into(),
@@ -187,6 +191,8 @@ fn full_workspace() -> UiNode {
                                 header: Box::new(UiNode::Text {
                                     value_expr: "$item.day".into(),
                                     style: TextStyle::Title,
+                                    format: None,
+                                    count: None,
                                 }),
                             }),
                             where_: Some(ListWhere {
@@ -708,4 +714,43 @@ fn progress_round_trips_and_needs_its_feature() {
     // Nothing else needs it.
     let plain: UiNode = serde_json::from_value(json!({"type": "core://Divider"})).unwrap();
     assert!(protocol::required_features(&plain).is_empty());
+}
+
+#[test]
+fn text_format_and_count_round_trip_and_need_their_features() {
+    let wire = r#"{"type":"core://Text","value_expr":"Due $item.due","style":"Secondary","format":{"date":"Relative","past":"Overdue"}}"#;
+    let parsed: UiNode = serde_json::from_str(wire).unwrap();
+    assert_eq!(
+        parsed,
+        UiNode::Text {
+            value_expr: "Due $item.due".into(),
+            style: TextStyle::Secondary,
+            format: Some(protocol::TextFormat {
+                date: protocol::DateFormat::Relative,
+                past: Some("Overdue".into()),
+            }),
+            count: None,
+        }
+    );
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
+    assert_eq!(protocol::required_features(&parsed), ["date_format"]);
+
+    let wire = r#"{"type":"core://Text","value_expr":"$count left","style":"Label","count":{"query_key":"collection:todos","where":[{"field":"done","equals":"false"},{"field":"deleted","equals":"false"}],"zero_text":"All done"}}"#;
+    let parsed: UiNode = serde_json::from_str(wire).unwrap();
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
+    assert_eq!(protocol::required_features(&parsed), ["count"]);
+    // `where` and `zero_text` are optional and omitted when unset.
+    let bare: UiNode =
+        serde_json::from_value(json!({"type": "core://Text", "value_expr": "$count",
+        "style": "Body", "count": {"query_key": "collection:todos"}}))
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&bare).unwrap()["count"],
+        json!({"query_key": "collection:todos"})
+    );
+    // A plain text needs neither; an older text still decodes.
+    let plain: UiNode =
+        serde_json::from_str(r#"{"type":"core://Text","value_expr":"Hi","style":"Body"}"#).unwrap();
+    assert!(protocol::required_features(&plain).is_empty());
+    assert!(protocol::FEATURES.contains(&"date_format") && protocol::FEATURES.contains(&"count"));
 }

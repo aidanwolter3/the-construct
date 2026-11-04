@@ -83,6 +83,8 @@ pub fn signed_out(config: &PixelfedConfig, app_id: &str, title: &str) -> Workspa
                 "Sign in to {default} to see your home feed. Your Pixelfed token stays on your pod."
             ),
             style: TextStyle::Body,
+            format: None,
+            count: None,
         },
         UiNode::Button {
             label: "Sign in with Pixelfed".into(),
@@ -95,6 +97,8 @@ pub fn signed_out(config: &PixelfedConfig, app_id: &str, title: &str) -> Workspa
             UiNode::Text {
                 value_expr: "Or sign in to another Pixelfed server:".into(),
                 style: TextStyle::Body,
+                format: None,
+                count: None,
             },
             UiNode::TextField {
                 field: INSTANCE_FIELD.into(),

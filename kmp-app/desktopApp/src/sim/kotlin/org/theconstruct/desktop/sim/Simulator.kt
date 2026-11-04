@@ -14,6 +14,7 @@ import kotlin.system.exitProcess
  *
  * Options: workspace (pixelfed_home), screen (phone), script / scriptFile (default "shot initial"),
  * mode (fixture|live), fixture, baseUrl, out, density, timeoutMs (live load wait, 10000),
+ * today (`YYYY-MM-DD`: the day dates are drawn against, `core://Text` `format`; default the real date),
  * storage (live only: persistent engine storage dir; default a fresh temp dir deleted on exit),
  * pixelfedLogin (live only: `<email or seed username>:<password>` signs in to a real Pixelfed's web UI and
  * approves the consent page, see [PixelfedLoginBrowser]; default: [AutoApproveBrowser] for the fake upstream).
@@ -50,7 +51,7 @@ const val LIVE_DEFAULT_BASE_URL = "https://the-construct-pod.fly.dev"
 
 private val KNOWN_OPTIONS = setOf(
     "workspace", "screen", "script", "scriptFile", "mode", "fixture", "baseUrl", "out", "density", "timeoutMs",
-    "storage", "pixelfedLogin",
+    "storage", "pixelfedLogin", "today",
 )
 
 // Kept reachable for the whole run: the bridge owns the engine handle and the JNA callback observers.
@@ -77,6 +78,9 @@ private fun runCli(args: Array<String>): Int {
     }
     val density = opts["density"]?.let {
         it.toFloatOrNull()?.takeIf { d -> d > 0f && d <= 8f } ?: throw UsageException("bad density '$it' (expected 0 < d <= 8)")
+    }
+    val today = opts["today"]?.let {
+        org.theconstruct.isoDateEpochDay(it) ?: throw UsageException("bad today '$it' (expected YYYY-MM-DD)")
     }
     val timeoutMs = opts["timeoutMs"]?.let { it.toLongOrNull() ?: throw UsageException("bad timeoutMs '$it'") } ?: 10_000L
 
@@ -198,6 +202,7 @@ private fun runCli(args: Array<String>): Int {
         outDir = outDir,
         screen = screen,
         density = density,
+        today = today,
         setOnline = setOnline,
         modeName = mode,
         publishVersion = publishVersion,

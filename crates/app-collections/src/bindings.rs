@@ -9,6 +9,8 @@
 //! - `$item.<f>` inside a `core://List` whose `query_key` is
 //!   `collection:<c>`, and its `filter.fields`, `group_by.field`,
 //!   `where.field`;
+//! - a `core://Text` `count`'s `where[].field` when its `query_key` is
+//!   `collection:<c>`;
 //! - `${collections://<c>/...#<f>}`;
 //! - a mutation of `collections://<c>/...` (or of `$item.uri` in such a
 //!   list): its `field`, `also[].field` and `entity.<f>` in `value_expr`;
@@ -167,6 +169,13 @@ impl<'a> Checker<'a> {
             if map.contains_key("item_template") {
                 inner = Some(def);
                 self.list_fields(map, at, def)?;
+            } else if let Some(conds) = map.get("where").and_then(Value::as_array) {
+                // A core://Text count: every condition names a field.
+                for (i, w) in conds.iter().enumerate() {
+                    if let Some(f) = w["field"].as_str() {
+                        self.bindable(&format!("{at}/where/{i}/field"), def, f, "the count")?;
+                    }
+                }
             }
         } else if map.contains_key("item_template") {
             // A list or carousel of something else: its items aren't rows.
@@ -457,6 +466,26 @@ mod tests {
         assert!(check(&create(json!({"colour": "red"})), &[], &defs()).is_err());
         let screen = json!({"screens": [{"data": "/v1/collections/notes/rows"}]});
         assert!(check(&screen, &[], &defs()).is_err());
+    }
+
+    #[test]
+    fn a_count_must_name_fields() {
+        let count = |field: &str| {
+            json!({"type": "core://Text", "style": "Label", "value_expr": "$count left",
+                "count": {"query_key": "collection:todos",
+                    "where": [{"field": "deleted", "equals": "false"}, {"field": field, "equals": "false"}]}})
+        };
+        assert_eq!(check(&count("done"), &[], &defs()), Ok(()));
+        let e = check(&count("finished"), &[], &defs()).unwrap_err();
+        assert_eq!(e.pointer, "/count/where/1/field");
+        assert!(
+            e.message.contains("the count names 'finished'"),
+            "{}",
+            e.message
+        );
+        let other = json!({"type": "core://Text", "style": "Label", "value_expr": "$count",
+            "count": {"query_key": "collection:groceries"}});
+        assert!(check(&other, &[], &defs()).is_err());
     }
 
     #[test]

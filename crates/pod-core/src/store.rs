@@ -1938,6 +1938,8 @@ mod tests {
         let classic = serde_json::to_string(&protocol::UiNode::Text {
             value_expr: "x".into(),
             style: protocol::TextStyle::Body,
+            format: None,
+            count: None,
         })
         .unwrap();
         {

@@ -386,11 +386,20 @@ async fn bindings_must_fit_the_collection() {
     // The snippets are a valid app as they are.
     let h = &d["layout_hints"];
     let mut list = h["list"].clone();
-    list["item_template"] = h["row"].clone();
+    let mut row = h["row"].clone();
+    // The due date goes under the title (the row's text column).
+    assert_eq!(h["date"]["content"]["format"]["past"], "Overdue", "{h}");
+    row["children"][1]["children"]
+        .as_array_mut()
+        .unwrap()
+        .push(h["date"].clone());
+    list["item_template"] = row;
+    assert_eq!(h["count"]["value_expr"], "$count left");
     let layout = json!({"type": "core://Workspace", "title": "Todos", "slots": [
+        {"slot_id": "count", "provider_uri": "core://custom", "content": h["count"]},
         {"slot_id": "add", "provider_uri": "core://custom", "content": h["add"]},
         {"slot_id": "list", "provider_uri": "core://custom", "content": list}]});
-    ok(
+    let hinted = ok(
         &pod,
         "create_app",
         json!({"title": "Hinted", "feeds": h["feed"].as_array().map(|f| json!([f])).unwrap(),
@@ -398,6 +407,21 @@ async fn bindings_must_fit_the_collection() {
     )
     .await;
     assert_eq!(d["definition"]["fields"][1]["name"], "done");
+    // Only clients that draw dates and counts get it.
+    let hinted = hinted["id"].as_str().unwrap();
+    let (_, v) = call(
+        &pod,
+        "GET",
+        &format!("/v1/apps/{hinted}/versions"),
+        "phone",
+        None,
+    )
+    .await;
+    assert_eq!(
+        v["versions"][0]["features"],
+        json!(["count", "date_format"]),
+        "{v}"
+    );
 }
 
 #[tokio::test]

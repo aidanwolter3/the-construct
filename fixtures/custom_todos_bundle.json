@@ -1,0 +1,203 @@
+{
+ "version": "1.0.0",
+ "workspace": {
+  "type": "core://Workspace",
+  "id": "c-todos",
+  "title": "Todos",
+  "slots": [
+   {
+    "slot_id": "count",
+    "provider_uri": "core://custom",
+    "content": {
+     "type": "core://Row",
+     "padding_h_dp": 16,
+     "children": [
+      {
+       "type": "core://Text",
+       "style": "Secondary",
+       "value_expr": "$count left",
+       "count": {
+        "query_key": "collection:todos",
+        "where": [
+         {
+          "field": "deleted",
+          "equals": "false"
+         },
+         {
+          "field": "done",
+          "equals": "false"
+         }
+        ],
+        "zero_text": "All done"
+       }
+      }
+     ]
+    }
+   },
+   {
+    "slot_id": "list",
+    "provider_uri": "collections://todos",
+    "content": {
+     "type": "core://List",
+     "query_key": "collection:todos",
+     "where": {
+      "field": "deleted",
+      "equals": "false"
+     },
+     "empty_text": "No todos yet",
+     "item_template": {
+      "type": "core://Row",
+      "spacing_dp": 12,
+      "padding_h_dp": 16,
+      "padding_v_dp": 6,
+      "align": "Center",
+      "children": [
+       {
+        "type": "core://Tappable",
+        "content_description": "done",
+        "tag": "toggle:$item.id",
+        "content": {
+         "type": "core://Container",
+         "orientation": "Vertical",
+         "padding_dp": 0,
+         "children": [
+          {
+           "type": "core://Conditional",
+           "value": "$item.done",
+           "equals": "true",
+           "content": {
+            "type": "core://Text",
+            "style": "Body",
+            "value_expr": "☑"
+           }
+          },
+          {
+           "type": "core://Conditional",
+           "value": "$item.done",
+           "equals": "false",
+           "content": {
+            "type": "core://Text",
+            "style": "Body",
+            "value_expr": "☐"
+           }
+          }
+         ]
+        },
+        "on_click": {
+         "intent": "action.mutation.optimistic",
+         "entity_uri": "$item.uri",
+         "field": "done",
+         "value_expr": "!entity.done",
+         "rollback_value": false,
+         "endpoint": "/v1/collections/todos/update",
+         "payload": {
+          "id": "$item.id",
+          "done": "$value"
+         }
+        }
+       },
+       {
+        "type": "core://Container",
+        "orientation": "Vertical",
+        "padding_dp": 0,
+        "children": [
+         {
+          "type": "core://Text",
+          "style": "Body",
+          "value_expr": "$item.title"
+         },
+         {
+          "type": "core://Conditional",
+          "value": "$item.due",
+          "content": {
+           "type": "core://Text",
+           "style": "Secondary",
+           "value_expr": "Due $item.due",
+           "format": {
+            "date": "Relative",
+            "past": "Overdue"
+           }
+          }
+         }
+        ]
+       },
+       {
+        "type": "core://Spacer"
+       },
+       {
+        "type": "core://IconButton",
+        "icon": "close",
+        "content_description": "Delete",
+        "on_click": {
+         "intent": "action.mutation.optimistic",
+         "entity_uri": "$item.uri",
+         "field": "deleted",
+         "value_expr": "true",
+         "rollback_value": false,
+         "endpoint": "/v1/collections/todos/delete",
+         "payload": {
+          "id": "$item.id"
+         }
+        }
+       }
+      ]
+     }
+    }
+   }
+  ]
+ },
+ "entities": {
+  "collections://todos/1": {
+   "id": "1",
+   "title": "Renew passport",
+   "done": false,
+   "deleted": false,
+   "due": "2026-11-01"
+  },
+  "collections://todos/2": {
+   "id": "2",
+   "title": "Call the vet",
+   "done": false,
+   "deleted": false,
+   "due": "2026-11-04"
+  },
+  "collections://todos/3": {
+   "id": "3",
+   "title": "Buy milk",
+   "done": false,
+   "deleted": false,
+   "due": "2026-11-05"
+  },
+  "collections://todos/4": {
+   "id": "4",
+   "title": "Book flights",
+   "done": false,
+   "deleted": false,
+   "due": "2026-11-07"
+  },
+  "collections://todos/5": {
+   "id": "5",
+   "title": "Pay rent",
+   "done": true,
+   "deleted": false,
+   "due": "2026-11-20"
+  },
+  "collections://todos/6": {
+   "id": "6",
+   "title": "Water the plants",
+   "done": false,
+   "deleted": false,
+   "due": null
+  }
+ },
+ "queries": {
+  "collection:todos": [
+   "collections://todos/1",
+   "collections://todos/2",
+   "collections://todos/3",
+   "collections://todos/4",
+   "collections://todos/5",
+   "collections://todos/6"
+  ]
+ }
+}

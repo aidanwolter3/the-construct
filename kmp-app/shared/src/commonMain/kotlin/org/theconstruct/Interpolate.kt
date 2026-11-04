@@ -24,17 +24,22 @@ private val FIELD = Regex("""[A-Za-z_][A-Za-z0-9_]*""")
  *
  * Primitives render without JSON quotes; null renders as ""; arrays/objects render as JSON.
  */
-fun interpolate(expr: String, entities: Map<String, JsonObject>, item: JsonObject? = null): String {
+fun interpolate(
+    expr: String,
+    entities: Map<String, JsonObject>,
+    item: JsonObject? = null,
+    render: (JsonElement) -> String = ::renderJsonValue,
+): String {
     if (item != null) {
         itemFieldName(expr, allowEntityPrefix = true)?.let { field ->
-            return item[field]?.let(::renderJsonValue) ?: ""
+            return item[field]?.let(render) ?: ""
         }
     }
-    val text = bindItemTokens(expr, item)
+    val text = bindItemTokens(expr, item, render)
     if (!text.contains("\${")) return text
     return PLACEHOLDER.replace(text) { m ->
         val (uri, field) = m.destructured
-        entities[uri]?.get(field)?.let(::renderJsonValue) ?: ""
+        entities[uri]?.get(field)?.let(render) ?: ""
     }
 }
 
@@ -139,13 +144,13 @@ fun resolveList(refs: ListBinding, item: JsonObject?): List<String> = when (refs
 
 /**
  * Substitutes every `$item.<field>` token inside [s] with the item's field value.
- * Tokens whose field is missing or null are left untouched.
+ * Tokens whose field is missing or null are left untouched. [render] draws a value (default [renderJsonValue]).
  */
-fun bindItemTokens(s: String, item: JsonObject?): String {
+fun bindItemTokens(s: String, item: JsonObject?, render: (JsonElement) -> String = ::renderJsonValue): String {
     if (item == null || !s.contains("\$item.")) return s
     return ITEM_TOKEN.replace(s) { m ->
         val v = item[m.groupValues[1]]
-        if (v == null || v is JsonNull) m.value else renderJsonValue(v)
+        if (v == null || v is JsonNull) m.value else render(v)
     }
 }
 

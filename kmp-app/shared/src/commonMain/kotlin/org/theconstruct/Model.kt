@@ -116,6 +116,29 @@ data class ListFilter(
 @Serializable
 data class GroupBy(val field: String, val header: UiNode)
 
+/**
+ * `core://Text` `format` (feature `date_format`, docs/decisions/text-dates-and-counts.md): every bound value that is a
+ * `YYYY-MM-DD` date is drawn as [date] says, against the device's clock and time zone. With [past], a text binding a
+ * date before today draws [past] instead ("Overdue").
+ */
+@Serializable
+data class TextFormat(val date: DateFormat, val past: String? = null)
+
+/** How [TextFormat] draws a date: [Relative] ("tomorrow", "in 3 days", else as [Short]) or [Short] ("Nov 5"). */
+@Serializable
+enum class DateFormat { Relative, Short }
+
+/**
+ * `core://Text` `count` (feature `count`): the number of entities of `queries[queryKey]` matching every [where] (as a
+ * list's [ListWhere]) replaces each `$count`; a count of 0 draws [zeroText] instead, when set.
+ */
+@Serializable
+data class TextCount(
+    @SerialName("query_key") val queryKey: String,
+    val where: List<ListWhere> = emptyList(),
+    @SerialName("zero_text") val zeroText: String? = null,
+)
+
 /** `core://List` `where` (schema 6, D44): while [equals] (`$form.<field>` or literal) is non-blank, only items whose [field] equals it are drawn. */
 @Serializable
 data class ListWhere(val field: String, val equals: String)
@@ -157,10 +180,16 @@ sealed class UiNode {
         val children: List<UiNode>,
     ) : UiNode()
 
+    /**
+     * Text. [format] (feature `date_format`) draws the `YYYY-MM-DD` dates it binds for the viewer; [count] (feature
+     * `count`) puts a count of a query's entities in place of `$count` ([formatText]).
+     */
     @Serializable
     data class Text(
         @SerialName("value_expr") val valueExpr: String,
         val style: TextStyle,
+        val format: TextFormat? = null,
+        val count: TextCount? = null,
     ) : UiNode()
 
     @Serializable
