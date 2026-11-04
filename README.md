@@ -107,9 +107,11 @@ layout versions keep working for the clients that drew them.
 
 ## Contributing
 
-Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers setup, the checks to run, and the few
-rules that keep the architecture intact.
+Issues and feedback are welcome. Outside code contributions aren't accepted until a license is chosen.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers setup, the checks to run, and the few rules that keep the architecture
+intact.
 
 ## License
 
-Dual-licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.
+No license has been chosen yet, so all rights are reserved. You're welcome to read the code and open issues, but
+please ask before reusing it.

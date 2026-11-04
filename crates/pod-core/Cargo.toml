@@ -2,7 +2,6 @@
 name = "pod-core"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 publish.workspace = true
 
 # The generic pod: workspaces, layout files and versions, schema negotiation,

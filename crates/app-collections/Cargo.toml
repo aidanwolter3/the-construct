@@ -2,7 +2,6 @@
 name = "app-collections"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 publish.workspace = true
 
 # The Collections data source (decision `collections`): data custom apps
