@@ -1427,6 +1427,7 @@ cd kmp-app && ./gradlew :shared:allTests :desktopApp:test
 Counts at the time of writing: `cargo test --workspace` 281, `:shared:allTests` 63, `:desktopApp:test` 63 (all
 passing).
 
-There are no on-device tests: UI is checked with the headless simulator, and Android-only runtime failures
-(for example, Android's ICU regex engine rejects some patterns that `java.util.regex` accepts) show up only when
-the app runs on a phone.
+There are no on-device tests: UI is checked with the headless simulator. Android's ICU regex engine rejects some
+patterns that `java.util.regex` accepts (a bare `}`), so `AndroidRegexSyntaxTest` (`:shared:desktopTest`) reads
+every `Regex` field of the shared code and fails on braces ICU would reject. Other Android-only runtime failures
+show up only when the app runs on a phone.

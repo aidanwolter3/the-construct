@@ -9,7 +9,8 @@ import kotlinx.serialization.json.JsonPrimitive
 // Text interpolation subset from docs/DECISIONS.md D4. Not a CEL evaluator.
 
 // Every literal brace is escaped, inside character classes too: Android's ICU regex engine rejects a
-// bare `}` that java.util.regex accepts (it crashed the app at class init).
+// bare `}` that java.util.regex accepts (it crashed the app at class init;
+// AndroidRegexSyntaxTest checks every shared Regex field for this).
 private val PLACEHOLDER = Regex("""\$\{([^#\}]+)#([^\}]+)\}""")
 private val FIELD = Regex("""[A-Za-z_][A-Za-z0-9_]*""")
 
