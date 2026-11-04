@@ -102,6 +102,7 @@ pub fn signed_out(config: &PixelfedConfig, app_id: &str, title: &str) -> Workspa
                 max_length: Some(253),
                 on_submit: None,
                 lines: None,
+                autofocus: false,
             },
             UiNode::Button {
                 label: "Sign in to this server".into(),

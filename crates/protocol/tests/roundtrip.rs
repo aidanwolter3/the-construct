@@ -710,3 +710,127 @@ fn progress_round_trips_and_needs_its_feature() {
     let plain: UiNode = serde_json::from_value(json!({"type": "core://Divider"})).unwrap();
     assert!(protocol::required_features(&plain).is_empty());
 }
+
+/// Serialize back and compare with the wire JSON (field order aside).
+fn round_trips(wire: Value) -> UiNode {
+    let node: UiNode = serde_json::from_value(wire.clone()).unwrap();
+    assert!(!matches!(node, UiNode::Unknown(_)), "{wire}");
+    assert_eq!(serde_json::to_value(&node).unwrap(), wire);
+    node
+}
+
+#[test]
+fn launcher_nodes_round_trip_and_need_their_features() {
+    let divider = json!({"type": "core://Divider"});
+    let back = json!({"intent": "action.navigation.back"});
+    let backdrop = round_trips(json!({"type": "core://Backdrop", "content": divider,
+        "footer": {"type": "core://Spacer", "size_dp": 4}, "background": "#0A0C0F",
+        "grid_color": "#7CC8DA", "tilt_deg": 30, "cell_dp": 40}));
+    assert_eq!(backdrop.children().len(), 2);
+    assert_eq!(protocol::required_features(&backdrop), ["backdrop"]);
+    // Defaults are omitted.
+    round_trips(json!({"type": "core://Backdrop", "content": divider}));
+
+    let clock = round_trips(json!({"type": "core://Clock", "format": "date"}));
+    assert_eq!(protocol::required_features(&clock), ["clock"]);
+    let bare: UiNode = serde_json::from_value(json!({"type": "core://Clock"})).unwrap();
+    assert_eq!(
+        bare,
+        UiNode::Clock {
+            format: protocol::ClockFormat::Time
+        }
+    );
+
+    let swipe = round_trips(json!({"type": "core://Swipe", "content": divider,
+        "on_swipe_up": back, "on_swipe_down": {"intent": "action.shell.open", "panel": "inbox"}}));
+    assert_eq!(swipe.own_intents().len(), 2);
+    assert_eq!(
+        protocol::required_features(&swipe),
+        ["gestures", "hidden_chrome"]
+    );
+
+    let tap = round_trips(
+        json!({"type": "core://Tappable", "on_click": back, "content": divider,
+        "on_long_press": {"intent": "action.device.launch", "package": "com.example.camera"}}),
+    );
+    assert_eq!(tap.own_intents().len(), 2);
+    assert_eq!(
+        protocol::required_features(&tap),
+        ["device_apps", "gestures"]
+    );
+    // A Tappable without a long press needs nothing new.
+    let plain: UiNode = serde_json::from_value(
+        json!({"type": "core://Tappable", "on_click": back, "content": divider}),
+    )
+    .unwrap();
+    assert!(protocol::required_features(&plain).is_empty());
+
+    let appear = round_trips(json!({"type": "core://OnAppear",
+        "intent": {"intent": "action.app.open", "app_id": "$item.app_id"}}));
+    assert_eq!(
+        protocol::required_features(&appear),
+        ["app_open", "on_appear"]
+    );
+
+    let field = round_trips(json!({"type": "core://TextField", "field": "q",
+        "placeholder": "Search", "autofocus": true}));
+    assert_eq!(protocol::required_features(&field), ["autofocus"]);
+    let unfocused: UiNode =
+        serde_json::from_value(json!({"type": "core://TextField", "field": "q"})).unwrap();
+    assert!(protocol::required_features(&unfocused).is_empty());
+}
+
+#[test]
+fn hidden_chrome_round_trips_on_workspaces_and_screens() {
+    let slot = json!([{"slot_id": "s", "provider_uri": "core://s", "content": {"type": "core://Divider"}}]);
+    let ws = round_trips(json!({"type": "core://Workspace", "id": "a", "title": "A",
+        "slots": slot, "chrome": "hidden"}));
+    assert!(matches!(
+        ws,
+        UiNode::Workspace {
+            chrome: protocol::Chrome::Hidden,
+            ..
+        }
+    ));
+    assert_eq!(protocol::required_features(&ws), ["hidden_chrome"]);
+    // A hidden screen alone needs it too; `full` is the default and omitted.
+    let screen = round_trips(json!({"type": "core://Workspace", "id": "a", "title": "A",
+        "slots": slot, "screens": [{"id": "s", "route": "a://s", "title": "S",
+        "content": {"type": "core://Divider"}, "chrome": "hidden"}]}));
+    assert_eq!(protocol::required_features(&screen), ["hidden_chrome"]);
+    let full =
+        round_trips(json!({"type": "core://Workspace", "id": "a", "title": "A", "slots": slot}));
+    assert!(protocol::required_features(&full).is_empty());
+}
+
+#[test]
+fn launcher_intents_round_trip() {
+    for wire in [
+        json!({"intent": "action.app.open", "app_id": "recipes"}),
+        json!({"intent": "action.device.launch", "package": "com.android.camera"}),
+        json!({"intent": "action.shell.open", "panel": "menu"}),
+    ] {
+        let i: ActionIntent = serde_json::from_value(wire.clone()).unwrap();
+        assert!(!matches!(i, ActionIntent::Unknown), "{wire}");
+        assert_eq!(serde_json::to_value(&i).unwrap(), wire);
+    }
+    // An unknown panel is not silently another one.
+    assert!(
+        serde_json::from_value::<ActionIntent>(
+            json!({"intent": "action.shell.open", "panel": "files"})
+        )
+        .is_err()
+    );
+    for f in [
+        "backdrop",
+        "clock",
+        "gestures",
+        "on_appear",
+        "autofocus",
+        "app_open",
+        "device_apps",
+        "hidden_chrome",
+    ] {
+        assert!(protocol::FEATURES.contains(&f), "{f}");
+    }
+}

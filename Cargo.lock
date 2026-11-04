@@ -130,6 +130,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "app-home"
+version = "0.1.0"
+dependencies = [
+ "app-collections",
+ "axum",
+ "http-body-util",
+ "pod-core",
+ "protocol",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "app-pixelfed"
 version = "0.1.0"
 dependencies = [
@@ -2631,6 +2649,7 @@ name = "server"
 version = "0.1.0"
 dependencies = [
  "app-collections",
+ "app-home",
  "app-pixelfed",
  "app-recipes",
  "app-watcher",

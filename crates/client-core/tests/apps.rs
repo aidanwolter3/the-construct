@@ -109,8 +109,8 @@ fn list_apps_shows_the_app_and_dev_apps_on_request() {
         .iter()
         .map(|a| a["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["pixelfed_home", "recipes", "watcher"]);
-    let app = &apps["apps"][0];
+    assert_eq!(ids, ["launcher", "pixelfed_home", "recipes", "watcher"]);
+    let app = &apps["apps"][1];
     assert_eq!(app["title"], "Pixelfed");
     assert_eq!(app["latest_version"], latest(&p, "pixelfed_home"));
     assert!(app["updated_at"].as_str().unwrap().ends_with('Z'));
@@ -126,7 +126,13 @@ fn list_apps_shows_the_app_and_dev_apps_on_request() {
         .collect();
     assert_eq!(
         ids,
-        ["pixelfed_home", "recipes", "watcher", "pixelfed_demo"]
+        [
+            "launcher",
+            "pixelfed_home",
+            "recipes",
+            "watcher",
+            "pixelfed_demo"
+        ]
     );
 }
 

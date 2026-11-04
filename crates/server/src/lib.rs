@@ -5,12 +5,14 @@
 //! The core's modules are re-exported (`server::layouts`, `server::store`,
 //! ...), `server::pixelfed` is the Pixelfed adapter crate and
 //! `server::recipes` the recipes adapter crate, `server::collections` the
-//! Collections adapter crate, `server::watcher` the watcher adapter crate.
+//! Collections adapter crate, `server::watcher` the watcher adapter crate,
+//! `server::home` the home app's adapter crate.
 
 use std::path::Path;
 use std::sync::Arc;
 
 pub use app_collections as collections;
+pub use app_home as home;
 pub use app_pixelfed as pixelfed;
 pub use app_pixelfed::{DEFAULT_PIXELFED_URL, PixelfedAdapter, PixelfedConfig};
 pub use app_recipes as recipes;
@@ -18,12 +20,17 @@ pub use app_watcher as watcher;
 pub use pod_core::*;
 pub use pod_host as host;
 
-/// The pod's adapters, in `GET /v1/apps` order: the Pixelfed feed (with the
+/// The pod's adapters, in `GET /v1/apps` order: the home screen (its
+/// builder configured from `CONSTRUCT_INFER_*` and
+/// `CONSTRUCT_HOME_BUILDER_MODEL`), the Pixelfed feed (with the
 /// `pixelfed` sign-in), the recipes, the watcher (configured from
 /// `CONSTRUCT_INFER_*` and `CONSTRUCT_WATCHER_*`), then the `pixelfed_demo` dev app; and
 /// Collections (no apps of its own: data custom apps declare).
 pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
     vec![
+        Arc::new(app_home::HomeAdapter::new(
+            app_home::BuilderConfig::from_env(),
+        )),
         Arc::new(PixelfedAdapter::new(pixelfed)),
         Arc::new(app_recipes::RecipesAdapter::new()),
         Arc::new(app_watcher::WatcherAdapter::new(
@@ -84,7 +91,7 @@ pub fn new_pod_settings(import_recipes: bool) -> Vec<(String, String)> {
 /// Extra settings of temporary pods (anyone can make one, D46): Pixelfed
 /// only on the default instance, and no watcher fetches, so a visitor can't
 /// make the server contact hosts of their choosing (fetch URLs, register
-/// OAuth apps).
+/// OAuth apps), and no app building (it spends the server's model budget).
 pub fn temporary_pod_settings() -> Vec<(String, String)> {
     vec![
         (
@@ -92,6 +99,7 @@ pub fn temporary_pod_settings() -> Vec<(String, String)> {
             "0".to_owned(),
         ),
         (app_watcher::check::FETCH_SETTING.to_owned(), "0".to_owned()),
+        (app_home::builder::BUILD_SETTING.to_owned(), "0".to_owned()),
     ]
 }
 
@@ -156,7 +164,8 @@ pub const DEFAULT_VAPID_SUBJECT: &str = "https://github.com/aidanwolter3/the-con
 
 /// Every layout file the pod ships, per app in number order.
 pub fn layout_files() -> Vec<layouts::LayoutSource> {
-    let mut files = app_pixelfed::apps::files();
+    let mut files = app_home::FILES.to_vec();
+    files.extend(app_pixelfed::apps::files());
     files.extend_from_slice(app_recipes::FILES);
     files.extend_from_slice(app_watcher::FILES);
     files

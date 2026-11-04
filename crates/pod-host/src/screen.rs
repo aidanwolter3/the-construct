@@ -26,6 +26,7 @@ pub fn open_your_pod(id: &str, temporary_hours: Option<u64>) -> WorkspaceSpec {
             max_length: Some(128),
             on_submit: None,
             lines: None,
+            autofocus: false,
         },
         UiNode::Button {
             label: "Open pod".into(),

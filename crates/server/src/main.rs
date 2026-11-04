@@ -45,7 +45,11 @@
 //!   Claude); default: from each request's `Host`, `https` behind Fly.
 //! - `CONSTRUCT_INFER_API_KEY`, `CONSTRUCT_INFER_MODEL`, `CONSTRUCT_INFER_URL`:
 //!   the model Collections asks for `model`-computed fields (unset: they
-//!   keep their default).
+//!   keep their default), the watcher's `llm` extractor and the home app's
+//!   builder (unset: + on the home screen answers that building isn't set up).
+//! - `CONSTRUCT_HOME_BUILDER_MODEL`: the model that builds apps asked for
+//!   with + on the home screen (default `CONSTRUCT_INFER_MODEL`, else
+//!   `claude-opus-5-5`). Temporary pods never build.
 //! - `PIXELFED_*`: see `PixelfedConfig::from_env` and README.
 //!
 //! A pod's layout files are synced into its database when the pod is first

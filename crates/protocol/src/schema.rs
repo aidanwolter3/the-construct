@@ -229,9 +229,9 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
         } => {
             out.insert(feature::AUTOFOCUS);
         }
-        UiNode::Workspace { chrome, screens, .. }
-            if *chrome == Chrome::Hidden || screens.iter().any(|s| s.chrome == Chrome::Hidden) =>
-        {
+        UiNode::Workspace {
+            chrome, screens, ..
+        } if *chrome == Chrome::Hidden || screens.iter().any(|s| s.chrome == Chrome::Hidden) => {
             out.insert(feature::HIDDEN_CHROME);
         }
         _ => {}
@@ -597,6 +597,13 @@ mod tests {
                 "core://MediaPicker" => json!({"type": t, "field": "f", "max_items": 4}),
                 "core://Sticky" => json!({"type": t, "content": {"type": "core://Divider"}}),
                 "core://Progress" => json!({"type": t}),
+                "core://Backdrop" => json!({"type": t, "content": {"type": "core://Divider"}}),
+                "core://Clock" => json!({"type": t, "format": "date"}),
+                "core://Swipe" => json!({"type": t, "content": {"type": "core://Divider"},
+                                         "on_swipe_up": {"intent": "action.navigation.back"}}),
+                "core://OnAppear" => {
+                    json!({"type": t, "intent": {"intent": "action.app.open", "app_id": "x"}})
+                }
                 other => panic!("no sample for {other}"),
             };
             let n: UiNode = serde_json::from_value(v).unwrap_or_else(|e| panic!("{t}: {e}"));

@@ -1,0 +1,28 @@
+[package]
+name = "app-home"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The home app: a launcher's home screen (pinned apps, every app of the pod
+# and of the device, + to have Claude build a new app). Pins and app
+# requests live in its own `home_*` tables; the builder runs Claude with the
+# pod's own MCP tools, in-process.
+
+[dependencies]
+pod-core = { path = "../pod-core" }
+protocol = { workspace = true }
+serde_json.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+axum = { version = "0.8", features = ["http2"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+app-collections = { path = "../app-collections" }

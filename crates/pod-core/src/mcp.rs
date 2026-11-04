@@ -143,6 +143,30 @@ fn initialize(pod: &Pod, params: &Value) -> Value {
     })
 }
 
+/// The MCP `instructions` text (the core's and every adapter's paragraph),
+/// for an in-process caller such as the home app's builder.
+pub fn instructions_text(pod: &Pod) -> String {
+    instructions(pod)
+}
+
+/// Every MCP tool definition (`{name, description, inputSchema}`): the
+/// core's and every adapter's, as `tools/list` answers.
+pub fn tool_definitions(pod: &Pod) -> Vec<Value> {
+    all_tools(pod)
+}
+
+/// Run MCP tool `name` with `args` in-process, as `tools/call` would for
+/// the pod's owner: the MCP tool result (`{content, isError,
+/// structuredContent?}`). Writes are recorded as Claude's.
+pub async fn run_tool(pod: &Pod, name: &str, args: Value) -> Value {
+    call_tool(
+        pod,
+        &HeaderMap::new(),
+        &json!({ "name": name, "arguments": args }),
+    )
+    .await
+}
+
 /// [`INSTRUCTIONS`] and every adapter's paragraph.
 fn instructions(pod: &Pod) -> String {
     let mut out = INSTRUCTIONS.to_owned();
@@ -892,8 +916,8 @@ pub fn apply_patch(doc: &mut Value, patch: &Value) -> Result<(), String> {
 pub const NODE_DOCS: &[(&str, &str, &str)] = &[
     (
         "core://Workspace",
-        "id, title, slots: [{slot_id, provider_uri, content}], screens: [{id, route, title, data?, content, footer?}]",
-        "The root. Slots stack top to bottom; screens open on navigation (route like scheme://things/{id}; data is a data path loaded when it opens; $route.<param> in it).",
+        "id, title, slots: [{slot_id, provider_uri, content}], screens: [{id, route, title, data?, content, footer?, chrome?}], chrome?: full|hidden",
+        "The root. Slots stack top to bottom; screens open on navigation (route like scheme://things/{id}; data is a data path loaded when it opens; $route.<param> in it). chrome: hidden draws only the layout (no title, bar or the client's buttons; content fills the screen without scrolling, so put a core://Backdrop in it).",
     ),
     (
         "core://Container",
@@ -922,8 +946,8 @@ pub const NODE_DOCS: &[(&str, &str, &str)] = &[
     ),
     (
         "core://TextField",
-        "field, placeholder, max_length?, lines?, on_submit?",
-        "A form field ($form.<field>).",
+        "field, placeholder, max_length?, lines?, on_submit?, autofocus?",
+        "A form field ($form.<field>). autofocus: focus it (keyboard up) when it first appears.",
     ),
     (
         "core://Row",
@@ -956,8 +980,8 @@ pub const NODE_DOCS: &[(&str, &str, &str)] = &[
     ("core://Badge", "text, icon", "An icon with a count."),
     (
         "core://Tappable",
-        "on_click, content, content_description?",
-        "Makes content tappable (e.g. open a screen).",
+        "on_click, content, content_description?, on_long_press?",
+        "Makes content tappable (e.g. open a screen); on_long_press is dispatched on a long press.",
     ),
     (
         "core://Box",
@@ -983,6 +1007,26 @@ pub const NODE_DOCS: &[(&str, &str, &str)] = &[
         "core://Progress",
         "size_dp?",
         "An indeterminate spinner for work in progress, e.g. inside a core://Conditional on a status field",
+    ),
+    (
+        "core://Backdrop",
+        "content, footer?, background?, grid_color?, tilt_deg? (0-60), cell_dp?",
+        "A dark sketchpad surface filling its space: a perspective grid under content (which scrolls) and footer (pinned at the bottom), all drawn in a dark theme with grid_color as the accent.",
+    ),
+    (
+        "core://Clock",
+        "format: time|date",
+        "The device's local time (large) or weekday and date, kept current.",
+    ),
+    (
+        "core://Swipe",
+        "content, on_swipe_up?, on_swipe_down?",
+        "Dispatches an intent when the user swipes up or down over content; taps inside still work.",
+    ),
+    (
+        "core://OnAppear",
+        "intent",
+        "Draws nothing; dispatches intent once each time it appears (e.g. inside a core://Conditional on a status, open the result when it is ready).",
     ),
 ];
 
@@ -1012,6 +1056,12 @@ fn vocabulary() -> Value {
               "doc": "Set fields of a loaded entity on this device only (no request), e.g. view state like added/expanded shown with core://Conditional. The next load of the entity from the pod replaces it." },
             { "intent": "action.link.open", "fields": "url",
               "doc": "Open an http(s) link in the device's browser (e.g. a Get tickets button with url $item.tickets_url). Nothing is sent to the pod." },
+            { "intent": "action.app.open", "fields": "app_id",
+              "doc": "Show another app of the pod (an id from list_apps, or a binding such as $item.id)." },
+            { "intent": "action.device.launch", "fields": "package",
+              "doc": "Start an app installed on the device: an item of the client-filled query device:apps (device://apps/<package>: package, label, letter)." },
+            { "intent": "action.shell.open", "fields": "panel: menu|inbox",
+              "doc": "Open the client's own app menu or notification inbox, from a layout with chrome: hidden." },
         ],
         "bindings": {
             "$item.<field>": "a field of the list or carousel item",

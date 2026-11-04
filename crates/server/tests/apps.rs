@@ -115,8 +115,14 @@ async fn apps_lists_dev_apps_only_when_shown() {
     let pod = pod().await;
     let (status, _, body) = get(&pod, "/v1/apps").await;
     assert_eq!(status, StatusCode::OK);
-    let apps = body["apps"].as_array().unwrap();
-    assert_eq!(apps.len(), 3, "{body}");
+    let all = body["apps"].as_array().unwrap();
+    assert_eq!(all.len(), 4, "{body}");
+    // The home screen leads the list.
+    assert_eq!(
+        (&all[0]["id"], &all[0]["title"], &all[0]["icon"]),
+        (&json!("launcher"), &json!("Home"), &json!("dashboard"))
+    );
+    let apps = &all[1..];
     let a = &apps[0];
     assert_eq!(
         (&a["id"], &a["title"], &a["icon"], &a["latest_version"]),
@@ -156,6 +162,7 @@ async fn apps_lists_dev_apps_only_when_shown() {
     assert_eq!(
         got,
         [
+            ("launcher", "Home", "dashboard", files("launcher")),
             ("pixelfed_home", "Pixelfed", "photo", files("pixelfed_home")),
             ("recipes", "Recipes", "recipe", files("recipes")),
             ("watcher", "Watcher", "dashboard", files("watcher")),
@@ -956,7 +963,7 @@ async fn apps_say_the_newest_version_the_client_can_draw() {
         (None, 1),
     ] {
         let body = apps(schema).await;
-        let a = &body["apps"][0];
+        let a = &body["apps"][1];
         assert_eq!(
             (&a["latest_version"], &a["latest_compatible_version"]),
             (&json!(8), &json!(want)),

@@ -26,6 +26,12 @@ pub const MAX_COLUMNS: u16 = 6;
 /// multi-line `core://TextField` (schema 9, D51).
 pub const MAX_MEDIA_ITEMS: u32 = 10;
 pub const MAX_TEXT_LINES: u32 = 12;
+/// Steepest tilt of a `core://Backdrop` grid, in degrees.
+pub const MAX_BACKDROP_TILT: u16 = 60;
+/// The query key and entity scheme the client fills with the device's own
+/// apps (feature `device_apps`): any layout may use them.
+pub const DEVICE_APPS_QUERY: &str = "device:apps";
+pub const DEVICE_SCHEME: &str = "device";
 
 /// Nesting depth of objects/arrays (a scalar root is 0). Iterative, so a deep
 /// document cannot overflow the stack here.
@@ -286,6 +292,26 @@ fn check_values(node: &UiNode) -> Result<(), String> {
                 if *s == 0 || *s > MAX_SIZE_DP {
                     return Err(format!("box width/height {s} (1..={MAX_SIZE_DP})"));
                 }
+            }
+            Ok(())
+        }
+        UiNode::Backdrop {
+            background,
+            grid_color,
+            tilt_deg,
+            cell_dp,
+            ..
+        } => {
+            for c in [background, grid_color].into_iter().flatten() {
+                check_tint(c).map_err(|_| format!("backdrop colour '{c}' must be #RRGGBB"))?;
+            }
+            if let Some(t) = tilt_deg {
+                check_dp("backdrop tilt_deg", *t, MAX_BACKDROP_TILT)?;
+            }
+            if let Some(c) = cell_dp
+                && !(4..=MAX_SIZE_DP).contains(c)
+            {
+                return Err(format!("backdrop cell_dp {c} (4..={MAX_SIZE_DP})"));
             }
             Ok(())
         }
@@ -686,14 +712,18 @@ impl<'a> Caps<'a> {
     }
 
     fn query_key(&self, at: &str, key: &str) -> Result<(), LayoutError> {
-        if self.keys().any(|p| crate::source::key_matches(p, key)) {
+        if key == DEVICE_APPS_QUERY || self.keys().any(|p| crate::source::key_matches(p, key)) {
             return Ok(());
         }
         Err(LayoutError::new(
             at,
             format!("query key '{key}' is not one this app's data sources fill"),
         )
-        .allowing(self.keys().map(str::to_owned)))
+        .allowing(
+            self.keys()
+                .map(str::to_owned)
+                .chain([DEVICE_APPS_QUERY.to_owned()]),
+        ))
     }
 
     /// An entity URI (only checked when it names a scheme: `$item.uri`
@@ -709,18 +739,17 @@ impl<'a> Caps<'a> {
             if rest.starts_with("sources/") {
                 return Ok(());
             }
-        } else if self.schemes().any(|s| s == scheme) {
+        } else if scheme == DEVICE_SCHEME || self.schemes().any(|s| s == scheme) {
             return Ok(());
         }
         Err(LayoutError::new(
             at,
             format!("entity URI '{uri}' is not from this app's data sources"),
         )
-        .allowing(
-            self.schemes()
-                .map(|s| format!("{s}://..."))
-                .chain(["core://sources/<source>".to_owned()]),
-        ))
+        .allowing(self.schemes().map(|s| format!("{s}://...")).chain([
+            "core://sources/<source>".to_owned(),
+            format!("{DEVICE_SCHEME}://apps/<package>"),
+        ])))
     }
 
     fn intent(&self, at: &str, map: &serde_json::Map<String, Value>) -> Result<(), LayoutError> {
@@ -912,6 +941,30 @@ mod tests {
         assert_eq!(check_values(&p(sized)), Ok(()));
         let huge = json!({"type": "core://Progress", "size_dp": 9999});
         assert!(check_values(&p(huge)).is_err());
+    }
+
+    #[test]
+    fn backdrops_are_bounded() {
+        let b = |extra: Value| {
+            let mut v = json!({"type": "core://Backdrop", "content": {"type": "core://Divider"}});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            node(v)
+        };
+        assert_eq!(check_values(&b(json!({}))), Ok(()));
+        let full =
+            json!({"background": "#000000", "grid_color": "#7CC8DA", "tilt_deg": 60, "cell_dp": 4});
+        assert_eq!(check_values(&b(full)), Ok(()));
+        for bad in [
+            json!({"tilt_deg": 61}),
+            json!({"cell_dp": 3}),
+            json!({"cell_dp": 9999}),
+            json!({"background": "black"}),
+            json!({"grid_color": "$item.color"}),
+        ] {
+            assert!(check_values(&b(bad.clone())).is_err(), "{bad}");
+        }
     }
 
     #[test]

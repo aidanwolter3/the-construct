@@ -517,6 +517,26 @@ async fn a_progress_spinner_is_accepted_and_needs_its_feature() {
 }
 
 #[tokio::test]
+async fn the_devices_own_apps_may_be_listed_and_launched() {
+    let env = env();
+    // A custom launcher page: the device's apps (filled in by the client),
+    // each one launching on tap.
+    let mut l = kitchen_a();
+    l["slots"][0]["content"] = json!({"type": "core://List", "query_key": "device:apps",
+        "item_template": {"type": "core://Tappable",
+            "on_click": {"intent": "action.device.launch", "package": "$item.package"},
+            "on_long_press": {"intent": "action.app.open", "app_id": "recipes"},
+            "content": {"type": "core://Text", "style": "Body", "value_expr": "${device://apps/x#label}"}}});
+    let (status, b) = create(&env, json!([["a", "all"]]), l).await;
+    assert_eq!(status, StatusCode::CREATED, "{b}");
+    // Other made-up keys are still refused.
+    let mut l = kitchen_a();
+    l["slots"][0]["content"]["query_key"] = json!("device:contacts");
+    let (status, b) = create(&env, json!([["a", "all"]]), l).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
+}
+
+#[tokio::test]
 async fn edits_append_history_and_restore_appends_a_copy() {
     let env = env();
     let (_, b) = create(&env, ab(), kitchen()).await;

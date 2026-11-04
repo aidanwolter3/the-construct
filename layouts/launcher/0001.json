@@ -3,7 +3,7 @@
   "schema": 12,
   "layout": {
     "type": "core://Workspace",
-    "id": "home",
+    "id": "launcher",
     "title": "Home",
     "chrome": "hidden",
     "slots": [
