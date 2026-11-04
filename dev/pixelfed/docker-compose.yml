@@ -11,9 +11,6 @@ x-pixelfed: &pixelfed
   restart: unless-stopped
   env_file:
     - pixelfed.env
-    # Overrides (fresh APP_KEY) written by dev/hetzner/provision.sh --pixelfed-domain; gitignored.
-    - path: pixelfed.local.env
-      required: false
   volumes:
     - pf-storage:/var/www/html/storage
   depends_on:

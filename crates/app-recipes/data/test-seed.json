@@ -1,0 +1,1238 @@
+{
+ "note": "Made-up recipes for tests only (not real recipes). One per category the recipes layouts' chips name.",
+ "categories": [
+  {
+   "slug": "appetizers-sides-salads",
+   "name": "Appetizers/Sides/Salads"
+  },
+  {
+   "slug": "main-dishes-meat-casseroles",
+   "name": "Main Dishes (Meat/Casseroles)"
+  },
+  {
+   "slug": "side-dishes-rice-grains",
+   "name": "Side Dishes (Rice/Grains)"
+  },
+  {
+   "slug": "desserts",
+   "name": "Desserts"
+  },
+  {
+   "slug": "breakfast",
+   "name": "Breakfast"
+  },
+  {
+   "slug": "baking-breads-crusts-frosting",
+   "name": "Baking (Breads/Crusts/Frosting)"
+  },
+  {
+   "slug": "snacks-confections",
+   "name": "Snacks/Confections"
+  },
+  {
+   "slug": "drinks",
+   "name": "Drinks"
+  }
+ ],
+ "recipes": [
+  {
+   "slug": "test-garden-salad",
+   "title": "Test Garden Salad",
+   "category": "Appetizers/Sides/Salads",
+   "source": "Made up for tests",
+   "yield": {
+    "min": 4,
+    "max": 6,
+    "unit": "servings"
+   },
+   "ingredient_groups": [
+    {
+     "name": "Salad",
+     "ingredients": [
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": "head",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "romaine lettuce",
+       "preparation": "chopped",
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 head romaine lettuce, chopped"
+      },
+      {
+       "qty_min": 2,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "cherry tomatoes",
+       "preparation": "halved",
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "2 cups cherry tomatoes, halved"
+      },
+      {
+       "qty_min": 0.5,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "croutons",
+       "preparation": null,
+       "note": "see below",
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1/2 cup croutons (see below)"
+      }
+     ]
+    },
+    {
+     "name": "Dressing",
+     "ingredients": [
+      {
+       "qty_min": 3,
+       "qty_max": null,
+       "unit": "tbsp",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "olive oil",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "3 Tbsp olive oil"
+      },
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": "tbsp",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "lemon juice",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 Tbsp lemon juice"
+      },
+      {
+       "qty_min": null,
+       "qty_max": null,
+       "unit": null,
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "salt and pepper",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": true,
+       "alternatives": [],
+       "line": "salt and pepper (to taste)"
+      }
+     ]
+    },
+    {
+     "name": "Croutons",
+     "ingredients": [
+      {
+       "qty_min": 2,
+       "qty_max": null,
+       "unit": "slice",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "bread",
+       "preparation": "cubed",
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "2 slices bread, cubed"
+      }
+     ]
+    }
+   ],
+   "instruction_groups": [
+    {
+     "name": null,
+     "steps": [
+      {
+       "text": "Chop the lettuce.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      },
+      {
+       "text": "Halve the tomatoes.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      },
+      {
+       "text": "Whisk the dressing.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      },
+      {
+       "text": "Toss everything together.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      }
+     ]
+    },
+    {
+     "name": "For the croutons",
+     "steps": [
+      {
+       "text": "Toss the bread with a little oil.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      },
+      {
+       "text": "Bake until golden.",
+       "temp_f": 375,
+       "time_min": 10,
+       "time_max": 12
+      }
+     ]
+    }
+   ],
+   "notes": [
+    "Made up for the tests.",
+    "Dress just before serving."
+   ]
+  },
+  {
+   "slug": "placeholder-pot-pie",
+   "title": "Placeholder Pot Pie",
+   "category": "Main Dishes (Meat/Casseroles)",
+   "source": "Made up for tests",
+   "yield": {
+    "min": 6,
+    "max": null,
+    "unit": "servings"
+   },
+   "ingredient_groups": [
+    {
+     "name": null,
+     "ingredients": [
+      {
+       "qty_min": 2,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "cooked chicken",
+       "preparation": "diced",
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "2 cups cooked chicken, diced"
+      },
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": "can",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": 15,
+       "pkg_unit": "oz",
+       "name": "cream of mushroom soup",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 (15 oz) can cream of mushroom soup"
+      },
+      {
+       "qty_min": 0.3333333333333333,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "milk",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1/3 cup milk"
+      },
+      {
+       "qty_min": 1.5,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "frozen peas and carrots",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 1/2 cups frozen peas and carrots"
+      },
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": null,
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "small onion",
+       "preparation": "minced",
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 small onion, minced"
+      },
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": "tsp",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "dried thyme",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 tsp dried thyme"
+      },
+      {
+       "qty_min": 0.5,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": 2,
+       "extra_unit": "tbsp",
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "shredded cheddar",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": true,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1/2 cup + 2 Tbsp shredded cheddar (divided)"
+      },
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": null,
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "large lemon",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [
+        {
+         "qty_min": 2,
+         "qty_max": null,
+         "unit": null,
+         "extra_qty": null,
+         "extra_unit": null,
+         "pkg_qty": null,
+         "pkg_unit": null,
+         "name": "small lemons",
+         "preparation": null,
+         "note": null,
+         "scale_basis": null,
+         "is_optional": false,
+         "is_divided": false,
+         "to_taste": false,
+         "alternatives": [],
+         "line": "2 small lemons"
+        }
+       ],
+       "line": "1 large lemon or 2 small lemons"
+      },
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": null,
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": 9,
+       "pkg_unit": "inch",
+       "name": "pie crust",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 (9\") pie crust"
+      }
+     ]
+    }
+   ],
+   "instruction_groups": [
+    {
+     "name": null,
+     "steps": [
+      {
+       "text": "Heat the oven.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      },
+      {
+       "text": "Mix the filling.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      },
+      {
+       "text": "Pour it into the crust.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      },
+      {
+       "text": "Top with the remaining cheese.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      },
+      {
+       "text": "Bake.",
+       "temp_f": 425,
+       "time_min": 30,
+       "time_max": null
+      },
+      {
+       "text": "Lower the heat and bake until bubbling.",
+       "temp_f": 375,
+       "time_min": 15,
+       "time_max": null
+      },
+      {
+       "text": "Let it rest before slicing.",
+       "temp_f": null,
+       "time_min": 10,
+       "time_max": null
+      }
+     ]
+    }
+   ],
+   "notes": []
+  },
+  {
+   "slug": "sample-pilaf",
+   "title": "Sample Pilaf",
+   "category": "Side Dishes (Rice/Grains)",
+   "source": "Made up for tests",
+   "yield": {
+    "min": 4,
+    "max": null,
+    "unit": "servings"
+   },
+   "ingredient_groups": [
+    {
+     "name": null,
+     "ingredients": [
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "long-grain rice",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 cup long-grain rice"
+      },
+      {
+       "qty_min": 2,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "broth",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "2 cups broth"
+      },
+      {
+       "qty_min": 2,
+       "qty_max": null,
+       "unit": "tbsp",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "butter",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "2 Tbsp butter"
+      },
+      {
+       "qty_min": 0.25,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "slivered almonds",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": true,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1/4 cup slivered almonds (optional)"
+      }
+     ]
+    }
+   ],
+   "instruction_groups": [
+    {
+     "name": null,
+     "steps": [
+      {
+       "text": "Melt the butter and toast the rice.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      },
+      {
+       "text": "Add the broth and simmer, covered.",
+       "temp_f": null,
+       "time_min": 18,
+       "time_max": 20
+      },
+      {
+       "text": "Fluff and top with the almonds.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      }
+     ]
+    }
+   ],
+   "notes": []
+  },
+  {
+   "slug": "example-brownies",
+   "title": "Example Brownies",
+   "category": "Desserts",
+   "source": "Made up for tests",
+   "yield": {
+    "min": 16,
+    "max": null,
+    "unit": null
+   },
+   "ingredient_groups": [
+    {
+     "name": null,
+     "ingredients": [
+      {
+       "qty_min": 0.5,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "butter",
+       "preparation": "melted",
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1/2 cup butter, melted"
+      },
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "sugar",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 cup sugar"
+      },
+      {
+       "qty_min": 2,
+       "qty_max": null,
+       "unit": null,
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "eggs",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "2 eggs"
+      },
+      {
+       "qty_min": 0.3333333333333333,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "cocoa powder",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1/3 cup cocoa powder"
+      },
+      {
+       "qty_min": 0.5,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "flour",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1/2 cup flour"
+      },
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": "pinch",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "salt",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 pinch salt"
+      }
+     ]
+    }
+   ],
+   "instruction_groups": [
+    {
+     "name": null,
+     "steps": [
+      {
+       "text": "Heat the oven and grease a pan.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      },
+      {
+       "text": "Stir everything together.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      },
+      {
+       "text": "Bake.",
+       "temp_f": 350,
+       "time_min": 25,
+       "time_max": 30
+      }
+     ]
+    }
+   ],
+   "notes": []
+  },
+  {
+   "slug": "demo-pancakes",
+   "title": "Demo Pancakes",
+   "category": "Breakfast",
+   "source": "Made up for tests",
+   "yield": {
+    "min": 2,
+    "max": null,
+    "unit": "dozen"
+   },
+   "ingredient_groups": [
+    {
+     "name": null,
+     "ingredients": [
+      {
+       "qty_min": 2,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "flour",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "2 cups flour"
+      },
+      {
+       "qty_min": 2,
+       "qty_max": null,
+       "unit": "tsp",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "baking powder",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "2 tsp baking powder"
+      },
+      {
+       "qty_min": 1.5,
+       "qty_max": 2,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "milk",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 1/2-2 cups milk"
+      },
+      {
+       "qty_min": 2,
+       "qty_max": null,
+       "unit": null,
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "eggs",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "2 eggs"
+      },
+      {
+       "qty_min": 3,
+       "qty_max": null,
+       "unit": "tbsp",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "butter",
+       "preparation": "melted",
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "3 Tbsp butter, melted"
+      }
+     ]
+    }
+   ],
+   "instruction_groups": [
+    {
+     "name": null,
+     "steps": [
+      {
+       "text": "Whisk the dry ingredients.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      },
+      {
+       "text": "Whisk in the wet ingredients.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      },
+      {
+       "text": "Cook on a hot griddle until golden.",
+       "temp_f": null,
+       "time_min": 2,
+       "time_max": 3
+      }
+     ]
+    }
+   ],
+   "notes": []
+  },
+  {
+   "slug": "mock-loaf",
+   "title": "Mock Loaf",
+   "category": "Baking (Breads/Crusts/Frosting)",
+   "source": "Made up for tests",
+   "yield": {
+    "min": 1,
+    "max": null,
+    "unit": "loaf"
+   },
+   "ingredient_groups": [
+    {
+     "name": null,
+     "ingredients": [
+      {
+       "qty_min": 3,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "flour",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "3 cups flour"
+      },
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": "tbsp",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "sugar",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 Tbsp sugar"
+      },
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": "tbsp",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "baking powder",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 Tbsp baking powder"
+      },
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": "bottle",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": 12,
+       "pkg_unit": "oz",
+       "name": "sparkling water",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 (12 oz) bottle sparkling water"
+      }
+     ]
+    }
+   ],
+   "instruction_groups": [
+    {
+     "name": null,
+     "steps": [
+      {
+       "text": "Heat the oven and grease a loaf pan.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      },
+      {
+       "text": "Stir everything together.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      },
+      {
+       "text": "Bake.",
+       "temp_f": 375,
+       "time_min": 50,
+       "time_max": 55
+      }
+     ]
+    }
+   ],
+   "notes": []
+  },
+  {
+   "slug": "imaginary-trail-mix",
+   "title": "Imaginary Trail Mix",
+   "category": "Snacks/Confections",
+   "source": "Made up for tests",
+   "yield": {
+    "min": 4,
+    "max": null,
+    "unit": "cups"
+   },
+   "ingredient_groups": [
+    {
+     "name": null,
+     "ingredients": [
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "peanuts",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 cup peanuts"
+      },
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "raisins",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 cup raisins"
+      },
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "pretzels",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 cup pretzels"
+      },
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "chocolate candies",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 cup chocolate candies"
+      }
+     ]
+    }
+   ],
+   "instruction_groups": [
+    {
+     "name": null,
+     "steps": [
+      {
+       "text": "Mix everything in a big bowl.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      },
+      {
+       "text": "Keep in a jar.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      }
+     ]
+    }
+   ],
+   "notes": []
+  },
+  {
+   "slug": "pretend-lemonade",
+   "title": "Pretend Lemonade",
+   "category": "Drinks",
+   "source": "Made up for tests",
+   "yield": {
+    "min": 8,
+    "max": null,
+    "unit": "servings"
+   },
+   "ingredient_groups": [
+    {
+     "name": null,
+     "ingredients": [
+      {
+       "qty_min": 1,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "lemon juice",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "1 cup lemon juice"
+      },
+      {
+       "qty_min": 0.75,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "sugar",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "3/4 cup sugar"
+      },
+      {
+       "qty_min": 6,
+       "qty_max": null,
+       "unit": "cup",
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "water",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "6 cups water"
+      },
+      {
+       "qty_min": 4,
+       "qty_max": null,
+       "unit": null,
+       "extra_qty": null,
+       "extra_unit": null,
+       "pkg_qty": null,
+       "pkg_unit": null,
+       "name": "hibiscus tea bags",
+       "preparation": null,
+       "note": null,
+       "scale_basis": null,
+       "is_optional": false,
+       "is_divided": false,
+       "to_taste": false,
+       "alternatives": [],
+       "line": "4 hibiscus tea bags"
+      }
+     ]
+    }
+   ],
+   "instruction_groups": [
+    {
+     "name": null,
+     "steps": [
+      {
+       "text": "Steep the tea bags in 2 cups of hot water.",
+       "temp_f": null,
+       "time_min": 5,
+       "time_max": null
+      },
+      {
+       "text": "Stir in the sugar, lemon juice and the rest of the water.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      },
+      {
+       "text": "Chill.",
+       "temp_f": null,
+       "time_min": null,
+       "time_max": null
+      }
+     ]
+    }
+   ],
+   "notes": []
+  }
+ ]
+}

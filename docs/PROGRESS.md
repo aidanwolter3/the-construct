@@ -419,7 +419,8 @@ from a client (D32, D33).
 ## Recipes app (D41, issue #13)
 - `crates/app-recipes`: a second adapter with typed `recipes_*` tables in the pod's SQLite. Its migration imports
   the family collection (81 recipes, 8 categories) from `data/import-0001.json`, generated from the recipe PDF by
-  `scripts/recipes_from_pdf.py`.
+  `scripts/recipes_from_pdf.py`. (Later removed: new pods start with no recipes, and the import file and script
+  are gone; decision `recipes-start-empty`.)
 - `layouts/recipes/0001.json`: recipes by category, each opening a screen with ingredients (grouped), numbered
   steps (grouped), notes and the source.
 - Existing vocabulary only: no client build. Checked with the simulator against a local pod.

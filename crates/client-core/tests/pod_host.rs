@@ -102,7 +102,6 @@ fn a_device_opens_a_pod_signs_in_signs_out_and_leaves() {
                 hours: 1,
                 max_live: 5,
             }),
-            new_pod_settings: server::new_pod_settings(false),
             ..HostConfig::default()
         },
     )

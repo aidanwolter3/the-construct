@@ -829,6 +829,7 @@ dependencies = [
 name = "e2e"
 version = "0.1.0"
 dependencies = [
+ "app-recipes",
  "axum",
  "client-core",
  "fake-pixelfed",

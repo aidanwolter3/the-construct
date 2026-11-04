@@ -34,19 +34,6 @@ ALICE_USER=alice
 ALICE_PASS=alice-dev-pass
 BOB_USER=bob
 BOB_PASS=bob-dev-pass
-# A public instance (dev/hetzner/provision.sh --pixelfed-domain) has random seed passwords in the gitignored
-# dev/pixelfed/pixelfed.local.env (CONSTRUCT_SEED_{ADMIN,ALICE,BOB}_PASS); read them without sourcing the file.
-LOCAL_ENV="$DIR/pixelfed.local.env"
-if [ -f "$LOCAL_ENV" ]; then
-  while IFS='=' read -r key val; do
-    val="${val%\"}"; val="${val#\"}"
-    case $key in
-      CONSTRUCT_SEED_ADMIN_PASS) ADMIN_PASS="$val" ;;
-      CONSTRUCT_SEED_ALICE_PASS) ALICE_PASS="$val" ;;
-      CONSTRUCT_SEED_BOB_PASS) BOB_PASS="$val" ;;
-    esac
-  done <"$LOCAL_ENV"
-fi
 
 dc() { docker compose --project-directory "$DIR" -f "$DIR/docker-compose.yml" "$@"; }
 artisan() { dc exec -T app php artisan "$@"; }

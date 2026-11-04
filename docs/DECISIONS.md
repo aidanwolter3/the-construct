@@ -1424,6 +1424,8 @@ Superseded in part (`hydrate` became a manifest plus named feeds) by
 
 ## D41: Recipes are a second adapter with its own tables in the pod's SQLite
 
+Superseded in part by [recipes-start-empty](decisions/recipes-start-empty.md) (the family import is gone).
+
 - **Why:** issue #13: the family recipe collection (81 recipes, 8 categories, normalized from the original scans)
   becomes an app. It is the first adapter with no upstream and the first whose data lives in the pod.
 - **Storage:** the pod's existing SQLite file, no new service (Turso / Postgres stay options if the data must be
@@ -1570,6 +1572,9 @@ Superseded in part (`hydrate` became a manifest plus named feeds) by
   account from a typed-in instance other than deleting the row; per-instance rate limits.
 
 ## D46: One server, many pods: pod tokens, temporary pods
+
+Superseded in part by [recipes-start-empty](decisions/recipes-start-empty.md) (`--import-recipes` and
+`recipes.import_family` are gone).
 
 - **Why:** a pod was one process for one person, and staging was one shared pod. Once staging accepted real Pixelfed
   accounts (D45), anyone with the app could reach it and claim it. Now one server hosts many pods, one per user,
