@@ -177,12 +177,27 @@ pub async fn extract(
     Ok((events, kind.name()))
 }
 
+/// Whether an event page's URL may be fetched: the same check as a
+/// target's URL ([`crate::edit::check_url`]). The URL comes from the
+/// watched page (or the model reading it), so it must not name an IP
+/// address or a private host: [`pod_core::net::PublicOnlyResolver`] only
+/// sees names, and an IP literal is connected to without resolving.
+pub fn detail_url_allowed(adapter: &WatcherAdapter, url: &str) -> bool {
+    crate::edit::check_url(adapter, url).is_ok()
+}
+
 /// Fetch each new event's own page (at most [`MAX_DETAIL_FETCHES`]) for
 /// its full description: the page's JSON-LD event's, else its text.
-async fn fill_details(client: &reqwest::Client, events: &mut [RawEvent], new: &[bool]) {
+async fn fill_details(adapter: &WatcherAdapter, events: &mut [RawEvent], new: &[bool]) {
+    let client = adapter.fetch_client();
     let mut fetched = 0;
     for (e, is_new) in events.iter_mut().zip(new) {
         if !is_new || e.url.is_empty() || fetched >= MAX_DETAIL_FETCHES {
+            continue;
+        }
+        if !detail_url_allowed(adapter, &e.url) {
+            tracing::warn!(host = ?reqwest::Url::parse(&e.url).ok().and_then(|u| u.host_str().map(str::to_owned)),
+                "event page not fetched: not a public website");
             continue;
         }
         fetched += 1;
@@ -303,7 +318,7 @@ async fn check_inner(pod: &Pod, adapter: &WatcherAdapter, t: &Target, now: i64) 
             .await
             .unwrap_or_default();
         let new: Vec<bool> = ids.iter().map(|i| !existing.contains(i)).collect();
-        fill_details(client, &mut events, &new).await;
+        fill_details(adapter, &mut events, &new).await;
     }
     let count = events.len();
     let t2 = t.clone();
@@ -445,5 +460,31 @@ mod tests {
         assert_eq!(backoff(&t, 3, None, 0), 4 * 3600);
         assert_eq!(backoff(&t, 9, None, 0), 86_400);
         assert_eq!(backoff(&t, 1, Some(7200), 0), 7200);
+    }
+
+    #[test]
+    fn detail_pages_only_on_public_hosts() {
+        let public = WatcherAdapter::new(crate::WatcherConfig::default());
+        for bad in [
+            "http://127.0.0.1:8080/v1/apps",
+            "http://[::1]/",
+            "http://[fdaa::3]:8080/",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.1/",
+            "http://localhost:8080/",
+            "http://pod.internal/",
+            "file:///etc/passwd",
+        ] {
+            assert!(!detail_url_allowed(&public, bad), "{bad}");
+        }
+        assert!(detail_url_allowed(
+            &public,
+            "https://tickets.example.com/e/1"
+        ));
+        let private = WatcherAdapter::new(crate::WatcherConfig {
+            llm: None,
+            allow_private_hosts: true,
+        });
+        assert!(detail_url_allowed(&private, "http://127.0.0.1:8080/e/1"));
     }
 }
