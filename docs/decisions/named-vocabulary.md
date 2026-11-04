@@ -1,41 +1,44 @@
-# Every piece of layout vocabulary is a named feature; clients list what they draw
+# Layout vocabulary is named features only; the schema number is gone
 
-Date: 2026-11-04. Related: D36, D37, D51, [layout-features](layout-features.md),
-[composable-actions](composable-actions.md).
+Date: 2026-11-04. Related: D36, D37, D38, D51, [layout-features](layout-features.md),
+[composable-actions](composable-actions.md). Supersedes the schema numbers of D36/D38 (and `RETIRED`, D37).
 
 `action.mutation.create`'s `dismiss` (D51) is the same as `action.sequence [create, action.navigation.back]`
-(decision `composable-actions`), so it should go. Removing vocabulary used to mean bumping `SCHEMA_VERSION`
-and adding a `RETIRED` entry, which retires *every* version written for an older schema: each built-in app
-would need a copy at the new number, every custom app would need re-stamping, and older clients would stop
-getting any new layout even though they draw a superset of the new vocabulary. Rewriting old layouts on the
-fly when serving them was considered and rejected: what the pod serves should be what was written.
+(decision `composable-actions`), so it should go. With schema numbers, removing vocabulary meant bumping
+`SCHEMA_VERSION` with a `RETIRED` entry, which retires *every* version written for an older schema: each app
+would need a copy at the new number, custom apps would need re-stamping, and older clients would stop getting new
+layouts although they draw a superset of the new vocabulary. Rewriting old layouts on the fly when serving them
+was rejected: what the pod serves should be what was written. Decision `layout-features` had already moved
+additive vocabulary to named features because one shared counter made parallel PRs conflict; the base vocabulary
+still lived behind the numbers.
 
-Decision: the vocabulary is a set of named features, and a layout is drawn by a client when the features it
-uses are a subset of the ones the client lists.
+Decision: every piece of the vocabulary is a named feature, and there is no schema number.
 
-- **Base vocabulary is named.** `protocol::BASE_FEATURES` names everything schemas 1–12 added (`row`,
-  `list_filter`, `sticky`, …), each with the schema that added it and, when removed, the schema that removed
-  it. Additive features stay one file each in `crates/protocol/features/` (decision `layout-features`).
-  `protocol::required_features` returns everything a layout uses; `required_schema` is derived from it.
-- **Schema 13 (`NAMED_SCHEMA`) changes the negotiation, not the vocabulary.** A client of schema 13 lists
-  every feature it draws in `X-Construct-Features` (`protocol::drawn_features`). A client of an older schema
-  lists only additive features; its schema's base vocabulary is implied (`implied_features`), so every
-  existing client keeps working with no build.
-- **Removing vocabulary = no longer listing it.** This build drops `create_dismiss` (removed in 13). The pod
-  marks the versions that use it `retired` for clients that don't list it (`ClientCaps::can_draw`), and
-  serves them unchanged to older clients that still draw them, so the field stays in the Rust types. Nothing
-  else is retired.
-- **Layout files keep declaring schema 12** (`protocol::LAYOUT_SCHEMA`; the pod refuses higher). Numbered
-  vocabulary ends there, so a new file is served to every client, older or newer, that draws its features.
-- **Stored versions:** pod migration v17 works out the full feature list of every stored version (built-in
-  and custom), so versions using `dismiss` are found on existing pods too.
-- **Custom-app writes** that use vocabulary this build no longer draws are refused, with a hint
-  (`dismiss` → the sequence). `describe_vocabulary` no longer lists it.
-- `pixelfed_home` 0009 is 0008 with Share written as `[create, back]`. The Kotlin client drops `dismiss`.
+- **One file per feature**, `crates/protocol/features/<name>.md`, for everything schemas 1–12 added too
+  (`row`, `list_filter`, `sticky`, …). `protocol::required_features` maps nodes and intents to them. Adding
+  vocabulary is adding a file, so parallel changes never touch the same line.
+- **Negotiation:** the engine sends every feature it draws in `X-Construct-Features`. The pod records each
+  version's features (built-in files when they sync, custom-app writes with their built-in parts expanded) and
+  serves a client the newest version whose features are a subset of its list (`ClientCaps::can_draw`). A request
+  without the header is a tool, not a client (curl): it gets the latest version. `X-Construct-Schema`,
+  `SCHEMA_VERSION`, `RETIRED`, `required_schema` and the `schema` of versions are removed; the versions API no
+  longer reports `schema`.
+- **Removing vocabulary = moving its file to `features/removed/`** (`protocol::REMOVED_FEATURES`). Clients built
+  after that don't list it; the pod marks only the versions that use it `retired` and keeps serving them to older
+  clients that list it. The field stays in the Rust types so old versions still parse. Removed now:
+  `create_dismiss` and `legacy_nodes` (node types this build doesn't know, i.e. the `pixelfed://` widgets of D37,
+  and stored layouts it can't read; this replaces `RETIRED = [(3, 3)]`).
+- **Layout files** are `{"note", "layout", "parts"?}`. Deployed files keep their `"schema"`; it is not part of the
+  content hash and is ignored. `pixelfed_home` 0009 is 0008 with Share written as `[create, back]`.
+- **Pod migration v17** works out the features of every stored version and drops the `schema` column.
+- **Custom-app writes** using a removed feature are refused with a hint (`dismiss` → the sequence);
+  `describe_vocabulary` lists the features instead of a schema number.
+- The Kotlin client drops `dismiss` and the versions' `schema`.
 
-The coarse `RETIRED` table stays for what it did (schema 3 dropped the `pixelfed://` widgets, D37) and is
-still checked as a floor; a future removal needs only a `BASE_FEATURES` entry (or, for an additive feature, a
-removal record) and a client that stops listing the name.
+Breaking, on purpose: clients built before this send `X-Construct-Schema` and, at most, their additive features,
+so the pod finds them drawing almost nothing and serves `no_compatible_version`. They need this build. Nothing
+else forces an update again: a later build that adds or removes a feature still gets every version it draws, and
+older builds keep getting every new version that uses only what they list.
 
-Not done: a custom app's `core://Ref` to a built-in part is counted by its stored form, so the features of
-the part it expands to are not checked per client (as before).
+Not done: a custom app's `core://Ref` to a built-in part is recorded with the features of the part it expanded to
+when written; a ref that follows the built-in (no `version`) can expand to a newer part with other features.

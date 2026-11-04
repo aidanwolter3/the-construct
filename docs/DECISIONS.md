@@ -1269,6 +1269,8 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
 
 ## D36: Layout versions declare their schema; breaking changes retire old ones without editing them
 
+> Superseded by [named-vocabulary](decisions/named-vocabulary.md): no schema numbers; clients list the features they draw.
+
 - **Problem:** D35's `required_schema(layout)` is a lower bound computed from vocabulary: it keeps new layouts away
   from old clients, but nothing stopped a newer client from being served (or pinning) an old layout after a
   breaking change, and the version picker could not tell the user a version won't draw.
@@ -1338,6 +1340,8 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   or counts in layouts, so the pod still sends ready-made strings.
 
 ## D38: "Latest" means the newest version this client can draw (SSE and the menu)
+
+> Superseded in part by [named-vocabulary](decisions/named-vocabulary.md): "can draw" is by the features a client lists, not a schema number.
 
 - **Problem (issue #5, D35/D36 "not yet"):** the pod serves each client the newest version it can draw, but the SSE
   `layout` event and `latest_version` in the apps API used the app's absolute latest. An old client was told about a
@@ -1718,7 +1722,7 @@ Superseded in part (`hydrate` became a manifest plus named feeds) by
 
 ## D51: Schema 9: media picker, multi-line fields, richer creates
 
-> Superseded in part by [named-vocabulary](decisions/named-vocabulary.md): schema 13 removed `dismiss` (feature `create_dismiss`); layouts write `action.sequence [create, action.navigation.back]`.
+> Superseded in part by [named-vocabulary](decisions/named-vocabulary.md): `dismiss` (feature `create_dismiss`) is removed; layouts write `action.sequence [create, action.navigation.back]`.
 
 - `core://MediaPicker {field, max_items, label?}` (D49).
 - `core://TextField.lines`: a multi-line field without `on_submit` (amends D43's single-line rule).

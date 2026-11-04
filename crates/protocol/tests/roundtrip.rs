@@ -782,11 +782,58 @@ fn todo_icons_need_their_feature() {
     }
 }
 
-/// The additive features (`features/*.md`) a node needs; its base vocabulary
-/// is named too (decision `named-vocabulary`) but not what these tests check.
+/// The features a node needs beyond the vocabulary of the numbered schemas
+/// (1-12, named since decision `named-vocabulary`): what these tests check.
 fn additive_features(node: &protocol::UiNode) -> Vec<&'static str> {
+    const NUMBERED: &[&str] = &[
+        "workspace",
+        "container",
+        "text",
+        "button",
+        "navigate",
+        "navigate_back",
+        "optimistic_mutation",
+        "auth_login",
+        "screens",
+        "list",
+        "image",
+        "text_field",
+        "load_data",
+        "create",
+        "row",
+        "column",
+        "spacer",
+        "divider",
+        "conditional",
+        "carousel",
+        "icon_button",
+        "chip",
+        "badge",
+        "text_label_styles",
+        "tappable",
+        "list_filter",
+        "list_group_by",
+        "box",
+        "choice_chips",
+        "list_where",
+        "align",
+        "text_display",
+        "icons_flame_timer",
+        "auth_session",
+        "list_grid",
+        "conditional_form",
+        "media_picker",
+        "text_field_lines",
+        "create_attachments",
+        "create_position",
+        "form_optional",
+        "icons_post",
+        "choice_chips_remember",
+        "sticky",
+        "list_focus",
+    ];
     protocol::required_features(node)
         .into_iter()
-        .filter(|f| protocol::FEATURES.contains(f))
+        .filter(|f| !NUMBERED.contains(f))
         .collect()
 }

@@ -25,7 +25,7 @@ use tower::ServiceExt;
 /// screen loads `data`.
 fn layout(id: &'static str, endpoint: &str, data: &str) -> LayoutSource {
     let text = format!(
-        r#"{{"note": "First", "schema": {schema}, "layout": {{"type": "core://Workspace", "id": "{id}",
+        r#"{{"note": "First", "layout": {{"type": "core://Workspace", "id": "{id}",
           "title": "T",
           "screens": [{{"id": "s", "route": "{id}://things/{{id}}", "title": "S", "data": "{data}",
             "content": {{"type": "core://Text", "style": "Body", "value_expr": "hi"}}}}],
@@ -33,8 +33,7 @@ fn layout(id: &'static str, endpoint: &str, data: &str) -> LayoutSource {
           "content": {{"type": "core://Button", "label": "Go", "on_click": {{
             "intent": "action.mutation.optimistic", "entity_uri": "{id}://x", "field": "n",
             "value_expr": "1", "rollback_value": 0, "endpoint": "{endpoint}",
-            "payload": {{}}}}}}}}]}}}}"#,
-        schema = protocol::LAYOUT_SCHEMA
+            "payload": {{}}}}}}}}]}}}}"#
     );
     LayoutSource {
         app_id: id,
@@ -290,12 +289,7 @@ fn a_layout_file_may_only_use_its_sources_routes() {
 }
 
 async fn get_json(pod: &Pod, path: &str, bearer: Option<&str>) -> (StatusCode, Value) {
-    let mut req = Request::get(path)
-        .header(
-            protocol::SCHEMA_HEADER,
-            protocol::SCHEMA_VERSION.to_string(),
-        )
-        .header(protocol::FEATURES_HEADER, protocol::features_header());
+    let mut req = Request::get(path).header(protocol::FEATURES_HEADER, protocol::features_header());
     if let Some(t) = bearer {
         req = req.header("authorization", format!("Bearer {t}"));
     }

@@ -1018,7 +1018,7 @@ pub const REF_DOC: (&str, &str, &str) = (
 
 fn vocabulary() -> Value {
     json!({
-        "schema": protocol::SCHEMA_VERSION,
+        "features": protocol::FEATURES,
         "nodes": NODE_DOCS.iter().chain(std::iter::once(&REF_DOC)).map(|(t, f, d)| json!({ "type": t, "fields": f, "doc": d })).collect::<Vec<_>>(),
         "icons": protocol::ICONS,
         "intents": [

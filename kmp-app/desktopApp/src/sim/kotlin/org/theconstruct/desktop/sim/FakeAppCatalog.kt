@@ -26,13 +26,12 @@ import java.time.Instant
  * [publish] appends a visibly changed copy of the newest version (the developer's "deploy").
  */
 class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis() / 1000 }) {
-    /** [schema] and [incompatible] are what the pod says for this client (D36); null = not said / compatible. */
+    /** [incompatible] is what the pod says for this client (decision `named-vocabulary`); null = compatible. */
     class Version(
         val layout: UiNode,
         val note: String?,
         val createdAt: Long,
         val source: String = "file",
-        val schema: Int? = null,
         val incompatible: String? = null,
     )
 
@@ -147,7 +146,6 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
         "source" to JsonPrimitive(v.source),
     ).also { m ->
         v.note?.let { m["note"] = JsonPrimitive(it) }
-        v.schema?.let { m["schema"] = JsonPrimitive(it) }
         m["compatible"] = JsonPrimitive(v.incompatible == null)
         v.incompatible?.let { m["incompatible"] = JsonPrimitive(it) }
     }

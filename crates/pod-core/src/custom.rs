@@ -1,7 +1,7 @@
 //! Custom apps (decision `custom-apps-and-data-sources`): apps the pod's user
 //! owns, stored in the pod, built from any layout over the pod's data
 //! sources. They are served like built-in apps (`GET /v1/workspaces/:id`,
-//! SSE, the versions API, schema negotiation); only their layouts come from
+//! SSE, the versions API, feature negotiation); only their layouts come from
 //! writes instead of files, each validated by
 //! [`crate::validate::custom_layout`] and appended to the app's history.
 //!
@@ -289,11 +289,10 @@ pub fn purge(store: &Store, now: i64) -> rusqlite::Result<usize> {
     })
 }
 
-/// The client schema a custom layout is recorded as written for: what its
-/// vocabulary needs, raised to the oldest schema current clients still draw
-/// ([`protocol::RETIRED`]).
-pub fn recorded_schema(layout: &protocol::UiNode) -> u32 {
-    protocol::required_schema(layout).max(protocol::oldest_layout_schema(protocol::SCHEMA_VERSION))
+/// The features a custom layout is recorded as using: those of the layout as
+/// validated, built-in parts expanded ([`protocol::required_features`]).
+pub fn recorded_features(layout: &protocol::UiNode) -> String {
+    protocol::required_features(layout).join(",")
 }
 
 // ---------- validation ----------
@@ -620,7 +619,8 @@ struct NewVersion<'a> {
     json: &'a str,
     source: &'a str,
     note: &'a str,
-    schema: u32,
+    /// [`recorded_features`].
+    features: String,
     by: Writer,
     /// Its `meta_json`; `None`: the previous version's (a copy stays one).
     meta: Option<String>,
@@ -643,10 +643,10 @@ fn append(
         v.json,
         v.source,
         Some(v.note),
-        v.schema,
         Authored {
             author: v.by.author(),
             meta_json: meta.as_deref(),
+            features: &v.features,
         },
     )?;
     tx.execute(
@@ -670,7 +670,7 @@ pub async fn create(pod: &Pod, body: &Value, by: Writer) -> Result<Written, Refu
     let meta = check_copied_from(pod, body)?;
     let id = new_custom_id();
     let (layout, json) = check_layout(pod, &id, &feeds, &body["layout"])?;
-    let schema = recorded_schema(&layout);
+    let features = recorded_features(&layout);
     let caps = pod.custom.caps;
     let feeds_json = serde_json::to_string(&feeds).expect("serializes");
     let app_id = id.clone();
@@ -701,7 +701,7 @@ pub async fn create(pod: &Pod, body: &Value, by: Writer) -> Result<Written, Refu
                 json: &json,
                 source: SOURCE_CUSTOM,
                 note: &note,
-                schema,
+                features: features.clone(),
                 by,
                 meta: meta.clone(),
             },
@@ -743,7 +743,7 @@ pub async fn update_layout(
             })?),
         };
     let (layout, json) = check_layout(pod, id, &app.feeds, &body["layout"])?;
-    let schema = recorded_schema(&layout);
+    let features = recorded_features(&layout);
     let meta = check_copied_from(pod, body)?;
     let caps = pod.custom.caps;
     let app_id = id.to_owned();
@@ -766,7 +766,7 @@ pub async fn update_layout(
                 json: &json,
                 source: SOURCE_CUSTOM,
                 note: &note,
-                schema,
+                features: features.clone(),
                 by,
                 meta: meta.clone(),
             },
@@ -845,7 +845,7 @@ pub async fn restore(pod: &Pod, id: &str, body: &Value, by: Writer) -> Result<Wr
     let meta = old_meta.meta_json.clone().or_else(|| Some("{}".to_owned()));
     let layout: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
     let (node, json) = check_layout(pod, id, &app.feeds, &layout)?;
-    let schema = recorded_schema(&node);
+    let features = recorded_features(&node);
     let caps = pod.custom.caps;
     let note = check_note(body.get("note"), &format!("Restored version {n}"))?;
     let app_id = id.to_owned();
@@ -858,7 +858,7 @@ pub async fn restore(pod: &Pod, id: &str, body: &Value, by: Writer) -> Result<Wr
                 json: &json,
                 source: SOURCE_RESTORE,
                 note: &note,
-                schema,
+                features: features.clone(),
                 by,
                 meta: meta.clone(),
             },
@@ -915,7 +915,7 @@ pub async fn set_hidden(pod: &Pod, id: &str, hidden: bool) -> Result<(), Refusal
     .await
 }
 
-/// A dry run of a create: `{feeds, layout}` -> `{ok, schema}`.
+/// A dry run of a create: `{feeds, layout}` -> `{ok, features}`.
 pub fn validate(pod: &Pod, body: &Value) -> Result<Value, Refusal> {
     let feeds = check_feeds(pod, &body["feeds"])?;
     let id = body["id"]
@@ -923,7 +923,7 @@ pub fn validate(pod: &Pod, body: &Value) -> Result<Value, Refusal> {
         .filter(|i| is_custom_id(i))
         .unwrap_or("c-aaaaaaaaaa");
     let (node, _) = check_layout(pod, id, &feeds, &body["layout"])?;
-    Ok(json!({ "ok": true, "schema": recorded_schema(&node) }))
+    Ok(json!({ "ok": true, "features": protocol::required_features(&node) }))
 }
 
 /// One custom app with its feeds and latest layout (`GET
@@ -962,7 +962,7 @@ pub async fn describe(pod: &Pod, id: &str) -> Result<Value, Refusal> {
 pub struct StagedLayout {
     pub id: String,
     json: String,
-    schema: u32,
+    features: String,
     note: String,
     meta: Option<String>,
     base: Option<i64>,
@@ -992,7 +992,7 @@ pub fn stage_layout(
         StagedLayout {
             id: app.id.clone(),
             json,
-            schema: recorded_schema(&node),
+            features: recorded_features(&node),
             note,
             meta,
             base,
@@ -1043,7 +1043,7 @@ pub fn commit_staged(
             json: &staged.json,
             source: SOURCE_CUSTOM,
             note: &staged.note,
-            schema: staged.schema,
+            features: staged.features.clone(),
             by,
             meta: staged.meta.clone(),
         },
@@ -1113,13 +1113,14 @@ pub fn ref_updates(
         };
         let title = catalog.app(builtin).map_or(builtin.as_str(), |a| a.title);
         let note = format!("{title} updated to v{version}");
-        let schema = crate::parts::expand(store, catalog, &doc, None, crate::parts::Mode::Lenient)
-            .ok()
-            .and_then(|v| serde_json::from_value::<protocol::UiNode>(v).ok())
-            .map_or(
-                protocol::oldest_layout_schema(protocol::SCHEMA_VERSION),
-                |n| recorded_schema(&n),
-            );
+        let features =
+            crate::parts::expand(store, catalog, &doc, None, crate::parts::Mode::Lenient)
+                .ok()
+                .and_then(|v| serde_json::from_value::<protocol::UiNode>(v).ok())
+                .map_or_else(
+                    || protocol::feature::LEGACY_NODES.to_owned(),
+                    |n| recorded_features(&n),
+                );
         let id = app.id.clone();
         let v = store.transaction(|tx| {
             append(
@@ -1130,7 +1131,7 @@ pub fn ref_updates(
                     json: &json,
                     source: SOURCE_REF_UPDATE,
                     note: &note,
-                    schema,
+                    features: features.clone(),
                     by: Writer::Pod,
                     meta: None,
                 },

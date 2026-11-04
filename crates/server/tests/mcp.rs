@@ -115,10 +115,6 @@ impl Env {
         let resp = client()
             .get(format!("{}{path}", self.url))
             .bearer_auth(bearer)
-            .header(
-                protocol::SCHEMA_HEADER,
-                protocol::SCHEMA_VERSION.to_string(),
-            )
             .header(protocol::FEATURES_HEADER, protocol::features_header())
             .send()
             .await

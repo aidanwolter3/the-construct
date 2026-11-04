@@ -74,10 +74,6 @@ async fn call(pod: &Pod, method: &str, path: &str, body: Option<Value>) -> (Stat
     let mut req = Request::builder()
         .method(method)
         .uri(path)
-        .header(
-            protocol::SCHEMA_HEADER,
-            protocol::SCHEMA_VERSION.to_string(),
-        )
         .header(protocol::FEATURES_HEADER, protocol::features_header())
         .header("authorization", format!("Bearer {bearer}"));
     let body = match body {

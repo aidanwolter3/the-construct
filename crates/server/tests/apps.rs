@@ -44,24 +44,33 @@ fn client() -> reqwest::Client {
 }
 
 /// `(status, X-Construct-Layout-Version, JSON body)`, as a current client
-/// (it sends this build's schema).
+/// (it sends this build's features).
 async fn get(pod: &Pod, path: &str) -> (StatusCode, Option<String>, Value) {
-    get_as(pod, path, Some(protocol::SCHEMA_VERSION)).await
+    get_as(pod, path, Some(&protocol::features_header())).await
 }
 
-/// [`get`] as a client of `schema` (`None`: no header, an old client).
-async fn get_as(pod: &Pod, path: &str, schema: Option<u32>) -> (StatusCode, Option<String>, Value) {
+/// The features header of a build from before `action.sequence`: it still
+/// drew the create's `dismiss` (decision `named-vocabulary`).
+fn before_sequences() -> String {
+    protocol::FEATURES
+        .iter()
+        .filter(|f| **f != protocol::feature::ACTION_SEQUENCE)
+        .chain([&protocol::feature::CREATE_DISMISS])
+        .copied()
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// [`get`] as a client sending `features` (`None`: no header, a client
+/// that draws nothing this pod serves).
+async fn get_as(
+    pod: &Pod,
+    path: &str,
+    features: Option<&str>,
+) -> (StatusCode, Option<String>, Value) {
     let mut req = client().get(format!("{}{path}", pod.url));
-    if let Some(n) = schema {
-        req = req.header(protocol::SCHEMA_HEADER, n.to_string());
-        if n >= protocol::NAMED_SCHEMA {
-            req = req.header(protocol::FEATURES_HEADER, protocol::features_header());
-        }
-        // A current client lists everything it draws (decision
-        // `named-vocabulary`); an older one only its additive features.
-        if n >= protocol::NAMED_SCHEMA {
-            req = req.header(protocol::FEATURES_HEADER, protocol::features_header());
-        }
+    if let Some(f) = features {
+        req = req.header(protocol::FEATURES_HEADER, f);
     }
     let resp = req.send().await.unwrap();
     let version = resp
@@ -176,10 +185,12 @@ async fn apps_lists_dev_apps_only_when_shown() {
         ]
     );
     // Hidden apps' endpoints work without the flag.
-    let (status, version, _) = get_as(&pod, "/v1/workspaces/pixelfed_demo", None).await;
+    let (status, version, _) = get(&pod, "/v1/workspaces/pixelfed_demo").await;
     assert_eq!(status, StatusCode::OK);
-    // No schema header: the newest version a schema-1 client draws.
-    assert_eq!(version.as_deref(), Some("1"));
+    assert_eq!(
+        version.as_deref(),
+        Some(files("pixelfed_demo").to_string().as_str())
+    );
     let (status, _, body) = get(&pod, "/v1/apps/pixelfed_demo/versions").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["latest_version"], files("pixelfed_demo"));
@@ -311,7 +322,9 @@ async fn workspace_get_serves_the_latest_app_version() {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.headers()[layouts::VERSION_HEADER], "1");
+        // No features header (a tool, not a client): the latest version.
+        let latest = files(ws).to_string();
+        assert_eq!(resp.headers()[layouts::VERSION_HEADER], latest.as_str());
         assert!(resp.headers().get("x-construct-layout-id").is_none());
         assert!(
             resp.headers()
@@ -322,7 +335,7 @@ async fn workspace_get_serves_the_latest_app_version() {
         let file = layouts::parse_files(&server::catalog(), &server::layout_files())
             .unwrap()
             .into_iter()
-            .find(|f| f.app_id == ws && f.number == 1)
+            .rfind(|f| f.app_id == ws)
             .unwrap();
         assert_eq!(spec.workspace, file.layout);
     }
@@ -509,7 +522,6 @@ fn db_with_a_changed_file(dir: &std::path::Path) {
         note: "Classic feed".into(),
         json: "{}".into(),
         file_hash: "0".repeat(64),
-        schema: 1,
         meta_json: None,
     };
     store
@@ -578,18 +590,17 @@ struct SseReader {
 }
 
 impl SseReader {
+    /// As this build.
     async fn connect(url: &str, bearer: Option<&str>) -> Self {
-        Self::connect_as(url, bearer, None).await
+        Self::connect_as(url, bearer, Some(&protocol::features_header())).await
     }
 
-    /// With `schema`, the request carries `X-Construct-Schema` like an engine.
-    async fn connect_as(url: &str, bearer: Option<&str>, schema: Option<u32>) -> Self {
+    /// With `features`, the request carries `X-Construct-Features` like an
+    /// engine.
+    async fn connect_as(url: &str, bearer: Option<&str>, features: Option<&str>) -> Self {
         let mut req = client().get(url);
-        if let Some(s) = schema {
-            req = req.header(protocol::SCHEMA_HEADER, s.to_string());
-            if s >= protocol::NAMED_SCHEMA {
-                req = req.header(protocol::FEATURES_HEADER, protocol::features_header());
-            }
+        if let Some(f) = features {
+            req = req.header(protocol::FEATURES_HEADER, f);
         }
         if let Some(t) = bearer {
             req = req.bearer_auth(t);
@@ -670,49 +681,23 @@ async fn sse_sends_current_version_then_new_versions_of_its_workspace() {
     );
 }
 
-/// A subscriber that sends its schema hears only of versions it can draw: a
-/// version it can't draw (newer or retired) causes no event, so no refetch.
+/// A subscriber hears only of versions it can draw: a version that uses a
+/// feature it doesn't list causes no event, so no refetch.
 #[tokio::test]
 async fn sse_announces_the_newest_version_the_client_can_draw() {
     let pod = pod().await;
     let app = "pixelfed_home";
     let url = format!("{}/v1/workspaces/{app}/events", pod.url);
-    // Files: 0001 schema 1, 0002 schema 2, 0003 schema 3 (which retires the
-    // older ones for schema-3 clients), 0004 schema 8 (D48), 0005 schema 9 (photo posting, D51),
-    // 0006 schema 10 (remembered List/Cards), 0007 schema 12 (comment threads, list focus),
-    // 0008 schema 12 (one post screen with its comments), 0009 schema 12 with
-    // feature `action_sequence` (Share as a sequence). 0005-0008 use the
-    // create's `dismiss` (feature `create_dismiss`), which this build no
-    // longer draws (decision `named-vocabulary`).
-    let mut s1 = SseReader::connect_as(&url, None, Some(1)).await;
-    let mut s2 = SseReader::connect_as(&url, None, Some(2)).await;
-    let mut s7 = SseReader::connect_as(&url, None, Some(7)).await;
-    let mut s8 = SseReader::connect_as(&url, None, Some(8)).await;
-    let mut s9 = SseReader::connect_as(&url, None, Some(9)).await;
-    let mut s10 = SseReader::connect_as(&url, None, Some(10)).await;
-    // A schema-12 client without `action_sequence`, and this build.
-    let mut s12 = SseReader::connect_as(&url, None, Some(12)).await;
-    let mut current = SseReader::connect_as(&url, None, Some(protocol::SCHEMA_VERSION)).await;
-    let mut legacy = SseReader::connect(&url, None).await;
-    assert_eq!(s1.next_event().await, layout_msg(app, 1));
-    assert_eq!(s2.next_event().await, layout_msg(app, 2));
-    assert_eq!(s7.next_event().await, layout_msg(app, 3));
-    assert_eq!(s8.next_event().await, layout_msg(app, 4));
-    assert_eq!(s9.next_event().await, layout_msg(app, 5));
-    assert_eq!(s10.next_event().await, layout_msg(app, 6));
-    assert_eq!(s12.next_event().await, layout_msg(app, 8));
+    // 0005-0008 use the create's `dismiss` (feature `create_dismiss`, now
+    // removed); 0009 writes Share as an `action.sequence`.
+    let old = before_sequences();
+    let mut before = SseReader::connect_as(&url, None, Some(&old)).await;
+    let mut current = SseReader::connect(&url, None).await;
+    assert_eq!(before.next_event().await, layout_msg(app, 8));
     assert_eq!(current.next_event().await, layout_msg(app, 9));
-    // No header: the app's latest, as before (engines from before this
-    // change send no header on the events stream).
-    assert_eq!(legacy.next_event().await, layout_msg(app, 9));
 
-    // Publish a copy of the version a schema-`n` client is served.
-    let publish = |schema: u32| {
-        let client = if schema >= protocol::NAMED_SCHEMA {
-            protocol::ClientCaps::this_build()
-        } else {
-            protocol::ClientCaps::schema(schema)
-        };
+    // Publish a copy of the version `client` is served.
+    let publish = |client: protocol::ClientCaps| {
         let mut layout = layouts::active_for(pod.state.store(), pod.state.catalog(), app, &client)
             .unwrap()
             .unwrap()
@@ -724,21 +709,13 @@ async fn sse_announces_the_newest_version_the_client_can_draw() {
         pod.state.publish_layout(app, v);
         v
     };
-    assert_eq!(publish(protocol::SCHEMA_VERSION), 10);
-    assert_eq!(current.next_event().await, layout_msg(app, 10));
-    assert_eq!(legacy.next_event().await, layout_msg(app, 10));
-    // A copy of 0001 (recorded as schema 1: it holds node types this build
-    // doesn't know): schema 1 and 2 clients, not schema 3 (retired).
-    assert_eq!(publish(1), 11);
-    assert_eq!(s1.next_event().await, layout_msg(app, 11));
-    assert_eq!(s2.next_event().await, layout_msg(app, 11));
-    assert_eq!(legacy.next_event().await, layout_msg(app, 11));
-    // A copy of 0008 (it uses `dismiss`): the schema-12 client, not this
-    // build, whose next event is the next version it can draw.
-    assert_eq!(publish(12), 12);
-    assert_eq!(s12.next_event().await, layout_msg(app, 12));
-    assert_eq!(publish(protocol::SCHEMA_VERSION), 13);
-    assert_eq!(current.next_event().await, layout_msg(app, 13));
+    // A copy of 0008: the older client, not this build.
+    assert_eq!(publish(protocol::ClientCaps::from_header(&old)), 10);
+    assert_eq!(before.next_event().await, layout_msg(app, 10));
+    // A copy of 0009: this build, whose next event is the next version it
+    // can draw.
+    assert_eq!(publish(protocol::ClientCaps::this_build()), 11);
+    assert_eq!(current.next_event().await, layout_msg(app, 11));
 }
 
 #[tokio::test]
@@ -826,162 +803,80 @@ async fn shutdown_ends_open_streams() {
     assert!(matches!(end, Ok(None)), "{end:?}");
 }
 
-/// Each version says which schema it was written for and whether the asking
-/// client (its `X-Construct-Schema`) can draw it.
+/// Each version says which features it uses and whether the asking client
+/// (its `X-Construct-Features`) can draw it.
 #[tokio::test]
 async fn versions_say_whether_the_client_can_draw_them() {
     let pod = pod().await;
-    let page = |schema: Option<u32>| {
+    let page = |features: Option<String>| {
         let mut req = client().get(format!("{}/v1/apps/pixelfed_home/versions", pod.url));
-        if let Some(s) = schema {
-            req = req.header(protocol::SCHEMA_HEADER, s.to_string());
-            if s >= protocol::NAMED_SCHEMA {
-                req = req.header(protocol::FEATURES_HEADER, protocol::features_header());
-            }
+        if let Some(f) = features {
+            req = req.header(protocol::FEATURES_HEADER, f);
         }
         async move { req.send().await.unwrap().json::<Value>().await.unwrap() }
     };
-    let rows = |body: &Value| -> Vec<(i64, i64, Option<String>)> {
+    let rows = |body: &Value| -> Vec<(i64, Option<String>)> {
         body["versions"]
             .as_array()
             .unwrap()
             .iter()
             .map(|v| {
                 assert_eq!(v["compatible"], v.get("incompatible").is_none(), "{v}");
+                assert!(v.get("schema").is_none(), "{v}");
                 (
                     v["version"].as_i64().unwrap(),
-                    v["schema"].as_i64().unwrap(),
                     v.get("incompatible")
                         .map(|r| r.as_str().unwrap().to_owned()),
                 )
             })
             .collect()
     };
-    // Schema 3 removed the pixelfed:// widgets (D37). This build draws 0003,
-    // 0004 and 0009; 0005-0008 use the create's `dismiss`, which it no longer
-    // draws (decision `named-vocabulary`): retired for it.
     let retired = Some("retired".to_owned());
     let update = Some("update_required".to_owned());
+    // 0001-0002 hold the removed pixelfed:// widgets (D37) and 0005-0008 the
+    // removed create `dismiss`: retired for this build.
+    let current = page(Some(protocol::features_header())).await;
     assert_eq!(
-        rows(&page(Some(protocol::SCHEMA_VERSION)).await),
+        rows(&current),
         [
-            (9, 12, None),
-            (8, 12, retired.clone()),
-            (7, 12, retired.clone()),
-            (6, 10, retired.clone()),
-            (5, 9, retired.clone()),
-            (4, 8, None),
-            (3, 3, None),
-            (2, 2, retired.clone()),
-            (1, 1, retired.clone())
+            (9, None),
+            (8, retired.clone()),
+            (7, retired.clone()),
+            (6, retired.clone()),
+            (5, retired.clone()),
+            (4, None),
+            (3, None),
+            (2, retired.clone()),
+            (1, retired.clone())
         ]
     );
-    // A schema-12 client draws all of 0003-0009 once it has
-    // `action_sequence`, and up to 0008 without it.
-    let twelve = client()
-        .get(format!("{}/v1/apps/pixelfed_home/versions", pod.url))
-        .header(protocol::SCHEMA_HEADER, "12")
-        .header(protocol::FEATURES_HEADER, protocol::FEATURES.join(","))
-        .send()
-        .await
-        .unwrap()
-        .json::<Value>()
-        .await
-        .unwrap();
-    assert!(rows(&twelve)[..7].iter().all(|r| r.2.is_none()), "{twelve}");
-    assert_eq!(twelve["latest_compatible_version"], json!(9));
-    assert_eq!(
-        rows(&page(Some(12)).await)[..2],
-        [(9, 12, update.clone()), (8, 12, None)]
+    assert_eq!(current["latest_compatible_version"], json!(9));
+    let v9 = &current["versions"][0]["features"];
+    assert!(
+        v9.as_array().unwrap().contains(&json!("action_sequence")),
+        "{v9}"
     );
-    // A schema 10 client draws up to 0006, not 0007 (list focus).
-    assert_eq!(
-        rows(&page(Some(10)).await)[2..4],
-        [(7, 12, update.clone()), (6, 10, None)]
-    );
-    // A schema 9 client draws up to 0005, not 0006 (remembered List/Cards).
-    assert_eq!(
-        rows(&page(Some(9)).await)[3..5],
-        [(6, 10, update.clone()), (5, 9, None)]
-    );
-    // A schema 8 client draws up to 0004, not 0005 (photo posting, D51).
-    assert_eq!(rows(&page(Some(8)).await)[4], (5, 9, update.clone()));
-    // A schema 7 client draws 0003, not 0004 (the cards view, D48).
-    assert_eq!(
-        rows(&page(Some(7)).await),
-        [
-            (9, 12, update.clone()),
-            (8, 12, update.clone()),
-            (7, 12, update.clone()),
-            (6, 10, update.clone()),
-            (5, 9, update.clone()),
-            (4, 8, update.clone()),
-            (3, 3, None),
-            (2, 2, retired.clone()),
-            (1, 1, retired)
-        ]
-    );
-    // A schema 2 client draws 0001 and 0002, not 0003.
-    assert_eq!(
-        rows(&page(Some(2)).await),
-        [
-            (9, 12, update.clone()),
-            (8, 12, update.clone()),
-            (7, 12, update.clone()),
-            (6, 10, update.clone()),
-            (5, 9, update.clone()),
-            (4, 8, update.clone()),
-            (3, 3, update.clone()),
-            (2, 2, None),
-            (1, 1, None)
-        ]
-    );
-    // A client from before screens (no header) cannot draw 0002.
-    let body = page(None).await;
-    assert_eq!(
-        rows(&body),
-        [
-            (9, 12, update.clone()),
-            (8, 12, update.clone()),
-            (7, 12, update.clone()),
-            (6, 10, update.clone()),
-            (5, 9, update.clone()),
-            (4, 8, update.clone()),
-            (3, 3, update.clone()),
-            (2, 2, update),
-            (1, 1, None)
-        ]
-    );
-    // `latest_compatible_version`: what opening the app serves each client.
-    for (schema, want) in [
-        (Some(protocol::SCHEMA_VERSION), 9),
-        (Some(12), 8),
-        (Some(10), 6),
-        (Some(9), 5),
-        (Some(8), 4),
-        (Some(7), 3),
-        (Some(2), 2),
-        (None, 1),
-    ] {
-        let body = page(schema).await;
-        assert_eq!(
-            (&body["latest_version"], &body["latest_compatible_version"]),
-            (&json!(9), &json!(want)),
-            "{schema:?}"
-        );
-    }
+    // A build from before sequences: 0003-0008, not 0009.
+    let before = page(Some(before_sequences())).await;
+    assert_eq!(rows(&before)[..2], [(9, update.clone()), (8, None)]);
+    assert_eq!(before["latest_compatible_version"], json!(8));
+    // A client that lists nothing draws nothing; a caller that sends no
+    // header at all (a tool) is shown everything.
+    let nothing = page(Some(String::new())).await;
+    assert!(rows(&nothing).iter().all(|r| r.1.is_some()), "{nothing}");
+    assert_eq!(nothing["latest_compatible_version"], Value::Null);
+    let tool = page(None).await;
+    assert!(rows(&tool).iter().all(|r| r.1.is_none()), "{tool}");
     let one = client()
-        .get(format!("{}/v1/apps/pixelfed_home/versions/2", pod.url))
+        .get(format!("{}/v1/apps/pixelfed_home/versions/5", pod.url))
+        .header(protocol::FEATURES_HEADER, protocol::features_header())
         .send()
         .await
         .unwrap()
         .json::<Value>()
         .await
         .unwrap();
-    assert_eq!(
-        (&one["schema"], &one["incompatible"]),
-        (&json!(2), &json!("update_required"))
-    );
+    assert_eq!(one["incompatible"], json!("retired"));
     assert!(one["layout"].is_object(), "still served to look at");
 }
 
@@ -990,32 +885,25 @@ async fn versions_say_whether_the_client_can_draw_them() {
 #[tokio::test]
 async fn apps_say_the_newest_version_the_client_can_draw() {
     let pod = pod().await;
-    let apps = |schema: Option<u32>| {
+    let apps = |features: Option<String>| {
         let mut req = client().get(format!("{}/v1/apps", pod.url));
-        if let Some(s) = schema {
-            req = req.header(protocol::SCHEMA_HEADER, s.to_string());
-            if s >= protocol::NAMED_SCHEMA {
-                req = req.header(protocol::FEATURES_HEADER, protocol::features_header());
-            }
+        if let Some(f) = features {
+            req = req.header(protocol::FEATURES_HEADER, f);
         }
         async move { req.send().await.unwrap().json::<Value>().await.unwrap() }
     };
-    for (schema, want) in [
-        (Some(protocol::SCHEMA_VERSION), 9),
-        (Some(12), 8),
-        (Some(10), 6),
-        (Some(9), 5),
-        (Some(8), 4),
-        (Some(7), 3),
-        (Some(2), 2),
-        (None, 1),
+    for (features, want) in [
+        (Some(protocol::features_header()), json!(9)),
+        (Some(before_sequences()), json!(8)),
+        (Some(String::new()), Value::Null),
+        (None, json!(9)),
     ] {
-        let body = apps(schema).await;
+        let body = apps(features.clone()).await;
         let a = &body["apps"][0];
         assert_eq!(
             (&a["latest_version"], &a["latest_compatible_version"]),
-            (&json!(9), &json!(want)),
-            "{schema:?}"
+            (&json!(9), &want),
+            "{features:?}"
         );
     }
 }
@@ -1029,10 +917,9 @@ fn newest_layouts_use_no_removed_vocabulary() {
     apps.dedup();
     assert!(apps.contains(&"pixelfed_home"), "{apps:?}");
     for app in apps {
-        let drawn = protocol::drawn_features();
         let removed: Vec<&str> = protocol::required_features(&newest_file(app))
             .into_iter()
-            .filter(|f| !drawn.contains(f))
+            .filter(|f| !protocol::FEATURES.contains(f))
             .collect();
         assert!(removed.is_empty(), "{app}: {removed:?}");
     }

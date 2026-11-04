@@ -128,8 +128,7 @@ fun updateRequiredFor(latest: Long?, compatible: Long?): Long? =
 fun updateHint(version: Long): String = "Update the app to see v$version"
 
 /**
- * One history row. [createdAt] is in epoch seconds (0 = unknown). [schema] is the client schema the version was
- * written for; [incompatible] is why this build can't draw it (`update_required`, `retired`, or another reason a newer
+ * One history row. [createdAt] is in epoch seconds (0 = unknown). [incompatible] is why this build can't draw it (`update_required`, `retired`, or another reason a newer
  * pod sends), null when it can (or the pod is too old to say).
  */
 data class AppVersionInfo(
@@ -137,7 +136,6 @@ data class AppVersionInfo(
     val createdAt: Long = 0,
     val source: String = "",
     val note: String? = null,
-    val schema: Long? = null,
     val incompatible: String? = null,
 ) {
     val compatible: Boolean get() = incompatible == null
@@ -269,7 +267,6 @@ object AppCatalogJson {
         createdAt = parseTimestamp(v["created_at"]),
         source = v.jStr("source").orEmpty(),
         note = v.jStr("note")?.takeIf { it.isNotBlank() },
-        schema = v.jLong("schema"),
         incompatible = incompatibility(v),
     )
 

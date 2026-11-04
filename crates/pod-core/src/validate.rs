@@ -622,10 +622,9 @@ pub fn custom_layout(
     }
     // Vocabulary current clients no longer draw (decision
     // `named-vocabulary`) is never written again.
-    let drawn = protocol::drawn_features();
     if let Some(f) = protocol::required_features(&node)
         .into_iter()
-        .find(|f| !drawn.contains(f))
+        .find(|f| protocol::REMOVED_FEATURES.contains(f))
     {
         let (key, hint) = match f {
             "create_dismiss" => (

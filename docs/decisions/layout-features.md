@@ -1,7 +1,7 @@
 # Additive layout vocabulary is a named feature, not a schema bump
 
-Extended by [named-vocabulary](named-vocabulary.md): the base vocabulary is named too, clients of schema 13
-list everything they draw, and vocabulary is removed by no longer listing it.
+Superseded in part by [named-vocabulary](named-vocabulary.md): the base vocabulary is named too and the
+schema number is gone; clients list everything they draw.
 
 Date: 2026-11-03. Related: D34, D36, D37, [decisions README](README.md).
 

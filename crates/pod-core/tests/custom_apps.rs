@@ -192,10 +192,6 @@ async fn call(
     let mut req = Request::builder()
         .method(method)
         .uri(path)
-        .header(
-            protocol::SCHEMA_HEADER,
-            protocol::SCHEMA_VERSION.to_string(),
-        )
         .header(protocol::FEATURES_HEADER, protocol::features_header());
     if let Some(t) = bearer {
         req = req.header("authorization", format!("Bearer {t}"));

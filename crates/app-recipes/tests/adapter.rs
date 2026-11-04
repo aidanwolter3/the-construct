@@ -40,23 +40,27 @@ fn layout_files_parse_and_validate() {
     let catalog = Catalog::new(adapters()).unwrap();
     let files = parse_files(&catalog, FILES).unwrap();
     assert_eq!(files.len(), FILES.len());
-    assert_eq!(files[0].schema, 3);
-    // The newest recipes layout (0005) pins the search box and chips
-    // (`core://Sticky`, schema 11).
-    assert_eq!(files.last().unwrap().schema, 11);
+    // The newest recipes layout (0005) pins the search box and chips.
+    assert!(
+        protocol::required_features(&files.last().unwrap().layout)
+            .contains(&protocol::feature::STICKY)
+    );
 }
 
 async fn get(state: &Arc<AppState>, path: &str) -> (StatusCode, serde_json::Value) {
-    get_as(state, path, protocol::SCHEMA_VERSION).await
+    get_as(state, path, &protocol::features_header()).await
 }
 
-async fn get_as(state: &Arc<AppState>, path: &str, schema: u32) -> (StatusCode, serde_json::Value) {
-    let mut req = Request::get(path).header(protocol::SCHEMA_HEADER, schema.to_string());
-    // A current client lists everything it draws (decision `named-vocabulary`).
-    if schema >= protocol::NAMED_SCHEMA {
-        req = req.header(protocol::FEATURES_HEADER, protocol::features_header());
-    }
-    let req = req.body(Body::empty()).unwrap();
+/// As a client drawing `features` (a [`protocol::FEATURES_HEADER`] value).
+async fn get_as(
+    state: &Arc<AppState>,
+    path: &str,
+    features: &str,
+) -> (StatusCode, serde_json::Value) {
+    let req = Request::get(path)
+        .header(protocol::FEATURES_HEADER, features)
+        .body(Body::empty())
+        .unwrap();
     let resp = pod_core::app(state.clone()).oneshot(req).await.unwrap();
     let status = resp.status();
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -102,31 +106,45 @@ async fn the_workspace_lists_every_recipe_and_a_screen_loads_one() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
-/// Schema 11 clients get the search box and chips pinned at the top (0005),
-/// schema 6 clients the coloured list with category chips (0004, D44),
-/// schema 5 clients the search box (0003, D43), schema 4 clients tappable
-/// rows (0002, D42) and schema 3 clients the "View" buttons (0001).
+/// A client gets the newest layout whose features it draws: with `sticky`
+/// the search box and chips pinned at the top (0005), without it the
+/// coloured list with category chips (0004, D44), and without `tappable` and
+/// `list_filter` the "View" buttons (0001).
 #[tokio::test]
-async fn each_schema_gets_the_newest_layout_it_draws() {
+async fn each_client_gets_the_newest_layout_it_draws() {
     let state = Arc::new(AppState::in_memory(adapters()));
-    for (schema, search, tappable) in [
-        (11, true, true),
-        (10, true, true),
-        (9, true, true),
-        (6, true, true),
-        (5, true, true),
-        (4, false, true),
-        (3, false, false),
+    let without = |missing: &[&str]| {
+        protocol::FEATURES
+            .iter()
+            .filter(|f| !missing.contains(f))
+            .copied()
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    for (missing, sticky_drawn, search, tappable) in [
+        (&[][..], true, true, true),
+        (&["sticky"][..], false, true, true),
+        (
+            &[
+                "sticky",
+                "tappable",
+                "list_filter",
+                "list_group_by",
+                "box",
+                "choice_chips",
+            ][..],
+            false,
+            false,
+            false,
+        ),
     ] {
-        let (status, body) = get_as(&state, "/v1/workspaces/recipes", schema).await;
+        let schema = format!("{missing:?}");
+        let (status, body) = get_as(&state, "/v1/workspaces/recipes", &without(missing)).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
-        let drawn = if schema == 9 || schema == 10 {
-            6
-        } else {
-            schema
-        };
-        assert_eq!(protocol::required_schema(&spec.workspace), drawn);
+        for f in protocol::required_features(&spec.workspace) {
+            assert!(!missing.contains(&f), "{schema}: {f}");
+        }
         let walk = spec.workspace.walk();
         let types: Vec<String> = walk.iter().map(|n| n.type_tag()).collect();
         // Schema 11: the search box and chips are pinned together.
@@ -134,7 +152,7 @@ async fn each_schema_gets_the_newest_layout_it_draws() {
             UiNode::Sticky { content } => Some(content.walk()),
             _ => None,
         });
-        assert_eq!(sticky.is_some(), schema >= 11, "schema {schema}");
+        assert_eq!(sticky.is_some(), sticky_drawn, "{schema}");
         if let Some(pinned) = sticky {
             assert!(pinned.iter().any(|n| matches!(n, UiNode::TextField { .. })));
             assert!(
@@ -146,12 +164,12 @@ async fn each_schema_gets_the_newest_layout_it_draws() {
         assert_eq!(
             types.iter().any(|t| t == "core://Tappable"),
             tappable,
-            "schema {schema}"
+            "{schema}"
         );
         assert_eq!(
             types.iter().any(|t| t == "core://Button"),
             !tappable,
-            "schema {schema}"
+            "{schema}"
         );
         let filter = walk.iter().find_map(|n| match n {
             UiNode::List {
@@ -159,7 +177,7 @@ async fn each_schema_gets_the_newest_layout_it_draws() {
             } => Some(f),
             _ => None,
         });
-        assert_eq!(filter.is_some(), search, "schema {schema}");
+        assert_eq!(filter.is_some(), search, "{schema}");
         if let Some(f) = filter {
             // The box edits the form value the filter reads, and the field exists.
             assert_eq!(f.value, "$form.q");
@@ -174,7 +192,7 @@ async fn each_schema_gets_the_newest_layout_it_draws() {
             UiNode::ChoiceChips { field, options, .. } => Some((field, options)),
             _ => None,
         });
-        assert_eq!(chips.is_some(), schema >= 6, "schema {schema}");
+        assert_eq!(chips.is_some(), search, "{schema}");
         if let Some((field, options)) = chips {
             // Every chip but "All" picks a category that has recipes, through
             // the list's `where`.

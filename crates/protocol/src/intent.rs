@@ -78,11 +78,10 @@ pub enum ActionIntent {
     /// `payload`. `position` puts the new entity at the start or end of its
     /// list.
     ///
-    /// `dismiss` (feature `create_dismiss`) was removed in schema 13
+    /// `dismiss` (feature `create_dismiss`) is removed
     /// (docs/decisions/named-vocabulary.md): layouts write `action.sequence
     /// [this create, action.navigation.back]`. The field stays only so the pod
-    /// serves the versions that use it, unchanged, to the older clients that
-    /// still draw it.
+    /// reads the old versions that use it and retires them.
     #[serde(rename = "action.mutation.create")]
     Create {
         query_key: String,

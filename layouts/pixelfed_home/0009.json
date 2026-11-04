@@ -1,6 +1,5 @@
 {
   "note": "Share closes the New post screen with action.sequence [create, back] instead of the create's dismiss option",
-  "schema": 12,
   "layout": {
     "type": "core://Workspace",
     "id": "pixelfed_home",

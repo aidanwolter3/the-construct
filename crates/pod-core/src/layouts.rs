@@ -16,13 +16,11 @@
 //! 1. Copy the newest file, e.g. `layouts/pixelfed_home/0001.json` to
 //!    `layouts/pixelfed_home/0002.json` (4 digits, the next number: numbering
 //!    is contiguous from 0001), and edit it. The format is
-//!    `{"note": "short changelog line", "schema": N, "layout": <UiNode>}`;
-//!    the layout root is the app's `core://Workspace` (id = the app id).
-//!    `schema` is the client schema the layout is written for: 12 for a new
-//!    file (at least what its vocabulary needs, [`protocol::required_schema`];
-//!    numbered vocabulary ends at 12, decision `named-vocabulary`, so 12 lets
-//!    every client that draws its features have it). Clients are served the
-//!    newest version they can draw ([`protocol::ClientCaps::can_draw`]).
+//!    `{"note": "short changelog line", "layout": <UiNode>}`; the layout root
+//!    is the app's `core://Workspace` (id = the app id). Clients are served
+//!    the newest version whose features they all draw
+//!    ([`protocol::ClientCaps::can_draw`], decision `named-vocabulary`).
+//!    Deployed files may still carry the `"schema"` of D36; it is ignored.
 //! 2. Nothing to list: the adapter's `build.rs` embeds every
 //!    `layouts/<app_id>/*.json` (`crates/pod-core/build_support/`). The
 //!    layout features a file uses are worked out, not declared
@@ -35,10 +33,9 @@
 //! refuses to start, naming the file and how to recover, if its content
 //! differs from what it recorded: [`file_hash`], the hash of the file's own
 //! note and layout JSON, independent of how the Rust types serialize it); add
-//! a new file instead. `schema` is not part of the hash (it was added to
-//! deployed files later) but is recorded and append-only too: to stop clients
-//! drawing old versions after a breaking schema change, add an entry to
-//! [`protocol::RETIRED`] rather than editing files. A gap in the numbering, a file that is not a valid
+//! a new file instead. To stop clients drawing old versions, remove the
+//! feature they use (move its file to `crates/protocol/features/removed/`)
+//! rather than editing files. A gap in the numbering, a file that is not a valid
 //! layout (structure checked by [`crate::validate::validate_structure`]), an
 //! unknown action intent tag, a root id that is not the app id, or a new file
 //! numbered below a deployed one also stop the start. A deployed file missing
@@ -116,8 +113,6 @@ pub struct LayoutFile {
     pub layout: UiNode,
     /// [`file_hash`] of the file's note and layout.
     pub file_hash: String,
-    /// The client schema the layout is written for (`"schema"`).
-    pub schema: u32,
     /// Named parts other layouts may reference (`"parts"`, decision
     /// `layout-parts`).
     pub parts: std::collections::BTreeMap<String, UiNode>,
@@ -132,7 +127,6 @@ impl LayoutFile {
             note: self.note.clone(),
             json: to_json(&self.layout),
             file_hash: self.file_hash.clone(),
-            schema: self.schema,
             meta_json: (!self.parts.is_empty()).then(|| {
                 let parts: serde_json::Map<String, Value> = self
                     .parts
@@ -260,16 +254,14 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
     let doc: Value =
         serde_json::from_str(src.text).map_err(|e| fail(format!("not valid JSON: {e}")))?;
     let Value::Object(obj) = &doc else {
-        return Err(fail(
-            r#"expected {"note": "...", "schema": N, "layout": {...}}"#.into(),
-        ));
+        return Err(fail(r#"expected {"note": "...", "layout": {...}}"#.into()));
     };
     if let Some(k) = obj
         .keys()
         .find(|k| !matches!(k.as_str(), "note" | "schema" | "layout" | "parts"))
     {
         return Err(fail(format!(
-            "unknown key '{k}' (only \"note\", \"schema\", \"layout\" and \"parts\")"
+            "unknown key '{k}' (only \"note\", \"layout\" and \"parts\")"
         )));
     }
     let note = obj
@@ -314,25 +306,8 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
     // `custom-apps-and-data-sources`).
     crate::source::check_routes(&parsed, &catalog.app_sources(src.app_id))
         .map_err(|e| fail(format!("invalid layout: {e}")))?;
-    let schema = obj
-        .get("schema")
-        .and_then(Value::as_u64)
-        .and_then(|n| u32::try_from(n).ok())
-        .filter(|n| (1..=protocol::LAYOUT_SCHEMA).contains(n))
-        .ok_or_else(|| {
-            fail(format!(
-                "\"schema\" must be the client schema the layout is written for, 1..={} \
-                 (normally {}: newer vocabulary is named features, not numbers)",
-                protocol::LAYOUT_SCHEMA,
-                protocol::LAYOUT_SCHEMA
-            ))
-        })?;
-    let needs = protocol::required_schema(&parsed);
-    if needs > schema {
-        return Err(fail(format!(
-            "\"schema\" is {schema} but the layout uses vocabulary from schema {needs}"
-        )));
-    }
+    // `"schema"` (D36): deployed files keep it, so it is allowed and not
+    // read; features replaced it (decision `named-vocabulary`).
     let raw_parts = obj.get("parts");
     let mut parts = std::collections::BTreeMap::new();
     if let Some(p) = raw_parts {
@@ -355,12 +330,6 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
             }
             crate::source::check_routes(&node, &catalog.app_sources(src.app_id))
                 .map_err(|e| fail(format!("part '{name}': {e}")))?;
-            let needs = protocol::required_schema(&node);
-            if needs > schema {
-                return Err(fail(format!(
-                    "part '{name}' uses vocabulary from schema {needs}, above the file's {schema}"
-                )));
-            }
             parts.insert(name.clone(), node);
         }
     }
@@ -373,7 +342,6 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
         note,
         layout: parsed,
         file_hash,
-        schema,
     })
 }
 
@@ -402,8 +370,7 @@ pub fn parse_files(catalog: &Catalog, sources: &[LayoutSource]) -> Result<Vec<La
 }
 
 /// Append every new layout file of the catalog's apps (one transaction) to
-/// the store, and record the declared schema of files deployed before it
-/// existed; see the module docs. Blocking; idempotent. `Err` is the message
+/// the store; see the module docs. Blocking; idempotent. `Err` is the message
 /// to stop the start with.
 pub fn sync(store: &Store, catalog: &Catalog) -> Result<SyncReport, String> {
     sync_sources(store, catalog, catalog.files())
@@ -493,29 +460,21 @@ pub fn active(
     }
 }
 
-/// The client's schema version from [`protocol::SCHEMA_HEADER`] (1 when
-/// absent or unreadable: clients from before screens send none).
-pub fn client_schema(headers: &HeaderMap) -> u32 {
-    headers
-        .get(protocol::SCHEMA_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.trim().parse().ok())
-        .filter(|v: &u32| *v >= 1)
-        .unwrap_or(1)
-}
-
-/// What the client draws: its schema ([`client_schema`]) and the features in
-/// [`protocol::FEATURES_HEADER`] (none when absent).
+/// What the client draws: the features in [`protocol::FEATURES_HEADER`].
+/// Without the header the caller is a tool, not a client
+/// ([`protocol::ClientCaps::unfiltered`]): it gets the latest version.
 pub fn client_caps(headers: &HeaderMap) -> protocol::ClientCaps {
-    let features = headers
+    match headers
         .get(protocol::FEATURES_HEADER)
         .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-    protocol::ClientCaps::schema(client_schema(headers)).with_features_header(features)
+    {
+        Some(features) => protocol::ClientCaps::from_header(features),
+        None => protocol::ClientCaps::unfiltered(),
+    }
 }
 
-/// The newest version of an app `client` can draw (by the version's declared
-/// schema and the features it uses, [`AppVersion::compatibility`]): metadata
+/// The newest version of an app `client` can draw (by the features it uses,
+/// [`AppVersion::compatibility`]): metadata
 /// only. `None` if the app has no version that fits. Blocking.
 pub fn newest_compatible(
     store: &Store,
@@ -564,7 +523,6 @@ pub fn active_for(
             app = workspace_id,
             latest = latest.version,
             served = v.version,
-            schema = client.schema,
             missing = ?latest
                 .features
                 .iter()
@@ -708,8 +666,8 @@ async fn known_app(state: &Arc<AppState>, id: &str) -> Result<String, Response> 
     }
 }
 
-/// One version's metadata for `client`: `schema` (what it was written for),
-/// `features` (the layout features it uses, when any), `compatible`, and
+/// One version's metadata for `client`: `features` (the layout features it
+/// uses), `compatible`, and
 /// `incompatible` (`update_required` | `retired`) when the client cannot draw
 /// it.
 fn version_json(v: &AppVersion, client: &protocol::ClientCaps) -> Value {
@@ -718,7 +676,6 @@ fn version_json(v: &AppVersion, client: &protocol::ClientCaps) -> Value {
         "version": v.version,
         "created_at": rfc3339(v.created_at),
         "source": v.source,
-        "schema": v.schema(),
         "compatible": compat.reason().is_none(),
     });
     if let Some(n) = &v.note {
@@ -742,7 +699,7 @@ fn version_json(v: &AppVersion, client: &protocol::ClientCaps) -> Value {
 /// oldest first. Hidden apps (`PUT /v1/apps/:id/hidden`) are listed only
 /// with `?all=1`. Dev apps only with `CONSTRUCT_SHOW_DEV_APPS=1`.
 /// `latest_compatible_version` is the newest version the client
-/// ([`protocol::SCHEMA_HEADER`], [`protocol::FEATURES_HEADER`]) can draw,
+/// ([`protocol::FEATURES_HEADER`]) can draw,
 /// i.e. what opening the app serves it (null if none fits).
 async fn list_apps(
     State(state): State<Arc<AppState>>,
@@ -822,11 +779,11 @@ fn bad_query() -> Response {
 
 /// `GET /v1/apps/:id/versions[?limit=1..=100 (20)&before=N]` ->
 /// `{app_id, latest_version, latest_compatible_version, versions: [{version,
-/// created_at, source, note?, schema, features?, compatible, incompatible?}],
+/// created_at, source, note?, features?, compatible, incompatible?}],
 /// next_before?}` newest first; `next_before` iff older versions exist (pass
 /// it as `before` for the next page). `compatible` and
 /// `latest_compatible_version` are for the client's
-/// [`protocol::SCHEMA_HEADER`] and [`protocol::FEATURES_HEADER`].
+/// [`protocol::FEATURES_HEADER`].
 async fn app_versions(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -886,7 +843,7 @@ async fn app_versions(
 }
 
 /// `GET /v1/apps/:id/versions/:n` -> `{app_id, version, created_at, source,
-/// note?, schema, features?, compatible, incompatible?, layout}` (the layout is served
+/// note?, features?, compatible, incompatible?, layout}` (the layout is served
 /// even when incompatible: it is history to look at).
 async fn app_version(
     State(state): State<Arc<AppState>>,
@@ -1099,38 +1056,30 @@ fn workspace_not_found(id: &str) -> Response {
 }
 
 /// The version a layout event announces to a subscriber: the newest one
-/// `client` can draw ([`newest_compatible`]), or the app's latest when the
-/// subscriber sent no [`protocol::SCHEMA_HEADER`] (engines from before D38
-/// send none on the events channel but draw schema 2 or 3, so treating them as
-/// schema 1 would hide new versions from them). Blocking.
+/// `client` can draw ([`newest_compatible`]). Blocking.
 fn announced_version(
     store: &Store,
     app_id: &str,
-    client: Option<&protocol::ClientCaps>,
+    client: &protocol::ClientCaps,
 ) -> rusqlite::Result<Option<i64>> {
-    Ok(match client {
-        Some(client) => newest_compatible(store, app_id, client)?,
-        None => store.app_latest_meta(app_id)?,
-    }
-    .map(|v| v.version))
+    Ok(newest_compatible(store, app_id, client)?.map(|v| v.version))
 }
 
 async fn announced_async(
     state: &Arc<AppState>,
     app_id: &str,
-    client: Option<protocol::ClientCaps>,
+    client: protocol::ClientCaps,
 ) -> Result<Option<i64>, ApiError> {
     let id = app_id.to_owned();
-    blocking(state, move |s| announced_version(s, &id, client.as_ref())).await
+    blocking(state, move |s| announced_version(s, &id, &client)).await
 }
 
 /// `GET /v1/workspaces/:id/events` (SSE). First message: the current
 /// version; then one `layout` event (`{workspace_id, version}`) each time a
 /// new version of this app changes what the subscriber would be served; a
-/// `: keepalive` comment every [`AppState::sse_keepalive`]. With
-/// [`protocol::SCHEMA_HEADER`] the version is the newest one that client can
-/// draw, so a version it can't draw causes no event (and no refetch); without
-/// it, the app's latest ([`announced_version`]). New versions normally arrive
+/// `: keepalive` comment every [`AppState::sse_keepalive`]. The version is
+/// the newest one the client ([`protocol::FEATURES_HEADER`]) can draw, so a
+/// version it can't draw causes no event (and no refetch). New versions normally arrive
 /// with a deploy (a restart), so clients mostly see the first message after
 /// reconnecting.
 ///
@@ -1192,9 +1141,7 @@ async fn events(
     // which sources this app draws on.
     let session_hash = caller.session().map(|s| s.token_hash.clone());
     let sources = state.sources_of(&app);
-    let client = headers
-        .contains_key(protocol::SCHEMA_HEADER)
-        .then(|| client_caps(&headers));
+    let client = client_caps(&headers);
     // Subscribe before reading the current version so nothing published in
     // between is missed (a duplicate version is harmless to clients).
     let rx = state.subscribe_layouts();
@@ -1210,7 +1157,7 @@ async fn events(
         /// The app was deleted: the `deleted` event went out, end.
         done: bool,
         sent: i64,
-        client: Option<protocol::ClientCaps>,
+        client: protocol::ClientCaps,
         rx: broadcast::Receiver<LayoutEvent>,
         notify_rx: Option<broadcast::Receiver<NotifyEvent>>,
         _live: Option<crate::notify::LiveDevice>,
