@@ -1,5 +1,5 @@
-//! The `recipes_*` tables: schema, the one-time import, and the reads behind
-//! the app (docs/DECISIONS.md D41).
+//! The `recipes_*` tables: schema, imports, and the reads behind the app
+//! (docs/DECISIONS.md D41).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -16,8 +16,10 @@ use crate::format::{self, Ingredient, UnitNames};
 pub static MIGRATIONS: &[Migration] = &[
     // 1: the schema and the units.
     Migration::Sql(SCHEMA),
-    // 2: import the family collection (data/import-0001.json, frozen).
-    Migration::Rust(import_0001),
+    // 2: imported the family collection until decision
+    // `recipes-start-empty`; now a no-op. Pods that ran it keep the recipes,
+    // new pods start with none. Kept so the step numbers stay the same.
+    Migration::Rust(retired_import),
 ];
 
 const SCHEMA: &str = "
@@ -137,12 +139,29 @@ CREATE INDEX recipes_steps_by_group ON recipes_steps(group_id);
 
 // ---------- import ----------
 
-/// The first import: 81 recipes in 8 categories, made from the family
-/// recipe PDF by `scripts/recipes_from_pdf.py`. Frozen once deployed:
-/// corrections go in a new migration.
-pub static IMPORT_0001: &str = include_str!("../data/import-0001.json");
+/// The former step 2 (the family collection import): does nothing now
+/// (decision `recipes-start-empty`).
+fn retired_import(_tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    Ok(())
+}
 
-/// An import file (`data/import-*.json`).
+/// Made-up recipes for tests, one per category the layouts' chips name. Not
+/// loaded by any migration: tests call [`seed_test_recipes`].
+pub static TEST_SEED: &str = include_str!("../data/test-seed.json");
+
+/// Add [`TEST_SEED`] to a pod's recipes, unless it already has some. For
+/// tests only.
+pub fn seed_test_recipes(conn: &Connection) -> rusqlite::Result<()> {
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM recipes", [], |r| r.get(0))?;
+    if n > 0 {
+        return Ok(());
+    }
+    let file = parse_import(TEST_SEED)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    import(conn, &file)
+}
+
+/// An import file (see `data/test-seed.json`).
 #[derive(Debug, Deserialize)]
 pub struct ImportFile {
     pub categories: Vec<ImportCategory>,
@@ -223,20 +242,6 @@ pub struct ImportStep {
 /// Parse an import file.
 pub fn parse_import(json: &str) -> serde_json::Result<ImportFile> {
     serde_json::from_str(json)
-}
-
-/// The pod setting that turns the family import off (`"0"`, D46): a pod
-/// host sets it for every pod except those created to hold the collection.
-/// Unset (a pod from before D46, a single-pod server, tests): imported.
-pub const IMPORT_FAMILY_SETTING: &str = "recipes.import_family";
-
-fn import_0001(tx: &Transaction<'_>) -> rusqlite::Result<()> {
-    if pod_core::store::pod_setting_on(tx, IMPORT_FAMILY_SETTING)?.as_deref() == Some("0") {
-        return Ok(());
-    }
-    let file = parse_import(IMPORT_0001)
-        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-    import(tx, &file)
 }
 
 /// Insert every category and recipe of `file`.
@@ -813,7 +818,7 @@ mod tests {
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(SCHEMA).unwrap();
-        import(&conn, &parse_import(IMPORT_0001).unwrap()).unwrap();
+        seed_test_recipes(&conn).unwrap();
         conn
     }
 
@@ -824,51 +829,55 @@ mod tests {
     #[test]
     fn recipes_carry_display_fields() {
         let conn = db();
-        let bundle = recipe_screen(&conn, "quiche-lorraine").unwrap().unwrap();
-        let r = &bundle.entities["recipes://recipes/quiche-lorraine"];
+        let bundle = recipe_screen(&conn, "placeholder-pot-pie")
+            .unwrap()
+            .unwrap();
+        let r = &bundle.entities["recipes://recipes/placeholder-pot-pie"];
         let get = |e: &EntityRecord, f: &str| e.get(f).cloned().unwrap_or_default();
         assert_eq!(get(r, "category_short"), "Main Dishes");
         assert_eq!(get(r, "color"), "#FBE6DF");
-        assert_eq!(get(r, "initial"), "Q");
+        assert_eq!(get(r, "initial"), "P");
         assert_eq!(get(r, "meta"), "9 ingredients · 425°F · 55 min");
         assert_eq!(get(r, "ingredient_count"), 9);
         assert_eq!(get(r, "step_count"), 7);
         assert_eq!(get(r, "oven_short"), "425°");
         assert_eq!(get(r, "time_short"), "55m");
-        let ingredients: Vec<_> = bundle.queries["recipe:quiche-lorraine:ingredients"]
+        let ingredients: Vec<_> = bundle.queries["recipe:placeholder-pot-pie:ingredients"]
             .iter()
             .map(|u| &bundle.entities[u])
             .collect();
-        assert_eq!(get(ingredients[0], "amount"), "12 slices");
-        assert_eq!(get(ingredients[0], "thing"), "bacon");
-        assert_eq!(get(ingredients[0], "details"), "crisply fried");
+        assert_eq!(get(ingredients[0], "amount"), "2 cups");
+        assert_eq!(get(ingredients[0], "thing"), "cooked chicken");
+        assert_eq!(get(ingredients[0], "details"), "diced");
         assert_eq!(get(ingredients[2], "amount"), "⅓ cup");
+        assert_eq!(get(ingredients[6], "amount"), "½ cup + 2 Tbsp");
+        assert_eq!(get(ingredients[6], "details"), "divided");
+        assert_eq!(
+            get(ingredients[7], "thing"),
+            "large lemon or 2 small lemons"
+        );
         assert_eq!(get(ingredients[8], "amount"), "1 (9\")");
-        let steps: Vec<_> = bundle.queries["recipe:quiche-lorraine:steps"]
+        let steps: Vec<_> = bundle.queries["recipe:placeholder-pot-pie:steps"]
             .iter()
             .map(|u| &bundle.entities[u])
             .collect();
         assert_eq!(get(steps[4], "temp_text"), "425°F");
-        assert_eq!(get(steps[4], "time_text"), "15 min");
+        assert_eq!(get(steps[4], "time_text"), "30 min");
         assert!(steps[1].get("temp_text").is_none());
-        // Without an oven or a time, the yield fills the meta line.
         let all = all_recipes(&conn).unwrap();
-        let meatballs = &all.entities["recipes://recipes/meatballs"];
-        assert_eq!(get(meatballs, "meta"), "7 ingredients · 400°F · 40 min");
-        let bars = all
-            .entities
-            .values()
-            .find(|e| get(e, "title") == "Homemade Peanut Butter Cups")
-            .unwrap();
-        assert_eq!(get(bars, "meta"), "6 ingredients · Makes 3 dozen");
-        assert_eq!(get(bars, "time_short"), "–");
+        let brownies = &all.entities["recipes://recipes/example-brownies"];
+        assert_eq!(get(brownies, "meta"), "6 ingredients · 350°F · 25 min");
+        // Without an oven or a time, the yield fills the meta line.
+        let mix = &all.entities["recipes://recipes/imaginary-trail-mix"];
+        assert_eq!(get(mix, "meta"), "4 ingredients · Makes 4 cups");
+        assert_eq!(get(mix, "time_short"), "–");
         assert_eq!(short_category("Snacks/Confections"), "Snacks/Confections");
     }
 
     #[test]
-    fn the_import_has_81_recipes_in_8_categories() {
+    fn the_test_seed_has_a_recipe_in_each_of_8_categories() {
         let conn = db();
-        assert_eq!(count(&conn, "SELECT COUNT(*) FROM recipes"), 81);
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM recipes"), 8);
         assert_eq!(count(&conn, "SELECT COUNT(*) FROM recipes_categories"), 8);
         assert_eq!(
             count(
@@ -890,31 +899,17 @@ mod tests {
             0,
             "every unit is a known unit"
         );
+        // Seeding again adds nothing.
+        seed_test_recipes(&conn).unwrap();
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM recipes"), 8);
     }
 
-    /// Formatting the stored fields gives back the recipe file's lines, so no
+    /// Formatting the stored fields gives back the import file's lines, so no
     /// ingredient lost anything in the import.
     #[test]
     fn ingredients_format_back_to_the_source_lines() {
-        // Lines the formatter writes in its own order (a note moves to the end),
-        // or that name the alternative's thing in the first choice too.
-        let reworded: HashMap<&str, &str> = [
-            (
-                "3 medium eggplants (about 3 1/2 lb total), sliced crosswise into 1/2\"-thick rounds",
-                "3 medium eggplants, sliced crosswise into 1/2\"-thick rounds (about 3 1/2 lb total)",
-            ),
-            (
-                "2 cups (12 oz) semisweet chocolate chips",
-                "2 cups semisweet chocolate chips (12 oz)",
-            ),
-            (
-                "1 large or 2 small lemons, peeled and seeded",
-                "1 large lemon or 2 small lemons, peeled and seeded",
-            ),
-        ]
-        .into();
         let conn = db();
-        let file = parse_import(IMPORT_0001).unwrap();
+        let file = parse_import(TEST_SEED).unwrap();
         let mut checked = 0;
         for r in &file.recipes {
             let bundle = recipe_screen(&conn, &r.slug).unwrap().unwrap();
@@ -926,47 +921,45 @@ mod tests {
                 .ingredient_groups
                 .iter()
                 .flat_map(|g| &g.ingredients)
-                .map(|i| {
-                    let line = i.line.as_deref().unwrap();
-                    reworded.get(line).copied().unwrap_or(line)
-                })
+                .map(|i| i.line.as_deref().unwrap())
                 .collect();
             assert_eq!(got, want, "{}", r.title);
             checked += got.len();
         }
-        assert!(checked > 600, "{checked}");
+        assert!(checked > 40, "{checked}");
     }
 
     #[test]
     fn a_recipe_screen_has_sections_groups_and_notes() {
         let conn = db();
-        let b = recipe_screen(&conn, "harvest-salad").unwrap().unwrap();
-        let recipe = &b.entities["recipes://recipes/harvest-salad"];
-        assert_eq!(recipe.get_str("title"), Some("Harvest Salad"));
-        assert_eq!(recipe.get_str("yield_text"), Some("Serves 8-10"));
+        let slug = "test-garden-salad";
+        let b = recipe_screen(&conn, slug).unwrap().unwrap();
+        let recipe = &b.entities["recipes://recipes/test-garden-salad"];
+        assert_eq!(recipe.get_str("title"), Some("Test Garden Salad"));
+        assert_eq!(recipe.get_str("yield_text"), Some("Serves 4-6"));
 
         let items = |q: String| -> Vec<&EntityRecord> {
             b.queries[&q].iter().map(|u| &b.entities[u]).collect()
         };
-        let ing = items(ingredients_query("harvest-salad"));
+        let ing = items(ingredients_query(slug));
         assert_eq!(ing[0].get_str("section"), Some("Ingredients"));
         assert_eq!(ing[0].get_str("group"), Some("Salad"));
         assert_eq!(
             ing[0].get_str("text"),
-            Some("1 lb shaved Brussels sprouts, stems removed")
+            Some("1 head romaine lettuce, chopped")
         );
         let groups: Vec<&str> = ing.iter().filter_map(|e| e.get_str("group")).collect();
-        assert_eq!(groups, ["Salad", "Vinaigrette", "Candied Pecans"]);
+        assert_eq!(groups, ["Salad", "Dressing", "Croutons"]);
         assert!(ing[1..].iter().all(|e| e.get("section").is_none()));
 
-        let steps = items(steps_query("harvest-salad"));
+        let steps = items(steps_query(slug));
         assert_eq!(steps[0].get_str("section"), Some("Instructions"));
         assert_eq!(steps[0].get("group"), None);
-        assert_eq!(steps[4].get_str("group"), Some("For the candied pecans"));
+        assert_eq!(steps[4].get_str("group"), Some("For the croutons"));
         let numbers: Vec<i64> = steps.iter().map(|e| e.get_i64("number").unwrap()).collect();
-        assert_eq!(numbers, [1, 2, 3, 4, 1, 2, 3]);
+        assert_eq!(numbers, [1, 2, 3, 4, 1, 2]);
 
-        let notes = items(notes_query("harvest-salad"));
+        let notes = items(notes_query(slug));
         assert_eq!(notes.len(), 2);
         assert_eq!(notes[0].get_str("section"), Some("Notes"));
 
@@ -981,12 +974,12 @@ mod tests {
                 "SELECT s.temp_f, s.time_min, s.time_max FROM recipes_steps s
                  JOIN recipes_instruction_groups g ON g.id = s.group_id
                  JOIN recipes r ON r.id = g.recipe_id
-                 WHERE r.slug = 'brownie-pudding' AND s.text LIKE 'Bake%'",
+                 WHERE r.slug = 'example-brownies' AND s.text LIKE 'Bake%'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap();
-        assert_eq!((temp, lo, hi), (Some(350), Some(40), Some(45)));
+        assert_eq!((temp, lo, hi), (Some(350), Some(25), Some(30)));
     }
 
     #[test]
@@ -994,7 +987,7 @@ mod tests {
         let conn = db();
         let b = all_recipes(&conn).unwrap();
         let order = &b.queries[ALL_QUERY];
-        assert_eq!(order.len(), 81);
+        assert_eq!(order.len(), 8);
         let headers: Vec<&str> = order
             .iter()
             .filter_map(|u| b.entities[u].get_str("category_header"))
@@ -1012,7 +1005,7 @@ mod tests {
                 "Drinks",
             ]
         );
-        // Search finds recipes by ingredient (D43): only one uses rhubarb.
+        // Search finds recipes by ingredient (D43): only one uses hibiscus.
         let with = |word: &str| -> Vec<&str> {
             order
                 .iter()
@@ -1026,8 +1019,11 @@ mod tests {
                 .map(|u| u.strip_prefix(RECIPE_PREFIX).unwrap())
                 .collect()
         };
-        assert_eq!(with("rhubarb"), ["rhubarb-crunch"]);
-        assert!(with("butter").len() > 10);
+        assert_eq!(with("hibiscus"), ["pretend-lemonade"]);
+        assert_eq!(
+            with("flour"),
+            ["example-brownies", "demo-pancakes", "mock-loaf"]
+        );
         // Slugs are valid route parameters.
         for u in order {
             let slug = u.strip_prefix(RECIPE_PREFIX).unwrap();

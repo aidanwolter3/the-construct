@@ -1,7 +1,7 @@
 //! Claude through MCP (decision `mcp-connector`), through the real host: OAuth
 //! discovery, registration, the pod-code page, the code exchange with PKCE, the
 //! scoped credential (only `/v1/mcp`), every tool against a pod with the
-//! recipes, and that rotation keeps and revocation ends the connection.
+//! made-up test recipes, and that rotation keeps and revocation ends the connection.
 
 use std::sync::Arc;
 
@@ -10,7 +10,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use server::PixelfedConfig;
-use server::host::{Host, HostConfig, PodKind};
+use server::host::{Host, HostConfig};
 use sha2::{Digest, Sha256};
 use tokio::task::JoinHandle;
 
@@ -35,10 +35,7 @@ async fn env() -> Env {
         86_400,
         false,
     );
-    let config = HostConfig {
-        new_pod_settings: server::new_pod_settings(false),
-        ..HostConfig::default()
-    };
+    let config = HostConfig::default();
     let path = dir.path().to_owned();
     let host = tokio::task::spawn_blocking(move || Host::open(&path, factory, config))
         .await
@@ -67,12 +64,20 @@ fn client() -> reqwest::Client {
 }
 
 impl Env {
-    /// An admin pod with the family recipes; its pod token.
+    /// An admin pod with the made-up test recipes (a seeded single-pod
+    /// database, adopted); its pod token.
     async fn pod(&self, name: &str) -> String {
         let host = self.host.clone();
         let name = name.to_owned();
         tokio::task::spawn_blocking(move || {
-            host.create_pod(&name, PodKind::Admin, None, &server::new_pod_settings(true))
+            let old = tempfile::tempdir().unwrap();
+            let state = server::open_dir(old.path()).unwrap();
+            state
+                .store()
+                .with_conn(app_recipes::db::seed_test_recipes)
+                .unwrap();
+            drop(state);
+            host.adopt(&name, &old.path().join("server.db"))
                 .unwrap()
                 .token
         })

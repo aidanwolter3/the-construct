@@ -1,4 +1,4 @@
 # Seed output (access tokens) is local-only.
 .seed/
-# Generated secrets for a publicly reachable instance (dev/hetzner/provision.sh --pixelfed-domain).
+# Secrets of the retired public-instance setup (no longer read); ignored so a leftover copy is never committed.
 pixelfed.local.env
