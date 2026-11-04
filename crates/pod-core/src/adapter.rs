@@ -401,6 +401,7 @@ fn default_signed_out(sign_in: &str, app: &AppInfo) -> WorkspaceSpec {
             id: app.id.into(),
             title: app.title.into(),
             screens: Vec::new(),
+            chrome: Default::default(),
             slots: vec![SlotSpec {
                 slot_id: "auth".into(),
                 provider_uri: format!("core://auth/{sign_in}"),

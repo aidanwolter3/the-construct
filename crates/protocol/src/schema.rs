@@ -60,7 +60,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::{ActionIntent, Align, Position, TextStyle, UiNode};
+use crate::{ActionIntent, Align, Chrome, Position, TextStyle, UiNode};
 
 include!(concat!(env!("OUT_DIR"), "/features.rs"));
 
@@ -203,8 +203,38 @@ pub fn required_features(node: &UiNode) -> Vec<&'static str> {
 /// feature, e.g. `if let UiNode::Foo { .. } = node { out.insert(feature::FOO); }`
 /// (`crates/protocol/features/README.md`).
 fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
-    if let UiNode::Progress { .. } = node {
-        out.insert(crate::feature::PROGRESS);
+    use crate::feature;
+    match node {
+        UiNode::Progress { .. } => {
+            out.insert(feature::PROGRESS);
+        }
+        UiNode::Backdrop { .. } => {
+            out.insert(feature::BACKDROP);
+        }
+        UiNode::Clock { .. } => {
+            out.insert(feature::CLOCK);
+        }
+        UiNode::Swipe { .. }
+        | UiNode::Tappable {
+            on_long_press: Some(_),
+            ..
+        } => {
+            out.insert(feature::GESTURES);
+        }
+        UiNode::OnAppear { .. } => {
+            out.insert(feature::ON_APPEAR);
+        }
+        UiNode::TextField {
+            autofocus: true, ..
+        } => {
+            out.insert(feature::AUTOFOCUS);
+        }
+        UiNode::Workspace { chrome, screens, .. }
+            if *chrome == Chrome::Hidden || screens.iter().any(|s| s.chrome == Chrome::Hidden) =>
+        {
+            out.insert(feature::HIDDEN_CHROME);
+        }
+        _ => {}
     }
 }
 
@@ -219,6 +249,15 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
         }
         ActionIntent::OpenLink { .. } => {
             out.insert(crate::feature::OPEN_LINK);
+        }
+        ActionIntent::OpenApp { .. } => {
+            out.insert(crate::feature::APP_OPEN);
+        }
+        ActionIntent::LaunchDeviceApp { .. } => {
+            out.insert(crate::feature::DEVICE_APPS);
+        }
+        ActionIntent::OpenShell { .. } => {
+            out.insert(crate::feature::HIDDEN_CHROME);
         }
         _ => {}
     }

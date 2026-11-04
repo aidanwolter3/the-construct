@@ -115,6 +115,7 @@ pub fn signed_out(config: &PixelfedConfig, app_id: &str, title: &str) -> Workspa
             id: app_id.into(),
             title: title.into(),
             screens: Vec::new(),
+            chrome: Default::default(),
             slots: vec![SlotSpec {
                 slot_id: "auth".into(),
                 provider_uri: "pixelfed://auth".into(),

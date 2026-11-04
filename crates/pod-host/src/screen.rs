@@ -59,6 +59,7 @@ pub fn open_your_pod(id: &str, temporary_hours: Option<u64>) -> WorkspaceSpec {
             id: id.into(),
             title: "The Construct".into(),
             screens: Vec::new(),
+            chrome: Default::default(),
             slots: vec![SlotSpec {
                 slot_id: "pod".into(),
                 provider_uri: "construct://pod".into(),

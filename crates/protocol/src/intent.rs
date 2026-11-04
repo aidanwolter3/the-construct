@@ -121,6 +121,24 @@ pub enum ActionIntent {
     #[serde(rename = "action.link.open")]
     OpenLink { url: String },
 
+    /// Feature `app_open`: show the pod's app `app_id` (usually a binding
+    /// such as `$item.id`), as if picked from the client's app list.
+    /// Handled by the client; nothing is sent to the pod.
+    #[serde(rename = "action.app.open")]
+    OpenApp { app_id: String },
+
+    /// Feature `device_apps`: start the app `package` installed on this
+    /// device (an entry of the client-filled `device:apps` query). Handled by
+    /// the client; a device without such an app does nothing.
+    #[serde(rename = "action.device.launch")]
+    LaunchDeviceApp { package: String },
+
+    /// Feature `hidden_chrome`: open one of the client's own panels
+    /// (`menu`: apps, versions and Settings; `inbox`: notifications), for
+    /// layouts that hide the client's buttons.
+    #[serde(rename = "action.shell.open")]
+    OpenShell { panel: ShellPanel },
+
     /// Any intent tag this build does not know, e.g. the removed
     /// `action.agent.prompt` (D32), which AI edits could put into layouts
     /// that legacy app versions still hold. Deserializing one drops its
@@ -156,6 +174,14 @@ pub enum PresentationMode {
     Push,
     Modal,
     Replace,
+}
+
+/// A client panel `action.shell.open` opens.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ShellPanel {
+    Menu,
+    Inbox,
 }
 
 /// Where `action.mutation.create` puts its new entity in the list (schema 9).

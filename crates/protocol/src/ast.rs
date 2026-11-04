@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::intent::ActionIntent;
 
 /// Node types this build knows (an other type is [`UiNode::Unknown`]).
-pub const NODE_TYPES: [&str; 22] = [
+pub const NODE_TYPES: [&str; 26] = [
     "core://Workspace",
     "core://Container",
     "core://Text",
@@ -38,6 +38,10 @@ pub const NODE_TYPES: [&str; 22] = [
     "core://MediaPicker",
     "core://Sticky",
     "core://Progress",
+    "core://Backdrop",
+    "core://Clock",
+    "core://Swipe",
+    "core://OnAppear",
 ];
 
 /// Icon names clients draw (`core://IconButton`, `core://Chip`).
@@ -92,6 +96,11 @@ pub enum UiNode {
         /// screens ignore it.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         screens: Vec<Screen>,
+        /// Feature `hidden_chrome`: `hidden` draws only the slots, filling
+        /// the screen without the title, scrolling or the client's own buttons
+        /// over the corners (a launcher's home screen). Default `full`.
+        #[serde(default, skip_serializing_if = "Chrome::is_full")]
+        chrome: Chrome,
     },
     #[serde(rename = "core://Container")]
     Container {
@@ -185,6 +194,10 @@ pub enum UiNode {
         on_submit: Option<ActionIntent>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         lines: Option<u32>,
+        /// Feature `autofocus`: focus the field (and show the keyboard) when
+        /// it first appears, e.g. a search box on a screen opened for search.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        autofocus: bool,
     },
 
     // Schema 3 (docs/DECISIONS.md D36)
@@ -304,6 +317,10 @@ pub enum UiNode {
     Tappable {
         on_click: ActionIntent,
         content: Box<UiNode>,
+        /// Feature `gestures`: dispatched on a long press instead of
+        /// `on_click`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_long_press: Option<ActionIntent>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         content_description: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -394,6 +411,57 @@ pub enum UiNode {
         size_dp: Option<u16>,
     },
 
+    // Feature `backdrop` (crates/protocol/features/backdrop.md)
+    /// A dark sketchpad surface that fills the space it is given: `background`
+    /// (default `#0A0C0F`) under a grid of `cell_dp` squares (default 36)
+    /// tilted back by `tilt_deg` (0..=60, default 36) in `grid_color`
+    /// (default `#7CC8DA`), fading out at the edges. `content` scrolls over it
+    /// and `footer` stays at the bottom. Everything inside is drawn in a dark
+    /// theme (light text, `grid_color` as the accent).
+    #[serde(rename = "core://Backdrop")]
+    Backdrop {
+        content: Box<UiNode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        footer: Option<Box<UiNode>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        background: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        grid_color: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tilt_deg: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cell_dp: Option<u16>,
+    },
+
+    // Feature `clock` (crates/protocol/features/clock.md)
+    /// The device's local time (`time`, large: "9:41") or date (`date`:
+    /// "Wednesday, November 4"), kept current.
+    #[serde(rename = "core://Clock")]
+    Clock {
+        #[serde(default)]
+        format: ClockFormat,
+    },
+
+    // Feature `gestures` (crates/protocol/features/gestures.md)
+    /// `content` that answers vertical swipes: `on_swipe_up` and
+    /// `on_swipe_down` are dispatched when a drag over it goes far enough up
+    /// or down. Taps inside keep working.
+    #[serde(rename = "core://Swipe")]
+    Swipe {
+        content: Box<UiNode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_swipe_up: Option<ActionIntent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_swipe_down: Option<ActionIntent>,
+    },
+
+    // Feature `on_appear` (crates/protocol/features/on_appear.md)
+    /// Draws nothing; dispatches `intent` once each time it appears (with
+    /// `$item` bound inside a list). Inside a `core://Conditional` it acts
+    /// when a status changes, e.g. opening an app once it is ready.
+    #[serde(rename = "core://OnAppear")]
+    OnAppear { intent: ActionIntent },
+
     /// A node of a type this build does not know: its JSON, kept as is.
     #[serde(skip)]
     Unknown(Value),
@@ -466,9 +534,15 @@ impl UiNode {
             UiNode::Conditional { content, .. }
             | UiNode::Tappable { content, .. }
             | UiNode::Box { content, .. }
+            | UiNode::Swipe { content, .. }
             | UiNode::Sticky { content } => {
                 vec![content]
             }
+            UiNode::Backdrop {
+                content, footer, ..
+            } => std::iter::once(content.as_ref())
+                .chain(footer.as_deref())
+                .collect(),
             UiNode::Text { .. }
             | UiNode::Button { .. }
             | UiNode::Image { .. }
@@ -481,6 +555,8 @@ impl UiNode {
             | UiNode::ChoiceChips { .. }
             | UiNode::MediaPicker { .. }
             | UiNode::Progress { .. }
+            | UiNode::Clock { .. }
+            | UiNode::OnAppear { .. }
             | UiNode::Unknown(_) => Vec::new(),
         }
     }
@@ -488,10 +564,23 @@ impl UiNode {
     /// The intents this node itself holds (not its children's).
     pub fn own_intents(&self) -> Vec<&ActionIntent> {
         let direct: Vec<&ActionIntent> = match self {
-            UiNode::Button { on_click, .. }
-            | UiNode::IconButton { on_click, .. }
-            | UiNode::Tappable { on_click, .. } => vec![on_click],
+            UiNode::Button { on_click, .. } | UiNode::IconButton { on_click, .. } => {
+                vec![on_click]
+            }
+            UiNode::Tappable {
+                on_click,
+                on_long_press,
+                ..
+            } => std::iter::once(on_click)
+                .chain(on_long_press.as_ref())
+                .collect(),
             UiNode::TextField { on_submit, .. } => on_submit.iter().collect(),
+            UiNode::Swipe {
+                on_swipe_up,
+                on_swipe_down,
+                ..
+            } => on_swipe_up.iter().chain(on_swipe_down.iter()).collect(),
+            UiNode::OnAppear { intent } => vec![intent],
             _ => Vec::new(),
         };
         // The steps of an `action.sequence` count as the node's intents too,
@@ -529,6 +618,41 @@ pub struct Screen {
     pub content: UiNode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub footer: Option<UiNode>,
+    /// Feature `hidden_chrome`: `hidden` draws the screen without the
+    /// client's bar (Back, title): `content` fills the screen without
+    /// scrolling (a `core://Backdrop` scrolls its own) and Back is the
+    /// system's.
+    #[serde(default, skip_serializing_if = "Chrome::is_full")]
+    pub chrome: Chrome,
+}
+
+/// How much of the client's own UI a workspace or screen shows (feature
+/// `hidden_chrome`).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Chrome {
+    /// The client's title, bar and buttons.
+    #[default]
+    Full,
+    /// Only the layout.
+    Hidden,
+}
+
+impl Chrome {
+    fn is_full(&self) -> bool {
+        *self == Chrome::Full
+    }
+}
+
+/// What a `core://Clock` shows (feature `clock`).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ClockFormat {
+    /// The time, large ("9:41").
+    #[default]
+    Time,
+    /// The weekday and date ("Wednesday, November 4").
+    Date,
 }
 
 /// `core://List` indentation: `item[field]` (a number) times `step_dp`,
