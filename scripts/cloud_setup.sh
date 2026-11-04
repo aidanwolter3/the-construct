@@ -79,7 +79,7 @@ warm_caches() {
   (cd "$REPO_ROOT" && with_backoff cargo build -p client-ffi --release) || ok=0
   # Compiling main + test sources resolves everything :shared:allTests, :desktopApp:test and :desktopApp:simulate
   # use. --no-daemon so no Gradle daemon outlives the warm-up.
-  (cd "$REPO_ROOT/kmp-app" && with_backoff ./gradlew -Dorg.gradle.java.home="$JAVA_HOME_GUESS" -PskipRustBuild \
+  (cd "$REPO_ROOT/kmp-app" && JAVA_HOME="$JAVA_HOME_GUESS" with_backoff ./gradlew -PskipRustBuild \
     --no-daemon --quiet :shared:compileTestKotlinDesktop :desktopApp:compileTestKotlin) || ok=0
   if [[ $ok == 1 ]]; then
     echo done >"$WARM_STATUS"
@@ -108,7 +108,6 @@ cat <<EOF
 Cloud setup done.
   rustc:  $(rustc --version)
   java:   $(java -version 2>&1 | grep -v "^Picked up" | head -n 1)
-Export for Gradle (kmp-app/gradle.properties pins a macOS JDK path; override it):
+Gradle uses the JDK in JAVA_HOME (or java on PATH); if JAVA_HOME is unset or not JDK 21:
   export JAVA_HOME=$JAVA_HOME_GUESS
-  ./gradlew -Dorg.gradle.java.home="\$JAVA_HOME" -PskipRustBuild ...
 EOF

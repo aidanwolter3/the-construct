@@ -37,12 +37,12 @@ cargo run -p server                      # 127.0.0.1:8080; on loopback, callers 
 cargo run -p fake-pixelfed               # fake upstream on 127.0.0.1:8081
 scripts/e2e.sh                           # e2e suite against the fake binary
 
-# JVM / Kotlin (from kmp-app). On macOS gradle.properties pins Android Studio's JDK; elsewhere override it:
+# JVM / Kotlin (from kmp-app). Gradle runs on any JDK 21 in JAVA_HOME or on PATH:
 cargo build -p client-ffi --release      # Linux: target/release/libclient_ffi.so (macOS: scripts/build_ffi.sh)
-cd kmp-app && ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :shared:allTests :desktopApp:test
+cd kmp-app && ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test
 
 # Headless simulator: real shared UI -> PNGs (no window). Read the PNGs to check UI changes.
-./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo \
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo \
   -Pscreen=phone -Pout=/tmp/sim -Pscript="shot start; click Like; assert-text Unlike; shot after"
 ```
 Simulator script commands (shot, click, assert-text, wait-text, open-menu, open-history, select-version,

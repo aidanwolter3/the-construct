@@ -70,12 +70,15 @@ kmp-app/             Gradle project: :shared (model + Compose renderer), :deskto
 
 - macOS on Apple Silicon, with Rust installed through rustup (target `aarch64-apple-darwin`; add it with
   `rustup target add aarch64-apple-darwin` if needed).
-- JDK 21 (`:desktopApp` sets `jvmToolchain(21)`). This repo uses Android Studio's bundled JBR, which is set in
-  `kmp-app/gradle.properties` (`org.gradle.java.home`). Set `JAVA_HOME` to match:
+- JDK 21 (the Kotlin modules set `jvmToolchain(21)`). Gradle runs on the JDK in `JAVA_HOME` (or `java` on
+  `PATH`); any JDK 21 works. On a Mac, Android Studio's bundled JBR is one:
 
 ```bash
 export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ```
+
+  To pin a JDK for Gradle without exporting `JAVA_HOME`, put `org.gradle.java.home=<path>` in your own
+  `~/.gradle/gradle.properties`, not in the repo's `kmp-app/gradle.properties`.
 
 ## Run the demo
 
@@ -1336,7 +1339,7 @@ fake outbox (`offline` keeps them "Sending…" until `online`). That file and th
 from the pod: `UPDATE_FIXTURES=1 cargo test -p server --test fixtures` (the test fails when they are stale).
 
 ```bash
-./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate -Pscreen=phone -Pout=/tmp/sim \
+./gradlew -PskipRustBuild :desktopApp:simulate -Pscreen=phone -Pout=/tmp/sim \
   -Pscript='click tag:comment:pixelfed://posts/781254316723458049; wait-text 3000 Which lens?; shot comments;
     type tag:textfield:comment Golden light!; click tag:textfield-send:comment; wait-text 3000 just now; shot sent'
 ```
@@ -1349,7 +1352,7 @@ except `age_seconds`, so times stay relative to now); its targets open the comme
 The inbox commands also work live (`-PbaseUrl`) against a pod's real notifications.
 
 ```bash
-./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -Pout=/tmp/sim \
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -Pout=/tmp/sim \
   -Pscript='notify pixelfed_demo likes Bob liked your post; shot badge; open-inbox; shot inbox;
     click-notification commented on; shot comments; back; open-notification-settings; toggle-channel pixelfed_home.likes; shot settings'
 ```
