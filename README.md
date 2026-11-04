@@ -385,6 +385,10 @@ credentials and free disk measured when read. Counts live in memory and start ag
   `monitor:metrics` (every counter's total, last hour and last day). The data is the whole server's, so the feed
   answers 403 `monitoring_off` unless the operator runs `server pods monitoring <name> on` (admin pods only). Then
   ask Claude to build an app on it.
+- **Alerts:** in such a pod, each app on the source gets a "Server warnings" notification channel; a check that turns
+  to warning sends one notification ("Server: <check>"), and again only after it has been back to ok (polled every 5
+  minutes while the pod has a registered device; decision
+  [`server-monitoring-alerts`](docs/decisions/server-monitoring-alerts.md)).
 - **Prometheus:** with `CONSTRUCT_METRICS_ADDR`, `GET /metrics` on that address serves the same counters and gauges
   (`construct_*`). Fly scrapes it (`[metrics]` in `deploy/fly/pod.toml`); see them in Fly's Grafana
   (fly-metrics.net) and alert from there.
