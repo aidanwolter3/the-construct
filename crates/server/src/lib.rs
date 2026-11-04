@@ -82,9 +82,9 @@ pub fn new_pod_settings(import_recipes: bool) -> Vec<(String, String)> {
 }
 
 /// Extra settings of temporary pods (anyone can make one, D46): Pixelfed
-/// only on the default instance, and no watcher fetches, so a visitor can't
-/// make the server contact hosts of their choosing (fetch URLs, register
-/// OAuth apps).
+/// only on the default instance, no watcher fetches and no collection
+/// `model` computes, so a visitor can't make the server contact hosts of
+/// their choosing (fetch URLs, register OAuth apps) or spend its model key.
 pub fn temporary_pod_settings() -> Vec<(String, String)> {
     vec![
         (
@@ -92,6 +92,10 @@ pub fn temporary_pod_settings() -> Vec<(String, String)> {
             "0".to_owned(),
         ),
         (app_watcher::check::FETCH_SETTING.to_owned(), "0".to_owned()),
+        (
+            app_collections::compute::MODEL_SETTING.to_owned(),
+            "0".to_owned(),
+        ),
     ]
 }
 

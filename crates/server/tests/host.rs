@@ -696,6 +696,22 @@ async fn temporary_pods_stay_on_the_default_instance() {
     assert_eq!(status, StatusCode::OK, "{body}");
 }
 
+/// Temporary pods can't fetch websites or spend the server's model key
+/// (security audit: collection `model` computes on temporary pods).
+#[test]
+fn temporary_pods_fetch_nothing_and_ask_no_model() {
+    let settings = server::temporary_pod_settings();
+    for key in [
+        app_watcher::check::FETCH_SETTING,
+        app_collections::compute::MODEL_SETTING,
+    ] {
+        assert!(
+            settings.iter().any(|(k, v)| k == key && v == "0"),
+            "{key}: {settings:?}"
+        );
+    }
+}
+
 /// Security review of D46: a burst of creations can't overshoot the cap.
 #[tokio::test]
 async fn concurrent_temporary_pods_respect_the_cap() {
