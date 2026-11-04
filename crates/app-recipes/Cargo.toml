@@ -15,7 +15,14 @@ rusqlite.workspace = true
 serde.workspace = true
 axum = { version = "0.8", features = ["http2"] }
 
+[features]
+# The made-up test recipes (`db::seed_test_recipes`). Tests only: enable it
+# from a dev-dependency, never from a normal one.
+test-seed = []
+
 [dev-dependencies]
+# This crate's own integration tests seed the test recipes too.
+app-recipes = { path = ".", features = ["test-seed"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

@@ -195,7 +195,7 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
     companion object {
         private val ID = Regex("[a-z0-9_-]{1,64}")
 
-        /** The fixture's custom app (a "Kitchen" over the demo posts, `fixtures/custom_kitchen_bundle.json`). */
+        /** The fixture's custom app (a "Kitchen" over the demo posts, `kmp-app/desktopApp/src/sim/resources/custom_kitchen_bundle.json`). */
         const val KITCHEN = "c-kitchen2dm"
         private const val HOUR = 3_600L
         private const val DAY = 86_400L

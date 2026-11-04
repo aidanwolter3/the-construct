@@ -224,7 +224,8 @@ class PixelfedFeedTest {
 
     @Test
     fun defaultFixtureForPixelfedHome() {
-        val repo = assertNotNull(findFixture("pixelfed_home_feed_bundle.json")).parentFile.parentFile
+        val feed = assertNotNull(findFixture("pixelfed_home_feed_bundle.json"))
+        val repo = File(feed.path.removeSuffix(fixturePath(feed.name)))
         assertEquals("pixelfed_home_feed_bundle.json", defaultFixture("pixelfed_home", repo).name)
     }
 

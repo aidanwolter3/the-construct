@@ -29,6 +29,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
+app-recipes = { path = "../app-recipes", features = ["test-seed"] }
 serde.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true

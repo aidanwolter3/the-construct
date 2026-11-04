@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
 
 /**
  * The comments screen of `layouts/pixelfed_home` (DECISIONS D34) through the generic screen support: the fixture
- * feed's layout declares it, the fake pod answers its data path from `fixtures/pixelfed_screen_data.json`.
+ * feed's layout declares it, the fake pod answers its data path from `kmp-app/desktopApp/src/sim/resources/pixelfed_screen_data.json`.
  */
 class ScreensSimTest {
     private val outDir: File = Files.createTempDirectory("construct-screens-test").toFile()

@@ -146,11 +146,15 @@ fn retired_import(_tx: &Transaction<'_>) -> rusqlite::Result<()> {
 }
 
 /// Made-up recipes for tests, one per category the layouts' chips name. Not
-/// loaded by any migration: tests call [`seed_test_recipes`].
-pub static TEST_SEED: &str = include_str!("../data/test-seed.json");
+/// loaded by any migration: tests call [`seed_test_recipes`]. Only built for
+/// tests (the `test-seed` feature, which other crates enable as a
+/// dev-dependency), so the pod binary never holds it.
+#[cfg(any(test, feature = "test-seed"))]
+pub static TEST_SEED: &str = include_str!("../tests/data/test-seed.json");
 
 /// Add [`TEST_SEED`] to a pod's recipes, unless it already has some. For
 /// tests only.
+#[cfg(any(test, feature = "test-seed"))]
 pub fn seed_test_recipes(conn: &Connection) -> rusqlite::Result<()> {
     let n: i64 = conn.query_row("SELECT COUNT(*) FROM recipes", [], |r| r.get(0))?;
     if n > 0 {
@@ -161,7 +165,7 @@ pub fn seed_test_recipes(conn: &Connection) -> rusqlite::Result<()> {
     import(conn, &file)
 }
 
-/// An import file (see `data/test-seed.json`).
+/// An import file (see `tests/data/test-seed.json`).
 #[derive(Debug, Deserialize)]
 pub struct ImportFile {
     pub categories: Vec<ImportCategory>,

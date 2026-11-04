@@ -23,6 +23,8 @@ issues. `docs/history/` is archived; don't treat it as current.
 - `layouts/<app>/NNNN.json` layout versions; `crates/protocol/features/` the named vocabulary.
 - Each crate's integration tests are one binary, `tests/integration/main.rs`: add a test file as a `mod` there
   ([docs/testing.md](docs/testing.md)).
+- Data files live next to the code that reads them (decision `data-next-to-its-code`): test data in
+  `crates/*/tests/data/`, simulator data in `kmp-app/desktopApp/src/sim/resources/`; anything else ships.
 
 ## Commands
 

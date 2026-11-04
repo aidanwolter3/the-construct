@@ -13,7 +13,7 @@
 #           bob posts one image and alice boosts it (so the admin home timeline contains a reblog).
 #           Users/posts are skipped if they already exist; fresh tokens are minted on every run.
 #           Tokens: dev/pixelfed/.seed/{admin,alice,bob}_token (gitignored).
-#   record  save the home timeline (plain, with boosts, with _pe=1; admin token) to fixtures/pixelfed/recorded/,
+#   record  save the home timeline (plain, with boosts, with _pe=1; admin token) to crates/app-pixelfed/tests/data/recorded/,
 #           which app-pixelfed's normalization tests read
 #   status  colima + compose status and an API probe
 #   logs    follow compose logs (extra args go to `docker compose logs`, e.g. `logs app`)
@@ -24,8 +24,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIR="$ROOT/dev/pixelfed"
 SEED_DIR="$DIR/.seed"
-IMG_DIR="$ROOT/fixtures/pixelfed/images"
-REC_DIR="$ROOT/fixtures/pixelfed/recorded"
+IMG_DIR="$ROOT/scripts/pixelfed_dev/images"
+REC_DIR="$ROOT/crates/app-pixelfed/tests/data/recorded"
 URL="${PIXELFED_URL:-http://localhost:8090}"
 export PATH="$HOME/.local/bin:$PATH"
 

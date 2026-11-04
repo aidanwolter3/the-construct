@@ -24,7 +24,7 @@ use client_core::{ConstructEngine, EngineConfig, StateSnapshot};
 use protocol::WorkspaceSpec;
 use serde_json::{Value, json};
 
-const FIXTURE: &str = include_str!("../../../../fixtures/counter_home_bundle.json");
+const FIXTURE: &str = include_str!("../../../protocol/tests/data/counter_home_bundle.json");
 const TIMEOUT: Duration = Duration::from_secs(10);
 const URI: &str = "core://counters/home";
 

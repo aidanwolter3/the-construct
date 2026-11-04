@@ -1,10 +1,10 @@
 //! Keeps the simulator's Pixelfed fixtures in step with the pod
 //! (docs/DECISIONS.md D34):
 //!
-//! - `fixtures/pixelfed_home_feed_bundle.json` is the signed-in feed bundle
+//! - `kmp-app/desktopApp/src/sim/resources/pixelfed_home_feed_bundle.json` is the signed-in feed bundle
 //!   the pod makes from the fake upstream, with the newest
 //!   `layouts/pixelfed_home/NNNN.json` and the fake's own media URLs;
-//! - `fixtures/pixelfed_screen_data.json` holds the comments screen data of
+//! - `kmp-app/desktopApp/src/sim/resources/pixelfed_screen_data.json` holds the comments screen data of
 //!   every fixture post with the post itself (`{path: DataBundle}`), made by the pod's own
 //!   normalization from the fake upstream at a fixed "now", with avatar URLs
 //!   pointing at the fake's `/storage/` (which the simulator serves), and the
@@ -32,7 +32,7 @@ const NOW: i64 = 1_793_534_400;
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures")
+        .join("../../kmp-app/desktopApp/src/sim/resources")
         .join(name)
 }
 
@@ -49,7 +49,7 @@ fn check_or_write(name: &str, want: &str) {
     let have = std::fs::read_to_string(&path).unwrap_or_default();
     assert!(
         have == want,
-        "fixtures/{name} is out of date; run UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::"
+        "kmp-app/desktopApp/src/sim/resources/{name} is out of date; run UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::"
     );
 }
 

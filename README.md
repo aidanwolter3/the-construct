@@ -93,7 +93,7 @@ crates/e2e              end-to-end suite
 fake-pixelfed/          a fake Pixelfed upstream for tests and staging
 kmp-app/                Gradle: :shared (Compose UI), :desktopApp (and the simulator), :androidApp
 layouts/<app>/          layout versions as code
-deploy/, dev/, scripts/, fixtures/, assets/icon/
+deploy/, dev/, scripts/, assets/icon/
 ```
 
 ## Status

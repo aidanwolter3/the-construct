@@ -22,7 +22,7 @@ import kotlin.test.fail
 
 /**
  * End-to-end over JNA: Kotlin [UniffiEngineBridge] (:shared jvmCommonMain) -> UniFFI -> Rust ConstructEngine -> StateObserver
- * callback. A stub HTTP server serves fixtures/counter_home_bundle.json and a small `/v1/apps` catalog.
+ * callback. A stub HTTP server serves crates/protocol/tests/data/counter_home_bundle.json and a small `/v1/apps` catalog.
  * Requires target/release/libclient_ffi.dylib (built by :shared:buildRustFfi).
  */
 class EngineBridgeTest {
@@ -33,7 +33,7 @@ class EngineBridgeTest {
     @BeforeTest
     fun setUp() {
         val bundle = generateSequence(File("").absoluteFile) { it.parentFile }
-            .map { File(it, "fixtures/counter_home_bundle.json") }
+            .map { File(it, "crates/protocol/tests/data/counter_home_bundle.json") }
             .first { it.isFile }
             .readBytes()
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {

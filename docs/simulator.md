@@ -18,12 +18,12 @@ The output directory holds the PNGs, `steps.log` and `steps.json` (one entry per
 ## Modes
 
 **Fixture mode** (the default) needs no server and, with `-PskipRustBuild`, no Rust build. A fake engine
-(`FakeEngineBridge`) loads a bundle from `fixtures/`, applies taps with the same expression subset as the engine,
+(`FakeEngineBridge`) loads a bundle from `kmp-app/desktopApp/src/sim/resources/`, applies taps with the same expression subset as the engine,
 models the outbox (`offline` queues, `online` flushes), and serves a fake app catalog (Pixelfed v1..v3, Pixelfed demo
-v1..v2) and notifications (`fixtures/notifications.json`). Images whose path ends in `/storage/<file>` or
+v1..v2) and notifications (`kmp-app/desktopApp/src/sim/resources/notifications.json`). Images whose path ends in `/storage/<file>` or
 `/v1/pixelfed/media/<file>` come from `fake-pixelfed/fixtures/media/`; every other URL fails at once, so shots are
-deterministic. Screen data comes from `fixtures/pixelfed_screen_data.json`, generated from the pod with
-`UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::` (the test fails when it is stale).
+deterministic. Screen data comes from `kmp-app/desktopApp/src/sim/resources/pixelfed_screen_data.json`, generated from the
+pod with `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::` (the test fails when it is stale).
 
 **Live mode** (`-PbaseUrl=<server>`) runs the real Rust engine against a server, with a fresh temporary storage
 directory unless `-Pstorage` is given. Images load over HTTP. `offline`, `online`, `publish-version` and `notify` are
@@ -51,7 +51,7 @@ and approves the consent page. Against staging, start with `click Try a temporar
 | `-Pscript` | `shot initial` | The script. |
 | `-PscriptFile` | | The script, from a file (instead of `-Pscript`). |
 | `-Pmode` | `fixture` | `fixture` or `live`; `-PbaseUrl` selects live. |
-| `-Pfixture` | per workspace | The bundle in fixture mode: `pixelfed_demo` uses `fixtures/pixelfed_home_bundle.json`, `pixelfed_home` uses `fixtures/pixelfed_home_feed_bundle.json`; other apps need this flag. |
+| `-Pfixture` | per workspace | The bundle in fixture mode: `pixelfed_demo` uses `crates/app-pixelfed/demo/bundle.json`, `pixelfed_home` uses `kmp-app/desktopApp/src/sim/resources/pixelfed_home_feed_bundle.json`; other apps need this flag. |
 | `-PbaseUrl` | staging | The server in live mode. |
 | `-PtimeoutMs` | `10000` | Live mode: how long to wait for the first load. |
 | `-Pout` | `kmp-app/desktopApp/build/sim/<timestamp>` | Output directory. |

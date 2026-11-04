@@ -47,6 +47,7 @@ jobs:
         with:
           tool: cargo-nextest@0.9.145
       - run: scripts/check_decisions.sh
+      - run: scripts/check_test_data.sh
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # nextest runs tests from different binaries in parallel (cargo test runs one
       # binary at a time); profile in .config/nextest.toml. It skips doctests.

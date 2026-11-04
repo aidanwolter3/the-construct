@@ -29,7 +29,7 @@ Run these before pushing; CI runs the same and keeps `main` green:
 
 ```bash
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
-scripts/check_decisions.sh
+scripts/check_decisions.sh && scripts/check_test_data.sh
 cd kmp-app && ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test
 ```
 

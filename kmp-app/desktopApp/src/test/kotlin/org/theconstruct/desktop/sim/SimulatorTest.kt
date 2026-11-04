@@ -23,7 +23,7 @@ class SimulatorTest {
         outDir.deleteRecursively()
     }
 
-    private fun bundle(name: String): String = assertNotNull(findFixture(name), "fixtures/$name not found").readText()
+    private fun bundle(name: String): String = assertNotNull(findFixture(name), "${fixturePath(name)} not found").readText()
 
     private fun run(fake: FakeEngineBridge, script: String, screen: String = "phone"): SimResult =
         SimRunner(

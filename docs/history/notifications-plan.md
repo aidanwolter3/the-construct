@@ -159,7 +159,7 @@ into a generic `pod_core::net` module so both use it.
 - Settings → "Notifications": per app, the pod's channels with switches (`set_channel_enabled`), plus the OS
   permission state.
 - `ConstructEngineBridge` (common interface) grows the matching methods; `FakeEngineBridge` (simulator) serves
-  notifications from a new fixture `fixtures/notifications.json` and a sim command `notify <app> <channel> <title>`
+  notifications from a new fixture `kmp-app/desktopApp/src/sim/resources/notifications.json` and a sim command `notify <app> <channel> <title>`
   to inject a live one. New sim commands: `open-inbox`, `click-notification <text>`.
 
 ## 8. Platforms

@@ -1,6 +1,7 @@
 package org.theconstruct
 
-// Copies of ../../fixtures/*.json (with `$` escaped for Kotlin raw strings).
+// Copies of crates/protocol/tests/data/counter_home_bundle.json and
+// crates/app-pixelfed/demo/bundle.json (with `$` escaped for Kotlin raw strings).
 // Regenerate if the fixtures change.
 
 val COUNTER_BUNDLE_JSON: String = """{
