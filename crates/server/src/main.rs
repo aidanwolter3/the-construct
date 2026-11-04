@@ -18,6 +18,8 @@
 //!   pod's MCP endpoint (`/v1/mcp` only; decision `mcp-connector`); printed
 //!   once. Claude on the web connects through OAuth instead.
 //! - `pods revoke-mcp <name>`: disconnect Claude (every MCP credential).
+//! - `pods monitoring <name> on|off`: whether the pod's apps may read the
+//!   server's monitoring data (the `monitor` source; decision `server-monitoring`).
 //! - `pods list`.
 //!
 //! Environment:
@@ -46,6 +48,9 @@
 //! - `CONSTRUCT_INFER_API_KEY`, `CONSTRUCT_INFER_MODEL`, `CONSTRUCT_INFER_URL`:
 //!   the model Collections asks for `model`-computed fields (unset: they
 //!   keep their default).
+//! - `CONSTRUCT_METRICS_ADDR`: serve `GET /metrics` (Prometheus text) on
+//!   this address, apart from the public one (decision `server-monitoring`). Unset:
+//!   off. On Fly, `[::]:9091`, which only Fly's private network reaches.
 //! - `PIXELFED_*`: see `PixelfedConfig::from_env` and README.
 //!
 //! A pod's layout files are synced into its database when the pod is first
@@ -126,7 +131,7 @@ fn main() -> std::process::ExitCode {
                  server pods rotate <name>\n       \
                  server pods delete <name>\n       server pods notify-test <name>\n       \
                  server pods mcp <name> [label]\n       server pods revoke-mcp <name>\n       \
-                 server pods list"
+                 server pods monitoring <name> on|off\n       server pods list"
             );
             std::process::ExitCode::from(2)
         }
@@ -247,6 +252,22 @@ fn pods(args: &[&str]) -> Result<(), String> {
                  `server pods revoke-mcp {name}`."
             );
         }
+        ["monitoring", name, setting @ ("on" | "off")] => {
+            let on = *setting == "on";
+            host.set_admin_pod_setting(
+                name,
+                server::monitor::ENABLED_SETTING,
+                if on { "1" } else { "0" },
+            )?;
+            if on {
+                println!(
+                    "Pod '{name}' can now read the server's monitoring data (the \"Server \
+                     monitoring\" source); build an app on it, e.g. with Claude."
+                );
+            } else {
+                println!("Pod '{name}' can no longer read the server's monitoring data.");
+            }
+        }
         ["revoke-mcp", name] => {
             let n = host.revoke_mcp(name)?;
             println!("Revoked {n} MCP credential(s) of pod '{name}'; Claude is disconnected.");
@@ -268,7 +289,7 @@ fn pods(args: &[&str]) -> Result<(), String> {
         }
         _ => {
             return Err(
-                "unknown pods command (create, adopt, remove-adopted, rotate, delete, notify-test, mcp, revoke-mcp, list)".into(),
+                "unknown pods command (create, adopt, remove-adopted, rotate, delete, notify-test, mcp, revoke-mcp, monitoring, list)".into(),
             );
         }
     }
@@ -330,6 +351,11 @@ async fn serve() -> Result<(), String> {
     let host = Arc::new(host);
     {
         let h = host.clone();
+        server::metrics::set_gauge_source(move || h.monitoring_gauges());
+    }
+    serve_metrics().await;
+    {
+        let h = host.clone();
         let swept = tokio::task::spawn_blocking(move || h.sweep())
             .await
             .unwrap_or(0);
@@ -361,6 +387,56 @@ async fn serve() -> Result<(), String> {
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+/// `GET /metrics` on `CONSTRUCT_METRICS_ADDR` (decision `server-monitoring`): a
+/// listener of its own, so the public address never serves it. Also keeps
+/// the copies of the counters that the last hour and day are measured from.
+/// A listener that can't start is logged, not fatal: the pod still serves.
+async fn serve_metrics() {
+    server::metrics::started_at();
+    tokio::spawn(async {
+        let every = std::time::Duration::from_secs(server::metrics::SNAPSHOT_EVERY_SECS as u64);
+        let mut tick = tokio::time::interval(every);
+        loop {
+            tick.tick().await;
+            server::metrics::snapshot();
+        }
+    });
+    let Some(addr) = std::env::var("CONSTRUCT_METRICS_ADDR")
+        .ok()
+        .filter(|a| !a.trim().is_empty())
+    else {
+        return;
+    };
+    let listener = match tokio::net::TcpListener::bind(addr.trim()).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!(%addr, error = %e, "CONSTRUCT_METRICS_ADDR: cannot listen; /metrics is off");
+            return;
+        }
+    };
+    tracing::info!(addr = %addr.trim(), "metrics on /metrics");
+    let app = axum::Router::new().route(
+        "/metrics",
+        axum::routing::get(|| async {
+            let text = tokio::task::spawn_blocking(server::metrics::render)
+                .await
+                .unwrap_or_default();
+            (
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "text/plain; version=0.0.4; charset=utf-8",
+                )],
+                text,
+            )
+        }),
+    );
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, app).await {
+            tracing::error!(error = %e, "metrics listener stopped");
+        }
+    });
 }
 
 /// Ctrl-C / SIGINT (Fly's default kill signal) or SIGTERM (`kill`, `docker stop`):

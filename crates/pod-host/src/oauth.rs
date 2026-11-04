@@ -29,6 +29,7 @@ use axum::{
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use pod_core::json_error;
+use pod_core::metrics;
 use pod_core::session::session_hash;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -158,6 +159,8 @@ fn oauth_error(status: StatusCode, error: &str, description: &str) -> Response {
 pub(crate) async fn register(State(host): State<Arc<Host>>, req: Request) -> Response {
     let key = client_keys(req.headers(), peer(&req), host.config.trust_fly_client_ip).narrow;
     if !host.registrations.allow(&key) {
+        tracing::warn!("OAuth client registration rate-limited");
+        metrics::inc(metrics::RATE_LIMITED, &[("limit", "oauth_register")]);
         return rate_limited();
     }
     let headers = req.headers().clone();
@@ -227,6 +230,7 @@ pub(crate) async fn register(State(host): State<Arc<Host>>, req: Request) -> Res
         }
     }
     tracing::info!(client = %client.name, "OAuth client registered");
+    metrics::inc(metrics::CREDENTIALS_ISSUED, &[("kind", "oauth_client")]);
     (
         StatusCode::CREATED,
         [(header::CACHE_CONTROL, "no-store")],
@@ -482,6 +486,8 @@ pub(crate) async fn authorize_submit(State(host): State<Arc<Host>>, req: Request
         );
     }
     if !host.code_tries.allow(&key) {
+        tracing::warn!("OAuth: pod code tries rate-limited");
+        metrics::inc(metrics::RATE_LIMITED, &[("limit", "oauth_pod_code")]);
         return page(
             Some((&r.client.name, &p, &origin_of(&r.redirect_uri))),
             "Connect Claude to your pod",
@@ -499,6 +505,7 @@ pub(crate) async fn authorize_submit(State(host): State<Arc<Host>>, req: Request
     };
     let Some(pod_id) = pod else {
         tracing::info!("OAuth: pod code rejected");
+        metrics::inc(metrics::AUTH_FAILURES, &[("kind", "oauth_pod_code")]);
         return page(
             Some((&r.client.name, &p, &origin_of(&r.redirect_uri))),
             "Connect Claude to your pod",
@@ -527,6 +534,7 @@ pub(crate) async fn authorize_submit(State(host): State<Arc<Host>>, req: Request
         }
     }
     tracing::info!(client = %r.client.name, "OAuth: pod connected; code issued");
+    metrics::inc(metrics::CREDENTIALS_ISSUED, &[("kind", "oauth_connect")]);
     redirect_with(
         &r.redirect_uri,
         &[("code", &code)],
@@ -624,6 +632,7 @@ pub(crate) async fn token(State(host): State<Arc<Host>>, req: Request) -> Respon
         }
     }
     tracing::info!(client = %label, "OAuth: MCP credential issued");
+    metrics::inc(metrics::CREDENTIALS_ISSUED, &[("kind", "mcp")]);
     (
         StatusCode::OK,
         [(header::CACHE_CONTROL, "no-store")],

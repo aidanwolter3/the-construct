@@ -18,6 +18,7 @@ pub mod custom;
 pub mod disk;
 pub mod layouts;
 pub mod mcp;
+pub mod metrics;
 pub mod net;
 pub mod notify;
 pub mod parts;

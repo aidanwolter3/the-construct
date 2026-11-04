@@ -130,6 +130,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "app-monitor"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "pod-core",
+ "protocol",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "app-pixelfed"
 version = "0.1.0"
 dependencies = [
@@ -2728,6 +2739,7 @@ name = "server"
 version = "0.1.0"
 dependencies = [
  "app-collections",
+ "app-monitor",
  "app-pixelfed",
  "app-recipes",
  "app-watcher",

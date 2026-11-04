@@ -319,6 +319,8 @@ pub struct LlmConfig {
 pub const DEFAULT_URL: &str = "https://api.anthropic.com/v1/messages";
 /// Default model of the `llm` extractor.
 pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
+/// The `feature` of this extractor's model calls in the metrics.
+const LLM_FEATURE: &str = "watcher";
 /// Most page text sent to the model.
 pub const MAX_PAGE_CHARS: usize = 60_000;
 
@@ -436,12 +438,19 @@ pub async fn llm(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("the model could not be reached: {e}"))?;
+        .map_err(|e| {
+            pod_core::metrics::record_llm(LLM_FEATURE, false, None);
+            format!("the model could not be reached: {e}")
+        })?;
     let status = resp.status();
-    let answer: Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("the model's answer could not be read: {e}"))?;
+    let answer: Value = match resp.json().await {
+        Ok(a) => a,
+        Err(e) => {
+            pod_core::metrics::record_llm(LLM_FEATURE, false, None);
+            return Err(format!("the model's answer could not be read: {e}"));
+        }
+    };
+    pod_core::metrics::record_llm(LLM_FEATURE, status.is_success(), Some(&answer));
     if !status.is_success() {
         let msg = answer["error"]["message"].as_str().unwrap_or("");
         return Err(format!(

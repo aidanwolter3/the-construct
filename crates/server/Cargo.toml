@@ -22,6 +22,7 @@ app-pixelfed = { path = "../app-pixelfed" }
 app-recipes = { path = "../app-recipes" }
 app-collections = { path = "../app-collections" }
 app-watcher = { path = "../app-watcher" }
+app-monitor = { path = "../app-monitor" }
 protocol = { workspace = true }
 axum = { version = "0.8", features = ["http2"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
