@@ -4,7 +4,7 @@
 One geometry definition (scene()) is emitted three ways, so every output matches:
   * SVG          assets/icon/construct.svg (full-bleed tile), assets/icon/construct-macos.svg (macOS margin + shadow)
   * Android      VectorDrawables (adaptive background / foreground / monochrome) in androidApp res/drawable
-  * PNG          rasterised with Pillow (4x supersampled), for the PNG set, legacy mipmaps, desktop resource,
+  * PNG          rasterised with Pillow (4x supersampled), for the Linux PNG, legacy mipmaps, desktop resource,
                  macOS .icns (via iconutil) and Windows .ico
 
 Detail levels: "full" (large PNGs, SVG master), "launcher" (Android adaptive layers: heavier lines, bigger cube, since
@@ -422,9 +422,8 @@ def main():
     write(os.path.join(ICON_DIR, "construct-macos.svg"),
           svg(all_ops(scene()), 1024, (100, 100, 824), clip=(100, 100, 824, 185), shadow=True))
 
-    # PNG set (Linux / web).
-    for s in (16, 32, 48, 64, 128, 192, 256, 512, 1024):
-        tile_png(s).save(os.path.join(ICON_DIR, "png", f"construct-{s}.png"))
+    # Linux desktop icon (the only PNG size anything uses).
+    tile_png(512).save(os.path.join(ICON_DIR, "png", "construct-512.png"))
     # .ico: every entry rendered at its own size (so 16/32 get the "tiny" detail level), not downscaled from 256.
     ico_sizes = (16, 32, 48, 64, 128, 256)
     tile_png(256).save(os.path.join(ICON_DIR, "construct.ico"), sizes=[(s, s) for s in ico_sizes],

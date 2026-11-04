@@ -30,7 +30,6 @@ use serde_json::{Value, json};
 
 use crate::push::{PushError, Subscription};
 use crate::session::{Caller, sign_in_required};
-use crate::store::Store;
 use crate::util::now_secs;
 use crate::{ApiError, AppState, Pod, blocking, json_error, parse_json_body};
 
@@ -343,16 +342,6 @@ fn save_poll_on(
         params![adapter, row.next_at, row.failures, error, row.stopped_for],
     )?;
     Ok(())
-}
-
-impl Store {
-    /// Unread notifications per app (only `apps` count).
-    pub fn unread_notifications(
-        &self,
-        apps: &[String],
-    ) -> rusqlite::Result<(u32, BTreeMap<String, u32>)> {
-        self.with_conn(|c| unread_on(c, apps))
-    }
 }
 
 // ---------- the pipeline ----------

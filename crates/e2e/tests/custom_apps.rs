@@ -56,6 +56,10 @@ fn a_custom_app_shows_two_sources_and_its_actions_work() {
     pod_store
         .create_pinned_session(&server::session::session_hash(POD_TOKEN))
         .unwrap();
+    // New pods have no recipes (decision `recipes-start-empty`): add the made-up ones.
+    pod_store
+        .with_conn(app_recipes::db::seed_test_recipes)
+        .unwrap();
     let http = reqwest::blocking::Client::new();
     let pod = |method: reqwest::Method, path: &str, body: Option<Value>| -> (u16, Value) {
         let mut req = http
@@ -125,7 +129,7 @@ fn a_custom_app_shows_two_sources_and_its_actions_work() {
 
     // 5. A recipe screen's data loads.
     kitchen_engine.dispatch(
-        &json!({"intent": "action.data.load", "path": "/v1/recipes/screens/recipe?id=meatballs"})
+        &json!({"intent": "action.data.load", "path": "/v1/recipes/screens/recipe?id=placeholder-pot-pie"})
             .to_string(),
     );
     wait_until("the recipe's steps", TIMEOUT, || {

@@ -85,10 +85,6 @@ impl EntityRecord {
     pub fn fields(&self) -> &Map<String, Value> {
         &self.0
     }
-
-    pub fn into_value(self) -> Value {
-        Value::Object(self.0)
-    }
 }
 
 impl From<Map<String, Value>> for EntityRecord {

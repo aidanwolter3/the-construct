@@ -1,5 +1,5 @@
-//! The recipes adapter on a pod: its layout files, its migrations (schema +
-//! import) and its two endpoints.
+//! The recipes adapter on a pod: its layout files, its migrations (a new
+//! pod starts empty) and its two endpoints, over the made-up test recipes.
 
 use std::sync::Arc;
 
@@ -14,6 +14,23 @@ use tower::ServiceExt;
 
 fn adapters() -> Vec<Arc<dyn AppAdapter>> {
     vec![Arc::new(RecipesAdapter::new())]
+}
+
+/// A pod with the made-up test recipes.
+fn seeded() -> Arc<AppState> {
+    let state = Arc::new(AppState::in_memory(adapters()));
+    state
+        .store()
+        .with_conn(app_recipes::db::seed_test_recipes)
+        .unwrap();
+    state
+}
+
+fn recipe_count(state: &AppState) -> i64 {
+    state
+        .store()
+        .with_conn(|c| c.query_row("SELECT COUNT(*) FROM recipes", [], |r| r.get(0)))
+        .unwrap()
 }
 
 #[test]
@@ -69,33 +86,30 @@ async fn get_as(
 
 #[tokio::test]
 async fn the_workspace_lists_every_recipe_and_a_screen_loads_one() {
-    let state = Arc::new(AppState::in_memory(adapters()));
+    let state = seeded();
     assert_eq!(state.store().adapter_version("recipes").unwrap(), 2);
 
     let (status, body) = get(&state, "/v1/workspaces/recipes").await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
-    assert_eq!(spec.queries["recipes:all"].len(), 81);
-    let salad = &spec.entities["recipes://recipes/three-bean-salad"];
-    assert_eq!(salad.get_str("title"), Some("Three Bean Salad"));
+    assert_eq!(spec.queries["recipes:all"].len(), 8);
+    let salad = &spec.entities["recipes://recipes/test-garden-salad"];
+    assert_eq!(salad.get_str("title"), Some("Test Garden Salad"));
 
-    let (status, body) = get(&state, "/v1/recipes/screens/recipe?id=moussaka").await;
+    let (status, body) = get(&state, "/v1/recipes/screens/recipe?id=test-garden-salad").await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let data: DataBundle = serde_json::from_value(body).unwrap();
     assert_eq!(
-        data.entities["recipes://recipes/moussaka"].get_str("yield_text"),
-        Some("Serves 8")
+        data.entities["recipes://recipes/test-garden-salad"].get_str("yield_text"),
+        Some("Serves 4-6")
     );
-    let first = &data.queries["recipe:moussaka:ingredients"][0];
+    let first = &data.queries["recipe:test-garden-salad:ingredients"][0];
     assert_eq!(
         data.entities[first].get_str("text"),
-        Some("8 garlic cloves, finely grated (divided)")
+        Some("1 head romaine lettuce, chopped")
     );
-    assert_eq!(
-        data.entities[first].get_str("group"),
-        Some("Eggplant and Lamb")
-    );
-    assert_eq!(data.queries["recipe:moussaka:steps"].len(), 7);
+    assert_eq!(data.entities[first].get_str("group"), Some("Salad"));
+    assert_eq!(data.queries["recipe:test-garden-salad:steps"].len(), 6);
 
     let (status, body) = get(&state, "/v1/recipes/screens/recipe?id=nope").await;
     assert_eq!(
@@ -112,7 +126,7 @@ async fn the_workspace_lists_every_recipe_and_a_screen_loads_one() {
 /// `list_filter` the "View" buttons (0001).
 #[tokio::test]
 async fn each_client_gets_the_newest_layout_it_draws() {
-    let state = Arc::new(AppState::in_memory(adapters()));
+    let state = seeded();
     let without = |missing: &[&str]| {
         protocol::FEATURES
             .iter()
@@ -220,15 +234,28 @@ async fn each_client_gets_the_newest_layout_it_draws() {
     }
 }
 
+/// A new pod has no recipes; recipes a pod holds stay when it is reopened
+/// (the retired import, migration step 2, runs once and adds nothing).
 #[tokio::test]
-async fn reopening_the_store_does_not_import_twice() {
+async fn a_new_pod_starts_empty_and_keeps_what_it_holds() {
     let dir = tempfile::tempdir().unwrap();
-    for _ in 0..2 {
-        let state = Arc::new(AppState::open_dir(dir.path(), adapters()).unwrap());
-        let n: i64 = state
-            .store()
-            .with_conn(|c| c.query_row("SELECT COUNT(*) FROM recipes", [], |r| r.get(0)))
-            .unwrap();
-        assert_eq!(n, 81);
-    }
+    let state = AppState::open_dir(dir.path(), adapters()).unwrap();
+    assert_eq!(state.store().adapter_version("recipes").unwrap(), 2);
+    assert_eq!(recipe_count(&state), 0);
+    let (status, body) = get(&Arc::new(state), "/v1/workspaces/recipes").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["queries"]["recipes:all"]
+            .as_array()
+            .is_none_or(Vec::is_empty),
+        "{body}"
+    );
+    let state = AppState::open_dir(dir.path(), adapters()).unwrap();
+    state
+        .store()
+        .with_conn(app_recipes::db::seed_test_recipes)
+        .unwrap();
+    drop(state);
+    let state = AppState::open_dir(dir.path(), adapters()).unwrap();
+    assert_eq!(recipe_count(&state), 8);
 }

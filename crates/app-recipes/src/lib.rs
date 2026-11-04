@@ -1,5 +1,5 @@
-//! The recipes adapter (docs/DECISIONS.md D41): the family recipe collection,
-//! kept in the pod's own SQLite (`recipes_*` tables), served as the `recipes`
+//! The recipes adapter (docs/DECISIONS.md D41): a recipe collection, kept in
+//! the pod's own SQLite (`recipes_*` tables), served as the `recipes`
 //! app. There is no upstream and no sign-in.
 //!
 //! - `GET /v1/workspaces/recipes`: the `all` feed, every recipe by category
@@ -7,7 +7,9 @@
 //! - `GET /v1/recipes/screens/recipe?id=<slug>`: one recipe's screen data
 //!   ([`db::recipe_screen`]).
 //!
-//! The recipes arrive by migration: step 2 imports `data/import-0001.json`.
+//! A new pod starts with no recipes (decision `recipes-start-empty`); pods
+//! that ran the old family import (migration step 2) keep theirs. Tests seed
+//! made-up ones with [`db::seed_test_recipes`].
 
 pub mod db;
 pub mod format;

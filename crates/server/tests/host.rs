@@ -75,7 +75,6 @@ async fn env_custom(config: HostConfig, allowed: Vec<String>) -> Env {
     };
     let factory = server::pod_factory(pixelfed, false, 86_400, true);
     let config = HostConfig {
-        new_pod_settings: server::new_pod_settings(false),
         temporary_pod_settings: server::temporary_pod_settings(),
         ..config
     };
@@ -99,18 +98,13 @@ async fn env() -> Env {
 }
 
 impl Env {
-    async fn create(&self, name: &str, import_recipes: bool) -> String {
+    async fn create(&self, name: &str) -> String {
         let host = self.host.clone();
         let name = name.to_owned();
         tokio::task::spawn_blocking(move || {
-            host.create_pod(
-                &name,
-                PodKind::Admin,
-                None,
-                &server::new_pod_settings(import_recipes),
-            )
-            .unwrap()
-            .token
+            host.create_pod(&name, PodKind::Admin, None, &[])
+                .unwrap()
+                .token
         })
         .await
         .unwrap()
@@ -259,25 +253,25 @@ async fn a_caller_without_a_pod_token_gets_only_the_open_screen() {
 }
 
 #[tokio::test]
-async fn a_pod_token_opens_its_pod_and_recipes_are_imported_only_when_asked() {
+async fn a_pod_token_opens_its_pod_and_new_pods_have_no_recipes() {
     let env = env().await;
-    let family = env.create("family", true).await;
-    let other = env.create("other", false).await;
-    let (status, body) = post(&env.url("/v1/pods/open"), None, json!({ "token": family })).await;
+    let first = env.create("first").await;
+    let other = env.create("other").await;
+    let (status, body) = post(&env.url("/v1/pods/open"), None, json!({ "token": first })).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["session_token"], family);
-    for wrong in ["cpod_wrong", "", "family"] {
+    assert_eq!(body["session_token"], first);
+    for wrong in ["cpod_wrong", "", "first"] {
         let (status, body) = post(&env.url("/v1/pods/open"), None, json!({ "token": wrong })).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{wrong}");
         assert_eq!(body["error"], "pod_not_found");
     }
-    for (token, recipes) in [(&family, 81), (&other, 0)] {
+    for token in [&first, &other] {
         let (status, _, body) = get(&env.url("/v1/workspaces/recipes"), Some(token)).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         let n = body["queries"]["recipes:all"]
             .as_array()
             .map_or(0, Vec::len);
-        assert_eq!(n, recipes);
+        assert_eq!(n, 0, "decision `recipes-start-empty`");
         let (_, _, apps) = get(&env.url("/v1/apps"), Some(token)).await;
         assert!(apps["apps"].as_array().unwrap().len() >= 2, "{apps}");
     }
@@ -286,8 +280,8 @@ async fn a_pod_token_opens_its_pod_and_recipes_are_imported_only_when_asked() {
 #[tokio::test]
 async fn pods_keep_their_sign_ins_and_media_apart() {
     let env = env().await;
-    let a = env.create("a", false).await;
-    let b = env.create("b", false).await;
+    let a = env.create("a").await;
+    let b = env.create("b").await;
     sign_in(&env, &a).await;
     let (status, _, feed) = get(&env.url("/v1/workspaces/pixelfed_home"), Some(&a)).await;
     assert_eq!(status, StatusCode::OK, "{feed}");
@@ -345,7 +339,7 @@ async fn pods_keep_their_sign_ins_and_media_apart() {
 #[tokio::test]
 async fn logout_keeps_the_pod_token_and_rotation_replaces_it() {
     let env = env().await;
-    let token = env.create("me", false).await;
+    let token = env.create("me").await;
     sign_in(&env, &token).await;
     let (_, _, body) = get(&env.url("/v1/auth/sign-ins"), Some(&token)).await;
     assert_eq!(body["sign_ins"][0]["id"], "pixelfed", "{body}");
@@ -404,7 +398,7 @@ async fn temporary_pods_are_capped_and_swept() {
     let (status, body) = post(&env.url("/v1/pods/temporary"), None, json!({})).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"], "temporary_pods_full");
-    // Full features, no family recipes.
+    // Full features, no recipes.
     let (status, _, body) = get(&env.url("/v1/workspaces/recipes"), Some(&tokens[0])).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
@@ -443,8 +437,8 @@ async fn temporary_pods_are_capped_and_swept() {
     assert_eq!(status, StatusCode::OK);
 }
 
-/// The rollout: today's single-pod `server.db` (with the family recipes)
-/// becomes an admin pod with everything in it.
+/// The rollout: a single-pod `server.db` from before D46 (here with the
+/// made-up test recipes) becomes an admin pod with everything in it.
 #[tokio::test]
 async fn adopting_a_single_pod_database_keeps_its_data() {
     let env = env().await;
@@ -453,6 +447,10 @@ async fn adopting_a_single_pod_database_keeps_its_data() {
     tokio::task::spawn_blocking(move || {
         let state = server::open_dir(&old_path).unwrap();
         assert_eq!(state.store().adapter_version("recipes").unwrap(), 2);
+        state
+            .store()
+            .with_conn(app_recipes::db::seed_test_recipes)
+            .unwrap();
     })
     .await
     .unwrap();
@@ -470,7 +468,7 @@ async fn adopting_a_single_pod_database_keeps_its_data() {
     );
     let (status, _, body) = get(&env.url("/v1/workspaces/recipes"), Some(&pod.token)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["queries"]["recipes:all"].as_array().unwrap().len(), 81);
+    assert_eq!(body["queries"]["recipes:all"].as_array().unwrap().len(), 8);
     // The renamed original can go once the pod works; a lookalike for a pod
     // that doesn't exist stays.
     let stranger = old.path().join(format!("x.adopted-{}", "0".repeat(32)));
@@ -500,7 +498,7 @@ async fn the_open_pod_serves_callers_without_a_token() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["workspace"]["id"], "pixelfed_demo");
     // Admin pods still need their own token.
-    let token = env.create("me", false).await;
+    let token = env.create("me").await;
     let (status, _, _) = get(&env.url("/v1/workspaces/recipes"), Some(&token)).await;
     assert_eq!(status, StatusCode::OK);
     tokio::time::sleep(Duration::from_millis(1)).await;
@@ -539,7 +537,7 @@ async fn the_open_pod_refuses_foreign_host_names() {
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["error"], "host_not_allowed");
-    let token = env.create("me", false).await;
+    let token = env.create("me").await;
     let resp = with_host("pod.example".to_owned(), Some(token)).await;
     assert_eq!(
         resp.status(),
@@ -675,7 +673,7 @@ async fn temporary_pods_stay_on_the_default_instance() {
     .await;
     let (_, body) = post(&env.url("/v1/pods/temporary"), None, json!({})).await;
     let temp = body["session_token"].as_str().unwrap().to_owned();
-    let admin = env.create("me", false).await;
+    let admin = env.create("me").await;
     let register = |token: String, instance: String| {
         let url = env.url("/v1/auth/pixelfed/app");
         async move {
@@ -746,8 +744,8 @@ async fn concurrent_temporary_pods_respect_the_cap() {
 #[tokio::test]
 async fn uploads_go_to_their_pod_and_load_from_its_public_prefix() {
     let env = env().await;
-    let a = env.create("a", false).await;
-    let b = env.create("b", false).await;
+    let a = env.create("a").await;
+    let b = env.create("b").await;
     let mut photo = vec![0xFF, 0xD8, 0xFF, 0xE0];
     photo.resize(3 * 1024 * 1024, 7);
     let resp = client()
@@ -794,7 +792,7 @@ async fn uploads_go_to_their_pod_and_load_from_its_public_prefix() {
 #[tokio::test]
 async fn the_scheduler_polls_pods_with_devices() {
     let env = env().await;
-    let token = env.create("alice", false).await;
+    let token = env.create("alice").await;
     sign_in(&env, &token).await;
     // No device yet: nothing is polled.
     env.host.run_due_polls().await;
