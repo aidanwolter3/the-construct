@@ -27,6 +27,7 @@ pub mod session;
 pub mod source;
 pub mod static_app;
 pub mod store;
+pub mod tz;
 pub mod uploads;
 pub mod util;
 pub mod validate;

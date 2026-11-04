@@ -374,6 +374,7 @@ mod tests {
             order_by: Vec::new(),
             descending: false,
             next_field: 3,
+            reminders: Vec::new(),
         };
         def.fields[0].aliases.push("name".into());
         HashMap::from([("todos".to_owned(), def)])
