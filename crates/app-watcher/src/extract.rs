@@ -11,7 +11,7 @@
 use serde_json::{Value, json};
 
 use crate::html;
-use crate::when::When;
+use crate::when::{When, Zone, tzid_zone};
 
 /// An event as an extractor found it.
 #[derive(Debug, Clone, PartialEq)]
@@ -110,7 +110,9 @@ fn ics_unescape(s: &str) -> String {
 }
 
 /// The events of an iCalendar feed. Lines are unfolded; `DTSTART;TZID=…`
-/// keeps its wall clock (no zone database), a `Z` time is UTC.
+/// keeps its wall clock with that zone's offset at the time (an unknown
+/// zone, such as a Windows name, leaves it to the target's), a `Z` time is
+/// UTC.
 pub fn ics(text: &str) -> Vec<RawEvent> {
     // Unfold: a line starting with a space or tab continues the previous.
     let mut lines: Vec<String> = Vec::new();
@@ -125,7 +127,8 @@ pub fn ics(text: &str) -> Vec<RawEvent> {
         }
     }
     let mut out = Vec::new();
-    let mut cur: Option<Vec<(String, String)>> = None;
+    // (name, TZID parameter, value)
+    let mut cur: Option<Vec<(String, String, String)>> = None;
     for line in lines {
         if line.eq_ignore_ascii_case("BEGIN:VEVENT") {
             cur = Some(Vec::new());
@@ -133,12 +136,16 @@ pub fn ics(text: &str) -> Vec<RawEvent> {
         }
         if line.eq_ignore_ascii_case("END:VEVENT") {
             if let Some(props) = cur.take() {
-                let get = |k: &str| {
-                    props
-                        .iter()
-                        .find(|(n, _)| n == k)
-                        .map(|(_, v)| v.as_str())
-                        .unwrap_or("")
+                let find = |k: &str| props.iter().find(|(n, _, _)| n == k);
+                let get = |k: &str| find(k).map(|(_, _, v)| v.as_str()).unwrap_or("");
+                // `DTSTART;TZID=America/Denver:20261106T193000` ->
+                // `2026-11-06T19:30-07:00`.
+                let date = |k: &str| match find(k) {
+                    Some((_, tzid, v)) => match (tzid_zone(tzid), When::parse(v)) {
+                        (Some(tz), Some(w)) => w.placed_in(Zone::Named(tz)).stored(),
+                        _ => v.clone(),
+                    },
+                    None => String::new(),
                 };
                 if get("STATUS").eq_ignore_ascii_case("CANCELLED") {
                     continue;
@@ -146,8 +153,8 @@ pub fn ics(text: &str) -> Vec<RawEvent> {
                 if let Some(e) = event(
                     Some(get("UID").to_owned()),
                     &ics_unescape(get("SUMMARY")),
-                    get("DTSTART"),
-                    get("DTEND"),
+                    &date("DTSTART"),
+                    &date("DTEND"),
                     &ics_unescape(get("LOCATION")),
                     &ics_unescape(get("DESCRIPTION")),
                     get("URL"),
@@ -160,9 +167,15 @@ pub fn ics(text: &str) -> Vec<RawEvent> {
         if let Some(props) = cur.as_mut()
             && let Some((key, value)) = line.split_once(':')
         {
-            // `DTSTART;TZID=America/Denver` -> `DTSTART`.
-            let name = key.split(';').next().unwrap_or("").to_ascii_uppercase();
-            props.push((name, value.to_owned()));
+            // `DTSTART;TZID=America/Denver` -> `DTSTART`, `America/Denver`.
+            let mut parts = key.split(';');
+            let name = parts.next().unwrap_or("").to_ascii_uppercase();
+            let tzid = parts
+                .filter_map(|p| p.split_once('='))
+                .find(|(k, _)| k.eq_ignore_ascii_case("TZID"))
+                .map(|(_, v)| v.to_owned())
+                .unwrap_or_default();
+            props.push((name, tzid, value.to_owned()));
         }
         if out.len() >= MAX_EVENTS {
             break;
@@ -456,6 +469,35 @@ BEGIN:VEVENT\r\nSUMMARY:No date\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
         assert_eq!(ev[0].venue, "The End\nLafayette");
         assert_eq!(ev[0].description, "House team night");
         assert_eq!(ev[0].source_id.as_deref(), Some("abc@x"));
+        assert_eq!(ev[0].start.stored(), "2026-11-06T19:30-07:00");
+    }
+
+    #[test]
+    fn ics_tzid_follows_daylight_saving() {
+        let feed = "BEGIN:VCALENDAR\r\n\
+BEGIN:VEVENT\r\nUID:jul\r\nSUMMARY:July\r\nDTSTART;TZID=America/Denver:20260710T193000\r\n\
+DTEND;TZID=America/Denver:20260710T213000\r\nEND:VEVENT\r\n\
+BEGIN:VEVENT\r\nUID:dec\r\nSUMMARY:December\r\nDTSTART;TZID=America/Denver:20261210T193000\r\nEND:VEVENT\r\n\
+BEGIN:VEVENT\r\nUID:win\r\nSUMMARY:Windows zone\r\nDTSTART;TZID=Mountain Standard Time:20261210T193000\r\nEND:VEVENT\r\n\
+END:VCALENDAR\r\n";
+        let ev = ics(feed);
+        let utc = |s: &str| When::parse(s).unwrap().timestamp(None);
+        // 7:30 PM MDT (UTC-6) and 7:30 PM MST (UTC-7).
+        assert_eq!(ev[0].start.timestamp(None), utc("2026-07-11T01:30Z"));
+        assert_eq!(ev[0].end.unwrap().stored(), "2026-07-10T21:30-06:00");
+        assert_eq!(ev[1].start.timestamp(None), utc("2026-12-11T02:30Z"));
+        assert_eq!(ev[1].start.time_text().as_deref(), Some("7:30 PM"));
+        // A zone we can't resolve keeps its wall clock for the target's zone.
+        assert_eq!(ev[2].start.stored(), "2026-12-10T19:30");
+        // A `Z` time on a Denver target shows in Denver time.
+        let z = ics("BEGIN:VEVENT\r\nSUMMARY:Z\r\nDTSTART:20260711T013000Z\r\nEND:VEVENT\r\n");
+        let shown = z[0]
+            .start
+            .shifted_to(Some(Zone::Named(chrono_tz::America::Denver)));
+        assert_eq!(
+            (shown.date_text(), shown.time_text()),
+            ("Fri Jul 10".into(), Some("7:30 PM".into()))
+        );
     }
 
     #[test]

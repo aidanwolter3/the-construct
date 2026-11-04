@@ -11,13 +11,16 @@ use pod_core::store::Migration;
 
 use crate::extract::RawEvent;
 use crate::rules::{Candidate, RuleSpec};
-use crate::when::{When, offset_text};
+use crate::when::{When, Zone, offset_text, parse_time_zone};
 
 /// Append-only: never edit or reorder a step that has shipped.
 pub static MIGRATIONS: &[Migration] = &[
     Migration::Sql(SCHEMA),
     // 2: every rule belongs to one site (decision `watcher-rules-per-site`).
     Migration::Rust(rules_per_site),
+    // 3: a target's zone by name (issue #66); `utc_offset_min` stays as the
+    // fallback for targets saved before.
+    Migration::Sql("ALTER TABLE watcher_targets ADD COLUMN time_zone TEXT;"),
 ];
 
 /// Give every rule exactly one site: a rule for all sites (or several)
@@ -188,7 +191,10 @@ pub struct Target {
     /// Fetch each new event's own page once for its full description.
     pub details: bool,
     pub interval_secs: i64,
+    /// A fixed offset (minutes east of UTC): used only without a `time_zone`.
     pub utc_offset: Option<i32>,
+    /// The site's zone by name (`America/Denver`), following daylight saving.
+    pub time_zone: Option<chrono_tz::Tz>,
     pub archived: bool,
     pub created_at: i64,
     pub next_fetch_at: i64,
@@ -205,7 +211,7 @@ pub struct Target {
 
 const TARGET_COLS: &str = "id, title, url, extractor, config_json, interval_secs, utc_offset_min,
     archived, created_at, next_fetch_at, etag, last_modified, content_hash, last_fetch_at,
-    last_ok_at, last_error, failures, empty_runs, last_extractor";
+    last_ok_at, last_error, failures, empty_runs, last_extractor, time_zone";
 
 fn target_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Target> {
     let config: Value = serde_json::from_str(&r.get::<_, String>(4)?).unwrap_or(Value::Null);
@@ -230,7 +236,28 @@ fn target_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Target> {
         failures: r.get(16)?,
         empty_runs: r.get(17)?,
         last_extractor: r.get(18)?,
+        time_zone: zone_column(r.get(19)?),
     })
+}
+
+/// A stored zone name (an unknown one, say from a newer zone database,
+/// reads as none).
+fn zone_column(name: Option<String>) -> Option<chrono_tz::Tz> {
+    parse_time_zone(name.as_deref().unwrap_or(""))
+        .ok()
+        .flatten()
+}
+
+impl Target {
+    /// The zone for times without an offset: the named zone, else the
+    /// fixed offset.
+    pub fn zone(&self) -> Option<Zone> {
+        target_zone(self.time_zone, self.utc_offset)
+    }
+}
+
+fn target_zone(tz: Option<chrono_tz::Tz>, offset: Option<i32>) -> Option<Zone> {
+    tz.map(Zone::Named).or(offset.map(Zone::Fixed))
 }
 
 pub fn target(c: &Connection, id: &str) -> rusqlite::Result<Option<Target>> {
@@ -294,8 +321,9 @@ pub fn insert_target(
 ) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT INTO watcher_targets (id, title, url, extractor, config_json, interval_secs,
-             utc_offset_min, archived, client_id, created_at, updated_at, next_fetch_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, 0)",
+             utc_offset_min, archived, client_id, created_at, updated_at, next_fetch_at,
+             time_zone)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, 0, ?11)",
         params![
             t.id,
             t.title,
@@ -306,7 +334,8 @@ pub fn insert_target(
             t.utc_offset,
             t.archived,
             client_id,
-            t.created_at
+            t.created_at,
+            t.time_zone.map(|z| z.name())
         ],
     )?;
     Ok(())
@@ -325,7 +354,8 @@ pub fn update_target(tx: &Transaction<'_>, t: &Target, now: i64) -> rusqlite::Re
     });
     tx.execute(
         "UPDATE watcher_targets SET title = ?2, url = ?3, extractor = ?4, config_json = ?5,
-             interval_secs = ?6, utc_offset_min = ?7, archived = ?8, updated_at = ?9
+             interval_secs = ?6, utc_offset_min = ?7, archived = ?8, updated_at = ?9,
+             time_zone = ?10
          WHERE id = ?1",
         params![
             t.id,
@@ -336,7 +366,8 @@ pub fn update_target(tx: &Transaction<'_>, t: &Target, now: i64) -> rusqlite::Re
             t.interval_secs,
             t.utc_offset,
             t.archived,
-            now
+            now,
+            t.time_zone.map(|z| z.name())
         ],
     )?;
     if refetch {
@@ -511,6 +542,10 @@ pub fn target_entity(c: &Connection, t: &Target, now: i64) -> rusqlite::Result<E
     v.insert(
         "utc_offset".into(),
         json!(t.utc_offset.map(offset_text).unwrap_or_default()),
+    );
+    v.insert(
+        "time_zone".into(),
+        json!(t.time_zone.map(|z| z.name()).unwrap_or_default()),
     );
     v.insert("archived".into(), json!(t.archived));
     v.insert("health".into(), json!(status));
@@ -717,8 +752,8 @@ pub fn store_events(
     let mut seen: Vec<String> = Vec::new();
     let mut changed = 0;
     for e in events {
-        let start_ts = e.start.timestamp(t.utc_offset);
-        let offset_known = e.start.offset_min.is_some() || t.utc_offset.is_some();
+        let start_ts = e.start.timestamp(t.zone());
+        let offset_known = e.start.offset_min.is_some() || t.zone().is_some();
         let until = relevant_until(&e.start, start_ts, offset_known);
         if until < now {
             continue;
@@ -885,12 +920,12 @@ pub fn prune(c: &Connection, now: i64) -> rusqlite::Result<usize> {
 }
 
 /// An event's entity: its fields, the display text (in the target's
-/// offset when it has one) and its matches.
+/// zone when it has one) and its matches.
 fn event_entity(c: &Connection, id: &str) -> rusqlite::Result<Option<EntityRecord>> {
     let row = c
         .query_row(
             "SELECT e.title, e.start, e.end_at, e.venue, e.description, e.url, e.target_id,
-                    t.title, t.utc_offset_min, e.first_seen_at
+                    t.title, t.utc_offset_min, e.first_seen_at, t.time_zone
              FROM watcher_events e JOIN watcher_targets t ON t.id = e.target_id
              WHERE e.id = ?1",
             [id],
@@ -906,12 +941,24 @@ fn event_entity(c: &Connection, id: &str) -> rusqlite::Result<Option<EntityRecor
                     r.get::<_, String>(7)?,
                     r.get::<_, Option<i32>>(8)?,
                     r.get::<_, i64>(9)?,
+                    r.get::<_, Option<String>>(10)?,
                 ))
             },
         )
         .optional()?;
-    let Some((title, start, end, venue, description, url, target_id, source, offset, first_seen)) =
-        row
+    let Some((
+        title,
+        start,
+        end,
+        venue,
+        description,
+        url,
+        target_id,
+        source,
+        offset,
+        first_seen,
+        tz,
+    )) = row
     else {
         return Ok(None);
     };
@@ -926,7 +973,8 @@ fn event_entity(c: &Connection, id: &str) -> rusqlite::Result<Option<EntityRecor
         let seen = !rows.is_empty() && rows.iter().all(|(_, s)| *s);
         (rows.into_iter().map(|(t, _)| t).collect(), seen)
     };
-    let shown = When::parse(&start).map(|w| w.shifted_to(offset));
+    let zone = target_zone(zone_column(tz), offset);
+    let shown = When::parse(&start).map(|w| w.shifted_to(zone));
     let date_text = shown.map(|w| w.date_text()).unwrap_or_default();
     let time_text = shown.and_then(|w| w.time_text()).unwrap_or_default();
     let when_text = [date_text.as_str(), time_text.as_str()]
@@ -1164,6 +1212,41 @@ mod tests {
         let d = raw("Renamed", "2026-11-07T19:30", Some("x1"));
         assert_eq!(event_id("t", &c), event_id("t", &d), "source ids win");
         assert_ne!(event_id("t", &c), event_id("u", &c));
+    }
+
+    fn run(c: &mut Connection, steps: &[Migration]) {
+        for step in steps {
+            let tx = c.transaction().unwrap();
+            match step {
+                Migration::Sql(sql) => tx.execute_batch(sql).unwrap(),
+                Migration::Rust(f) => f(&tx).unwrap(),
+            }
+            tx.commit().unwrap();
+        }
+    }
+
+    #[test]
+    fn time_zone_migration_keeps_offsets() {
+        let mut c = Connection::open_in_memory().unwrap();
+        run(&mut c, &MIGRATIONS[..2]);
+        c.execute(
+            "INSERT INTO watcher_targets (id, title, url, extractor, interval_secs,
+                 utc_offset_min, created_at, updated_at)
+             VALUES ('t1', 'Old', 'https://a.example/', 'auto', 3600, -420, 0, 0)",
+            [],
+        )
+        .unwrap();
+        run(&mut c, &MIGRATIONS[2..]);
+        let mut t = target(&c, "t1").unwrap().unwrap();
+        assert_eq!(t.time_zone, None);
+        assert_eq!(t.zone(), Some(Zone::Fixed(-420)));
+        t.time_zone = Some(chrono_tz::America::Denver);
+        let tx = c.transaction().unwrap();
+        update_target(&tx, &t, 1).unwrap();
+        tx.commit().unwrap();
+        let t = target(&c, "t1").unwrap().unwrap();
+        assert_eq!(t.zone(), Some(Zone::Named(chrono_tz::America::Denver)));
+        assert_eq!(t.utc_offset, Some(-420));
     }
 
     #[test]
