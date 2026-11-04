@@ -84,7 +84,7 @@ class BindingTest {
         assertEquals("pixelfed://users/7", resolveRef("pixelfed://users/7", post))
         assertNull(resolveRef("${'$'}item.missing", post))
         assertNull(resolveRef("${'$'}item.author_uri", null))
-        // Embedded tokens (DESIGN.md §2.2A: "entity://posts/$item.id") are substituted.
+        // Embedded tokens (docs/layouts.md: "entity://posts/$item.id") are substituted.
         assertEquals("pixelfed://posts/101", resolveRef("pixelfed://posts/${'$'}item.id", post))
     }
 

@@ -1,4 +1,4 @@
-//! Normalized hydration wire bundle (DESIGN.md §2.2C).
+//! Normalized hydration wire bundle (docs/architecture.md "Wire bundle").
 //!
 //! `WorkspaceSpec` is the Rust name for the hydration bundle: a layout tree
 //! plus a flat, URI-keyed map of entities the layout binds against.

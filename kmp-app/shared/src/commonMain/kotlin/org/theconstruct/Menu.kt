@@ -69,7 +69,7 @@ import kotlinx.coroutines.withContext
 // version history opens the version picker) and, at the bottom, a Settings row with the connection status. Settings
 // (docs/decisions/settings-page-and-sign-ins.md) holds the pod (connection, server, leaving the pod), the list of
 // sign-ins, each with a detail page, and the notification settings. Shared Compose: desktop, Android and the
-// simulator run the same code. Test tags are listed in README "The menu".
+// simulator run the same code. Test tags are listed in docs/simulator.md "Test tags".
 
 /** Start padding the workspace title gets so it sits beside the menu button (8 dp margin + 40 dp button + 8 dp). */
 internal val MENU_BUTTON_INSET = 56.dp

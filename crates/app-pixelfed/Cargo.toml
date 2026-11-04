@@ -2,7 +2,6 @@
 name = "app-pixelfed"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 publish.workspace = true
 
 # The Pixelfed adapter: sign-in, home feed, likes, bookmarks, comments, the

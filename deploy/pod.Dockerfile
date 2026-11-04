@@ -3,7 +3,7 @@
 #   docker build -f deploy/pod.Dockerfile -t construct-pod .     # from the repo root
 #   docker run --rm -p 8080:8080 -v construct-data:/data construct-pod
 #
-# Runtime config is environment-only (README "Server runtime configuration").
+# Runtime config is environment-only (docs/server.md "Configuration").
 #
 # Dependencies are compiled in their own layer (cargo-chef): it is rebuilt only when Cargo.toml / Cargo.lock
 # change, so a code-only deploy recompiles just the workspace crates.

@@ -1,4 +1,4 @@
-//! Unified intent model (DESIGN.md §2.2B).
+//! Unified intent model (docs/layouts.md "Intents").
 //!
 //! Actions are decoupled semantic intents; the `"intent"` field selects the
 //! variant on the wire.

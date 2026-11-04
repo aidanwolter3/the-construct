@@ -17,7 +17,7 @@ sealed class SimStep(val command: String, val arg: String = "") {
     object Online : SimStep("online")
     class Screen(val spec: ScreenSpec) : SimStep("screen", spec.label)
     class WaitImages(val timeoutMs: Long) : SimStep("wait-images", timeoutMs.toString())
-    /** Swipes the node [target] selects (see README) towards [direction]: left shows the next carousel page. */
+    /** Swipes the node [target] selects (see docs/simulator.md) towards [direction]: left shows the next carousel page. */
     class Swipe(val direction: String, val target: String) : SimStep("swipe-$direction", target)
     class ScrollTo(val target: String) : SimStep("scroll-to", target)
     /** Replaces the text of the text field [target] selects with [text]. */
@@ -85,7 +85,7 @@ fun validateStepsForMode(steps: List<SimStep>, mode: String) {
 }
 
 /**
- * Parses a simulator script (commands: README "Simulation mode"; `pick <path> [<path>…]` queues image files for the
+ * Parses a simulator script (commands: docs/simulator.md; `pick <path> [<path>…]` queues image files for the
  * next photo picker, see [SimStep.Pick]). Commands are separated by `;` or newlines; each is trimmed, blank
  * entries are ignored and entries starting with `#` are comments. The first word is the command
  * and the rest of the entry (trimmed) is its argument, so `click Count: 2` clicks "Count: 2".

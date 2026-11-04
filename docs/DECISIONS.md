@@ -2,6 +2,10 @@
 
 Short records of places where the implementation resolves ambiguity or deviates from DESIGN.md.
 
+> DESIGN.md is now [`history/original-design.md`](history/original-design.md) and `docs/NOTIFICATIONS.md` is
+> [`history/notifications-plan.md`](history/notifications-plan.md). The README sections these entries mention moved
+> into the guides in [`docs/`](README.md). The entries describe the system as it was when each was written.
+
 **This file is closed at D52.** New decisions go in [`decisions/`](decisions/), one file each, named by topic
 and not numbered, so parallel PRs no longer fight over the next number (see [decisions/README.md](decisions/README.md)).
 The entries below keep their numbers; only a "Superseded by …" line may be added to one.
@@ -1683,7 +1687,7 @@ Superseded in part by [recipes-start-empty](decisions/recipes-start-empty.md) (`
 
 ## D49: Attachments: the client stages files, the outbox uploads them, the pod stores them
 
-- **Why:** posting photos (docs/POSTING.md) needs files to travel from the user's device to an adapter. The outbox
+- **Why:** posting photos ([`posting.md`](posting.md)) needs files to travel from the user's device to an adapter. The outbox
   and pod only moved JSON. Doing it generically means any app can take photos with a layout change and an adapter
   route.
 - **Client:** `core://MediaPicker` puts staged attachment ids in the form. `stage_attachment(path)` (engine, FFI)
@@ -1739,7 +1743,7 @@ Superseded in part by [recipes-start-empty](decisions/recipes-start-empty.md) (`
 
 ## D52: Notifications from apps are a generic pod pipeline; only adapters know their source
 
-Design: `docs/NOTIFICATIONS.md`. README "Notifications" has the API and configuration.
+Design: [`history/notifications-plan.md`](history/notifications-plan.md); how it works now: [`notifications.md`](notifications.md).
 
 - **Why:** the user wants Pixelfed notifications from their pod on every device, including when the app is closed.
   Nothing existed: no background work in pods, SSE carried only layout events, no device record, no push on Android.

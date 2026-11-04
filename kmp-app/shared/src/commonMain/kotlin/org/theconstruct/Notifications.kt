@@ -11,7 +11,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 
-// Notifications from apps (DECISIONS D52, docs/NOTIFICATIONS.md): the wire model, lenient parsers and the pure rules the
+// Notifications from apps (DECISIONS D52, docs/notifications.md): the wire model, lenient parsers and the pure rules the
 // inbox follows (time labels, day groups). Nothing here knows any app. The Compose UI is in Inbox.kt.
 
 /**

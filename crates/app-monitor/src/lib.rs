@@ -117,7 +117,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
 const OK_COLOR: &str = "#2E7D32";
 const WARN_COLOR: &str = "#B26A00";
 
-/// Thresholds (`CONSTRUCT_MONITOR_*`, README).
+/// Thresholds (`CONSTRUCT_MONITOR_*`, docs/server.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MonitorConfig {
     /// Wrong pod codes and unknown tokens per hour before a warning.

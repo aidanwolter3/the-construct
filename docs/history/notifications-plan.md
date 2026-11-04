@@ -1,7 +1,9 @@
-# Notifications from apps: design (D52)
+# Notifications from apps: build plan (D52)
 
-Status: built (see D52 in `docs/DECISIONS.md` for what changed while building: no wake hook, the FCM fallback needs no
-Firebase project, the engine's offline behaviour). Section 10's phases shipped together.
+> **Archived.** This is the plan the notifications pipeline was built from, kept for history. How it works today is
+> in [`../notifications.md`](../notifications.md). D52 in [`../DECISIONS.md`](../DECISIONS.md) records what changed
+> while building: there is no wake hook, the FCM fallback needs no Firebase project, and the engine's offline
+> behaviour differs. Section 10's phases shipped together; "PROGRESS.md" and `SCHEMA_VERSION` no longer exist.
 
 ## Context
 The goal: Pixelfed notifications (likes, comments, follows, ...) from the pod, on the user's devices, including when the app

@@ -13,7 +13,7 @@ import java.time.format.DateTimeFormatter
 import kotlin.system.exitProcess
 
 /**
- * Headless simulator entry point (README "Simulation mode"). Run through
+ * Headless simulator entry point (docs/simulator.md). Run through
  * `./gradlew :desktopApp:simulate -P<name>=<value>`, which forwards each property as `--<name>=<value>`.
  *
  * Options: workspace (pixelfed_home), screen (phone), script / scriptFile (default "shot initial"),

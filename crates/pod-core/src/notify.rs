@@ -1,4 +1,4 @@
-//! Notifications from apps (D52, `docs/NOTIFICATIONS.md`).
+//! Notifications from apps (D52, `docs/notifications.md`).
 //!
 //! Adapters report notifications ([`AppState::notify`]), either when the host
 //! scheduler polls them ([`AppAdapter::poll_notifications`], driven by

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Local, loopback-only Pixelfed instance for end-to-end tests (DEV ONLY; never points at a public instance).
 # Compose project: dev/pixelfed/docker-compose.yml, served at http://localhost:8090 (127.0.0.1 only).
-# Requires colima + docker CLI + compose plugin (see README "Local Pixelfed instance").
+# Requires colima + docker CLI + compose plugin (see docs/testing.md "A local real Pixelfed").
 #
 # Usage: scripts/pixelfed_dev.sh <command>
 #   up      start colima if needed, compose up -d, wait until healthy, first-run init
@@ -43,7 +43,7 @@ log() { printf '[pixelfed_dev] %s\n' "$*" >&2; }
 json() { python3 -c "import sys,json; d=json.load(sys.stdin); print($1)"; }
 
 ensure_colima() {
-  command -v colima >/dev/null || { log "colima not found in ~/.local/bin (see README)"; exit 1; }
+  command -v colima >/dev/null || { log "colima not found in ~/.local/bin (see docs/testing.md)"; exit 1; }
   if ! colima status >/dev/null 2>&1; then
     log "starting colima"
     colima start --cpu "${COLIMA_CPU:-2}" --memory "${COLIMA_MEMORY:-4}" --disk "${COLIMA_DISK:-15}" \

@@ -1,4 +1,4 @@
-# Fake Pixelfed upstream as a tiny sidecar image (README "Fake Pixelfed upstream").
+# Fake Pixelfed upstream as a tiny sidecar image (docs/testing.md "Fake Pixelfed").
 #
 #   docker build -f fake-pixelfed/Dockerfile -t construct-fake-pixelfed .   # from the repo root
 #   docker run --rm -p 8081:8081 -e FAKE_PIXELFED_ADMIN=1 \

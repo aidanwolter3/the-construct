@@ -1,8 +1,8 @@
 # Posting photos
 
 How a user posts photos with a caption to Pixelfed, and why the client, the engine and `pod-core` stay generic while
-doing it. Decisions: D49 (attachments and uploads), D50 (server-side pending creates and data events), D51 (schema 9
-vocabulary).
+doing it. Decisions: D49 (attachments and uploads), D50 (server-side pending creates and data events), D51 (the
+picker and create vocabulary) in [DECISIONS.md](DECISIONS.md).
 
 ## What the user sees
 
@@ -18,8 +18,8 @@ vocabulary).
 
 | Part | Knows | Doesn't know |
 | --- | --- | --- |
-| Layout (`layouts/pixelfed_home/0004.json`) | The compose screen, the 4-photo limit, what the placeholder looks like | — |
-| Shared UI | `core://MediaPicker`, picking files, `dismiss` | Pixelfed, posts |
+| Layout (`layouts/pixelfed_home/`) | The compose screen, the 4-photo limit, what the placeholder looks like | — |
+| Shared UI | `core://MediaPicker`, picking files, closing the screen | Pixelfed, posts |
 | Engine (`client-core`) | Staging files, uploading a create's attachments before its POST, `position`, `event: data` | What the files are for |
 | `pod-core` | Storing uploads, giving adapters access, `event: data`, the `resume` hook | Pixelfed, posts |
 | Pixelfed adapter | Media upload, processing, `POST /api/v1/statuses`, pending posts in the feed | — |
@@ -55,11 +55,12 @@ Share ── Create ──────▶ temp post at top of feed
 - `EngineHandle.stage_attachment(path)` decodes the image, scales its longest side to at most 2048 px, writes a JPEG
   without metadata (no GPS) under `<storage>/attachments/`, and registers a local entity
   `construct://attachments/<id>` (`url: file://…`, `aspect_ratio`) so Carousels can draw it.
-- `action.mutation.create` gains `attachments` (`{"photos": "$form.photos"}`), `position` and `dismiss`. In the
-  intent's `entity`, `$attachments.photos` becomes the local entity URIs; in its `payload`, the upload ids (filled in
-  at flush time).
-- Store v5 adds the `attachments` table; a create's attachment refs (and their upload ids) live in its
-  `create_json`.
+- **Share** is an `action.sequence` of an `action.mutation.create` and `action.navigation.back`. The create's
+  `attachments` (`{"photos": "$form.photos"}`) names the picked files and `position: "start"` puts the placeholder
+  at the top of the feed. In the intent's `entity`, `$attachments.photos` becomes the local entity URIs; in its
+  `payload`, the upload ids (filled in at flush time).
+- The engine's `attachments` table tracks staged files; a create's attachment refs (and their upload ids) live in
+  its outbox row.
 - The outbox uploads a row's attachments first (`POST /v1/uploads`, raw body, `Idempotency-Key: <attachment id>`),
   remembers each `upload_id` so retries don't upload twice, then POSTs the payload as for any create. Attachment files
   are deleted when the row is.

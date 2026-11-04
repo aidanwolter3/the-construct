@@ -53,7 +53,7 @@ it only where dev apps are shown.
   unchanged once the core resolves an app through `AppState::app(id) -> AppRef` (`Builtin` | `Custom`) instead of the
   static catalog. A version is recorded as written for its vocabulary's schema, raised to the oldest one current
   clients draw.
-- **API** (`pod_core::custom`, README "Custom apps"): create, edit with compare-and-append (`base_version`, 409
+- **API** (`pod_core::custom`, [`custom-apps.md`](../custom-apps.md)): create, edit with compare-and-append (`base_version`, 409
   `stale_base`), rename/re-icon/re-feed (the latest layout must still fit), restore (appends a copy), soft delete
   (purged after 30 days by the hourly sweeper; open event streams get `event: deleted` and end), a dry-run validate,
   and hide/show for any app (`pod_settings` `apps.hidden`; `GET /v1/apps` lists hidden apps only with `?all=1`, and

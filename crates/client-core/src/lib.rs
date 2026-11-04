@@ -1,4 +1,4 @@
-//! Client core engine (DESIGN.md §2.3).
+//! Client core engine (docs/architecture.md "The engine").
 //!
 //! `ConstructEngine` owns workspace state, fetches the hydration bundle over
 //! HTTP and applies optimistic mutations locally, pushing a `StateSnapshot`

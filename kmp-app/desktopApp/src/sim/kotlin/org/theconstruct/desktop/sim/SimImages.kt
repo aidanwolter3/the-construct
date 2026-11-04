@@ -15,7 +15,7 @@ import java.io.File
 import java.io.FileNotFoundException
 
 /**
- * Image loading for the simulator (README "Simulation mode", DECISIONS: sim image loading).
+ * Image loading for the simulator (docs/simulator.md, DECISIONS: sim image loading).
  *
  * Fixture mode never touches the network: [FixtureMediaInterceptor] serves any image URL whose path ends in
  * `/storage/<file>` or `/v1/pixelfed/media/<file>` from `fake-pixelfed/fixtures/media/<file>`; every other URL fails

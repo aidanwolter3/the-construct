@@ -15,7 +15,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 
-// Photo picking for `core://MediaPicker` (DECISIONS D49, D51; docs/POSTING.md). Nothing here knows what the photos are
+// Photo picking for `core://MediaPicker` (DECISIONS D49, D51; docs/posting.md). Nothing here knows what the photos are
 // for: the picker stages files with the engine and keeps their ids in the form; a create's `attachments` sends them.
 
 /**
