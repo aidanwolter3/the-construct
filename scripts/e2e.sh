@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# End-to-end suite (crates/e2e/tests/suite.rs): sign-in via PKCE with a scripted browser, feed,
+# End-to-end suite (crates/e2e/tests/integration/suite.rs): sign-in via PKCE with a scripted browser, feed,
 # like, offline like -> flush, bookmark; the real pod and client-core engine in-process. Also
-# crates/e2e/tests/notifications.rs (a like injected on the fake becomes an unread pod
+# crates/e2e/tests/integration/notifications.rs (a like injected on the fake becomes an unread pod
 # notification; skipped against a real upstream).
 # README "End-to-end tests".
 #
@@ -9,7 +9,7 @@
 #   --upstream fake  (default) build the fake-pixelfed binary, start it on a free loopback port
 #                    with its admin endpoints, run the suite against it (E2E_FAKE_URL), stop it.
 #     --in-process   use the fake in-process instead (what `cargo test --workspace` does).
-#     --faults       also run the upstream fault tests (crates/e2e/tests/upstream_faults.rs,
+#     --faults       also run the upstream fault tests (crates/e2e/tests/integration/upstream_faults.rs,
 #                    in-process fake; ~11 s).
 #   --upstream real  a real Pixelfed: PIXELFED_INSTANCE_URL (default http://localhost:8090, the
 #                    local dev stack, scripts/pixelfed_dev.sh up && seed). Signs in through the
@@ -40,7 +40,8 @@ done
 run_suite() {
   # The in-process pods seal upstream credentials, as staging does (a throwaway key).
   CONSTRUCT_SECRETS_KEY="${CONSTRUCT_SECRETS_KEY:-$(head -c 32 /dev/urandom | base64)}" \
-  cargo test -p e2e --test suite --test notifications -- --nocapture ${extra[@]+"${extra[@]}"}
+  # One test binary for all of e2e's tests; the filters pick the suite's modules.
+  cargo test -p e2e --test integration -- --nocapture suite:: notifications:: ${extra[@]+"${extra[@]}"}
 }
 
 case "$upstream" in
@@ -71,7 +72,7 @@ case "$upstream" in
       E2E_FAKE_URL="$url" run_suite
     fi
     if [[ $faults == 1 ]]; then
-      cargo test -p e2e --test upstream_faults ${extra[@]+"${extra[@]}"}
+      cargo test -p e2e --test integration -- upstream_faults:: ${extra[@]+"${extra[@]}"}
     fi
     ;;
   real)

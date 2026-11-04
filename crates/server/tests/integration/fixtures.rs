@@ -10,7 +10,7 @@
 //!   pointing at the fake's `/storage/` (which the simulator serves), and the
 //!   post screen data of every fixture post (D48).
 //!
-//! `UPDATE_FIXTURES=1 cargo test -p server --test fixtures` rewrites them.
+//! `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::` rewrites them.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -49,7 +49,7 @@ fn check_or_write(name: &str, want: &str) {
     let have = std::fs::read_to_string(&path).unwrap_or_default();
     assert!(
         have == want,
-        "fixtures/{name} is out of date; run UPDATE_FIXTURES=1 cargo test -p server --test fixtures"
+        "fixtures/{name} is out of date; run UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::"
     );
 }
 

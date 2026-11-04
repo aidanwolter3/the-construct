@@ -824,7 +824,7 @@ idle, ~5 MB after a few hundred requests; the Docker container ~1 MB). Image: `r
 docker build -f crates/fake-pixelfed/Dockerfile -t construct-fake-pixelfed .      # from the repo root
 docker run --rm -p 127.0.0.1:8081:8081 -e FAKE_PIXELFED_ADMIN=1 \
   -e FAKE_PIXELFED_PUBLIC_URL=http://127.0.0.1:8081 construct-fake-pixelfed
-E2E_FAKE_URL=http://127.0.0.1:8081 cargo test -p e2e --test suite                # suite against it
+E2E_FAKE_URL=http://127.0.0.1:8081 cargo test -p e2e --test integration suite::     # suite against it
 ```
 
 Inside the container it binds `0.0.0.0:8081`, so the admin routes stay off unless `FAKE_PIXELFED_ADMIN=1`; it
@@ -878,7 +878,7 @@ visible.
 
 `crates/e2e` runs the real pod (`server::app`, in-memory store) and the client-core engine in-process against a
 Pixelfed upstream; the engine reaches the pod through a TCP proxy the tests can switch off (offline). The same
-suite (`tests/suite.rs`) runs against either upstream: sign-in via PKCE with a scripted browser, the feed, a like,
+suite (`tests/integration/suite.rs`) runs against either upstream: sign-in via PKCE with a scripted browser, the feed, a like,
 an offline like flushed on reconnect, a bookmark, sign-out. It leaves the upstream as it found it.
 
 ```bash
@@ -896,7 +896,7 @@ scripts/e2e.sh --upstream real          # a real Pixelfed (default http://localh
   a bare login gets `@example.test`) and consent form as `E2E_PIXELFED_LOGIN` / `E2E_PIXELFED_PASSWORD` (default
   `alice` / `alice-dev-pass`), and upstream state is checked with `E2E_PIXELFED_TOKEN` (default
   `dev/pixelfed/.seed/<login>_token`). Each run registers one OAuth app on the instance (the pod is in-memory).
-- **Fault tests** (`tests/upstream_faults.rs`, always the in-process fake): upstream 503 x2 -> pod 502 -> the client
+- **Fault tests** (`tests/integration/upstream_faults.rs`, always the in-process fake): upstream 503 x2 -> pod 502 -> the client
   retries with backoff -> flushed; upstream 429 -> pod 429 -> retried, never rolled back; expired upstream token ->
   the pod refreshes transparently (action and feed); latency past the 10 s timeouts -> retried (this one takes
   ~11 s); reset with and without `keep_auth` through a live session (a full reset signs the client out; a new
@@ -1326,7 +1326,7 @@ The menu's test tags are listed in [The menu](#the-menu-all-surfaces).
 ends); generic nodes carry `textfield:<field>`, `textfield-send:<field>` and `list-empty`. In fixture
 mode the fake engine answers data paths from `fixtures/pixelfed_screen_data.json`, and sends creates through its
 fake outbox (`offline` keeps them "Sending…" until `online`). That file and the feed fixture's layout are generated
-from the pod: `UPDATE_FIXTURES=1 cargo test -p server --test fixtures` (the test fails when they are stale).
+from the pod: `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::` (the test fails when they are stale).
 
 ```bash
 ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate -Pscreen=phone -Pout=/tmp/sim \

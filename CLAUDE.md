@@ -79,7 +79,9 @@ Staging needs a pod token (D46). Make a temporary one (24 h, deleted afterwards;
 `Authorization: Bearer <token>`; in the simulator click "Try a temporary pod". Never put pod codes in git or files.
 
 ## Deploys and CI
-- Every PR/push: clippy + Rust tests, JVM tests, simulator screenshots (artifact).
+- Every PR/push: clippy + Rust tests (cargo-nextest, plus `cargo test --doc`), JVM tests, simulator screenshots
+  (artifact). A crate's integration tests are one binary, `tests/integration/main.rs` (linking one binary per
+  file was most of CI's build time): add a test file as a `mod` there, not as a new `tests/*.rs`.
 - **Push to `main` auto-deploys staging** (https://the-construct-pod.fly.dev + fake Pixelfed) when the Rust job
   passes. Keep `main` green; server schema changes need a migration that works on staging's existing DB.
 - Prefer branches + PRs for non-trivial work; check `gh run list` after pushing.
@@ -108,7 +110,7 @@ layout state.
   client build. All vocabulary is named layout features: one file `crates/protocol/features/<name>.md` plus
   an arm in `protocol::required_features` (see that folder's README). There is no schema number
   (docs/decisions/named-vocabulary.md). After changing a pixelfed_home layout or the comments
-  data, regenerate the simulator fixtures: `UPDATE_FIXTURES=1 cargo test -p server --test fixtures`.
+  data, regenerate the simulator fixtures: `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::`.
 - Names: product "The Construct"; Kotlin package `org.theconstruct`; env vars `CONSTRUCT_*`; data dirs
   `~/.construct*`; OAuth redirect `construct://oauth`. Server env vars: README "Server runtime configuration".
 - Clients default to staging; override with `CONSTRUCT_BASE_URL` / `-Dconstruct.baseUrl` (desktop),
