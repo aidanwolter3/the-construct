@@ -126,6 +126,7 @@ fn full_workspace() -> UiNode {
         id: "home".into(),
         title: "Home".into(),
         screens: Vec::new(),
+        title_scrolls: false,
         slots: vec![
             SlotSpec {
                 slot_id: "header".into(),

@@ -1614,6 +1614,7 @@
       }
     ],
     "title": "Pixelfed",
+    "title_scrolls": true,
     "type": "core://Workspace"
   }
 }

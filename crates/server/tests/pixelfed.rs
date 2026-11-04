@@ -737,7 +737,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     // No features header (a tool, not a client): the latest version.
-    assert_eq!(version(&resp).as_deref(), Some("9"));
+    assert_eq!(version(&resp).as_deref(), Some("10"));
     let resp = client()
         .get(&url)
         .bearer_auth("tok")
@@ -745,8 +745,8 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
         .send()
         .await
         .unwrap();
-    // A current client: 0009.
-    assert_eq!(version(&resp).as_deref(), Some("9"));
+    // A current client: 0010.
+    assert_eq!(version(&resp).as_deref(), Some("10"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 4));
     // A newer version replaces the feed layout; entities still come upstream.
@@ -756,7 +756,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     }
     server::layouts::append_version(state.store(), "pixelfed_home", &node, None).unwrap();
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("10"));
+    assert_eq!(version(&resp).as_deref(), Some("11"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert_eq!(spec.workspace, node);
     assert_eq!(spec.queries["timeline:home"].len(), 5);

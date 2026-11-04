@@ -186,6 +186,19 @@ class ModelTest {
     }
 
     @Test
+    fun workspaceTitleIsPinnedUnlessItScrolls() {
+        val pinned = assertIs<UiNode.Workspace>(ConstructJson.decodeNode(
+            """{"type":"core://Workspace","id":"a","title":"A","slots":[]}"""
+        ))
+        assertEquals(false, pinned.titleScrolls)
+        val scrolls = assertIs<UiNode.Workspace>(ConstructJson.decodeNode(
+            """{"type":"core://Workspace","id":"a","title":"A","slots":[],"title_scrolls":true}"""
+        ))
+        assertEquals(true, scrolls.titleScrolls)
+        assertEquals(scrolls, ConstructJson.decodeNode(ConstructJson.encodeNode(scrolls)))
+    }
+
+    @Test
     fun schema8GridsAndConditionalsDecodeFromTheWire() {
         val grid = assertIs<UiNode.ItemList>(ConstructJson.decodeNode(
             """{"type":"core://List","query_key":"q","item_template":{"type":"core://Divider"},

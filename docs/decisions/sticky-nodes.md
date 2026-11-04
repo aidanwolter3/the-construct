@@ -1,5 +1,7 @@
 # `core://Sticky` pins content to the top while its parent scrolls (schema 11)
 
+Partly superseded by [pinned-app-title](pinned-app-title.md): the workspace title is pinned, so sticky content pins under it.
+
 Date: 2026-11-03. Related: D34, D36, D43, D44.
 
 The recipes list has a search box and category chips above about 80 recipes. Scrolling down the list
