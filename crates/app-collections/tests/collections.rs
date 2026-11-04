@@ -52,6 +52,7 @@ async fn call(
             protocol::SCHEMA_HEADER,
             protocol::SCHEMA_VERSION.to_string(),
         )
+        .header(protocol::FEATURES_HEADER, protocol::features_header())
         .header("authorization", format!("Bearer {bearer}"));
     let body = match body {
         Some(b) => {
@@ -125,18 +126,14 @@ fn todo_layout(extra: &str) -> Value {
             "type": "core://List", "query_key": "collection:todos",
             "where": {"field": "deleted", "equals": "false"}, "empty_text": "Nothing to do",
             "item_template": {"type": "core://Row", "children": [
-                {"type": "core://Tappable", "content_description": "Done",
+                {"type": "core://IconButton", "icon": "check_box_outline_blank",
+                 "active": "$item.done", "active_icon": "check_box", "content_description": "Done",
                  "on_click": {"intent": "action.mutation.optimistic", "entity_uri": "$item.uri",
                     "field": "done", "value_expr": "!entity.done", "rollback_value": false,
                     "endpoint": "/v1/collections/todos/update",
-                    "payload": {"id": "$item.id", "done": "$value"}},
-                 "content": {"type": "core://Container", "orientation": "Vertical", "padding_dp": 0, "children": [
-                    {"type": "core://Conditional", "value": "$item.done", "equals": "true",
-                     "content": {"type": "core://Text", "style": "Body", "value_expr": "☑"}},
-                    {"type": "core://Conditional", "value": "$item.done", "equals": "false",
-                     "content": {"type": "core://Text", "style": "Body", "value_expr": "☐"}}]}},
+                    "payload": {"id": "$item.id", "done": "$value"}}},
                 {"type": "core://Text", "style": "Body", "value_expr": format!("$item.title {extra}")},
-                {"type": "core://IconButton", "icon": "close", "content_description": "Delete",
+                {"type": "core://IconButton", "icon": "delete", "content_description": "Delete",
                  "on_click": {"intent": "action.mutation.optimistic", "entity_uri": "$item.uri",
                     "field": "deleted", "value_expr": "true", "rollback_value": false,
                     "endpoint": "/v1/collections/todos/delete", "payload": {"id": "$item.id"}}}]}}}]})
