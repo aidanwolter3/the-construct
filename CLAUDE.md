@@ -78,8 +78,7 @@ once.
   needed** (see CONTRIBUTING.md).
 - Interface changes embed simulator screenshots. Images can't be uploaded through the API: push the PNGs to a side
   branch `screenshots/<pr-branch>` (never merged) and embed them with
-  `https://github.com/aidanwolter3/the-construct/blob/screenshots/<pr-branch>/<file>.png?raw=true` (the repo is
-  private, so `raw.githubusercontent.com` links don't render).
+  `https://raw.githubusercontent.com/aidanwolter3/the-construct/screenshots/<pr-branch>/<file>.png`.
 - Keep sessions to one task: file follow-up work as a GitHub issue with the `/ticket` skill (`.claude/skills/ticket`).
 
 ## House rules
