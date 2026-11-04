@@ -629,8 +629,10 @@ fn fetch_401_clears_the_session() {
         &session_key(&base),
         r#"{"token":"stale","username":"constructdemo"}"#,
     );
+    // The engine starts its first fetch at once, so the 401 may already have
+    // signed it out by the time a snapshot is read: check the stored session
+    // instead of a "signed_in" snapshot.
     let engine = engine(&base, &store, None, RedirectMode::Loopback);
-    assert_eq!(auth(&engine.snapshot())["state"], "signed_in");
     wait_until("signed out by the fetch 401", || {
         auth(&engine.snapshot())["state"] == "signed_out"
     });
@@ -657,9 +659,12 @@ fn stale_session_is_cleared_by_the_pods_401_on_fetch() {
         .unwrap();
     assert_eq!(revoked.status().as_u16(), 200);
 
-    // Restart with the stale session in the store.
+    // Restart with the stale session in the store. The engine fetches at
+    // once, so its 401 may sign out before a first snapshot could show
+    // "signed_in"; restoring a stored session is covered by
+    // restart_restores_the_session_from_the_store.
+    assert!(store.get(&session_key(&env.pod)).is_some());
     let engine = engine(&env.pod, &store, None, RedirectMode::Loopback);
-    assert_eq!(auth(&engine.snapshot())["state"], "signed_in");
     wait_signed_out_bundle(&engine);
     assert_eq!(auth(&engine.snapshot())["state"], "signed_out");
     assert!(store.get(&session_key(&env.pod)).is_none());
