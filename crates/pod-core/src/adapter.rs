@@ -20,7 +20,7 @@ use crate::layouts::LayoutSource;
 use crate::notify::{PollCtx, PollOutcome};
 use crate::session::Session;
 use crate::source::{self, SourceManifest};
-use crate::store::{Migration, Store};
+use crate::store::{Step, Store};
 
 /// The handle adapters get: the shared pod state. It is also the axum state
 /// of every route, the adapter's included.
@@ -54,8 +54,8 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub trait AppAdapter: Any + Send + Sync {
     /// A short, unique name for this adapter, such as `pixelfed`.
     ///
-    /// It keys the adapter's row in `adapter_migrations`, so never change it
-    /// once shipped. Use it as the prefix of the adapter's tables
+    /// It is the scope of the adapter's migrations (`schema_migrations`), so
+    /// never change it once shipped. Use it as the prefix of the adapter's tables
     /// (`pixelfed_*`) and routes (`/v1/pixelfed/...`).
     fn name(&self) -> &'static str;
 
@@ -121,14 +121,15 @@ pub trait AppAdapter: Any + Send + Sync {
         default_signed_out(sign_in, app)
     }
 
-    /// Its own SQL migrations, tracked per adapter.
+    /// Its own named migrations, tracked per adapter (decision
+    /// `named-migrations`).
     ///
-    /// Run once at startup, after the core's migrations and before the layout
-    /// sync. Step `i` upgrades this adapter's version from `i` to `i + 1` in
-    /// its own IMMEDIATE transaction. The list is append-only, like the
-    /// core's: never edit or reorder a step that has shipped, because
-    /// staging's database has already run it. Name tables `<adapter>_*`.
-    fn migrations(&self) -> &'static [Migration] {
+    /// Run at startup, after the core's migrations and before the layout
+    /// sync: each step whose name has not run yet, in list order, in its own
+    /// IMMEDIATE transaction. Add steps at the end with a new name; never
+    /// rename, edit or remove a step that has shipped, because staging's
+    /// database has already run it. Name tables `<adapter>_*`.
+    fn migrations(&self) -> &'static [Step] {
         &[]
     }
 

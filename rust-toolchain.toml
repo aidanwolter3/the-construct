@@ -1,0 +1,5 @@
+# The Rust version for local builds, cloud sessions and CI alike, so clippy
+# flags the same lints everywhere. Bump it in its own PR (fix new lints there).
+[toolchain]
+channel = "1.99"
+components = ["clippy", "rustfmt"]

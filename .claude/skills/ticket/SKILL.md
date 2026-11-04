@@ -30,16 +30,32 @@ it will have this repo and CLAUDE.md, but none of the current conversation.
 4. Add the start link: once you have the issue number N, update the issue (`issue_write`, `method: update`, the
    full body) so its first line is a link that opens a new Claude Code session on it:
    ```bash
-   python3 -c "import sys,urllib.parse as u; n=sys.argv[1]; p=f'Work on GitHub issue #{n} (https://github.com/aidanwolter3/the-construct/issues/{n}). Read the issue and its comments first, then fix it and open a PR that says Fixes #{n}.'; print('https://claude.ai/code?'+u.urlencode({'prompt':p,'repositories':'aidanwolter3/the-construct'},quote_via=u.quote))" N
+   python3 -c "import sys,urllib.parse as u; n=sys.argv[1]; p=f'Work on GitHub issue #{n} (https://github.com/aidanwolter3/the-construct/issues/{n}). Read the issue and its comments first, then fix it and ship it with the ship skill: open a PR that says Fixes #{n} (Part of #{n} if the issue plans several PRs), watch CI, fix failures and merge when green.'; print('https://claude.ai/code?'+u.urlencode({'prompt':p,'repositories':'aidanwolter3/the-construct'},quote_via=u.quote))" N
    ```
    First line of the body: `**[▶ Start a Claude Code session on this issue](<that URL>)**`, then a blank line.
 5. Tell the user the issue number and link in one line. Don't start working on it in this session. If they ask
-   to start it now, use `create_session` with the same prompt instead of the link.
+   to start it now, start a session as in "Starting sessions" below, with the same prompt.
 
 ## Picking up a ticket ("fix issue #N")
 
 1. Read the issue and its comments (`issue_read`), then the files and decisions it names.
-2. Work on the session's designated branch; reference the issue in commits and the PR body (`Fixes #N`) so it
-   closes on merge.
-3. If the ticket turns out wrong or bigger than described, comment on the issue with what you found before
+2. Work on the session's designated branch; reference the issue in commits and the PR body (`Fixes #N`, or
+   `Part of #N` when the issue plans several PRs) so it closes on the last merge.
+3. Ship it with the `ship` skill: this session owns its PR through to merged and deployed.
+4. If the ticket turns out wrong or bigger than described, comment on the issue with what you found before
    changing course.
+
+## Starting sessions (one per ticket, or a fan-out)
+
+When the user asks to work on tickets in separate sessions ("spin up a session for each"):
+
+1. Call `create_session` with `source_url: "https://github.com/aidanwolter3/the-construct"`. Without it the
+   setup script has no repo and the session fails at start.
+2. The prompt stands alone (the child has none of this conversation): the issue link, "read the issue and its
+   comments first", what's decided already, and "ship it with the ship skill" (the start-link prompt above).
+3. Plan for overlap before starting them. List the files each ticket will likely touch; for tickets that
+   overlap (the same layout, store, doc), tell the later ones in their prompt which PR lands first and to merge
+   main in once it has. Tickets that change the same app's layout are better done in one session.
+4. Each child owns its PR: it opens, fixes and merges it. Don't subscribe the parent to the children's PRs
+   (two sessions watching one PR both act on its events). Track the children with `get_session` and
+   `list_events` instead, and tell the user which PRs merged and what's left.

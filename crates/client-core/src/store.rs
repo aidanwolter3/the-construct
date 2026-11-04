@@ -1,7 +1,7 @@
 //! SQLite entity cache and action outbox (docs/architecture.md "The engine", docs/DECISIONS.md D13).
 //!
-//! The schema is DESIGN §2.3 plus extra columns, created by `PRAGMA
-//! user_version` migrations. The engine keeps its in-memory `State` as the
+//! The schema is DESIGN §2.3 plus extra columns, created by named migrations
+//! ([`MIGRATIONS`], decision `named-migrations`). The engine keeps its in-memory `State` as the
 //! source for snapshots and writes every change through to this store.
 //!
 //! All row operations live on [`StoreOps`], which is implemented both by
@@ -33,8 +33,9 @@ pub use rusqlite::Error as StoreError;
 
 pub type StoreResult<T> = Result<T, StoreError>;
 
-/// Current schema version (`PRAGMA user_version`).
-pub const SCHEMA_VERSION: u32 = 7;
+/// How many steps [`MIGRATIONS`] has: a store that ran them all has this
+/// `PRAGMA user_version` (kept for builds from before named migrations).
+pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
 
 /// Outbox row status for rows not yet accepted or rejected by the server.
 pub const STATUS_PENDING: &str = "PENDING";
@@ -151,15 +152,18 @@ CREATE TABLE IF NOT EXISTS form_values (
 );
 ";
 
-/// `MIGRATIONS[i]` upgrades schema v`i` to v`i+1`, each in one transaction.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [
-    MIGRATION_V1,
-    MIGRATION_V2,
-    MIGRATION_V3,
-    MIGRATION_V4,
-    MIGRATION_V5,
-    MIGRATION_V6,
-    MIGRATION_V7,
+/// The store's steps, `(name, sql)`, run in order, each once, in its own
+/// transaction; `schema_migrations` records the names that ran. Add a step at
+/// the end with a new name; never rename, edit or remove one that shipped:
+/// phones have run it. (The `vN` of older steps is their position.)
+const MIGRATIONS: &[(&str, &str)] = &[
+    ("base", MIGRATION_V1),
+    ("queries_and_also", MIGRATION_V2),
+    ("data_loads_and_creates", MIGRATION_V3),
+    ("signed_in_rows", MIGRATION_V4),
+    ("attachments", MIGRATION_V5),
+    ("notifications", MIGRATION_V6),
+    ("remembered_values", MIGRATION_V7),
 ];
 
 /// Notifications kept in the cache (the newest ids).
@@ -1198,28 +1202,74 @@ impl Store {
         Ok(store)
     }
 
+    /// Run the [`MIGRATIONS`] that have not run. A store made before names
+    /// existed counted steps in `user_version`: that many leading steps are
+    /// recorded as run first. `user_version` keeps counting the leading
+    /// steps that ran, for older builds.
     fn migrate(&mut self) -> StoreResult<()> {
-        let version = self.schema_version()?;
-        if version > SCHEMA_VERSION {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY NOT NULL);",
+        )?;
+        let mut ran = self.migration_names()?;
+        if ran.is_empty() {
+            let counted = self.schema_version()? as usize;
+            let tx = self
+                .conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            for (name, _) in MIGRATIONS.iter().take(counted) {
+                tx.execute(
+                    "INSERT OR IGNORE INTO schema_migrations (name) VALUES (?1)",
+                    [name],
+                )?;
+            }
+            tx.commit()?;
+            ran = self.migration_names()?;
+        }
+        if let Some(unknown) = ran
+            .iter()
+            .find(|n| !MIGRATIONS.iter().any(|(name, _)| name == n))
+        {
             eprintln!(
-                "[ConstructEngine] store: schema version {version} is newer than {SCHEMA_VERSION}; \
-                 using it as is"
+                "[ConstructEngine] store: migration '{unknown}' is from a newer build; \
+                 using the store as is"
             );
             return Ok(());
         }
-        for (from, step) in MIGRATIONS.iter().enumerate().skip(version as usize) {
-            let tx = self.conn.transaction()?;
-            tx.execute_batch(step)?;
-            tx.pragma_update(None, "user_version", from as u32 + 1)?;
+        for (name, sql) in MIGRATIONS {
+            if ran.contains(*name) {
+                continue;
+            }
+            let tx = self
+                .conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            // Another engine on the same storage may have run it meanwhile.
+            let done: bool = tx
+                .prepare("SELECT 1 FROM schema_migrations WHERE name = ?1")?
+                .exists([name])?;
+            if !done {
+                tx.execute_batch(sql)?;
+                tx.execute("INSERT INTO schema_migrations (name) VALUES (?1)", [name])?;
+                ran.insert((*name).to_owned());
+                let leading = MIGRATIONS
+                    .iter()
+                    .take_while(|(n, _)| ran.contains(*n))
+                    .count();
+                tx.pragma_update(None, "user_version", leading as u32)?;
+            }
             tx.commit()?;
-            if from > 0 {
-                eprintln!(
-                    "[ConstructEngine] store: migrated schema v{from} -> v{}",
-                    from + 1
-                );
+            if done {
+                ran.insert((*name).to_owned());
+            } else if ran.len() > 1 {
+                eprintln!("[ConstructEngine] store: ran migration '{name}'");
             }
         }
         Ok(())
+    }
+
+    /// The names of the [`MIGRATIONS`] that ran.
+    fn migration_names(&self) -> StoreResult<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare("SELECT name FROM schema_migrations")?;
+        stmt.query_map([], |r| r.get(0))?.collect()
     }
 
     /// Copy the WAL into the main file and truncate it to zero bytes
@@ -1234,7 +1284,7 @@ impl Store {
         Ok(busy == 0)
     }
 
-    /// `PRAGMA user_version`.
+    /// `PRAGMA user_version`: how many leading [`MIGRATIONS`] ran.
     pub fn schema_version(&self) -> StoreResult<u32> {
         self.conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
@@ -1285,6 +1335,41 @@ mod tests {
         assert_eq!(split_uri("core://counters/home"), ("core", "counters"));
         assert_eq!(split_uri("core://x"), ("core", "x"));
         assert_eq!(split_uri("nope"), ("", ""));
+    }
+
+    #[test]
+    fn migration_names_are_unique_and_plain() {
+        let mut seen = std::collections::HashSet::new();
+        for (name, _) in MIGRATIONS {
+            assert!(
+                name.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+                "{name}"
+            );
+            assert!(seen.insert(name), "{name} appears twice");
+        }
+    }
+
+    /// A store a newer build migrated (a name this build doesn't know) is
+    /// used as is: nothing runs.
+    #[test]
+    fn a_store_from_a_newer_build_is_used_as_is() {
+        let path = temp_db("newer");
+        Store::open(&path).unwrap();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "DELETE FROM schema_migrations WHERE name = 'remembered_values';
+                 INSERT INTO schema_migrations (name) VALUES ('from_the_future');",
+            )
+            .unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        let ran = s.migration_names().unwrap();
+        assert!(ran.contains("from_the_future"));
+        assert!(!ran.contains("remembered_values"), "nothing ran");
+        drop(s);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1609,6 +1694,7 @@ mod tests {
         write_v1_db(&path);
         let s = Store::open(&path).unwrap();
         assert_eq!(s.schema_version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(s.migration_names().unwrap().len(), MIGRATIONS.len());
         assert!(s.load_data_loads().unwrap().is_empty());
         assert_eq!(s.first_pending().unwrap().unwrap().create, None);
         let ws = s.load_workspace("home").unwrap().unwrap();

@@ -44,7 +44,9 @@ scripts/e2e.sh                           # e2e suite against the fake binary
 ```
 
 Script commands and flags: [docs/simulator.md](docs/simulator.md). `-PbaseUrl=http://127.0.0.1:8080` runs live
-against a local pod.
+against a local pod. Easy to get wrong: `wait-text <ms> <text>` takes the timeout first, and a command's argument
+is the rest of the entry as written, so `click "Sign in"` looks for the quote marks too (only `type` and `pick`
+read quotes).
 
 Cloud sessions can't run the Android app on a phone or open the macOS window; say so in your summary when a change
 needs a device check.
@@ -67,18 +69,55 @@ tmp=$(mktemp -d) && git clone --depth 1 https://github.com/aidanwolter3/the-cons
   && exec bash "$tmp/the-construct/scripts/cloud_setup.sh"
 ```
 
-The warm-up (~2-3 min) runs in the background; builds started meanwhile wait on Gradle's cache lock.
-`~/.construct-cloud-warmup.status` reads `running`, `done` or `failed` (log: `~/.construct-cloud-warmup.log`). If
-there is no setup script or the warm-up failed, run `CONSTRUCT_SETUP_WARM=foreground bash scripts/cloud_setup.sh`
-once.
+The warm-up (~3-5 min) runs in the background; builds started meanwhile wait on Gradle's cache lock. Before the
+JVM tests or the simulator, run `scripts/await_warmup.sh`: it waits for the warm-up, restarts it if its process
+died (the status file can say `running` long after), and fails with the log's location if it failed. If there is
+no setup script, run `CONSTRUCT_SETUP_WARM=foreground bash scripts/cloud_setup.sh` once.
+
+What a cloud session can't do, so don't spend time trying:
+- **Re-run a CI job**: the API answers 403. Fix the cause (or the flaky test) and push; merging `main` in also
+  starts a fresh run.
+- **Delete remote branches**: merged PR branches are deleted by GitHub on merge.
+- **Run the Android app or open the macOS window**: say which device checks are left in your summary.
+
+Habits that avoid known traps:
+- **Disk** is a fixed allowance of about 30 GB; incremental builds are off in cloud sessions (the setup script
+  sets it) and dev builds carry little debug info (`Cargo.toml`). If `df` gets low, `rm -rf target/debug` and
+  rebuild. Don't make a second checkout or a second target directory.
+- **Stop processes by pid** (`kill $pid`, with the pid from `$!`), never `pkill -f`: the pattern matches the
+  session's own shell and kills it (exit 144).
+- **Wait with Monitor or PR events**, not `sleep` (blocked in the foreground).
+- **`git fetch origin main`** before branching from, merging or comparing with main: the clone's `origin/main`
+  is as old as the container.
+- Rust is pinned in `rust-toolchain.toml` (CI uses the same file), so local clippy matches CI. Bump it in its own
+  PR.
 
 **Staging** needs a pod token: make a temporary one with
 `curl -fsS -X POST https://the-construct-pod.fly.dev/v1/pods/temporary | jq -r .session_token` and send it as
 `Authorization: Bearer <token>`; in the simulator, click "Try a temporary pod". Never put pod codes in git or files.
+Staging's image has no shell (distroless): `fly ssh console -C` can't run `rm` or scripts there. Use the
+`server pods …` subcommands ([docs/server.md](docs/server.md)).
+
+**Secrets** are set on staging by the developer with `flyctl secrets set` (list in [docs/server.md](docs/server.md)).
+There is one Anthropic key, `CONSTRUCT_INFER_API_KEY`, already set: every model feature (computed fields, `llm`
+extraction, app building) uses it. Don't add a new key variable or ask for another secret when an existing one
+fits; if a feature truly needs a new secret, say so before building it.
+
+**Pod MCP tools**: after a change adds or renames tools of the pod's MCP server, the Claude connector keeps its old
+tool list. Tell the developer to use "Refresh tools list" in Claude's connector settings (or remove and re-add the
+connector); a new session started after that sees the new tools.
 
 ## Pull requests
 
-- Check `gh run list` after pushing; pushes to `main` deploy staging.
+- **"Open a PR" means ship it**: use the `ship` skill (`.claude/skills/ship`): sync with main, run the checks,
+  open the PR, watch CI, fix failures, squash-merge when green and confirm the staging deploy. Stop before merging
+  only when the developer says so ("don't merge", "draft", "I'll review"), or the PR isn't this session's.
+- **Ask before a change that needs a client build** (a new node type, intent or field, or an engine store change):
+  say so before starting, and offer a ticket instead if it wasn't part of the request. Every PR's summary says
+  plainly whether a new desktop or Android build is needed.
+- Sessions started for tickets (`ticket` skill, "Starting sessions") each own their PR through to merged; the
+  session that started them tracks them but doesn't watch their PRs.
+- Pushes to `main` deploy staging.
 - The PR body follows `.github/pull_request_template.md` and states **New or removed feature** and **Client update
   needed** (see CONTRIBUTING.md).
 - Interface changes embed simulator screenshots. Images can't be uploaded through the API: push the PNGs to a side
@@ -88,7 +127,6 @@ once.
 
 ## House rules
 
-- Read files with the Read tool, never `cat`, `head`, `tail`, `sed` or `awk` (the developer's rule).
 - No model names in commit messages or docs prose.
 - Keep docs current: a change to behaviour, configuration or vocabulary updates the guide in `docs/` that covers
   it, in the same PR.

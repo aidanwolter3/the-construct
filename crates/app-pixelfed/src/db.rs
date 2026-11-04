@@ -12,29 +12,32 @@
 //! in again. [`reseal`] seals rows written before the key was set.
 
 use pod_core::secrets::Secrets;
-use pod_core::store::{Migration, Store, open_session_on};
+use pod_core::store::{Step, Store, open_session_on};
 use pod_core::util::now_secs;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::adapter::SIGN_IN;
 
-/// The adapter's own migrations (append-only; staging has run them).
-pub static MIGRATIONS: &[Migration] = &[
+/// The adapter's own migrations, by name (decision `named-migrations`):
+/// add steps at the end; never rename, edit or remove one that shipped.
+pub static MIGRATIONS: &[Step] = &[
     // 1 (D45): the instance each session signed in to. A session without a
     // row (one from before D45) uses the default instance. Rows of sessions
     // that are gone are pruned at the next sign-in.
-    Migration::Sql(
+    Step::sql(
+        "session_instance",
         "CREATE TABLE pixelfed_session_instance (
              token_hash TEXT PRIMARY KEY NOT NULL,
              instance   TEXT NOT NULL
          );",
     ),
     // 2 (D50): posts on their way to Pixelfed (crate::posting).
-    Migration::Sql(crate::posting::MIGRATION),
+    Step::sql("posts", crate::posting::MIGRATION),
     // 3 (D52): the notification poll's position per instance: the newest
     // upstream notification id seen (`last_id`, None while there were none)
     // and when the first poll ran (its backlog was stored quietly).
-    Migration::Sql(
+    Step::sql(
+        "notify_cursor",
         "CREATE TABLE IF NOT EXISTS pixelfed_notify_cursor (
              instance       TEXT PRIMARY KEY NOT NULL,
              last_id        TEXT,
@@ -44,7 +47,7 @@ pub static MIGRATIONS: &[Migration] = &[
     // 4 (decision `rename-apps-and-folders`): the apps' new ids, `pixelfed`
     // (was `pixelfed_home`) and `pixelfed_sample_no_login` (was
     // `pixelfed_demo`, also its data source).
-    Migration::Rust(rename_apps),
+    Step::rust("rename_apps", rename_apps),
 ];
 
 fn rename_apps(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -53,9 +56,9 @@ fn rename_apps(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
     rename_app_on(tx, "pixelfed_demo", crate::apps::SAMPLE_NAME)?;
     rename_source_on(tx, "pixelfed_demo", crate::apps::SAMPLE_NAME)?;
     // The sample's adapter had no migrations; nothing else is stored by it.
-    tx.execute(
-        "DELETE FROM adapter_migrations WHERE adapter = 'pixelfed_demo'",
-        [],
+    tx.execute_batch(
+        "DELETE FROM adapter_migrations WHERE adapter = 'pixelfed_demo';
+         DELETE FROM schema_migrations WHERE scope = 'pixelfed_demo';",
     )?;
     Ok(())
 }
@@ -618,7 +621,7 @@ mod tests {
         {
             // A v3 database with a stored account.
             let mut conn = Connection::open(&path).unwrap();
-            pod_core::store::migrate_to(&mut conn, 3).unwrap();
+            pod_core::store::migrate_to(&mut conn, "pixelfed_refresh_tokens").unwrap();
             save_account_on(&conn, &Secrets::none(), "i", &account("7", "t")).unwrap();
         }
         let s = Store::open(&path).unwrap();

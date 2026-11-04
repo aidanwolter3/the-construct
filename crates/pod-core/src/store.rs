@@ -1,8 +1,9 @@
 //! Server persistence: one SQLite database (`$CONSTRUCT_DATA_DIR/server.db`).
 //!
-//! The schema is versioned with `PRAGMA user_version`. To add tables in a later
-//! milestone, append a step to [`MIGRATIONS`]; each step runs once, in order,
-//! inside a transaction that also bumps `user_version`.
+//! The schema is a list of named steps ([`MIGRATIONS`], decision
+//! `named-migrations`): to change it, append a [`Step`] with a new name. Each
+//! step runs once, in order, recorded in `schema_migrations` under the scope
+//! `core`; adapters keep their own lists ([`Store::migrate_adapter`]).
 
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -10,19 +11,16 @@ use std::sync::{Mutex, MutexGuard};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-/// One schema upgrade: plain SQL, or Rust code for data conversions SQL
-/// cannot do (hashing, compression). The core's list is [`MIGRATIONS`]; each
-/// adapter has its own ([`crate::AppAdapter::migrations`],
-/// [`Store::migrate_adapter`]).
-pub enum Migration {
-    Sql(&'static str),
-    Rust(fn(&Transaction<'_>) -> rusqlite::Result<()>),
-}
+use crate::migrations::{self, Counter};
+pub use crate::migrations::{Migration, Step};
 
-/// Migration `i` upgrades the schema from `user_version = i` to `i + 1`.
-const MIGRATIONS: &[Migration] = &[
+/// The core's steps, in order. Never rename or remove a deployed step; add
+/// new ones at the end. (The `vN` in older comments is the step's position
+/// from when steps were counted.)
+const MIGRATIONS: &[Step] = &[
     // v1 (M5): persistent counters (the counter app; dropped in v10).
-    Migration::Sql(
+    Step::sql(
+        "counters",
         "CREATE TABLE counters (
          id    TEXT PRIMARY KEY NOT NULL,
          count INTEGER NOT NULL DEFAULT 0
@@ -31,7 +29,8 @@ const MIGRATIONS: &[Migration] = &[
     // v2 (M6): Pixelfed adapter. Single tenant: one account per instance; any
     // valid pod session may use it. Sessions store SHA-256(token), never the
     // token. pixelfed_media maps opaque proxy keys to upstream media URLs.
-    Migration::Sql(
+    Step::sql(
+        "pixelfed_tables",
         "CREATE TABLE pixelfed_apps (
          instance      TEXT NOT NULL,
          redirect_uri  TEXT NOT NULL,
@@ -58,14 +57,16 @@ const MIGRATIONS: &[Migration] = &[
     // v3 (M6, real Pixelfed): the refresh token Passport issues with the access
     // token, its expiry, and the redirect_uri whose app (client credentials)
     // issued it, so the pod can refresh on an upstream 401.
-    Migration::Sql(
+    Step::sql(
+        "pixelfed_refresh_tokens",
         "ALTER TABLE pixelfed_account ADD COLUMN refresh_token TEXT;
      ALTER TABLE pixelfed_account ADD COLUMN expires_at INTEGER;
      ALTER TABLE pixelfed_account ADD COLUMN redirect_uri TEXT;",
     ),
     // v4 (M6 review): the pinned owner, the upstream account id that may sign
     // in (D17). An existing stored account becomes the owner.
-    Migration::Sql(
+    Step::sql(
+        "pixelfed_owner",
         "CREATE TABLE pixelfed_owner (
          instance   TEXT PRIMARY KEY NOT NULL,
          account_id TEXT NOT NULL,
@@ -77,7 +78,8 @@ const MIGRATIONS: &[Migration] = &[
     // v5 (M7): versioned workspace layouts (D22). Append-only history; `json`
     // is the workspace root UiNode. Version 1 (the built-in layout) is
     // inserted lazily by `layouts::latest`.
-    Migration::Sql(
+    Step::sql(
+        "layout_versions",
         "CREATE TABLE layout_versions (
          id           INTEGER PRIMARY KEY,
          workspace_id TEXT NOT NULL,
@@ -94,24 +96,27 @@ const MIGRATIONS: &[Migration] = &[
     // own append-only history; specs are content-addressed (zstd) blobs; one
     // workspace revision log whose latest row is the active layout. The v5
     // rows become the history of each workspace's default built-in layout.
-    Migration::Rust(migrate_v6),
+    Step::rust("layout_catalog", migrate_v6),
     // v7: layouts as code (one app = one linear, append-only history; D31+).
     // The v6 catalog tables stay but are inert after this.
-    Migration::Rust(migrate_v7),
+    Step::rust("layouts_as_code", migrate_v7),
     // v8: `file_hash`, the hash of a layout file's own content (canonical JSON
     // of its note and layout, see `layouts::file_hash`), independent of how
     // the current `UiNode` re-serializes it. The append-only check compares
     // it; NULL on rows recorded before v8 until the next startup sync adopts
     // it (`Store::sync_layout_files`).
-    Migration::Sql("ALTER TABLE app_versions ADD COLUMN file_hash TEXT;"),
+    Step::sql(
+        "layout_file_hash",
+        "ALTER TABLE app_versions ADD COLUMN file_hash TEXT;",
+    ),
     // v9 (D36): `schema`, the client schema a version was written for. Rows
     // from layout files stay NULL until the next startup sync adopts the
     // file's declared `"schema"`; other rows get the schema their layout's
     // vocabulary needs.
-    Migration::Rust(migrate_v9),
+    Step::rust("layout_schema_column", migrate_v9),
     // v10 (D39): the counter app is gone. Its old `home` rows in
     // `app_versions` stay, inert (no app reads them).
-    Migration::Sql("DROP TABLE IF EXISTS counters;"),
+    Step::sql("drop_counters", "DROP TABLE IF EXISTS counters;"),
     // v11 (D40): adapters and sign-ins. `adapter_migrations` tracks each
     // adapter's own migration list (`Store::migrate_adapter`).
     // `session_sign_ins` records which sign-ins a session completed; every
@@ -119,7 +124,8 @@ const MIGRATIONS: &[Migration] = &[
     // was), so each gets a `pixelfed` row and stays signed in. The v2-v4
     // `pixelfed_*` tables above are frozen history here: only the Pixelfed
     // adapter reads them.
-    Migration::Sql(
+    Step::sql(
+        "adapters_and_sign_ins",
         "CREATE TABLE adapter_migrations (
          adapter TEXT PRIMARY KEY NOT NULL,
          version INTEGER NOT NULL
@@ -137,7 +143,8 @@ const MIGRATIONS: &[Migration] = &[
     // and a logout keeps it (only its sign-ins go). `pod_settings` are the
     // host's per-pod choices (e.g. whether an adapter seeds data), written
     // before the adapters' migrations run.
-    Migration::Sql(
+    Step::sql(
+        "pinned_sessions_and_pod_settings",
         "ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
      CREATE TABLE pod_settings (
          key   TEXT PRIMARY KEY NOT NULL,
@@ -146,7 +153,8 @@ const MIGRATIONS: &[Migration] = &[
     ),
     // v13 (D49): uploads. Files a session sends before an action that needs
     // them; `owner` is the adapter's claim (kept until it releases them).
-    Migration::Sql(
+    Step::sql(
+        "uploads",
         "CREATE TABLE uploads (
          id           TEXT PRIMARY KEY NOT NULL,
          token_hash   TEXT NOT NULL,
@@ -169,7 +177,8 @@ const MIGRATIONS: &[Migration] = &[
     // `devices` are the clients that registered (bound to a session, with an
     // optional Web Push subscription) and `device_channel_prefs` their
     // channel choices (no row = the channel's default).
-    Migration::Sql(
+    Step::sql(
+        "notifications",
         "CREATE TABLE notifications (
          id          INTEGER PRIMARY KEY AUTOINCREMENT,
          app_id      TEXT NOT NULL,
@@ -216,14 +225,18 @@ const MIGRATIONS: &[Migration] = &[
     // v15 (docs/decisions/layout-features.md): `features`, the layout
     // features a version uses (comma-separated, sorted; worked out from the
     // layout when it is appended). Every earlier version uses none.
-    Migration::Sql("ALTER TABLE app_versions ADD COLUMN features TEXT NOT NULL DEFAULT '';"),
+    Step::sql(
+        "layout_features",
+        "ALTER TABLE app_versions ADD COLUMN features TEXT NOT NULL DEFAULT '';",
+    ),
     // v16 (decision `custom-apps-and-data-sources`): custom apps, owned by
     // the pod's user. `feeds_json` is the app's root feeds, `[[source,
     // feed], ...]`; `deleted_at` marks a soft delete (purged after 30 days).
     // Their versions are `app_versions` rows like a built-in app's;
     // `author` says who wrote a version (`user` | `claude`; NULL for files)
     // and `meta_json` holds extra facts about it (`copied_from`, ...).
-    Migration::Sql(
+    Step::sql(
+        "custom_apps",
         "CREATE TABLE custom_apps (
          id         TEXT PRIMARY KEY NOT NULL,
          title      TEXT NOT NULL,
@@ -239,7 +252,7 @@ const MIGRATIONS: &[Migration] = &[
     // v17 (decision `named-vocabulary`): `features` names the base
     // vocabulary too, so a version's features are everything it uses.
     // Worked out again for every stored version.
-    Migration::Rust(migrate_v17),
+    Step::rust("named_vocabulary_features", migrate_v17),
 ];
 
 /// A pod setting inside a transaction (an adapter migration reads its
@@ -1097,39 +1110,19 @@ fn refuse(msg: String) -> rusqlite::Error {
     rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(msg))
 }
 
-/// [`migrate`] for tests of later migrations (an adapter's own test builds
-/// a database at an old version, then opens it).
+/// Run the core's steps up to and including `name` (tests of later
+/// migrations: an adapter's own test builds a database as an older build left
+/// it, then opens it).
 #[doc(hidden)]
-pub fn migrate_to(conn: &mut Connection, target: usize) -> rusqlite::Result<()> {
-    migrate(conn, target)
+pub fn migrate_to(conn: &mut Connection, name: &str) -> rusqlite::Result<()> {
+    let upto = migrations::position(MIGRATIONS, name)
+        .ok_or_else(|| refuse(format!("no core migration named '{name}'")))?;
+    migrate(conn, upto)
 }
 
-/// Run migrations up to `user_version = target`. Each step runs in an
-/// IMMEDIATE transaction (the write lock is taken up front) that re-reads
-/// `user_version`, so two processes starting on the same database never both
-/// run a step.
-fn migrate(conn: &mut Connection, target: usize) -> rusqlite::Result<()> {
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    for (i, step) in MIGRATIONS
-        .iter()
-        .enumerate()
-        .take(target)
-        .skip(version.max(0) as usize)
-    {
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let now: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if now > i as i64 {
-            // Another process ran this step meanwhile.
-            continue;
-        }
-        match step {
-            Migration::Sql(sql) => tx.execute_batch(sql)?,
-            Migration::Rust(f) => f(&tx)?,
-        }
-        tx.pragma_update(None, "user_version", (i + 1) as i64)?;
-        tx.commit()?;
-    }
-    Ok(())
+/// Run the first `upto` core steps that have not run ([`migrations::run`]).
+fn migrate(conn: &mut Connection, upto: usize) -> rusqlite::Result<()> {
+    migrations::run(conn, "core", MIGRATIONS, Counter::UserVersion, upto)
 }
 
 pub struct Store {
@@ -1241,40 +1234,30 @@ impl Store {
         Ok(out)
     }
 
-    /// Run an adapter's migrations that have not run yet, each in its own
-    /// IMMEDIATE transaction that also bumps the adapter's row in
-    /// `adapter_migrations` (so two starters never both run a step). Step `i`
-    /// upgrades the adapter from version `i` to `i + 1`.
-    pub fn migrate_adapter(&self, adapter: &str, steps: &[Migration]) -> rusqlite::Result<()> {
+    /// Run an adapter's steps that have not run yet, in order, recorded in
+    /// `schema_migrations` under the adapter's name ([`migrations::run`]).
+    /// Its row in `adapter_migrations` keeps counting the leading steps that
+    /// ran, for older builds.
+    pub fn migrate_adapter(&self, adapter: &str, steps: &[Step]) -> rusqlite::Result<()> {
         let mut conn = self.conn();
-        for (i, step) in steps.iter().enumerate() {
-            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let now: i64 = tx
-                .query_row(
-                    "SELECT version FROM adapter_migrations WHERE adapter = ?1",
-                    [adapter],
-                    |r| r.get(0),
-                )
-                .optional()?
-                .unwrap_or(0);
-            if now > i as i64 {
-                continue;
-            }
-            match step {
-                Migration::Sql(sql) => tx.execute_batch(sql)?,
-                Migration::Rust(f) => f(&tx)?,
-            }
-            tx.execute(
-                "INSERT INTO adapter_migrations (adapter, version) VALUES (?1, ?2)
-                 ON CONFLICT(adapter) DO UPDATE SET version = excluded.version",
-                params![adapter, (i + 1) as i64],
-            )?;
-            tx.commit()?;
-        }
-        Ok(())
+        migrations::run(
+            &mut conn,
+            adapter,
+            steps,
+            Counter::Adapter(adapter),
+            steps.len(),
+        )
     }
 
-    /// An adapter's migration version (0 before its first step).
+    /// The names of an adapter's steps that ran.
+    pub fn adapter_migrations(
+        &self,
+        adapter: &str,
+    ) -> rusqlite::Result<std::collections::HashSet<String>> {
+        migrations::applied(&self.conn(), adapter)
+    }
+
+    /// How many of an adapter's leading steps ran (0 before its first).
     pub fn adapter_version(&self, adapter: &str) -> rusqlite::Result<i64> {
         Ok(self
             .conn()
@@ -1740,9 +1723,9 @@ mod tests {
             tx.execute("INSERT INTO demo_t (n) VALUES (2)", [])?;
             Ok(())
         }
-        static STEPS: &[Migration] = &[
-            Migration::Sql("CREATE TABLE demo_t (n INTEGER NOT NULL);"),
-            Migration::Rust(add_row),
+        static STEPS: &[Step] = &[
+            Step::sql("demo_t", "CREATE TABLE demo_t (n INTEGER NOT NULL);"),
+            Step::rust("demo_row", add_row),
         ];
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("server.db");
@@ -1756,10 +1739,10 @@ mod tests {
             assert_eq!(rows, 1, "the Rust step ran once");
         }
         // A later build adds a step: only it runs.
-        static MORE: &[Migration] = &[
-            Migration::Sql("CREATE TABLE demo_t (n INTEGER NOT NULL);"),
-            Migration::Rust(add_row),
-            Migration::Sql("ALTER TABLE demo_t ADD COLUMN m INTEGER;"),
+        static MORE: &[Step] = &[
+            Step::sql("demo_t", "CREATE TABLE demo_t (n INTEGER NOT NULL);"),
+            Step::rust("demo_row", add_row),
+            Step::sql("demo_m", "ALTER TABLE demo_t ADD COLUMN m INTEGER;"),
         ];
         let s = Store::open(&path).unwrap();
         s.migrate_adapter("demo", MORE).unwrap();

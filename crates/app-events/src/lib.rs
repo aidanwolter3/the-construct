@@ -12,7 +12,7 @@ pub mod events;
 use std::sync::Arc;
 
 use pod_core::layouts::LayoutSource;
-use pod_core::store::Migration;
+use pod_core::store::Step;
 use pod_core::{
     AppAdapter, AppInfo, AuthPolicy, BoxFuture, Hydration, Pod, RequestCtx, SourceManifest,
 };
@@ -46,12 +46,13 @@ include!(concat!(env!("OUT_DIR"), "/layout_files.rs"));
 /// The app's id and adapter before decision `rename-apps-and-folders`.
 const OLD_NAME: &str = "watcher";
 
-/// Append-only: never edit or reorder a step that has shipped.
-pub static MIGRATIONS: &[Migration] = &[
+/// By name (decision `named-migrations`): add steps at the end; never
+/// rename, edit or remove one that shipped.
+pub static MIGRATIONS: &[Step] = &[
     // 1 (decision `rename-apps-and-folders`): the app was `watcher`. Its
     // stored data moves to the new id, and the old Watcher's tables (read
     // once, long ago, when its sites moved into `events`) go.
-    Migration::Rust(from_watcher),
+    Step::rust("from_watcher", from_watcher),
 ];
 
 fn from_watcher(tx: &Transaction<'_>) -> rusqlite::Result<()> {
@@ -66,6 +67,7 @@ fn from_watcher(tx: &Transaction<'_>) -> rusqlite::Result<()> {
         "DELETE FROM adapter_migrations WHERE adapter = ?1",
         [OLD_NAME],
     )?;
+    tx.execute("DELETE FROM schema_migrations WHERE scope = ?1", [OLD_NAME])?;
     pod_core::store::rename_app_on(tx, OLD_NAME, APP_ID)
 }
 
@@ -108,7 +110,7 @@ impl AppAdapter for EventsAdapter {
         FILES
     }
 
-    fn migrations(&self) -> &'static [Migration] {
+    fn migrations(&self) -> &'static [Step] {
         MIGRATIONS
     }
 

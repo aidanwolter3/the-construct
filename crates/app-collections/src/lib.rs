@@ -70,7 +70,7 @@ use axum::{
     routing::{get, post},
 };
 use pod_core::layouts::LayoutSource;
-use pod_core::store::{Migration, Store};
+use pod_core::store::{Step, Store};
 use pod_core::validate::LayoutError;
 use pod_core::{
     AppAdapter, AppInfo, BoxFuture, EntityDoc, FeedSpec, Hydration, PathSpec, Pod, PollCtx,
@@ -340,7 +340,7 @@ impl AppAdapter for CollectionsAdapter {
             .route("/v1/collections/{collection}/row", get(row_screen_route))
     }
 
-    fn migrations(&self) -> &'static [Migration] {
+    fn migrations(&self) -> &'static [Step] {
         db::MIGRATIONS
     }
 

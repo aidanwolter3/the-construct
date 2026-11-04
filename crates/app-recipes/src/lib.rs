@@ -22,7 +22,7 @@ use axum::{
     routing::get,
 };
 use pod_core::layouts::LayoutSource;
-use pod_core::store::Migration;
+use pod_core::store::Step;
 use pod_core::{
     AppAdapter, AppInfo, AuthPolicy, BoxFuture, EntityDoc, FeedSpec, Hydration, PathSpec, Pod,
     RequestCtx, SourceManifest,
@@ -162,7 +162,7 @@ impl AppAdapter for RecipesAdapter {
         Router::new().route("/v1/recipes/screens/recipe", get(recipe_screen))
     }
 
-    fn migrations(&self) -> &'static [Migration] {
+    fn migrations(&self) -> &'static [Step] {
         db::MIGRATIONS
     }
 

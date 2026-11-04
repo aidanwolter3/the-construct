@@ -212,6 +212,8 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
 
 ## D12: Server persistence (SQLite counters, fault-injection hook)
 
+> Superseded by [named-migrations](decisions/named-migrations.md) in part: migrations are named steps recorded in `schema_migrations`; `user_version` only counts the leading steps that ran.
+
 - **Store:** one SQLite file, `$CONSTRUCT_DATA_DIR/server.db` (default `~/.construct-server`), via `rusqlite`
   (`bundled`, workspace dependency shared with client-core), WAL mode. A single `Connection` behind a `Mutex`
   in `AppState` (an `Arc` passed to `server::app(state)`); handlers run store calls in `spawn_blocking`. Tests
@@ -226,6 +228,8 @@ and the same `org.jetbrains.compose.material3` as `:shared`. The JNA aar (`libjn
   before they reach a handler, so nothing is applied. In-memory only; it does not survive a restart.
 
 ## D13: Client SQLite cache and outbox (schema extensions, write-through)
+
+> Superseded by [named-migrations](decisions/named-migrations.md) in part: the cache's migrations are named steps recorded in `schema_migrations`; `user_version` only counts the leading steps that ran.
 
 - **File:** `<storage_path>/cache.db` (desktop `~/.construct/cache.db`, Android `filesDir`); empty `storage_path`
   (simulation, tests) uses an in-memory DB, and so does a file that cannot be opened (logged). A file that opens
@@ -997,6 +1001,8 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
 
 ## D32: One app, layouts as code, read-only versions API (`server::layouts`, migrations v7, v8)
 
+> Superseded by [named-migrations](decisions/named-migrations.md) in part: each migration step's IMMEDIATE transaction re-checks the step's name in `schema_migrations`, not `user_version`.
+
 - **Product rule:** the pod serves ONE app, Pixelfed (workspace `pixelfed`), at its latest layout version. New
   versions come only from the developer, as files in the repo plus a deploy. No client can change layout or version
   state on the pod, and no AI generation is reachable from a client. Pixelfed interactions (like/bookmark through
@@ -1386,6 +1392,8 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   id (`ConstructEngine::init`) is still `home`; clients always pass one.
 
 ## D40: The pod core knows apps only through adapters
+
+> Superseded by [named-migrations](decisions/named-migrations.md) in part: adapter steps are named and recorded in `schema_migrations` under the adapter's name; `adapter_migrations.version` only counts the leading steps that ran.
 
 Superseded in part (`hydrate` became a manifest plus named feeds) by
 [custom-apps-and-data-sources](decisions/custom-apps-and-data-sources.md).

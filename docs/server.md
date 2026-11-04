@@ -178,6 +178,10 @@ Set secrets with `flyctl secrets set`, never in the file: at least `CONSTRUCT_SE
 (`fake-pixelfed/fly.toml`, workflow `.github/workflows/fake-pixelfed.yml`, secret `FLY_API_TOKEN_FAKE`).
 
 Schema changes must come with a migration that works on the existing databases, since staging upgrades in place.
+A migration is a named step appended to its list (the core's in `pod-core/src/store.rs`, an adapter's in its
+`migrations()`, `host.db`'s in `pod-host/src/db.rs`); `schema_migrations` records which names ran (decision
+`named-migrations`). Never rename, edit or remove a step that shipped. If another branch also appended a step, git
+may report a conflict at the end of the list: keep both.
 
 Any other host works the same way: run the image (or the `server` binary) with a persistent `CONSTRUCT_DATA_DIR`
 behind TLS, and set `CONSTRUCT_SECRETS_KEY`.

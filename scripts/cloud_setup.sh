@@ -12,8 +12,13 @@
 #
 # The warm-up (~2-3 min) runs in the background by default, so the session starts right away. A Gradle or cargo
 # build started meanwhile waits on the cache lock instead of downloading twice. Progress goes to
-# ~/.construct-cloud-warmup.log; ~/.construct-cloud-warmup.status reads "running", "done" or "failed".
+# ~/.construct-cloud-warmup.log; ~/.construct-cloud-warmup.status reads "running <pid>", "done" or
+# "failed <step>". `scripts/await_warmup.sh` waits for it, and restarts it when the status says running but the
+# process is gone (a container restart or a killed shell leaves that behind).
 # Env: CONSTRUCT_SETUP_WARM=background (default) | foreground | skip.
+#
+# Disk: a session has a fixed allowance (~30 GB). The script turns off incremental compilation for this user
+# (~/.cargo/config.toml), which otherwise grows target/debug by many GB per session.
 #
 # Network access the environment needs (allow these domains in the environment's network policy):
 #   static.rust-lang.org, sh.rustup.rs, crates.io, index.crates.io, static.crates.io   (Rust)
@@ -49,8 +54,15 @@ if ! command -v cargo >/dev/null; then
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component clippy,rustfmt
   # shellcheck disable=SC1091
   source "$HOME/.cargo/env"
-else
-  rustup component add clippy rustfmt >/dev/null 2>&1 || true
+fi
+# rust-toolchain.toml pins the version CI uses; install it now rather than on the first build.
+(cd "$REPO_ROOT" && rustup show active-toolchain >/dev/null 2>&1 || rustup toolchain install) || true
+
+# No incremental compilation in cloud sessions: it is the largest part of target/debug, and a fresh container
+# gains nothing from it. Written to the user's cargo config, so the developer's Mac is unaffected.
+mkdir -p "$HOME/.cargo"
+if ! grep -qs '^incremental' "$HOME/.cargo/config.toml"; then
+  printf '\n[build]\nincremental = false\n' >>"$HOME/.cargo/config.toml"
 fi
 
 JAVA_HOME_GUESS="$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")"
@@ -72,20 +84,27 @@ with_backoff() {
 
 WARM_LOG="$HOME/.construct-cloud-warmup.log"
 WARM_STATUS="$HOME/.construct-cloud-warmup.status"
+NEXTEST_VERSION=0.9.145
 
 warm_caches() {
-  local ok=1
-  echo running >"$WARM_STATUS"
-  (cd "$REPO_ROOT" && with_backoff cargo build -p client-ffi --release) || ok=0
+  local failed=()
+  echo "running $$" >"$WARM_STATUS"
+  # Anything that ends the warm-up early (a signal, a crash) must not leave "running" behind.
+  trap 'grep -q "^running" "$WARM_STATUS" 2>/dev/null && echo "failed interrupted" >"$WARM_STATUS"' EXIT
+  (cd "$REPO_ROOT" && with_backoff cargo build -p client-ffi --release) || failed+=(client-ffi)
   # Compiling main + test sources resolves everything :shared:allTests, :desktopApp:test and :desktopApp:simulate
   # use. --no-daemon so no Gradle daemon outlives the warm-up.
   (cd "$REPO_ROOT/app" && JAVA_HOME="$JAVA_HOME_GUESS" with_backoff ./gradlew -PskipRustBuild \
-    --no-daemon --quiet :shared:compileTestKotlinDesktop :desktopApp:compileTestKotlin) || ok=0
-  if [[ $ok == 1 ]]; then
+    --no-daemon --quiet :shared:compileTestKotlinDesktop :desktopApp:compileTestKotlin) || failed+=(gradle)
+  # The test runner CI uses (same version as .github/workflows/ci.yml), built from crates.io.
+  if ! cargo nextest --version 2>/dev/null | grep -q "$NEXTEST_VERSION"; then
+    with_backoff cargo install --locked --quiet cargo-nextest --version "$NEXTEST_VERSION" || failed+=(nextest)
+  fi
+  if [[ ${#failed[@]} == 0 ]]; then
     echo done >"$WARM_STATUS"
   else
-    echo failed >"$WARM_STATUS"
-    echo "cloud_setup: WARNING: cache warm-up failed (see above); the first build will download dependencies." >&2
+    echo "failed ${failed[*]}" >"$WARM_STATUS"
+    echo "cloud_setup: WARNING: cache warm-up failed (${failed[*]}); the first build will download dependencies." >&2
   fi
 }
 
@@ -95,9 +114,10 @@ case "$warm_mode" in
   background)
     # setsid + nohup: detached from the setup script, so it keeps running after the script returns.
     export -f warm_caches with_backoff
-    export REPO_ROOT JAVA_HOME_GUESS WARM_STATUS PATH
-    echo running >"$WARM_STATUS"
+    export REPO_ROOT JAVA_HOME_GUESS WARM_STATUS NEXTEST_VERSION PATH
     setsid nohup bash -c warm_caches >"$WARM_LOG" 2>&1 </dev/null &
+    # The child writes its own pid too; writing it here closes the gap before it starts.
+    echo "running $!" >"$WARM_STATUS"
     echo "Cache warm-up running in the background: log $WARM_LOG, status $WARM_STATUS"
     ;;
   skip) ;;

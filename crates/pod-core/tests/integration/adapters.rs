@@ -12,7 +12,7 @@ use axum::{
 use http_body_util::BodyExt;
 use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
-use pod_core::store::{Migration, open_session_on};
+use pod_core::store::{Step, open_session_on};
 use pod_core::{
     AppAdapter, AppInfo, AppState, AuthPolicy, BoxFuture, Catalog, FeedSpec, Hydration, Pod,
     RequestCtx, SignInProvider, SourceManifest, StaticAdapter,
@@ -80,8 +80,10 @@ fn open_app() -> Arc<dyn AppAdapter> {
 /// An adapter with a sign-in, an app that requires it, a route and a table.
 struct Gated;
 
-static GATED_MIGRATIONS: &[Migration] =
-    &[Migration::Sql("CREATE TABLE gated_t (n INTEGER NOT NULL);")];
+static GATED_MIGRATIONS: &[Step] = &[Step::sql(
+    "gated_t",
+    "CREATE TABLE gated_t (n INTEGER NOT NULL);",
+)];
 
 impl AppAdapter for Gated {
     fn name(&self) -> &'static str {
@@ -99,7 +101,7 @@ impl AppAdapter for Gated {
             title: "Test service",
         }]
     }
-    fn migrations(&self) -> &'static [Migration] {
+    fn migrations(&self) -> &'static [Step] {
         GATED_MIGRATIONS
     }
     fn router(&self) -> Router<Pod> {
