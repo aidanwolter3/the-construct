@@ -1,6 +1,5 @@
 {
   "note": "Events (the Watcher on Collections): the events collection with one filler per website and alerts for rules (decision collection-fillers); matches, sites with health and alerts, event screens",
-  "schema": 12,
   "layout": {
     "type": "core://Workspace",
     "id": "watcher",

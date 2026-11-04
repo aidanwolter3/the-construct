@@ -126,6 +126,7 @@ fn full_workspace() -> UiNode {
         id: "home".into(),
         title: "Home".into(),
         screens: Vec::new(),
+        title_scrolls: false,
         slots: vec![
             SlotSpec {
                 slot_id: "header".into(),
@@ -669,19 +670,13 @@ fn sequences_and_local_sets_round_trip_and_need_their_features() {
         })
         .collect();
     assert_eq!(kinds, ["sequence", "create", "local"]);
-    assert_eq!(
-        protocol::required_features(&node),
-        ["action_sequence", "local_set"]
-    );
+    assert_eq!(additive_features(&node), ["action_sequence", "local_set"]);
     // A nested sequence is walked too; a lone local set needs only its own feature.
     let nested = ActionIntent::Sequence {
         steps: vec![parsed.clone()],
     };
     assert_eq!(nested.flatten().len(), 4);
-    assert_eq!(
-        protocol::required_features(&button(&steps[1])),
-        ["local_set"]
-    );
+    assert_eq!(additive_features(&button(&steps[1])), ["local_set"]);
 }
 
 #[test]
@@ -709,11 +704,11 @@ fn progress_round_trips_and_needs_its_feature() {
              "content": {"type": "core://Progress"}}]}},
     }))
     .unwrap();
-    assert_eq!(protocol::required_features(&list), ["progress"]);
+    assert_eq!(additive_features(&list), ["progress"]);
     assert!(protocol::FEATURES.contains(&"progress"));
     // Nothing else needs it.
     let plain: UiNode = serde_json::from_value(json!({"type": "core://Divider"})).unwrap();
-    assert!(protocol::required_features(&plain).is_empty());
+    assert!(additive_features(&plain).is_empty());
 }
 
 #[test]
@@ -733,12 +728,12 @@ fn text_format_and_count_round_trip_and_need_their_features() {
         }
     );
     assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
-    assert_eq!(protocol::required_features(&parsed), ["date_format"]);
+    assert_eq!(additive_features(&parsed), ["date_format"]);
 
     let wire = r#"{"type":"core://Text","value_expr":"$count left","style":"Label","count":{"query_key":"collection:todos","where":[{"field":"done","equals":"false"},{"field":"deleted","equals":"false"}],"zero_text":"All done"}}"#;
     let parsed: UiNode = serde_json::from_str(wire).unwrap();
     assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
-    assert_eq!(protocol::required_features(&parsed), ["count"]);
+    assert_eq!(additive_features(&parsed), ["count"]);
     // `where` and `zero_text` are optional and omitted when unset.
     let bare: UiNode =
         serde_json::from_value(json!({"type": "core://Text", "value_expr": "$count",
@@ -751,7 +746,7 @@ fn text_format_and_count_round_trip_and_need_their_features() {
     // A plain text needs neither; an older text still decodes.
     let plain: UiNode =
         serde_json::from_str(r#"{"type":"core://Text","value_expr":"Hi","style":"Body"}"#).unwrap();
-    assert!(protocol::required_features(&plain).is_empty());
+    assert!(additive_features(&plain).is_empty());
     assert!(protocol::FEATURES.contains(&"date_format") && protocol::FEATURES.contains(&"count"));
 }
 
@@ -760,7 +755,7 @@ fn todo_icons_need_their_feature() {
     let on_click = json!({"intent": "action.navigation.back"});
     let needs = |v: serde_json::Value| {
         let n: UiNode = serde_json::from_value(v).unwrap();
-        protocol::required_features(&n)
+        additive_features(&n)
     };
     // A tick box: the feature whether the icon is the resting or the active one.
     let tick = json!({"type": "core://IconButton", "icon": "check_box_outline_blank",
@@ -786,4 +781,60 @@ fn todo_icons_need_their_feature() {
     for i in ["check", "check_box", "check_box_outline_blank", "delete"] {
         assert!(protocol::ICONS.contains(&i), "{i}");
     }
+}
+
+/// The features a node needs beyond the vocabulary of the numbered schemas
+/// (1-12, named since decision `named-vocabulary`): what these tests check.
+fn additive_features(node: &protocol::UiNode) -> Vec<&'static str> {
+    const NUMBERED: &[&str] = &[
+        "workspace",
+        "container",
+        "text",
+        "button",
+        "navigate",
+        "navigate_back",
+        "optimistic_mutation",
+        "auth_login",
+        "screens",
+        "list",
+        "image",
+        "text_field",
+        "load_data",
+        "create",
+        "row",
+        "column",
+        "spacer",
+        "divider",
+        "conditional",
+        "carousel",
+        "icon_button",
+        "chip",
+        "badge",
+        "text_label_styles",
+        "tappable",
+        "list_filter",
+        "list_group_by",
+        "box",
+        "choice_chips",
+        "list_where",
+        "align",
+        "text_display",
+        "icons_flame_timer",
+        "auth_session",
+        "list_grid",
+        "conditional_form",
+        "media_picker",
+        "text_field_lines",
+        "create_attachments",
+        "create_position",
+        "form_optional",
+        "icons_post",
+        "choice_chips_remember",
+        "sticky",
+        "list_focus",
+    ];
+    protocol::required_features(node)
+        .into_iter()
+        .filter(|f| !NUMBERED.contains(f))
+        .collect()
 }

@@ -171,6 +171,8 @@ sealed class UiNode {
         val slots: List<SlotSpec>,
         /** Screens this app can open (D34); omitted when empty. */
         val screens: List<Screen> = emptyList(),
+        /** The title scrolls away with the content (feature `title_scrolls`); by default it is pinned in a top bar. */
+        @SerialName("title_scrolls") val titleScrolls: Boolean = false,
     ) : UiNode()
 
     @Serializable
@@ -458,7 +460,8 @@ sealed class ActionIntent {
      * Schema 9 (D49, D51): [attachments] maps a name to a form-bound list of staged attachment ids (`{"photos":
      * "$form.photos"}`, bound by [bindForm] to a JSON array); the engine uploads them first and replaces
      * `"$attachments.<name>"` in [entity] (local attachment URIs) and [payload] (upload ids) itself. [position] puts the
-     * entity at the start or end of the list; [dismiss] closes the current screen once dispatched.
+     * entity at the start or end of the list. (Schema 13 removed `dismiss`: layouts close the screen with
+     * `action.sequence [this create, action.navigation.back]`; decision `named-vocabulary`.)
      */
     @Serializable
     data class Create(
@@ -470,7 +473,6 @@ sealed class ActionIntent {
         @SerialName("refresh_workspace") val refreshWorkspace: Boolean = false,
         val attachments: Map<String, JsonElement> = emptyMap(),
         val position: CreatePosition = CreatePosition.End,
-        val dismiss: Boolean = false,
     ) : ActionIntent()
 
     /**

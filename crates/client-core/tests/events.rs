@@ -45,7 +45,6 @@ struct StubState {
     /// Authorization header per events connection.
     event_auth: Mutex<Vec<String>>,
     /// `X-Construct-Schema` header per events connection ("" if absent).
-    event_schema: Mutex<Vec<String>>,
     /// `X-Construct-Features` header per events connection (`None` if absent).
     event_features: Mutex<Vec<Option<String>>>,
     /// Workspace fetches answer an unversioned "Signed out" screen (no
@@ -126,7 +125,6 @@ fn handle(mut stream: TcpStream, st: &StubState) {
         return;
     }
     let mut auth = String::new();
-    let mut schema = String::new();
     let mut features = None;
     loop {
         let mut line = String::new();
@@ -138,10 +136,6 @@ fn handle(mut stream: TcpStream, st: &StubState) {
                     && k.eq_ignore_ascii_case("authorization")
                 {
                     auth = v.trim().to_owned();
-                } else if let Some((k, v)) = line.split_once(':')
-                    && k.eq_ignore_ascii_case(protocol::SCHEMA_HEADER)
-                {
-                    schema = v.trim().to_owned();
                 } else if let Some((k, v)) = line.split_once(':')
                     && k.eq_ignore_ascii_case(protocol::FEATURES_HEADER)
                 {
@@ -177,7 +171,6 @@ fn handle(mut stream: TcpStream, st: &StubState) {
             );
         }
         (true, "/v1/workspaces/home/events") => {
-            st.event_schema.lock().unwrap().push(schema);
             st.event_features.lock().unwrap().push(features);
             serve_events(stream, st, auth)
         }
@@ -298,12 +291,8 @@ fn snapshot_layout_json_names_the_app_and_its_version() {
     );
     // The events stream carries the session's bearer.
     assert_eq!(stub.st.event_auth.lock().unwrap()[0], "Bearer tok-1");
-    // And the schema, so the pod announces only versions this build can draw.
-    assert_eq!(
-        stub.st.event_schema.lock().unwrap()[0],
-        protocol::SCHEMA_VERSION.to_string()
-    );
-    // And the layout features it draws.
+    // And the layout features it draws, so the pod announces only versions
+    // this build can draw.
     assert_eq!(
         stub.st.event_features.lock().unwrap()[0],
         Some(protocol::features_header())

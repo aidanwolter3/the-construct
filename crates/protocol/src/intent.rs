@@ -76,7 +76,12 @@ pub enum ActionIntent {
     /// uploads them before the POST; `"$attachments.<name>"` is then the
     /// local attachment entity URIs inside `entity` and the upload ids inside
     /// `payload`. `position` puts the new entity at the start or end of its
-    /// list; `dismiss` closes the current screen once dispatched.
+    /// list.
+    ///
+    /// `dismiss` (feature `create_dismiss`) is removed
+    /// (docs/decisions/named-vocabulary.md): layouts write `action.sequence
+    /// [this create, action.navigation.back]`. The field stays only so the pod
+    /// reads the old versions that use it and retires them.
     #[serde(rename = "action.mutation.create")]
     Create {
         query_key: String,

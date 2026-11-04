@@ -48,10 +48,6 @@ async fn call(
     let mut req = Request::builder()
         .method(method)
         .uri(path)
-        .header(
-            protocol::SCHEMA_HEADER,
-            protocol::SCHEMA_VERSION.to_string(),
-        )
         .header(protocol::FEATURES_HEADER, protocol::features_header())
         .header("authorization", format!("Bearer {bearer}"));
     let body = match body {
@@ -414,11 +410,10 @@ async fn bindings_must_fit_the_collection() {
         None,
     )
     .await;
-    assert_eq!(
-        v["versions"][0]["features"],
-        json!(["count", "date_format", "todo_icons"]),
-        "{v}"
-    );
+    let features = v["versions"][0]["features"].as_array().unwrap();
+    for f in ["count", "date_format", "todo_icons", "list", "row"] {
+        assert!(features.contains(&json!(f)), "{f}: {v}");
+    }
 }
 
 #[tokio::test]

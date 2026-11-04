@@ -69,8 +69,8 @@ pub trait AppAdapter: Any + Send + Sync {
     /// The layout files for this adapter's apps, per app in number order.
     ///
     /// Called once at startup by the layout sync, before the pod serves. The
-    /// usual rules apply: numbers have no gaps, every file declares the current
-    /// `SCHEMA_VERSION`, and a deployed file is never edited or renumbered
+    /// usual rules apply: numbers have no gaps, and a deployed file is never
+    /// edited or renumbered
     /// (the pod refuses to start). Every app in `apps` needs at least one file.
     fn layout_files(&self) -> &'static [LayoutSource];
 
@@ -404,9 +404,9 @@ pub struct SignInProvider {
 #[derive(Debug, Clone)]
 pub struct RequestCtx {
     /// The request headers (`Host` and `X-Forwarded-Proto` for absolute
-    /// URLs; [`protocol::SCHEMA_HEADER`]).
+    /// URLs; [`protocol::FEATURES_HEADER`]).
     pub headers: HeaderMap,
-    /// What the client draws: its schema and features
+    /// What the client draws: its features
     /// ([`crate::layouts::client_caps`]).
     pub client: protocol::ClientCaps,
     /// The caller's valid session, if the request carried one.
@@ -421,6 +421,7 @@ fn default_signed_out(sign_in: &str, app: &AppInfo) -> WorkspaceSpec {
             id: app.id.into(),
             title: app.title.into(),
             screens: Vec::new(),
+            title_scrolls: false,
             slots: vec![SlotSpec {
                 slot_id: "auth".into(),
                 provider_uri: format!("core://auth/{sign_in}"),

@@ -3456,10 +3456,6 @@ fn fetch(
         .map_err(|e| FetchError::Other(format!("client build: {e}")))?;
     let mut req = client
         .get(url)
-        .header(
-            protocol::SCHEMA_HEADER,
-            protocol::SCHEMA_VERSION.to_string(),
-        )
         .header(protocol::FEATURES_HEADER, protocol::features_header())
         .header(protocol::DEVICE_HEADER, device);
     if let Some(t) = token {
@@ -3490,10 +3486,6 @@ fn fetch_data(url: &str, token: Option<&str>, device: &str) -> Result<DataBundle
         .map_err(|e| FetchError::Other(format!("client build: {e}")))?;
     let mut req = client
         .get(url)
-        .header(
-            protocol::SCHEMA_HEADER,
-            protocol::SCHEMA_VERSION.to_string(),
-        )
         .header(protocol::FEATURES_HEADER, protocol::features_header())
         .header(protocol::DEVICE_HEADER, device);
     if let Some(t) = token {

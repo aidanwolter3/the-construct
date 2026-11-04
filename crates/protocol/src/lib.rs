@@ -8,9 +8,9 @@
 
 pub mod ast;
 pub mod bundle;
+pub mod features;
 pub mod intent;
 pub mod notify;
-pub mod schema;
 
 pub use ast::{
     Align, ChoiceOption, DateFormat, GroupBy, ICONS, ImageShape, Indent, ListBinding, ListFilter,
@@ -18,13 +18,12 @@ pub use ast::{
     TextStyle, Tone, UiNode,
 };
 pub use bundle::{DataBundle, EntityRecord, WorkspaceSpec};
+pub use features::{
+    ClientCaps, Compatibility, FEATURES, FEATURES_HEADER, REMOVED_FEATURES, feature,
+    features_header, parse_features, required_features,
+};
 pub use intent::{ActionIntent, FieldUpdate, Position, PresentationMode};
 pub use notify::{
     DEVICE_HEADER, Importance, Notification, NotificationChannel, NotificationEvent,
     NotificationList, PushPayload, ReadEvent, channel_key,
-};
-pub use schema::{
-    ClientCaps, Compatibility, FEATURES, FEATURES_HEADER, RETIRED, SCHEMA_HEADER, SCHEMA_VERSION,
-    compatibility, feature, features_header, oldest_layout_schema, parse_features,
-    required_features, required_schema,
 };

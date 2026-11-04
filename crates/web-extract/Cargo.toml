@@ -16,7 +16,7 @@ pod-core = { path = "../pod-core" }
 serde_json.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # CSS selectors over parsed HTML (the `selectors` extractor).
-scraper = "0.20"
+scraper = "0.29"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }

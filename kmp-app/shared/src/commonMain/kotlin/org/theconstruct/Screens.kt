@@ -276,18 +276,6 @@ class Navigation internal constructor(private val controller: ConstructControlle
         return true
     }
 
-    /**
-     * Closes the top screen after a create with `dismiss` (schema 9) and clears its form; its photos now belong to that
-     * create. False when no screen is open.
-     */
-    internal fun dismiss(): Boolean {
-        if (stack.isEmpty()) return false
-        val entry = stack.removeAt(stack.lastIndex)
-        controller.attachments.release(entry.form)
-        entry.form.clear()
-        return true
-    }
-
     /** Loads the top screen's data again. */
     fun retry() {
         top?.screen?.data?.let { controller.send(ActionIntent.LoadData(it)) }

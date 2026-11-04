@@ -50,7 +50,7 @@ crates/client-ffi    UniFFI bridge (EngineHandle, FfiStateSnapshot, StateObserve
 crates/fake-pixelfed fake Pixelfed (Mastodon API + OAuth PKCE, admin/fault controls), the primary e2e upstream;
                      single binary with embedded fixtures, Dockerfile for a sidecar image
 crates/e2e           end-to-end suite: pod + engine in-process against the fake (default) or a real Pixelfed
-layouts/             layouts as code: <app>/NNNN.json ({"note", "schema", "layout"}), embedded in the pod, append-only
+layouts/             layouts as code: <app>/NNNN.json ({"note", "layout"}), embedded in the pod, append-only
 fixtures/            pixelfed_home_bundle.json (DESIGN.md §2.2C; the pixelfed_demo app),
                      pixelfed_home_feed_bundle.json (simulator), counter_home_bundle.json (test-only: a minimal
                      stateful workspace for engine and UI tests; no pod serves it); pixelfed/ (Mastodon API JSON + media served by
@@ -111,8 +111,8 @@ endpoints always work. (The `home` "Counter" app was removed, D39.)
 - `GET /v1/workspaces/{id}` serves the app's latest layout with `X-Construct-Layout-Version: <n>`. The header is
   absent on the signed-out `pixelfed_home` screen and on its 401.
 - `GET /v1/apps` -> `{"apps":[{id, title, icon, latest_version, latest_compatible_version, updated_at}]}`.
-  `latest_compatible_version` is the newest version the asking client (`X-Construct-Schema`) can draw, i.e. what
-  opening the app serves it (null if none fits); see "Schema versions" below.
+  `latest_compatible_version` is the newest version the asking client (`X-Construct-Features`) can draw, i.e. what
+  opening the app serves it (null if none fits); see "Layout features" below.
 - `GET /v1/apps/{id}/versions[?limit=1..100 (default 20)&before=N]` -> `{app_id, latest_version,
   latest_compatible_version, versions:[{version, created_at, source, note?}], next_before?}`, newest first. `next_before` is present iff older versions exist;
   pass it as `before`. `source` is `file` for layout files. Versions migrated from the old catalog keep `seed`,
@@ -123,9 +123,9 @@ endpoints always work. (The `home` "Counter" app was removed, D39.)
   version).
 - `GET /v1/workspaces/{id}/events` (SSE): the first message is the current version, then one each time a new
   version of that app changes it (`event: layout` / `data: {"version":N,"workspace_id":"pixelfed_demo"}`), plus a
-  `: keepalive` comment every 15 s. With `X-Construct-Schema` the version is the newest one that client can draw
-  (what a workspace GET serves it), so a version it can't draw sends nothing; without the header it is the app's
-  latest (D38). New versions normally arrive with a deploy (the restart ends the stream, and the reconnect's first message
+  `: keepalive` comment every 15 s. The version is the newest one the client (`X-Construct-Features`) can draw
+  (what a workspace GET serves it), so a version it can't draw sends nothing; a caller without the header (a tool)
+  gets the app's latest. New versions normally arrive with a deploy (the restart ends the stream, and the reconnect's first message
   carries the new number). No session is needed; for `pixelfed_home`, a bearer that is not a valid session gets 401
   like the workspace GET. A stream opened with a session ends once the session is revoked (logout, `server pods
   rotate`, expiry): it is re-checked before each private event and every 15 s. One session token may hold 8
@@ -137,7 +137,7 @@ endpoints always work. (The `home` "Counter" app was removed, D39.)
 ```bash
 CONSTRUCT_SHOW_DEV_APPS=1 cargo run -p server
 curl -s http://127.0.0.1:8080/v1/apps | jq '.apps[] | {id, latest_version}'
-curl -s http://127.0.0.1:8080/v1/apps/pixelfed_home/versions | jq '.versions[] | {version, note, schema, compatible}'
+curl -s http://127.0.0.1:8080/v1/apps/pixelfed_home/versions | jq '.versions[] | {version, note, compatible}'
 # -> {"version":1,"note":"Classic feed","schema":1,"compatible":true} on a fresh database (no header = schema 1,
 #    so version 2, written for schema 2, says "compatible": false, "incompatible": "update_required")
 curl -s http://127.0.0.1:8080/v1/apps/pixelfed_home/versions/1 | jq .layout.id     # "pixelfed_home"
@@ -323,7 +323,7 @@ paths, e.g. the Pixelfed media proxy).
 
 A pod's user can have apps of their own next to the built-in ones (decision `custom-apps-and-data-sources`, issue
 #45): any layout the node vocabulary can draw, over the feeds, screen data and actions the pod's data sources
-declare (each adapter's `SourceManifest`). They are served like built-ins (workspace, SSE, versions, schema
+declare (each adapter's `SourceManifest`). They are served like built-ins (workspace, SSE, versions, feature
 negotiation) and marked `"kind": "custom"` in `GET /v1/apps`. Every write is validated against the app's sources
 (errors name a JSON pointer and what is allowed) and appended to the app's history.
 
@@ -564,11 +564,10 @@ Notes:
 The only way to change what the app looks like is a new layout file plus a deploy (DECISIONS D32):
 
 1. Copy the newest file of the app, e.g. `layouts/pixelfed_home/0001.json` to `layouts/pixelfed_home/0002.json`
-   (4 digits, the next number, no gaps), and edit it. The format is `{"note": "short changelog line", "schema": N,
-   "layout": <UiNode>}`. The note is what the menu's version history shows. `schema` is the client schema the
-   layout is written for: normally the current `protocol::SCHEMA_VERSION` (the pod refuses a value below what the
-   layout's vocabulary needs, or above the current one). The layout features it uses are worked out by the pod,
-   not declared (docs/decisions/layout-features.md). The layout root is the app's `core://Workspace`, and its id
+   (4 digits, the next number, no gaps), and edit it. The format is `{"note": "short changelog line", "layout":
+   <UiNode>}`. The note is what the menu's version history shows. The layout features it uses are worked out by the
+   pod, not declared (docs/decisions/named-vocabulary.md); deployed files may still carry the old `"schema"`, which
+   is ignored. The layout root is the app's `core://Workspace`, and its id
    is the app id. If another PR adds the same number first (git reports an add/add conflict), merge both changes
    into the next number: each file is a whole snapshot of the layout.
 2. There is no list to edit: the adapter's `build.rs` embeds every `layouts/<app>/*.json`.
@@ -583,8 +582,7 @@ Files are **append-only**. Never edit, rename or delete a deployed file: the pod
 file (e.g. "layouts/pixelfed_home/0002.json changed after it was deployed as version 7; layout files are
 append-only, add 0003.json instead"). A gap in the numbering, an invalid layout or a wrong root id also stops the
 start. Reformatting a file without changing its layout or note is fine. To undo a change, add a new file with the
-old content. A file's `schema` is append-only too (it is recorded separately from the content hash, since it was
-added to the first files after they deployed).
+old content. A deployed file's old `"schema"` is not part of the content hash and is ignored.
 
 ### Screens, generic nodes and actions (D34)
 
@@ -654,19 +652,17 @@ client build. The engine and the clients know no app.
   route parameter, e.g. `pixelfed://comments/$route.comment`) is scrolled into view once, the first time the list
   draws it, and drawn on `background` (`#RRGGBB`). One-column lists only. `layouts/pixelfed_home/0007.json` uses it
   for the `comment_thread` screen (`pixelfed://posts/{id}/comments/{comment}`), which a comment notification opens.
-- **Schema versions (D36, D38):** the engine sends `X-Construct-Schema: 12` (workspace fetches, data loads, the
-  apps API and the events stream). Every version records the schema it was written for (`"schema"` in its file). The pod serves each client
-  the newest version it can draw, so an older app (no header = 1) keeps getting the last version without screens
-  or the new nodes. Screens and List/Image/TextField need `"schema": 2`; the building blocks need 3; `core://Tappable` needs 4; a List `filter` or `group_by` needs 5; the schema-6 vocabulary above needs 6; `action.auth.session` needs 7; List `columns`/`spacing_dp`/`padding_h_dp` and a form-based or `equals` Conditional need 8; the photo-posting vocabulary (D49-D51) needs 9; a remembered `core://ChoiceChips` needs 10; `core://Sticky` needs 11; a List `focus` needs 12. `GET /v1/apps/{id}/versions[/{n}]` adds `schema`,
-  `compatible` and, when false, `incompatible` (`update_required`: written for a newer app; `retired`: written for
-  a schema this app no longer draws) per version; the menu greys those rows out and won't pin them. "Latest" in the
-  menu is always a version this app can draw; when the newest needs a newer app, the menu adds "Update the app to
-  see vN" instead of "Newer version available".
-- **Layout features (additive vocabulary after schema 12):** new nodes and attributes no longer bump
-  `SCHEMA_VERSION`. Each is a named feature, one file `crates/protocol/features/<name>.md`, mapped from the
-  vocabulary in `protocol::required_features` (docs/decisions/layout-features.md). Clients send the features they
-  draw in `X-Construct-Features`; the pod serves a version only to clients that have every feature it uses (else
-  `update_required`) and lists them as `features` in `GET /v1/apps/{id}/versions[/{n}]`.
+- **Layout features (decision [`named-vocabulary`](docs/decisions/named-vocabulary.md)):** every piece of the
+  vocabulary is a named feature, one file `crates/protocol/features/<name>.md`, mapped from the nodes and intents
+  in `protocol::required_features`. The engine sends every feature it draws in `X-Construct-Features` (workspace
+  fetches, data loads, the apps API and the events stream); there is no schema number. The pod records each
+  version's features and serves a client the newest version whose features it all draws. `GET
+  /v1/apps/{id}/versions[/{n}]` lists `features`, `compatible` and, when false, `incompatible` per version
+  (`update_required`: it uses a feature this app doesn't draw yet; `retired`: it uses a removed feature,
+  `crates/protocol/features/removed/`); the menu greys those rows out and won't pin them. A request without the
+  header (curl, a tool) is served the latest version. Removing a feature retires only the versions that use it:
+  `create_dismiss` (a create's `dismiss`, now `action.sequence [create, action.navigation.back]`) and
+  `legacy_nodes` (the `pixelfed://` widgets, D37) are removed.
 - **Progress (feature `progress`):** `core://Progress` (`size_dp` optional, default 16) is an indeterminate
   circular spinner in a quiet theme colour, with no children or intents. Put it in a `core://Conditional` to show
   work in progress, e.g. a group header that spins while its `section` is still `"Unsorted"`.
@@ -676,13 +672,6 @@ client build. The engine and the clients know no app.
   where?: [{field, equals}], zero_text?}` puts the number of the query's matching entities in place of `$count`
   ("$count left"). Drawn by the client, since the pod knows neither the viewer's time zone nor when a cached screen
   is looked at (decision `text-dates-and-counts`).
-- **A breaking schema change:** bump `protocol::SCHEMA_VERSION` and add `(new schema, oldest layout schema it still
-  draws)` to `protocol::RETIRED`. Older versions then show as incompatible to new clients and are never served to
-  them; the old files are not edited. `RETIRED` is `[(3, 3)]`: schema 3 removed the `pixelfed://` widgets (D37),
-  so schema-3 clients draw only schema-3 versions (`pixelfed_home/0003`, `pixelfed_demo/0002`). Schema 4 (D42) was
-  additive (no `RETIRED` entry): schema-4 clients still draw schema-3 versions, and schema-3 clients keep getting
-  the newest schema-3 version (e.g. `recipes/0001`). Schema 5 (D43) and 6 (D44) were additive too (`recipes/0002` for
-  schema-4 clients, `recipes/0003` for schema 5).
 
 `layouts/pixelfed_home/0003.json` builds the feed from these nodes. It (like 0002) uses the rest for comments: the feed's comment button (already
 `pixelfed://posts/$item.id/comments`) opens the `comments` screen, which loads
