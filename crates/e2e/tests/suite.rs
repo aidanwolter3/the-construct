@@ -130,7 +130,7 @@ fn e2e_suite() {
     // placeholder shows at once; the outbox uploads the photo, the pod posts it, and
     // its data event makes the engine reload: the real post is first in the feed.
     if !up.is_real() {
-        up.fake().set_media_processing_polls(2);
+        up.set_media_processing_polls(2);
         let photo = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../fixtures/pixelfed/media/carousel-1.png"
@@ -158,9 +158,9 @@ fn e2e_suite() {
         assert_eq!(h.posts_to("/v1/uploads"), [200]);
         assert_eq!(h.posts_to("/v1/pixelfed/posts/create"), [202]);
         wait_until("the post on the upstream", TIMEOUT, || {
-            !up.fake().created_ids().is_empty()
+            !up.created_ids().is_empty()
         });
-        let new_id = up.fake().created_ids()[0].clone();
+        let new_id = up.created_ids()[0].clone();
         wait_until("the real post first in the feed", TIMEOUT, || {
             feed(&engine.snapshot()).first() == Some(&format!("pixelfed://posts/{new_id}"))
         });
