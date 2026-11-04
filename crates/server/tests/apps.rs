@@ -151,7 +151,7 @@ async fn apps_lists_dev_apps_only_when_shown() {
     );
     assert_eq!(
         (&apps[2]["id"], &apps[2]["title"], &apps[2]["icon"]),
-        (&json!("watcher"), &json!("Watcher"), &json!("dashboard"))
+        (&json!("watcher"), &json!("Events"), &json!("dashboard"))
     );
 
     let dev = spawn(server::state_in_memory().with_dev_apps(true)).await;
@@ -175,7 +175,7 @@ async fn apps_lists_dev_apps_only_when_shown() {
         [
             ("pixelfed_home", "Pixelfed", "photo", files("pixelfed_home")),
             ("recipes", "Recipes", "recipe", files("recipes")),
-            ("watcher", "Watcher", "dashboard", files("watcher")),
+            ("watcher", "Events", "dashboard", files("watcher")),
             (
                 "pixelfed_demo",
                 "Pixelfed demo",

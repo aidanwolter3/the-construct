@@ -254,8 +254,8 @@ fn mib(bytes: f64) -> String {
 /// order).
 pub fn checks(series: &[Series], gauges: &[Gauge], cfg: &MonitorConfig) -> Vec<Check> {
     use metrics::{
-        AUTH_FAILURES, CREDENTIALS_ISSUED, HTTP_RESPONSES, LLM_REQUESTS, LLM_TOKENS, RATE_LIMITED,
-        TEMPORARY_PODS,
+        AUTH_FAILURES, CREDENTIALS_ISSUED, HTTP_RESPONSES, LLM_REQUESTS, LLM_TOKENS, LLM_WEB_TOOLS,
+        RATE_LIMITED, TEMPORARY_PODS,
     };
     let mut out = Vec::new();
 
@@ -343,15 +343,24 @@ pub fn checks(series: &[Series], gauges: &[Gauge], cfg: &MonitorConfig) -> Vec<C
             m
         });
     let (_, calls) = sum(series, LLM_REQUESTS, "outcome", &[]);
+    let (_, web) = sum(series, LLM_WEB_TOOLS, "tool", &[]);
     let split: Vec<String> = by_feature.iter().map(|(f, n)| format!("{f} {n}")).collect();
     out.push(Check {
         id: "model_use",
         title: "Model use",
         warn: tokens > cfg.llm_tokens_per_day,
         detail: format!(
-            "{} over {} in the last day{}",
+            "{} over {}{} in the last day{}",
             plural(tokens, "token", "tokens"),
             plural(calls, "call", "calls"),
+            if web > 0 {
+                format!(
+                    " and {}",
+                    plural(web, "web search or fetch", "web searches and fetches")
+                )
+            } else {
+                String::new()
+            },
             if split.is_empty() {
                 String::new()
             } else {
@@ -565,7 +574,7 @@ mod tests {
     use super::*;
     use metrics::{
         AUTH_FAILURES, CREDENTIALS_ISSUED, DAY, HTTP_RESPONSES, LLM_REQUESTS, LLM_TOKENS,
-        RATE_LIMITED, TEMPORARY_PODS,
+        LLM_WEB_TOOLS, RATE_LIMITED, TEMPORARY_PODS,
     };
 
     fn s(name: &'static str, label: (&str, &str), hour: u64, day: u64) -> Series {
@@ -608,7 +617,7 @@ mod tests {
         let series = vec![
             s(HTTP_RESPONSES, ("status", "200"), 500, 9000),
             s(AUTH_FAILURES, ("kind", "pod_code"), 2, 5),
-            s(LLM_TOKENS, ("feature", "watcher"), 1000, 20_000),
+            s(LLM_TOKENS, ("feature", "fill_page"), 1000, 20_000),
             s(CREDENTIALS_ISSUED, ("kind", "oauth_client"), 1, 1),
         ];
         assert!(warned(&series, &quiet_gauges()).is_empty());
@@ -643,6 +652,7 @@ mod tests {
             s(HTTP_RESPONSES, ("status", "502"), 11, 11),
             s(LLM_TOKENS, ("feature", "collections"), 0, 2_000_000),
             s(LLM_REQUESTS, ("outcome", "refused"), 0, 6),
+            s(LLM_WEB_TOOLS, ("tool", "web_search"), 0, 3),
             s(TEMPORARY_PODS, ("outcome", "full"), 0, 1),
         ];
         let mut g = quiet_gauges();
@@ -665,7 +675,8 @@ mod tests {
         let model = c.iter().find(|c| c.id == "model_use").unwrap();
         assert_eq!(
             model.detail,
-            "2000000 tokens over 6 calls in the last day (collections 2000000)"
+            "2000000 tokens over 6 calls and 3 web searches and fetches in the last day \
+             (collections 2000000)"
         );
         let b = bundle(&series, &g, &MonitorConfig::default(), 2 * DAY, 0);
         let summary = &b.entities["monitor://summary/server"];

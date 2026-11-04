@@ -37,12 +37,16 @@ pub const RATE_LIMITED: &str = "construct_rate_limited_total";
 pub const CREDENTIALS_ISSUED: &str = "construct_credentials_issued_total";
 /// Temporary pod requests (`outcome`): `created`, `full` or `low_disk`.
 pub const TEMPORARY_PODS: &str = "construct_temporary_pod_requests_total";
-/// Model calls (`feature`: the app that asked, e.g. `watcher`,
-/// `collections`; `outcome`: `ok`, `error` or `refused`).
+/// Model calls (`feature`: what asked: `collections` (computed fields),
+/// `fill_page` (a filler reading a page), `fill_agent` (an agent fill);
+/// `outcome`: `ok`, `error` or `refused`).
 pub const LLM_REQUESTS: &str = "construct_llm_requests_total";
 /// Model tokens (`feature`; `direction`: `input` or `output`), from the
 /// answer's `usage`.
 pub const LLM_TOKENS: &str = "construct_llm_tokens_total";
+/// Web searches and fetches the model ran (`feature`; `tool`:
+/// `web_search` or `web_fetch`), billed per use on top of tokens.
+pub const LLM_WEB_TOOLS: &str = "construct_llm_web_tools_total";
 
 type Labels = &'static [(&'static str, &'static str)];
 
@@ -94,6 +98,11 @@ pub const COUNTERS: &[(&str, &str, &[Labels])] = &[
     ),
     (LLM_REQUESTS, "Model calls, by feature and outcome.", &[]),
     (LLM_TOKENS, "Model tokens, by feature and direction.", &[]),
+    (
+        LLM_WEB_TOOLS,
+        "Web searches and fetches the model ran, by feature and tool.",
+        &[],
+    ),
 ];
 
 /// A series' labels, sorted by name.

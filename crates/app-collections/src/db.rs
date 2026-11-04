@@ -13,6 +13,13 @@
 //!   `collection-computed-fields`) as JSON, by collection, field id and the
 //!   normalized source values, so each input is asked about once; a
 //!   person's edit of the field replaces the answer.
+//! - `collections_fills`: each filler's fill state (decision
+//!   `collection-fillers`): validators and body hash of the last fetch,
+//!   health, the next scheduled fill and an agent's fills today. Rows a
+//!   filler wrote carry its id (`collections_rows.filler`).
+//! - `collections_alerts_sent`: which row an alert already notified about.
+//! - `collections_secrets`: values fetch recipes send in headers
+//!   (`{secret:<name>}`), sealed with the server key; never shown back.
 //! - `collections_reminders_sent`: which row a reminder (decision
 //!   `collection-reminders`) already notified about, for which date, so
 //!   each fires once even after the core's notification retention.
@@ -33,7 +40,45 @@ pub static MIGRATIONS: &[Migration] = &[
     Migration::Sql(COMPUTED),
     // 3: reminders already sent (decision `collection-reminders`).
     Migration::Sql(REMINDERS),
+    // 4: fill state and secrets (decision `collection-fillers`).
+    Migration::Sql(FILLS),
 ];
+
+const FILLS: &str = "
+ALTER TABLE collections_rows ADD COLUMN filler TEXT;
+CREATE TABLE collections_fills (
+    collection   TEXT NOT NULL,
+    filler       TEXT NOT NULL,
+    fingerprint  TEXT NOT NULL DEFAULT '',
+    next_at      INTEGER,
+    etag         TEXT,
+    last_modified TEXT,
+    content_hash TEXT,
+    last_fill_at INTEGER,
+    last_ok_at   INTEGER,
+    last_error   TEXT,
+    failures     INTEGER NOT NULL DEFAULT 0,
+    empty_runs   INTEGER NOT NULL DEFAULT 0,
+    last_rows    INTEGER,
+    last_skipped INTEGER,
+    day          TEXT,
+    day_fills    INTEGER NOT NULL DEFAULT 0,
+    quiet_next   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (collection, filler)
+);
+CREATE TABLE collections_alerts_sent (
+    collection TEXT NOT NULL,
+    alert      TEXT NOT NULL,
+    row_id     TEXT NOT NULL,
+    sent_at    INTEGER NOT NULL,
+    PRIMARY KEY (collection, alert, row_id)
+);
+CREATE TABLE collections_secrets (
+    name       TEXT PRIMARY KEY NOT NULL,
+    value      TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+";
 
 const REMINDERS: &str = "
 CREATE TABLE collections_reminders_sent (
@@ -242,6 +287,8 @@ pub struct Row {
     pub created_at: i64,
     pub updated_at: i64,
     pub deleted_at: Option<i64>,
+    /// The filler that wrote it (`None`: a person or Claude).
+    pub filler: Option<String>,
 }
 
 impl Row {
@@ -260,10 +307,11 @@ fn row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         created_at: r.get(3)?,
         updated_at: r.get(4)?,
         deleted_at: r.get(5)?,
+        filler: r.get(6)?,
     })
 }
 
-const ROW_COLS: &str = "id, client_id, values_json, created_at, updated_at, deleted_at";
+const ROW_COLS: &str = "id, client_id, values_json, created_at, updated_at, deleted_at, filler";
 
 /// Row `id` of `collection` (deleted or not).
 pub fn row(conn: &Connection, collection: &str, id: &str) -> rusqlite::Result<Option<Row>> {
@@ -365,6 +413,10 @@ fn compare(field: &Field, x: &Value, y: &Value) -> Ordering {
             .to_lowercase()
             .cmp(&y.as_str().unwrap_or("").to_lowercase()),
         Kind::Date => x.as_str().cmp(&y.as_str()),
+        Kind::Datetime => match (model::instant(x), model::instant(y)) {
+            (Some(a), Some(b)) => a.cmp(&b),
+            _ => x.as_str().cmp(&y.as_str()),
+        },
     }
 }
 
@@ -378,25 +430,209 @@ pub fn query_key(collection: &str) -> String {
     format!("collection:{collection}")
 }
 
+/// A row as an entity: its fields ([`model::row_entity`]) and, with
+/// fillers, `filler_id` and `filler_title`; with alerts, `alert_matched` and
+/// `alert_names` (decision `collection-fillers`).
+pub fn row_record(def: &Definition, r: &Row, now: i64) -> EntityRecord {
+    let mut e = model::row_entity(
+        def,
+        &r.id,
+        &r.values,
+        &pod_core::layouts::rfc3339(r.created_at),
+        &pod_core::layouts::rfc3339(r.updated_at),
+    );
+    let derived = def.derived_names();
+    let mut put = |k: &str, v: Value| {
+        if derived.iter().any(|d| d == k) {
+            e.insert(k.to_owned(), v);
+        }
+    };
+    if !def.fillers.is_empty() {
+        let f = r
+            .filler
+            .as_deref()
+            .and_then(|id| crate::filler::find(def, id));
+        put("filler_id", json!(r.filler.clone().unwrap_or_default()));
+        put("filler_title", json!(f.map_or("", |f| f.title.as_str())));
+    }
+    if !def.alerts.is_empty() {
+        let names = crate::alerts::matching(def, r, now);
+        put("alert_matched", json!(!names.is_empty()));
+        put("alert_names", json!(names.join(", ")));
+    }
+    EntityRecord(e)
+}
+
+/// The query key of a collection's fillers.
+pub fn fillers_key(collection: &str) -> String {
+    format!("collection:{collection}:fillers")
+}
+
+/// The query key of a collection's rows some alert matches.
+pub fn alerted_key(collection: &str) -> String {
+    format!("collection:{collection}:alerted")
+}
+
+/// The entity URI of filler `id` of `collection`.
+pub fn filler_uri(collection: &str, id: &str) -> String {
+    format!("collections://{collection}/fillers/{id}")
+}
+
+/// The entity URI of alert `id` of `collection`.
+pub fn alert_uri(collection: &str, id: &str) -> String {
+    format!("collections://{collection}/alerts/{id}")
+}
+
+/// A filler as an entity, for an app's list of sites: its title, kind,
+/// URL, health (`state`, `detail`, `failing`) and its alerts' names.
+pub fn filler_record(
+    def: &Definition,
+    f: &crate::filler::Filler,
+    st: &crate::fill::State,
+    now: i64,
+    off: bool,
+) -> EntityRecord {
+    let (state, detail) = crate::fill::health_state(f, st, now, off, true);
+    let names: Vec<String> = crate::alerts::of_filler(def, &f.id)
+        .map(|a| a.name.clone())
+        .collect();
+    let alerts_text = if names.is_empty() {
+        "No alerts yet".to_owned()
+    } else {
+        format!("Watching for {}", names.join(", "))
+    };
+    let mut e = Map::new();
+    for (k, v) in [
+        ("id", json!(f.id)),
+        ("uri", json!(filler_uri(&def.name, &f.id))),
+        ("title", json!(f.title)),
+        ("kind", json!(f.kind())),
+        ("url", json!(f.url().unwrap_or(""))),
+        ("state", json!(state)),
+        ("detail", json!(detail)),
+        ("failing", json!(matches!(state, "failing" | "empty"))),
+        ("alert_count", json!(names.len())),
+        ("alerts_text", json!(alerts_text)),
+    ] {
+        e.insert(k.to_owned(), v);
+    }
+    EntityRecord(e)
+}
+
+/// An alert as an entity: its name, summary and filler.
+pub fn alert_record(def: &Definition, a: &crate::alerts::Alert) -> EntityRecord {
+    let mut e = Map::new();
+    for (k, v) in [
+        ("id", json!(a.id)),
+        ("uri", json!(alert_uri(&def.name, &a.id))),
+        ("name", json!(a.name)),
+        ("summary", json!(a.summary())),
+        ("filler_id", json!(a.filler.clone().unwrap_or_default())),
+    ] {
+        e.insert(k.to_owned(), v);
+    }
+    EntityRecord(e)
+}
+
+/// Whether fillers are off on this pod (`collections.fill = 0`).
+fn fills_off(conn: &Connection) -> rusqlite::Result<bool> {
+    Ok(pod_core::store::pod_setting_on(conn, crate::fill::FILL_SETTING)?.is_some_and(|v| v == "0"))
+}
+
 /// A collection's list as a `DataBundle`: each live row at
-/// `collections://<name>/<id>`, in order under `collection:<name>`.
+/// `collections://<name>/<id>`, in order under `collection:<name>`; with
+/// fillers also `collection:<name>:fillers`, with alerts
+/// `collection:<name>:alerted` (the rows an alert matches).
 pub fn bundle(conn: &Connection, def: &Definition) -> rusqlite::Result<DataBundle> {
+    let now = pod_core::util::now_secs();
     let mut data = DataBundle::default();
     let mut list = Vec::new();
+    let mut alerted = Vec::new();
     for r in rows(conn, def)? {
         let uri = row_uri(&def.name, &r.id);
-        let e = model::row_entity(
-            def,
-            &r.id,
-            &r.values,
-            &pod_core::layouts::rfc3339(r.created_at),
-            &pod_core::layouts::rfc3339(r.updated_at),
-        );
-        data.entities.insert(uri.clone(), EntityRecord(e));
+        let rec = row_record(def, &r, now);
+        if rec.0.get("alert_matched") == Some(&json!(true)) {
+            alerted.push(uri.clone());
+        }
+        data.entities.insert(uri.clone(), rec);
         list.push(uri);
     }
     data.queries.insert(query_key(&def.name), list);
+    if !def.alerts.is_empty() {
+        data.queries.insert(alerted_key(&def.name), alerted);
+    }
+    if !def.fillers.is_empty() {
+        let off = fills_off(conn)?;
+        let states = crate::fill::states(conn, def)?;
+        let mut keys = Vec::new();
+        for f in &def.fillers {
+            let uri = filler_uri(&def.name, &f.id);
+            let st = states.get(&f.id).cloned().unwrap_or_default();
+            data.entities
+                .insert(uri.clone(), filler_record(def, f, &st, now, off));
+            keys.push(uri);
+        }
+        data.queries.insert(fillers_key(&def.name), keys);
+    }
     Ok(data)
+}
+
+/// One filler's screen: the filler (a one-item list,
+/// `collection:<c>:filler:<f>`), its rows (`…:rows`, in order) and its
+/// alerts (`…:alerts`). `None`: no such filler.
+pub fn filler_bundle(
+    conn: &Connection,
+    def: &Definition,
+    filler: &str,
+) -> rusqlite::Result<Option<DataBundle>> {
+    let Some(f) = crate::filler::find(def, filler) else {
+        return Ok(None);
+    };
+    let now = pod_core::util::now_secs();
+    let off = fills_off(conn)?;
+    let st = crate::fill::state(conn, &def.name, &f.id)?;
+    let base = format!("collection:{}:filler:{}", def.name, f.id);
+    let mut data = DataBundle::default();
+    let uri = filler_uri(&def.name, &f.id);
+    data.entities
+        .insert(uri.clone(), filler_record(def, f, &st, now, off));
+    data.queries.insert(base.clone(), vec![uri]);
+    let mut list = Vec::new();
+    for r in rows(conn, def)?
+        .into_iter()
+        .filter(|r| r.filler.as_deref() == Some(filler))
+    {
+        let uri = row_uri(&def.name, &r.id);
+        data.entities.insert(uri.clone(), row_record(def, &r, now));
+        list.push(uri);
+    }
+    data.queries.insert(format!("{base}:rows"), list);
+    let mut alerts = Vec::new();
+    for a in crate::alerts::of_filler(def, filler) {
+        let uri = alert_uri(&def.name, &a.id);
+        data.entities.insert(uri.clone(), alert_record(def, a));
+        alerts.push(uri);
+    }
+    data.queries.insert(format!("{base}:alerts"), alerts);
+    Ok(Some(data))
+}
+
+/// One row's screen: the row as a one-item list `collection:<c>:row:<id>`.
+pub fn row_bundle(
+    conn: &Connection,
+    def: &Definition,
+    id: &str,
+) -> rusqlite::Result<Option<DataBundle>> {
+    let Some(r) = row(conn, &def.name, id)?.filter(|r| r.deleted_at.is_none()) else {
+        return Ok(None);
+    };
+    let mut data = DataBundle::default();
+    let uri = row_uri(&def.name, &r.id);
+    data.entities
+        .insert(uri.clone(), row_record(def, &r, pod_core::util::now_secs()));
+    data.queries
+        .insert(format!("collection:{}:row:{}", def.name, r.id), vec![uri]);
+    Ok(Some(data))
 }
 
 /// Live rows and their values' bytes across the pod's collections.
@@ -413,7 +649,7 @@ pub fn usage(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
 pub fn insert_row(tx: &Connection, collection: &str, row: &Row) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT INTO collections_rows (collection, id, client_id, values_json, created_at,
-         updated_at, deleted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+         updated_at, deleted_at, filler) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             collection,
             row.id,
@@ -421,7 +657,8 @@ pub fn insert_row(tx: &Connection, collection: &str, row: &Row) -> rusqlite::Res
             Value::Object(row.values.clone()).to_string(),
             row.created_at,
             row.updated_at,
-            row.deleted_at
+            row.deleted_at,
+            row.filler
         ],
     )?;
     Ok(())
@@ -775,6 +1012,13 @@ pub fn purge(tx: &Transaction<'_>, now: i64, window: i64) -> rusqlite::Result<Pu
     tx.execute(
         "DELETE FROM collections_edits WHERE created_at <= ?1",
         [cutoff],
+    )?;
+    // Alerts sent about rows that are gone.
+    tx.execute(
+        "DELETE FROM collections_alerts_sent WHERE NOT EXISTS (SELECT 1 FROM collections_rows r
+         WHERE r.collection = collections_alerts_sent.collection
+           AND r.id = collections_alerts_sent.row_id)",
+        [],
     )?;
     // Older than any reminder still fires (`remind::LATE_SECS`).
     tx.execute(

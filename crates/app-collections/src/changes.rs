@@ -15,6 +15,12 @@
 //! | `{op: add_reminder, field, title, body?, at?, unless?, label?, app?}` | notify when a row's date is reached (decision `collection-reminders`) |
 //! | `{op: update_reminder, reminder, ...}` | change what it names |
 //! | `{op: remove_reminder, reminder}` | stop it |
+//! | `{op: set_filler, filler}` | add a filler, or change the one `filler.id` names (decision `collection-fillers`; [`crate::filler::parse`]) |
+//! | `{op: remove_filler, filler}` | stop that filler (its rows stay, no longer locked) |
+//! | `{op: add_alert, ...}`, `{op: update_alert, alert, ...}`, `{op: remove_alert, alert}` | notify when a row matches ([`crate::alerts`]) |
+//!
+//! A system collection (one a built-in app owns) refuses renaming, removing
+//! and retyping its fields.
 
 use serde_json::Value;
 
@@ -30,6 +36,18 @@ pub struct Planned {
     pub convert: Vec<String>,
     pub compute: Vec<String>,
     pub recompute: Vec<String>,
+}
+
+impl Planned {
+    /// The fillers new or changed against `before` (a fill then starts).
+    pub fn fillers_changed(&self, before: &Definition) -> Vec<String> {
+        self.def
+            .fillers
+            .iter()
+            .filter(|f| crate::filler::find(before, &f.id) != Some(*f))
+            .map(|f| f.id.clone())
+            .collect()
+    }
 }
 
 /// The field an op names (by name or alias, live or, for `restore_field`,
@@ -56,6 +74,7 @@ fn find<'a>(def: &'a mut Definition, name: &str, removed: bool) -> Result<&'a mu
 
 /// Apply change `ops` to `def` (`others`: every collection's live
 /// definition, which lookups read). `Err((op index, why))`.
+#[allow(clippy::too_many_arguments)]
 pub fn plan(
     def: &Definition,
     ops: &[Value],
@@ -63,12 +82,22 @@ pub fn plan(
     now: i64,
     max_chars: usize,
     max_fields: usize,
+    allow_private: bool,
 ) -> Result<Planned, (usize, String)> {
     let mut def = def.clone();
     let before = def.clone();
     let mut recompute = Vec::new();
     for (i, op) in ops.iter().enumerate() {
-        apply_op(&mut def, op, others, &mut recompute, now, max_chars).map_err(|e| (i, e))?;
+        apply_op(
+            &mut def,
+            op,
+            others,
+            &mut recompute,
+            now,
+            max_chars,
+            allow_private,
+        )
+        .map_err(|e| (i, e))?;
     }
     model::check_definition(&def, max_fields).map_err(|e| (ops.len().saturating_sub(1), e))?;
     let compute = to_compute(&before, &def);
@@ -117,9 +146,24 @@ fn apply_op(
     recompute: &mut Vec<String>,
     now: i64,
     max_chars: usize,
+    allow_private: bool,
 ) -> Result<(), String> {
     let arg = |k: &str| op[k].as_str().map(str::trim).unwrap_or("");
-    match op["op"].as_str().unwrap_or("") {
+    let name = op["op"].as_str().unwrap_or("");
+    if def.system.is_some()
+        && (matches!(name, "rename_field" | "remove_field")
+            || (name == "update_field"
+                && ["type", "options", "optional"]
+                    .iter()
+                    .any(|k| op.get(*k).is_some())))
+    {
+        return Err(format!(
+            "'{}' belongs to the {} app, which depends on its fields: they can't be renamed, removed or retyped (add a field instead)",
+            def.name,
+            def.system.as_ref().map_or("", |s| s.app.as_str())
+        ));
+    }
+    match name {
         "add_field" => {
             let id = format!("f{}", def.next_field);
             let field = model::parse_field(op, id, max_chars)?;
@@ -231,9 +275,52 @@ fn apply_op(
         "add_reminder" => crate::remind::add(def, op, now)?,
         "update_reminder" => crate::remind::update(def, op)?,
         "remove_reminder" => crate::remind::remove(def, op)?,
+        "set_filler" => {
+            let Some(spec) = op.get("filler").filter(|f| f.is_object()) else {
+                return Err(
+                    "set_filler needs \"filler\": a filler spec (with \"id\" to change one)".into(),
+                );
+            };
+            match spec.get("id").and_then(Value::as_str).map(str::trim) {
+                Some(id) if !id.is_empty() => {
+                    let Some(i) = def.fillers.iter().position(|f| f.id == id) else {
+                        return Err(format!(
+                            "no filler '{id}' (fillers: {})",
+                            def.fillers
+                                .iter()
+                                .map(|f| format!("{} ({})", f.id, f.title))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    };
+                    let f = crate::filler::parse(def, spec, id.to_owned(), allow_private)?;
+                    def.fillers[i] = f;
+                }
+                _ => {
+                    let f = crate::filler::parse(def, spec, crate::db::new_id("s"), allow_private)?;
+                    def.fillers.push(f);
+                }
+            }
+        }
+        "remove_filler" => {
+            let id = arg("filler").to_owned();
+            let before = def.fillers.len();
+            def.fillers.retain(|f| f.id != id);
+            if def.fillers.len() == before {
+                return Err(format!("no filler '{id}'"));
+            }
+            // Its alerts go with it.
+            def.alerts
+                .retain(|a| a.filler.as_deref() != Some(id.as_str()));
+        }
+        "add_alert" => {
+            crate::alerts::add(def, op, now)?;
+        }
+        "update_alert" => crate::alerts::update(def, op)?,
+        "remove_alert" => crate::alerts::remove(def, op)?,
         other => {
             return Err(format!(
-                "unknown op '{other}' (add_field, rename_field, remove_field, restore_field, update_field, recompute_field, set_order, set_title, add_reminder, update_reminder, remove_reminder)"
+                "unknown op '{other}' (add_field, rename_field, remove_field, restore_field, update_field, recompute_field, set_order, set_title, add_reminder, update_reminder, remove_reminder, set_filler, remove_filler, add_alert, update_alert, remove_alert)"
             ));
         }
     }
@@ -311,6 +398,31 @@ pub fn restore(
         .collect();
     def.reminders
         .retain(|r| r.sources().iter().all(|id| live.contains(id)));
+    // Fillers and alerts that no longer fit the fields stop (set them
+    // again).
+    let fits: Vec<crate::filler::Filler> = def
+        .fillers
+        .iter()
+        .filter(|f| {
+            let mut one = def.clone();
+            one.fillers = vec![(*f).clone()];
+            one.alerts.clear();
+            crate::filler::check(&one, u32::MAX).is_ok()
+        })
+        .cloned()
+        .collect();
+    def.fillers = fits;
+    let keep: Vec<crate::alerts::Alert> = def
+        .alerts
+        .iter()
+        .filter(|a| {
+            let mut one = def.clone();
+            one.alerts = vec![(*a).clone()];
+            crate::alerts::check(&one).is_ok()
+        })
+        .cloned()
+        .collect();
+    def.alerts = keep;
     model::check_definition(&def, max_fields)?;
     Ok(Planned {
         convert: to_convert(current, &def),
@@ -333,7 +445,15 @@ mod tests {
         max_chars: usize,
         max_fields: usize,
     ) -> Result<Planned, (usize, String)> {
-        plan(def, ops, &Defs::default(), now, max_chars, max_fields)
+        plan(
+            def,
+            ops,
+            &Defs::default(),
+            now,
+            max_chars,
+            max_fields,
+            false,
+        )
     }
 
     fn todos() -> Definition {
@@ -354,6 +474,9 @@ mod tests {
             descending: false,
             next_field: 4,
             reminders: Vec::new(),
+            fillers: Vec::new(),
+            alerts: Vec::new(),
+            system: None,
         }
     }
 

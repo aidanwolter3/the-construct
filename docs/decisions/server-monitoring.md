@@ -4,15 +4,15 @@ Date: 2026-11-04. Related: D46, [custom-apps-and-data-sources](custom-apps-and-d
 [mcp-connector](mcp-connector.md), [pod-storage-limits](pod-storage-limits.md).
 
 The server logged security events (wrong pod codes, rate limits, new OAuth clients and MCP credentials) but nothing
-counted them, so noticing an attack meant reading `fly logs`. Model calls (the watcher's `llm` extractor, Collections'
-`model` fields) were not counted at all, though they are the one thing a caller can spend money on: temporary pods
-can't reach the model, but a stolen MCP credential or pod code for an admin pod could. Options considered: a log
+counted them, so noticing an attack meant reading `fly logs`. Model calls (Collections' `model` fields and its
+fillers, which read pages and run agent fills with web search) were not counted at all, though they are the one
+thing a caller can spend money on: temporary pods can't reach the model, but a stolen MCP credential or pod code for an admin pod could. Options considered: a log
 shipper with alerts on log lines (no code, but needs an outside service to see anything), the `prometheus` or
 `metrics` crates (more than we need), and our own small registry.
 
 Decision: `pod_core::metrics` is a process-wide registry of counters with fixed label values (no user input, so
 few series), every one declared up front so readers see it at 0. The host counts responses by status and its
-security events; the model callers count calls by outcome (`ok`, `error`, `refused`) and tokens by direction. The
+security events; the model callers count calls by outcome (`ok`, `error`, `refused`) tokens by direction, and web searches and fetches. The
 host supplies gauges (live pods, MCP credentials, free disk) measured when read. Two readers:
 
 - `GET /metrics` in the Prometheus text format, on its own listener (`CONSTRUCT_METRICS_ADDR`), never the public

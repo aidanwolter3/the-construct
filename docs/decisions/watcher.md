@@ -1,5 +1,7 @@
 # A built-in watcher source polls websites for events and notifies matches; sites and rules are rows
 
+Superseded by [collection-fillers](collection-fillers.md): the Watcher became the Events app on Collections.
+
 Partly superseded by [watcher-rules-per-site](watcher-rules-per-site.md) (rules belong to one site; shared model
 settings; the app no longer edits sites and rules).
 

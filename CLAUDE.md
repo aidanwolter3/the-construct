@@ -2,7 +2,7 @@
 
 Server-driven UI: a Rust "pod" serves app layouts (JSON `UiNode` trees) plus normalized entities; native clients
 (macOS desktop, Android, headless simulator) render them with shared Compose code and a shared Rust engine.
-Apps today: Pixelfed (`pixelfed_home`), Recipes (`recipes`) and Watcher (`watcher`). Read `README.md` for details and `docs/DECISIONS.md` (D1–D52) and
+Apps today: Pixelfed (`pixelfed_home`), Recipes (`recipes`) and Events (`watcher`, once the Watcher). Read `README.md` for details and `docs/DECISIONS.md` (D1–D52) and
 `docs/decisions/` (newer ones, one file each) before changing architecture; open work is in GitHub issues; `docs/NOTIFICATIONS.md` is the notifications design (D52). `DESIGN.md` is the original design doc
 (product renamed from "Project Canvas"; AI layout editing was built, then shelved — see D32/D33).
 
@@ -14,9 +14,11 @@ Apps today: Pixelfed (`pixelfed_home`), Recipes (`recipes`) and Watcher (`watche
   the `pixelfed_demo` dev app (a `StaticAdapter`).
 - `crates/app-recipes` — the recipes adapter (`recipes_*` tables, the recipe import migration, D41).
 - `crates/app-collections` — Collections: data custom apps declare over MCP (`collections_*` tables, change sets,
-  row edits; decision `collections`).
-- `crates/app-watcher` — the watcher: polls websites for events (ics / JSON-LD / LLM extractors), matches rules,
-  notifies (`watcher_*` tables; decision `watcher`).
+  row edits; decision `collections`), fillers that keep rows current from the web and alerts (decision
+  `collection-fillers`).
+- `crates/app-watcher` — the Events app (app id `watcher`): the system collection `events`, one filler per watched
+  website, alerts for rules; moves the old Watcher's `watcher_*` data in once (decision `collection-fillers`).
+- `crates/web-extract` — fetching pages and reading structured data out of them (shared by fillers).
 - `crates/pod-host` — one server, many pods (D46): `host.db`, pod tokens, temporary pods, routing by bearer token.
 - `crates/server` — the server binary: `pod-host` over pods built from `pod-core` + the compile-time adapters
   (`server::adapters`); `server pods …` is the admin CLI.

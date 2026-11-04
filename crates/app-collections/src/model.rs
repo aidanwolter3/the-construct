@@ -53,12 +53,17 @@ pub enum Kind {
     Bool,
     /// A calendar date, `YYYY-MM-DD`.
     Date,
+    /// A date and time as the source wrote it, with its UTC offset when
+    /// known: `2026-11-06T19:30-07:00` (or a date alone for all day).
+    /// Served with `<name>_date`, `<name>_time` and `<name>_text` (decision
+    /// `collection-fillers`).
+    Datetime,
     /// One of the field's `options`.
     Choice,
 }
 
 impl Kind {
-    pub const ALL: &[&str] = &["text", "number", "bool", "date", "choice"];
+    pub const ALL: &[&str] = &["text", "number", "bool", "date", "datetime", "choice"];
 
     pub fn parse(s: &str) -> Option<Kind> {
         serde_json::from_value(json!(s)).ok()
@@ -70,6 +75,7 @@ impl Kind {
             Kind::Number => "number",
             Kind::Bool => "bool",
             Kind::Date => "date",
+            Kind::Datetime => "datetime",
             Kind::Choice => "choice",
         }
     }
@@ -311,6 +317,31 @@ pub struct Definition {
     /// `collection-reminders`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reminders: Vec<crate::remind::Reminder>,
+    /// What keeps the rows current (decision `collection-fillers`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fillers: Vec<crate::filler::Filler>,
+    /// Notifications when a row matches (decision `collection-fillers`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alerts: Vec<crate::alerts::Alert>,
+    /// A collection a built-in app owns (the Events app's `events`): its
+    /// fields can't be renamed, removed or retyped, and its alerts notify
+    /// on that app's channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<System>,
+}
+
+/// The built-in app a system collection belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct System {
+    pub app: String,
+    /// The app's notification channel its alerts use.
+    pub channel: String,
+    /// The default notification title and body of its alerts (templates as
+    /// alerts take; empty: the generic ones).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub alert_title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub alert_body: String,
 }
 
 impl Definition {
@@ -343,6 +374,30 @@ impl Definition {
             out.push(f.name.clone());
             out.extend(f.aliases.iter().cloned());
         }
+        out.extend(self.derived_names());
+        out
+    }
+
+    /// The keys rows are served with besides their fields: a datetime's
+    /// `<name>_date`, `_time` and `_text`; with fillers, `filler_id` and
+    /// `filler_title`; with alerts, `alert_matched` and `alert_names`. A
+    /// field of the same name wins.
+    pub fn derived_names(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for f in self.live_fields().filter(|f| f.kind == Kind::Datetime) {
+            for n in std::iter::once(&f.name).chain(&f.aliases) {
+                for suffix in ["_date", "_time", "_text"] {
+                    out.push(format!("{n}{suffix}"));
+                }
+            }
+        }
+        if !self.fillers.is_empty() {
+            out.extend(["filler_id".to_owned(), "filler_title".to_owned()]);
+        }
+        if !self.alerts.is_empty() {
+            out.extend(["alert_matched".to_owned(), "alert_names".to_owned()]);
+        }
+        out.retain(|n| self.field(n).is_none());
         out
     }
 
@@ -438,6 +493,9 @@ impl Definition {
             "order_by": order_json(self.order_fields().map(|f| f.name.clone()).collect()),
             "descending": self.descending,
             "reminders": self.reminders.iter().map(|r| r.describe(self)).collect::<Vec<_>>(),
+            "fillers": self.fillers.iter().map(|f| f.describe(self)).collect::<Vec<_>>(),
+            "alerts": self.alerts.iter().map(|a| a.describe(self)).collect::<Vec<_>>(),
+            "system_app": self.system.as_ref().map(|s| s.app.clone()),
         })
     }
 }
@@ -853,6 +911,9 @@ fn coerce_kind(
                 Kind::Number => "a number".to_owned(),
                 Kind::Bool => "true or false".to_owned(),
                 Kind::Date => "a date (YYYY-MM-DD)".to_owned(),
+                Kind::Datetime =>
+                    "a date and time (2026-11-06T19:30, with an offset such as -07:00 when known)"
+                        .to_owned(),
                 Kind::Choice => format!("one of {}", options.join(", ")),
             }
         ))
@@ -896,6 +957,10 @@ fn coerce_kind(
                 fail()
             }
         }
+        Kind::Datetime => match web_extract::when::When::parse(&text) {
+            Some(w) => Ok(Some(json!(w.stored()))),
+            None => fail(),
+        },
         Kind::Choice => options
             .iter()
             .find(|o| **o == text)
@@ -1056,6 +1121,8 @@ pub fn check_definition(def: &Definition, max_fields: usize) -> Result<(), Strin
         }
     }
     crate::remind::check(def)?;
+    crate::filler::check(def, u32::MAX)?;
+    crate::alerts::check(def)?;
     if def.order_by.len() > MAX_ORDER_KEYS {
         return Err(format!(
             "rows are ordered by at most {MAX_ORDER_KEYS} fields"
@@ -1162,12 +1229,47 @@ pub fn row_entity(
             .get(&f.id)
             .cloned()
             .unwrap_or_else(|| f.empty_value());
+        if f.kind == Kind::Datetime {
+            let (date, time, text) = datetime_parts(&v);
+            for n in std::iter::once(&f.name).chain(&f.aliases) {
+                for (suffix, x) in [("_date", &date), ("_time", &time), ("_text", &text)] {
+                    let k = format!("{n}{suffix}");
+                    if def.field(&k).is_none() {
+                        e.insert(k, json!(x));
+                    }
+                }
+            }
+        }
         for n in &f.aliases {
             e.insert(n.clone(), v.clone());
         }
         e.insert(f.name.clone(), v);
     }
     e
+}
+
+/// A datetime value as `(YYYY-MM-DD, "7:30 PM", "Fri Nov 6 · 7:30 PM")`,
+/// on its own wall clock (empty texts when it has none).
+pub fn datetime_parts(v: &Value) -> (String, String, String) {
+    let Some(w) = v.as_str().and_then(web_extract::when::When::parse) else {
+        return Default::default();
+    };
+    let date = w.iso().get(..10).unwrap_or("").to_owned();
+    let time = w.time_text().unwrap_or_default();
+    let text = if time.is_empty() {
+        w.date_text()
+    } else {
+        format!("{} · {time}", w.date_text())
+    };
+    (date, time, text)
+}
+
+/// A date or datetime value as unix seconds (a date: its start, UTC; a
+/// time without an offset: as UTC).
+pub fn instant(v: &Value) -> Option<i64> {
+    v.as_str()
+        .and_then(web_extract::when::When::parse)
+        .map(|w| w.timestamp(None))
 }
 
 /// A row's values by name (live fields only), for exports and previews.
@@ -1269,6 +1371,9 @@ mod tests {
             descending: false,
             next_field: 4,
             reminders: Vec::new(),
+            fillers: Vec::new(),
+            alerts: Vec::new(),
+            system: None,
         }
     }
 
