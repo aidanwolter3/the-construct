@@ -389,6 +389,8 @@ fn page(
         body = format!(
             "<p><b>{}</b> wants to read your pod's apps and data sources, and to create and edit your \
              <b>custom apps</b>. It can't use your apps' accounts or change built-in apps.</p>\
+             <p>Connecting gives access to <b>{}</b>. The name above is the one the app gave itself; \
+             only connect if you started this from Claude and that is where it should go.</p>\
              {}\
              <form method=\"post\" action=\"/oauth/authorize\">{hidden}\
              <label>Your pod code<br><input name=\"pod_code\" type=\"password\" autocomplete=\"off\" \
@@ -397,6 +399,7 @@ fn page(
              <button name=\"decision\" value=\"deny\" formnovalidate class=\"secondary\">Cancel</button></div></form>\
              <p class=\"small\">You can disconnect it later with <code>server pods revoke-mcp</code>.</p>",
             esc(client),
+            esc(destination(origin)),
             error
                 .map(|e| format!("<p class=\"error\">{}</p>", esc(e)))
                 .unwrap_or_default(),
@@ -423,6 +426,12 @@ fn page(
     r.headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     r
+}
+
+/// Who gets the code, for the consent page: the redirect's host (the
+/// client's name is whatever it registered, so it can't be trusted alone).
+fn destination(origin: &str) -> &str {
+    origin.split_once("://").map_or(origin, |(_, host)| host)
 }
 
 fn origin_of(uri: &str) -> String {
