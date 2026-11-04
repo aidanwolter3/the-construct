@@ -1147,27 +1147,34 @@
         "footer": {
           "label": "Share",
           "on_click": {
-            "attachments": {
-              "photos": "$form.photos"
-            },
-            "dismiss": true,
-            "endpoint": "/v1/pixelfed/posts/create",
-            "entity": {
-              "author_name": "You",
-              "caption": "$form?.caption",
-              "media_uris": "$attachments.photos",
-              "pending_label": "Posting…"
-            },
-            "entity_uri": "pixelfed://posts/pending-$nonce",
-            "intent": "action.mutation.create",
-            "payload": {
-              "caption": "$form?.caption",
-              "client_id": "$nonce",
-              "media": "$attachments.photos"
-            },
-            "position": "start",
-            "query_key": "timeline:home",
-            "refresh_workspace": true
+            "intent": "action.sequence",
+            "steps": [
+              {
+                "attachments": {
+                  "photos": "$form.photos"
+                },
+                "endpoint": "/v1/pixelfed/posts/create",
+                "entity": {
+                  "author_name": "You",
+                  "caption": "$form?.caption",
+                  "media_uris": "$attachments.photos",
+                  "pending_label": "Posting…"
+                },
+                "entity_uri": "pixelfed://posts/pending-$nonce",
+                "intent": "action.mutation.create",
+                "payload": {
+                  "caption": "$form?.caption",
+                  "client_id": "$nonce",
+                  "media": "$attachments.photos"
+                },
+                "position": "start",
+                "query_key": "timeline:home",
+                "refresh_workspace": true
+              },
+              {
+                "intent": "action.navigation.back"
+              }
+            ]
           },
           "type": "core://Button"
         },

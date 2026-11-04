@@ -414,8 +414,8 @@ fn sync_appends_new_files_once_and_refuses_changes() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        v, 8,
-        "0008: one post screen with the whole photo and its comments"
+        v, 9,
+        "0009: Share is action.sequence [create, back] (decision create-dismiss-is-a-sequence)"
     );
     assert!(pod_core::validate::unknown_node_types(&layout).is_empty());
     // Each client gets the newest version it can draw.
@@ -440,6 +440,16 @@ fn sync_appends_new_files_once_and_refuses_changes() {
         assert_eq!(served.version, version, "schema {schema}");
         assert!(protocol::required_schema(&served.layout) <= schema);
     }
+    // 0009 needs feature `action_sequence`; this build has it.
+    let served = active_for(
+        &store,
+        &catalog(),
+        "pixelfed_home",
+        &protocol::ClientCaps::this_build(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(served.version, 9);
     // A third pixelfed_demo file.
     let one = src("pixelfed_demo", "0003", MINIMAL);
     let two_text = MINIMAL.replace("Minimal demo", "Minimal v2");

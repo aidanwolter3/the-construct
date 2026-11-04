@@ -271,8 +271,9 @@ class ConstructController internal constructor(
     /**
      * Binds the visible form's `$form.<field>` values and a fresh `$nonce` into [intent] (nothing is sent when a
      * referenced field is blank), opens or closes screens for navigation intents that match the layout's screens
-     * (DECISIONS D34), and sends everything else to the engine. A create hands its attachments to the engine and, with
-     * `dismiss` (schema 9), closes the screen it was sent from (clearing its form).
+     * (DECISIONS D34), and sends everything else to the engine. A create hands its attachments to the engine. A create's
+     * legacy `dismiss` (schema 9, layouts before decision `create-dismiss-is-a-sequence`) runs as the sequence that
+     * replaced it: the create, then `action.navigation.back`.
      */
     fun dispatch(intent: ActionIntent) {
         val bound = bindForm(intent, navigation.activeForm()) ?: return
@@ -285,6 +286,10 @@ class ConstructController internal constructor(
             bound.steps.forEach(::run)
             return
         }
+        if (bound is ActionIntent.Create && bound.dismiss) {
+            run(ActionIntent.Sequence(listOf(bound.copy(dismiss = false), ActionIntent.NavigateBack)))
+            return
+        }
         if (bound is ActionIntent.OpenLink) {
             openLink(bound.url)
             return
@@ -293,7 +298,6 @@ class ConstructController internal constructor(
         send(bound)
         if (bound is ActionIntent.Create) {
             attachments.consume(attachmentIds(bound.attachments))
-            if (bound.dismiss) navigation.dismiss()
         }
     }
 

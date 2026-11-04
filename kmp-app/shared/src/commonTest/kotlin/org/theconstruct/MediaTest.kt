@@ -132,10 +132,31 @@ class MediaTest {
     }
 
     @Test
-    fun aCreateWithDismissClosesItsScreenAndClearsItsForm() {
+    fun aCreateWithLegacyDismissRunsAsCreateThenBack() {
+        assertFalse(shareFromCompose(COMPOSE_WORKSPACE).dismiss)
+    }
+
+    @Test
+    fun aSequenceOfCreateAndBackClosesTheComposeScreen() {
+        // layouts/pixelfed_home/0009.json: the same Share, written as action.sequence [create, back].
+        val sequence = COMPOSE_WORKSPACE
+            .replace(
+                """"on_click":{"intent":"action.mutation.create",""",
+                """"on_click":{"intent":"action.sequence","steps":[{"intent":"action.mutation.create",""",
+            )
+            .replace(
+                """"refresh_workspace":true,"dismiss":true}""",
+                """"refresh_workspace":true},{"intent":"action.navigation.back"}]}""",
+            )
+        assertTrue("action.sequence" in sequence && "dismiss" !in sequence, sequence)
+        assertFalse(shareFromCompose(sequence).dismiss)
+    }
+
+    /** Opens the compose screen of [workspace], taps Share without and then with a photo; returns what was sent. */
+    private fun shareFromCompose(workspace: String): ActionIntent.Create {
         val bridge = Recorder()
         val controller = ConstructController(bridge)
-        bridge.listener!!(EngineSnapshot(COMPOSE_WORKSPACE, "{}", true, 1, 0))
+        bridge.listener!!(EngineSnapshot(workspace, "{}", true, 1, 0))
         controller.dispatch(ActionIntent.Navigate("pixelfed://compose", PresentationMode.Modal))
         val entry = controller.navigation.top!!
         assertEquals("compose", entry.screen.id)
@@ -146,10 +167,11 @@ class MediaTest {
         entry.form["photos"] = encodeFormList(listOf("att1"))
         entry.form["caption"] = "Hello"
         controller.dispatch(share)
+        // Only the create reaches the engine (the back is the client's), and the screen is closed.
         val sent = assertIs<ActionIntent.Create>(ConstructJson.decodeIntent(bridge.sent.single()))
         assertEquals(JsonArray(listOf(JsonPrimitive("att1"))), sent.attachments["photos"])
         assertEquals(CreatePosition.Start, sent.position)
         assertNull(controller.navigation.top)
-        assertTrue(entry.form.isEmpty())
+        return sent
     }
 }
