@@ -343,20 +343,16 @@ fn hints(def: &Definition) -> Value {
                 "endpoint": format!("/v1/collections/{n}/create"),
                 "payload": { first_text: format!("$form.{first_text}"), "client_id": "$nonce" },
                 "refresh_workspace": true } },
-        "delete": { "type": "core://IconButton", "icon": "close", "content_description": "Delete",
+        "delete": { "type": "core://IconButton", "icon": "delete", "content_description": "Delete",
             "on_click": { "intent": "action.mutation.optimistic", "entity_uri": "$item.uri",
                 "field": "deleted", "value_expr": "true", "rollback_value": false,
                 "endpoint": format!("/v1/collections/{n}/delete"), "payload": { "id": "$item.id" } } },
         "notes": "Give every create's entity \"deleted\": false and an \"id\" of \"pending-$nonce\" (so the List's where shows it and a tick before the pod answers still reaches it). Fields left out of a create get their default. Dates are YYYY-MM-DD text.",
     });
     if let Some(b) = first_bool {
-        let box_for = |equals: &str, glyph: &str| {
-            json!({ "type": "core://Conditional", "value": format!("$item.{}", b.name), "equals": equals,
-                    "content": { "type": "core://Text", "style": "Body", "value_expr": glyph } })
-        };
-        out["toggle"] = json!({ "type": "core://Tappable", "content_description": b.name,
-            "content": { "type": "core://Container", "orientation": "Vertical", "padding_dp": 0,
-                "children": [box_for("true", "☑"), box_for("false", "☐")] },
+        out["toggle"] = json!({ "type": "core://IconButton", "icon": "check_box_outline_blank",
+            "active": format!("$item.{}", b.name), "active_icon": "check_box",
+            "content_description": b.name,
             "on_click": { "intent": "action.mutation.optimistic", "entity_uri": "$item.uri",
                 "field": b.name, "value_expr": format!("!entity.{}", b.name),
                 "rollback_value": false,

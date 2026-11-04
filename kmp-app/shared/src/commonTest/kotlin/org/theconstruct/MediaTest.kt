@@ -78,6 +78,10 @@ class MediaTest {
         assertNull(assertIs<UiNode.TextField>(ConstructJson.decodeNode("""{"type":"core://TextField","field":"f"}""")).lines)
         assertEquals(UiNode.MediaPicker("p", 2), ConstructJson.decodeNode("""{"type":"core://MediaPicker","field":"p","max_items":2}"""))
         for (icon in listOf("add_photo", "add", "refresh")) assertTrue(ConstructIcons.named(icon) != null, icon)
+        // Feature `todo_icons`.
+        for (icon in listOf("check", "check_box", "check_box_outline_blank", "delete")) {
+            assertTrue(ConstructIcons.named(icon) != null, icon)
+        }
     }
 
     @Test
