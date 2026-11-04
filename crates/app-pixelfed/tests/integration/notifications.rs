@@ -136,7 +136,7 @@ async fn first_poll_is_quiet_then_new_ones_alert() {
     assert_eq!(out.status, PollStatus::Ok);
     assert_eq!(out.new.len(), 1);
     let n = &out.new[0];
-    assert_eq!(n.app_id, "pixelfed_home");
+    assert_eq!(n.app_id, "pixelfed");
     assert_eq!(n.channel, "likes");
     assert!(!n.quiet);
     assert_eq!(n.title, "Alice Lumen liked your post");
@@ -468,7 +468,7 @@ async fn the_scheduler_path_stores_and_serves_them() {
     pod.poll_due().await;
     let list = pod_call(&pod_url, "GET", "/v1/notifications", None).await;
     assert_eq!(list["unread_total"], 1, "{list}");
-    assert_eq!(list["unread_by_app"]["pixelfed_home"], 1);
+    assert_eq!(list["unread_by_app"]["pixelfed"], 1);
     let newest = &list["notifications"][0];
     assert_eq!(newest["channel"], "comments");
     // A reply to our comment 504: the thread of its post, at the reply.

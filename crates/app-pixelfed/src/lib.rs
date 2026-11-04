@@ -1,6 +1,6 @@
-//! The Pixelfed adapter (M6, D40): the `pixelfed_home` app, the `pixelfed`
-//! sign-in and the `pixelfed_demo` dev app, plugged into the pod through
-//! [`pod_core::AppAdapter`] ([`PixelfedAdapter`], [`apps::demo_adapter`]).
+//! The Pixelfed adapter (M6, D40): the `pixelfed` app, the `pixelfed`
+//! sign-in and the `pixelfed_sample_no_login` dev app, plugged into the pod through
+//! [`pod_core::AppAdapter`] ([`PixelfedAdapter`], [`apps::sample_adapter`]).
 //!
 //! Mastodon-API JSON -> normalized Construct entities: everything in this
 //! module (except [`upstream`], [`routes`], [`adapter`], [`db`] and the polling
@@ -53,7 +53,7 @@ use sha2::{Digest, Sha256};
 pub const POST_PREFIX: &str = "pixelfed://posts/";
 pub const USER_PREFIX: &str = "pixelfed://users/";
 pub const MEDIA_PREFIX: &str = "pixelfed://media/";
-/// Query key the pixelfed_home FeedList renders.
+/// Query key the pixelfed FeedList renders.
 pub const HOME_QUERY: &str = "timeline:home";
 
 // ---------- lenient upstream types ----------

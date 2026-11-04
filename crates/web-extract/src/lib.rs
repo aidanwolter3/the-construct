@@ -1,5 +1,5 @@
 //! Fetching web pages and reading structured data out of them (decisions
-//! `watcher` and `collection-fillers`).
+//! `watcher` and `collection-fillers`; the Events app and Collections' fetch fillers).
 //!
 //! - [`fetch`]: a conditional `GET` with a size cap, and the URL check that
 //!   keeps fetches on public websites.

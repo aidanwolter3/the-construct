@@ -9,7 +9,7 @@
 //! (`collections_refresh`, and after a filler is set). One fill per filler
 //! runs at a time.
 //!
-//! - **fetch**: the Watcher's fetch ([`web_extract::fetch`]): conditional
+//! - **fetch**: a page fetch ([`web_extract::fetch`]): conditional
 //!   headers, size and time caps, public hosts only, a second between
 //!   requests to one host. A 304 or an unchanged body ends the fill with no
 //!   work (unless the recipe changed). The extractor reads the items (or,
@@ -27,7 +27,7 @@
 //! kept for 30 days: they were never anyone's), `upsert` adds and updates
 //! by key and leaves other rows alone. Other fillers' rows and people's
 //! rows are never touched. Computed fields compute as after any write.
-//! Failures back off like the Watcher's (doubling from the interval, at
+//! Failures back off (doubling from the interval, at
 //! most a day, at least `Retry-After`).
 
 use std::collections::{HashMap, HashSet};

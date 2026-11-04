@@ -131,6 +131,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "app-events"
+version = "0.1.0"
+dependencies = [
+ "app-collections",
+ "axum",
+ "http-body-util",
+ "pod-core",
+ "protocol",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "app-monitor"
 version = "0.1.0"
 dependencies = [
@@ -179,27 +196,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower",
-]
-
-[[package]]
-name = "app-watcher"
-version = "0.1.0"
-dependencies = [
- "app-collections",
- "axum",
- "getrandom 0.3.4",
- "http-body-util",
- "pod-core",
- "protocol",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
- "tower",
- "tracing",
- "web-extract",
 ]
 
 [[package]]
@@ -2986,10 +2982,10 @@ name = "server"
 version = "0.1.0"
 dependencies = [
  "app-collections",
+ "app-events",
  "app-monitor",
  "app-pixelfed",
  "app-recipes",
- "app-watcher",
  "axum",
  "base64 0.22.1",
  "fake-pixelfed",

@@ -1,4 +1,4 @@
-//! [`PixelfedAdapter`]: the `pixelfed_home` app, the `pixelfed` sign-in and
+//! [`PixelfedAdapter`]: the `pixelfed` app, the `pixelfed` sign-in and
 //! its notifications (D52, [`crate::notify`]).
 
 use std::sync::{Arc, RwLock};
@@ -241,11 +241,11 @@ impl AppAdapter for PixelfedAdapter {
     }
 
     fn apps(&self) -> Vec<AppInfo> {
-        vec![apps::HOME]
+        vec![apps::PIXELFED]
     }
 
     fn layout_files(&self) -> &'static [LayoutSource] {
-        apps::HOME_FILES
+        apps::PIXELFED_FILES
     }
 
     fn router(&self) -> Router<Pod> {

@@ -1,0 +1,77 @@
+{
+  "note": "Simulator fixture (D52): FakeEngineBridge serves these from listNotifications/notificationChannels. Wire shape, except age_seconds (created_at = now - age_seconds when loaded). target_uri post ids have comments data in pixelfed_screen_data.json.",
+  "notifications": [
+    {
+      "id": "fx-6",
+      "app_id": "pixelfed",
+      "channel": "comments",
+      "title": "@bob commented on your post",
+      "body": "Number 3 for me. That blue!",
+      "target_uri": "pixelfed://posts/781254316723458049/comments/781300000000000107",
+      "group_key": "781254316723458049:comment",
+      "age_seconds": 180,
+      "read": false
+    },
+    {
+      "id": "fx-5",
+      "app_id": "pixelfed",
+      "channel": "likes",
+      "title": "@carol liked your post",
+      "body": "Sunrise over Millbrook, three ways & one coffee later #sunrise #highlands",
+      "target_uri": "pixelfed://posts/781254316723458049/comments",
+      "group_key": "781254316723458049:like",
+      "age_seconds": 1500,
+      "read": false
+    },
+    {
+      "id": "fx-4",
+      "app_id": "pixelfed",
+      "channel": "mentions",
+      "title": "@carol mentioned you",
+      "body": "Thanks @alice for the tips on night shooting!",
+      "target_uri": "pixelfed://posts/781220014433221633/comments",
+      "group_key": "781220014433221633:mention",
+      "age_seconds": 7400,
+      "read": false
+    },
+    {
+      "id": "fx-3",
+      "app_id": "pixelfed",
+      "channel": "follows",
+      "title": "@dana followed you",
+      "body": "",
+      "age_seconds": 93600,
+      "read": true
+    },
+    {
+      "id": "fx-2",
+      "app_id": "pixelfed",
+      "channel": "boosts",
+      "title": "@bob boosted your post",
+      "body": "Rattlesnake on the trail this morning. Kept my distance!",
+      "target_uri": "pixelfed://posts/781198765432109057/comments",
+      "group_key": "781198765432109057:reblog",
+      "age_seconds": 262800,
+      "read": true
+    },
+    {
+      "id": "fx-1",
+      "app_id": "pixelfed",
+      "channel": "likes",
+      "title": "@bob liked your post",
+      "body": "Rattlesnake on the trail this morning. Kept my distance!",
+      "target_uri": "pixelfed://posts/781198765432109057/comments",
+      "group_key": "781198765432109057:like",
+      "age_seconds": 777600,
+      "read": true
+    }
+  ],
+  "channels": [
+    {"app_id": "pixelfed", "id": "likes", "title": "Likes", "description": "When someone likes your post", "default_enabled": true, "importance": "default"},
+    {"app_id": "pixelfed", "id": "comments", "title": "Comments", "description": "When someone comments on your post or replies to you", "default_enabled": true, "importance": "high"},
+    {"app_id": "pixelfed", "id": "mentions", "title": "Mentions", "description": "When someone mentions you", "default_enabled": true, "importance": "high"},
+    {"app_id": "pixelfed", "id": "follows", "title": "New followers", "description": "When someone follows you", "default_enabled": true, "importance": "default"},
+    {"app_id": "pixelfed", "id": "boosts", "title": "Boosts", "description": "When someone boosts your post", "default_enabled": true, "importance": "default"},
+    {"app_id": "pixelfed", "id": "other", "title": "Other", "description": "Other Pixelfed activity", "default_enabled": false, "importance": "low"}
+  ]
+}

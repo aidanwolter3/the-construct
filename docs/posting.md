@@ -18,7 +18,7 @@ picker and create vocabulary) in [DECISIONS.md](DECISIONS.md).
 
 | Part | Knows | Doesn't know |
 | --- | --- | --- |
-| Layout (`layouts/pixelfed_home/`) | The compose screen, the 4-photo limit, what the placeholder looks like | — |
+| Layout (`crates/app-pixelfed/layouts/pixelfed/`) | The compose screen, the 4-photo limit, what the placeholder looks like | — |
 | Shared UI | `core://MediaPicker`, picking files, closing the screen | Pixelfed, posts |
 | Engine (`client-core`) | Staging files, uploading a create's attachments before its POST, `position`, `event: data` | What the files are for |
 | `pod-core` | Storing uploads, giving adapters access, `event: data`, the `resume` hook | Pixelfed, posts |

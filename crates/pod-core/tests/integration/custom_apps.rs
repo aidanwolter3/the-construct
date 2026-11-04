@@ -35,6 +35,7 @@ struct Src {
 }
 
 static A_FILES: &[LayoutSource] = &[LayoutSource {
+    dir: "layouts",
     app_id: "a_home",
     name: "0001",
     text: r#"{"note": "First", "schema": 11, "layout": {"type": "core://Workspace", "id": "a_home",

@@ -2,7 +2,7 @@
 
 ```bash
 cargo test --workspace                       # Rust, including the end-to-end suite against an in-process fake Pixelfed
-cd kmp-app && ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test   # shared UI and desktop (needs the engine library)
+cd app && ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test   # shared UI and desktop (needs the engine library)
 ./gradlew :androidApp:assembleDebug          # Android build check (launches nothing)
 ```
 
@@ -126,7 +126,7 @@ The offline outbox, end to end on the desktop app:
 
 ```bash
 cargo run -p server                                                    # terminal 1
-cd kmp-app && CONSTRUCT_BASE_URL=http://127.0.0.1:8080 CONSTRUCT_WORKSPACE=pixelfed_demo ./gradlew :desktopApp:run
+cd app && CONSTRUCT_BASE_URL=http://127.0.0.1:8080 CONSTRUCT_WORKSPACE=pixelfed_sample_no_login ./gradlew :desktopApp:run
 # stop the server: the menu button gets a badge and the menu says Offline
 # click the heart and the bookmark: both change at once and the menu shows "2 pending"
 sqlite3 ~/.construct/servers/*/cache.db "SELECT id, endpoint, status FROM action_outbox;"
@@ -134,5 +134,5 @@ sqlite3 ~/.construct/servers/*/cache.db "SELECT id, endpoint, status FROM action
 ```
 
 A new layout version reaching an open app: with the app open on a local server, add the next
-`layouts/pixelfed_demo/NNNN.json` and restart the server. The app reconnects its event stream and shows the new
-version within seconds.
+`crates/app-pixelfed/layouts/pixelfed_sample_no_login/NNNN.json` and restart the server. The app reconnects its event
+stream and shows the new version within seconds.

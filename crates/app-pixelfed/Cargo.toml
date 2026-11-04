@@ -5,7 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 # The Pixelfed adapter: sign-in, home feed, likes, bookmarks, comments, the
-# media proxy, its `pixelfed_*` tables, and the `pixelfed_demo` fixture app.
+# media proxy, its `pixelfed_*` tables, and the `pixelfed_sample_no_login` fixture app.
 
 [dependencies]
 pod-core = { path = "../pod-core" }

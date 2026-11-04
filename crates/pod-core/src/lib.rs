@@ -4,7 +4,7 @@
 //! workspace (`GET /v1/workspaces/:id`), the read-only apps and versions API
 //! and the layout push channel (see [`layouts`]), and owns sessions and
 //! sign-ins (see [`session`]). Workspace layouts are code
-//! (`layouts/<app>/NNNN.json`), synced into one append-only version history
+//! (`layouts/<app>/NNNN.json` in each adapter crate), synced into one append-only version history
 //! per app at startup; [`validate`] checks every layout file.
 //!
 //! Apps plug in through [`AppAdapter`]: the `server` binary builds the
@@ -183,7 +183,8 @@ impl AppState {
             .appended
             .iter()
             .filter_map(|(path, version)| {
-                let app = path.strip_prefix("layouts/")?.split('/').next()?;
+                // `<dir>/<app>/NNNN.json`: the file's folder is its app.
+                let app = path.rsplit('/').nth(1)?;
                 Some((app.to_owned(), *version))
             })
             .rev() // the newest version of each app first

@@ -34,8 +34,6 @@ RUN cargo chef cook --release --locked -p server --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY fake-pixelfed ./fake-pixelfed
-# Layout files (layouts as code) are embedded in the binary at compile time.
-COPY layouts ./layouts
 RUN cargo build --release --locked -p server \
     && cp target/release/server /server
 

@@ -10,7 +10,7 @@ engine, and know nothing about any particular app.
   the Messages API  ◀───▶│  ┌──────────── pod (crates/pod-core) ────────────────┐   │
                          │  │ apps, layout versions, sessions, sign-ins, SQLite  │   │
                          │  │ adapters: app-pixelfed, app-recipes,               │   │
-                         │  │           app-collections, app-watcher, app-monitor│   │
+                         │  │           app-collections, app-events, app-monitor│   │
                          │  └────────────────────────────────────────────────────┘   │
                          └──────────────▲──────────────────────────▲──────────────────┘
                      HTTP: layouts +    │                          │  SSE: layout, data,
@@ -19,7 +19,7 @@ engine, and know nothing about any particular app.
                          │ engine (crates/client-core, Rust): SQLite cache, outbox,   │
                          │ sign-in, event stream; exposed through UniFFI (client-ffi) │
                          ├────────────────────────────────────────────────────────────┤
-                         │ shared Compose UI (kmp-app/shared): draws UiNode trees     │
+                         │ shared Compose UI (app/shared): draws UiNode trees     │
                          ├───────────────┬───────────────────┬────────────────────────┤
                          │ desktop (JVM) │ Android           │ headless simulator     │
                          └───────────────┴───────────────────┴────────────────────────┘
@@ -59,10 +59,10 @@ The server binary picks the adapters at compile time (`server::adapters`). Apps 
 
 | App id | Title | Adapter | What it is |
 |---|---|---|---|
-| `pixelfed_home` | Pixelfed | `app-pixelfed` | A Pixelfed client: feed, carousels, likes, bookmarks, threaded comments, photo posting, notifications |
-| `pixelfed_demo` | Pixelfed demo | `app-pixelfed` (static) | A one-post demo that needs no sign-in; listed only with `CONSTRUCT_SHOW_DEV_APPS=1` |
+| `pixelfed` | Pixelfed | `app-pixelfed` | A Pixelfed client: feed, carousels, likes, bookmarks, threaded comments, photo posting, notifications |
+| `pixelfed_sample_no_login` | Pixelfed sample | `app-pixelfed` (static) | A one-post sample that needs no sign-in; listed only with `CONSTRUCT_SHOW_DEV_APPS=1` |
 | `recipes` | Recipes | `app-recipes` | A recipe collection with search, categories and recipe cards (D41) |
-| `watcher` | Events | `app-watcher` | Upcoming events from websites the user watches, with alerts (decision `collection-fillers`) |
+| `events` | Events | `app-events` | Upcoming events from websites the user watches, with alerts (decision `collection-fillers`) |
 
 Two more sources have no app of their own: **Collections** (`app-collections`), typed data that custom apps declare,
 and **Server monitoring** (`app-monitor`). Users build their own apps on top of all of these; see
@@ -74,7 +74,7 @@ A layout is a tree of generic `core://` nodes (`protocol::UiNode`) with intents 
 rooted at a `core://Workspace` that can also declare **screens** opened by route. Layouts bind to entities by URI and
 field (`$item.like_count`, `${pixelfed://posts/1#caption}`) and never contain app logic.
 
-- **Layouts are code.** Built-in apps' layouts are files, `layouts/<app>/NNNN.json`, embedded in the binary and
+- **Layouts are code.** Built-in apps' layouts are files, `crates/<adapter>/layouts/<app>/NNNN.json`, embedded in the binary and
   appended to each app's history at startup. Files are append-only: the pod refuses to start if a deployed one
   changed (D32).
 - **Every version stays servable.** Each piece of vocabulary is a named **feature**
@@ -92,7 +92,7 @@ How to write one: [layouts.md](layouts.md).
 
 ```json
 {
-  "workspace": { "type": "core://Workspace", "id": "pixelfed_home", "title": "Pixelfed", "slots": [], "screens": [] },
+  "workspace": { "type": "core://Workspace", "id": "pixelfed", "title": "Pixelfed", "slots": [], "screens": [] },
   "entities": { "pixelfed://posts/101": { "id": "101", "caption": "Sunrise over Millbrook", "is_liked": false } },
   "queries":  { "timeline:home": ["pixelfed://posts/101"] }
 }
@@ -104,7 +104,7 @@ screen's `data` path answers the same `{entities, queries}` shape (`protocol::Da
 ## The engine
 
 `crates/client-core` (`ConstructEngine`) is the client's brain, written once in Rust and used by every client through
-UniFFI (`crates/client-ffi`; Kotlin bindings in `kmp-app/shared/src/jvmCommonMain`).
+UniFFI (`crates/client-ffi`; Kotlin bindings in `app/shared/src/jvmCommonMain`).
 
 - **Cache.** Every workspace, data load and entity is written to SQLite (`cache.db`), so the last screen shows at once
   on launch and offline (D13).
@@ -122,7 +122,7 @@ UniFFI (`crates/client-ffi`; Kotlin bindings in `kmp-app/shared/src/jvmCommonMai
 
 ## The clients
 
-`kmp-app/shared/src/commonMain` is one Compose Multiplatform UI used by every client: the node renderer, screens and
+`app/shared/src/commonMain` is one Compose Multiplatform UI used by every client: the node renderer, screens and
 navigation, the app menu and version picker, Settings, and the notification inbox. Platform code is thin:
 
 - **Desktop** (`:desktopApp`, JVM): loads the engine through JNA; the loopback OAuth redirect; tray notifications.

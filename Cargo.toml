@@ -9,7 +9,7 @@ members = [
     "crates/app-pixelfed",
     "crates/app-recipes",
     "crates/app-collections",
-    "crates/app-watcher",
+    "crates/app-events",
     "crates/app-monitor",
     "crates/web-extract",
     "crates/server",

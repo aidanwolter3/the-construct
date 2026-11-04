@@ -462,7 +462,7 @@ fn cache_is_keyed_by_workspace_id() {
     let other = ConstructEngine::init_with_workspace(
         dir.to_str().unwrap(),
         "http://127.0.0.1:1",
-        "pixelfed_demo",
+        "pixelfed_sample_no_login",
     );
     let snap = other.snapshot();
     assert_eq!(snap.workspace_json, "null");

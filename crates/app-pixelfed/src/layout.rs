@@ -1,5 +1,5 @@
-//! The `pixelfed_home` data. The signed-in feed's layout comes from
-//! `layouts/pixelfed_home/NNNN.json` (generic nodes, docs/DECISIONS.md D36;
+//! The `pixelfed` data. The signed-in feed's layout comes from
+//! `layouts/pixelfed/NNNN.json` (generic nodes, docs/DECISIONS.md D36;
 //! the core merges it in, D40); this module builds the entities/queries part
 //! and the signed-out screen.
 
@@ -12,7 +12,7 @@ use protocol::{
 use super::HOME_QUERY;
 use crate::config::PixelfedConfig;
 
-pub const WORKSPACE_ID: &str = "pixelfed_home";
+pub const WORKSPACE_ID: &str = "pixelfed";
 pub const LIKE_ENDPOINT: &str = "/v1/pixelfed/posts/like";
 pub const BOOKMARK_ENDPOINT: &str = "/v1/pixelfed/posts/bookmark";
 /// The pod's sign-in endpoints, carried by the sign-in button's intent.

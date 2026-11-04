@@ -41,7 +41,24 @@ pub static MIGRATIONS: &[Migration] = &[
              initialized_at INTEGER NOT NULL
          );",
     ),
+    // 4 (decision `rename-apps-and-folders`): the apps' new ids, `pixelfed`
+    // (was `pixelfed_home`) and `pixelfed_sample_no_login` (was
+    // `pixelfed_demo`, also its data source).
+    Migration::Rust(rename_apps),
 ];
+
+fn rename_apps(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    use pod_core::store::{rename_app_on, rename_source_on};
+    rename_app_on(tx, "pixelfed_home", crate::apps::PIXELFED.id)?;
+    rename_app_on(tx, "pixelfed_demo", crate::apps::SAMPLE_NAME)?;
+    rename_source_on(tx, "pixelfed_demo", crate::apps::SAMPLE_NAME)?;
+    // The sample's adapter had no migrations; nothing else is stored by it.
+    tx.execute(
+        "DELETE FROM adapter_migrations WHERE adapter = 'pixelfed_demo'",
+        [],
+    )?;
+    Ok(())
+}
 
 /// Outcome of [`PixelfedStore::sign_in_pixelfed`].
 #[derive(Debug, Clone, PartialEq, Eq)]

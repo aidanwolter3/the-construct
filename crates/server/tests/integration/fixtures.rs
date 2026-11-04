@@ -1,10 +1,10 @@
 //! Keeps the simulator's Pixelfed fixtures in step with the pod
 //! (docs/DECISIONS.md D34):
 //!
-//! - `kmp-app/desktopApp/src/sim/resources/pixelfed_home_feed_bundle.json` is the signed-in feed bundle
+//! - `app/desktopApp/src/sim/resources/pixelfed_feed_bundle.json` is the signed-in feed bundle
 //!   the pod makes from the fake upstream, with the newest
-//!   `layouts/pixelfed_home/NNNN.json` and the fake's own media URLs;
-//! - `kmp-app/desktopApp/src/sim/resources/pixelfed_screen_data.json` holds the comments screen data of
+//!   `layouts/pixelfed/NNNN.json` and the fake's own media URLs;
+//! - `app/desktopApp/src/sim/resources/pixelfed_screen_data.json` holds the comments screen data of
 //!   every fixture post with the post itself (`{path: DataBundle}`), made by the pod's own
 //!   normalization from the fake upstream at a fixed "now", with avatar URLs
 //!   pointing at the fake's `/storage/` (which the simulator serves), and the
@@ -32,7 +32,7 @@ const NOW: i64 = 1_793_534_400;
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../kmp-app/desktopApp/src/sim/resources")
+        .join("../../app/desktopApp/src/sim/resources")
         .join(name)
 }
 
@@ -49,7 +49,7 @@ fn check_or_write(name: &str, want: &str) {
     let have = std::fs::read_to_string(&path).unwrap_or_default();
     assert!(
         have == want,
-        "kmp-app/desktopApp/src/sim/resources/{name} is out of date; run UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::"
+        "app/desktopApp/src/sim/resources/{name} is out of date; run UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::"
     );
 }
 
@@ -57,7 +57,7 @@ fn newest_layout() -> UiNode {
     server::layouts::parse_files(&server::catalog(), &server::layout_files())
         .unwrap()
         .into_iter()
-        .rfind(|f| f.app_id == "pixelfed_home")
+        .rfind(|f| f.app_id == "pixelfed")
         .unwrap()
         .layout
 }
@@ -108,7 +108,7 @@ async fn get(base: &str, client: &reqwest::Client, path: &str) -> Value {
 }
 
 /// The signed-in feed as the pod serves it (fixed media URLs), with the newest
-/// `pixelfed_home` layout.
+/// `pixelfed` layout.
 #[tokio::test]
 async fn feed_fixture_is_the_pods_feed() {
     let (base, client) = fake_upstream().await;
@@ -136,7 +136,7 @@ async fn feed_fixture_is_the_pods_feed() {
     // Through text, so f32 fields are not widened (see layouts::node_value).
     v["workspace"] = server::layouts::node_value(&spec.workspace);
     check_or_write(
-        "pixelfed_home_feed_bundle.json",
+        "pixelfed_feed_bundle.json",
         &(serde_json::to_string_pretty(&v).unwrap() + "\n"),
     );
 }

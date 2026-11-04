@@ -5,16 +5,16 @@
 //! apps are listed only with `CONSTRUCT_SHOW_DEV_APPS=1`). Each app has ONE
 //! linear, append-only layout history (`app_versions`, store migration v7).
 //! New versions come only from the developer: files
-//! `layouts/<app_id>/NNNN.json` in the repo, embedded in the binary by the
-//! app's adapter ([`crate::AppAdapter::layout_files`]) and appended at startup
+//! `crates/<adapter>/layouts/<app_id>/NNNN.json` in the repo, embedded in the
+//! binary by the app's adapter ([`crate::AppAdapter::layout_files`]) and appended at startup
 //! by [`sync`] before the server listens. No HTTP route changes a built-in
 //! app's layout; custom apps (the pod user's own, [`crate::custom`]) get
 //! their versions from validated writes instead of files.
 //!
 //! # Adding a layout version
 //!
-//! 1. Copy the newest file, e.g. `layouts/pixelfed_home/0010.json` to
-//!    `layouts/pixelfed_home/0011.json` (4 digits, the next number: numbering
+//! 1. Copy the newest file, e.g. `crates/app-pixelfed/layouts/pixelfed/0011.json`
+//!    to `.../pixelfed/0012.json` (4 digits, the next number: numbering
 //!    is contiguous from the app's oldest file), and edit it. The format is
 //!    `{"note": "short changelog line", "layout": <UiNode>}`; the layout root
 //!    is the app's `core://Workspace` (id = the app id). Clients are served
@@ -22,7 +22,7 @@
 //!    ([`protocol::ClientCaps::can_draw`], decision `named-vocabulary`).
 //!    Deployed files may still carry the `"schema"` of D36; it is ignored.
 //! 2. Nothing to list: the adapter's `build.rs` embeds every
-//!    `layouts/<app_id>/*.json` (`crates/pod-core/build_support/`). The
+//!    `layouts/<app_id>/*.json` of its crate (`crates/pod-core/build_support/`). The
 //!    layout features a file uses are worked out, not declared
 //!    ([`protocol::required_features`], recorded per version).
 //! 3. `cargo test --workspace` (validates every file), deploy. On start the pod
@@ -97,9 +97,12 @@ pub const MAX_VERSIONS_LIMIT: i64 = 100;
 
 // ---------- layout files ----------
 
-/// One embedded layout file: `layouts/<app>/<name>.json`.
+/// One embedded layout file: `<dir>/<app>/<name>.json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LayoutSource {
+    /// The folder of the app folders, as the repository names it
+    /// (`crates/app-events/layouts`): only for messages.
+    pub dir: &'static str,
     pub app_id: &'static str,
     /// `NNNN` (4 digits).
     pub name: &'static str,
@@ -111,7 +114,7 @@ pub struct LayoutSource {
 pub struct LayoutFile {
     pub app_id: String,
     pub number: u32,
-    /// `layouts/<app>/NNNN.json`.
+    /// `<dir>/<app>/NNNN.json` ([`LayoutSource::dir`]).
     pub path: String,
     pub note: String,
     pub layout: UiNode,
@@ -242,7 +245,7 @@ fn collect_unknown_intent_tags(
 
 /// Parse and validate one file of an app in `catalog` (`Err` names the file).
 pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, String> {
-    let path = format!("layouts/{}/{}.json", src.app_id, src.name);
+    let path = format!("{}/{}/{}.json", src.dir, src.app_id, src.name);
     let fail = |e: String| format!("{path}: {e}");
     if !catalog.is_app(src.app_id) {
         return Err(fail(format!("'{}' is not an app", src.app_id)));
@@ -402,7 +405,7 @@ pub fn sync_sources(
         .collect();
     store
         .sync_layout_files(&apps)
-        .map_err(|e| format!("syncing layouts/: {e}"))?
+        .map_err(|e| format!("syncing the layout files: {e}"))?
 }
 
 /// An app's oldest layout file in this build (its lowest-numbered one; see

@@ -27,7 +27,7 @@ use serde_json::{Map, Value, json};
 
 use crate::model::{Definition, Kind};
 
-/// Most fillers per collection (the Watcher allowed 50 sites).
+/// Most fillers per collection.
 pub const MAX_FILLERS: usize = 50;
 /// Most map entries of a recipe.
 pub const MAX_MAP: usize = 40;
@@ -39,7 +39,7 @@ pub const MAX_HEADER_CHARS: usize = 1_000;
 pub const MAX_PROMPT_CHARS: usize = 2_000;
 /// Longest filler title.
 pub const MAX_TITLE_CHARS: usize = 100;
-/// Interval bounds, minutes (as Watcher targets).
+/// Interval bounds, minutes.
 pub const MIN_EVERY: u32 = 15;
 pub const MAX_EVERY: u32 = 7 * 24 * 60;
 /// An agent's shortest interval, minutes.

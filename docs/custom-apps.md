@@ -27,7 +27,7 @@ curl -fsS -H "Authorization: Bearer $token" -H 'content-type: application/json' 
 - **Source status.** The root gets a `core://sources/<source>` entity per source, `{title, signed_in, error?}`, so a
   layout can say when a source is signed out or failing (`${core://sources/pixelfed#signed_in}`). Sign-ins start
   from Settings; custom layouts can't hold sign-in buttons.
-- **Built-in parts.** `{"type": "core://Ref", "app": "pixelfed_home", "part": "screen:post"}` reuses a built-in's
+- **Built-in parts.** `{"type": "core://Ref", "app": "pixelfed", "part": "screen:post"}` reuses a built-in's
   screen, slot or declared part, expanded and kept current by the pod. A copy instead says `"copied_from": {app,
   version}`, and `GET /v1/apps` reports `updates_from` when that built-in moves on.
 - **Hiding and deleting.** Any app can be hidden from the app list on every device; custom apps can be deleted
@@ -127,14 +127,15 @@ MCP tools: `collections_preview` (try a recipe without storing anything), `colle
 
 ## The Events app
 
-The **Events** app (app id `watcher`, `crates/app-watcher`) shows every upcoming event of the websites the user
+The **Events** app (app id `events`, `crates/app-events`) shows every upcoming event of the websites the user
 watches and notifies when one matches ("a show with Brass Lanterns at Improv Millbrook"). Its data is the system collection
 `events` (`source_id`, `title`, `start`, `end`, `venue`, `description`, `url`, `tickets_url`, `seen`): each website is a
 fetch filler, and each rule an alert on that filler. Claude adds and changes them with the Collections tools; the
 MCP instructions include the recipe. The app shows matches, sites with their health and alerts, a site's events, and
 an event with ticket and page links. The fields of `events` can't be renamed or removed.
 
-The app replaced an earlier Watcher: when a pod starts, its old Watcher sites and rules move into `events` once
-(decisions [`watcher`](decisions/watcher.md), [`watcher-rules-per-site`](decisions/watcher-rules-per-site.md)).
+The app replaced an earlier Watcher with its own tables (decisions [`watcher`](decisions/watcher.md),
+[`watcher-rules-per-site`](decisions/watcher-rules-per-site.md)); its app id was `watcher` until decision
+[`rename-apps-and-folders`](decisions/rename-apps-and-folders.md).
 
 Try it locally: `CONSTRUCT_FILL_PRIVATE_HOSTS=1 cargo run -p server`, serve an `.ics` file, and ask Claude to watch it.

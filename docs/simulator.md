@@ -4,10 +4,10 @@
 against it and writes PNG screenshots. There is no window and a run takes a few seconds, so it works in CI and cloud
 sessions. It is the project's UI check: there are no emulator or on-device tests.
 
-Run it from `kmp-app` with a JDK 21 (see [CONTRIBUTING.md](../CONTRIBUTING.md#setup)):
+Run it from `app` with a JDK 21 (see [CONTRIBUTING.md](../CONTRIBUTING.md#setup)):
 
 ```bash
-./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -Pscreen=phone -Pout=/tmp/sim \
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_sample_no_login -Pscreen=phone -Pout=/tmp/sim \
   -Pscript="shot feed; click Like; assert-text Unlike; shot liked; offline; shot offline"
 ```
 
@@ -18,11 +18,11 @@ The output directory holds the PNGs, `steps.log` and `steps.json` (one entry per
 ## Modes
 
 **Fixture mode** (the default) needs no server and, with `-PskipRustBuild`, no Rust build. A fake engine
-(`FakeEngineBridge`) loads a bundle from `kmp-app/desktopApp/src/sim/resources/`, applies taps with the same expression subset as the engine,
-models the outbox (`offline` queues, `online` flushes), and serves a fake app catalog (Pixelfed v1..v3, Pixelfed demo
-v1..v2) and notifications (`kmp-app/desktopApp/src/sim/resources/notifications.json`). Images whose path ends in `/storage/<file>` or
+(`FakeEngineBridge`) loads a bundle from `app/desktopApp/src/sim/resources/`, applies taps with the same expression subset as the engine,
+models the outbox (`offline` queues, `online` flushes), and serves a fake app catalog (Pixelfed v1..v3, Pixelfed sample
+v1..v2) and notifications (`app/desktopApp/src/sim/resources/notifications.json`). Images whose path ends in `/storage/<file>` or
 `/v1/pixelfed/media/<file>` come from `fake-pixelfed/fixtures/media/`; every other URL fails at once, so shots are
-deterministic. Screen data comes from `kmp-app/desktopApp/src/sim/resources/pixelfed_screen_data.json`, generated from the
+deterministic. Screen data comes from `app/desktopApp/src/sim/resources/pixelfed_screen_data.json`, generated from the
 pod with `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::` (the test fails when it is stale).
 
 **Live mode** (`-PbaseUrl=<server>`) runs the real Rust engine against a server, with a fresh temporary storage
@@ -33,7 +33,7 @@ fixture-only.
 follows the authorize URL with `auto=1`, which the fake Pixelfed approves at once:
 
 ```bash
-./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_home -PbaseUrl=http://127.0.0.1:8080 \
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed -PbaseUrl=http://127.0.0.1:8080 \
   -Pscript="click Sign in with Pixelfed; open-settings; wait-text 20000 @constructdemo; close-menu; wait-text 20000 Alice Lumen; wait-images 20000; shot feed"
 ```
 
@@ -44,17 +44,17 @@ and approves the consent page. Against staging, start with `click Try a temporar
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `-Pworkspace` | `pixelfed_home` | The app at start; in fixture mode it picks the default fixture. |
+| `-Pworkspace` | `pixelfed` | The app at start; in fixture mode it picks the default fixture. |
 | `-Pscreen` | `phone` | `phone` (390x844 dp), `tablet` (820x1180), `desktop` (1280x800), or `WxH` in dp. |
 | `-Pdensity` | per screen | Pixels per dp: phone 3, tablet 2, desktop 2, `WxH` 2. |
 | `-Ptoday` | the real date | `YYYY-MM-DD` that date formatting draws against, for repeatable shots. |
 | `-Pscript` | `shot initial` | The script. |
 | `-PscriptFile` | | The script, from a file (instead of `-Pscript`). |
 | `-Pmode` | `fixture` | `fixture` or `live`; `-PbaseUrl` selects live. |
-| `-Pfixture` | per workspace | The bundle in fixture mode: `pixelfed_demo` uses `crates/app-pixelfed/demo/bundle.json`, `pixelfed_home` uses `kmp-app/desktopApp/src/sim/resources/pixelfed_home_feed_bundle.json`; other apps need this flag. |
+| `-Pfixture` | per workspace | The bundle in fixture mode: `pixelfed_sample_no_login` uses `crates/app-pixelfed/sample/bundle.json`, `pixelfed` uses `app/desktopApp/src/sim/resources/pixelfed_feed_bundle.json`; other apps need this flag. |
 | `-PbaseUrl` | staging | The server in live mode. |
 | `-PtimeoutMs` | `10000` | Live mode: how long to wait for the first load. |
-| `-Pout` | `kmp-app/desktopApp/build/sim/<timestamp>` | Output directory. |
+| `-Pout` | `app/desktopApp/build/sim/<timestamp>` | Output directory. |
 | `-PpixelfedLogin` | | Live mode: `<login>:<password>` for a real Pixelfed. |
 | `-Pstorage` | a fresh temp dir | Live mode: the engine's storage, kept after the run (to test restarts). |
 
@@ -105,7 +105,7 @@ Examples:
 # Comments: open, write, send
 -Pscript='click tag:comment:pixelfed://posts/781254316723458049; wait-text 3000 Which lens?; type tag:textfield:comment Golden light!; click tag:textfield-send:comment; wait-text 3000 just now; shot sent'
 # Notifications
--Pscript='notify pixelfed_demo likes Bob liked your post; open-inbox; shot inbox; click-notification commented on; shot comments'
+-Pscript='notify pixelfed_sample_no_login likes Bob liked your post; open-inbox; shot inbox; click-notification commented on; shot comments'
 # Posting a photo
 -Pscript='click tag:new-post; pick fake-pixelfed/fixtures/media/carousel-1.png; click tag:media-picker-add:photos; click Share; shot posting'
 ```

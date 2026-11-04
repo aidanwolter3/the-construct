@@ -6,7 +6,7 @@
 #
 # Cache warm-up: builds client-ffi (target/release/libclient_ffi.so) and compiles the Kotlin main + test sources,
 # which fills ~/.gradle with every dependency the JVM tests and the simulator need. Gradle tries Google's Maven
-# Central mirror before repo.maven.apache.org (kmp-app/settings.gradle.kts), because Maven Central answers
+# Central mirror before repo.maven.apache.org (app/settings.gradle.kts), because Maven Central answers
 # HTTP 429 to shared cloud egress IPs. A failed step is retried with long, growing waits (30s..4min), never in a
 # tight loop; a warm-up that still fails only leaves a warning: sessions then download on first build.
 #
@@ -79,7 +79,7 @@ warm_caches() {
   (cd "$REPO_ROOT" && with_backoff cargo build -p client-ffi --release) || ok=0
   # Compiling main + test sources resolves everything :shared:allTests, :desktopApp:test and :desktopApp:simulate
   # use. --no-daemon so no Gradle daemon outlives the warm-up.
-  (cd "$REPO_ROOT/kmp-app" && JAVA_HOME="$JAVA_HOME_GUESS" with_backoff ./gradlew -PskipRustBuild \
+  (cd "$REPO_ROOT/app" && JAVA_HOME="$JAVA_HOME_GUESS" with_backoff ./gradlew -PskipRustBuild \
     --no-daemon --quiet :shared:compileTestKotlinDesktop :desktopApp:compileTestKotlin) || ok=0
   if [[ $ok == 1 ]]; then
     echo done >"$WARM_STATUS"

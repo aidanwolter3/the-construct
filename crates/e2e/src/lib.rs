@@ -33,7 +33,7 @@ use server::{AppState, PixelfedConfig, WithPixelfed};
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 
-pub const WORKSPACE: &str = "pixelfed_home";
+pub const WORKSPACE: &str = "pixelfed";
 pub const LIKE_ENDPOINT: &str = "/v1/pixelfed/posts/like";
 pub const BOOKMARK_ENDPOINT: &str = "/v1/pixelfed/posts/bookmark";
 const LIKE_COUNT_EXPR: &str = "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1";
@@ -375,7 +375,7 @@ impl Harness {
         }
     }
 
-    /// An engine on the `pixelfed_home` workspace with an in-memory cache, this upstream's
+    /// An engine on the `pixelfed` workspace with an in-memory cache, this upstream's
     /// browser and a loopback redirect on a random port.
     pub fn engine(&self, store: &Arc<MemoryStore>) -> ConstructEngine {
         self.engine_with(store, Some(self.upstream.browser()))

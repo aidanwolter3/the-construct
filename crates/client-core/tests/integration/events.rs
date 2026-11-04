@@ -48,7 +48,7 @@ struct StubState {
     /// `X-Construct-Features` header per events connection (`None` if absent).
     event_features: Mutex<Vec<Option<String>>>,
     /// Workspace fetches answer an unversioned "Signed out" screen (no
-    /// version header), like the signed-out `pixelfed_home`.
+    /// version header), like the signed-out `pixelfed`.
     unversioned: std::sync::atomic::AtomicBool,
 }
 

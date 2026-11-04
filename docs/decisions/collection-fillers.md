@@ -110,7 +110,8 @@ alerts use its built-in app's channel. Rows are served with `alert_matched` and 
 
 ## The Events app
 
-The Watcher's app keeps its id (`watcher`), so it stays where people pinned it, and its notification channel
+The Watcher's app keeps its id (`watcher`; renamed `events` by decision
+[rename-apps-and-folders](rename-apps-and-folders.md)), so it stays where people pinned it, and its notification channel
 (`matches`), so their choice holds; it is titled **Events**. Its feed is the system collection `events`
 (`source_id`, `title`, `start`, `end`, `venue`, `description`, `url`, `tickets_url`, `seen`), which every pod gets
 on start. A system collection's fields can't be renamed, removed or retyped (the app reads them); fields can be
@@ -138,4 +139,5 @@ Not done yet:
 - Headless fetching for pages that render with JavaScript; sites that block bots stay out of reach.
 - Keeping a filled value's history (a price over time); a filler writing several collections.
 - Seeing and editing fillers and alerts in an app (they are Claude's, as the Watcher's sites were).
-- Dropping the `watcher_*` tables once every pod has moved.
+- Dropping the `watcher_*` tables once every pod has moved (done by decision
+  [rename-apps-and-folders](rename-apps-and-folders.md)).

@@ -26,7 +26,7 @@ use server::{AppState, PixelfedConfig, WithPixelfed};
 const TIMEOUT: Duration = Duration::from_secs(15);
 const SEED: &str = "seed-token";
 const CUSTOM_REDIRECT: &str = "construct://oauth";
-const WORKSPACE: &str = "pixelfed_home";
+const WORKSPACE: &str = "pixelfed";
 const LIKE_COUNT_EXPR: &str = "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1";
 
 fn fast_config() -> EngineConfig {

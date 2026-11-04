@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Build the client-ffi cdylib (macOS) and generate the UniFFI Kotlin bindings shared by the
-# desktop and Android targets (kmp-app :shared, jvmCommonMain source set).
+# desktop and Android targets (app :shared, jvmCommonMain source set).
 #
 # Usage: scripts/build_ffi.sh
 #
 # Outputs:
 #   target/release/libclient_ffi.dylib   (desktop app: -Djna.library.path=<repo>/target/release)
-#   kmp-app/shared/src/jvmCommonMain/kotlin/uniffi/client_ffi/client_ffi.kt
+#   app/shared/src/jvmCommonMain/kotlin/uniffi/client_ffi/client_ffi.kt
 # Idempotent; safe to re-run.
 set -euo pipefail
 
@@ -17,7 +17,7 @@ cd "$REPO_ROOT"
 TARGET="aarch64-apple-darwin"
 LIB_NAME="libclient_ffi.dylib"
 BUILT_LIB="target/$TARGET/release/$LIB_NAME"
-OUT_DIR="kmp-app/shared/src/jvmCommonMain/kotlin"
+OUT_DIR="app/shared/src/jvmCommonMain/kotlin"
 
 echo "==> Building client-ffi ($TARGET, release)"
 cargo build -p client-ffi --release --lib --target "$TARGET"

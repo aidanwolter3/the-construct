@@ -21,6 +21,7 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 static FILES: &[LayoutSource] = &[LayoutSource {
+    dir: "layouts",
     app_id: "up",
     name: "0001",
     text: r#"{"note": "First", "schema": 1, "layout": {"type": "core://Workspace", "id": "up",

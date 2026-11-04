@@ -87,13 +87,13 @@ jobs:
       - name: Build the Rust engine for the JVM (target/release/libclient_ffi.so)
         run: cargo build -p client-ffi --release
       - name: Shared + desktop tests
-        working-directory: kmp-app
+        working-directory: app
         run: ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test
       - name: Simulator screenshots (fixture mode)
-        working-directory: kmp-app
+        working-directory: app
         run: |
           ./gradlew -PskipRustBuild :desktopApp:simulate \
-            -Pworkspace=pixelfed_demo -Pscreen=phone -Pout="$RUNNER_TEMP/sim/pixelfed" \
+            -Pworkspace=pixelfed_sample_no_login -Pscreen=phone -Pout="$RUNNER_TEMP/sim/pixelfed" \
             -Pscript="shot feed; click Like; assert-text Unlike; shot liked; offline; shot offline"
       - name: Upload screenshots and test reports
         if: always()
@@ -102,7 +102,7 @@ jobs:
           name: simulator-and-test-reports
           path: |
             ${{ runner.temp }}/sim
-            kmp-app/**/build/reports/tests
+            app/**/build/reports/tests
           if-no-files-found: ignore
           retention-days: 14
 
@@ -144,11 +144,11 @@ jobs:
           [ "$code" = 200 ] || { echo "healthz returned $code"; exit 1; }
           pod=https://the-construct-pod.fly.dev
           # Without a pod token: only the "Open your pod" screen (D46).
-          curl -fsS "$pod/v1/workspaces/pixelfed_demo" | jq -e '.workspace.title == "The Construct"'
+          curl -fsS "$pod/v1/workspaces/pixelfed_sample_no_login" | jq -e '.workspace.title == "The Construct"'
           # A temporary pod (deleted when it expires) serves the apps.
           token=$(curl -fsS -X POST "$pod/v1/pods/temporary" | jq -er '.session_token')
-          curl -fsS -H "Authorization: Bearer $token" "$pod/v1/workspaces/pixelfed_demo" \
-            | jq -e '.workspace.id == "pixelfed_demo" and (.entities | length) > 0'
+          curl -fsS -H "Authorization: Bearer $token" "$pod/v1/workspaces/pixelfed_sample_no_login" \
+            | jq -e '.workspace.id == "pixelfed_sample_no_login" and (.entities | length) > 0'
       - name: Note skipped deploy
         if: steps.secrets.outputs.pod != 'true' || steps.secrets.outputs.fake != 'true'
         run: echo "::warning::FLY_API_TOKEN_POD / FLY_API_TOKEN_FAKE secrets missing; some deploy steps were skipped."

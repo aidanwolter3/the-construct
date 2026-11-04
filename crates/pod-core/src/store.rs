@@ -253,6 +253,168 @@ pub fn pod_setting_on(tx: &Connection, key: &str) -> rusqlite::Result<Option<Str
     .optional()
 }
 
+/// Rename a built-in app's stored data from `from` to `to`, for the
+/// adapter migration of an app whose id changes (decision
+/// `rename-apps-and-folders`): its layout history (every version's root id
+/// and file key, so the history and pinned versions stay), its
+/// notifications, devices' channel choices for it, the hidden list, and
+/// custom apps' references to it (`core://Ref` parts, `copied_from`). A pod
+/// with nothing under `from` is left as it is; one with a history under
+/// both ids refuses.
+pub fn rename_app_on(tx: &Transaction<'_>, from: &str, to: &str) -> rusqlite::Result<()> {
+    let has = |id: &str| {
+        tx.prepare("SELECT 1 FROM app_versions WHERE app_id = ?1")?
+            .exists([id])
+    };
+    if has(from)? && has(to)? {
+        return Err(refuse(format!(
+            "renaming app '{from}' to '{to}': '{to}' already has layout versions"
+        )));
+    }
+    let rows: Vec<(i64, String, Option<String>)> = {
+        let mut stmt =
+            tx.prepare("SELECT version, hash, file_key FROM app_versions WHERE app_id = ?1")?;
+        stmt.query_map([from], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    let key_prefix = format!("{from}/");
+    for (version, hash, key) in rows {
+        let hash = match renamed_layout(&get_blob(tx, &hash)?, from, to, false) {
+            Some(json) => put_blob(tx, &json)?,
+            None => hash,
+        };
+        let key = key.map(|k| match k.strip_prefix(&key_prefix) {
+            Some(rest) => format!("{to}/{rest}"),
+            None => k,
+        });
+        tx.execute(
+            "UPDATE app_versions SET app_id = ?1, hash = ?2, file_key = ?3
+             WHERE app_id = ?4 AND version = ?5",
+            params![to, hash, key, from, version],
+        )?;
+    }
+    for table in ["notifications", "device_channel_prefs"] {
+        tx.execute(
+            &format!("UPDATE {table} SET app_id = ?1 WHERE app_id = ?2"),
+            params![to, from],
+        )?;
+    }
+    let hidden = crate::custom::HIDDEN_SETTING;
+    if let Some(list) = pod_setting_on(tx, hidden)?
+        .and_then(|v| serde_json::from_str::<Vec<String>>(&v).ok())
+        .filter(|l| l.iter().any(|id| id == from))
+    {
+        let list: Vec<String> = list
+            .into_iter()
+            .map(|id| if id == from { to.to_owned() } else { id })
+            .collect();
+        tx.execute(
+            "UPDATE pod_settings SET value = ?1 WHERE key = ?2",
+            params![serde_json::to_string(&list).expect("serializes"), hidden],
+        )?;
+    }
+    // Custom apps' versions that reference the app.
+    let custom: Vec<(String, i64, String, Option<String>)> = {
+        let mut stmt = tx.prepare(
+            "SELECT app_id, version, hash, meta_json FROM app_versions
+             WHERE app_id IN (SELECT id FROM custom_apps)",
+        )?;
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    for (app, version, hash, meta) in custom {
+        let new_hash = match renamed_layout(&get_blob(tx, &hash)?, from, to, true) {
+            Some(json) => Some(put_blob(tx, &json)?),
+            None => None,
+        };
+        let new_meta = meta
+            .as_deref()
+            .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+            .filter(|m| m["copied_from"]["app"] == from)
+            .map(|mut m| {
+                m["copied_from"]["app"] = serde_json::Value::from(to);
+                m.to_string()
+            });
+        if new_hash.is_some() || new_meta.is_some() {
+            tx.execute(
+                "UPDATE app_versions SET hash = ?1, meta_json = ?2 WHERE app_id = ?3 AND version = ?4",
+                params![
+                    new_hash.unwrap_or(hash),
+                    new_meta.or(meta),
+                    app,
+                    version
+                ],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Rename a data source in custom apps' feeds (`custom_apps.feeds_json`,
+/// `[[source, feed], ...]`), for the adapter migration of a source whose
+/// id changes (decision `rename-apps-and-folders`).
+pub fn rename_source_on(tx: &Transaction<'_>, from: &str, to: &str) -> rusqlite::Result<()> {
+    let apps: Vec<(String, String)> = {
+        let mut stmt = tx.prepare("SELECT id, feeds_json FROM custom_apps")?;
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    for (id, feeds) in apps {
+        let Ok(list) = serde_json::from_str::<Vec<(String, String)>>(&feeds) else {
+            continue;
+        };
+        if !list.iter().any(|(s, _)| s == from) {
+            continue;
+        }
+        let list: Vec<(String, String)> = list
+            .into_iter()
+            .map(|(s, f)| (if s == from { to.to_owned() } else { s }, f))
+            .collect();
+        tx.execute(
+            "UPDATE custom_apps SET feeds_json = ?1 WHERE id = ?2",
+            params![serde_json::to_string(&list).expect("serializes"), id],
+        )?;
+    }
+    Ok(())
+}
+
+/// A stored layout with app `from` renamed to `to`: the root
+/// `core://Workspace` id of the app's own layouts, or (`refs`) the `app` of
+/// every `core://Ref` in a custom app's. `None` when nothing changes.
+fn renamed_layout(json: &str, from: &str, to: &str, refs: bool) -> Option<String> {
+    fn walk(v: &mut serde_json::Value, from: &str, to: &str) -> bool {
+        match v {
+            serde_json::Value::Object(map) => {
+                let mut changed = false;
+                if map.get("type").and_then(|t| t.as_str()) == Some(crate::parts::REF_TYPE)
+                    && map.get("app").and_then(|a| a.as_str()) == Some(from)
+                {
+                    map.insert("app".into(), to.into());
+                    changed = true;
+                }
+                for child in map.values_mut() {
+                    changed |= walk(child, from, to);
+                }
+                changed
+            }
+            serde_json::Value::Array(items) => {
+                items.iter_mut().fold(false, |c, i| walk(i, from, to) | c)
+            }
+            _ => false,
+        }
+    }
+    let mut v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let changed = if refs {
+        walk(&mut v, from, to)
+    } else if v["type"] == "core://Workspace" && v["id"] == from {
+        v["id"] = to.into();
+        true
+    } else {
+        false
+    };
+    changed.then(|| canonical_json(&v.to_string()))
+}
+
 fn migrate_v9(tx: &Transaction<'_>) -> rusqlite::Result<()> {
     // A version's schema (D36), dropped again by v17 (decision
     // `named-vocabulary`): v17 works out every version's features instead.
@@ -542,7 +704,7 @@ pub const SOURCE_AGENT: &str = "agent";
 pub const SOURCE_ROLLBACK: &str = "rollback";
 pub const SOURCE_RESTORE: &str = "restore";
 pub const SOURCE_MANUAL: &str = "manual";
-/// A version created from a layout file (`layouts/<app>/NNNN.json`).
+/// A version created from a layout file (`crates/<adapter>/layouts/<app>/NNNN.json`).
 pub const SOURCE_FILE: &str = "file";
 /// `reason` of a revision that switched the active layout.
 pub const REASON_ACTIVATE: &str = "activate";
@@ -623,7 +785,8 @@ pub struct AppVersion {
     /// `seed` | `agent` | `rollback` | `restore` | `manual` | `switch`.
     pub source: String,
     pub note: Option<String>,
-    /// `<app_id>/NNNN` for a version created from `layouts/<app_id>/NNNN.json`.
+    /// `<app_id>/NNNN` for a version created from the layout file
+    /// `<app_id>/NNNN.json`.
     pub file_key: Option<String>,
     pub hash: String,
     /// The layout features the version uses ([`protocol::required_features`]).
@@ -651,7 +814,7 @@ pub struct FileVersion {
     pub key: String,
     /// NNNN.
     pub number: u32,
-    /// `layouts/<app_id>/NNNN.json`, for error messages.
+    /// The file's path in the repository, for error messages.
     pub path: String,
     pub note: String,
     pub json: String,
@@ -866,7 +1029,7 @@ fn sync_app_files_on(
         let retired = matches!((key_number(&r.key), min_file), (Some(n), Some(m)) if n < m);
         if !retired && !files.iter().any(|f| f.key == r.key) {
             report.missing.push(format!(
-                "layouts/{}.json was deployed as version {} but is missing from this build; \
+                "layout file {}.json was deployed as version {} but is missing from this build; \
                  serving the recorded history unchanged",
                 r.key, r.version
             ));
@@ -888,7 +1051,7 @@ fn sync_app_files_on(
                 return Ok(Err(format!(
                     "{path} changed after it was deployed as version {version}; layout files are \
                      append-only. To recover, restore the deployed content of {path} (git log -p \
-                     -- {path}) and put the change in a new file, {next_name}",
+                     --follow -- {path}) and put the change in a new file, {next_name}",
                     path = file.path,
                     version = r.version,
                 )));
@@ -904,7 +1067,7 @@ fn sync_app_files_on(
         }
         if let Some(max) = max_recorded.filter(|m| *m > file.number) {
             return Ok(Err(format!(
-                "{} is new but numbered below layouts/{app_id}/{max:04}.json, which is already \
+                "{} is new but numbered below {app_id}/{max:04}.json, which is already \
                  deployed; layout files are append-only. To recover, move its content to a new \
                  file numbered after the newest deployed one, {next_name}",
                 file.path
@@ -1648,6 +1811,77 @@ mod tests {
     }
 
     #[test]
+    fn renaming_an_app_moves_its_stored_data() {
+        let s = Store::open_in_memory().unwrap();
+        let root = r#"{"type":"core://Workspace","id":"old","title":"Old","slots":[]}"#;
+        sync1(&s, "old", &[file("old", 3, root, "first")]).unwrap();
+        let reference = r#"{"type":"core://Workspace","id":"c1","title":"C","slots":[{"slot_id":"a","provider_uri":"core://custom","content":{"type":"core://Ref","app":"old","part":"card"}}]}"#;
+        s.transaction(|tx| {
+            tx.execute_batch(
+                "INSERT INTO custom_apps (id, title, icon, feeds_json, created_at, updated_at)
+                     VALUES ('c1', 'C', 'photo', '[[\"old_source\",\"items\"],[\"other\",\"x\"]]', 1, 1);
+                 INSERT INTO notifications (app_id, channel, dedupe_key, title, created_at, inserted_at)
+                     VALUES ('old', 'likes', 'k', 'Liked', 1, 1);
+                 INSERT INTO device_channel_prefs (device_id, app_id, channel, enabled)
+                     VALUES ('d1', 'old', 'likes', 0);
+                 INSERT INTO pod_settings (key, value) VALUES ('apps.hidden', '[\"x\",\"old\"]');",
+            )?;
+            let hash = put_blob(tx, reference)?;
+            tx.execute(
+                "INSERT INTO app_versions (app_id, version, hash, source, created_at, meta_json)
+                 VALUES ('c1', 1, ?1, 'manual', 1, ?2)",
+                params![hash, r#"{"copied_from":{"app":"old","version":1}}"#],
+            )?;
+            rename_app_on(tx, "old", "new")?;
+            rename_source_on(tx, "old_source", "new_source")
+        })
+        .unwrap();
+        let (v, json) = s.app_latest("new").unwrap().expect("the history moved");
+        assert_eq!((v.version, v.file_key.as_deref()), (1, Some("new/0003")));
+        let layout: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(layout["id"], "new", "the root id follows");
+        assert!(s.app_latest("old").unwrap().is_none());
+        let custom = s.app_latest("c1").unwrap().unwrap();
+        assert!(custom.1.contains(r#""app":"new""#), "{}", custom.1);
+        assert_eq!(
+            custom.0.meta_json.as_deref(),
+            Some(r#"{"copied_from":{"app":"new","version":1}}"#)
+        );
+        let (notification, pref, hidden, feeds): (String, String, String, String) = s
+            .conn()
+            .query_row(
+                "SELECT (SELECT app_id FROM notifications), (SELECT app_id FROM device_channel_prefs),
+                        (SELECT value FROM pod_settings WHERE key = 'apps.hidden'),
+                        (SELECT feeds_json FROM custom_apps)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (notification.as_str(), pref.as_str(), hidden.as_str()),
+            ("new", "new", r#"["x","new"]"#)
+        );
+        assert_eq!(feeds, r#"[["new_source","items"],["other","x"]]"#);
+        // A file synced under the new id after the rename is the next version.
+        let next = r#"{"type":"core://Workspace","id":"new","title":"New","slots":[]}"#;
+        assert_eq!(
+            sync1(&s, "new", &[file("new", 4, next, "renamed")]).unwrap(),
+            [("layouts/new/0004.json".to_owned(), 2)]
+        );
+        // Again (nothing left under the old id): nothing changes.
+        s.transaction(|tx| rename_app_on(tx, "old", "new")).unwrap();
+        assert_eq!(history(&s, "new").len(), 2);
+        // Renaming onto an app that has a history refuses.
+        let err = s
+            .transaction(|tx| rename_app_on(tx, "c1", "new"))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("already has layout versions"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn layout_file_sync_is_append_only_and_idempotent() {
         let s = Store::open_in_memory().unwrap();
         let one = file("a", 1, "{\"v\":1}", "First");
@@ -1668,7 +1902,7 @@ mod tests {
             sync1(&s, "a", &[changed]).unwrap_err(),
             "layouts/a/0001.json changed after it was deployed as version 1; layout files are \
              append-only. To recover, restore the deployed content of layouts/a/0001.json \
-             (git log -p -- layouts/a/0001.json) and put the change in a new file, 0002.json"
+             (git log -p --follow -- layouts/a/0001.json) and put the change in a new file, 0002.json"
         );
         let renoted = file("a", 1, "{\"v\":1}", "Other");
         assert!(
@@ -1708,7 +1942,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err,
-            "layouts/b/0001.json is new but numbered below layouts/b/0002.json, which is \
+            "layouts/b/0001.json is new but numbered below b/0002.json, which is \
              already deployed; layout files are append-only. To recover, move its content to a \
              new file numbered after the newest deployed one, 0003.json"
         );
@@ -1740,7 +1974,7 @@ mod tests {
         assert_eq!(
             report.missing,
             [
-                "layouts/a/0002.json was deployed as version 2 but is missing from this build; \
+                "layout file a/0002.json was deployed as version 2 but is missing from this build; \
               serving the recorded history unchanged"
             ]
         );
@@ -1766,7 +2000,7 @@ mod tests {
             .unwrap();
         let err = sync1(&s2, "a", &[one, two]).unwrap_err();
         assert!(
-            err.starts_with("layouts/a/0002.json is new but numbered below layouts/a/0003.json"),
+            err.starts_with("layouts/a/0002.json is new but numbered below a/0003.json"),
             "{err}"
         );
         assert!(err.ends_with("0004.json"), "{err}");
@@ -1900,9 +2134,9 @@ mod tests {
                     Some("rollback"),
                     None,
                 ),
-                ("pixelfed_home", 1, classic.as_str(), None, None, None),
+                ("pixelfed", 1, classic.as_str(), None, None, None),
                 (
-                    "pixelfed_home",
+                    "pixelfed",
                     2,
                     "{\"b\":1}",
                     Some("p"),
@@ -1952,11 +2186,8 @@ mod tests {
             s.app_version("home", 2).unwrap().unwrap().1,
             "{\"edited\":true}"
         );
-        assert_eq!(
-            s.app_latest("pixelfed_home").unwrap().unwrap().1,
-            "{\"b\":1}"
-        );
-        assert_eq!(s.app_latest("pixelfed_demo").unwrap(), None);
+        assert_eq!(s.app_latest("pixelfed").unwrap().unwrap().1, "{\"b\":1}");
+        assert_eq!(s.app_latest("pixelfed_sample_no_login").unwrap(), None);
         assert_eq!(s.layout_storage().unwrap().0, 3, "3 distinct blobs");
     }
 
@@ -2009,17 +2240,27 @@ mod tests {
 
     /// A v6 database: `home` went seed -> agent edit -> switch to Big counter
     /// -> switch back restoring v1 -> restore v2 (active) -> rollback to v1;
-    /// `pixelfed_demo` has catalog rows but no revisions.
+    /// `pixelfed_sample_no_login` has catalog rows but no revisions.
     fn v6_db(path: &Path) {
         let mut conn = Connection::open(path).unwrap();
         migrate(&mut conn, 6).unwrap();
         let db = V6(&conn);
         db.layout("home.counter", "home", "Counter");
         db.layout("home.big_counter", "home", "Big counter");
-        db.layout("pixelfed_demo.classic", "pixelfed_demo", "Classic feed");
+        db.layout(
+            "pixelfed_sample_no_login.classic",
+            "pixelfed_sample_no_login",
+            "Classic feed",
+        );
         db.version("home.counter", 1, C1, SOURCE_SEED, None);
         db.version("home.big_counter", 1, B1, SOURCE_SEED, None);
-        db.version("pixelfed_demo.classic", 1, "{\"d\":1}", SOURCE_SEED, None);
+        db.version(
+            "pixelfed_sample_no_login.classic",
+            1,
+            "{\"d\":1}",
+            SOURCE_SEED,
+            None,
+        );
         db.revision("home", 1, "home.counter", 1, SOURCE_SEED);
         db.version("home.counter", 2, C2, SOURCE_AGENT, Some("make it bigger"));
         db.revision("home", 2, "home.counter", 2, SOURCE_AGENT);
@@ -2070,7 +2311,7 @@ mod tests {
             s.app_version("home", 3).unwrap().unwrap().0.created_at,
             2003
         );
-        assert!(history(&s, "pixelfed_demo").is_empty());
+        assert!(history(&s, "pixelfed_sample_no_login").is_empty());
         {
             // No new blobs; the v6 tables are left as they were.
             let conn = s.conn();
@@ -2085,8 +2326,13 @@ mod tests {
             [("layouts/home/0001.json".to_owned(), 7)]
         );
         assert_eq!(
-            sync1(&s, "pixelfed_demo", &[file("pixelfed_demo", 1, "{}", "x")]).unwrap(),
-            [("layouts/pixelfed_demo/0001.json".to_owned(), 1)]
+            sync1(
+                &s,
+                "pixelfed_sample_no_login",
+                &[file("pixelfed_sample_no_login", 1, "{}", "x")]
+            )
+            .unwrap(),
+            [("layouts/pixelfed_sample_no_login/0001.json".to_owned(), 1)]
         );
         drop(s);
         // Reopening runs nothing again.

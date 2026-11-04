@@ -33,7 +33,7 @@ no client release.
 
 The pod serves each app as a layout (a `core://Workspace` with screens) plus normalized entities. The engine caches
 both, applies actions optimistically and keeps an event stream open, so new layout versions and notifications arrive
-live. Layout versions are files in [`layouts/`](layouts/) and every version stays servable: a client is always sent
+live. Layout versions are files in each adapter crate's `layouts/` folder and every version stays servable: a client is always sent
 the newest one it can draw. Read [docs/architecture.md](docs/architecture.md) for the full picture.
 
 ## Quick start
@@ -50,14 +50,14 @@ Render the shared UI headlessly to PNGs (no window, no device):
 
 ```bash
 cargo build -p client-ffi --release
-cd kmp-app && ./gradlew -PskipRustBuild :desktopApp:simulate \
-  -Pworkspace=pixelfed_demo -Pscript="shot feed; click Like; assert-text Unlike; shot liked" -Pout=/tmp/sim
+cd app && ./gradlew -PskipRustBuild :desktopApp:simulate \
+  -Pworkspace=pixelfed_sample_no_login -Pscript="shot feed; click Like; assert-text Unlike; shot liked" -Pout=/tmp/sim
 ```
 
 Run the desktop app against the local server (macOS):
 
 ```bash
-cd kmp-app && ./gradlew :desktopApp:run -Dconstruct.baseUrl=http://127.0.0.1:8080
+cd app && ./gradlew :desktopApp:run -Dconstruct.baseUrl=http://127.0.0.1:8080
 ```
 
 Without `-Dconstruct.baseUrl`, clients use the public staging server, where **Try a temporary pod** gives you a
@@ -85,14 +85,14 @@ crates/protocol         wire types: UiNode, ActionIntent, bundles, layout featur
 crates/pod-core         the generic pod: apps, layout versions, sessions, sign-ins, uploads, notifications, MCP
 crates/pod-host         one server, many pods: host.db, pod tokens, temporary pods, scheduler
 crates/server           the server binary and the `server pods` admin CLI
-crates/app-*            adapters: pixelfed, recipes, collections, watcher (Events), monitor
+crates/app-*            adapters: pixelfed, recipes, collections, events, monitor; each with its
+                          apps' layout versions in layouts/<app>/NNNN.json
 crates/web-extract      fetching pages and reading structured data out of them, for fillers
 crates/client-core      the engine: SQLite cache, outbox, PKCE sign-in, event stream
 crates/client-ffi       the UniFFI bridge to Kotlin
 crates/e2e              end-to-end suite
 fake-pixelfed/          a fake Pixelfed upstream for tests and staging
-kmp-app/                Gradle: :shared (Compose UI), :desktopApp (and the simulator), :androidApp
-layouts/<app>/          layout versions as code
+app/                    Gradle: :shared (Compose UI), :desktopApp (and the simulator), :androidApp
 deploy/, dev/, scripts/, assets/icon/
 ```
 

@@ -1,4 +1,4 @@
-//! Events: the extractors the Watcher had, now an extractor of fetch
+//! Events: the extractor of fetch
 //! fillers (`extract: "events"`, decision `collection-fillers`). A page
 //! in, normalized events out: from an iCalendar feed (`VEVENT`s, a `TZID`
 //! resolved to its offset on the day) or from a page's schema.org `Event`

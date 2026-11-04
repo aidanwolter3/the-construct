@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn segments_are_percent_encoded() {
-        assert_eq!(segment("pixelfed_home"), "pixelfed_home");
+        assert_eq!(segment("pixelfed"), "pixelfed");
         assert_eq!(segment("a/b c?"), "a%2Fb%20c%3F");
     }
 

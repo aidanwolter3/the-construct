@@ -1,8 +1,8 @@
 # The Construct — notes for Claude
 
 Server-driven UI: a Rust pod serves app layouts (JSON `UiNode` trees) and entities; desktop, Android and a headless
-simulator draw them with shared Compose code over a shared Rust engine. Apps: Pixelfed (`pixelfed_home`), Recipes
-(`recipes`) and Events (`watcher`), plus users' custom apps and Collections.
+simulator draw them with shared Compose code over a shared Rust engine. Apps: Pixelfed (`pixelfed`), Recipes
+(`recipes`) and Events (`events`), plus users' custom apps and Collections.
 
 **Read [CONTRIBUTING.md](CONTRIBUTING.md) first: its rules and checks apply to you.** Then, as the task needs:
 [docs/architecture.md](docs/architecture.md) (read before changing architecture), [docs/layouts.md](docs/layouts.md)
@@ -15,16 +15,16 @@ issues. `docs/history/` is archived; don't treat it as current.
 - `crates/protocol` wire types; `crates/pod-core` the generic pod (knows apps only through `AppAdapter`,
   `adapter.rs`; `validate.rs` checks layout files); `crates/pod-host` many pods per server; `crates/server` the
   binary and `server pods` CLI.
-- `crates/app-pixelfed`, `app-recipes`, `app-collections`, `app-watcher` (Events), `app-monitor`: the adapters.
+- `crates/app-pixelfed`, `app-recipes`, `app-collections`, `app-events` (Events), `app-monitor`: the adapters.
   `crates/web-extract`: page fetching and extraction for fillers.
 - `crates/client-core` the engine; `crates/client-ffi` UniFFI (Kotlin bindings in
-  `kmp-app/shared/src/jvmCommonMain`); `kmp-app/shared/src/commonMain` the shared UI.
+  `app/shared/src/jvmCommonMain`); `app/shared/src/commonMain` the shared UI.
 - `fake-pixelfed/` the fake upstream (primary test target); `crates/e2e` the end-to-end suite.
-- `layouts/<app>/NNNN.json` layout versions; `crates/protocol/features/` the named vocabulary.
+- `crates/app-*/layouts/<app>/NNNN.json` layout versions; `crates/protocol/features/` the named vocabulary.
 - Each crate's integration tests are one binary, `tests/integration/main.rs`: add a test file as a `mod` there
   ([docs/testing.md](docs/testing.md)).
 - Data files live next to the code that reads them (decision `data-next-to-its-code`): test data in
-  `crates/*/tests/data/`, simulator data in `kmp-app/desktopApp/src/sim/resources/`; anything else ships.
+  `crates/*/tests/data/`, simulator data in `app/desktopApp/src/sim/resources/`; anything else ships.
   Test data is made up: invented people and places and `.example` domains, never real personal data.
 
 ## Commands
@@ -35,11 +35,11 @@ cargo run -p server                      # 127.0.0.1:8080; callers without a pod
 cargo run -p fake-pixelfed               # 127.0.0.1:8081
 scripts/e2e.sh                           # e2e suite against the fake binary
 
-# JVM (from kmp-app; any JDK 21 in JAVA_HOME or on PATH). The engine library first: cargo build -p client-ffi --release
+# JVM (from app; any JDK 21 in JAVA_HOME or on PATH). The engine library first: cargo build -p client-ffi --release
 ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test
 
 # Headless simulator: the real shared UI to PNGs. Read the PNGs to check UI changes.
-./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo \
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_sample_no_login \
   -Pscreen=phone -Pout=/tmp/sim -Pscript="shot start; click Like; assert-text Unlike; shot after"
 ```
 

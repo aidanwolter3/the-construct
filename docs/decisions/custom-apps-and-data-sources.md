@@ -40,7 +40,7 @@ Decision:
   deployed layout uses, like the routes themselves.
 
 Built-in answers are byte-identical (bodies and headers), fixtures regenerate unchanged, and no URL, layout file or
-`SCHEMA_VERSION` changed: no client build. The `pixelfed_demo` source reuses Pixelfed's shapes (`pixelfed://` URIs,
+`SCHEMA_VERSION` changed: no client build. The `pixelfed_sample_no_login` source reuses Pixelfed's shapes (`pixelfed://` URIs,
 `timeline:home`), so it declares no entity scheme or query key of its own, and it is marked `dev`: custom apps may use
 it only where dev apps are shown.
 

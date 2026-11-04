@@ -3,7 +3,7 @@
 target
 **/target
 .git
-kmp-app
+app
 dev
 docs
 **/*.swp

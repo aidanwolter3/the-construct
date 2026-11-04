@@ -1,0 +1,23 @@
+[package]
+name = "app-events"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The Events app (decision `collection-fillers`): the system collection
+# `events`, filled by one fetch filler per website and watched by alerts.
+
+[dependencies]
+pod-core = { path = "../pod-core" }
+app-collections = { path = "../app-collections" }
+protocol = { workspace = true }
+serde_json.workspace = true
+rusqlite.workspace = true
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+axum = { version = "0.8", features = ["http2"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }

@@ -9,7 +9,7 @@ to the wrong status. The comments screen also never showed the post being discus
 Decision:
 
 - **Links:** a comment or mention that is a reply links to `pixelfed://posts/<post>/comments/<comment>` (the new
-  `comment_thread` screen of `layouts/pixelfed_home/0007.json`: the same screen plus a List `focus` on the comment).
+  `comment_thread` screen of `layouts/pixelfed/0007.json`: the same screen plus a List `focus` on the comment).
   `<post>` is the top of the thread: the poll walks up `in_reply_to_id` with `GET /api/v1/statuses/{id}` (at most
   10 hops per reply, 40 lookups per poll, shared per parent). If the walk fails, the link uses the parent and the
   screen walks up instead. A reply whose parent is not the post is titled "replied to your comment".

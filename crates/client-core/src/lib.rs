@@ -332,7 +332,7 @@ enum FetchOutcome {
 /// - `layout_json`: the layout on display, `{"app_id": <workspace id>,
 ///   "version": n}` (the app version from `X-Construct-Layout-Version` of the
 ///   applied fetch); `"{}"` while unknown or when the screen is not versioned
-///   (e.g. the signed-out `pixelfed_home` screen); `{"app_id", "gone": true}`
+///   (e.g. the signed-out `pixelfed` screen); `{"app_id", "gone": true}`
 ///   when the app no longer exists on the pod (a deleted custom app: SSE
 ///   `deleted`, or a 404): the UI leaves it.
 /// - `loads_json`: data path loads (`action.data.load`, docs/DECISIONS.md
@@ -3443,7 +3443,7 @@ enum FetchError {
 
 /// `GET url`, with `Authorization: Bearer <token>` when signed in. Returns
 /// the bundle and its [`LAYOUT_VERSION_HEADER`] (`None` when absent, e.g.
-/// the unversioned signed-out `pixelfed_home` screen).
+/// the unversioned signed-out `pixelfed` screen).
 fn fetch(
     url: &str,
     token: Option<&str>,

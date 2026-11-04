@@ -8,7 +8,7 @@ deployment. The HTTP API is in [api.md](api.md).
 ```bash
 cargo run -p server                       # http://127.0.0.1:8080
 cargo run -p fake-pixelfed                # optional: a fake Pixelfed upstream on 127.0.0.1:8081
-curl -s http://127.0.0.1:8080/v1/workspaces/pixelfed_demo | jq .
+curl -s http://127.0.0.1:8080/v1/workspaces/pixelfed_sample_no_login | jq .
 ```
 
 On a loopback address, callers without a pod token use a pod named `dev` (created if missing), so `curl` and a
@@ -89,7 +89,7 @@ settings are logged at startup.
 | `CONSTRUCT_METRICS_ADDR` | unset | Serve Prometheus `GET /metrics` on this separate address. |
 | `CONSTRUCT_MONITOR_AUTH_FAILURES_PER_HOUR` | `20` | The monitoring source warns above this many wrong pod codes and unknown tokens an hour. |
 | `CONSTRUCT_MONITOR_LLM_TOKENS_PER_DAY` | `1000000` | It warns above this many model tokens a day. |
-| `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: `GET /v1/apps` also lists `pixelfed_demo` (it works either way). |
+| `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: `GET /v1/apps` also lists `pixelfed_sample_no_login` (it works either way). |
 | `CONSTRUCT_TEST_HOOKS` | unset | `1` enables `POST /v1/test/fault` and local Web Push receivers. Tests only. |
 
 The fake Pixelfed's own variables are in [testing.md](testing.md#fake-pixelfed).
