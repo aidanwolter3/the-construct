@@ -20,7 +20,7 @@ use crate::layouts::LayoutSource;
 use crate::notify::{PollCtx, PollOutcome};
 use crate::session::Session;
 use crate::source::{self, SourceManifest};
-use crate::store::Migration;
+use crate::store::{Migration, Store};
 
 /// The handle adapters get: the shared pod state. It is also the axum state
 /// of every route, the adapter's included.
@@ -185,6 +185,26 @@ pub trait AppAdapter: Any + Send + Sync {
     /// unique per app, and never change once shipped (devices store their
     /// choices by id). Write titles and descriptions for people.
     fn notification_channels(&self) -> Vec<NotificationChannel> {
+        Vec::new()
+    }
+
+    /// Whether this adapter sends notifications for the pod's custom apps,
+    /// whose channels it declares at run time
+    /// ([`Self::custom_notification_channels`]; decision
+    /// `collection-reminders`). Such an adapter may poll without declaring
+    /// a channel at startup.
+    fn notifies_custom_apps(&self) -> bool {
+        false
+    }
+
+    /// The channels this adapter declares now for the pod's custom apps
+    /// (only when [`Self::notifies_custom_apps`]): each `app_id` a live
+    /// custom app, ids `[a-z0-9_]{1,32}` that stay the same while the
+    /// thing they stand for exists. The core drops any other. Called often
+    /// (every notification, every channel list): keep it to a quick read of
+    /// the store (blocking is fine).
+    fn custom_notification_channels(&self, store: &Store) -> Vec<NotificationChannel> {
+        let _ = store;
         Vec::new()
     }
 
@@ -512,7 +532,7 @@ impl Catalog {
                     ));
                 }
             }
-            if a.poll_interval().is_some() && channels.is_empty() {
+            if a.poll_interval().is_some() && channels.is_empty() && !a.notifies_custom_apps() {
                 return Err(format!(
                     "adapter '{}' polls for notifications but declares no channel",
                     a.name()

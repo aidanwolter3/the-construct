@@ -307,6 +307,10 @@ pub struct Definition {
     pub descending: bool,
     /// The next field id's number.
     pub next_field: u32,
+    /// Notifications when a row's date is reached (decision
+    /// `collection-reminders`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reminders: Vec<crate::remind::Reminder>,
 }
 
 impl Definition {
@@ -433,6 +437,7 @@ impl Definition {
             "removed_fields": removed,
             "order_by": order_json(self.order_fields().map(|f| f.name.clone()).collect()),
             "descending": self.descending,
+            "reminders": self.reminders.iter().map(|r| r.describe(self)).collect::<Vec<_>>(),
         })
     }
 }
@@ -1050,6 +1055,7 @@ pub fn check_definition(def: &Definition, max_fields: usize) -> Result<(), Strin
             return Err("a field is listed twice in the order".into());
         }
     }
+    crate::remind::check(def)?;
     if def.order_by.len() > MAX_ORDER_KEYS {
         return Err(format!(
             "rows are ordered by at most {MAX_ORDER_KEYS} fields"
@@ -1262,6 +1268,7 @@ mod tests {
             order_by: Vec::new(),
             descending: false,
             next_field: 4,
+            reminders: Vec::new(),
         }
     }
 

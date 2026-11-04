@@ -34,6 +34,9 @@ zstd = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # Web Push (RFC 8291 encryption, RFC 8292 VAPID), no HTTP stack of its own.
 web-push-native = "0.5"
+# The pod owner's IANA time zone (`tz`), with the zone database built in
+# (servers may have none); adapters use it through `pod_core::tz`.
+jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
 
 [target.'cfg(unix)'.dependencies]
 # Free disk space (`statvfs`) for the low-disk guard on uploads.
