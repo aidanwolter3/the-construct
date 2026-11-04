@@ -616,7 +616,9 @@ mod tests {
             descending: false,
             next_field: 4,
             reminders: Vec::new(),
-            filler: None,
+            fillers: Vec::new(),
+            alerts: Vec::new(),
+            system: None,
         }
     }
 
@@ -628,6 +630,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             deleted_at: None,
+            filler: None,
         }
     }
 

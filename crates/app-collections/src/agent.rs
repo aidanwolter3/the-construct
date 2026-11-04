@@ -52,9 +52,95 @@ pub struct AgentAnswer {
     pub fetches: u32,
 }
 
-/// Answers an [`AgentRequest`].
+/// What an `llm` fetch filler asks about one page.
+#[derive(Debug, Clone)]
+pub struct PageRequest<'a> {
+    pub title: &'a str,
+    pub fields: &'a [AgentField],
+    /// The page's readable text.
+    pub page_text: &'a str,
+    pub url: &'a str,
+    /// The filler's notes about the page.
+    pub hint: &'a str,
+    pub today: &'a str,
+}
+
+/// Answers an [`AgentRequest`] (an `agent` filler) and a [`PageRequest`]
+/// (an `llm` fetch filler).
 pub trait FillAgent: Send + Sync + std::fmt::Debug {
     fn fill<'a>(&'a self, req: AgentRequest<'a>) -> BoxFuture<'a, Result<AgentAnswer, String>>;
+
+    /// The rows one page holds, by field name.
+    fn read_page<'a>(
+        &'a self,
+        req: PageRequest<'a>,
+    ) -> BoxFuture<'a, Result<Vec<Map<String, Value>>, String>> {
+        let _ = req;
+        Box::pin(async { Err("this model can't read pages".to_owned()) })
+    }
+}
+
+/// Most page text sent to the model.
+pub const MAX_PAGE_CHARS: usize = 60_000;
+
+const PAGE_SYSTEM: &str = "You read the text of a web page and list the items it holds as rows of \
+a table in a personal app. Give every field of each row: the page's own words for text; null for \
+anything the page doesn't say; never guess a number, a price or a date. Dates are YYYY-MM-DD; a date \
+and time is YYYY-MM-DDTHH:MM, with the UTC offset only when the page states one. Skip navigation, ads \
+and anything the notes exclude. Answer {\"rows\": []} when there are none.";
+
+/// The request body of a [`PageRequest`].
+pub fn page_request_body(model: &str, req: &PageRequest<'_>) -> Value {
+    let schema = save_rows_tool(req.fields)["input_schema"].clone();
+    let fields: Vec<String> = req
+        .fields
+        .iter()
+        .map(|f| format!("- {} ({})", f.name, f.kind.as_str()))
+        .collect();
+    let mut prompt = format!(
+        "Today is {}. The table is \"{}\", with columns:\n{}\n\nThe page is {}.\n\n<page>\n{}\n</page>",
+        req.today,
+        req.title,
+        fields.join("\n"),
+        req.url,
+        web_extract::html::truncate(req.page_text, MAX_PAGE_CHARS)
+    );
+    if !req.hint.trim().is_empty() {
+        prompt.push_str(&format!("\n\nNotes about this page: {}", req.hint.trim()));
+    }
+    json!({
+        "model": model,
+        "max_tokens": 16000,
+        "system": PAGE_SYSTEM,
+        "output_config": { "effort": "low", "format": { "type": "json_schema", "schema": schema } },
+        "fallbacks": "default",
+        "messages": [{ "role": "user", "content": prompt }],
+    })
+}
+
+/// The rows of a [`PageRequest`]'s answer.
+pub fn page_rows(answer: &Value) -> Result<Vec<Map<String, Value>>, String> {
+    match answer["stop_reason"].as_str() {
+        Some("refusal") => return Err("the model declined to read this page".into()),
+        Some("max_tokens") => return Err("the model's answer was cut off (too many rows)".into()),
+        _ => {}
+    }
+    let text: String = answer["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|b| b["type"] == "text")
+        .filter_map(|b| b["text"].as_str())
+        .collect();
+    let parsed: Value = serde_json::from_str(text.trim())
+        .map_err(|e| format!("the model's answer is not JSON: {e}"))?;
+    Ok(parsed["rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r.as_object().cloned())
+        .take(MAX_ROWS * 2)
+        .collect())
 }
 
 /// The env var naming the model agent fillers use; unset:
@@ -130,6 +216,9 @@ fn field_schema(f: &AgentField) -> Value {
         Kind::Number => json!({ "type": "number" }),
         Kind::Bool => json!({ "type": "boolean" }),
         Kind::Date => json!({ "type": "string", "format": "date" }),
+        Kind::Datetime => {
+            json!({ "type": "string", "description": "YYYY-MM-DDTHH:MM with the UTC offset when the source gives one (e.g. 2026-11-06T19:30-07:00), or YYYY-MM-DD" })
+        }
         Kind::Choice => json!({ "type": "string", "enum": f.options }),
     };
     json!({ "anyOf": [one, { "type": "null" }] })
@@ -274,35 +363,52 @@ pub fn read_turn(answer: &Value) -> Turn {
     }
 }
 
+impl MessagesAgent {
+    async fn post(&self, body: &Value) -> Result<Value, String> {
+        let resp = self
+            .client
+            .post(&self.url)
+            .header("x-api-key", &self.key)
+            .header("anthropic-version", "2026-10-21")
+            .header("anthropic-beta", "server-side-fallback-2026-07-01")
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| format!("the model could not be reached: {e}"))?;
+        let status = resp.status();
+        let answer: Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("the model's answer could not be read: {e}"))?;
+        if !status.is_success() {
+            let msg = answer["error"]["message"].as_str().unwrap_or("");
+            return Err(format!(
+                "the model answered {status}: {}",
+                web_extract::html::truncate(msg, 200)
+            ));
+        }
+        Ok(answer)
+    }
+}
+
 impl FillAgent for MessagesAgent {
+    fn read_page<'a>(
+        &'a self,
+        req: PageRequest<'a>,
+    ) -> BoxFuture<'a, Result<Vec<Map<String, Value>>, String>> {
+        Box::pin(async move {
+            let answer = self.post(&page_request_body(&self.model, &req)).await?;
+            page_rows(&answer)
+        })
+    }
+
     fn fill<'a>(&'a self, req: AgentRequest<'a>) -> BoxFuture<'a, Result<AgentAnswer, String>> {
         Box::pin(async move {
             let mut messages = vec![json!({ "role": "user", "content": user_prompt(&req) })];
             let mut used = (0, 0);
             for _ in 0..MAX_TURNS {
                 let body = request_body(&self.model, &req, &messages);
-                let resp = self
-                    .client
-                    .post(&self.url)
-                    .header("x-api-key", &self.key)
-                    .header("anthropic-version", "2026-10-21")
-                    .header("anthropic-beta", "server-side-fallback-2026-07-01")
-                    .json(&body)
-                    .send()
-                    .await
-                    .map_err(|e| format!("the model could not be reached: {e}"))?;
-                let status = resp.status();
-                let answer: Value = resp
-                    .json()
-                    .await
-                    .map_err(|e| format!("the model's answer could not be read: {e}"))?;
-                if !status.is_success() {
-                    let msg = answer["error"]["message"].as_str().unwrap_or("");
-                    return Err(format!(
-                        "the model answered {status}: {}",
-                        web_extract::html::truncate(msg, 200)
-                    ));
-                }
+                let answer = self.post(&body).await?;
                 count_tools(&answer, &mut used);
                 match read_turn(&answer) {
                     Turn::Rows(rows) => {

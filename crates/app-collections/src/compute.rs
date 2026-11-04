@@ -127,6 +127,7 @@ pub fn prompt_text(q: &Question<'_>) -> String {
         Kind::Number => "a number and nothing else".into(),
         Kind::Bool => "true or false and nothing else".into(),
         Kind::Date => "a date as YYYY-MM-DD and nothing else".into(),
+        Kind::Datetime => "a date and time as YYYY-MM-DDTHH:MM and nothing else".into(),
         Kind::Text => "the text only, with no preamble".into(),
     };
     format!(

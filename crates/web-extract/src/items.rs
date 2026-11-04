@@ -8,7 +8,8 @@
 //! | `embedded-json` | the JSON in a page's `<script id="…">` (`script`, default `__NEXT_DATA__`), then `items` | a path |
 //! | `jsonld` | the schema.org objects of the page's JSON-LD whose `@type` is one of `types` (`Product`, `Event`, …), nested ones included | a path (`offers.price`) |
 //! | `rss` | RSS `<item>`s and Atom `<entry>`s as `{title, link, description, published, updated, id, author, category}` | a path |
-//! | `ics` | iCalendar `VEVENT`s as their lowercase property names (`summary`, `dtstart`, `location`, …), cancelled ones skipped | a path |
+//! | `ics` | iCalendar `VEVENT`s as their lowercase property names (`summary`, `dtstart`, `location`, …; dates as `2026-11-06T19:30-07:00`, a `TZID` resolved), cancelled ones skipped | a path |
+//! | `events` | events of an iCalendar feed or a page's schema.org `Event`s, normalized ([`crate::events::items`]: `id`, `title`, `start`, `end`, `venue`, `description`, `url`, `tickets_url`) | a path |
 //! | `selectors` | the elements matching the CSS selector `items` | a CSS selector inside the item: its text; `sel@attr`: an attribute; `@attr`: the item's own; `""`: the item's text |
 //!
 //! Links (`href`, `src`, and `url`/`link` values) are made absolute against
@@ -30,6 +31,7 @@ pub const DEFAULT_SCRIPT: &str = "__NEXT_DATA__";
 /// The extractor kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
+    Events,
     Json,
     EmbeddedJson,
     Jsonld,
@@ -39,10 +41,19 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: &[&str] = &["json", "embedded-json", "jsonld", "rss", "ics", "selectors"];
+    pub const ALL: &[&str] = &[
+        "events",
+        "json",
+        "embedded-json",
+        "jsonld",
+        "rss",
+        "ics",
+        "selectors",
+    ];
 
     pub fn parse(s: &str) -> Option<Kind> {
         Some(match s.trim() {
+            "events" => Kind::Events,
             "json" => Kind::Json,
             "embedded-json" => Kind::EmbeddedJson,
             "jsonld" => Kind::Jsonld,
@@ -55,6 +66,7 @@ impl Kind {
 
     pub fn name(self) -> &'static str {
         match self {
+            Kind::Events => "events",
             Kind::Json => "json",
             Kind::EmbeddedJson => "embedded-json",
             Kind::Jsonld => "jsonld",
@@ -76,6 +88,26 @@ pub struct Spec {
     pub types: Vec<String>,
     /// `embedded-json`: the script's `id`.
     pub script: String,
+    /// `events`, `ics`: the zone (IANA name or `±HH:MM`) a time without an
+    /// offset is in. Empty: left without one.
+    pub zone: String,
+}
+
+impl Spec {
+    /// The zone [`Self::zone`] names.
+    pub fn zone(&self) -> Option<crate::when::Zone> {
+        let z = self.zone.trim();
+        if z.is_empty() {
+            return None;
+        }
+        if let Ok(Some(tz)) = crate::when::parse_time_zone(z) {
+            return Some(crate::when::Zone::Named(tz));
+        }
+        crate::when::parse_utc_offset(z)
+            .ok()
+            .flatten()
+            .map(crate::when::Zone::Fixed)
+    }
 }
 
 /// Check `spec` and the map values `map` (`(key, path or selector)`).
@@ -101,6 +133,12 @@ pub fn check(spec: &Spec, map: &[(String, String)]) -> Result<(), String> {
                 path::parse(v).map_err(|e| format!("map.{k}: {e}"))?;
             }
         }
+    }
+    if !spec.zone.trim().is_empty() && spec.zone().is_none() {
+        return Err(format!(
+            "zone '{}' is not a time zone (an IANA name such as America/Denver, or ±HH:MM)",
+            spec.zone
+        ));
     }
     if spec.kind == Kind::Jsonld && spec.types.is_empty() {
         return Err(
@@ -151,21 +189,40 @@ pub fn extract(
         }
         Kind::Jsonld => jsonld(body, &spec.types),
         Kind::Rss => rss(body),
-        Kind::Ics => ics(body),
+        Kind::Ics => ics_in(body, spec.zone().as_ref()),
+        Kind::Events => {
+            let found = crate::events::read(body, base);
+            pick(
+                &Value::Array(crate::events::items(found, spec.zone().as_ref(), base)),
+                &spec.items,
+            )?
+        }
         Kind::Selectors => unreachable!("handled above"),
     };
-    let paths: Vec<(String, Path)> = map
+    // (key, path, the path's last key: whether it names a link).
+    let paths: Vec<(String, Path, String)> = map
         .iter()
-        .map(|(k, v)| Ok((k.clone(), path::parse(v)?)))
+        .map(|(k, v)| {
+            let last = v
+                .rsplit('.')
+                .next()
+                .unwrap_or("")
+                .split('[')
+                .next()
+                .unwrap_or("")
+                .to_owned();
+            Ok((k.clone(), path::parse(v)?, last))
+        })
         .collect::<Result<_, String>>()?;
     Ok(items
         .iter()
         .take(MAX_ITEMS)
         .map(|item| {
             let mut row = Map::new();
-            for (k, p) in &paths {
+            for (k, p, last) in &paths {
                 if let Some(v) = p.value(item) {
-                    row.insert(k.clone(), tidy(k, v, base));
+                    let link = is_link_key(k) || is_link_key(last);
+                    row.insert(k.clone(), tidy(link, v, base));
                 }
             }
             row
@@ -179,11 +236,11 @@ fn pick(doc: &Value, items: &str) -> Result<Vec<Value>, String> {
 }
 
 /// A value as kept: text decoded and capped; links absolute.
-fn tidy(key: &str, v: Value, base: &str) -> Value {
+fn tidy(link: bool, v: Value, base: &str) -> Value {
     match v {
         Value::String(s) => {
             let s = html::decode_entities(s.trim());
-            let s = if is_link_key(key) && !s.contains(char::is_whitespace) {
+            let s = if link && !s.contains(char::is_whitespace) {
                 let a = absolute(base, &s);
                 if a.is_empty() { s } else { a }
             } else {
@@ -429,8 +486,14 @@ fn ics_unescape(s: &str) -> String {
 }
 
 /// The `VEVENT`s of an iCalendar body, each its properties by lowercase
-/// name (the first of each; parameters dropped), cancelled ones skipped.
+/// name (the first of each; parameters dropped, but a date's `TZID`
+/// resolves to its offset), cancelled ones skipped.
 pub fn ics(text: &str) -> Vec<Value> {
+    ics_in(text, None)
+}
+
+/// [`ics`], a time without an offset or zone placed in `zone`.
+pub fn ics_in(text: &str, zone: Option<&crate::when::Zone>) -> Vec<Value> {
     let mut lines: Vec<String> = Vec::new();
     for raw in text.split('\n') {
         let raw = raw.strip_suffix('\r').unwrap_or(raw);
@@ -462,10 +525,27 @@ pub fn ics(text: &str) -> Vec<Value> {
         } else if let Some(props) = cur.as_mut()
             && let Some((key, value)) = line.split_once(':')
         {
-            let name = key.split(';').next().unwrap_or("").to_ascii_lowercase();
-            if !name.is_empty() && !props.contains_key(&name) {
-                props.insert(name, json!(ics_unescape(value)));
+            let mut parts = key.split(';');
+            let name = parts.next().unwrap_or("").to_ascii_lowercase();
+            if name.is_empty() || props.contains_key(&name) {
+                continue;
             }
+            let tzid = parts
+                .filter_map(|p| p.split_once('='))
+                .find(|(k, _)| k.eq_ignore_ascii_case("TZID"))
+                .and_then(|(_, v)| crate::when::tzid_zone(v));
+            let v = match crate::when::When::parse(value) {
+                Some(w) if name.starts_with("dt") || name == "due" => {
+                    let w = match (&tzid, zone) {
+                        (Some(tz), _) => w.placed_in(&crate::when::Zone::Named(tz.clone())),
+                        (None, Some(z)) => w.placed_in(z),
+                        _ => w,
+                    };
+                    w.stored()
+                }
+                _ => ics_unescape(value),
+            };
+            props.insert(name, json!(v));
         }
     }
     out
@@ -571,6 +651,7 @@ mod tests {
             items: items.into(),
             types: Vec::new(),
             script: String::new(),
+            zone: String::new(),
         }
     }
 
@@ -671,7 +752,43 @@ BEGIN:VEVENT\r\nSUMMARY:Gone\r\nSTATUS:CANCELLED\r\nEND:VEVENT\r\nEND:VCALENDAR\
         .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["title"], json!("Show, late"));
-        assert_eq!(rows[0]["start"], json!("20261106T193000"));
+        assert_eq!(
+            rows[0]["start"],
+            json!("2026-11-06T19:30-07:00"),
+            "TZID resolved"
+        );
+    }
+
+    #[test]
+    fn events_from_calendars_and_pages() {
+        let cal = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:u1\r\nSUMMARY:Budget  Cuts\r\nDTSTART:20261106T193000\r\nLOCATION:The End\r\n\
+DESCRIPTION:[Get tickets](https://tix.example/1)\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        let mut s = spec(Kind::Events, "");
+        s.zone = "America/Denver".into();
+        check(&s, &[]).unwrap();
+        let m = map(&[
+            ("id", "id"),
+            ("title", "title"),
+            ("start", "start"),
+            ("tickets", "tickets_url"),
+        ]);
+        let rows = extract(&s, cal, "https://club.example/cal.ics", &m).unwrap();
+        assert_eq!(rows[0]["title"], json!("Budget Cuts"));
+        assert_eq!(
+            rows[0]["start"],
+            json!("2026-11-06T19:30-07:00"),
+            "placed in the zone"
+        );
+        assert_eq!(rows[0]["tickets"], json!("https://tix.example/1"));
+        let page = r#"<script type="application/ld+json">{"@type":"Event","name":"Show","startDate":"2026-11-07T20:00:00-07:00","location":{"name":"Hall"}}</script>"#;
+        let rows = extract(&spec(Kind::Events, ""), page, "https://club.example/", &m).unwrap();
+        assert!(
+            rows[0]["id"].as_str().unwrap().starts_with("event-"),
+            "{rows:?}"
+        );
+        let mut bad = spec(Kind::Events, "");
+        bad.zone = "Mars/Olympus".into();
+        assert!(check(&bad, &[]).is_err());
     }
 
     #[test]

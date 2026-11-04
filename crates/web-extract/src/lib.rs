@@ -10,7 +10,9 @@
 //! - [`path`]: the small path language that picks the items out of a
 //!   document and a value out of each item (`results[*].votes`).
 
+pub mod events;
 pub mod fetch;
 pub mod html;
 pub mod items;
 pub mod path;
+pub mod when;

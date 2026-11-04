@@ -39,18 +39,26 @@ A collection can remind the user: apply_change {op: add_reminder, field: <a date
 {title}\", unless: {field: \"done\", equals: true}, at?: \"09:00\"} sends a notification from the app showing \
 the collection once a row's date is reached (at that time of day in the user's time zone), unless the row \
 then matches unless. Set the zone first with set_time_zone (ask the user if you don't know it). \
-A collection can keep itself current from the web with a filler (define_collection filler, or apply_change \
-{op: set_filler}): {kind: \"fetch\", url, extract: json|embedded-json|jsonld|rss|ics|selectors, items?, \
-types?, map: {field: path}} is a recipe the pod runs on a schedule with no model call, so prefer it: try the \
-page with collections_preview first (without map it shows sample items to write paths from), pick the \
-cheapest extractor that gives the fields (an API's json, then jsonld, rss or ics, then embedded-json, then \
-CSS selectors), then save the filler. {kind: \"agent\", prompt} has a model with web search answer the rows \
-(each fill costs model calls; budgeted by fills_per_day): use it only when no page holds the data. Combine \
-them for shopping: an agent finds the items once, a fetch filler with url_field keeps each row's price \
-current. every_minutes schedules fills; on_open_minutes fills when the app opens and the data is older. \
-collections_status shows each filler's health: say so when one is failing or finds nothing. An API key goes \
-in with collections_set_secret and is sent as a header value \"{secret:<name>}\"; ask the user for it and \
-never repeat it.";
+A collection can keep itself current from the web with fillers (define_collection fillers, or apply_change \
+{op: set_filler}; several per collection, e.g. one per website, each writing only its own rows): {kind: \
+\"fetch\", url, extract: events|json|embedded-json|jsonld|rss|ics|selectors|llm, items?, types?, map: \
+{field: path}} is a recipe the pod runs on a schedule; prefer it: try the page with collections_preview \
+first (without map it shows sample items to write paths from) and pick the cheapest extractor that gives \
+the fields: events (an ics feed or a page's schema.org events, normalized), an API's json, jsonld, rss or \
+ics, embedded-json, CSS selectors, and only then llm (a model reads each changed page; fields and hint \
+instead of map). {kind: \"agent\", prompt} has a model with web search answer the rows (each fill costs \
+model calls; budgeted by fills_per_day): use it only when no page holds the data. Combine them for \
+shopping: an agent finds the items once, a fetch filler with url_field keeps each row's price current. \
+every_minutes schedules fills; on_open_minutes fills when the app opens and the data is older; upcoming \
+(a date field) drops past items; zone places times without an offset; details reads each new row's own \
+page. A datetime field (2026-11-06T19:30-07:00) is also served as <name>_date, <name>_time and \
+<name>_text. Alerts (apply_change {op: add_alert, any?, all?, none?, filler?, days?, within_days?}) notify \
+once when a row matches, e.g. a show listing a team. collections_status shows each filler's health: say so \
+when one is failing or finds nothing. An API key goes in with collections_set_secret and is sent as a \
+header value \"{secret:<name>}\"; ask the user for it and never repeat it. The Events app (app watcher) \
+shows the collection events: to watch a website for events, add a filler there (extract events, map \
+{source_id: id, title: title, start: start, end: end, venue: venue, url: url, tickets_url: tickets_url}, \
+key source_id, upcoming start, every_minutes 360) and alerts for what the user wants to hear about.";
 
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({
@@ -72,15 +80,17 @@ pub fn tools() -> Vec<Value> {
     let compute = json!({
         "description": "The pod computes the value from the row's other fields (not from other computed fields), again whenever they change; a value written by hand stays until they change. One kind, or a list of kinds tried in order (the first with an answer wins; a model is last). kind \"lookup\": {kind, from: field, collection, key, value, match?: exact (the default; ignores case and spacing) | contains (the key's whole words, ignoring case) | regex (case-insensitive, at most 200 characters; an invalid one is skipped and listed by describe_collection), learn?}: the value field of the row of another collection whose key (a text field) matches this row's from field, the longest matching key winning; evaluated in the write; not recomputed when the rules change (apply_change recompute_field does). learn: true adds a rule (key: the input, lowercase with spaces collapsed; for match regex, that text escaped and anchored) when a later kind (the model) answers, and a hand edit of the field adds or changes that rule. Example: [{kind: \"lookup\", from: \"name\", collection: \"section_rules\", key: \"pattern\", value: \"section\", match: \"contains\", learn: true}, {kind: \"model\", from: \"name\", prompt: \"...\"}]. kind \"expr\": {kind, expr}, e.g. \"entity.quantity ? entity.name + \\\" (\\\" + entity.quantity + \\\")\\\" : entity.name\" (entity.<field>, JSON literals, + joins text or adds numbers, -, !, c ? a : b, parentheses; an empty value is \"\" or 0 and false in a condition), evaluated in the write. kind \"model\": {kind, from: field or [fields], prompt}, e.g. {from: \"name\", prompt: \"Which grocery store section is this item in?\"}: a model answers in the background (a choice: one of its options; text: trimmed), each input once; a value set by hand is remembered as the answer for that input. Needs optional or a default (what the row reads until computed). null: stop computing.",
         "anyOf": [kind, { "type": "array", "items": kind }, { "type": "null" }] });
-    let field = json!({ "type": "object", "description": "{name, type: text|number|bool|date|choice, options? (choice), optional?, default?, compute?}",
+    let field = json!({ "type": "object", "description": "{name, type: text|number|bool|date|datetime|choice, options? (choice), optional?, default?, compute?}",
         "properties": { "name": { "type": "string" }, "type": { "type": "string", "enum": model::Kind::ALL },
             "options": { "type": "array", "items": { "type": "string" } }, "optional": { "type": "boolean" }, "default": {},
             "compute": compute },
         "required": ["name", "type"] });
     let order = json!({ "description": "A field, or a list of fields (first key first), rows are listed by (else oldest first). A choice sorts by the order of its options; empty values last.",
         "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] });
-    let filler = json!({ "type": ["object", "null"],
-        "description": "What keeps the rows current from the web (decision collection-fillers). kind \"fetch\" (a recipe, no model call per fill): {kind, url (one page) | url_field (a text field holding each row's own page; that row is filled from it), extract: json | embedded-json (a page's <script id=script, default __NEXT_DATA__>) | jsonld (schema.org objects of types, e.g. [\"Product\"]) | rss (items {title, link, description, published, updated, id, author, category}) | ics (VEVENT properties lowercase: summary, dtstart, location, ...) | selectors (CSS), items? (json/embedded-json: a path to the list; selectors: a CSS selector per item), types?, script?, map: {field: path} (paths: a.b, a[0], a[*]; a list key is looked into, so offers.price works; selectors: a CSS selector inside the item, sel@attr for an attribute, @attr for the item's own), headers? {name: value, value may be \"Bearer {secret:<name>}\"}}. kind \"agent\" (a model with web search and fetch answers the rows; costs model calls): {kind, prompt, fields? (default every field that isn't computed), max_searches? (default 5, at most 20), max_fetches? (default 10, at most 30), fills_per_day? (default 4)}. Both: mode? replace (default: the rows are the latest answer; rows it no longer lists are deleted; apps can't add or delete rows) | upsert (adds and updates rows by key, keeps others; people may add rows), key? (a filled field identifying a row; with replace, rows keep their ids and unfilled fields), every_minutes? (fetch: 15..10080; agent: 60..10080), on_open_minutes? (1..1440: fill when an app showing it opens and the last fill is older). Values are coerced to the fields' types (prices like \"$1,299\" and feed dates are read); a value that doesn't fit is skipped. Filled fields can't be set by hand. null: no filler." });
+    let filler = json!({ "type": "object",
+        "description": "A filler: what keeps rows current from the web (decision collection-fillers); each writes only its own rows. kind \"fetch\" (a recipe, no model call per fill): {kind, title?, url (one page) | url_field (a text field holding each row's own page; that row is filled from it), extract: events (an ics feed or a page's schema.org events: items {id, title, start, end, venue, description, url, tickets_url}) | json | embedded-json (a page's <script id=script, default __NEXT_DATA__>) | jsonld (schema.org objects of types, e.g. [\"Product\"]) | rss (items {title, link, description, published, updated, id, author, category}) | ics (VEVENT properties lowercase: summary, dtstart, location, ...) | selectors (CSS) | llm (a model reads each changed page's text: fields? [names] and hint? instead of map), items? (json/embedded-json: a path to the list; selectors: a CSS selector per item), types?, script?, zone? (IANA, for times without an offset), map: {field: path} (paths: a.b, a[0], a[*]; a list key is looked into, so offers.price works; selectors: a CSS selector inside the item, sel@attr for an attribute, @attr for the item's own), headers? {name: value, value may be \"Bearer {secret:<name>}\"}, details? {link: a mapped field with the row's page, extract, types?, map: {field: path} (fields not in map), text?: a field for the page's text when nothing is found}: read each new row's own page}. kind \"agent\" (a model with web search and fetch answers the rows; costs model calls): {kind, title?, prompt, fields? (default every field that isn't computed), max_searches? (default 5, at most 20), max_fetches? (default 10, at most 30), fills_per_day? (default 4)}. Both: mode? replace (default: its rows are the latest answer; rows it no longer lists are deleted; they can't be added or deleted by hand) | upsert (adds and updates rows by key, keeps others; people may add rows), key? (a mapped field identifying a row; with replace, rows keep their ids and unfilled fields), upcoming? (a mapped date or datetime field: past items are left out), every_minutes? (fetch: 15..10080; agent: 60..10080), on_open_minutes? (1..1440: fill when an app showing it opens and the last fill is older). Values are coerced to the fields' types (prices like \"$1,299\" and feed dates are read); a value that doesn't fit is skipped. Filled fields can't be set by hand." });
+    let alert = json!({ "type": "object",
+        "description": "An alert: notify once when a row matches. {name?, any?: [phrases] (one must appear), all?: [phrases], none?: [phrases], fields?: [text fields searched; default all text fields], filler?: a filler id (only its rows), days?: [mon..sun], within_days?, date_field? (default the first date or datetime field; past rows stop matching), title?, body? (templates: {field}, {start_text}, {alert}, {filler}), label?, app?}" });
     let apps = json!({ "type": "array", "description": "Custom app layouts that change with it: [{app, layout | json_patch, base_version?, note?}]",
         "items": { "type": "object", "properties": { "app": { "type": "string" }, "layout": { "type": "object" },
             "json_patch": { "type": "array", "items": { "type": "object" } }, "base_version": { "type": "integer" }, "note": { "type": "string" } },
@@ -98,7 +108,10 @@ pub fn tools() -> Vec<Value> {
             json!({ "name": collection, "title": { "type": "string" },
                     "fields": { "type": "array", "items": field },
                     "order_by": order,
-                    "descending": { "type": "boolean" }, "filler": filler.clone(), "note": note }),
+                    "descending": { "type": "boolean" },
+                    "fillers": { "type": "array", "items": filler.clone() },
+                    "alerts": { "type": "array", "items": alert },
+                    "note": note }),
             &["name", "fields"],
         ),
         tool(
@@ -109,7 +122,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "apply_change",
-            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, optional?, default?, compute?} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title} | {op: add_reminder, field, title, body?, at?, unless?, label?, app?} | {op: update_reminder, reminder: id, ...} | {op: remove_reminder, reminder: id} | {op: set_filler, filler} | {op: remove_filler}]. set_filler sets what keeps the rows current (as define_collection's filler) and starts a fill; remove_filler stops filling and keeps the rows. A reminder notifies the user once per row when its date field is reached: on that date at at (HH:MM, default 09:00) in the pod's time zone (set_time_zone), unless the row then has unless {field, equals} (e.g. {field: \"done\", equals: true}); dates before the day it was added never notify, and a reminder more than 7 days late is dropped. title and body are the notification's text with {field} replaced by the row's value; label names it in the user's notification settings (default \"<Title>: <field>\"); app (a custom app id) is the app it comes from and opens, default the oldest custom app with the collection as a feed (with none, nothing is sent). describe_collection lists reminders with their ids. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. A lookup is not recomputed when its rules change: after editing them, recompute_field computes the field again for every row (a row only the model could answer keeps its value). Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
+            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, optional?, default?, compute?} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title} | {op: add_reminder, field, title, body?, at?, unless?, label?, app?} | {op: update_reminder, reminder: id, ...} | {op: remove_reminder, reminder: id} | {op: set_filler, filler} | {op: remove_filler, filler: id} | {op: add_alert, ...} | {op: update_alert, alert: id, ...} | {op: remove_alert, alert: id}]. set_filler adds a filler (as define_collection's fillers), or changes the one filler.id names, and starts its fill; remove_filler stops one (its rows stay, no longer locked; its alerts go). add_alert notifies once per row when a row matches (as define_collection's alerts). describe_collection lists fillers and alerts with their ids. A reminder notifies the user once per row when its date field is reached: on that date at at (HH:MM, default 09:00) in the pod's time zone (set_time_zone), unless the row then has unless {field, equals} (e.g. {field: \"done\", equals: true}); dates before the day it was added never notify, and a reminder more than 7 days late is dropped. title and body are the notification's text with {field} replaced by the row's value; label names it in the user's notification settings (default \"<Title>: <field>\"); app (a custom app id) is the app it comes from and opens, default the oldest custom app with the collection as a feed (with none, nothing is sent). describe_collection lists reminders with their ids. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. A lookup is not recomputed when its rules change: after editing them, recompute_field computes the field again for every row (a row only the model could answer keeps its value). Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
             json!({ "collection": collection, "base_version": { "type": "integer", "description": "The definition version you read" },
                     "changes": { "type": "array", "items": { "type": "object" } }, "apps": apps, "note": note }),
             &["collection", "changes"],
@@ -141,8 +154,9 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "collections_preview",
-            "Try a fetch recipe now and store nothing: fetch the page, extract and map, and answer the rows (or, without map, sample items to write the paths from). Pass the recipe's {url, extract, items?, types?, script?, map?, headers?}, or collection to try that collection's filler (a url_field filler tries its first row's page). Use it before set_filler, and when collections_status says a filler finds nothing.",
-            json!({ "collection": collection, "url": { "type": "string" }, "extract": { "type": "string", "enum": web_extract::items::Kind::ALL },
+            "Try a fetch recipe now and store nothing: fetch the page, extract and map, and answer the rows (or, without map, sample items to write the paths from). Pass the recipe's {url, extract, items?, types?, script?, zone?, map?, headers?}, or collection (and filler, an id; default its first) to try that filler (a url_field filler tries its first row's page). Use it before set_filler, and when collections_status says a filler finds nothing.",
+            json!({ "collection": collection, "filler": { "type": "string" }, "url": { "type": "string" },
+                    "extract": { "type": "string", "enum": web_extract::items::Kind::ALL }, "zone": { "type": "string" },
                     "items": { "type": "string" }, "types": { "type": "array", "items": { "type": "string" } },
                     "script": { "type": "string" }, "map": { "type": "object", "description": "{name: path}" },
                     "headers": { "type": "object" } }),
@@ -150,14 +164,14 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "collections_status",
-            "Each filled collection's filler health: state (pending, ok, failing, empty, off, unavailable), detail, last and next fill, items found, agent fills today. Say so when one is failing or finds no items.",
+            "Each filler's health (of one collection, or all): state (pending, ok, failing, empty, off, unavailable), detail, last and next fill, items found, model fills today, and its alerts. Say so when one is failing or finds no items.",
             json!({ "collection": collection }),
             &[],
         ),
         tool(
             "collections_refresh",
-            "Fill a collection from its filler now (refetching even an unchanged page) and answer what changed. An agent filler counts toward its fills_per_day and runs in the background.",
-            json!({ "collection": collection }),
+            "Fill a collection's fillers now (or one: filler, an id), refetching even an unchanged page, and answer what changed. A model filler (agent or llm) runs in the background and counts toward its budget.",
+            json!({ "collection": collection, "filler": { "type": "string" } }),
             &["collection"],
         ),
         tool(
@@ -303,7 +317,9 @@ async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result
         next_field: fields.len() as u32 + 1,
         fields,
         reminders: Vec::new(),
-        filler: None,
+        fillers: Vec::new(),
+        alerts: Vec::new(),
+        system: None,
         order_by: Vec::new(),
         descending: args["descending"].as_bool().unwrap_or(false),
     };
@@ -323,16 +339,34 @@ async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result
     }
     let order = model::order_names(args.get("order_by")).map_err(bad)?;
     def.order_by = model::resolve_order(&def, &order).map_err(bad)?;
-    if let Some(spec) = args.get("filler") {
-        def.filler = crate::filler::parse(&def, spec, adapter.allow_private_hosts()).map_err(
-            |e| json!({ "error": "invalid_filler", "at": "/filler", "detail": e, "status": 400 }),
+    // One filler (`filler`) or several (`fillers`); alerts after them.
+    let specs: Vec<(String, Value)> = match (args.get("fillers"), args.get("filler")) {
+        (Some(Value::Array(a)), _) => a
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (format!("/fillers/{i}"), v.clone()))
+            .collect(),
+        (_, Some(v)) if v.is_object() => vec![("/filler".to_owned(), v.clone())],
+        _ => Vec::new(),
+    };
+    for (at, spec) in specs {
+        let f = crate::filler::parse(&def, &spec, db::new_id("s"), adapter.allow_private_hosts())
+            .map_err(
+            |e| json!({ "error": "invalid_filler", "at": at, "detail": e, "status": 400 }),
         )?;
+        def.fillers.push(f);
+    }
+    if let Some(Value::Array(a)) = args.get("alerts") {
+        for (i, spec) in a.iter().enumerate() {
+            crate::alerts::add(&mut def, spec, pod_core::util::now_secs()).map_err(
+                |e| json!({ "error": "invalid_alert", "at": format!("/alerts/{i}"), "detail": e, "status": 400 }),
+            )?;
+        }
     }
     model::check_definition(&def, caps.fields)
         .map_err(|e| json!({ "error": "invalid_definition", "detail": e, "status": 400 }))?;
-    crate::filler::check(&def, caps.agent_fills_per_day).map_err(
-        |e| json!({ "error": "invalid_filler", "at": "/filler", "detail": e, "status": 400 }),
-    )?;
+    crate::filler::check(&def, caps.agent_fills_per_day)
+        .map_err(|e| json!({ "error": "invalid_filler", "detail": e, "status": 400 }))?;
     let mut with_new = others.clone();
     with_new.insert(def.name.clone(), def.clone());
     model::check_lookups(&def, &with_new)
@@ -367,8 +401,8 @@ async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result
         "definition": def.describe(pod_core::util::now_secs(), KEEP_SECS, &with_new),
         "next": format!("Make an app with create_app and feeds [[\"collections\", \"{name}\"]]; describe_collection has layout snippets."),
     });
-    if def.filler.is_some() {
-        crate::fill::spawn(pod, &name, true);
+    if !def.fillers.is_empty() {
+        crate::fill::spawn(pod, &name, None, true);
         out["filling"] = json!("a first fill started; collections_status shows how it went");
     }
     Ok(out)
@@ -486,7 +520,7 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
                     .collect();
                 let lookups = crate::lookup::report(c, &def)?;
                 let others = db::defs_by_name(c)?;
-                let fill_state = crate::fill::state(c, &lookup)?;
+                let fill_state = crate::fill::states(c, &def)?;
                 Ok(Some((
                     latest,
                     shown,
@@ -532,16 +566,29 @@ async fn describe(pod: &Pod, args: &Value) -> Result<Value, Value> {
     }))
 }
 
-/// `def`'s filler health ([`crate::fill::health`]).
-async fn fill_health(pod: &Pod, def: &Definition, st: &crate::fill::State) -> Value {
-    if def.filler.is_none() {
+/// Every filler's health of `def` ([`crate::fill::health`]).
+async fn fill_health(
+    pod: &Pod,
+    def: &Definition,
+    states: &HashMap<String, crate::fill::State>,
+) -> Value {
+    if def.fillers.is_empty() {
         return Value::Null;
     }
     let off = !crate::fill::allowed(pod).await;
     let agent = pod
         .adapter::<CollectionsAdapter>()
         .is_some_and(|a| a.agent().is_some());
-    crate::fill::health(def, st, pod_core::util::now_secs(), off, agent)
+    let now = pod_core::util::now_secs();
+    Value::Array(
+        def.fillers
+            .iter()
+            .map(|f| {
+                let st = states.get(&f.id).cloned().unwrap_or_default();
+                crate::fill::health(def, f, &st, now, off, agent)
+            })
+            .collect(),
+    )
 }
 
 async fn status(pod: &Pod, args: &Value) -> Result<Value, Value> {
@@ -551,8 +598,8 @@ async fn status(pod: &Pod, args: &Value) -> Result<Value, Value> {
             s.with_conn(|c| {
                 let mut out = Vec::new();
                 for (_, def) in db::all_defs(c)? {
-                    if def.filler.is_some() {
-                        let st = crate::fill::state(c, &def.name)?;
+                    if !def.fillers.is_empty() {
+                        let st = crate::fill::states(c, &def)?;
                         out.push((def, st));
                     }
                 }
@@ -567,7 +614,9 @@ async fn status(pod: &Pod, args: &Value) -> Result<Value, Value> {
         if only.as_ref().is_some_and(|o| *o != def.name) {
             continue;
         }
-        out.push(fill_health(pod, &def, &st).await);
+        if let Value::Array(h) = fill_health(pod, &def, &st).await {
+            out.extend(h);
+        }
     }
     if let Some(o) = &only
         && out.is_empty()
@@ -583,21 +632,34 @@ async fn status(pod: &Pod, args: &Value) -> Result<Value, Value> {
 async fn refresh(pod: &Pod, args: &Value) -> Result<Value, Value> {
     let name = str_arg(args, "collection")?.to_owned();
     let (_, def) = current(pod, &name).await?;
-    let Some(f) = &def.filler else {
+    if def.fillers.is_empty() {
         return Err(
             json!({ "error": "no_filler", "collection": name, "status": 409,
             "detail": "set one with apply_change {op: set_filler}" }),
         );
-    };
-    if f.is_agent() {
-        crate::fill::spawn(pod, &name, true);
-        return Ok(json!({ "ok": true, "started": true,
-            "detail": "the agent is filling in the background (it can take minutes); collections_status shows how it went" }));
     }
-    let out = crate::fill::fill(pod, &name, true).await;
-    let mut v = out.to_json();
-    v["collection"] = json!(name);
-    Ok(v)
+    let ids: Vec<String> = match args["filler"].as_str() {
+        Some(id) => match crate::filler::find(&def, id) {
+            Some(f) => vec![f.id.clone()],
+            None => return Err(bad(format!("no filler '{id}' in '{name}'"))),
+        },
+        None => def.fillers.iter().map(|f| f.id.clone()).collect(),
+    };
+    let mut out = Vec::new();
+    for id in ids {
+        let f = crate::filler::find(&def, &id).cloned();
+        if f.as_ref().is_some_and(crate::filler::Filler::uses_model) {
+            crate::fill::spawn(pod, &name, Some(&id), true);
+            out.push(json!({ "filler": id, "ok": true, "started": true,
+                "detail": "a model is filling it in the background (it can take minutes); collections_status shows how it went" }));
+            continue;
+        }
+        let mut v = crate::fill::fill(pod, &name, &id, true).await.to_json();
+        v["filler"] = json!(id);
+        v["title"] = json!(f.map(|f| f.title).unwrap_or_default());
+        out.push(v);
+    }
+    Ok(json!({ "collection": name, "fills": out }))
 }
 
 async fn set_secret(pod: &Pod, args: &Value) -> Result<Value, Value> {
@@ -643,11 +705,20 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
     // The recipe: a collection's filler, or the arguments.
     let (url, spec, map, headers, def) = if let Some(name) = args["collection"].as_str() {
         let (_, def) = current(pod, name).await?;
-        let Some(f) = def.filler.clone() else {
+        let f = match args["filler"].as_str() {
+            Some(id) => crate::filler::find(&def, id).cloned(),
+            None => def.fillers.first().cloned(),
+        };
+        let Some(f) = f else {
             return Err(bad(format!(
-                "'{name}' has no filler; pass a recipe instead"
+                "'{name}' has no such filler; pass filler (an id from describe_collection) or a recipe"
             )));
         };
+        if f.is_llm() {
+            return Err(bad(
+                "an llm filler can't be previewed (it asks a model; collections_refresh runs it)",
+            ));
+        }
         let crate::filler::Source::Fetch {
             url,
             url_field,
@@ -705,6 +776,7 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
             items: args["items"].as_str().unwrap_or("").to_owned(),
             types,
             script: args["script"].as_str().unwrap_or("").to_owned(),
+            zone: args["zone"].as_str().unwrap_or("").to_owned(),
         };
         let map: Vec<(String, String)> = args["map"]
             .as_object()
@@ -771,7 +843,8 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
                     .collect()
             })
             .collect();
-        let (vals, skipped) = crate::fill::coerce_preview(def, by_id, adapter.caps.text_chars);
+        let (vals, skipped) =
+            crate::fill::coerce_preview(def, by_id, adapter.caps.text_chars, spec.zone().as_ref());
         out["rows"] = json!(
             vals.iter()
                 .take(PREVIEW_ROWS)
@@ -1022,8 +1095,8 @@ async fn apply_change(
         .map_err(|(i, e)| json!({ "error": "invalid_change", "at": format!("/changes/{i}"), "detail": e, "status": 400 }))?;
     crate::filler::check(&planned.def, caps.agent_fills_per_day)
         .map_err(|e| json!({ "error": "invalid_change", "detail": e, "status": 400 }))?;
-    let filler_changed = planned.filler_changed(&def);
-    let filler_removed = def.filler.is_some() && planned.def.filler.is_none();
+    let changed_fillers = planned.fillers_changed(&def);
+    let keep: Vec<String> = planned.def.fillers.iter().map(|f| f.id.clone()).collect();
     for r in &planned.def.reminders {
         if let Some(app) = r.app.clone() {
             let exists = pod
@@ -1039,15 +1112,16 @@ async fn apply_change(
     }
     let note = note_arg(args, "Changed");
     let mut out = commit(pod, caps, &name, version, planned, args, note).await?;
-    if filler_removed {
-        let n = name.clone();
-        let _ = pod
-            .blocking(move |s| s.with_conn(|c| crate::fill::clear_state(c, &n)))
-            .await;
+    let n = name.clone();
+    let _ = pod
+        .blocking(move |s| s.transaction(|tx| crate::fill::forget_removed(tx, &n, &keep)))
+        .await;
+    for f in &changed_fillers {
+        crate::fill::spawn(pod, &name, Some(f), true);
     }
-    if filler_changed {
-        crate::fill::spawn(pod, &name, true);
-        out["filling"] = json!("a fill started; collections_status shows how it went");
+    if !changed_fillers.is_empty() {
+        out["filling"] = json!({ "fillers": changed_fillers,
+            "detail": "a fill started for each new or changed filler; collections_status shows how it went" });
     }
     Ok(out)
 }
@@ -1162,7 +1236,9 @@ async fn edit(
             let values = e["values"].as_object().cloned().unwrap_or_default();
             hasher.update(e.to_string());
             let invalid = |detail: String| Ok(Err(json!({ "error": "invalid_edit", "at": at, "detail": detail, "status": 422 })));
-            if let Err(d) = crate::filler::check_write(&def, &values, op) {
+            if op == "create"
+                && let Err(d) = crate::filler::check_write(&def, &values, op, None)
+            {
                 return invalid(d);
             }
             if op == "create" {
@@ -1173,6 +1249,7 @@ async fn edit(
                     created_at: now,
                     updated_at: now,
                     deleted_at: None,
+                    filler: None,
                 };
                 if let Err(d) = model::apply_write(&def, &mut row.values, &values, Write::Create, caps.text_chars) {
                     return invalid(d);
@@ -1185,6 +1262,9 @@ async fn edit(
             let Some(before) = db::row(tx, &name, id)? else {
                 return invalid(format!("no row '{id}'"));
             };
+            if let Err(d) = crate::filler::check_write(&def, &values, op, before.filler.as_deref()) {
+                return invalid(d);
+            }
             if planned.iter().any(|(_, r, _, _)| r == id) {
                 return invalid(format!("row '{id}' is edited twice"));
             }

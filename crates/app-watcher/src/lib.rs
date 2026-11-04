@@ -26,7 +26,7 @@ pub mod extract;
 pub use web_extract::html;
 mod mcp;
 pub mod rules;
-pub mod when;
+pub use web_extract::when;
 
 use std::time::Duration;
 

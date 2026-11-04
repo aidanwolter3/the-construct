@@ -1,26 +1,32 @@
 //! Running fillers (decision `collection-fillers`; the spec is
-//! [`crate::filler`]): fetch or ask, read the items, write the rows, record
-//! how it went.
+//! [`crate::filler`]): fetch or ask, read the items, write the filler's
+//! rows, record how it went, then send what alerts owe.
 //!
-//! A fill starts on its schedule (the adapter's poll, [`run_due`]), when an
-//! app showing the collection opens and the last fill is older than
-//! `on_open_minutes` (or a scheduled one is overdue: [`due_on_open`]), from
-//! a layout's refresh action, and from Claude (`collections_refresh`, and
-//! after a filler is set). One fill per collection runs at a time.
+//! A fill (of one filler) starts on its schedule (the adapter's poll,
+//! [`run_due`]), when an app showing the collection opens and the last fill
+//! is older than `on_open_minutes` or a scheduled one is overdue
+//! ([`due_on_open`]), from a layout's refresh action, and from Claude
+//! (`collections_refresh`, and after a filler is set). One fill per filler
+//! runs at a time.
 //!
 //! - **fetch**: the Watcher's fetch ([`web_extract::fetch`]): conditional
-//!   headers, size and time caps, public hosts only. A 304 or an unchanged
-//!   body ends the fill with no work (unless the recipe changed). The
-//!   extractor reads the items, the map picks each field's value, values
-//!   are coerced to the fields' types (one that doesn't fit is skipped and
-//!   counted). With `url_field`, each row's own page fills that row.
+//!   headers, size and time caps, public hosts only, a second between
+//!   requests to one host. A 304 or an unchanged body ends the fill with no
+//!   work (unless the recipe changed). The extractor reads the items (or,
+//!   for `llm`, a model reads the page's text), the map picks each field's
+//!   value, values are coerced to the fields' types (one that doesn't fit is
+//!   skipped and counted; a time without an offset is placed in the
+//!   filler's zone). `upcoming` drops past items. With `url_field`, each
+//!   row's own page fills that row. `details` then reads each new row's
+//!   own page (at most [`MAX_DETAILS`] a fill).
 //! - **agent**: [`crate::agent`], within the filler's daily budget and the
 //!   pod's.
 //!
-//! Rows are written in one transaction ([`store`]): `replace` makes the
-//! rows the answer (rows it no longer lists are deleted for good, not kept
-//! for 30 days: they were never anyone's), `upsert` adds and updates by key
-//! and leaves other rows alone. Computed fields compute as after any write.
+//! The filler's rows are written in one transaction ([`store`]): `replace`
+//! makes them the answer (rows it no longer lists are deleted for good, not
+//! kept for 30 days: they were never anyone's), `upsert` adds and updates
+//! by key and leaves other rows alone. Other fillers' rows and people's
+//! rows are never touched. Computed fields compute as after any write.
 //! Failures back off like the Watcher's (doubling from the interval, at
 //! most a day, at least `Retry-After`).
 
@@ -31,7 +37,7 @@ use pod_core::Pod;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Map, Value, json};
 
-use crate::agent::{AgentField, AgentRequest};
+use crate::agent::{AgentField, AgentRequest, PageRequest};
 use crate::db::{self, Row};
 use crate::filler::{Filler, Source};
 use crate::model::{self, Definition, Kind};
@@ -44,20 +50,24 @@ pub const FILL_SETTING: &str = "collections.fill";
 /// The error a fill records when fillers are off.
 pub const FILL_OFF: &str =
     "fillers are turned off on this pod (temporary pods can't fetch or ask a model)";
-/// The error of an agent fill without a model.
-pub const NO_AGENT: &str = "agent fillers need a model: set CONSTRUCT_INFER_API_KEY on the server";
+/// The error of a model fill without a model.
+pub const NO_AGENT: &str = "this filler needs a model: set CONSTRUCT_INFER_API_KEY on the server";
 /// The least time between two requests to one host from a pod.
 pub const HOST_SPACING: Duration = Duration::from_secs(1);
 /// A whole fetch fill's time limit.
 pub const FETCH_FILL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-/// A whole agent fill's time limit.
+/// A whole model fill's time limit.
 pub const AGENT_FILL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// Empty fills in a row before a filler reads "empty".
 pub const EMPTY_AFTER: i64 = 3;
+/// New rows' own pages read per fill (`details`).
+pub const MAX_DETAILS: usize = 10;
+/// A dated item this long past is left out (`upcoming`).
+pub const PAST_SLACK_SECS: i64 = 3 * 3600;
 
 // ---------- state ----------
 
-/// A filled collection's fill state (`collections_fills`).
+/// One filler's fill state (`collections_fills`).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct State {
     pub fingerprint: String,
@@ -74,16 +84,20 @@ pub struct State {
     pub last_skipped: Option<i64>,
     pub day: Option<String>,
     pub day_fills: i64,
+    /// The next fill records alert matches without notifying (rows a
+    /// migration brings in were announced before).
+    pub quiet_next: bool,
 }
 
-/// The fill state of `collection` (default: never filled).
-pub fn state(conn: &Connection, collection: &str) -> rusqlite::Result<State> {
+/// The fill state of `filler` of `collection` (default: never filled).
+pub fn state(conn: &Connection, collection: &str, filler: &str) -> rusqlite::Result<State> {
     Ok(conn
         .query_row(
             "SELECT fingerprint, next_at, etag, last_modified, content_hash, last_fill_at, last_ok_at,
-                    last_error, failures, empty_runs, last_rows, last_skipped, day, day_fills
-             FROM collections_fills WHERE collection = ?1",
-            [collection],
+                    last_error, failures, empty_runs, last_rows, last_skipped, day, day_fills,
+                    quiet_next
+             FROM collections_fills WHERE collection = ?1 AND filler = ?2",
+            params![collection, filler],
             |r| {
                 Ok(State {
                     fingerprint: r.get(0)?,
@@ -100,6 +114,7 @@ pub fn state(conn: &Connection, collection: &str) -> rusqlite::Result<State> {
                     last_skipped: r.get(11)?,
                     day: r.get(12)?,
                     day_fills: r.get(13)?,
+                    quiet_next: r.get(14)?,
                 })
             },
         )
@@ -107,21 +122,36 @@ pub fn state(conn: &Connection, collection: &str) -> rusqlite::Result<State> {
         .unwrap_or_default())
 }
 
-fn save_state(conn: &Connection, collection: &str, s: &State) -> rusqlite::Result<()> {
+/// Every filler's state of `def`, by filler id.
+pub fn states(conn: &Connection, def: &Definition) -> rusqlite::Result<HashMap<String, State>> {
+    def.fillers
+        .iter()
+        .map(|f| Ok((f.id.clone(), state(conn, &def.name, &f.id)?)))
+        .collect()
+}
+
+/// Store `s` as the state of `filler` of `collection`.
+pub fn save_state(
+    conn: &Connection,
+    collection: &str,
+    filler: &str,
+    s: &State,
+) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO collections_fills (collection, fingerprint, next_at, etag, last_modified,
-            content_hash, last_fill_at, last_ok_at, last_error, failures, empty_runs, last_rows,
-            last_skipped, day, day_fills)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
-         ON CONFLICT (collection) DO UPDATE SET fingerprint = excluded.fingerprint,
+        "INSERT INTO collections_fills (collection, filler, fingerprint, next_at, etag,
+            last_modified, content_hash, last_fill_at, last_ok_at, last_error, failures,
+            empty_runs, last_rows, last_skipped, day, day_fills, quiet_next)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+         ON CONFLICT (collection, filler) DO UPDATE SET fingerprint = excluded.fingerprint,
             next_at = excluded.next_at, etag = excluded.etag, last_modified = excluded.last_modified,
             content_hash = excluded.content_hash, last_fill_at = excluded.last_fill_at,
             last_ok_at = excluded.last_ok_at, last_error = excluded.last_error,
             failures = excluded.failures, empty_runs = excluded.empty_runs,
             last_rows = excluded.last_rows, last_skipped = excluded.last_skipped,
-            day = excluded.day, day_fills = excluded.day_fills",
+            day = excluded.day, day_fills = excluded.day_fills, quiet_next = excluded.quiet_next",
         params![
             collection,
+            filler,
             s.fingerprint,
             s.next_at,
             s.etag,
@@ -135,23 +165,46 @@ fn save_state(conn: &Connection, collection: &str, s: &State) -> rusqlite::Resul
             s.last_rows,
             s.last_skipped,
             s.day,
-            s.day_fills
+            s.day_fills,
+            s.quiet_next
         ],
     )?;
     Ok(())
 }
 
-/// Forget `collection`'s fill state (its filler was removed).
-pub fn clear_state(conn: &Connection, collection: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "DELETE FROM collections_fills WHERE collection = ?1",
-        [collection],
-    )?;
+/// Forget the state of fillers of `collection` no longer in `keep`, and
+/// hand their rows to people (they stay, no longer locked).
+pub fn forget_removed(tx: &Connection, collection: &str, keep: &[String]) -> rusqlite::Result<()> {
+    let ids: Vec<String> = {
+        let mut stmt =
+            tx.prepare_cached("SELECT filler FROM collections_fills WHERE collection = ?1")?;
+        stmt.query_map([collection], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    for id in ids.iter().filter(|i| !keep.contains(i)) {
+        tx.execute(
+            "DELETE FROM collections_fills WHERE collection = ?1 AND filler = ?2",
+            params![collection, id],
+        )?;
+    }
+    let tagged: Vec<String> = {
+        let mut stmt = tx.prepare_cached(
+            "SELECT DISTINCT filler FROM collections_rows WHERE collection = ?1 AND filler IS NOT NULL",
+        )?;
+        stmt.query_map([collection], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    for id in tagged.iter().filter(|i| !keep.contains(i)) {
+        tx.execute(
+            "UPDATE collections_rows SET filler = NULL WHERE collection = ?1 AND filler = ?2",
+            params![collection, id],
+        )?;
+    }
     Ok(())
 }
 
-/// Agent fills made today across the pod (`today`: `YYYY-MM-DD`).
-fn pod_agent_fills_today(conn: &Connection, today: &str) -> rusqlite::Result<i64> {
+/// Model fills made today across the pod (`today`: `YYYY-MM-DD`).
+fn pod_model_fills_today(conn: &Connection, today: &str) -> rusqlite::Result<i64> {
     conn.query_row(
         "SELECT COALESCE(SUM(day_fills), 0) FROM collections_fills WHERE day = ?1",
         [today],
@@ -219,7 +272,11 @@ fn resolve_headers(
             let plain = store
                 .secrets()
                 .open(&secret_context(&name), &stored)
-                .map_err(|_| format!("the secret '{name}' can't be opened (the server key changed?); set it again"))?;
+                .map_err(|_| {
+                    format!(
+                        "the secret '{name}' can't be opened (the server key changed?); set it again"
+                    )
+                })?;
             value = value.replace(&format!("{{secret:{name}}}"), &plain);
         }
         out.push((k.clone(), value));
@@ -258,7 +315,12 @@ pub fn sample_items(spec: &web_extract::items::Spec, body: &str) -> Result<Vec<V
         }
         X::Jsonld => items::jsonld(body, &spec.types),
         X::Rss => items::rss(body),
-        X::Ics => items::ics(body),
+        X::Ics => items::ics_in(body, spec.zone().as_ref()),
+        X::Events => web_extract::events::items(
+            web_extract::events::read(body, ""),
+            spec.zone().as_ref(),
+            "",
+        ),
         X::Selectors => return Err("the selectors extractor needs map".into()),
     };
     Ok(items.into_iter().map(|v| shorten(v, 0)).collect())
@@ -290,15 +352,6 @@ fn shorten(v: Value, depth: usize) -> Value {
         ),
         other => other,
     }
-}
-
-/// Rows of a preview as the collection would store them.
-pub fn coerce_preview(
-    def: &Definition,
-    rows: Vec<Map<String, Value>>,
-    max_chars: usize,
-) -> (Vec<Map<String, Value>>, usize) {
-    coerce_all(def, rows, usize::MAX, max_chars)
 }
 
 // ---------- values ----------
@@ -345,8 +398,9 @@ fn normalize_date(s: &str) -> Option<String> {
 
 /// `v` made readable as a value of `kind` where web data commonly differs:
 /// prices with currency signs and thousands separators, feed and calendar
-/// dates, schema.org enumeration URLs for choices.
-fn normalize(kind: Kind, v: Value) -> Value {
+/// dates, schema.org enumeration URLs for choices, and a datetime without an
+/// offset placed in `zone`.
+fn normalize(kind: Kind, v: Value, zone: Option<&web_extract::when::Zone>) -> Value {
     let Value::String(s) = &v else { return v };
     match kind {
         Kind::Number => {
@@ -363,6 +417,10 @@ fn normalize(kind: Kind, v: Value) -> Value {
             }
         }
         Kind::Date => normalize_date(s).map_or(v, |d| json!(d)),
+        Kind::Datetime => match (web_extract::when::When::parse(s), zone) {
+            (Some(w), Some(z)) => json!(w.placed_in(z).stored()),
+            _ => v,
+        },
         Kind::Choice if s.contains('/') => {
             json!(s.rsplit('/').next().unwrap_or(s))
         }
@@ -376,6 +434,7 @@ fn to_values(
     def: &Definition,
     item: Map<String, Value>,
     max_chars: usize,
+    zone: Option<&web_extract::when::Zone>,
 ) -> (Map<String, Value>, usize) {
     let mut out = Map::new();
     let mut skipped = 0;
@@ -383,7 +442,7 @@ fn to_values(
         let Some(f) = def.by_id(&id).filter(|f| f.live()) else {
             continue;
         };
-        let v = normalize(f.kind, v);
+        let v = normalize(f.kind, v, zone);
         let v = match (&v, f.kind) {
             // Text keeps what it can.
             (Value::String(s), Kind::Text) if s.chars().count() > max_chars => {
@@ -402,6 +461,16 @@ fn to_values(
     (out, skipped)
 }
 
+/// Rows of a preview as the collection would store them.
+pub fn coerce_preview(
+    def: &Definition,
+    rows: Vec<Map<String, Value>>,
+    max_chars: usize,
+    zone: Option<&web_extract::when::Zone>,
+) -> (Vec<Map<String, Value>>, usize) {
+    coerce_all(def, rows, usize::MAX, max_chars, zone)
+}
+
 /// A key value as a match key.
 fn key_text(v: &Value) -> Option<String> {
     let t = match v {
@@ -410,6 +479,23 @@ fn key_text(v: &Value) -> Option<String> {
         other => other.to_string(),
     };
     (!t.is_empty()).then_some(t)
+}
+
+/// Whether an item's `upcoming` value has passed at `now`.
+fn is_past(v: Option<&Value>, now: i64) -> bool {
+    let Some(w) = v
+        .and_then(Value::as_str)
+        .and_then(web_extract::when::When::parse)
+    else {
+        return false;
+    };
+    let end = if w.time.is_some() {
+        w.timestamp(None) + PAST_SLACK_SECS
+    } else {
+        // A date lasts the day, with a day of slack for zones.
+        w.timestamp(None) + 2 * 86_400
+    };
+    end < now
 }
 
 // ---------- storing ----------
@@ -421,8 +507,8 @@ pub struct Stored {
     pub updated: usize,
     pub removed: usize,
     pub unchanged: usize,
-    /// Items left out: no key, a repeated key, or a required filled value
-    /// missing.
+    /// Items left out: no key, a repeated key, a required filled value
+    /// missing, or past (`upcoming`).
     pub dropped: usize,
 }
 
@@ -440,14 +526,14 @@ fn hard_delete(tx: &Connection, collection: &str, id: &str) -> rusqlite::Result<
     Ok(())
 }
 
-/// The write `after_write` sees: every filled field by name, null when the
-/// item has no value.
+/// The write `after_write` sees: `fields` by name, null when the item has no
+/// value.
 fn write_of(
     def: &Definition,
-    filled: &[String],
+    fields: &[String],
     values: &Map<String, Value>,
 ) -> Map<String, Value> {
-    filled
+    fields
         .iter()
         .filter_map(|id| def.by_id(id))
         .map(|f| {
@@ -459,10 +545,10 @@ fn write_of(
         .collect()
 }
 
-/// Set `row`'s filled fields to `item`'s; whether anything changed.
-fn apply_item(row: &mut Row, filled: &[String], item: &Map<String, Value>) -> bool {
+/// Set `row`'s `fields` to `item`'s; whether anything changed.
+fn apply_item(row: &mut Row, fields: &[String], item: &Map<String, Value>) -> bool {
     let before = row.values.clone();
-    for id in filled {
+    for id in fields {
         match item.get(id) {
             Some(v) => {
                 row.values.insert(id.clone(), v.clone());
@@ -475,16 +561,20 @@ fn apply_item(row: &mut Row, filled: &[String], item: &Map<String, Value>) -> bo
     row.values != before
 }
 
-/// Whether `values` lacks a required filled field without a default.
-fn missing_required(def: &Definition, filled: &[String], values: &Map<String, Value>) -> bool {
-    filled.iter().any(|id| {
+/// Whether `values` lacks a required field of `fields` without a default.
+fn missing_required(def: &Definition, fields: &[String], values: &Map<String, Value>) -> bool {
+    fields.iter().any(|id| {
         def.by_id(id)
             .is_some_and(|f| !f.optional && f.default.is_none() && !values.contains_key(id))
     })
 }
 
-/// Write `items` (values by field id, coerced) as `def`'s rows by its
-/// filler's mode. `Err`: the pod's row or byte cap would be passed (the
+/// What [`store`] answers: what it did, the compute jobs, and the rows it
+/// created (for `details`).
+pub type StoreResult = (Stored, Vec<crate::compute::Job>, Vec<String>);
+
+/// Write `items` (values by field id, coerced) as filler `filler`'s rows of
+/// `def` by its mode. `Err`: the pod's row or byte cap would be passed (the
 /// caller rolls back).
 pub fn store(
     tx: &Connection,
@@ -493,11 +583,12 @@ pub fn store(
     items: Vec<Map<String, Value>>,
     now: i64,
     caps: Caps,
-) -> rusqlite::Result<Result<(Stored, Vec<crate::compute::Job>), String>> {
+) -> rusqlite::Result<Result<StoreResult, String>> {
     let name = &def.name;
-    let filled = filler.filled();
+    let mapped = filler.mapped();
     let mut out = Stored::default();
     let mut jobs = Vec::new();
+    let mut created = Vec::new();
     let new_row = |values: Map<String, Value>| Row {
         id: db::new_id("r"),
         client_id: None,
@@ -505,8 +596,26 @@ pub fn store(
         created_at: now,
         updated_at: now,
         deleted_at: None,
+        filler: Some(filler.id.clone()),
     };
-    let existing = db::all_rows(tx, name, true)?;
+    // Past items are left out.
+    let items: Vec<Map<String, Value>> = match &filler.upcoming {
+        Some(u) => items
+            .into_iter()
+            .filter(|i| {
+                let past = is_past(i.get(u), now);
+                if past {
+                    out.dropped += 1;
+                }
+                !past
+            })
+            .collect(),
+        None => items,
+    };
+    let existing: Vec<Row> = db::all_rows(tx, name, true)?
+        .into_iter()
+        .filter(|r| r.filler.as_deref() == Some(filler.id.as_str()))
+        .collect();
     if let Some(key) = &filler.key {
         let mut by_key: HashMap<String, Row> = HashMap::new();
         let mut unkeyed: Vec<Row> = Vec::new();
@@ -533,13 +642,13 @@ pub fn store(
                 Some(r) if r.deleted_at.is_some() => out.unchanged += 1,
                 Some(r) => {
                     let before = r.values.clone();
-                    if apply_item(r, &filled, &item) {
-                        if missing_required(def, &filled, &r.values) {
+                    if apply_item(r, &mapped, &item) {
+                        if missing_required(def, &mapped, &r.values) {
                             r.values = before;
                             out.dropped += 1;
                             continue;
                         }
-                        let write = write_of(def, &filled, &item);
+                        let write = write_of(def, &mapped, &item);
                         jobs.extend(crate::compute::after_write(
                             tx,
                             def,
@@ -557,16 +666,17 @@ pub fn store(
                     }
                 }
                 None => {
-                    if missing_required(def, &filled, &item) {
+                    if missing_required(def, &mapped, &item) {
                         out.dropped += 1;
                         continue;
                     }
                     let mut r = new_row(item.clone());
-                    let write = write_of(def, &filled, &item);
+                    let write = write_of(def, &mapped, &item);
                     jobs.extend(crate::compute::after_write(
                         tx, def, None, &mut r, &write, now, caps,
                     )?);
                     db::insert_row(tx, name, &r)?;
+                    created.push(r.id.clone());
                     out.created += 1;
                 }
             }
@@ -584,11 +694,11 @@ pub fn store(
             }
         }
     } else {
-        // Replace without a key: the rows are the items, in order.
+        // Replace without a key: its rows are the items, in order.
         let mut items: Vec<Map<String, Value>> = items
             .into_iter()
             .filter(|i| {
-                let keep = !missing_required(def, &filled, i);
+                let keep = !missing_required(def, &mapped, i);
                 if !keep {
                     out.dropped += 1;
                 }
@@ -600,7 +710,7 @@ pub fn store(
             && live
                 .iter()
                 .zip(&items)
-                .all(|(r, i)| filled.iter().all(|id| r.values.get(id) == i.get(id)));
+                .all(|(r, i)| mapped.iter().all(|id| r.values.get(id) == i.get(id)));
         if same {
             out.unchanged = items.len();
         } else {
@@ -612,11 +722,12 @@ pub fn store(
             // in insertion order ([`db::all_rows`]).
             for item in items.drain(..) {
                 let mut r = new_row(item.clone());
-                let write = write_of(def, &filled, &item);
+                let write = write_of(def, &mapped, &item);
                 jobs.extend(crate::compute::after_write(
                     tx, def, None, &mut r, &write, now, caps,
                 )?);
                 db::insert_row(tx, name, &r)?;
+                created.push(r.id.clone());
                 out.created += 1;
             }
         }
@@ -634,12 +745,12 @@ pub fn store(
             caps.bytes
         )));
     }
-    Ok(Ok((out, jobs)))
+    Ok(Ok((out, jobs, created)))
 }
 
 // ---------- running ----------
 
-/// Collections being filled now (one fill per collection at a time).
+/// Fillers filling now, as `collection/filler` (one fill each at a time).
 #[derive(Default)]
 pub struct Busy(std::sync::Mutex<HashSet<String>>);
 
@@ -655,13 +766,19 @@ impl Drop for BusyGuard<'_> {
     }
 }
 
-/// Whether a fill of `collection` is running.
+fn busy_key(collection: &str, filler: &str) -> String {
+    format!("{collection}/{filler}")
+}
+
+/// Whether a fill of `collection` (any filler) is running.
 pub fn is_busy(pod: &Pod, collection: &str) -> bool {
+    let prefix = format!("{collection}/");
     pod.local::<Busy>()
         .0
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .contains(collection)
+        .iter()
+        .any(|k| k.starts_with(&prefix))
 }
 
 /// When the pod last sent a request to each host.
@@ -699,7 +816,7 @@ pub enum Outcome {
     /// The page didn't change since the last fill.
     Unchanged,
     Failed(String),
-    /// Another fill of the collection is running.
+    /// Another fill of the filler is running.
     Busy,
 }
 
@@ -720,7 +837,7 @@ impl Outcome {
                 "detail": "the page hasn't changed since the last fill" }),
             Outcome::Failed(e) => json!({ "ok": false, "error": e }),
             Outcome::Busy => json!({ "ok": true, "busy": true,
-                "detail": "a fill of this collection is running; its rows update when it ends" }),
+                "detail": "a fill of this filler is running; its rows update when it ends" }),
         }
     }
 }
@@ -732,7 +849,8 @@ fn backoff(f: &Filler, failures: i64, retry_after: Option<i64>, now: i64) -> i64
     now + exp.min(86_400).max(retry_after.unwrap_or(0)).max(60)
 }
 
-fn today(store: &pod_core::store::Store, now: i64) -> String {
+/// Today in the pod's zone (`YYYY-MM-DD`).
+pub fn today(store: &pod_core::store::Store, now: i64) -> String {
     let tz = pod_core::tz::time_zone(store).unwrap_or(pod_core::tz::jiff::tz::TimeZone::UTC);
     pod_core::tz::jiff::Timestamp::from_second(now)
         .map(|t| t.to_zoned(tz).date().to_string())
@@ -783,13 +901,14 @@ fn coerce_all(
     rows: Vec<Map<String, Value>>,
     max: usize,
     max_chars: usize,
+    zone: Option<&web_extract::when::Zone>,
 ) -> (Vec<Map<String, Value>>, usize) {
     let mut skipped = 0;
     let items = rows
         .into_iter()
         .take(max)
         .map(|r| {
-            let (v, s) = to_values(def, r, max_chars);
+            let (v, s) = to_values(def, r, max_chars, zone);
             skipped += s;
             v
         })
@@ -798,6 +917,76 @@ fn coerce_all(
     (items, skipped)
 }
 
+/// The fields a model answers for `ids`.
+fn agent_fields(def: &Definition, ids: &[String]) -> Vec<AgentField> {
+    ids.iter()
+        .filter_map(|id| def.by_id(id).filter(|f| f.live()))
+        .map(|f| AgentField {
+            name: f.name.clone(),
+            kind: f.kind,
+            options: f.options.clone(),
+        })
+        .collect()
+}
+
+/// A model's rows (by field name) as rows by field id, only of `ids`.
+fn by_ids(
+    def: &Definition,
+    rows: Vec<Map<String, Value>>,
+    ids: &[String],
+) -> Vec<Map<String, Value>> {
+    rows.into_iter()
+        .map(|r| {
+            r.into_iter()
+                .filter_map(|(n, v)| {
+                    let f = def.field(&n)?;
+                    ids.contains(&f.id).then(|| (f.id.clone(), v))
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Count a model fill toward today's budgets: the filler's own (an agent's
+/// `fills_per_day`) and, for agents, the pod's. Answers today's date; `Err`
+/// when a budget is spent.
+async fn take_model_budget(
+    pod: &Pod,
+    adapter: &CollectionsAdapter,
+    filler: &Filler,
+    st: &State,
+    now: i64,
+) -> Result<String, String> {
+    let day = today(pod.store(), now);
+    let mine = if st.day.as_deref() == Some(day.as_str()) {
+        st.day_fills
+    } else {
+        0
+    };
+    if let Source::Agent { fills_per_day, .. } = &filler.source
+        && mine >= i64::from(*fills_per_day)
+    {
+        return Err(format!(
+            "this filler already filled {mine} times today (fills_per_day {fills_per_day})"
+        ));
+    }
+    if filler.is_agent() {
+        let d = day.clone();
+        let pod_total = pod
+            .blocking(move |s| s.with_conn(|c| pod_model_fills_today(c, &d)))
+            .await
+            .unwrap_or(0);
+        let cap = i64::from(adapter.caps().agent_fills_per_day);
+        if pod_total >= cap {
+            return Err(format!(
+                "the pod's agents already filled {pod_total} times today (the operator's limit is {cap})"
+            ));
+        }
+    }
+    Ok(day)
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn run_fetch(
     pod: &Pod,
     adapter: &CollectionsAdapter,
@@ -805,32 +994,70 @@ async fn run_fetch(
     filler: &Filler,
     state: &State,
     force: bool,
+    now: i64,
+    day: &mut Option<String>,
 ) -> Fetch {
     let Source::Fetch {
         url,
         url_field,
         headers,
         map,
+        hint,
         ..
     } = &filler.source
     else {
         return Fetch::Failed("not a fetch filler".into(), None);
     };
-    let Some(spec) = filler.extract_spec() else {
+    let spec = filler.extract_spec();
+    if spec.is_none() && !filler.is_llm() {
         return Fetch::Failed("the filler's extractor is unknown".into(), None);
-    };
+    }
+    if filler.is_llm() && adapter.agent().is_none() {
+        return Fetch::Failed(NO_AGENT.into(), None);
+    }
     let headers = match resolve_headers(pod.store(), headers) {
         Ok(h) => h,
         Err(e) => return Fetch::Failed(e, None),
     };
     let pairs: Vec<(String, String)> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let ids: Vec<String> = map.keys().cloned().collect();
     let caps = adapter.caps();
+    let zone = filler.zone();
     let client = adapter.fetch_client();
     let get = |u: String, etag: Option<String>, lm: Option<String>| {
         let headers = headers.clone();
         async move {
             space(pod, &u).await;
             web_extract::fetch::fetch(client, &u, etag.as_deref(), lm.as_deref(), &headers).await
+        }
+    };
+    // One page's rows (by field id).
+    let read = |body: String, page: String, day: String| {
+        let spec = spec.clone();
+        let pairs = pairs.clone();
+        let ids = ids.clone();
+        async move {
+            match spec {
+                Some(spec) => web_extract::items::extract(&spec, &body, &page, &pairs),
+                None => {
+                    let Some(agent) = adapter.agent() else {
+                        return Err(NO_AGENT.to_owned());
+                    };
+                    let fields = agent_fields(def, &ids);
+                    let text = web_extract::html::to_text(&body);
+                    let rows = agent
+                        .read_page(PageRequest {
+                            title: &def.title,
+                            fields: &fields,
+                            page_text: &text,
+                            url: &page,
+                            hint,
+                            today: &day,
+                        })
+                        .await?;
+                    Ok(by_ids(def, rows, &ids))
+                }
+            }
         }
     };
     if let Some(url) = url {
@@ -856,10 +1083,18 @@ async fn run_fetch(
         if !fresh && state.content_hash.as_deref() == Some(hash.as_str()) {
             return Fetch::Unchanged;
         }
-        let body = String::from_utf8_lossy(&bytes);
-        return match web_extract::items::extract(&spec, &body, url, &pairs) {
+        if filler.is_llm() {
+            match take_model_budget(pod, adapter, filler, state, now).await {
+                Ok(d) => *day = Some(d),
+                Err(e) => return Fetch::Failed(e, None),
+            }
+        }
+        let body = String::from_utf8_lossy(&bytes).into_owned();
+        let today = day.clone().unwrap_or_default();
+        return match read(body, url.clone(), today).await {
             Ok(rows) => {
-                let (items, skipped) = coerce_all(def, rows, caps.fill_items, caps.text_chars);
+                let (items, skipped) =
+                    coerce_all(def, rows, caps.fill_items, caps.text_chars, zone.as_ref());
                 Fetch::Items {
                     items,
                     skipped,
@@ -874,6 +1109,12 @@ async fn run_fetch(
     let Some(field) = url_field else {
         return Fetch::Failed("the filler has no URL".into(), None);
     };
+    if filler.is_llm() {
+        match take_model_budget(pod, adapter, filler, state, now).await {
+            Ok(d) => *day = Some(d),
+            Err(e) => return Fetch::Failed(e, None),
+        }
+    }
     // Each row from its own page.
     let name = def.name.clone();
     let rows = pod
@@ -910,9 +1151,9 @@ async fn run_fetch(
                 continue;
             }
         };
-        match web_extract::items::extract(&spec, &body, &u, &pairs) {
+        match read(body, u.clone(), day.clone().unwrap_or_default()).await {
             Ok(found) => {
-                let (mut vals, s) = coerce_all(def, found, 1, caps.text_chars);
+                let (mut vals, s) = coerce_all(def, found, 1, caps.text_chars, zone.as_ref());
                 skipped += s;
                 if let Some(v) = vals.pop() {
                     items += 1;
@@ -945,7 +1186,7 @@ async fn run_agent(
         fields,
         max_searches,
         max_fetches,
-        fills_per_day,
+        ..
     } = &filler.source
     else {
         return Err("not an agent filler".into());
@@ -953,37 +1194,8 @@ async fn run_agent(
     let Some(agent) = adapter.agent() else {
         return Err(NO_AGENT.into());
     };
-    let day = today(pod.store(), now);
-    let mine = if state.day.as_deref() == Some(day.as_str()) {
-        state.day_fills
-    } else {
-        0
-    };
-    if mine >= i64::from(*fills_per_day) {
-        return Err(format!(
-            "this collection's agent already filled {mine} times today (fills_per_day {fills_per_day})"
-        ));
-    }
-    let d = day.clone();
-    let pod_total = pod
-        .blocking(move |s| s.with_conn(|c| pod_agent_fills_today(c, &d)))
-        .await
-        .unwrap_or(0);
-    let cap = i64::from(adapter.caps().agent_fills_per_day);
-    if pod_total >= cap {
-        return Err(format!(
-            "the pod's agents already filled {pod_total} times today (the operator's limit is {cap})"
-        ));
-    }
-    let agent_fields: Vec<AgentField> = fields
-        .iter()
-        .filter_map(|id| def.by_id(id).filter(|f| f.live()))
-        .map(|f| AgentField {
-            name: f.name.clone(),
-            kind: f.kind,
-            options: f.options.clone(),
-        })
-        .collect();
+    let day = take_model_budget(pod, adapter, filler, state, now).await?;
+    let agent_fields = agent_fields(def, fields);
     let name = def.name.clone();
     let current_rows = pod
         .blocking(move |s| s.with_conn(|c| db::all_rows(c, &name, false)))
@@ -991,6 +1203,7 @@ async fn run_agent(
         .unwrap_or_default();
     let current: Vec<Map<String, Value>> = current_rows
         .iter()
+        .filter(|r| r.filler.as_deref() == Some(filler.id.as_str()))
         .take(crate::agent::MAX_CURRENT)
         .map(|r| {
             fields
@@ -1024,19 +1237,13 @@ async fn run_agent(
         Err(e) => return Ok((Fetch::Failed(e, None), day)),
     };
     let caps = adapter.caps();
-    let by_id: Vec<Map<String, Value>> = answer
-        .rows
-        .into_iter()
-        .map(|r| {
-            r.into_iter()
-                .filter_map(|(n, v)| {
-                    let f = def.field(&n)?;
-                    fields.contains(&f.id).then(|| (f.id.clone(), v))
-                })
-                .collect()
-        })
-        .collect();
-    let (items, skipped) = coerce_all(def, by_id, caps.fill_items, caps.text_chars);
+    let (items, skipped) = coerce_all(
+        def,
+        by_ids(def, answer.rows, fields),
+        caps.fill_items,
+        caps.text_chars,
+        None,
+    );
     Ok((
         Fetch::Items {
             items,
@@ -1049,31 +1256,141 @@ async fn run_agent(
     ))
 }
 
-/// Fill `collection` now. `force`: refetch even when the page looks
-/// unchanged.
-pub async fn fill(pod: &Pod, collection: &str, force: bool) -> Outcome {
+/// Read each new row's own page for the filler's `details` (at most
+/// [`MAX_DETAILS`]) and store what it found.
+async fn fill_details(
+    pod: &Pod,
+    adapter: &CollectionsAdapter,
+    def: &Definition,
+    filler: &Filler,
+    created: &[String],
+) -> Vec<crate::compute::Job> {
+    let Source::Fetch {
+        details: Some(d),
+        zone,
+        ..
+    } = &filler.source
+    else {
+        return Vec::new();
+    };
+    let Some(kind) = web_extract::items::Kind::parse(&d.extract) else {
+        return Vec::new();
+    };
+    let spec = web_extract::items::Spec {
+        kind,
+        items: d.items.clone(),
+        types: d.types.clone(),
+        script: String::new(),
+        zone: zone.clone(),
+    };
+    let pairs: Vec<(String, String)> = d.map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let caps = adapter.caps();
+    let mut found: Vec<(String, Map<String, Value>)> = Vec::new();
+    for id in created.iter().take(MAX_DETAILS) {
+        let (n, rid) = (def.name.clone(), id.clone());
+        let Ok(Some(row)) = pod
+            .blocking(move |s| s.with_conn(|c| db::row(c, &n, &rid)))
+            .await
+        else {
+            continue;
+        };
+        let Some(link) = row.values.get(&d.link).and_then(Value::as_str) else {
+            continue;
+        };
+        let Ok(link) = web_extract::fetch::check_url(link, adapter.allow_private_hosts()) else {
+            tracing::warn!("a details page was not fetched: not a public website");
+            continue;
+        };
+        space(pod, &link).await;
+        let Ok(web_extract::fetch::Fetched::Body { bytes, .. }) =
+            web_extract::fetch::fetch(adapter.fetch_client(), &link, None, None, &[]).await
+        else {
+            continue;
+        };
+        let page = String::from_utf8_lossy(&bytes);
+        let mut item = web_extract::items::extract(&spec, &page, &link, &pairs)
+            .ok()
+            .and_then(|mut v| (!v.is_empty()).then(|| v.remove(0)))
+            .unwrap_or_default();
+        if item.is_empty()
+            && let Some(t) = &d.text
+        {
+            item.insert(t.clone(), json!(web_extract::html::to_text(&page)));
+        }
+        let (vals, _) = to_values(def, item, caps.text_chars, filler.zone().as_ref());
+        if !vals.is_empty() {
+            found.push((id.clone(), vals));
+        }
+    }
+    if found.is_empty() {
+        return Vec::new();
+    }
+    let mapped = filler.mapped();
+    let detail_fields: Vec<String> = filler
+        .filled()
+        .into_iter()
+        .filter(|f| !mapped.contains(f))
+        .collect();
+    let d2 = def.clone();
+    let now = pod_core::util::now_secs();
+    let stored = pod
+        .blocking(move |s| {
+            s.transaction(|tx| {
+                let mut jobs = Vec::new();
+                for (id, vals) in &found {
+                    let Some(mut r) = db::row(tx, &d2.name, id)? else {
+                        continue;
+                    };
+                    let before = r.values.clone();
+                    if apply_item(&mut r, &detail_fields, vals) {
+                        let write = write_of(&d2, &detail_fields, vals);
+                        jobs.extend(crate::compute::after_write(
+                            tx,
+                            &d2,
+                            Some(&before),
+                            &mut r,
+                            &write,
+                            now,
+                            caps,
+                        )?);
+                        db::save_row(tx, &d2.name, &r)?;
+                    }
+                }
+                Ok(jobs)
+            })
+        })
+        .await;
+    stored.unwrap_or_default()
+}
+
+/// Fill `filler_id` of `collection` now. `force`: refetch even when the
+/// page looks unchanged.
+pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> Outcome {
     let Some(adapter) = pod.adapter::<CollectionsAdapter>() else {
         return Outcome::Failed("no Collections".into());
     };
     let busy = pod.local::<Busy>();
+    let key = busy_key(collection, filler_id);
     {
         let mut b = busy.0.lock().unwrap_or_else(|e| e.into_inner());
-        if !b.insert(collection.to_owned()) {
+        if !b.insert(key.clone()) {
             return Outcome::Busy;
         }
     }
-    let _guard = BusyGuard(&busy, collection.to_owned());
-    let name = collection.to_owned();
+    let _guard = BusyGuard(&busy, key);
+    let (name, fid) = (collection.to_owned(), filler_id.to_owned());
     let read = pod
-        .blocking(move |s| s.with_conn(|c| Ok((db::latest_def(c, &name)?, state(c, &name)?))))
+        .blocking(move |s| s.with_conn(|c| Ok((db::latest_def(c, &name)?, state(c, &name, &fid)?))))
         .await;
     let (def, mut st) = match read {
         Ok((Some((_, def)), st)) => (def, st),
         Ok((None, _)) => return Outcome::Failed(format!("no collection '{collection}'")),
         Err(_) => return Outcome::Failed("the collection could not be read".into()),
     };
-    let Some(filler) = def.filler.clone() else {
-        return Outcome::Failed(format!("collection '{collection}' has no filler"));
+    let Some(filler) = crate::filler::find(&def, filler_id).cloned() else {
+        return Outcome::Failed(format!(
+            "collection '{collection}' has no filler '{filler_id}'"
+        ));
     };
     let now = pod_core::util::now_secs();
     let mut day = None;
@@ -1094,9 +1411,14 @@ pub async fn fill(pod: &Pod, collection: &str, force: bool) -> Outcome {
             Err(_) => Fetch::Failed("the agent took too long".into(), None),
         }
     } else {
+        let limit = if filler.is_llm() {
+            AGENT_FILL_TIMEOUT
+        } else {
+            FETCH_FILL_TIMEOUT
+        };
         match tokio::time::timeout(
-            FETCH_FILL_TIMEOUT,
-            run_fetch(pod, adapter, &def, &filler, &st, force),
+            limit,
+            run_fetch(pod, adapter, &def, &filler, &st, force, now, &mut day),
         )
         .await
         {
@@ -1115,8 +1437,9 @@ pub async fn fill(pod: &Pod, collection: &str, force: bool) -> Outcome {
     }
     let scheduled = filler.every_minutes.map(|m| now + i64::from(m) * 60);
     let fingerprint = filler.fingerprint();
-    let name = def.name.clone();
-    let (outcome, jobs) = match fetched {
+    let quiet = st.quiet_next;
+    let mut created_rows = Vec::new();
+    let (outcome, mut jobs) = match fetched {
         Fetch::Unchanged => {
             st.failures = 0;
             st.last_error = None;
@@ -1140,11 +1463,16 @@ pub async fn fill(pod: &Pod, collection: &str, force: bool) -> Outcome {
             let count = items.len();
             let (d2, f2) = (def.clone(), filler.clone());
             let stored = crate::refusable(pod, move |tx| {
-                Ok(store(tx, &d2, &f2, items, now, caps)?.map_err(|e| json!({ "error": e })))
+                let out = store(tx, &d2, &f2, items, now, caps)?;
+                if out.is_ok() && quiet {
+                    crate::alerts::mark_sent(tx, &d2, &f2.id, now)?;
+                }
+                Ok(out.map_err(|e| json!({ "error": e })))
             })
             .await;
             match stored {
-                Ok((stored, jobs)) => {
+                Ok((stored, jobs, created)) => {
+                    created_rows = created;
                     st.failures = 0;
                     st.last_error = None;
                     st.last_ok_at = Some(now);
@@ -1156,6 +1484,7 @@ pub async fn fill(pod: &Pod, collection: &str, force: bool) -> Outcome {
                     st.last_rows = Some(count as i64);
                     st.last_skipped = Some((skipped + stored.dropped) as i64);
                     st.empty_runs = if count == 0 { st.empty_runs + 1 } else { 0 };
+                    st.quiet_next = false;
                     (
                         Outcome::Filled {
                             items: count,
@@ -1190,7 +1519,7 @@ pub async fn fill(pod: &Pod, collection: &str, force: bool) -> Outcome {
             let stored = pod
                 .blocking(move |s| {
                     s.transaction(|tx| {
-                        let filled = f2.filled();
+                        let mapped = f2.mapped();
                         let mut out = Stored::default();
                         let mut jobs = Vec::new();
                         for (id, item) in &rows {
@@ -1201,8 +1530,8 @@ pub async fn fill(pod: &Pod, collection: &str, force: bool) -> Outcome {
                                 continue;
                             }
                             let before = r.values.clone();
-                            if apply_item(&mut r, &filled, item) {
-                                let write = write_of(&d2, &filled, item);
+                            if apply_item(&mut r, &mapped, item) {
+                                let write = write_of(&d2, &mapped, item);
                                 jobs.extend(crate::compute::after_write(
                                     tx,
                                     &d2,
@@ -1274,68 +1603,97 @@ pub async fn fill(pod: &Pod, collection: &str, force: bool) -> Outcome {
             }
         }
     };
+    if !created_rows.is_empty() {
+        jobs.extend(fill_details(pod, adapter, &def, &filler, &created_rows).await);
+    }
     let st2 = st.clone();
+    let (name, fid) = (def.name.clone(), filler.id.clone());
     let _ = pod
-        .blocking(move |s| s.with_conn(|c| save_state(c, &name, &st2)))
+        .blocking(move |s| s.with_conn(|c| save_state(c, &name, &fid, &st2)))
         .await;
     if let Outcome::Filled { stored, .. } = &outcome
         && stored.changed()
     {
         pod.publish_data_all(NAME);
+        crate::alerts::run(pod, Some(collection.to_owned())).await;
     }
     crate::compute::spawn(pod, collection, jobs);
     if let Outcome::Failed(e) = &outcome {
-        tracing::info!(collection, error = %e, "a collection fill failed");
+        tracing::info!(collection, filler = filler_id, error = %e, "a collection fill failed");
     }
     outcome
 }
 
-/// Start [`fill`] in the background.
-pub fn spawn(pod: &Pod, collection: &str, force: bool) {
+/// Start fills in the background: `filler`, else every filler of the
+/// collection.
+pub fn spawn(pod: &Pod, collection: &str, filler: Option<&str>, force: bool) {
     let pod = pod.clone();
     let c = collection.to_owned();
+    let only = filler.map(str::to_owned);
     tokio::spawn(async move {
-        fill(&pod, &c, force).await;
+        let ids: Vec<String> = match only {
+            Some(f) => vec![f],
+            None => {
+                let n = c.clone();
+                pod.blocking(move |s| s.with_conn(|conn| db::latest_def(conn, &n)))
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|(_, d)| d.fillers.iter().map(|f| f.id.clone()).collect())
+                    .unwrap_or_default()
+            }
+        };
+        for f in ids {
+            fill(&pod, &c, &f, force).await;
+        }
     });
 }
 
-/// Whether opening an app showing `def` should start a fill: its last fill
-/// is older than `on_open_minutes`, or a scheduled fill is overdue. Not
-/// while a failure's backoff runs.
-pub fn due_on_open(def: &Definition, st: &State, now: i64) -> bool {
-    let Some(f) = &def.filler else { return false };
-    if st.failures > 0 {
-        return st.next_at.is_none_or(|t| t <= now);
-    }
-    let stale = f
-        .on_open_minutes
-        .is_some_and(|m| st.last_fill_at.is_none_or(|t| now - t >= i64::from(m) * 60));
-    let overdue = f.every_minutes.is_some() && st.next_at.is_none_or(|t| t <= now);
-    stale || overdue
+/// The fillers of `def` that opening an app showing it should start: the
+/// last fill is older than `on_open_minutes`, or a scheduled fill is
+/// overdue. Not while a failure's backoff runs.
+pub fn due_on_open(def: &Definition, states: &HashMap<String, State>, now: i64) -> Vec<String> {
+    def.fillers
+        .iter()
+        .filter(|f| {
+            let st = states.get(&f.id).cloned().unwrap_or_default();
+            if st.failures > 0 {
+                return st.next_at.is_none_or(|t| t <= now)
+                    && (f.on_open_minutes.is_some() || f.every_minutes.is_some());
+            }
+            let stale = f
+                .on_open_minutes
+                .is_some_and(|m| st.last_fill_at.is_none_or(|t| now - t >= i64::from(m) * 60));
+            let overdue = f.every_minutes.is_some() && st.next_at.is_none_or(|t| t <= now);
+            stale || overdue
+        })
+        .map(|f| f.id.clone())
+        .collect()
 }
 
 /// Per pod: one scheduled run at a time.
 #[derive(Default)]
 pub struct RunLock(tokio::sync::Mutex<()>);
 
-/// Fill every collection whose scheduled fill is due. Returns at once when
-/// a run is going.
+/// Fill every filler whose scheduled fill is due, then send what alerts
+/// owe. Returns at once when a run is going.
 pub async fn run_due(pod: &Pod) {
     let lock = pod.local::<RunLock>();
     let Ok(_guard) = lock.0.try_lock() else {
         return;
     };
     let now = pod_core::util::now_secs();
-    let due: Vec<String> = pod
+    let due: Vec<(String, String)> = pod
         .blocking(move |s| {
             s.with_conn(|c| {
                 let mut out = Vec::new();
                 for (_, def) in db::all_defs(c)? {
-                    let Some(f) = &def.filler else { continue };
-                    let st = state(c, &def.name)?;
-                    let scheduled = f.every_minutes.is_some() || st.failures > 0;
-                    if scheduled && st.next_at.is_none_or(|t| t <= now) {
-                        out.push(def.name.clone());
+                    for f in &def.fillers {
+                        let st = state(c, &def.name, &f.id)?;
+                        let scheduled = f.every_minutes.is_some() || st.failures > 0;
+                        if scheduled && st.next_at.is_none_or(|t| t <= now) {
+                            out.push((def.name.clone(), f.id.clone()));
+                        }
                     }
                 }
                 Ok(out)
@@ -1343,38 +1701,43 @@ pub async fn run_due(pod: &Pod) {
         })
         .await
         .unwrap_or_default();
-    for c in due {
-        fill(pod, &c, false).await;
+    for (c, f) in due {
+        fill(pod, &c, &f, false).await;
     }
+    crate::alerts::run(pod, None).await;
 }
 
-/// Whether any collection has a scheduled filler (the poll then comes back
-/// within [`crate::remind::MAX_WAIT`]).
+/// Whether any collection has a scheduled filler or an alert (the poll then
+/// comes back within [`crate::remind::MAX_WAIT`]).
 pub fn any_scheduled(conn: &Connection) -> rusqlite::Result<bool> {
     Ok(db::all_defs(conn)?
         .iter()
-        .any(|(_, d)| d.filler.as_ref().is_some_and(|f| f.every_minutes.is_some())))
+        .any(|(_, d)| !d.alerts.is_empty() || d.fillers.iter().any(|f| f.every_minutes.is_some())))
 }
 
-/// `def`'s fill health for Claude and `describe_collection`: `state`
-/// (pending, ok, failing, empty, off, unavailable), a one-line `detail`,
-/// and the times.
-pub fn health(def: &Definition, st: &State, now: i64, off: bool, agent: bool) -> Value {
-    let Some(f) = &def.filler else {
-        return Value::Null;
-    };
-    let ago = |t: i64| {
-        let m = (now - t).max(0) / 60;
-        match m {
-            0 => "just now".to_owned(),
-            1..=59 => format!("{m} min ago"),
-            60..=2879 => format!("{} h ago", m / 60),
-            _ => format!("{} days ago", m / 1440),
-        }
-    };
-    let (state_name, detail) = if off {
+/// "5 min ago" style.
+fn ago(now: i64, t: i64) -> String {
+    let m = (now - t).max(0) / 60;
+    match m {
+        0 => "just now".to_owned(),
+        1..=59 => format!("{m} min ago"),
+        60..=2879 => format!("{} h ago", m / 60),
+        _ => format!("{} days ago", m / 1440),
+    }
+}
+
+/// A filler's health: `(state, detail)`: pending, ok, failing, empty, off
+/// or unavailable.
+pub fn health_state(
+    f: &Filler,
+    st: &State,
+    now: i64,
+    off: bool,
+    agent: bool,
+) -> (&'static str, String) {
+    if off {
         ("off", FILL_OFF.to_owned())
-    } else if f.is_agent() && !agent {
+    } else if f.uses_model() && !agent {
         ("unavailable", NO_AGENT.to_owned())
     } else if st.failures > 0 {
         (
@@ -1399,7 +1762,7 @@ pub fn health(def: &Definition, st: &State, now: i64, off: bool, agent: bool) ->
             format!(
                 "{} items · filled {}{}",
                 st.last_rows.unwrap_or(0),
-                ago(t),
+                ago(now, t),
                 st.last_error
                     .as_ref()
                     .map(|e| format!(" · {e}"))
@@ -1408,14 +1771,21 @@ pub fn health(def: &Definition, st: &State, now: i64, off: bool, agent: bool) ->
         )
     } else {
         ("pending", "not filled yet".to_owned())
-    };
+    }
+}
+
+/// A filler's health for Claude: state, detail and the times.
+pub fn health(def: &Definition, f: &Filler, st: &State, now: i64, off: bool, agent: bool) -> Value {
+    let (state_name, detail) = health_state(f, st, now, off, agent);
     let at = |t: Option<i64>| t.map(pod_core::layouts::rfc3339);
     json!({
-        "collection": def.name, "kind": f.kind(), "state": state_name, "detail": detail,
+        "collection": def.name, "filler": f.id, "title": f.title, "kind": f.kind(),
+        "url": f.url(), "state": state_name, "detail": detail,
         "last_fill_at": at(st.last_fill_at), "last_ok_at": at(st.last_ok_at),
         "next_fill_at": at(st.next_at.filter(|_| f.every_minutes.is_some() || st.failures > 0)),
         "items_last_fill": st.last_rows, "skipped_last_fill": st.last_skipped,
-        "agent_fills_today": f.is_agent().then_some(st.day_fills),
+        "model_fills_today": f.uses_model().then_some(st.day_fills),
+        "alerts": crate::alerts::of_filler(def, &f.id).map(|a| a.describe(def)).collect::<Vec<_>>(),
     })
 }
 
@@ -1426,28 +1796,45 @@ mod tests {
     #[test]
     fn web_values_are_normalized() {
         assert_eq!(
-            normalize(Kind::Number, json!(" $1,299.00 ")),
+            normalize(Kind::Number, json!(" $1,299.00 "), None),
             json!("1299.00")
         );
-        assert_eq!(normalize(Kind::Number, json!("-3")), json!("-3"));
-        assert_eq!(normalize(Kind::Number, json!("free")), json!("free"));
+        assert_eq!(normalize(Kind::Number, json!("-3"), None), json!("-3"));
+        assert_eq!(normalize(Kind::Number, json!("free"), None), json!("free"));
         assert_eq!(
-            normalize(Kind::Date, json!("20261106T193000")),
+            normalize(Kind::Date, json!("20261106T193000"), None),
             json!("2026-11-06")
         );
         assert_eq!(
-            normalize(Kind::Date, json!("Tue, 03 Nov 2026 20:00:00 GMT")),
+            normalize(Kind::Date, json!("Tue, 03 Nov 2026 20:00:00 GMT"), None),
             json!("2026-11-03")
         );
+        let denver = web_extract::when::Zone::Named(pod_core::tz::parse("America/Denver").unwrap());
         assert_eq!(
-            normalize(Kind::Date, json!("2026-11-03")),
-            json!("2026-11-03")
+            normalize(Kind::Datetime, json!("2026-11-06T19:30"), Some(&denver)),
+            json!("2026-11-06T19:30-07:00")
         );
         assert_eq!(
-            normalize(Kind::Choice, json!("https://schema.org/InStock")),
+            normalize(
+                Kind::Datetime,
+                json!("2026-11-06T19:30+01:00"),
+                Some(&denver)
+            ),
+            json!("2026-11-06T19:30+01:00"),
+            "a given offset stays"
+        );
+        assert_eq!(
+            normalize(Kind::Choice, json!("https://schema.org/InStock"), None),
             json!("InStock")
         );
         assert_eq!(key_text(&json!(" Acme 27 ")).as_deref(), Some("acme 27"));
+        let now = web_extract::when::When::parse("2026-11-06T12:00Z")
+            .unwrap()
+            .timestamp(None);
+        assert!(is_past(Some(&json!("2026-11-06T08:00Z")), now));
+        assert!(!is_past(Some(&json!("2026-11-06T10:00Z")), now), "slack");
+        assert!(!is_past(Some(&json!("2026-11-05")), now), "a day's slack");
+        assert!(is_past(Some(&json!("2026-11-03")), now));
     }
 
     #[test]
@@ -1455,26 +1842,38 @@ mod tests {
         let mut def: Definition = serde_json::from_value(json!({
             "name": "results", "title": "Results", "next_field": 2,
             "fields": [{"id": "f1", "name": "name", "type": "text", "optional": true}],
-            "filler": {"kind": "fetch", "url": "https://r.example/x", "extract": "json",
-                       "map": {"f1": "name"}, "on_open_minutes": 5}
+            "fillers": [{"id": "s1", "title": "R", "kind": "fetch", "url": "https://r.example/x",
+                         "extract": "json", "map": {"f1": "name"}, "on_open_minutes": 5}]
         }))
         .unwrap();
         let mut st = State::default();
-        assert!(due_on_open(&def, &st, 1_000), "never filled");
+        let with = |st: &State| HashMap::from([("s1".to_owned(), st.clone())]);
+        assert_eq!(
+            due_on_open(&def, &with(&st), 1_000),
+            vec!["s1"],
+            "never filled"
+        );
         st.last_fill_at = Some(1_000);
-        assert!(!due_on_open(&def, &st, 1_200));
-        assert!(due_on_open(&def, &st, 1_300));
+        assert!(due_on_open(&def, &with(&st), 1_200).is_empty());
+        assert_eq!(due_on_open(&def, &with(&st), 1_300).len(), 1);
         st.failures = 2;
         st.next_at = Some(5_000);
-        assert!(!due_on_open(&def, &st, 1_300), "not during a backoff");
-        def.filler.as_mut().unwrap().on_open_minutes = None;
+        assert!(
+            due_on_open(&def, &with(&st), 1_300).is_empty(),
+            "not during a backoff"
+        );
+        def.fillers[0].on_open_minutes = None;
         st = State {
             last_fill_at: Some(1_000),
             next_at: Some(2_000),
             ..State::default()
         };
-        assert!(!due_on_open(&def, &st, 1_500));
-        def.filler.as_mut().unwrap().every_minutes = Some(15);
-        assert!(due_on_open(&def, &st, 2_000), "a scheduled fill is overdue");
+        assert!(due_on_open(&def, &with(&st), 1_500).is_empty());
+        def.fillers[0].every_minutes = Some(15);
+        assert_eq!(
+            due_on_open(&def, &with(&st), 2_000).len(),
+            1,
+            "a scheduled fill is overdue"
+        );
     }
 }

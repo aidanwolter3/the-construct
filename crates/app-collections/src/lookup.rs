@@ -277,6 +277,7 @@ pub fn learn(
             created_at: now,
             updated_at: now,
             deleted_at: None,
+            filler: None,
         },
     )?;
     Ok(true)
