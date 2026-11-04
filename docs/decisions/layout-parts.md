@@ -5,7 +5,7 @@ Date: 2026-11-03. Related: D36, [custom-apps-and-data-sources](custom-apps-and-d
 
 A custom app often starts from a built-in one ("a compact Pixelfed", "Kitchen with the normal post screen"). If it
 copies the built-in's layout, the copy falls behind every time the built-in ships a feature. There was no reuse
-mechanism: no fragments or includes; even `pixelfed_home/0005.json` repeats its post card.
+mechanism: no fragments or includes; even `pixelfed/0005.json` repeats its post card.
 
 Decision:
 
@@ -34,6 +34,6 @@ Decision:
   `update_layout` with the new `copied_from`; rejecting it is `dismiss_update`.
 
 Not done yet: no built-in layout file declares named parts yet (screens and slots are parts already); a new
-`pixelfed_home` version could declare its post card and reference it in both places, ending the duplicate. A ref
+`pixelfed` version could declare its post card and reference it in both places, ending the duplicate. A ref
 cannot be partially overridden (copy the part to change it). The update notice needs a client build; older clients
 just don't show it.

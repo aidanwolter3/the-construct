@@ -97,6 +97,6 @@ credential it issues reaches only `/v1/mcp`. See [custom-apps.md](custom-apps.md
 
 | Call | Answer |
 |---|---|
-| `POST /v1/demo/ack` | A stateless 200, for the `pixelfed_demo` app's buttons. |
+| `POST /v1/pixelfed_sample_no_login/ack` | A stateless 200, for the `pixelfed_sample_no_login` app's buttons. |
 | `POST /v1/test/fault {"status": 503, "count": 3}` | Only with `CONSTRUCT_TEST_HOOKS=1`: the next `count` POSTs answer `status` without being applied; `count: 0` clears it. |
 | `GET /metrics` | Prometheus text, only on `CONSTRUCT_METRICS_ADDR`. |

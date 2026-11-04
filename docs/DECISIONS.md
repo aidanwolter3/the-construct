@@ -64,7 +64,7 @@ defaults to `None` when missing, which matches the §2.2C fixture.
 
 UniFFI's Kotlin bindings load the library through JNA, so they run on the JVM and on Android but not in
 `commonMain`. Until M4 they lived in `:desktopApp`. Since M4 (Phase B) they are generated into
-`kmp-app/shared/src/jvmCommonMain/kotlin/uniffi/client_ffi/` (committed). `jvmCommonMain` is an intermediate
+`app/shared/src/jvmCommonMain/kotlin/uniffi/client_ffi/` (committed). `jvmCommonMain` is an intermediate
 source set between `commonMain` and the `desktop` (JVM) and `android` targets, declared with
 `applyDefaultHierarchyTemplate { common { group("jvmCommon") { ... } } }`.
 
@@ -132,7 +132,7 @@ feedback.
   cdylib builds for desktop and Android don't compile the CLI. To generate bindings:
   `cargo run -p client-ffi --release --features bindgen --bin uniffi-bindgen -- generate --library <lib> --language kotlin --out-dir <dir> --no-format`.
 - **Android build:** `scripts/build_android.sh` runs `cargo ndk` and writes
-  `kmp-app/androidApp/src/main/jniLibs/<abi>/libclient_ffi.so`. The ABIs default to `arm64-v8a x86_64`
+  `app/androidApp/src/main/jniLibs/<abi>/libclient_ffi.so`. The ABIs default to `arm64-v8a x86_64`
   (`CONSTRUCT_ANDROID_ABIS` overrides them), and the NDK defaults to the newest complete one (`ANDROID_NDK_HOME`
   overrides it). The `.so` needs only `liblog`, `libdl` and `libc`, not `libc++_shared.so`. reqwest's rustls
   (ring) cross-compiles cleanly.
@@ -166,11 +166,11 @@ use the classic `androidTarget()` with `com.android.library`.
   `withCompilations { it.target.platformType == KotlinPlatformType.androidJvm }`.
 - The plugin id and version are in `gradle/libs.versions.toml` (`agp`,
   `android-kotlin-multiplatform-library`) and applied with `apply false` in the root build. The SDK path comes
-  from the gitignored `kmp-app/local.properties` (`sdk.dir=...`) or `ANDROID_HOME`.
+  from the gitignored `app/local.properties` (`sdk.dir=...`) or `ANDROID_HOME`.
 
 ## D11: `:androidApp` shell (base URL, cleartext, storage, engine lifetime)
 
-`kmp-app/androidApp` is a plain `com.android.application` module (AGP 9.1.1) with the Kotlin Compose
+`app/androidApp` is a plain `com.android.application` module (AGP 9.1.1) with the Kotlin Compose
 compiler plugin. AGP 9 compiles Kotlin itself (built-in Kotlin), so `org.jetbrains.kotlin.android` is not
 applied. namespace/applicationId `org.theconstruct.android`, compileSdk/targetSdk 36, minSdk 26, Java/Kotlin
 target 21 (same toolchain as `:shared`). Dependencies: `:shared`, `androidx.activity:activity-compose` 1.12.4,
@@ -385,7 +385,7 @@ session. The rules below hold inside each pod.
   Pixelfed's 10 requests/minute/IP throttle on `/oauth/*` (a 429 keeps the cached app).
 - **Upstream 401 cleanup is compare-and-delete:** a 401 that survives refresh deletes the stored account only if it
   still holds the access token that failed, so a concurrent sign-in or refresh is not wiped.
-- **Status mapping:** `GET /v1/workspaces/pixelfed_home` without a bearer -> 200 signed-out bundle (AuthLogin
+- **Status mapping:** `GET /v1/workspaces/pixelfed` without a bearer -> 200 signed-out bundle (AuthLogin
   button). With a bearer that gets no feed (unknown session, no stored account, or upstream 401, which also deletes
   the stored account) -> 401 + `WWW-Authenticate: Bearer` + `X-Construct-Session: invalid`, body = the same signed-out
   bundle, so the client learns its session is stale (D19 fetch-401 path). Unreachable/5xx -> 502. Actions: no session 401, upstream 4xx passed through (client rolls back), 5xx/unreachable 502 (retry).
@@ -407,7 +407,7 @@ session. The rules below hold inside each pod.
   `media_host_not_allowed`. Media redirects are followed (max 5) only to allowlisted origins (else the 3xx ->
   502). Bodies are capped at 25 MB: a larger `Content-Length` -> 502 `media_too_large`, and a body that grows past
   the cap while streaming is aborted.
-- **Demo:** the static `pixelfed_demo` like intent posts to `POST /v1/demo/ack` (stateless 200).
+- **Demo:** the static `pixelfed_sample_no_login` like intent posts to `POST /v1/pixelfed_sample_no_login/ack` (stateless 200).
 - **Real Pixelfed (M6-RA):** the timeline request adds `include_reblogs=true` (Pixelfed hides boosts otherwise; the
   pod reads one page, so Pixelfed's Link headers, which drop the flag, are not followed). Every optional field is
   type-lenient (counts as numbers or numeric strings, flags as bools/0/1/strings, `aspect` integer or float,
@@ -442,9 +442,9 @@ session. The rules below hold inside each pod.
   on-screen images from creation until success/error/disposal, so an image whose request has not started yet also
   counts; `wait-images` and every `shot` wait for it to reach 0 and then for Coil's crossfade, which runs on the
   wall clock, not the test clock (300 ms after the last success).
-- **Fixture:** `fixtures/pixelfed_home_feed_bundle.json` is `fixtures/pixelfed/timeline_home.json` normalized by
+- **Fixture:** `fixtures/pixelfed_feed_bundle.json` is `fixtures/pixelfed/timeline_home.json` normalized by
   the D17 rules (with `{{BASE}}` = `http://127.0.0.1:8081`, image URLs left un-proxied so the sim can map them)
-  plus the contract's `pixelfed_home` layout and `queries`.
+  plus the contract's `pixelfed` layout and `queries`.
 
 ## D19: Client sign-in (OAuth2 PKCE in client-core, session store, 401 policy)
 
@@ -514,7 +514,7 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
   after a restart the row is tried once more and pauses again on another 401. A 401 for a session that was
   replaced while the POST was in flight (a sign-in or logout finished) neither pauses nor clears anything; the
   row is retried with the current session. A user's like is never silently
-  undone just because the session expired. The pod answers a stale bearer on `pixelfed_home` with 401 (D17), so
+  undone just because the session expired. The pod answers a stale bearer on `pixelfed` with 401 (D17), so
   a stale session is cleared on the first workspace fetch (e.g. at startup) and the signed-out bundle follows.
 - **Logout:** non-blocking: cancel flow, clear the in-memory session, purge the private cache (below), notify
   signed_out; then on a thread: sync the store (delete the session, drop a pending sign-in), `POST /v1/auth/logout`
@@ -590,7 +590,7 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
 
 - **Storage:** migration v5 `layout_versions(id, workspace_id, version, json, prompt, provider, patch_json,
   created_at, UNIQUE(workspace_id, version))`. Replaced by the v6 catalog (D26); the rules below still hold per layout. Only the workspace root `UiNode` is versioned; entities still come
-  from fixtures / the upstream. Versioned workspaces: `home`, `pixelfed_demo`, `pixelfed_home` (signed-in feed
+  from fixtures / the upstream. Versioned workspaces: `home`, `pixelfed_sample_no_login`, `pixelfed` (signed-in feed
   layout only; the signed-out screen is a different screen and carries no version header). Version 1 is the
   built-in layout, inserted lazily (`INSERT ... WHERE NOT EXISTS`) on first read or commit. Appends compute
   `MAX(version) + 1` inside the INSERT, under the store mutex, so versions are gapless and never reused.
@@ -603,7 +603,7 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
 - **Auth:** versions/rollback/agent require a valid pod session unless `CONSTRUCT_AGENT_OPEN=1` (dev/demo, so QA can
   curl without signing in). The SSE endpoint follows the workspace GET: anonymous subscriptions are allowed because
   an event carries only `{workspace_id, version}` (no layout, no entities); a client must still fetch the workspace
-  with its own credentials. A stale bearer on `pixelfed_home` gets 401 so the client notices.
+  with its own credentials. A stale bearer on `pixelfed` gets 401 so the client notices.
 - **Push:** a `tokio::sync::broadcast` channel (capacity 64) in `AppState`; each SSE stream subscribes before
   reading the current version (no missed commit; a duplicate version is harmless), filters by workspace, and on
   `Lagged` re-sends the current version instead of the skipped ones. Keepalive is axum's `KeepAlive` comment
@@ -663,7 +663,7 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
   entities, queries and the outbox and rewrites the cached `active_workspace` row with its existing entity URIs and
   queries (the response carries `entities: {}`, so the fetch merge must not be used). Skipped if an equal or newer
   version is already applied (the SSE refetch may win the race): both paths are idempotent. Not applied (a refetch
-  instead) when no versioned layout is on display (`layout_version` is `None`, e.g. the signed-out `pixelfed_home`
+  instead) when no versioned layout is on display (`layout_version` is `None`, e.g. the signed-out `pixelfed`
   screen with `CONSTRUCT_AGENT_OPEN=1`) or the session changed since the request. `agent_json` =
   `{"state":"done","message":"Layout updated (vN, <provider>)","provider","layout_version"}`; an `"unchanged": true`
   response -> `"message":"No change needed (vN)"` plus `"unchanged":true`.
@@ -676,7 +676,7 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
 - **Stale status:** a fetch whose layout version is newer than the applied one resets a `done`/`error` status to
   idle unless that status names this version (the prompt's own SSE echo); `running` is left alone.
 - **Layout version:** from `X-Construct-Layout-Version` on every applied fetch (absent -> `None`, e.g. the signed-out
-  `pixelfed_home` screen), or the prompt response's `layout_version`. In memory only (a restart refetches anyway). A
+  `pixelfed` screen), or the prompt response's `layout_version`. In memory only (a restart refetches anyway). A
   fetch whose header is older than the applied version (it started before a prompt response was applied) keeps the
   newer layout and takes only the entities.
 - **Push subscriber (`client_core::events`):** a `construct-engine-events` thread, connected only while `is_online`,
@@ -759,8 +759,8 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
   data `{"workspace_id","version","layout_id","layout_version"}`; agent response `layout_id`, `layout_id_version`
   (its `layout_version` stays the revision). In the catalog endpoints `version` / `layout_version` always mean the
   per-layout version and `revision` the workspace revision.
-- **Built-ins:** `fixtures/layouts/*.json` (`include_str!`) plus the existing defaults: `pixelfed_home` and
-  `pixelfed_demo`: `classic` (the built-in feed, default), `editorial` (media first at 0.8 portrait, then the
+- **Built-ins:** `fixtures/layouts/*.json` (`include_str!`) plus the existing defaults: `pixelfed` and
+  `pixelfed_sample_no_login`: `classic` (the built-in feed, default), `editorial` (media first at 0.8 portrait, then the
   author, then the caption; no action bar), `compact` (wide 1.91 media inset by a 24 dp Container, Caption-style
   caption), `minimal` (no action bar: an empty Container); `home`: `counter` (default), `big_counter` (count first,
   buttons, small title). The PostCard renders its slots in a fixed order, so variants move nodes between slots, as
@@ -814,9 +814,9 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
 - **Agent:** commits to the active layout with compare-and-append on `(layout_id, layout_version)`; a concurrent
   edit, restore or SWITCH makes it re-apply the same patch on the new active layout's latest (up to 3 more times,
   then 409), so a switch during a slow provider call is not reverted and the edit lands on what the user now sees.
-- **Auth:** reads follow the workspace GET per layout's workspace: `home`/`pixelfed_demo` anonymous, `pixelfed_home`
+- **Auth:** reads follow the workspace GET per layout's workspace: `home`/`pixelfed_sample_no_login` anonymous, `pixelfed`
   needs a valid session (no bearer -> 401 with the agent detail, stale bearer -> 401 like the GET) unless
-  `CONSTRUCT_AGENT_OPEN=1`; the unfiltered list omits `pixelfed_home` for anonymous callers (stale bearer -> 401).
+  `CONSTRUCT_AGENT_OPEN=1`; the unfiltered list omits `pixelfed` for anonymous callers (stale bearer -> 401).
   Writes (activate, restore) need a session unless `CONSTRUCT_AGENT_OPEN=1` (D22).
 - **f32 in responses:** layouts are turned into JSON values through their text form (`layouts::node_value`), since
   `serde_json::to_value` widens `aspect_ratio` 0.8 to 0.800000011920929.
@@ -859,7 +859,7 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
   available here." so other fakes compile. `UniffiEngineBridge` maps `uniffi.client_ffi.LayoutApiException` (Int
   args clamped to `UInt`, negatives -> 0, which the pod rejects readably). `EngineSnapshot.layoutJson` (default `{}`)
   -> `ConstructState.activeLayout` (`ActiveLayout(layoutId?, layoutVersion?, revision?)`, lenient parse).
-  `FakeEngineBridge` serves `FakeLayoutCatalog` (same JSON shapes; `pixelfed_demo` for a bundle with
+  `FakeEngineBridge` serves `FakeLayoutCatalog` (same JSON shapes; `pixelfed_sample_no_login` for a bundle with
   `pixelfed://` entities, else `home`; the active layout's newest version is the bundle's layout so the screen starts
   unchanged; activate/restore of the active layout swap the layout and bump the revision; an applied prompt appends
   to the active layout; offline -> `Kind.Offline`).
@@ -960,8 +960,8 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
   slot; tested), the agent prompt text and the outbox are untouched (the engine's merge re-applies pending rows).
 - **Fake catalog:** `FakeLayoutCatalog` serves the pod's built-ins with the pod's titles, descriptions and hints,
   read from the repo's `fixtures/layouts/*.json` (found by walking up from the working directory like the bundles;
-  rule-derived stand-ins if missing): the feed bundle (root id `pixelfed_home`) gets `pixelfed_home.*`, the one-post
-  bundle `pixelfed_demo.*`, the counter `home.*`. Classic has v1 seed, v2/v3 AI prompts, v4 a rollback to v1 (counter:
+  rule-derived stand-ins if missing): the feed bundle (root id `pixelfed`) gets `pixelfed.*`, the one-post
+  bundle `pixelfed_sample_no_login.*`, the counter `home.*`. Classic has v1 seed, v2/v3 AI prompts, v4 a rollback to v1 (counter:
   seed, AI, rollback), timestamps relative to now.
 - **Simulator commands:** `open-layouts`, `select-layout <id | last segment>`, `select-version <n>` (presses Load
   older until the row appears), `use-layout`, `restore-version`, `confirm`, `cancel`, `undo`, `close-layouts`, and a
@@ -992,29 +992,29 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
   stored Pixelfed apps are keyed by (instance, redirect URI): the first `construct://oauth` sign-in registers a new app
   (the `canvas://oauth` row is simply unused); an existing account's token refresh still finds its own app row.
 - **Deliberately unchanged:** Fly app names and URLs (`the-construct-pod`, `the-construct-fake-pixelfed`), crate
-  names (none contained "canvas"), the `kmp-app` directory, git history, and earlier D-entries' narrative (their
+  names (none contained "canvas"), the `app` directory, git history, and earlier D-entries' narrative (their
   identifiers were updated to match the code).
 
 ## D32: One app, layouts as code, read-only versions API (`server::layouts`, migrations v7, v8)
 
-- **Product rule:** the pod serves ONE app, Pixelfed (workspace `pixelfed_home`), at its latest layout version. New
+- **Product rule:** the pod serves ONE app, Pixelfed (workspace `pixelfed`), at its latest layout version. New
   versions come only from the developer, as files in the repo plus a deploy. No client can change layout or version
   state on the pod, and no AI generation is reachable from a client. Pixelfed interactions (like/bookmark through
   the outbox, sign-in/out) and the counter mutation routes stay.
-- **Apps:** `layouts::APPS` = `pixelfed_home` "Pixelfed" (icon `photo`), plus two dev apps, `pixelfed_demo`
-  "Pixelfed demo" (`photo`) and `home` "Counter" (`counter`). `GET /v1/apps` lists the dev apps only with
+- **Apps:** `layouts::APPS` = `pixelfed` "Pixelfed" (icon `photo`), plus two dev apps, `pixelfed_sample_no_login`
+  "Pixelfed sample" (`photo`) and `home` "Counter" (`counter`). `GET /v1/apps` lists the dev apps only with
   `CONSTRUCT_SHOW_DEV_APPS=1`; their other endpoints always work, because tests, CI and the simulator use them.
 - **Layout files:** `layouts/<app>/NNNN.json` = `{"note": "short changelog line", "layout": <UiNode>}`. Names have
   4 digits and are contiguous from 0001. No other keys are allowed, the note must be non-empty, and the root is the
   app's `core://Workspace` with id = the app id. Each file is embedded with `include_str!` through one line in
-  `layouts::FILES` (`layout_file!("pixelfed_home", "0002")`). A test fails if a file in `layouts/` is not listed,
+  `layouts::FILES` (`layout_file!("pixelfed", "0002")`). A test fails if a file in `layouts/` is not listed,
   or if a listed file is missing. `0001.json` of each app holds the former built-in default (the classic feed / the
   counter). The named alternatives (Editorial, Compact, Minimal, Big counter; `fixtures/layouts/`) are deleted.
   Files are validated with the agent's structural validator (`agent::validate_structure`: depth, size, slot rules,
   aspect ratio, padding, `/v1/` endpoint prefix). Intents may be new action types the validator has no rule for,
   since a developer wrote the file, but every intent tag must be one this build knows: a tag that would deserialize
   as `ActionIntent::Unknown` (a typo, the removed `action.agent.prompt`, `action.unknown` itself) is refused, naming
-  the file, the tag and its JSON pointer ("layouts/pixelfed_home/0002.json: invalid layout: unknown action intent
+  the file, the tag and its JSON pointer ("layouts/pixelfed/0002.json: invalid layout: unknown action intent
   'action.navigation.opne' at /layout/slots/0/..."). Legacy stored versions stay lenient (see below).
 - **File hash (migration v8, `app_versions.file_hash TEXT NULL`):** the append-only check compares
   `layouts::file_hash` = SHA-256 of the canonical JSON (keys sorted recursively, no whitespace) of
@@ -1033,17 +1033,17 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
   branch) is only a warning: "layouts/<app>/NNNN.json was deployed as version V but is missing from this build;
   serving the recorded history unchanged"; files numbered after the highest recorded one still append. These stop
   the start (exit code 1), naming the file and how to recover:
-  - "layouts/pixelfed_home/0002.json changed after it was deployed as version 7; layout files are append-only. To
-    recover, restore the deployed content of layouts/pixelfed_home/0002.json (git log -p -- ...) and put the change
+  - "layouts/pixelfed/0002.json changed after it was deployed as version 7; layout files are append-only. To
+    recover, restore the deployed content of layouts/pixelfed/0002.json (git log -p -- ...) and put the change
     in a new file, 0003.json" (a file with the same number as a recorded-but-missing one is that file: same check)
   - "... is new but numbered below layouts/<app>/NNNN.json, which is already deployed; layout files are
     append-only. To recover, move its content to a new file numbered after the newest deployed one, NNNN.json"
   - "...: layout files are numbered without gaps, expected NNNN.json next", "... is listed twice", "not valid
     JSON", "unknown key", "\"note\" must be a non-empty string", "invalid layout: ..." (including unknown intents)
 
-  On a fresh DB `pixelfed_home/0001` becomes version 1. On a migrated DB the files continue after the existing
+  On a fresh DB `pixelfed/0001` becomes version 1. On a migrated DB the files continue after the existing
   maximum, so every 0001 appears once more as the newest version, with the same content as the old built-in. On
-  staging, `pixelfed_home` v2 "Classic feed" (source `file`) therefore duplicates v1 (the migrated seed): expected.
+  staging, `pixelfed` v2 "Classic feed" (source `file`) therefore duplicates v1 (the migrated seed): expected.
 - **Migrations** run each step in an IMMEDIATE transaction that re-reads `user_version`, so two processes
   starting on the same database never both run a step.
 - **Migration v7 (Rust step):** this adds `app_versions(app_id, version, hash -> layout_blobs, source, note,
@@ -1106,14 +1106,14 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
   - Removed: `PromptAgent` dispatch, the agent thread, `agent_json`, the catalog writes (activate/restore) and the
     old catalog reads, with their FFI exports and Kotlin wrappers.
   - Snapshot `layout_json` = `{"app_id": "<workspace>", "version": n}` from the applied
-    `X-Construct-Layout-Version`, or `"{}"` when unversioned (the signed-out `pixelfed_home` screen).
+    `X-Construct-Layout-Version`, or `"{}"` when unversioned (the signed-out `pixelfed` screen).
     `ActiveLayout` reads only this shape (the D27 `layout_id`/`revision` fallback is gone).
   - `UniffiEngineBridge.close()` frees the Rust engine; later calls do nothing.
 - **Kotlin bridge:** `ConstructEngineBridge.listApps()`, `appVersions(appId, before: Long?, limit: Int?)` and
   `appVersion(appId, version: Long)` are blocking (call them on `Dispatchers.IO`) and throw `LayoutApiException`.
   The interface defaults throw "Apps aren't available here.". There is also `close()`.
   - `FakeEngineBridge` serves `FakeAppCatalog`, a catalog shaped like `CONSTRUCT_SHOW_DEV_APPS=1` with a short
-    history per app: Pixelfed v1..v3, Pixelfed demo v1..v2, Counter v1..v2.
+    history per app: Pixelfed v1..v3, Pixelfed sample v1..v2, Counter v1..v2.
 - **Default view:** only the rendered layout plus a small hamburger button at the top left. It is an inset-aware
   overlay (`menu-button`, content description "Menu"). There is no status line, account text, FAB or debug chip; the
   sign-in prompts inside the layout stay.
@@ -1157,7 +1157,7 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
     hamburger is badged until "Latest" / "Show latest" resumes following.
   - Why client-local: one person's choice of an older version must not change what other clients see, and the
     product rule allows no client writes.
-- **Default workspace** `pixelfed_home` on every surface: desktop `DEFAULT_WORKSPACE`, Android `-PconstructWorkspace`,
+- **Default workspace** `pixelfed` on every surface: desktop `DEFAULT_WORKSPACE`, Android `-PconstructWorkspace`,
   the simulator's `-Pworkspace`, and `android_smoke.sh`. The overrides keep working.
 - **Server picker in all builds:** the drawer's Server section replaces the debug-only chip (D29).
   - Android presets: Staging, Local emulator (`http://10.0.2.2:8080`), Local USB (`http://127.0.0.1:8080`), plus
@@ -1202,7 +1202,7 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
     with a "What's new" banner.
 
   Each command waits for idle and for the apps calls, and fails with a hint when its control is missing. The D30
-  browser commands and the agent controls are gone. `-Pworkspace` defaults to `pixelfed_home`.
+  browser commands and the agent controls are gone. `-Pworkspace` defaults to `pixelfed`.
 
 ## D34: App changes ship from the pod; the engine and clients stay app-agnostic
 
@@ -1299,9 +1299,9 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
   of the app" / "Made for an older version of the app" before the note. `parseVersionLayout` refuses an
   incompatible spec, so nothing pins one. An older pod that sends no `compatible` means compatible. The simulator's
   `select-version` fails with the row's text on a greyed-out row.
-- **Compatibility today:** schema 2 (D35) was additive, so `RETIRED` is empty. `home/0001`, `pixelfed_demo/0001` and
-  `pixelfed_home/0001` declare 1, `pixelfed_home/0002` declares 2; every version draws on current clients. (On
-  `pixelfed_home/0001` the comment button opens nothing: that version has no comments screen.)
+- **Compatibility today:** schema 2 (D35) was additive, so `RETIRED` is empty. `home/0001`, `pixelfed_sample_no_login/0001` and
+  `pixelfed/0001` declare 1, `pixelfed/0002` declares 2; every version draws on current clients. (On
+  `pixelfed/0001` the comment button opens nothing: that version has no comments screen.)
 - **Not yet:** the SSE event and "Newer version available" still use the latest version even when the client can't
   draw it (D35's note). Pins are in memory only, so an app update cannot carry over a pin it can't draw.
   *(The SSE event and the menu are fixed in D38.)*
@@ -1319,12 +1319,12 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   description), `core://Chip` (tone Neutral/Warning) and `core://Badge`. `core://Image` gains `blurhash`; text
   styles gain `Label` and `Secondary`. `protocol::NODE_TYPES` lists every node type; `required_schema` gives 3 for
   any of the new vocabulary.
-- **The post card is now layout:** `layouts/pixelfed_home/0003.json` and `layouts/pixelfed_demo/0002.json` build it
+- **The post card is now layout:** `layouts/pixelfed/0003.json` and `layouts/pixelfed_sample_no_login/0002.json` build it
   from those nodes inside a `core://List`. Everything a widget used to compute moved to the pod's entities:
   `author_name`, `author_handle`, `author_avatar_url`, `reblogged_by_name` and `content_warning_label`. Text binds
   embedded tokens (`$item.reblogged_by_name boosted`).
 - **Old versions stay servable:** a node type the protocol doesn't know decodes as an opaque `UiNode::Unknown` that
-  re-serialises unchanged, so the deployed `pixelfed://` versions (pixelfed_home 1–2, pixelfed_demo 1, listed in
+  re-serialises unchanged, so the deployed `pixelfed://` versions (pixelfed 1–2, pixelfed_sample_no_login 1, listed in
   `layouts::LEGACY_FILES`) are still served to old clients (schema 1–2). Any other file using an unknown node type
   is refused at startup. Kotlin decodes unknown types as `UiNode.Unknown` (drawn as nothing).
 - **Schema 3 is a breaking change (D36):** `protocol::RETIRED = [(3, 3)]`, so schema-3 clients draw only versions
@@ -1338,7 +1338,7 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   (`app_path`, `token_path`, both `/v1/`); a button without them shows "This sign-in button is out of date". Sign-out
   removes every entity no query or workspace references, every cached data load and the workspace cache, and drops
   outbox rows made while signed in (store v4 `session_bound`), instead of anything under `pixelfed://`.
-- **Demo fixture:** `fixtures/pixelfed_home_bundle.json` now carries a `timeline:home` query, because a
+- **Demo fixture:** `fixtures/pixelfed_sample_bundle.json` now carries a `timeline:home` query, because a
   `core://List` shows only what its query lists (the old feed widget showed every post).
 - **Cost:** layouts are longer (the post card is about 150 lines of JSON). Not yet: a generic way to format dates
   or counts in layouts, so the pod still sends ready-made strings.
@@ -1376,7 +1376,7 @@ engine still knew the `pixelfed://` domain for sign-out. All of that is gone.
   the counter store calls. Migration v10 drops the `counters` table. The `home` rows already in `app_versions` on
   existing databases stay, inert: the startup sync only reads the apps in `APPS` (D32), and deleting history is not
   worth a data migration. `GET /v1/workspaces/home` is now 404. The fault hook (`/v1/test/fault`) stays; its tests
-  use `/v1/demo/ack`.
+  use `/v1/pixelfed_sample_no_login/ack`.
 - **Clients:** the `counter` icon and the simulator's Counter app and `home` default fixture are gone. A pod that
   still lists `home` (staging before the deploy) shows it with the generic icon.
 - **Kept as test data:** `fixtures/counter_home_bundle.json` (workspace `home`, entity `core://counters/home`) stays
@@ -1391,12 +1391,12 @@ Superseded in part (`hydrate` became a manifest plus named feeds) by
 [custom-apps-and-data-sources](decisions/custom-apps-and-data-sources.md).
 
 - **Why:** the pod (`crates/server`) was generic in name only. `AppState` held the Pixelfed config and client,
-  `get_workspace` and the SSE handler special-cased `pixelfed_home`, `layouts::APPS`/`FILES` hard-coded the apps,
+  `get_workspace` and the SSE handler special-cased `pixelfed`, `layouts::APPS`/`FILES` hard-coded the apps,
   and sessions lived in the Pixelfed routes. D34 made the clients app-agnostic; this does the same for the server.
 - **Crates:** `pod-core` (library) is the generic pod: router, workspaces, layout files and versions, schema
   negotiation, SSE, sessions and sign-ins, the store and its migrations, the fault hook. It names no app (a test
   checks its source, outside comments and the frozen migrations). `app-pixelfed` (library) is the Pixelfed adapter:
-  upstream client, normalizing, auth/actions/comments/media routes, its tables and the `pixelfed_demo` dev app.
+  upstream client, normalizing, auth/actions/comments/media routes, its tables and the `pixelfed_sample_no_login` dev app.
   `server` keeps its package name (so `deploy/`, `scripts/` and `cargo run -p server` are unchanged) and is only
   the composition: `server::adapters(config)` plus `main.rs`; its library re-exports `pod_core::*` and
   `app_pixelfed as pixelfed` for tests.
@@ -1408,7 +1408,7 @@ Superseded in part (`hydrate` became a manifest plus named feeds) by
   `Catalog::new` checks the adapter set at startup (unique adapter names, app ids and sign-in ids; every required
   sign-in provided; every layout file belongs to an app). Handlers find their adapter with `AppState::adapter::<T>()`.
 - **Layout-only apps** use `pod_core::StaticAdapter` (layout files + a fixed bundle, optional extra routes);
-  `pixelfed_demo` is one (with `/v1/demo/ack`).
+  `pixelfed_sample_no_login` is one (with `/v1/pixelfed_sample_no_login/ack`).
 - **Sign-ins:** one pod session is shared by every app. Adapters register sign-ins (`pixelfed`); an app declares the
   one it requires (`AuthPolicy::SignIn("pixelfed")`) or none (`Public`). The core checks it before `hydrate`:
   without it, the provider's signed-out screen (200 with no bearer, 401 + `X-Construct-Session: invalid` with one);
@@ -1423,7 +1423,7 @@ Superseded in part (`hydrate` became a manifest plus named feeds) by
   existing session a `pixelfed` row, so staging users stay signed in. Older builds ignore both tables.
 - **Unchanged on the wire:** no URL, layout file or `SCHEMA_VERSION` changed; no client build needed. One edge case
   changed: a workspace whose app has no layout version the client can draw is now 409 `no_compatible_version`
-  (before, `pixelfed_demo` fell back to the fixture's own layout and `pixelfed_home` panicked).
+  (before, `pixelfed_sample_no_login` fell back to the fixture's own layout and `pixelfed` panicked).
 - **Media proxy** stays Pixelfed-only (`app-pixelfed`) until a second app needs one.
 
 ## D41: Recipes are a second adapter with its own tables in the pod's SQLite
@@ -1669,7 +1669,7 @@ Superseded in part by [recipes-start-empty](decisions/recipes-start-empty.md) (`
   reads `$form.<field>` ("" while unset) and takes `equals`: show the content only when the value, as text (null and
   missing are ""), equals it. A switch is then a `core://ChoiceChips` over a form value plus one `Conditional` per
   view; the empty option is the default view.
-- **Pixelfed (`layouts/pixelfed_home/0004.json`, adapter only):** the feed slot is a Column of the chips and two
+- **Pixelfed (`layouts/pixelfed/0004.json`, adapter only):** the feed slot is a Column of the chips and two
   Conditionals (the old post list, and a two-column `core://List` of `Tappable` cards over the same
   `timeline:home` query, so both views share entities and likes). A card opens the new post screen
   (`pixelfed://posts/{id}`, Push), whose data `GET /v1/pixelfed/screens/post?id=<id>` returns the post (the inner one

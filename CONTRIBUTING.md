@@ -30,7 +30,7 @@ Run these before pushing; CI runs the same and keeps `main` green:
 ```bash
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 scripts/check_decisions.sh && scripts/check_test_data.sh
-cd kmp-app && ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test
+cd app && ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test
 ```
 
 UI changes are checked with the [headless simulator](docs/simulator.md): there are no emulator or on-device tests.
@@ -42,7 +42,7 @@ device; say so in the PR when a change needs that. More in [docs/testing.md](doc
 1. **The core knows no app.** The engine (`client-core`), the shared UI and `pod-core` handle layouts, entities and
    intents in general (D34, D35, D40). App changes ship as layout files plus adapter code in `crates/app-*`. Only new
    generic vocabulary (a node type, an intent, a field) needs a client build.
-2. **Layouts are append-only files.** A new version is the next `layouts/<app>/NNNN.json`; never edit or renumber a
+2. **Layouts are append-only files.** A new version is the next `layouts/<app>/NNNN.json` in the app's adapter crate; never edit or renumber a
    deployed one, or the server refuses to start. Old files may be deleted, oldest first (decision
    `retired-layout-files`). See [docs/layouts.md](docs/layouts.md).
 3. **Vocabulary is named features.** Every node type, intent or field a layout can use has a file in
@@ -51,12 +51,14 @@ device; say so in the PR when a change needs that. More in [docs/testing.md](doc
    [crates/protocol/features/README.md](crates/protocol/features/README.md).
 4. **Migrations, not resets.** Schema changes to the server's databases need a migration that works on existing
    pods: staging upgrades in place.
-5. **Keep Compose keys stable** in `kmp-app/shared`, so UI state survives layout updates.
+5. **Keep Compose keys stable** in `app/shared`, so UI state survives layout updates.
 6. **Record decisions.** An architecture decision gets a new file, `docs/decisions/<topic>.md`, following
-   [docs/decisions/README.md](docs/decisions/README.md). Don't rewrite old decisions; mark them superseded.
+   [docs/decisions/README.md](docs/decisions/README.md). Don't rewrite old decisions; mark them superseded. Renaming
+   something they mention (an app id, a folder) is the one exception: update the name in them too, so a search finds
+   it, and list the rename in [docs/decisions/README.md](docs/decisions/README.md).
    `docs/DECISIONS.md` is closed at D52.
 
-After changing a `pixelfed_home` layout or the fake Pixelfed's comments, regenerate the simulator fixtures:
+After changing a `pixelfed` layout or the fake Pixelfed's comments, regenerate the simulator fixtures:
 `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::`.
 
 ## Naming

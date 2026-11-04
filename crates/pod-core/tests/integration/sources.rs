@@ -36,6 +36,7 @@ fn layout(id: &'static str, endpoint: &str, data: &str) -> LayoutSource {
             "payload": {{}}}}}}}}]}}}}"#
     );
     LayoutSource {
+        dir: "layouts",
         app_id: id,
         name: "0001",
         text: Box::leak(text.into_boxed_str()),

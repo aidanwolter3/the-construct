@@ -88,7 +88,7 @@ fn a_like_on_the_upstream_becomes_an_unread_notification() {
     let list = pod(reqwest::Method::GET, "/v1/notifications", None);
     assert_eq!(list["unread_total"], 1, "{list}");
     let n = &list["notifications"][0];
-    assert_eq!(n["app_id"], "pixelfed_home");
+    assert_eq!(n["app_id"], "pixelfed");
     assert_eq!(n["channel"], "likes");
     assert_eq!(n["title"], "Alice Lumen liked your post");
     assert_eq!(n["target_uri"], format!("pixelfed://posts/{CAROUSEL}"));

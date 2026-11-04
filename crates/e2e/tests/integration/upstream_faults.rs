@@ -147,11 +147,11 @@ fn expired_upstream_token_is_refreshed_transparently() {
     wait_until("the refetch", TIMEOUT, || {
         h.hits()[before..]
             .iter()
-            .any(|x| x.path == "/v1/workspaces/pixelfed_home")
+            .any(|x| x.path == "/v1/workspaces/pixelfed")
     });
     let fetch = h.hits()[before..]
         .iter()
-        .find(|x| x.path == "/v1/workspaces/pixelfed_home")
+        .find(|x| x.path == "/v1/workspaces/pixelfed")
         .unwrap()
         .status;
     assert_eq!(fetch, 200);

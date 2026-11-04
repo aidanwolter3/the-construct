@@ -597,7 +597,7 @@ mod tests {
         let handle = EngineHandle::new_with_options(
             String::new(),
             "http://127.0.0.1:1".to_string(),
-            "pixelfed_home".to_string(),
+            "pixelfed".to_string(),
             Some(Box::new(PanickyStore)),
             Some(Box::new(PanickyOpener)),
             Some("construct://oauth".to_string()),

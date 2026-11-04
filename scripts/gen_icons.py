@@ -24,8 +24,8 @@ from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ICON_DIR = os.path.join(ROOT, "assets", "icon")
-ANDROID_RES = os.path.join(ROOT, "kmp-app", "androidApp", "src", "main", "res")
-DESKTOP_RES = os.path.join(ROOT, "kmp-app", "desktopApp", "src", "main", "resources", "icon")
+ANDROID_RES = os.path.join(ROOT, "app", "androidApp", "src", "main", "res")
+DESKTOP_RES = os.path.join(ROOT, "app", "desktopApp", "src", "main", "resources", "icon")
 
 # ---------------------------------------------------------------------------------------------- geometry
 # Art space: the unit square (y down). Ops may extend beyond it; every target clips to its own frame.

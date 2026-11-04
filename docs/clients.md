@@ -1,16 +1,16 @@
 # Clients
 
-Desktop and Android run the same shared Compose UI (`kmp-app/shared`) over the same Rust engine
+Desktop and Android run the same shared Compose UI (`app/shared`) over the same Rust engine
 (`crates/client-core`). Every client defaults to the staging server, `https://the-construct-pod.fly.dev`, and to the
 Pixelfed app. Build prerequisites are in [CONTRIBUTING.md](../CONTRIBUTING.md#setup).
 
 ## Desktop
 
 ```bash
-cd kmp-app
+cd app
 ./gradlew :desktopApp:run                                              # the staging server
 ./gradlew :desktopApp:run -Dconstruct.baseUrl=http://127.0.0.1:8080    # a local server
-./gradlew :desktopApp:run -Dconstruct.baseUrl=http://127.0.0.1:8080 -Dconstruct.workspace=pixelfed_demo
+./gradlew :desktopApp:run -Dconstruct.baseUrl=http://127.0.0.1:8080 -Dconstruct.workspace=pixelfed_sample_no_login
 ```
 
 `:desktopApp:run` builds the engine first (`scripts/build_ffi.sh`, macOS); `-PskipRustBuild` skips that and uses the
@@ -19,7 +19,7 @@ library already in `target/release`.
 | Option (`-D` property or environment variable) | Default | Meaning |
 |---|---|---|
 | `construct.baseUrl` / `CONSTRUCT_BASE_URL` | the menu's saved choice, else staging | The server at launch. Picking a server in Settings still switches the running app. |
-| `construct.workspace` / `CONSTRUCT_WORKSPACE` | `pixelfed_home` | The app opened at launch. |
+| `construct.workspace` / `CONSTRUCT_WORKSPACE` | `pixelfed` | The app opened at launch. |
 
 The engine keeps its cache in `~/.construct/cache.db` for staging and `~/.construct/servers/<url>/` for any other
 server, so data and queued actions never cross servers. Sessions are kept in the macOS Keychain (service
@@ -27,7 +27,7 @@ server, so data and queued actions never cross servers. Sessions are kept in the
 
 ## Android
 
-Prerequisites once: an Android SDK with an NDK (the path from `kmp-app/local.properties` `sdk.dir=` or
+Prerequisites once: an Android SDK with an NDK (the path from `app/local.properties` `sdk.dir=` or
 `ANDROID_HOME`), then:
 
 ```bash
@@ -35,7 +35,7 @@ cargo install cargo-ndk
 rustup target add aarch64-linux-android x86_64-linux-android
 ```
 
-Build and install from `kmp-app`; `assembleDebug` cross-compiles the engine first (`scripts/build_android.sh`):
+Build and install from `app`; `assembleDebug` cross-compiles the engine first (`scripts/build_android.sh`):
 
 ```bash
 ./gradlew :androidApp:assembleDebug     # androidApp/build/outputs/apk/debug/androidApp-debug.apk
@@ -49,12 +49,12 @@ adb logcat -s ConstructEngine:V         # Kotlin log lines and the engine's outp
 | `-PskipRustBuild` | | Package the `.so` files already in `jniLibs` without running cargo. |
 | `-PandroidAbis` | `arm64-v8a,x86_64` | ABIs to build and package. |
 | `-PconstructBaseUrl` | staging | The built-in server (`http://10.0.2.2:8080` is the host machine from the emulator). |
-| `-PconstructWorkspace` | `pixelfed_home` | The built-in app. |
+| `-PconstructWorkspace` | `pixelfed` | The built-in app. |
 | `-PconstructAppLinkHost` | the staging host | The host whose App Link the sign-in redirect uses. |
 | `-PnoFcmFallback` | | Leave out the embedded FCM push distributor. |
 
 Debug builds also take intent extras, read when the engine starts (use `am start -S` to restart):
-`--es baseUrl http://10.0.2.2:8080`, `--es workspace pixelfed_demo`. On a phone over USB, run
+`--es baseUrl http://10.0.2.2:8080`, `--es workspace pixelfed_sample_no_login`. On a phone over USB, run
 `adb reverse tcp:8080 tcp:8080` and use `http://127.0.0.1:8080`.
 
 **Cleartext:** the app allows plain HTTP only to `localhost`, `127.0.0.1` and `10.0.2.2`, and a custom server in

@@ -224,7 +224,7 @@ async fn a_caller_without_a_pod_token_gets_only_the_open_screen() {
     let env = env().await;
     let resp = client().get(env.url("/healthz")).send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let (status, header, body) = get(&env.url("/v1/workspaces/pixelfed_home"), None).await;
+    let (status, header, body) = get(&env.url("/v1/workspaces/pixelfed"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(header, None);
     let spec: WorkspaceSpec = serde_json::from_value(body).unwrap();
@@ -283,14 +283,14 @@ async fn pods_keep_their_sign_ins_and_media_apart() {
     let a = env.create("a").await;
     let b = env.create("b").await;
     sign_in(&env, &a).await;
-    let (status, _, feed) = get(&env.url("/v1/workspaces/pixelfed_home"), Some(&a)).await;
+    let (status, _, feed) = get(&env.url("/v1/workspaces/pixelfed"), Some(&a)).await;
     assert_eq!(status, StatusCode::OK, "{feed}");
     assert_eq!(
         feed["queries"]["timeline:home"].as_array().unwrap().len(),
         5
     );
     // Pod b is not signed in to anything, and keeps its token (200, no header).
-    let (status, header, body) = get(&env.url("/v1/workspaces/pixelfed_home"), Some(&b)).await;
+    let (status, header, body) = get(&env.url("/v1/workspaces/pixelfed"), Some(&b)).await;
     assert_eq!((status, header), (StatusCode::OK, None));
     assert!(body["queries"]["timeline:home"].is_null());
     let (status, body) = post(
@@ -326,7 +326,7 @@ async fn pods_keep_their_sign_ins_and_media_apart() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     // Only public paths: the feed itself is not reachable that way.
     for path in [
-        format!("/v1/p/{id_a}/v1/workspaces/pixelfed_home"),
+        format!("/v1/p/{id_a}/v1/workspaces/pixelfed"),
         format!("/v1/p/{id_a}/v1/workspaces/recipes"),
         format!("/v1/p/{id_a}/v1/pixelfed/media/../../workspaces/recipes"),
         format!("/v1/p/{}/v1/pixelfed/media/{key}", "0".repeat(32)),
@@ -350,7 +350,7 @@ async fn logout_keeps_the_pod_token_and_rotation_replaces_it() {
     // Signed out of Pixelfed, still in the pod: no sign-ins left.
     let (status, _, body) = get(&env.url("/v1/auth/sign-ins"), Some(&token)).await;
     assert_eq!((status, &body["sign_ins"]), (StatusCode::OK, &json!([])));
-    let (status, header, body) = get(&env.url("/v1/workspaces/pixelfed_home"), Some(&token)).await;
+    let (status, header, body) = get(&env.url("/v1/workspaces/pixelfed"), Some(&token)).await;
     assert_eq!((status, header), (StatusCode::OK, None), "{body}");
     assert!(
         body["queries"]["timeline:home"].is_null(),
@@ -494,9 +494,9 @@ async fn the_open_pod_serves_callers_without_a_token() {
         ..HostConfig::default()
     })
     .await;
-    let (status, _, body) = get(&env.url("/v1/workspaces/pixelfed_demo"), None).await;
+    let (status, _, body) = get(&env.url("/v1/workspaces/pixelfed_sample_no_login"), None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["workspace"]["id"], "pixelfed_demo");
+    assert_eq!(body["workspace"]["id"], "pixelfed_sample_no_login");
     // Admin pods still need their own token.
     let token = env.create("me").await;
     let (status, _, _) = get(&env.url("/v1/workspaces/recipes"), Some(&token)).await;
@@ -518,7 +518,7 @@ async fn the_open_pod_refuses_foreign_host_names() {
     let port = env.server.url.rsplit(':').next().unwrap().to_owned();
     let with_host = |host: String, token: Option<String>| {
         let mut req = client
-            .get(env.url("/v1/workspaces/pixelfed_demo"))
+            .get(env.url("/v1/workspaces/pixelfed_sample_no_login"))
             .header("host", host);
         if let Some(t) = token {
             req = req.bearer_auth(t);

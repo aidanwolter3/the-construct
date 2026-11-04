@@ -112,7 +112,7 @@ fn a_device_opens_a_pod_signs_in_signs_out_and_leaves() {
     let engine = ConstructEngine::init_with_options(
         "",
         &base,
-        "pixelfed_home",
+        "pixelfed",
         EngineOptions {
             config: EngineConfig {
                 poll_interval: Duration::from_millis(100),

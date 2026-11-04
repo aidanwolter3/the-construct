@@ -31,5 +31,6 @@ Decision: old files may be deleted from the repo, oldest first; the newest file 
   `feed_history`, synthetic sources in `crates/app-pixelfed/tests/layout_files.rs`) instead of relying on old
   files.
 
-First retirement, this decision's change: every app kept only its newest file (`pixelfed_home/0010`,
-`pixelfed_demo/0002`, `recipes/0005`, `watcher/0003`). The deleted files are in git history.
+First retirement, this decision's change: every app kept only its newest file (`pixelfed/0010`,
+`pixelfed_sample_no_login/0002`, `recipes/0005`, `events/0003`; the ids are the apps' current ones, decision
+[rename-apps-and-folders](rename-apps-and-folders.md)). The deleted files are in git history.

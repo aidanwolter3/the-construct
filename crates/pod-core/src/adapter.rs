@@ -34,7 +34,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 ///
 /// An adapter connects the pod to one upstream service (Pixelfed today) and
 /// serves one or more apps. Each app is a workspace whose layout comes from
-/// `layouts/<app>/NNNN.json`. The core owns everything generic: layout
+/// `layouts/<app>/NNNN.json` in the adapter's crate. The core owns everything generic: layout
 /// versions, schema negotiation, SSE, `/v1/apps`, sessions and logout. The
 /// adapter supplies only data, its own routes and its own tables.
 ///
@@ -350,7 +350,8 @@ pub enum Hydration {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppInfo {
     /// The workspace id and its `layouts/` directory name, e.g.
-    /// `pixelfed_home`. Never change it once shipped: clients cache by it.
+    /// `pixelfed`. Clients cache by it: renaming it takes an adapter
+    /// migration ([`crate::store::rename_app_on`]) and a client update.
     pub id: &'static str,
     /// Shown in the app list.
     pub title: &'static str,
@@ -550,8 +551,8 @@ impl Catalog {
         for f in &files {
             if !apps.iter().any(|(a, _)| a.id == f.app_id) {
                 return Err(format!(
-                    "layouts/{}/{}.json: '{}' is not an app",
-                    f.app_id, f.name, f.app_id
+                    "{}/{}/{}.json: '{}' is not an app",
+                    f.dir, f.app_id, f.name, f.app_id
                 ));
             }
         }

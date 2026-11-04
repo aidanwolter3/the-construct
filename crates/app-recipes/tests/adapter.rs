@@ -34,8 +34,8 @@ fn recipe_count(state: &AppState) -> i64 {
 }
 
 #[test]
-fn every_file_in_layouts_recipes_is_embedded() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../layouts/recipes");
+fn every_layout_file_is_embedded() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("layouts/recipes");
     let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
         .unwrap()
         .map(|f| f.unwrap().file_name().into_string().unwrap())
@@ -44,7 +44,7 @@ fn every_file_in_layouts_recipes_is_embedded() {
     let embedded: Vec<String> = FILES.iter().map(|f| format!("{}.json", f.name)).collect();
     assert_eq!(
         on_disk, embedded,
-        "build.rs embeds every layouts/recipes file"
+        "build.rs embeds every file in layouts/recipes"
     );
     for f in FILES {
         let text = std::fs::read_to_string(dir.join(format!("{}.json", f.name))).unwrap();

@@ -23,6 +23,7 @@ use protocol::{DataBundle, Importance, NotificationChannel};
 use tower::ServiceExt;
 
 static FILES: &[LayoutSource] = &[LayoutSource {
+    dir: "layouts",
     app_id: "bell",
     name: "0001",
     text: r#"{"note": "First", "schema": 1, "layout": {"type": "core://Workspace", "id": "bell",

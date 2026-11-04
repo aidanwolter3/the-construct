@@ -10,7 +10,7 @@
 #   CONSTRUCT_ANDROID_ABIS  Space- or comma-separated ABIs. Default: "arm64-v8a x86_64".
 #
 # Outputs:
-#   kmp-app/androidApp/src/main/jniLibs/<abi>/libclient_ffi.so
+#   app/androidApp/src/main/jniLibs/<abi>/libclient_ffi.so
 # Prerequisites: cargo install cargo-ndk;
 #   rustup target add aarch64-linux-android x86_64-linux-android
 # Idempotent; safe to re-run.
@@ -20,7 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-OUT_DIR="kmp-app/androidApp/src/main/jniLibs"
+OUT_DIR="app/androidApp/src/main/jniLibs"
 ABIS="${CONSTRUCT_ANDROID_ABIS:-arm64-v8a x86_64}"
 ABIS="${ABIS//,/ }"
 

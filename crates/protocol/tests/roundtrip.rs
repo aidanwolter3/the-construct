@@ -4,7 +4,7 @@ use protocol::{
 };
 use serde_json::{Value, json};
 
-const PIXELFED_FIXTURE: &str = include_str!("../../app-pixelfed/demo/bundle.json");
+const PIXELFED_FIXTURE: &str = include_str!("../../app-pixelfed/sample/bundle.json");
 const COUNTER_FIXTURE: &str = include_str!("data/counter_home_bundle.json");
 
 fn like_intent() -> ActionIntent {
@@ -13,7 +13,7 @@ fn like_intent() -> ActionIntent {
         field: "is_liked".into(),
         value_expr: "!entity.is_liked".into(),
         rollback_value: json!(false),
-        endpoint: "/v1/demo/ack".into(),
+        endpoint: "/v1/pixelfed_sample_no_login/ack".into(),
         payload: json!({ "id": "$item.id" }),
         also: vec![],
     }

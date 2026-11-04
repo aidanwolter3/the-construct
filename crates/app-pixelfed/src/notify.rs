@@ -4,7 +4,7 @@
 //! device. For each stored upstream account (one per instance) it reads
 //! `GET /api/v1/notifications` from the instance's cursor on and turns each
 //! upstream notification into a [`NewNotification`] with ready-made text, a
-//! navigation target in the `pixelfed_home` layout routes and the actor's
+//! navigation target in the `pixelfed` layout routes and the actor's
 //! avatar through the media proxy. The mapping functions are pure.
 
 use std::cmp::Ordering;
@@ -52,9 +52,9 @@ pub const FOLLOWS: &str = "follows";
 pub const BOOSTS: &str = "boosts";
 pub const OTHER: &str = "other";
 
-/// The channels of `pixelfed_home`.
+/// The channels of `pixelfed`.
 pub fn channels() -> Vec<NotificationChannel> {
-    let app = crate::apps::HOME.id;
+    let app = crate::apps::PIXELFED.id;
     let c = |id: &str, title: &str, description: &str, on: bool, importance| NotificationChannel {
         app_id: app.into(),
         id: id.into(),
@@ -240,13 +240,13 @@ fn path_safe(id: &str) -> bool {
 }
 
 /// The screen of a post (`pixelfed://posts/{id}`, the route of the `post`
-/// screen in the pixelfed_home layouts; from 0008 it shows the comments too).
+/// screen in the pixelfed layouts; from 0008 it shows the comments too).
 pub fn post_target(post_id: &str) -> String {
     format!("{}{post_id}", crate::POST_PREFIX)
 }
 
 /// One comment in the thread of its post (`pixelfed://posts/{id}/comments/{comment}`,
-/// the route of the `comment_thread` screen in the pixelfed_home layouts from
+/// the route of the `comment_thread` screen in the pixelfed layouts from
 /// 0007): the whole thread, scrolled to the comment and highlighted.
 pub fn comment_target(post_id: &str, comment_id: &str) -> String {
     format!("{}{post_id}/comments/{comment_id}", crate::POST_PREFIX)
@@ -348,7 +348,7 @@ pub fn to_new(
         })
         .unwrap_or(now);
     NewNotification {
-        app_id: crate::apps::HOME.id.to_owned(),
+        app_id: crate::apps::PIXELFED.id.to_owned(),
         channel: channel.to_owned(),
         dedupe_key: format!("{instance}:{}", n.id),
         title,
@@ -644,7 +644,7 @@ mod tests {
             ]
         );
         for c in &list {
-            assert_eq!(c.app_id, "pixelfed_home");
+            assert_eq!(c.app_id, "pixelfed");
             assert!(pod_core::notify::valid_channel_id(&c.id), "{}", c.id);
             assert!(!c.title.is_empty() && !c.description.is_empty());
             assert_eq!(c.default_enabled, c.id != "other");
@@ -659,7 +659,7 @@ mod tests {
             json!({"id": 17, "type": "favourite", "created_at": "2026-11-01T10:00:00Z",
                            "account": bob(), "status": our_post()}),
         );
-        assert_eq!(n.app_id, "pixelfed_home");
+        assert_eq!(n.app_id, "pixelfed");
         assert_eq!(n.channel, "likes");
         assert_eq!(n.dedupe_key, format!("{BASE}:17"));
         assert_eq!(n.title, "Bob 🚲 liked your post");
@@ -772,7 +772,7 @@ mod tests {
         assert_eq!(
             comment_target("1", "2"),
             "pixelfed://posts/1/comments/2",
-            "the comment_thread screen route of the pixelfed_home layouts"
+            "the comment_thread screen route of the pixelfed layouts"
         );
     }
 
@@ -841,7 +841,7 @@ mod tests {
         assert_eq!(
             post_target("42"),
             "pixelfed://posts/42",
-            "the post screen route of the pixelfed_home layouts"
+            "the post screen route of the pixelfed layouts"
         );
     }
 }

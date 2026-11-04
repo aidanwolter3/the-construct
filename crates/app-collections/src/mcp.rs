@@ -55,7 +55,7 @@ page. A datetime field (2026-11-06T19:30-07:00) is also served as <name>_date, <
 <name>_text. Alerts (apply_change {op: add_alert, any?, all?, none?, filler?, days?, within_days?}) notify \
 once when a row matches, e.g. a show listing a team. collections_status shows each filler's health: say so \
 when one is failing or finds nothing. An API key goes in with collections_set_secret and is sent as a \
-header value \"{secret:<name>}\"; ask the user for it and never repeat it. The Events app (app watcher) \
+header value \"{secret:<name>}\"; ask the user for it and never repeat it. The Events app (app events) \
 shows the collection events: to watch a website for events, add a filler there (extract events, map \
 {source_id: id, title: title, start: start, end: end, venue: venue, url: url, tickets_url: tickets_url}, \
 key source_id, upcoming start, every_minutes 360) and alerts for what the user wants to hear about.";

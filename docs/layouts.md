@@ -7,21 +7,23 @@ feature has a one-paragraph description in `crates/protocol/features/`.
 
 ## Publishing a new layout version
 
-Built-in apps' layouts live in `layouts/<app>/NNNN.json`. Adding a file is the only way to change how a built-in app
+Built-in apps' layouts live in their adapter crate, `crates/<adapter>/layouts/<app>/NNNN.json` (Pixelfed's in
+`crates/app-pixelfed/layouts/pixelfed/`, the Events app's in `crates/app-events/layouts/events/`). Adding a file is the only way to change how a built-in app
 looks.
 
-1. Copy the newest file of the app to the next number (four digits, no gaps), e.g. `layouts/recipes/0005.json` to
-   `layouts/recipes/0006.json`, and edit it.
+1. Copy the newest file of the app to the next number (four digits, no gaps), e.g.
+   `crates/app-recipes/layouts/recipes/0005.json` to `.../recipes/0006.json`, and edit it.
 2. The file is `{"note": "<one-line changelog>", "layout": <core://Workspace>}`. The note is what the app menu's
    version history shows. The root's `id` must be the app id. Don't declare features: the pod works them out. Older
    files carry a `"schema"` number; it is ignored.
-3. Run `cargo test` (`-p app-pixelfed`, `-p app-recipes` or `-p app-watcher` is enough). It validates every file:
+3. Run `cargo test` (`-p app-pixelfed`, `-p app-recipes` or `-p app-events` is enough). It validates every file:
    structure, size, slots, routes, endpoints the adapter declares, and nesting rules.
 4. Check it in the [simulator](simulator.md) and put screenshots in the PR.
 5. Merge to `main`. On start, the pod appends the file as the app's next version. Connected clients get a `layout`
    event on their stream and refetch; a client that pinned an older version keeps it and is told a newer one exists.
 
-There is no list of files to edit: each adapter's `build.rs` embeds its `layouts/<app>/` directory.
+There is no list of files to edit: each adapter's `build.rs` embeds its crate's `layouts/<app>/`
+directories.
 
 **Files are append-only.** Never edit or rename a file that has been deployed: the pod refuses to start and names
 the file. To undo a change, add a new file with the old content. Reformatting a file without changing its
@@ -33,7 +35,7 @@ keeps at least its newest file. An app's files then start above `0001`. A pod th
 keeps them in its history and serves them as before; a new pod starts from the oldest file left, as its version 1,
 so a client too old to draw that file gets `409 no_compatible_version` there.
 
-After changing a `pixelfed_home` layout, regenerate the simulator fixtures:
+After changing a `pixelfed` layout, regenerate the simulator fixtures:
 `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::`.
 
 ## Structure of a workspace
@@ -140,7 +142,7 @@ each version `compatible` or, for that client, `update_required` (uses something
 removed). See decision [`named-vocabulary`](decisions/named-vocabulary.md).
 
 - **Adding vocabulary** needs a client build: add the type or field to `protocol`, a feature file, an arm in
-  `required_features`, the Kotlin model and renderer in `kmp-app/shared`, and tests. Steps:
+  `required_features`, the Kotlin model and renderer in `app/shared`, and tests. Steps:
   [`crates/protocol/features/README.md`](../crates/protocol/features/README.md). Then layouts can use it; clients
   without it keep getting the previous version.
 - **Removing vocabulary** never edits layout files: move the feature's file to `crates/protocol/features/removed/`,
@@ -151,7 +153,7 @@ removed). See decision [`named-vocabulary`](decisions/named-vocabulary.md).
 A custom app can embed a part of a built-in layout by reference, and the pod keeps it current:
 
 ```json
-{ "type": "core://Ref", "app": "pixelfed_home", "part": "screen:post" }
+{ "type": "core://Ref", "app": "pixelfed", "part": "screen:post" }
 ```
 
 `part` is `screen:<id>`, `slot:<id>`, or a name from the layout file's `"parts"`. See decision

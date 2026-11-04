@@ -34,11 +34,13 @@ macro_rules! layout {
 }
 
 static OPEN_FILES: &[LayoutSource] = &[LayoutSource {
+    dir: "layouts",
     app_id: "open",
     name: "0001",
     text: layout!("open"),
 }];
 static GATED_FILES: &[LayoutSource] = &[LayoutSource {
+    dir: "layouts",
     app_id: "gated",
     name: "0001",
     text: layout!("gated"),

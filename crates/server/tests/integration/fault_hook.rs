@@ -1,5 +1,5 @@
 //! The fault-injection test hook (`POST /v1/test/fault`, `CONSTRUCT_TEST_HOOKS=1`)
-//! and JSON body parsing, exercised through `POST /v1/demo/ack`.
+//! and JSON body parsing, exercised through `POST /v1/pixelfed_sample_no_login/ack`.
 
 use std::sync::Arc;
 
@@ -33,7 +33,15 @@ fn post(uri: &str, content_type: Option<&str>, body: impl Into<Body>) -> Request
 }
 
 async fn ack(app: &Router) -> (StatusCode, Value) {
-    send(app, post("/v1/demo/ack", Some("application/json"), "{}")).await
+    send(
+        app,
+        post(
+            "/v1/pixelfed_sample_no_login/ack",
+            Some("application/json"),
+            "{}",
+        ),
+    )
+    .await
 }
 
 async fn set_fault(app: &Router, body: Value) -> (StatusCode, Value) {
@@ -68,7 +76,7 @@ async fn fault_hook_fails_next_n_mutations() {
     // GETs are not mutations and do not consume the fault.
     let (status, _) = send(
         &app,
-        Request::get("/v1/workspaces/pixelfed_demo")
+        Request::get("/v1/workspaces/pixelfed_sample_no_login")
             .body(Body::empty())
             .unwrap(),
     )

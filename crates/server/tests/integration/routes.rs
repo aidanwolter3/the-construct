@@ -38,7 +38,7 @@ async fn healthz() {
 
 #[tokio::test]
 async fn pixelfed_workspace_parses() {
-    let (status, body) = get("/v1/workspaces/pixelfed_demo").await;
+    let (status, body) = get("/v1/workspaces/pixelfed_sample_no_login").await;
     assert_eq!(status, StatusCode::OK);
     let spec: WorkspaceSpec = serde_json::from_slice(&body).unwrap();
     assert!(matches!(spec.workspace, UiNode::Workspace { .. }));
@@ -69,13 +69,13 @@ async fn unknown_workspace_is_404_json() {
 #[tokio::test]
 async fn wrong_method_is_405() {
     let (status, _) = send(
-        Request::post("/v1/workspaces/pixelfed_demo")
+        Request::post("/v1/workspaces/pixelfed_sample_no_login")
             .body(Body::empty())
             .unwrap(),
     )
     .await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
-    let (status, _) = get("/v1/demo/ack").await;
+    let (status, _) = get("/v1/pixelfed_sample_no_login/ack").await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
 }
 
@@ -83,7 +83,7 @@ async fn wrong_method_is_405() {
 async fn workspace_response_is_json_content_type() {
     let resp = server::app_in_memory()
         .oneshot(
-            Request::get("/v1/workspaces/pixelfed_demo")
+            Request::get("/v1/workspaces/pixelfed_sample_no_login")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -98,14 +98,16 @@ async fn real_tcp_listener() {
     let addr = listener.local_addr().unwrap();
     let handle = tokio::spawn(async move { axum::serve(listener, server::app_in_memory()).await });
 
-    let spec: WorkspaceSpec = reqwest::get(format!("http://{addr}/v1/workspaces/pixelfed_demo"))
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let spec: WorkspaceSpec = reqwest::get(format!(
+        "http://{addr}/v1/workspaces/pixelfed_sample_no_login"
+    ))
+    .await
+    .unwrap()
+    .error_for_status()
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
     assert!(matches!(spec.workspace, UiNode::Workspace { .. }));
     handle.abort();
 }

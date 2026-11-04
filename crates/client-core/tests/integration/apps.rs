@@ -15,7 +15,7 @@ use server::{AppState, layouts};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// The dev app these tests version (hidden from `/v1/apps` by default).
-const APP: &str = "pixelfed_demo";
+const APP: &str = "pixelfed_sample_no_login";
 
 struct Pod {
     state: Arc<AppState>,
@@ -69,7 +69,7 @@ fn parse(s: &str) -> Value {
     serde_json::from_str(s).unwrap()
 }
 
-/// The newest `pixelfed_demo` layout file with another title.
+/// The newest `pixelfed_sample_no_login` layout file with another title.
 fn retitled(title: &str) -> UiNode {
     let newest = layouts::parse_files(&server::catalog(), &server::layout_files())
         .unwrap()
@@ -101,7 +101,7 @@ fn versions(page: &Value) -> Vec<i64> {
 #[test]
 fn list_apps_shows_the_app_and_dev_apps_on_request() {
     let p = pod(server::state_in_memory());
-    let e = engine(&p.base, "pixelfed_home");
+    let e = engine(&p.base, "pixelfed");
     let apps = parse(&e.list_apps().unwrap());
     let ids: Vec<&str> = apps["apps"]
         .as_array()
@@ -109,10 +109,10 @@ fn list_apps_shows_the_app_and_dev_apps_on_request() {
         .iter()
         .map(|a| a["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["pixelfed_home", "recipes", "watcher"]);
+    assert_eq!(ids, ["pixelfed", "recipes", "events"]);
     let app = &apps["apps"][0];
     assert_eq!(app["title"], "Pixelfed");
-    assert_eq!(app["latest_version"], latest(&p, "pixelfed_home"));
+    assert_eq!(app["latest_version"], latest(&p, "pixelfed"));
     assert!(app["updated_at"].as_str().unwrap().ends_with('Z'));
 
     let dev = pod(server::state_in_memory().with_dev_apps(true));
@@ -126,7 +126,7 @@ fn list_apps_shows_the_app_and_dev_apps_on_request() {
         .collect();
     assert_eq!(
         ids,
-        ["pixelfed_home", "recipes", "watcher", "pixelfed_demo"]
+        ["pixelfed", "recipes", "events", "pixelfed_sample_no_login"]
     );
 }
 
@@ -145,7 +145,7 @@ fn app_versions_pages_newest_first() {
     }
     let top = first + 4;
     // A hidden app's endpoints still work.
-    let e = engine(&p.base, "pixelfed_home");
+    let e = engine(&p.base, "pixelfed");
 
     let page = parse(&e.app_versions(APP, None, Some(2)).unwrap());
     assert_eq!(page["app_id"], APP);
@@ -262,7 +262,7 @@ fn web_server(status: u16) -> (String, tokio::runtime::Runtime) {
 #[test]
 fn a_server_that_is_not_a_pod_says_so() {
     let (base, _rt) = web_server(404);
-    let e = engine(&base, "pixelfed_home");
+    let e = engine(&base, "pixelfed");
     assert_eq!(
         e.list_apps().unwrap_err(),
         LayoutApiError::NotFound {
@@ -271,14 +271,12 @@ fn a_server_that_is_not_a_pod_says_so() {
     );
     // The per-app endpoints keep their own sentence.
     assert_eq!(
-        e.app_versions("pixelfed_home", None, None)
-            .unwrap_err()
-            .reason(),
+        e.app_versions("pixelfed", None, None).unwrap_err().reason(),
         "That app doesn't exist."
     );
 
     let (base, _rt) = web_server(200);
-    let e = engine(&base, "pixelfed_home");
+    let e = engine(&base, "pixelfed");
     let err = e.list_apps().unwrap_err();
     assert_eq!(err.reason(), LAYOUTS_NOT_A_POD);
     assert!(matches!(err, LayoutApiError::Server { .. }), "{err:?}");
@@ -287,7 +285,7 @@ fn a_server_that_is_not_a_pod_says_so() {
 #[test]
 fn sign_ins_without_a_session_needs_no_request_and_an_old_pod_says_so() {
     // No session: answered locally, even with no server at all.
-    let e = engine("http://127.0.0.1:9", "pixelfed_home");
+    let e = engine("http://127.0.0.1:9", "pixelfed");
     assert_eq!(parse(&e.sign_ins().unwrap()), json!({ "sign_ins": [] }));
     // With a session, a pod without `/v1/auth/sign-ins` (404) gets its own sentence.
     let (base, _rt) = web_server(404);
@@ -300,7 +298,7 @@ fn sign_ins_without_a_session_needs_no_request_and_an_old_pod_says_so() {
     let e = ConstructEngine::init_with_options(
         "",
         &base,
-        "pixelfed_home",
+        "pixelfed",
         client_core::EngineOptions {
             config: fast_config(),
             secure_store: Some(store as Arc<dyn client_core::SecureStore>),
@@ -338,8 +336,8 @@ fn snapshot_layout_json_follows_the_pods_version() {
     let ws = parse(&e.snapshot().workspace_json);
     assert_eq!(ws["title"], "Pushed");
 
-    // The signed-out pixelfed_home screen is not versioned.
-    let signed_out = engine(&p.base, "pixelfed_home");
+    // The signed-out pixelfed screen is not versioned.
+    let signed_out = engine(&p.base, "pixelfed");
     wait_until("signed-out screen", || {
         signed_out.snapshot().workspace_json != "null"
     });

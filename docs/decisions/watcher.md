@@ -16,7 +16,8 @@ source per site (rejected: code per site), storing targets and rules as a Collec
 typed columns for its own state such as `ETag`, hashes, backoff and health), and fetching from the clients
 (rejected: polling must run while no client is open).
 
-Decision: one built-in adapter, **watcher** (`crates/app-watcher`, source and app `watcher`). A website is a
+Decision: one built-in adapter, **watcher** (`crates/app-events`, source and app `watcher`; the app is `events` since decision
+[rename-apps-and-folders](rename-apps-and-folders.md)). A website is a
 *target* and a filter is a *rule*: both are rows in the watcher's own tables, edited from the app's routes or by
 Claude over MCP, so new sites need no deploy. There is no stored code: extractors are a fixed set, rules are
 declarative.
@@ -64,7 +65,7 @@ declarative.
 
 ## Surfaces
 
-- **App** `watcher` (layout `layouts/watcher/0001.json`, existing vocabulary only): upcoming matches; an event
+- **App** `watcher`, now `events` (layout `layouts/watcher/0001.json`, existing vocabulary only): upcoming matches; an event
   screen; "Sites & rules" (sites with health, add a site by URL, rules with remove, add a rule from keywords and
   exclusions); a site screen with its upcoming events, "Check now" and "Stop watching".
 - **Source** (custom apps may use it too): feeds `matches` and `targets`, data paths for the event and site screens,

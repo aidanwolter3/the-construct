@@ -42,6 +42,7 @@ fn file(n: u32, card: &str, with_card_part: bool) -> LayoutSource {
                 "value_expr": "true", "rollback_value": false, "endpoint": "/v1/a/act", "payload": {{}}}}}}}}}}]}}{parts}}}"#
     );
     LayoutSource {
+        dir: "layouts",
         app_id: "a_home",
         name: Box::leak(format!("{n:04}").into_boxed_str()),
         text: Box::leak(text.into_boxed_str()),

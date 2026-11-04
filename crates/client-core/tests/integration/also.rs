@@ -21,7 +21,7 @@ const POST1: &str = "pixelfed://posts/1";
 const POST2: &str = "pixelfed://posts/2";
 const LIKE_EP: &str = "/v1/pixelfed/posts/like";
 
-/// The pixelfed_home like intent: toggle `is_liked`, adjust `like_count`.
+/// The pixelfed like intent: toggle `is_liked`, adjust `like_count`.
 const LIKE: &str = r#"{"intent":"action.mutation.optimistic","entity_uri":"pixelfed://posts/1","field":"is_liked","value_expr":"!entity.is_liked","rollback_value":false,"endpoint":"/v1/pixelfed/posts/like","payload":{"id":"1","liked":"$value"},"also":[{"field":"like_count","value_expr":"entity.is_liked ? entity.like_count - 1 : entity.like_count + 1"}]}"#;
 
 fn bundle(is_liked: bool, like_count: i64) -> String {

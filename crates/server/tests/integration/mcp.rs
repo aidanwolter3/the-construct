@@ -520,7 +520,7 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|s| s["id"] == "pixelfed_demo"),
+            .any(|s| s["id"] == "pixelfed_sample_no_login"),
         "dev sources are not offered"
     );
 
@@ -532,7 +532,7 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
         protocol::NODE_TYPES.len() + 1
     );
     let (err, parts) = env
-        .tool(&access, "list_parts", json!({"app": "pixelfed_home"}))
+        .tool(&access, "list_parts", json!({"app": "pixelfed"}))
         .await;
     assert!(!err, "{parts}");
     let names: Vec<&str> = parts["apps"][0]["parts"]

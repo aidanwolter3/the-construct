@@ -5,25 +5,25 @@
 //! The core's modules are re-exported (`server::layouts`, `server::store`,
 //! ...), `server::pixelfed` is the Pixelfed adapter crate and
 //! `server::recipes` the recipes adapter crate, `server::collections` the
-//! Collections adapter crate, `server::watcher` the watcher adapter crate,
+//! Collections adapter crate, `server::events` the Events adapter crate,
 //! `server::monitor` the monitoring source crate.
 
 use std::path::Path;
 use std::sync::Arc;
 
 pub use app_collections as collections;
+pub use app_events as events;
 pub use app_monitor as monitor;
 pub use app_pixelfed as pixelfed;
 pub use app_pixelfed::{DEFAULT_PIXELFED_URL, PixelfedAdapter, PixelfedConfig};
 pub use app_recipes as recipes;
-pub use app_watcher as watcher;
 pub use pod_core::*;
 pub use pod_host as host;
 
 /// The pod's adapters, in `GET /v1/apps` order: the Pixelfed feed (with the
-/// `pixelfed` sign-in), the recipes, the Events app (app `watcher`: the
-/// Collections `events` collection, once the Watcher), then the
-/// `pixelfed_demo` dev app; and
+/// `pixelfed` sign-in), the recipes, the Events app (the
+/// Collections `events` collection), then the
+/// `pixelfed_sample_no_login` dev app; and
 /// Collections (no apps of its own: data custom apps declare; fillers
 /// configured from `CONSTRUCT_INFER_*` and `CONSTRUCT_FILL_*`), and the
 /// server monitoring source (no apps; decision `server-monitoring`).
@@ -31,11 +31,8 @@ pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
     vec![
         Arc::new(PixelfedAdapter::new(pixelfed)),
         Arc::new(app_recipes::RecipesAdapter::new()),
-        Arc::new(
-            app_watcher::WatcherAdapter::new()
-                .with_private_hosts(std::env::var(FILL_PRIVATE_HOSTS_VAR).as_deref() == Ok("1")),
-        ),
-        app_pixelfed::apps::demo_adapter(),
+        Arc::new(app_events::EventsAdapter::new()),
+        app_pixelfed::apps::sample_adapter(),
         Arc::new(
             app_collections::CollectionsAdapter::with_caps(collections_caps_from_env())
                 .with_model(app_collections::compute::MessagesModel::from_env())
@@ -187,7 +184,7 @@ pub const DEFAULT_VAPID_SUBJECT: &str = "https://github.com/aidanwolter3/the-con
 pub fn layout_files() -> Vec<layouts::LayoutSource> {
     let mut files = app_pixelfed::apps::files();
     files.extend_from_slice(app_recipes::FILES);
-    files.extend_from_slice(app_watcher::FILES);
+    files.extend_from_slice(app_events::FILES);
     files
 }
 

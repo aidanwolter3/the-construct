@@ -6,7 +6,7 @@ The post screen (grid cards) and the comments screen (comment button, notificati
 over. Neither showed the whole photo: the post screen clamped its aspect ratio to 0.8–1.91 like the feed, and the
 comments screen cut the cover to a 2.5:1 strip. Opening a post from the grid also had no comments.
 
-Decision: `layouts/pixelfed_home/0008.json` has one post screen layout, used by three routes:
+Decision: `layouts/pixelfed/0008.json` has one post screen layout, used by three routes:
 
 - `pixelfed://posts/{id}`: grid cards and the feed's comment button (now a Push, not a Modal) open it; like and
   boost notifications link to it (`notify::post_target`).

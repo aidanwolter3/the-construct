@@ -1,5 +1,5 @@
 //! Alerts (decision `collection-fillers`): declarative rules that notify when
-//! a row matches, the Watcher's rules made general ("tell me when Improv
+//! a row matches ("tell me when Improv
 //! Millbrook lists a Brass Lanterns show"). Data in the definition, not code:
 //! phrases of which one (`any`), every one (`all`) or none (`none`) must
 //! appear in the row's text fields (ignoring case and spacing), optionally
@@ -29,7 +29,7 @@ use crate::NAME;
 use crate::db::{self, Row};
 use crate::model::{self, Definition, Kind};
 
-/// Most alerts per collection (the Watcher allowed 100 rules).
+/// Most alerts per collection (the first Events app allowed 100 rules).
 pub const MAX_ALERTS: usize = 100;
 /// Most phrases per list, and their length.
 pub const MAX_PHRASES: usize = 20;

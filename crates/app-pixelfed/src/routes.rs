@@ -623,14 +623,14 @@ async fn exchange_token(State(state): State<Pod>, headers: HeaderMap, body: Byte
 
 // ---------- home feed ----------
 
-/// The data of `GET /v1/workspaces/pixelfed_home` (the `home` feed, [`pod_core::AppAdapter::feed`];
+/// The data of `GET /v1/workspaces/pixelfed` (the `home` feed, [`pod_core::AppAdapter::feed`];
 /// the core has checked the caller's session has the `pixelfed` sign-in).
 /// No stored account, or the upstream rejected the stored token: a stale
 /// session (401 with the signed-out screen, so the client clears its session).
 /// The core adds the latest layout version the client can draw.
 pub async fn home_feed(pf: &PixelfedAdapter, state: &Pod, req: &RequestCtx) -> Hydration {
     let rt = pf.runtime();
-    let app = crate::apps::HOME;
+    let app = crate::apps::PIXELFED;
     let signed_out = || Hydration::StaleSession(layout::signed_out(&rt.config, app.id, app.title));
     let found = match &req.session {
         Some(session) => session_account(state, session).await,
@@ -724,7 +724,7 @@ pub async fn home_feed(pf: &PixelfedAdapter, state: &Pod, req: &RequestCtx) -> H
         posts = timeline.order.len(),
         entities = timeline.entities.len(),
         instance = %instance.url,
-        "pixelfed_home served"
+        "pixelfed served"
     );
     Hydration::Data(layout::home_feed(timeline.entities, timeline.order))
 }

@@ -589,7 +589,7 @@ async fn event_sites_fill_one_collection_and_alerts_notify_once() {
     );
     assert_eq!(r[2]["filler_id"], json!(ids[1]));
     assert!(agent.pages.lock().unwrap()[0].contains("Brass Lanterns live"));
-    // An alert per site, as the Watcher's rules were.
+    // An alert per site.
     let (err, e) = tool(
         &pod,
         "apply_change",

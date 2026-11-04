@@ -126,7 +126,7 @@ async fn get_home(pod: &str, bearer: Option<&str>) -> (StatusCode, Value) {
 
 /// Like [`get_home`], plus the `X-Construct-Session` response header.
 async fn get_home_full(pod: &str, bearer: Option<&str>) -> (StatusCode, Option<String>, Value) {
-    let mut req = client().get(format!("{pod}/v1/workspaces/pixelfed_home"));
+    let mut req = client().get(format!("{pod}/v1/workspaces/pixelfed"));
     if let Some(t) = bearer {
         req = req.bearer_auth(t);
     }
@@ -260,7 +260,7 @@ fn signed_out_button(spec: &WorkspaceSpec) -> (String, ActionIntent) {
     else {
         panic!("not a workspace");
     };
-    assert_eq!(id, "pixelfed_home");
+    assert_eq!(id, "pixelfed");
     assert_eq!(title, "Pixelfed");
     let UiNode::Container { children, .. } = &slots[0].content else {
         panic!("signed-out slot is not a Container");
@@ -295,7 +295,7 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
 
     // Feed fetched through a non-local Host (as the emulator does).
     let resp = client()
-        .get(format!("{}/v1/workspaces/pixelfed_home", env.pod.url))
+        .get(format!("{}/v1/workspaces/pixelfed", env.pod.url))
         .header("host", "10.0.2.2:8080")
         .header(protocol::FEATURES_HEADER, protocol::features_header())
         .bearer_auth(&session)
@@ -345,7 +345,7 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
     let UiNode::Workspace { id, .. } = &spec.workspace else {
         panic!("not a workspace");
     };
-    assert_eq!(id, "pixelfed_home");
+    assert_eq!(id, "pixelfed");
     let feeds: Vec<u16> = spec
         .workspace
         .walk()
@@ -416,7 +416,7 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
 }
 
 #[tokio::test]
-async fn pixelfed_home_signed_out_without_valid_session() {
+async fn pixelfed_signed_out_without_valid_session() {
     let env = env().await;
     // No bearer: 200. A bearer that is not a session: 401 + `X-Construct-Session: invalid`, so the
     // client learns its session is stale; the body is the same signed-out bundle either way.
@@ -633,7 +633,7 @@ async fn sign_ins_lists_the_pixelfed_account_with_its_server() {
             "title": "Pixelfed",
             "server": env.fake.url,
             "username": "constructdemo",
-            "apps": [{ "id": "pixelfed_home", "title": "Pixelfed" }],
+            "apps": [{ "id": "pixelfed", "title": "Pixelfed" }],
         }])
     );
     assert_eq!(body["providers"][0]["signed_in"], true);
@@ -733,7 +733,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
             .get("x-construct-layout-version")
             .map(|v| v.to_str().unwrap().to_owned())
     };
-    let url = format!("{}/v1/workspaces/pixelfed_home", pod.url);
+    let url = format!("{}/v1/workspaces/pixelfed", pod.url);
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     // No features header (a tool, not a client): the latest version (a new
@@ -751,11 +751,11 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 4));
     // A newer version replaces the feed layout; entities still come upstream.
-    let mut node = server::layouts::builtin(&server::catalog(), "pixelfed_home").unwrap();
+    let mut node = server::layouts::builtin(&server::catalog(), "pixelfed").unwrap();
     if let UiNode::Workspace { title, .. } = &mut node {
         *title = "Custom".into();
     }
-    server::layouts::append_version(state.store(), "pixelfed_home", &node, None).unwrap();
+    server::layouts::append_version(state.store(), "pixelfed", &node, None).unwrap();
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
     assert_eq!(version(&resp).as_deref(), Some("2"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
@@ -932,7 +932,7 @@ async fn a_session_from_before_v11_stays_signed_in() {
         let later: Vec<String> = conn
             .prepare(
                 "SELECT name FROM sqlite_master WHERE type = 'table'
-                 AND (name LIKE 'recipes%' OR name LIKE 'collections%' OR name LIKE 'watcher%' OR name IN ('pixelfed_session_instance', 'pixelfed_pending_posts'))
+                 AND (name LIKE 'recipes%' OR name LIKE 'collections%' OR name IN ('pixelfed_session_instance', 'pixelfed_pending_posts'))
                  OR (type = 'table' AND name IN ('pod_settings', 'uploads', 'notifications',
                      'notification_polls', 'devices', 'device_channel_prefs',
                      'pixelfed_notify_cursor', 'custom_apps'))",
@@ -1124,10 +1124,13 @@ async fn bad_code_verifier_is_oauth_exchange_failed() {
 }
 
 #[tokio::test]
-async fn demo_ack_accepts_pixelfed_demo_likes() {
+async fn sample_ack_accepts_likes() {
     let pod = spawn_pod(server::state_in_memory()).await;
     let demo: WorkspaceSpec = client()
-        .get(format!("{}/v1/workspaces/pixelfed_demo", pod.url))
+        .get(format!(
+            "{}/v1/workspaces/pixelfed_sample_no_login",
+            pod.url
+        ))
         .send()
         .await
         .unwrap()
@@ -1135,9 +1138,12 @@ async fn demo_ack_accepts_pixelfed_demo_likes() {
         .await
         .unwrap();
     let s = serde_json::to_string(&demo).unwrap();
-    assert!(s.contains("\"endpoint\":\"/v1/demo/ack\""), "{s}");
+    assert!(
+        s.contains("\"endpoint\":\"/v1/pixelfed_sample_no_login/ack\""),
+        "{s}"
+    );
     let (status, body) = post_json(
-        &format!("{}/v1/demo/ack", pod.url),
+        &format!("{}/v1/pixelfed_sample_no_login/ack", pod.url),
         None,
         json!({ "id": "101" }),
     )
@@ -2231,7 +2237,7 @@ async fn wait_for(what: &str, mut f: impl AsyncFnMut() -> bool) {
 fn listen(pod: &str, session: &str) -> Arc<std::sync::Mutex<String>> {
     let seen = Arc::new(std::sync::Mutex::new(String::new()));
     let (url, session, out) = (
-        format!("{pod}/v1/workspaces/pixelfed_home/events"),
+        format!("{pod}/v1/workspaces/pixelfed/events"),
         session.to_owned(),
         seen.clone(),
     );

@@ -21,8 +21,8 @@ Decision: the client pins the workspace title in a bar at the top, beside the me
 buttons; only the slots scroll, and `core://Sticky` content pins right under the title. A workspace
 sets `"title_scrolls": true` (feature `title_scrolls`) to get the old behaviour back: the title is
 the first item of the scrolling view and sticky content pins 56 dp below the top.
-`layouts/pixelfed_home/0010.json` is 0009 with `title_scrolls`.
+`layouts/pixelfed/0010.json` is 0009 with `title_scrolls`.
 
-Clients built before this always scroll the title; the pod keeps serving them `pixelfed_home`
+Clients built before this always scroll the title; the pod keeps serving them `pixelfed`
 0009, and Recipes, Watcher and custom apps look as before on them until they update. This
 replaces the sentence of `sticky-nodes` that the recipes title "should scroll in first".

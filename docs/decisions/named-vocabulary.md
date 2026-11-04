@@ -29,7 +29,7 @@ Decision: every piece of the vocabulary is a named feature, and there is no sche
   `create_dismiss` and `legacy_nodes` (node types this build doesn't know, i.e. the `pixelfed://` widgets of D37,
   and stored layouts it can't read; this replaces `RETIRED = [(3, 3)]`).
 - **Layout files** are `{"note", "layout", "parts"?}`. Deployed files keep their `"schema"`; it is not part of the
-  content hash and is ignored. `pixelfed_home` 0009 is 0008 with Share written as `[create, back]`.
+  content hash and is ignored. `pixelfed` 0009 is 0008 with Share written as `[create, back]`.
 - **Pod migration v17** works out the features of every stored version and drops the `schema` column.
 - **Custom-app writes** using a removed feature are refused with a hint (`dismiss` → the sequence);
   `describe_vocabulary` lists the features instead of a schema number.
