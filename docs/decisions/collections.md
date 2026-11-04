@@ -104,5 +104,5 @@ rows, removed fields' data, kept-aside values, undo records), swept hourly.
 
 Not done yet: user confirmation of a row edit happens in the chat with Claude, not in the app (the pod has no way to
 ask the user; MCP elicitation needs a server stream this endpoint doesn't have); deleting or renaming a whole
-collection; an icon set for todos (`check`, `delete`: the snippets use ☐/☑ text in a `core://Tappable` and the
-`close` icon; issue #56); formatting (point 2) and reminders (point 3).
+collection; formatting (point 2) and reminders (point 3). (The todo icons are done: feature `todo_icons` adds
+`check`, `check_box`, `check_box_outline_blank` and `delete`, and the snippets use them; issue #56.)
