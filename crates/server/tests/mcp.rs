@@ -289,6 +289,12 @@ async fn claude_connects_with_oauth_and_the_pod_code() {
         html.contains("Claude &lt;script&gt;") && html.contains("name=\"pod_code\""),
         "{html}"
     );
+    // The client's name is self-chosen: the page also names where the code
+    // goes (security audit: consent phishing with a look-alike name).
+    assert!(
+        html.contains("gives access to <b>claude.example</b>"),
+        "{html}"
+    );
     // An unregistered redirect gets no redirect.
     let resp = client()
         .get(format!("{}/oauth/authorize", env.url))
