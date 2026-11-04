@@ -431,7 +431,7 @@ highlighted) but doesn't edit them.
 | feed `["watcher", "matches"]` | upcoming matched events `watcher://events/<id>` under `watcher:matches` |
 | feed `["watcher", "targets"]` | sites `watcher://targets/<id>` (with `health`, `health_text`, `failing`) under `watcher:targets`; rules `watcher://rules/<id>` under `watcher:rules` |
 | `GET /v1/watcher/screens/event?id=…` / `…/screens/target?id=…` | an event (`watcher:event:<id>`); a site (`watcher:target:<id>`), its rules (`…:rules`) and events (`…:events`) |
-| `POST /v1/watcher/targets/create {url, title?, extractor?, interval_minutes?, hint?, details?, utc_offset?, client_id?}` | add a site |
+| `POST /v1/watcher/targets/create {url, title?, extractor?, interval_minutes?, hint?, details?, time_zone?, utc_offset?, client_id?}` | add a site |
 | `POST /v1/watcher/targets/update {id, …, archived?}` · `POST /v1/watcher/targets/refresh {id}` | change or archive a site; check it now |
 | `POST /v1/watcher/rules/create {target, title?, keywords, exclude?, venue?, days?, within_days?, client_id?}` · `…/rules/update {id, …}` | add a rule to a site, change or archive one |
 | `POST /v1/watcher/events/seen {id, seen}` | mark an event's matches seen |

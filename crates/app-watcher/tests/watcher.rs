@@ -350,10 +350,22 @@ async fn watches_sites_and_notifies_matches() {
         &pod,
         "POST",
         "/v1/watcher/targets/create",
-        Some(json!({"url": format!("{base}/cal.ics"), "title": "Calendar", "extractor": "ics"})),
+        Some(
+            json!({"url": format!("{base}/cal.ics"), "title": "Calendar", "extractor": "ics",
+                    "time_zone": "America/Denver"}),
+        ),
     )
     .await;
+    assert_eq!(ics["time_zone"], "America/Denver");
     let ics_id = ics["id"].as_str().unwrap().to_owned();
+    let (status, _) = call(
+        &pod,
+        "POST",
+        "/v1/watcher/targets/update",
+        Some(json!({"id": ics_id, "time_zone": "Denver"})),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK, "an unknown zone is refused");
     checked(&pod, &ics_id).await;
     let (_, llm) = call(
         &pod,
