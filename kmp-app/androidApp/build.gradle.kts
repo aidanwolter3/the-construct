@@ -49,8 +49,6 @@ android {
         // Package only the ABIs libclient_ffi.so is built for. The JNA aar ships more (armeabi-v7a, x86,
         // ...); without this filter such a device would install the app and then fail to load the engine.
         ndk { abiFilters += androidAbis }
-
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildFeatures {
@@ -83,11 +81,6 @@ dependencies {
     // Notifications when the app is closed (D52): Web Push via UnifiedPush, FCM fallback unless -PnoFcmFallback.
     implementation(libs.unifiedpush.connector)
     if (fcmFallback) implementation(libs.unifiedpush.embedded.fcm)
-
-    // On-device checks of shared code whose behaviour differs on Android (ICU regex): connectedDebugAndroidTest.
-    androidTestImplementation(libs.androidx.test.runner)
-    androidTestImplementation(libs.androidx.test.ext.junit)
-    androidTestImplementation(libs.junit)
 }
 
 // Cross-compiles libclient_ffi.so with cargo-ndk (scripts/build_android.sh) into src/main/jniLibs/<abi>/

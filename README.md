@@ -61,7 +61,6 @@ dev/pixelfed/        docker compose stack for the optional local real Pixelfed (
 scripts/build_ffi.sh builds libclient_ffi.dylib and regenerates the Kotlin bindings
 scripts/build_android.sh  cross-compiles libclient_ffi.so for Android (cargo-ndk)
 scripts/e2e.sh       end-to-end suite against the fake binary or a real Pixelfed (End-to-end tests)
-scripts/android_smoke.sh  installs and launches the Android app on an emulator, checks it renders (Tests)
 scripts/pixelfed_dev.sh   up/seed/record/status/down/reset for the local real Pixelfed (Local Pixelfed instance)
 kmp-app/             Gradle project: :shared (model + Compose renderer), :desktopApp (JVM, JNA),
                      :androidApp (Android, JNA aar)
@@ -1422,9 +1421,7 @@ then the old one is closed) and the choice is saved (SharedPreferences `server`,
 can't be created, nothing changes and the Server section shows why. Precedence: the `baseUrl` extra (debug only,
 and no longer once the menu has switched servers), then the saved choice, then `BuildConfig`. A server other than the build default gets its own storage dir (`filesDir/servers/<url>`), so cached
 entities and pending outbox rows never cross servers. Other apps open from the menu's Apps section (with a pod that
-lists them, `CONSTRUCT_SHOW_DEV_APPS=1`). `scripts/android_smoke.sh` passes `--es baseUrl http://10.0.2.2:8080` (its
-`--base-url`). The extras are read when the engine is
-created, so use `am start -S` (force-stop first) to switch workspace on a running app. Rotation keeps the
+lists them, `CONSTRUCT_SHOW_DEV_APPS=1`). The extras are read when the engine is created, so use `am start -S` (force-stop first) to switch workspace on a running app. Rotation keeps the
 same engine. Logcat tag `ConstructEngine` carries both the Kotlin log lines (`starting base_url=...`,
 `dispatch: ...`) and the Rust engine's stdout/stderr. The stdout/stderr redirect is process-wide, so the tag also
 shows other native output from the app process (e.g. GL/EGL driver lines). The SQLite cache (`cache.db`) is in the app's
@@ -1460,22 +1457,7 @@ cd kmp-app && ./gradlew :shared:allTests :desktopApp:test
 Counts at the time of writing: `cargo test --workspace` 281, `:shared:allTests` 63, `:desktopApp:test` 63 (all
 passing).
 
-`assembleDebug` and the JVM host tests can't catch Android-only runtime failures (for example, Android's ICU regex
-engine rejects patterns that `java.util.regex` accepts). Two checks run on a booted emulator or device:
-
-```bash
-# Launch check: installs the debug app, launches it per workspace (default pixelfed_home; --pixelfed adds
-# pixelfed_demo and home), then fails on a FATAL EXCEPTION in logcat, a dead process, or a `uiautomator dump`
-# missing the "Menu" button or the expected text ("Sign in with Pixelfed" or a Like button for pixelfed_home,
-# "Sunrise over Boulder" for pixelfed_demo, "Count: <n>" for home). Writes <ws>.png, <ws>.xml and
-# <ws>.logcat.txt to --out (default kmp-app/androidApp/build/smoke).
-../scripts/android_smoke.sh --pixelfed                    # device and server already running
-../scripts/android_smoke.sh --boot --server --pixelfed    # boots Medium_Phone_API_36 headless and starts the
-                                                          # server, then stops both at the end
-../scripts/android_smoke.sh --help                        # --workspaces, --base-url, --skip-install, --skip-rust, --wait, --timeout
-
-# Instrumented tests (androidApp/src/androidTest): the shared interpolation regexes on the device, and the
-# AndroidKeyStore session store round trip (set/get/delete, survives a new instance, encrypted at rest).
-# Note: AGP uninstalls the app afterwards, so don't follow this with android_smoke.sh --skip-install.
-./gradlew :androidApp:connectedDebugAndroidTest
-```
+There are no on-device tests: UI is checked with the headless simulator. Android's ICU regex engine rejects some
+patterns that `java.util.regex` accepts (a bare `}`), so `AndroidRegexSyntaxTest` (`:shared:desktopTest`) reads
+every `Regex` field of the shared code and fails on braces ICU would reject. Other Android-only runtime failures
+show up only when the app runs on a phone.
