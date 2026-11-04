@@ -5,12 +5,14 @@
 //! The core's modules are re-exported (`server::layouts`, `server::store`,
 //! ...), `server::pixelfed` is the Pixelfed adapter crate and
 //! `server::recipes` the recipes adapter crate, `server::collections` the
-//! Collections adapter crate, `server::watcher` the watcher adapter crate.
+//! Collections adapter crate, `server::watcher` the watcher adapter crate,
+//! `server::monitor` the monitoring source crate.
 
 use std::path::Path;
 use std::sync::Arc;
 
 pub use app_collections as collections;
+pub use app_monitor as monitor;
 pub use app_pixelfed as pixelfed;
 pub use app_pixelfed::{DEFAULT_PIXELFED_URL, PixelfedAdapter, PixelfedConfig};
 pub use app_recipes as recipes;
@@ -23,7 +25,8 @@ pub use pod_host as host;
 /// Collections `events` collection, once the Watcher), then the
 /// `pixelfed_demo` dev app; and
 /// Collections (no apps of its own: data custom apps declare; fillers
-/// configured from `CONSTRUCT_INFER_*` and `CONSTRUCT_FILL_*`).
+/// configured from `CONSTRUCT_INFER_*` and `CONSTRUCT_FILL_*`), and the
+/// server monitoring source (no apps; decision `server-monitoring`).
 pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
     vec![
         Arc::new(PixelfedAdapter::new(pixelfed)),
@@ -39,6 +42,9 @@ pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
                 .with_agent(app_collections::agent::MessagesAgent::from_env())
                 .with_private_hosts(std::env::var(FILL_PRIVATE_HOSTS_VAR).as_deref() == Ok("1")),
         ),
+        Arc::new(app_monitor::MonitorAdapter::new(
+            app_monitor::MonitorConfig::from_env(),
+        )),
     ]
 }
 

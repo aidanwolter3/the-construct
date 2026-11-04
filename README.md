@@ -248,6 +248,9 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 | `CONSTRUCT_FILL_MODEL` | `claude-opus-5-5` | The model of Collections' model fillers (`agent`, and `extract: llm`; decision [`collection-fillers`](docs/decisions/collection-fillers.md)). They use the same key and endpoint as computed fields, `CONSTRUCT_INFER_API_KEY` and `CONSTRUCT_INFER_URL`; without the key they report themselves unavailable. An `llm` filler asks only when its page changed. |
 | `CONSTRUCT_FILL_AGENT_DAILY` | `20` | Agent filler fills per pod per day; one filler's `fills_per_day` can't exceed it. |
 | `CONSTRUCT_FILL_PRIVATE_HOSTS` | unset | `1`: fetch fillers (the Events app's websites included) may read private addresses (local development). Otherwise only public addresses are fetched. |
+| `CONSTRUCT_METRICS_ADDR` | unset (off) | Serve `GET /metrics` (Prometheus text) on this address, apart from the public one (decision [`server-monitoring`](docs/decisions/server-monitoring.md)). Staging: `[::]:9091`, reached only over Fly's private network, which scrapes it for Fly's Grafana. |
+| `CONSTRUCT_MONITOR_AUTH_FAILURES_PER_HOUR` | `20` | The monitoring source's "Wrong pod codes and unknown tokens" check warns above this many in an hour. |
+| `CONSTRUCT_MONITOR_LLM_TOKENS_PER_DAY` | `1000000` | The "Model use" check warns above this many model tokens (computed fields and fillers) in a day. |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
 
 The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PROVIDER`, `CONSTRUCT_LLM_MODEL`,
@@ -292,6 +295,7 @@ paths, e.g. the Pixelfed media proxy).
   server pods notify-test <name>                 # a test notification: inbox + Web Push to the pod's devices
   server pods mcp <name> [label]                 # a credential for Claude Code (reaches only /v1/mcp); printed once
   server pods revoke-mcp <name>                  # disconnect Claude (every MCP credential of the pod)
+  server pods monitoring <name> on|off           # let the pod's apps read the server's monitoring data
   server pods list
   ```
 
@@ -365,6 +369,24 @@ version history as written by Claude.
   (OAuth works too).
 - **Disconnect:** `server pods revoke-mcp <name>`. Rotating the pod code (`server pods rotate`) keeps Claude
   connected.
+
+### Server monitoring
+
+The server counts what an operator wants to notice (decision
+[`server-monitoring`](docs/decisions/server-monitoring.md), `pod_core::metrics`, `crates/app-monitor`): wrong pod
+codes and unknown tokens, rate limits hit, credentials used out of scope, new Claude connections, 5xx responses,
+temporary pod requests, and model calls, tokens and web searches per feature (`collections` computed
+fields, `fill_page`, `fill_agent`), plus pods, MCP
+credentials and free disk measured when read. Counts live in memory and start again at each restart.
+
+- **In the pod:** the **Server monitoring** source (`monitor`, feed `overview`) serves `monitor:summary` (overall
+  status and headline), `monitor:checks` (plain-language checks, `ok` or `warn`, warnings first) and
+  `monitor:metrics` (every counter's total, last hour and last day). The data is the whole server's, so the feed
+  answers 403 `monitoring_off` unless the operator runs `server pods monitoring <name> on` (admin pods only). Then
+  ask Claude to build an app on it.
+- **Prometheus:** with `CONSTRUCT_METRICS_ADDR`, `GET /metrics` on that address serves the same counters and gauges
+  (`construct_*`). Fly scrapes it (`[metrics]` in `deploy/fly/pod.toml`); see them in Fly's Grafana
+  (fly-metrics.net) and alert from there.
 
 ### Collections (data a custom app keeps)
 

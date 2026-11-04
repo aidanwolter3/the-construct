@@ -399,6 +399,30 @@ impl HostStore {
         )
     }
 
+    /// For monitoring (decision `server-monitoring`): live admin pods, live temporary
+    /// pods, and the MCP credentials of live pods.
+    pub fn monitoring_counts(&self) -> rusqlite::Result<(i64, i64, i64)> {
+        let conn = self.conn();
+        let live = "expires_at IS NULL OR expires_at > ?1";
+        let (admin, temporary) = conn.query_row(
+            &format!(
+                "SELECT COALESCE(SUM(kind = 'admin'), 0), COALESCE(SUM(kind = 'temporary'), 0)
+                 FROM pods WHERE {live}"
+            ),
+            [now_secs()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let mcp = conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM credentials WHERE kind = 'mcp'
+                 AND pod_id IN (SELECT id FROM pods WHERE {live})"
+            ),
+            [now_secs()],
+            |r| r.get(0),
+        )?;
+        Ok((admin, temporary, mcp))
+    }
+
     /// Replace a pod's token (rotation).
     pub fn replace_token(&self, pod_id: &str, token_hash: &str) -> rusqlite::Result<()> {
         let mut conn = self.conn();

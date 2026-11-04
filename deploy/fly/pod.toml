@@ -48,6 +48,14 @@ primary_region = "dfw"
   CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES = "26214400"
   CONSTRUCT_POD_UPLOAD_QUOTA_BYTES = "524288000"
   CONSTRUCT_MIN_FREE_DISK_BYTES = "104857600"
+  # GET /metrics (Prometheus) on a port of its own, outside [http_service], so
+  # only Fly's private network reaches it; Fly scrapes it into its Grafana
+  # (fly-metrics.net). Decision `server-monitoring`.
+  CONSTRUCT_METRICS_ADDR = "[::]:9091"
+
+[metrics]
+  port = 9091
+  path = "/metrics"
 
 [mounts]
   source = "pod_data"

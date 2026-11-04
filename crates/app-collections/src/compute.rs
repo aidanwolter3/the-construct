@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use pod_core::{BoxFuture, Pod};
+use pod_core::{BoxFuture, Pod, metrics};
 use rusqlite::Connection;
 use serde_json::{Map, Value, json};
 
@@ -69,6 +69,9 @@ pub const DEFAULT_URL: &str = "https://api.anthropic.com/v1/messages";
 /// which anyone can make, must not spend the server's model key). Such
 /// fields keep their default, as without a model.
 pub const MODEL_SETTING: &str = "collections.model";
+
+/// The `feature` of `model` computes' calls in the metrics.
+const LLM_FEATURE: &str = "collections";
 
 /// A [`FieldModel`] that asks a model over the Anthropic Messages API.
 pub struct MessagesModel {
@@ -157,14 +160,21 @@ impl FieldModel for MessagesModel {
                 Ok(r) if r.status().is_success() => r,
                 Ok(r) => {
                     tracing::warn!(status = %r.status(), "computing a collection field failed");
+                    let answer = r.json::<Value>().await.ok();
+                    metrics::record_llm(LLM_FEATURE, false, answer.as_ref());
                     return None;
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "computing a collection field failed");
+                    metrics::record_llm(LLM_FEATURE, false, None);
                     return None;
                 }
             };
-            let v: Value = resp.json().await.ok()?;
+            let Ok(v) = resp.json::<Value>().await else {
+                metrics::record_llm(LLM_FEATURE, false, None);
+                return None;
+            };
+            metrics::record_llm(LLM_FEATURE, true, Some(&v));
             let text = v["content"]
                 .as_array()?
                 .iter()

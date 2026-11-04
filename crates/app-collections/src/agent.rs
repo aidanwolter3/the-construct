@@ -363,8 +363,17 @@ pub fn read_turn(answer: &Value) -> Turn {
     }
 }
 
+/// The `feature` of a page read's model calls in the metrics (decision
+/// `server-monitoring`).
+const PAGE_FEATURE: &str = "fill_page";
+/// The `feature` of an agent fill's model calls.
+const AGENT_FEATURE: &str = "fill_agent";
+
 impl MessagesAgent {
-    async fn post(&self, body: &Value) -> Result<Value, String> {
+    /// One Messages API call, counted under `feature` (calls, tokens and
+    /// web tool uses).
+    async fn post(&self, feature: &str, body: &Value) -> Result<Value, String> {
+        use pod_core::metrics;
         let resp = self
             .client
             .post(&self.url)
@@ -374,12 +383,30 @@ impl MessagesAgent {
             .json(body)
             .send()
             .await
-            .map_err(|e| format!("the model could not be reached: {e}"))?;
+            .map_err(|e| {
+                metrics::record_llm(feature, false, None);
+                format!("the model could not be reached: {e}")
+            })?;
         let status = resp.status();
-        let answer: Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("the model's answer could not be read: {e}"))?;
+        let answer: Value = match resp.json().await {
+            Ok(a) => a,
+            Err(e) => {
+                metrics::record_llm(feature, false, None);
+                return Err(format!("the model's answer could not be read: {e}"));
+            }
+        };
+        metrics::record_llm(feature, status.is_success(), Some(&answer));
+        let mut tools = (0, 0);
+        count_tools(&answer, &mut tools);
+        for (tool, n) in [("web_search", tools.0), ("web_fetch", tools.1)] {
+            if n > 0 {
+                metrics::add(
+                    metrics::LLM_WEB_TOOLS,
+                    &[("feature", feature), ("tool", tool)],
+                    u64::from(n),
+                );
+            }
+        }
         if !status.is_success() {
             let msg = answer["error"]["message"].as_str().unwrap_or("");
             return Err(format!(
@@ -397,7 +424,9 @@ impl FillAgent for MessagesAgent {
         req: PageRequest<'a>,
     ) -> BoxFuture<'a, Result<Vec<Map<String, Value>>, String>> {
         Box::pin(async move {
-            let answer = self.post(&page_request_body(&self.model, &req)).await?;
+            let answer = self
+                .post(PAGE_FEATURE, &page_request_body(&self.model, &req))
+                .await?;
             page_rows(&answer)
         })
     }
@@ -408,7 +437,7 @@ impl FillAgent for MessagesAgent {
             let mut used = (0, 0);
             for _ in 0..MAX_TURNS {
                 let body = request_body(&self.model, &req, &messages);
-                let answer = self.post(&body).await?;
+                let answer = self.post(AGENT_FEATURE, &body).await?;
                 count_tools(&answer, &mut used);
                 match read_turn(&answer) {
                     Turn::Rows(rows) => {

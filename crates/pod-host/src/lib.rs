@@ -36,6 +36,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use pod_core::metrics;
 use pod_core::session::{SESSION_HEADER, bearer, session_hash};
 use pod_core::store::Store;
 use pod_core::util::{hex, now_secs};
@@ -582,6 +583,25 @@ impl Host {
     /// by Web Push to its devices. A running server's open streams don't
     /// hear it (another process); clients see it on their next refresh.
     /// Returns its title.
+    /// Set pod setting `key` of admin pod `name` (e.g. turning on the
+    /// monitoring source, decision `server-monitoring`). A running server reads it
+    /// on the next request. Temporary pods are refused: anyone can make one.
+    pub fn set_admin_pod_setting(&self, name: &str, key: &str, value: &str) -> Result<(), String> {
+        let pod = self
+            .store
+            .pod_by_name(name)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("no pod named {name:?}"))?;
+        if pod.kind != PodKind::Admin {
+            return Err(format!(
+                "pod {name:?} is temporary; only admin pods can change this"
+            ));
+        }
+        let store =
+            Store::open(&self.pod_dir(&pod.id)?.join("server.db")).map_err(|e| e.to_string())?;
+        store.set_pod_setting(key, value).map_err(|e| e.to_string())
+    }
+
     pub fn notify_test(&self, name: &str) -> Result<String, String> {
         let pod = self
             .store
@@ -775,6 +795,50 @@ impl Host {
         self.open.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// The gauges for monitoring (decision `server-monitoring`): pods, MCP
+    /// credentials and free disk, measured now. Blocking (reads `host.db`).
+    pub fn monitoring_gauges(&self) -> Vec<metrics::Gauge> {
+        let mut gauges = Vec::new();
+        match self.store.monitoring_counts() {
+            Ok((admin, temporary, mcp)) => {
+                gauges.push(metrics::Gauge {
+                    name: "construct_pods",
+                    help: "Live pods, by kind.",
+                    series: vec![
+                        (vec![("kind".into(), "admin".into())], admin as f64),
+                        (vec![("kind".into(), "temporary".into())], temporary as f64),
+                    ],
+                });
+                gauges.push(metrics::Gauge::one(
+                    "construct_mcp_credentials",
+                    "MCP credentials (Claude connections) of live pods.",
+                    mcp as f64,
+                ));
+            }
+            Err(e) => tracing::error!(error = %e, "metrics: host store error"),
+        }
+        if let Some(t) = self.config.temporary {
+            gauges.push(metrics::Gauge::one(
+                "construct_temporary_pods_max",
+                "Most live temporary pods allowed.",
+                t.max_live as f64,
+            ));
+        }
+        if let Some(free) = pod_core::disk::free_bytes(&self.dir) {
+            gauges.push(metrics::Gauge::one(
+                "construct_disk_free_bytes",
+                "Free space on the data volume.",
+                free as f64,
+            ));
+        }
+        gauges.push(metrics::Gauge::one(
+            "construct_disk_min_free_bytes",
+            "Free space below which uploads and new temporary pods stop.",
+            self.config.storage.min_free_disk_bytes as f64,
+        ));
+        gauges
+    }
+
     /// True when the data volume is nearly full.
     fn low_on_disk(&self) -> bool {
         pod_core::disk::DiskGuard::new(&self.dir, self.config.storage.min_free_disk_bytes)
@@ -919,6 +983,21 @@ pub fn app(host: Arc<Host>) -> Router {
             host.config.hsts,
             security_headers,
         ))
+        .layer(axum::middleware::from_fn(count_responses))
+}
+
+/// Count every response by status code (decision `server-monitoring`), except the
+/// health check Fly polls every few seconds.
+async fn count_responses(req: Request, next: axum::middleware::Next) -> Response {
+    let health = req.uri().path() == "/healthz";
+    let resp = next.run(req).await;
+    if !health {
+        metrics::inc(
+            metrics::HTTP_RESPONSES,
+            &[("status", resp.status().as_str())],
+        );
+    }
+    resp
 }
 
 /// Headers on every response, unless the route set its own (an upload's
@@ -1056,6 +1135,7 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
             Some(id)
         }
         Some((_, CredentialKind::Mcp)) => {
+            metrics::inc(metrics::AUTH_FAILURES, &[("kind", "mcp_scope")]);
             return json_error(
                 StatusCode::FORBIDDEN,
                 json!({ "error": "mcp_credential_scope",
@@ -1075,6 +1155,7 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
                 host = ?req.headers().get(header::HOST),
                 "open pod refused for a Host that is not localhost or an IP address"
             );
+            metrics::inc(metrics::AUTH_FAILURES, &[("kind", "open_pod_host")]);
             return json_error(
                 StatusCode::FORBIDDEN,
                 json!({ "error": "host_not_allowed" }),
@@ -1099,6 +1180,9 @@ async fn dispatch(State(host): State<Arc<Host>>, mut req: Request) -> Response {
 /// forgets it.
 fn no_pod(host: &Host, req: &Request, had_token: bool) -> Response {
     let path = req.uri().path();
+    if had_token {
+        metrics::inc(metrics::AUTH_FAILURES, &[("kind", "unknown_token")]);
+    }
     let invalid = |mut r: Response| {
         if had_token {
             r.headers_mut()
@@ -1141,6 +1225,7 @@ async fn open_with_token(State(host): State<Arc<Host>>, req: Request) -> Respons
     let key = client_keys(req.headers(), peer(&req), host.config.trust_fly_client_ip).narrow;
     if !host.code_tries.allow(&key) {
         tracing::warn!("pod code tries rate-limited");
+        metrics::inc(metrics::RATE_LIMITED, &[("limit", "pod_code")]);
         return rate_limited();
     }
     let headers = req.headers().clone();
@@ -1167,6 +1252,7 @@ async fn open_with_token(State(host): State<Arc<Host>>, req: Request) -> Respons
         Ok(Some(_)) => Json(json!({ "session_token": token })).into_response(),
         Ok(None) => {
             tracing::info!("pod code rejected");
+            metrics::inc(metrics::AUTH_FAILURES, &[("kind", "pod_code")]);
             json_error(
                 StatusCode::UNAUTHORIZED,
                 json!({ "error": "pod_not_found" }),
@@ -1190,10 +1276,12 @@ async fn temporary_pod(State(host): State<Arc<Host>>, req: Request) -> Response 
     let keys = client_keys(req.headers(), peer(&req), host.config.trust_fly_client_ip);
     if !host.temp_creates.allow(&keys) {
         tracing::warn!("temporary pod creation rate-limited");
+        metrics::inc(metrics::RATE_LIMITED, &[("limit", "temporary_pod")]);
         return rate_limited();
     }
     if host.low_on_disk() {
         tracing::warn!("temporary pod refused: low disk space");
+        metrics::inc(metrics::TEMPORARY_PODS, &[("outcome", "low_disk")]);
         return json_error(
             StatusCode::SERVICE_UNAVAILABLE,
             json!({ "error": "low_disk_space" }),
@@ -1222,6 +1310,7 @@ async fn temporary_pod(State(host): State<Arc<Host>>, req: Request) -> Response 
     match made {
         Ok(Ok(Some(pod))) => {
             tracing::info!(pod = %pod.name, "temporary pod created");
+            metrics::inc(metrics::TEMPORARY_PODS, &[("outcome", "created")]);
             Json(json!({
                 "session_token": pod.token,
                 "expires_at": pod.expires_at,
@@ -1229,10 +1318,13 @@ async fn temporary_pod(State(host): State<Arc<Host>>, req: Request) -> Response 
             }))
             .into_response()
         }
-        Ok(Ok(None)) => json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            json!({ "error": "temporary_pods_full" }),
-        ),
+        Ok(Ok(None)) => {
+            metrics::inc(metrics::TEMPORARY_PODS, &[("outcome", "full")]);
+            json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({ "error": "temporary_pods_full" }),
+            )
+        }
         Ok(Err(e)) => {
             tracing::error!(error = %e, "cannot create a temporary pod");
             json_error(

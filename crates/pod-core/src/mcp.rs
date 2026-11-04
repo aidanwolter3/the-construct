@@ -704,6 +704,17 @@ async fn sample_data(pod: &Pod, headers: &HeaderMap, args: &Value) -> Result<Val
         };
         match adapter.feed(pod, feed, &req).await {
             crate::Hydration::Data(d) => serde_json::to_value(d).unwrap_or(Value::Null),
+            // The source's own error (e.g. `monitoring_off` with how to
+            // turn it on), so Claude can tell the user what to do.
+            crate::Hydration::Error(resp) => {
+                let status = resp.status().as_u16();
+                let detail = axum::body::to_bytes(resp.into_body(), 16 * 1024)
+                    .await
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+                return Err(json!({ "error": "feed_failed", "feed": feed,
+                    "status": status, "detail": detail }));
+            }
             _ => return Err(json!({ "error": "feed_failed", "feed": feed })),
         }
     };
