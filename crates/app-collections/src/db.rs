@@ -13,6 +13,9 @@
 //!   `collection-computed-fields`) as JSON, by collection, field id and the
 //!   normalized source values, so each input is asked about once; a
 //!   person's edit of the field replaces the answer.
+//! - `collections_reminders_sent`: which row a reminder (decision
+//!   `collection-reminders`) already notified about, for which date, so
+//!   each fires once even after the core's notification retention.
 
 use std::cmp::Ordering;
 
@@ -28,7 +31,20 @@ pub static MIGRATIONS: &[Migration] = &[
     Migration::Sql(SCHEMA),
     // 2: computed field answers (decision `collection-computed-fields`).
     Migration::Sql(COMPUTED),
+    // 3: reminders already sent (decision `collection-reminders`).
+    Migration::Sql(REMINDERS),
 ];
+
+const REMINDERS: &str = "
+CREATE TABLE collections_reminders_sent (
+    collection TEXT NOT NULL,
+    reminder   TEXT NOT NULL,
+    row_id     TEXT NOT NULL,
+    date       TEXT NOT NULL,
+    sent_at    INTEGER NOT NULL,
+    PRIMARY KEY (collection, reminder, row_id, date)
+);
+";
 
 const COMPUTED: &str = "
 CREATE TABLE collections_computed (
@@ -758,6 +774,11 @@ pub fn purge(tx: &Transaction<'_>, now: i64, window: i64) -> rusqlite::Result<Pu
     )?;
     tx.execute(
         "DELETE FROM collections_edits WHERE created_at <= ?1",
+        [cutoff],
+    )?;
+    // Older than any reminder still fires (`remind::LATE_SECS`).
+    tx.execute(
+        "DELETE FROM collections_reminders_sent WHERE sent_at <= ?1",
         [cutoff],
     )?;
     for (version, mut def) in all_defs(tx)? {

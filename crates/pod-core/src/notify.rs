@@ -161,7 +161,7 @@ const NOTIFICATION_COLS: &str =
     "id, app_id, channel, title, body, image_url, target_uri, group_key, created_at, read_at";
 
 /// Unread counts per app, for the apps in `apps`.
-fn unread_on(conn: &Connection, apps: &[&str]) -> rusqlite::Result<(u32, BTreeMap<String, u32>)> {
+fn unread_on(conn: &Connection, apps: &[String]) -> rusqlite::Result<(u32, BTreeMap<String, u32>)> {
     let mut stmt = conn.prepare_cached(
         "SELECT app_id, COUNT(*) FROM notifications WHERE read_at IS NULL GROUP BY app_id",
     )?;
@@ -169,7 +169,7 @@ fn unread_on(conn: &Connection, apps: &[&str]) -> rusqlite::Result<(u32, BTreeMa
     let mut total = 0u32;
     for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
         let (app, n) = row?;
-        if apps.contains(&app.as_str()) {
+        if apps.contains(&app) {
             let n = u32::try_from(n).unwrap_or(u32::MAX);
             total = total.saturating_add(n);
             by_app.insert(app, n);
@@ -349,7 +349,7 @@ impl Store {
     /// Unread notifications per app (only `apps` count).
     pub fn unread_notifications(
         &self,
-        apps: &[&str],
+        apps: &[String],
     ) -> rusqlite::Result<(u32, BTreeMap<String, u32>)> {
         self.with_conn(|c| unread_on(c, apps))
     }
@@ -413,23 +413,57 @@ pub fn device_id(headers: &HeaderMap) -> Option<String> {
 }
 
 impl AppState {
-    /// Every adapter's channels.
+    /// Every adapter's channels: those declared at startup, then those
+    /// declared now for live custom apps (decision `collection-reminders`).
+    /// Reads the store (blocking).
     pub fn notification_channels(&self) -> Vec<NotificationChannel> {
-        self.catalog()
+        let mut out: Vec<NotificationChannel> = self
+            .catalog()
             .adapters()
             .iter()
             .flat_map(|a| a.notification_channels())
-            .collect()
+            .collect();
+        let senders: Vec<_> = self
+            .catalog()
+            .adapters()
+            .iter()
+            .filter(|a| a.notifies_custom_apps())
+            .collect();
+        if senders.is_empty() {
+            return out;
+        }
+        let live: Vec<String> = match self.store().with_conn(crate::custom::custom_apps_on) {
+            Ok(apps) => apps.into_iter().map(|a| a.id).collect(),
+            Err(e) => {
+                tracing::error!(error = %e, "custom apps could not be read");
+                return out;
+            }
+        };
+        for a in senders {
+            for c in a.custom_notification_channels(self.store()) {
+                let fits = live.contains(&c.app_id)
+                    && valid_channel_id(&c.id)
+                    && !out.iter().any(|o| o.app_id == c.app_id && o.id == c.id);
+                if fits {
+                    out.push(c);
+                } else {
+                    tracing::warn!(adapter = a.name(), app = %c.app_id, channel = %c.id,
+                        "custom app channel dropped");
+                }
+            }
+        }
+        out
     }
 
-    fn channel(&self, app_id: &str, channel: &str) -> Option<NotificationChannel> {
-        self.notification_channels()
-            .into_iter()
-            .find(|c| c.app_id == app_id && c.id == channel)
-    }
-
-    fn app_ids(&self) -> Vec<&'static str> {
-        self.catalog().apps().map(|a| a.id).collect()
+    /// The apps notifications may belong to: built-in apps and live custom
+    /// apps.
+    fn app_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.catalog().apps().map(|a| a.id.to_owned()).collect();
+        match self.store().with_conn(crate::custom::custom_apps_on) {
+            Ok(apps) => ids.extend(apps.into_iter().map(|a| a.id)),
+            Err(e) => tracing::error!(error = %e, "custom apps could not be read"),
+        }
+        ids
     }
 
     pub fn subscribe_notifications(&self) -> tokio::sync::broadcast::Receiver<NotifyEvent> {
@@ -509,10 +543,13 @@ impl AppState {
         self: &Pod,
         items: Vec<NewNotification>,
     ) -> Result<(Vec<Notification>, Vec<tokio::task::JoinHandle<()>>), ApiError> {
+        let channels = self.notification_channels();
         let mut items: Vec<NewNotification> = items
             .into_iter()
             .filter(|n| {
-                let known = self.channel(&n.app_id, &n.channel).is_some();
+                let known = channels
+                    .iter()
+                    .any(|c| c.app_id == n.app_id && c.id == n.channel);
                 if !known {
                     tracing::warn!(app = %n.app_id, channel = %n.channel, "notification for an undeclared channel dropped");
                 }
@@ -865,12 +902,12 @@ async fn list(
         Some(_) => return bad_request("before is a notification id"),
     };
     let app = q.get("app").cloned();
+    let apps = state.app_ids();
     if let Some(a) = &app
-        && !state.catalog().is_app(a)
+        && !apps.contains(a)
     {
         return json_error(StatusCode::NOT_FOUND, json!({ "error": "app_not_found" }));
     }
-    let apps = state.app_ids();
     let result = blocking(&state, move |s| {
         s.with_conn(|c| {
             let mut rows: Vec<Notification> = {
@@ -882,7 +919,7 @@ async fn list(
                 stmt.query_map(params![before, app, limit + 1], row_to_notification)?
                     .collect::<rusqlite::Result<_>>()?
             };
-            rows.retain(|n| apps.contains(&n.app_id.as_str()));
+            rows.retain(|n| apps.contains(&n.app_id));
             let (total, by_app) = unread_on(c, &apps)?;
             Ok((rows, total, by_app))
         })
