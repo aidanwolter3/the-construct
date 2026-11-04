@@ -1,39 +1,29 @@
-//! The watcher (issue #58, decision `watcher`): polls websites for events,
-//! matches them against rules and sends a notification for each new match.
-//! A website is a row of config (a *target*), not code: its URL, how often
-//! to check it and which extractor reads it (`ics`, `jsonld`, `llm`, or
-//! `auto`). Rules are rows too (keywords, venue, days, a date window).
+//! The Events app (app id `watcher`; decision `collection-fillers`): every
+//! upcoming event of the websites the user watches, the ones an alert
+//! matches first, and a notification for each match.
 //!
-//! - Feeds: `matches` (upcoming matched events, `watcher:matches`) and
-//!   `targets` (`watcher:targets` with each target's health,
-//!   `watcher:rules`).
-//! - Screens: `GET /v1/watcher/screens/event?id=…`,
-//!   `GET /v1/watcher/screens/target?id=…`.
-//! - Actions: `POST /v1/watcher/targets/{create,update,refresh}`,
-//!   `/v1/watcher/rules/{create,update}`, `/v1/watcher/events/seen`.
-//! - MCP tools for Claude: `watcher_status`, `watcher_set_target`,
-//!   `watcher_set_rule`, `watcher_preview`, `watcher_refresh`.
+//! It was the Watcher (decision `watcher`), a source with its own tables,
+//! extractors and rules. Now the data is the Collections source's: the
+//! system collection `events` ([`events`]), with one fetch filler per
+//! website (`extract: events`, or `llm`) and alerts for the rules. Claude
+//! adds and changes sites and alerts with the Collections MCP tools. The app
+//! keeps its id, so it stays where people pinned it, and its notification
+//! channel (`matches`), so their choice for it holds. When a pod starts, its
+//! Watcher sites and rules move into `events` once ([`events::import`]).
 //!
-//! Checks run in the background ([`check`]): from the notification poller
-//! every minute while a device is registered, and when the app opens with
-//! a target overdue (a pod that slept still refreshes). No sign-in: the
-//! data is the pod's.
+//! The Watcher's routes and feeds stay declared for its older layout
+//! versions (0001, 0002), and answer that it is gone; its tables stay,
+//! unread.
 
-pub mod check;
-pub mod db;
-pub mod edit;
-pub mod extract;
-pub use web_extract::html;
-mod mcp;
-pub mod rules;
-pub use web_extract::when;
+pub mod events;
+pub mod legacy;
 
-use std::time::Duration;
+pub use web_extract::{html, when};
+
+use std::sync::Arc;
 
 use axum::{
-    Json, Router,
-    body::Bytes,
-    extract::{Query, State},
+    Router,
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -42,56 +32,57 @@ use pod_core::layouts::LayoutSource;
 use pod_core::store::Migration;
 use pod_core::{
     AppAdapter, AppInfo, AuthPolicy, BoxFuture, EntityDoc, FeedSpec, Hydration, PathSpec, Pod,
-    PollCtx, PollOutcome, RequestCtx, SourceManifest,
+    RequestCtx, SourceManifest,
 };
-use protocol::{Importance, NotificationChannel};
-use serde::Deserialize;
-use serde_json::{Value, json};
+use protocol::{DataBundle, Importance, NotificationChannel};
+use serde_json::json;
 
-pub use extract::LlmConfig;
-
-/// The adapter name: the prefix of its tables and routes, and the source id.
+/// The adapter name: the prefix of its old tables and routes, and the
+/// source id of its old feeds.
 pub const NAME: &str = "watcher";
 /// The app.
 pub const APP_ID: &str = "watcher";
-/// Its notification channel.
+/// Its notification channel (alerts on `events` notify on it).
 pub const CHANNEL: &str = "matches";
 
 pub const MATCHES_FEED: &str = "matches";
 pub const TARGETS_FEED: &str = "targets";
 
-/// The Watcher app.
+/// The Events app: the `events` collection.
 pub const APP: AppInfo = AppInfo {
     id: APP_ID,
-    title: "Watcher",
+    title: "Events",
     icon: "dashboard",
     dev: false,
     auth: AuthPolicy::Public,
-    feeds: &[(NAME, MATCHES_FEED), (NAME, TARGETS_FEED)],
+    feeds: &[(app_collections::NAME, events::COLLECTION)],
 };
 
-/// What layouts may use of the watcher.
+const GONE: &str = "Retired: the Watcher became the Events app (the events collection).";
+
+/// The Watcher's old routes and feeds, declared for its older layout
+/// versions; every one answers that it is gone.
 pub const MANIFEST: SourceManifest = SourceManifest {
-    title: "Watcher",
+    title: "Watcher (retired)",
     sign_in: None,
     entity_schemes: &["watcher"],
     feeds: &[
         FeedSpec {
             name: MATCHES_FEED,
-            query_keys: &[db::MATCHES_QUERY],
-            doc: "Upcoming events a rule matched, soonest first.",
+            query_keys: &["watcher:matches"],
+            doc: GONE,
         },
         FeedSpec {
             name: TARGETS_FEED,
-            query_keys: &[db::TARGETS_QUERY, db::RULES_QUERY],
-            doc: "The watched websites with their health, and the rules.",
+            query_keys: &["watcher:targets", "watcher:rules"],
+            doc: GONE,
         },
     ],
     data_paths: &[
         PathSpec {
             pattern: "/v1/watcher/screens/event?id={id}",
             query_keys: &["watcher:event:{id}"],
-            doc: "One event (watcher://events/{id}), also as a one-item list.",
+            doc: GONE,
         },
         PathSpec {
             pattern: "/v1/watcher/screens/target?id={id}",
@@ -100,190 +91,87 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 "watcher:target:{id}:rules",
                 "watcher:target:{id}:events",
             ],
-            doc: "One website (also as a one-item list), its rules and its upcoming events (matched ones have matched: true).",
+            doc: GONE,
         },
     ],
     actions: &[
         PathSpec {
             pattern: "/v1/watcher/targets/create",
             query_keys: &[],
-            doc: "Watch a website: payload {url, title?, extractor? (auto|ics|jsonld|llm), interval_minutes?, hint?, details?, time_zone? (e.g. America/Denver), utc_offset?, client_id: \"$nonce\"}.",
+            doc: GONE,
         },
         PathSpec {
             pattern: "/v1/watcher/targets/update",
             query_keys: &[],
-            doc: "Change a website: payload {id, <field>: value}; archive with archived: true.",
+            doc: GONE,
         },
         PathSpec {
             pattern: "/v1/watcher/targets/refresh",
             query_keys: &[],
-            doc: "Check a website now: payload {id}.",
+            doc: GONE,
         },
         PathSpec {
             pattern: "/v1/watcher/rules/create",
             query_keys: &[],
-            doc: "Add a rule to a site: payload {target: site id, title?, keywords (any of, comma separated), exclude?, venue?, days?, within_days?, client_id: \"$nonce\"}.",
+            doc: GONE,
         },
         PathSpec {
             pattern: "/v1/watcher/rules/update",
             query_keys: &[],
-            doc: "Change a rule: payload {id, <field>: value}; archive with archived: true.",
+            doc: GONE,
         },
         PathSpec {
             pattern: "/v1/watcher/events/seen",
             query_keys: &[],
-            doc: "Mark an event's matches seen: payload {id, seen}.",
+            doc: GONE,
         },
     ],
-    entities: &[
-        EntityDoc {
-            uri: "watcher://events/{id}",
-            doc: "An event found on a watched website.",
-            fields: &[
-                ("id", "stable id"),
-                ("title", "as the site writes it"),
-                (
-                    "start",
-                    "the site's wall clock, YYYY-MM-DDTHH:MM (offset when known)",
-                ),
-                ("date_text", "e.g. Fri Nov 6"),
-                ("time_text", "e.g. 7:30 PM, or empty"),
-                ("when_text", "date · time"),
-                ("meta", "date · time · venue"),
-                ("venue", "where"),
-                ("description", "everything the site says (lineups)"),
-                ("url", "the event's own page, or empty"),
-                (
-                    "tickets_url",
-                    "a tickets link found in the description, or empty",
-                ),
-                ("source", "the website's title"),
-                ("target_id", "the website's id"),
-                ("matched", "a live rule matched it"),
-                ("rules_text", "Matched <rule titles>"),
-                (
-                    "match_text",
-                    "<site> · <rule titles> when matched, else empty",
-                ),
-                ("seen", "its matches were marked seen"),
-            ],
-        },
-        EntityDoc {
-            uri: "watcher://targets/{id}",
-            doc: "A watched website.",
-            fields: &[
-                ("id", "target id"),
-                ("title", "name"),
-                ("url", "the page checked"),
-                ("host", "its host"),
-                ("extractor", "auto, ics, jsonld or llm"),
-                ("interval_text", "e.g. every 6 h"),
-                ("health", "ok, pending, failing, empty or archived"),
-                (
-                    "health_text",
-                    "one line, e.g. 4 upcoming events · checked 5 min ago",
-                ),
-                ("failing", "health is failing or empty"),
-                ("upcoming_count", "upcoming events found"),
-                ("rule_count", "its live rules"),
-                ("rules_text", "Watching for <rule titles>, or No rules yet"),
-                ("meta", "host · extractor · interval"),
-                ("archived", "archived"),
-            ],
-        },
-        EntityDoc {
-            uri: "watcher://rules/{id}",
-            doc: "A rule.",
-            fields: &[
-                ("id", "rule id"),
-                ("target_id", "the site it belongs to (empty: every site)"),
-                ("site", "that site's title"),
-                ("title", "name"),
-                ("summary", "its conditions in one line"),
-                ("keywords", "any-of phrases, comma separated"),
-                ("exclude", "none-of phrases, comma separated"),
-                ("archived", "archived"),
-            ],
-        },
-    ],
+    entities: &[EntityDoc {
+        uri: "watcher://{kind}/{id}",
+        doc: GONE,
+        fields: &[],
+    }],
     dev: false,
 };
 
 // `FILES`: every `layouts/watcher/*.json`, in number order (`build.rs`).
 include!(concat!(env!("OUT_DIR"), "/layout_files.rs"));
 
-/// Server configuration (`CONSTRUCT_WATCHER_*`, README).
-#[derive(Debug, Clone, Default)]
-pub struct WatcherConfig {
-    /// The model behind the `llm` extractor; `None`: it is off.
-    pub llm: Option<LlmConfig>,
-    /// Targets may be on private addresses (local development, tests).
-    pub allow_private_hosts: bool,
-}
-
-impl WatcherConfig {
-    /// From the environment: the pod's shared model settings
-    /// (`CONSTRUCT_INFER_API_KEY`, `CONSTRUCT_INFER_URL`, and the model
-    /// from `CONSTRUCT_WATCHER_LLM_MODEL`, else `CONSTRUCT_INFER_MODEL`),
-    /// and `CONSTRUCT_WATCHER_PRIVATE_HOSTS=1`.
-    pub fn from_env() -> Self {
-        let var = |k: &str| {
-            std::env::var(k)
-                .ok()
-                .map(|v| v.trim().to_owned())
-                .filter(|v| !v.is_empty())
-        };
-        let key = var("CONSTRUCT_INFER_API_KEY");
-        Self {
-            llm: key.map(|api_key| LlmConfig {
-                api_key,
-                model: var("CONSTRUCT_WATCHER_LLM_MODEL")
-                    .or_else(|| var("CONSTRUCT_INFER_MODEL"))
-                    .unwrap_or_else(|| extract::DEFAULT_MODEL.into()),
-                url: var("CONSTRUCT_INFER_URL").unwrap_or_else(|| extract::DEFAULT_URL.into()),
-            }),
-            allow_private_hosts: var("CONSTRUCT_WATCHER_PRIVATE_HOSTS").as_deref() == Some("1"),
-        }
-    }
-}
-
-/// The watcher adapter.
+/// The Events adapter.
+#[derive(Debug, Default)]
 pub struct WatcherAdapter {
-    config: WatcherConfig,
-    fetch_client: reqwest::Client,
-    llm_client: reqwest::Client,
+    /// Imported sites may be on private addresses (tests; the operator's
+    /// `CONSTRUCT_FILL_PRIVATE_HOSTS=1`).
+    allow_private_hosts: bool,
 }
 
 impl WatcherAdapter {
-    pub fn new(config: WatcherConfig) -> Self {
-        let fetch = if config.allow_private_hosts {
-            pod_core::net::builder(check::FETCH_TIMEOUT)
-        } else {
-            pod_core::net::public_builder(check::FETCH_TIMEOUT)
-        };
-        Self {
-            fetch_client: fetch.build().expect("HTTP client"),
-            llm_client: pod_core::net::builder(check::LLM_TIMEOUT)
-                .build()
-                .expect("HTTP client"),
-            config,
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    pub fn config(&self) -> &WatcherConfig {
-        &self.config
-    }
-
-    /// The client for watched websites (public addresses only unless
-    /// [`WatcherConfig::allow_private_hosts`]).
-    pub fn fetch_client(&self) -> &reqwest::Client {
-        &self.fetch_client
-    }
-
-    pub fn llm_client(&self) -> &reqwest::Client {
-        &self.llm_client
+    /// Let imported sites be on private hosts.
+    pub fn with_private_hosts(mut self, allow: bool) -> Self {
+        self.allow_private_hosts = allow;
+        self
     }
 }
+
+const INSTRUCTIONS: &str = "The Events app (app watcher) shows the pod's events collection: every \
+upcoming event of the websites the user watches, matched ones first, with a notification for each \
+match. A website is a filler of events and a rule is an alert, both changed with apply_change on \
+collection events (describe_collection events shows them with their ids; collections_status shows each \
+site's health). To watch a site: try it with collections_preview {url, extract: \"events\"} (an ics feed \
+or a page with schema.org events; zone for times without an offset), then apply_change {op: set_filler, \
+filler: {kind: \"fetch\", title, url, extract: \"events\", zone, map: {source_id: \"id\", title: \
+\"title\", start: \"start\", end: \"end\", venue: \"venue\", description: \"description\", url: \"url\", \
+tickets_url: \"tickets_url\"}, key: \"source_id\", upcoming: \"start\", every_minutes: 360}}. Add \
+details: {link: \"url\", extract: \"events\", map: {description: \"description\"}, text: \"description\"} \
+(and drop description from map) when the listing lacks what alerts need (lineups) and each event's \
+page has it. A page without structured events: extract \"llm\" with fields [title, start, end, venue, \
+description, url] and a hint (a model reads each changed page). Then a rule: apply_change {op: \
+add_alert, filler: <the site's id>, any: [phrases], none?: [phrases], days?, within_days?}; each site has \
+its own alerts. The events fields can't be renamed or removed.";
 
 impl AppAdapter for WatcherAdapter {
     fn name(&self) -> &'static str {
@@ -300,18 +188,18 @@ impl AppAdapter for WatcherAdapter {
 
     fn router(&self) -> Router<Pod> {
         Router::new()
-            .route("/v1/watcher/screens/event", get(event_screen))
-            .route("/v1/watcher/screens/target", get(target_screen))
-            .route("/v1/watcher/targets/create", post(create_target))
-            .route("/v1/watcher/targets/update", post(update_target))
-            .route("/v1/watcher/targets/refresh", post(refresh_target))
-            .route("/v1/watcher/rules/create", post(create_rule))
-            .route("/v1/watcher/rules/update", post(update_rule))
-            .route("/v1/watcher/events/seen", post(mark_seen))
+            .route("/v1/watcher/screens/event", get(gone))
+            .route("/v1/watcher/screens/target", get(gone))
+            .route("/v1/watcher/targets/create", post(gone))
+            .route("/v1/watcher/targets/update", post(gone))
+            .route("/v1/watcher/targets/refresh", post(gone))
+            .route("/v1/watcher/rules/create", post(gone))
+            .route("/v1/watcher/rules/update", post(gone))
+            .route("/v1/watcher/events/seen", post(gone))
     }
 
     fn migrations(&self) -> &'static [Migration] {
-        db::MIGRATIONS
+        legacy::MIGRATIONS
     }
 
     fn manifest(&self) -> SourceManifest {
@@ -320,37 +208,37 @@ impl AppAdapter for WatcherAdapter {
 
     fn feed<'a>(
         &'a self,
-        pod: &'a Pod,
+        _pod: &'a Pod,
         feed: &'a str,
         _req: &'a RequestCtx,
     ) -> BoxFuture<'a, Hydration> {
         Box::pin(async move {
-            let now = pod_core::util::now_secs();
-            let bundle = match feed {
-                MATCHES_FEED => {
-                    // Opening the app checks overdue targets (the poller
-                    // runs only while a device is registered).
-                    let overdue = pod
-                        .blocking(|s| s.with_conn(db::next_due))
-                        .await
-                        .ok()
-                        .flatten()
-                        .is_some_and(|t| t <= now);
-                    if overdue {
-                        check::spawn_run(pod);
-                    }
-                    pod.blocking(move |s| s.with_conn(|c| db::matches_bundle(c, now)))
-                        .await
+            match feed {
+                // An older layout version: nothing to show.
+                MATCHES_FEED | TARGETS_FEED => Hydration::Data(DataBundle::default()),
+                other => pod_core::unknown_feed(NAME, other),
+            }
+        })
+    }
+
+    fn resume<'a>(&'a self, pod: &'a Pod) -> BoxFuture<'a, ()> {
+        let allow = self.allow_private_hosts;
+        let pod = Arc::clone(pod);
+        Box::pin(async move {
+            match pod
+                .blocking(move |s| {
+                    events::prepare(s, allow).map_err(|e| {
+                        tracing::error!(error = %e, "the events collection could not be prepared");
+                        e
+                    })
+                })
+                .await
+            {
+                Ok(moved) if !moved.is_empty() => {
+                    tracing::info!(sites = moved.len(), "the Watcher's sites moved to Events");
+                    app_collections::fill::spawn(&pod, events::COLLECTION, None, false);
                 }
-                TARGETS_FEED => {
-                    pod.blocking(move |s| s.with_conn(|c| db::targets_bundle(c, now)))
-                        .await
-                }
-                other => return pod_core::unknown_feed(NAME, other),
-            };
-            match bundle {
-                Ok(b) => Hydration::Data(b),
-                Err(e) => Hydration::Error(e.into_response()),
+                _ => {}
             }
         })
     }
@@ -360,217 +248,22 @@ impl AppAdapter for WatcherAdapter {
             app_id: APP_ID.into(),
             id: CHANNEL.into(),
             title: "Matching events".into(),
-            description: "A watched website lists an event one of your rules matches.".into(),
+            description: "A watched website lists an event one of your alerts matches.".into(),
             default_enabled: true,
             importance: Importance::default(),
         }]
     }
 
-    fn poll_interval(&self) -> Option<Duration> {
-        Some(Duration::from_secs(60))
-    }
-
-    fn poll_notifications<'a>(
-        &'a self,
-        pod: &'a Pod,
-        _ctx: &'a PollCtx,
-    ) -> BoxFuture<'a, PollOutcome> {
-        Box::pin(async move {
-            // Checks can take minutes (model calls), longer than a poll
-            // may: they run in the background and notify themselves.
-            check::spawn_run(pod);
-            let now = pod_core::util::now_secs();
-            let next = pod
-                .blocking(|s| s.with_conn(db::next_due))
-                .await
-                .ok()
-                .flatten();
-            PollOutcome {
-                next_in: Some(Duration::from_secs(
-                    next.map_or(3600, |t| (t - now).clamp(60, 3600)) as u64,
-                )),
-                ..Default::default()
-            }
-        })
-    }
-
-    fn mcp_tools(&self) -> Vec<Value> {
-        mcp::tools()
-    }
-
     fn mcp_instructions(&self) -> Option<&'static str> {
-        Some(mcp::INSTRUCTIONS)
-    }
-
-    fn mcp_call<'a>(
-        &'a self,
-        pod: &'a Pod,
-        tool: &'a str,
-        args: &'a Value,
-    ) -> Option<BoxFuture<'a, Result<Value, Value>>> {
-        mcp::call(self, pod, tool, args)
+        Some(INSTRUCTIONS)
     }
 }
 
-// ---------- routes ----------
-
-fn answer(r: Result<Value, edit::Refusal>) -> Response {
-    match r {
-        Ok(v) => Json(v).into_response(),
-        Err((status, body)) => pod_core::json_error(status, body),
-    }
-}
-
-fn body_of(bytes: &Bytes) -> Result<Value, edit::Refusal> {
-    match serde_json::from_slice::<Value>(bytes) {
-        Ok(v @ Value::Object(_)) => Ok(v),
-        _ => Err(edit::invalid("the body is a JSON object")),
-    }
-}
-
-#[derive(Deserialize)]
-struct IdParam {
-    #[serde(default)]
-    id: String,
-}
-
-fn valid_id(id: &str) -> bool {
-    (1..=64).contains(&id.len())
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-}
-
-async fn event_screen(State(pod): State<Pod>, Query(p): Query<IdParam>) -> Response {
-    if !valid_id(&p.id) {
-        return answer(Err(edit::invalid("\"id\" is an event id")));
-    }
-    let id = p.id.clone();
-    match pod
-        .blocking(move |s| s.with_conn(|c| db::event_screen(c, &id)))
-        .await
-    {
-        Ok(Some(b)) => Json(b).into_response(),
-        Ok(None) => pod_core::json_error(
-            StatusCode::NOT_FOUND,
-            json!({ "error": "event_not_found", "id": p.id }),
-        ),
-        Err(e) => e.into_response(),
-    }
-}
-
-async fn target_screen(State(pod): State<Pod>, Query(p): Query<IdParam>) -> Response {
-    if !valid_id(&p.id) {
-        return answer(Err(edit::invalid("\"id\" is a target id")));
-    }
-    let id = p.id.clone();
-    let now = pod_core::util::now_secs();
-    match pod
-        .blocking(move |s| s.with_conn(|c| db::target_screen(c, &id, now)))
-        .await
-    {
-        Ok(Some(b)) => Json(b).into_response(),
-        Ok(None) => pod_core::json_error(
-            StatusCode::NOT_FOUND,
-            json!({ "error": "target_not_found", "id": p.id }),
-        ),
-        Err(e) => e.into_response(),
-    }
-}
-
-async fn create_target(State(pod): State<Pod>, body: Bytes) -> Response {
-    let r = match body_of(&body) {
-        Ok(mut b) => {
-            b.as_object_mut().map(|o| o.remove("id"));
-            edit::save_target(&pod, b).await
-        }
-        Err(e) => Err(e),
-    };
-    answer(r)
-}
-
-async fn update_target(State(pod): State<Pod>, body: Bytes) -> Response {
-    let r = match body_of(&body) {
-        Ok(b) if b["id"].as_str().is_some_and(|i| !i.is_empty()) => {
-            edit::save_target(&pod, b).await
-        }
-        Ok(_) => Err(edit::invalid("\"id\" is required")),
-        Err(e) => Err(e),
-    };
-    answer(r)
-}
-
-async fn refresh_target(State(pod): State<Pod>, body: Bytes) -> Response {
-    let b = match body_of(&body) {
-        Ok(b) => b,
-        Err(e) => return answer(Err(e)),
-    };
-    let Some(id) = b["id"].as_str().map(str::to_owned) else {
-        return answer(Err(edit::invalid("\"id\" is required")));
-    };
-    let lookup = id.clone();
-    match pod
-        .blocking(move |s| s.with_conn(|c| db::request_refresh(c, Some(&lookup))))
-        .await
-    {
-        Ok(0) => pod_core::json_error(
-            StatusCode::NOT_FOUND,
-            json!({ "error": "target_not_found", "id": id }),
-        ),
-        Ok(_) => {
-            check::spawn_run(&pod);
-            Json(json!({ "id": id, "refreshing": true })).into_response()
-        }
-        Err(e) => e.into_response(),
-    }
-}
-
-async fn create_rule(State(pod): State<Pod>, body: Bytes) -> Response {
-    let r = match body_of(&body) {
-        Ok(mut b) => {
-            b.as_object_mut().map(|o| o.remove("id"));
-            edit::save_rule(&pod, b).await
-        }
-        Err(e) => Err(e),
-    };
-    answer(r)
-}
-
-async fn update_rule(State(pod): State<Pod>, body: Bytes) -> Response {
-    let r = match body_of(&body) {
-        Ok(b) if b["id"].as_str().is_some_and(|i| !i.is_empty()) => edit::save_rule(&pod, b).await,
-        Ok(_) => Err(edit::invalid("\"id\" is required")),
-        Err(e) => Err(e),
-    };
-    answer(r)
-}
-
-async fn mark_seen(State(pod): State<Pod>, body: Bytes) -> Response {
-    let b = match body_of(&body) {
-        Ok(b) => b,
-        Err(e) => return answer(Err(e)),
-    };
-    let Some(id) = b["id"].as_str().map(str::to_owned).filter(|i| valid_id(i)) else {
-        return answer(Err(edit::invalid("\"id\" is required")));
-    };
-    let seen = match &b["seen"] {
-        Value::Bool(v) => *v,
-        Value::String(s) => s != "false",
-        _ => true,
-    };
-    let lookup = id.clone();
-    match pod
-        .blocking(move |s| s.with_conn(|c| db::set_seen(c, &lookup, seen)))
-        .await
-    {
-        Ok(true) => {
-            pod.publish_data_all(NAME);
-            Json(json!({ "id": id, "seen": seen })).into_response()
-        }
-        Ok(false) => pod_core::json_error(
-            StatusCode::NOT_FOUND,
-            json!({ "error": "event_not_found", "id": id }),
-        ),
-        Err(e) => e.into_response(),
-    }
+/// Every old Watcher route: 410, it is gone.
+async fn gone() -> Response {
+    pod_core::json_error(
+        StatusCode::GONE,
+        json!({ "error": "gone", "detail": "The Watcher became the Events app; update the app to see your events." }),
+    )
+    .into_response()
 }

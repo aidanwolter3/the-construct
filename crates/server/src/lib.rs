@@ -19,17 +19,19 @@ pub use pod_core::*;
 pub use pod_host as host;
 
 /// The pod's adapters, in `GET /v1/apps` order: the Pixelfed feed (with the
-/// `pixelfed` sign-in), the recipes, the watcher (configured from
-/// `CONSTRUCT_INFER_*` and `CONSTRUCT_WATCHER_*`), then the `pixelfed_demo` dev app; and
+/// `pixelfed` sign-in), the recipes, the Events app (app `watcher`: the
+/// Collections `events` collection, once the Watcher), then the
+/// `pixelfed_demo` dev app; and
 /// Collections (no apps of its own: data custom apps declare; fillers
 /// configured from `CONSTRUCT_INFER_*` and `CONSTRUCT_FILL_*`).
 pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
     vec![
         Arc::new(PixelfedAdapter::new(pixelfed)),
         Arc::new(app_recipes::RecipesAdapter::new()),
-        Arc::new(app_watcher::WatcherAdapter::new(
-            app_watcher::WatcherConfig::from_env(),
-        )),
+        Arc::new(
+            app_watcher::WatcherAdapter::new()
+                .with_private_hosts(std::env::var(FILL_PRIVATE_HOSTS_VAR).as_deref() == Ok("1")),
+        ),
         app_pixelfed::apps::demo_adapter(),
         Arc::new(
             app_collections::CollectionsAdapter::with_caps(collections_caps_from_env())
@@ -103,8 +105,9 @@ pub fn new_pod_settings(import_recipes: bool) -> Vec<(String, String)> {
 }
 
 /// Extra settings of temporary pods (anyone can make one, D46): Pixelfed
-/// only on the default instance, no watcher fetches, no collection `model`
-/// computes and no collection fillers, so a visitor can't make the server
+/// only on the default instance, no collection `model` computes and no
+/// collection fillers (the Events app's websites included), so a visitor
+/// can't make the server
 /// contact hosts of their choosing (fetch URLs, register OAuth apps) or
 /// spend its model key.
 pub fn temporary_pod_settings() -> Vec<(String, String)> {
@@ -113,7 +116,6 @@ pub fn temporary_pod_settings() -> Vec<(String, String)> {
             app_pixelfed::OTHER_INSTANCES_SETTING.to_owned(),
             "0".to_owned(),
         ),
-        (app_watcher::check::FETCH_SETTING.to_owned(), "0".to_owned()),
         (
             app_collections::compute::MODEL_SETTING.to_owned(),
             "0".to_owned(),

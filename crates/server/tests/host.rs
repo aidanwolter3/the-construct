@@ -702,7 +702,6 @@ async fn temporary_pods_stay_on_the_default_instance() {
 fn temporary_pods_fetch_nothing_and_ask_no_model() {
     let settings = server::temporary_pod_settings();
     for key in [
-        app_watcher::check::FETCH_SETTING,
         app_collections::compute::MODEL_SETTING,
         app_collections::fill::FILL_SETTING,
     ] {
