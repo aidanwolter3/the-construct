@@ -158,6 +158,51 @@ impl Upstream {
         }
     }
 
+    /// Fake: how many polls new v2 uploads stay "processing" (in-process, or `POST
+    /// /_admin/media` on an external fake). Panics on a real upstream.
+    pub fn set_media_processing_polls(&self, polls: u32) {
+        match self {
+            Self::Fake {
+                state: Some(state), ..
+            } => state.set_media_processing_polls(polls),
+            Self::Fake { url, state: None } => {
+                reqwest::blocking::Client::new()
+                    .post(format!("{url}/_admin/media"))
+                    .json(&json!({ "processing_polls": polls }))
+                    .send()
+                    .and_then(|r| r.error_for_status())
+                    .expect("POST /_admin/media (is FAKE_PIXELFED_ADMIN on?)");
+            }
+            Self::Real { .. } => panic!("media processing polls need the fake"),
+        }
+    }
+
+    /// Fake: ids of the statuses created since the last reset, oldest first (in-process, or
+    /// `created` of `GET /_admin/state` on an external fake). Panics on a real upstream.
+    pub fn created_ids(&self) -> Vec<String> {
+        match self {
+            Self::Fake {
+                state: Some(state), ..
+            } => state.created_ids(),
+            Self::Fake { url, state: None } => {
+                let report: Value = reqwest::blocking::Client::new()
+                    .get(format!("{url}/_admin/state?tail=0"))
+                    .send()
+                    .and_then(|r| r.error_for_status())
+                    .expect("GET /_admin/state (is FAKE_PIXELFED_ADMIN on?)")
+                    .json()
+                    .unwrap();
+                report["created"]
+                    .as_array()
+                    .expect("`created` in /_admin/state")
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            }
+            Self::Real { .. } => panic!("created ids need the fake"),
+        }
+    }
+
     /// Fake: `POST /_admin/reset` (fixture state, no apps or tokens). Real: nothing.
     pub fn reset(&self) {
         if let Self::Fake { url, .. } = self {
