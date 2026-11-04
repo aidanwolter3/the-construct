@@ -754,3 +754,36 @@ fn text_format_and_count_round_trip_and_need_their_features() {
     assert!(protocol::required_features(&plain).is_empty());
     assert!(protocol::FEATURES.contains(&"date_format") && protocol::FEATURES.contains(&"count"));
 }
+
+#[test]
+fn todo_icons_need_their_feature() {
+    let on_click = json!({"intent": "action.navigation.back"});
+    let needs = |v: serde_json::Value| {
+        let n: UiNode = serde_json::from_value(v).unwrap();
+        protocol::required_features(&n)
+    };
+    // A tick box: the feature whether the icon is the resting or the active one.
+    let tick = json!({"type": "core://IconButton", "icon": "check_box_outline_blank",
+        "active_icon": "check_box", "active": "$item.done", "content_description": "Done",
+        "on_click": on_click});
+    assert_eq!(needs(tick), ["todo_icons"]);
+    let active_only = json!({"type": "core://IconButton", "icon": "close",
+        "active_icon": "check", "content_description": "x", "on_click": on_click});
+    assert_eq!(needs(active_only), ["todo_icons"]);
+    assert_eq!(
+        needs(json!({"type": "core://Chip", "text": "Bin", "icon": "delete"})),
+        ["todo_icons"]
+    );
+    assert_eq!(
+        needs(json!({"type": "core://Badge", "text": "Done", "icon": "check"})),
+        ["todo_icons"]
+    );
+    // Older icons need nothing.
+    let close = json!({"type": "core://IconButton", "icon": "close",
+        "content_description": "x", "on_click": on_click});
+    assert!(needs(close).is_empty());
+    assert!(protocol::FEATURES.contains(&"todo_icons"));
+    for i in ["check", "check_box", "check_box_outline_blank", "delete"] {
+        assert!(protocol::ICONS.contains(&i), "{i}");
+    }
+}

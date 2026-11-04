@@ -11,7 +11,7 @@ use crate::db;
 use crate::edit::{self, Refusal};
 use crate::extract::Kind;
 use crate::html;
-use crate::when::parse_utc_offset;
+use crate::when::{Zone, parse_time_zone, parse_utc_offset};
 use crate::{NAME, WatcherAdapter};
 
 pub const INSTRUCTIONS: &str = "The Watcher app checks websites for events and notifies the user when \
@@ -50,7 +50,8 @@ pub fn tools() -> Vec<Value> {
             "watcher_preview",
             "Fetch a page now and run an extractor on it, without saving anything: the events it finds (first 15) and the extractor used. Use it to choose a target's extractor.",
             json!({ "url": s("The page"), "extractor": extractor, "hint": s("Notes for the llm extractor"),
-                    "utc_offset": s("e.g. -07:00: the site's zone, for times without an offset") }),
+                    "time_zone": s("e.g. America/Denver: the site's zone, for times without an offset (follows daylight saving)"),
+                    "utc_offset": s("e.g. -07:00: a fixed offset, only when the zone has no name (time_zone wins)") }),
             &["url"],
         ),
         tool(
@@ -61,7 +62,8 @@ pub fn tools() -> Vec<Value> {
                     "interval_minutes": { "type": "integer", "description": "How often to check (15-10080, default 360)" },
                     "hint": s("Notes for the llm extractor about this page"),
                     "details": { "type": "boolean", "description": "Fetch each new event's own page once for its full description" },
-                    "utc_offset": s("e.g. -07:00: the site's zone, for times without an offset"),
+                    "time_zone": s("e.g. America/Denver: the site's zone, for times without an offset (follows daylight saving)"),
+                    "utc_offset": s("e.g. -07:00: a fixed offset, only when the zone has no name (time_zone wins)"),
                     "archived": { "type": "boolean" } }),
             &[],
         ),
@@ -178,6 +180,9 @@ async fn preview(adapter: &WatcherAdapter, pod: &Pod, args: &Value) -> Result<Va
     }
     let offset = parse_utc_offset(args["utc_offset"].as_str().unwrap_or(""))
         .map_err(|e| err(edit::invalid(e)))?;
+    let tz = parse_time_zone(args["time_zone"].as_str().unwrap_or(""))
+        .map_err(|e| err(edit::invalid(e)))?;
+    let zone = tz.map(Zone::Named).or(offset.map(Zone::Fixed));
     let fetching = pod
         .blocking(|s| s.pod_setting(check::FETCH_SETTING))
         .await
@@ -198,18 +203,14 @@ async fn preview(adapter: &WatcherAdapter, pod: &Pod, args: &Value) -> Result<Va
     let body = String::from_utf8_lossy(&bytes);
     let now = pod_core::util::now_secs();
     let hint = args["hint"].as_str().unwrap_or("");
-    let (events, used) = check::extract(adapter, extractor, &body, &url, hint, offset, now)
+    let (events, used) = check::extract(adapter, extractor, &body, &url, hint, zone.as_ref(), now)
         .await
         .map_err(|e| json!({ "error": "extract_failed", "detail": e, "status": 502 }))?;
     let upcoming: Vec<_> = events
         .iter()
         .filter(|e| {
-            let ts = e.start.timestamp(offset);
-            db::relevant_until(
-                &e.start,
-                ts,
-                e.start.offset_min.is_some() || offset.is_some(),
-            ) >= now
+            let ts = e.start.timestamp(zone.as_ref());
+            db::relevant_until(&e.start, ts, e.start.offset_min.is_some() || zone.is_some()) >= now
         })
         .collect();
     let sample: Vec<Value> = upcoming
@@ -217,8 +218,8 @@ async fn preview(adapter: &WatcherAdapter, pod: &Pod, args: &Value) -> Result<Va
         .take(15)
         .map(|e| {
             json!({ "title": e.title, "start": e.start.stored(),
-                    "when": format!("{} {}", e.start.shifted_to(offset).date_text(),
-                                    e.start.shifted_to(offset).time_text().unwrap_or_default()).trim(),
+                    "when": format!("{} {}", e.start.shifted_to(zone.as_ref()).date_text(),
+                                    e.start.shifted_to(zone.as_ref()).time_text().unwrap_or_default()).trim(),
                     "venue": e.venue, "url": e.url, "source_id": e.source_id,
                     "description": html::truncate(&e.description, 300) })
         })

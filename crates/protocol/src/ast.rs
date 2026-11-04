@@ -41,7 +41,7 @@ pub const NODE_TYPES: [&str; 22] = [
 ];
 
 /// Icon names clients draw (`core://IconButton`, `core://Chip`).
-pub const ICONS: [&str; 15] = [
+pub const ICONS: [&str; 19] = [
     "favorite",
     "favorite_border",
     "chat_bubble",
@@ -59,6 +59,11 @@ pub const ICONS: [&str; 15] = [
     "add_photo",
     "add",
     "refresh",
+    // Feature `todo_icons` (crates/protocol/features/todo_icons.md).
+    "check",
+    "check_box",
+    "check_box_outline_blank",
+    "delete",
 ];
 
 fn one() -> f64 {

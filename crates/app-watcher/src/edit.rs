@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use crate::db::{self, Rule, Target};
 use crate::extract::Kind;
 use crate::rules;
-use crate::when::parse_utc_offset;
+use crate::when::{parse_time_zone, parse_utc_offset};
 use crate::{NAME, WatcherAdapter};
 
 /// Live targets per pod.
@@ -138,6 +138,9 @@ pub fn apply_target(adapter: &WatcherAdapter, t: &mut Target, body: &Value) -> R
     if let Some(o) = text(body, "utc_offset", 10)? {
         t.utc_offset = parse_utc_offset(&o).map_err(invalid)?;
     }
+    if let Some(z) = text(body, "time_zone", 64)? {
+        t.time_zone = parse_time_zone(&z).map_err(invalid)?;
+    }
     if let Some(a) = boolean(body, "archived")? {
         t.archived = a;
     }
@@ -202,6 +205,7 @@ pub async fn save_target(pod: &Pod, body: Value) -> Result<Value, Refusal> {
                 details: false,
                 interval_secs: DEFAULT_INTERVAL_MIN * 60,
                 utc_offset: None,
+                time_zone: None,
                 archived: false,
                 created_at: now,
                 next_fetch_at: 0,

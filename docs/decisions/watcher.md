@@ -22,7 +22,8 @@ declarative.
 ## Pipeline
 
 - **Targets** (`watcher_targets`): URL, title, check interval (15 min to 7 days, default 6 h), extractor, a hint for
-  the model, `details` (fetch each new event's own page once), an optional UTC offset, and the poll state (next
+  the model, `details` (fetch each new event's own page once), an optional zone (an IANA name such as `America/Denver`, or a fixed UTC offset from targets saved before
+  zones had names; the name wins), and the poll state (next
   check, `ETag`/`Last-Modified`, body hash, failures, empty runs, last error).
 - **Fetch:** plain `GET` with conditional headers, 3 MiB cap, 30 s timeout. Only public addresses
   (`pod_core::net::public_builder`) unless the server sets `CONSTRUCT_WATCHER_PRIVATE_HOSTS=1`. A 304 or an
@@ -38,9 +39,12 @@ declarative.
 - **Normalize:** every extractor yields the same event: title, start, end, venue, description, url. Identity is the
   source's own id when it has one (iCalendar `UID`, JSON-LD `@id`/`url`), else a hash of the normalized title, the
   date and the venue, so a re-scraped or reworded listing is the same event. Past events are dropped.
-- **Dates** (`when.rs`): no time-zone database. An event keeps the source's wall clock and its offset when the
-  source gave one. Display text (`Fri Nov 6 · 7:30 PM · The End`) is written by the pod from that wall clock
-  (layouts can't format dates), shifted to the target's offset when both are known.
+- **Dates** (`when.rs`): an event keeps the source's wall clock and its offset when the source gave one; an
+  iCalendar `DTSTART;TZID=America/Denver` gets that zone's offset on that date (a zone name we can't resolve, such
+  as a Windows one, is left to the target's zone). A time without an offset is placed in the target's zone, with
+  daylight saving when it is named (`pod_core::tz`'s built-in database: the server image needs no zoneinfo).
+  Display text (`Fri Nov 6 · 7:30 PM · The End`) is written by the pod from that wall clock (layouts can't format
+  dates), shifted to the target's zone when both are known.
 - **Rules** (`watcher_rules`): any-of, all-of and none-of phrases, a venue, days of the week, a window in days, and
   the targets they apply to. Matching ignores case over the title, venue and description. Rules run on new and
   changed events, and a new or changed rule runs on every upcoming event.
@@ -77,8 +81,6 @@ Not done yet:
   the URL as text. That is new client vocabulary (a named layout feature and a client build): issue #63.
 - **Extractors** `rss`, `embedded-json` (e.g. Next.js page state) and `selectors`, and headless-browser fetching for
   pages that render with JavaScript. Matching against the raw page text as well as the extracted fields: issue #65.
-- **Zones by name** (`America/Denver`): offsets are fixed, so a target's offset is wrong half the year across DST,
-  and `TZID` times are read as wall clock: issue #66.
 - **Editing a rule or site in place** from the app: there is no prefilled text field; the app removes and re-adds,
   Claude edits with the MCP tools.
 - **Day-of reminders** for a matched event.

@@ -217,7 +217,21 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
         }
         _ => {}
     }
+    let icons: [Option<&str>; 2] = match node {
+        UiNode::IconButton {
+            icon, active_icon, ..
+        } => [Some(icon), active_icon.as_deref()],
+        UiNode::Chip { icon, .. } => [icon.as_deref(), None],
+        UiNode::Badge { icon, .. } => [Some(icon), None],
+        _ => [None, None],
+    };
+    if icons.into_iter().flatten().any(|i| TODO_ICONS.contains(&i)) {
+        out.insert(crate::feature::TODO_ICONS);
+    }
 }
+
+/// Icons of the `todo_icons` feature.
+const TODO_ICONS: [&str; 4] = ["check", "check_box", "check_box_outline_blank", "delete"];
 
 /// The features one action intent uses; see [`node_features`].
 fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {

@@ -11,7 +11,7 @@ use reqwest::{StatusCode, header};
 use crate::db::{self, CheckResult, Target};
 use crate::extract::{self, Kind, RawEvent};
 use crate::html;
-use crate::when::civil_from_days;
+use crate::when::{Zone, civil_from_days};
 use crate::{APP_ID, CHANNEL, NAME, WatcherAdapter};
 
 /// Largest page read.
@@ -122,9 +122,9 @@ pub async fn fetch(
     })
 }
 
-/// Today's date (`YYYY-MM-DD`) at UTC offset `offset` minutes.
-fn today(now: i64, offset: Option<i32>) -> String {
-    let local = now + i64::from(offset.unwrap_or(0)) * 60;
+/// Today's date (`YYYY-MM-DD`) in `zone` (else UTC).
+fn today(now: i64, zone: Option<&Zone>) -> String {
+    let local = now + i64::from(zone.map_or(0, |z| z.offset_at(now))) * 60;
     let (y, m, d) = civil_from_days(local.div_euclid(86_400));
     format!("{y:04}-{m:02}-{d:02}")
 }
@@ -138,7 +138,7 @@ pub async fn extract(
     body: &str,
     url: &str,
     hint: &str,
-    offset: Option<i32>,
+    zone: Option<&Zone>,
     now: i64,
 ) -> Result<(Vec<RawEvent>, &'static str), String> {
     let kind = match Kind::parse(extractor) {
@@ -169,7 +169,7 @@ pub async fn extract(
                 &text,
                 url,
                 hint,
-                &today(now, offset),
+                &today(now, zone),
             )
             .await?
         }
@@ -287,7 +287,7 @@ async fn check_inner(pod: &Pod, adapter: &WatcherAdapter, t: &Target, now: i64) 
         &body,
         &t.url,
         &t.hint,
-        t.utc_offset,
+        t.zone().as_ref(),
         now,
     )
     .await
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn dates_and_backoff() {
-        assert_eq!(today(0, Some(-420)), "1969-12-31");
+        assert_eq!(today(0, Some(&Zone::Fixed(-420))), "1969-12-31");
         let t = Target {
             id: "t".into(),
             title: String::new(),
@@ -427,6 +427,7 @@ mod tests {
             details: false,
             interval_secs: 3600,
             utc_offset: None,
+            time_zone: None,
             archived: false,
             created_at: 0,
             next_fetch_at: 0,

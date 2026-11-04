@@ -107,7 +107,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         PathSpec {
             pattern: "/v1/watcher/targets/create",
             query_keys: &[],
-            doc: "Watch a website: payload {url, title?, extractor? (auto|ics|jsonld|llm), interval_minutes?, hint?, details?, utc_offset?, client_id: \"$nonce\"}.",
+            doc: "Watch a website: payload {url, title?, extractor? (auto|ics|jsonld|llm), interval_minutes?, hint?, details?, time_zone? (e.g. America/Denver), utc_offset?, client_id: \"$nonce\"}.",
         },
         PathSpec {
             pattern: "/v1/watcher/targets/update",
