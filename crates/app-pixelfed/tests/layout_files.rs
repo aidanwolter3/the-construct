@@ -378,8 +378,8 @@ fn sync_appends_new_files_once_and_refuses_changes() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        v, 9,
-        "0009: Share is action.sequence [create, back] (decision named-vocabulary)"
+        v, 10,
+        "0010: the title scrolls away with the feed (decision pinned-app-title)"
     );
     assert!(pod_core::validate::unknown_node_types(&layout).is_empty());
     // Each client gets the newest version it can draw: a build from before
@@ -407,6 +407,23 @@ fn sync_appends_new_files_once_and_refuses_changes() {
         &catalog(),
         "pixelfed_home",
         &protocol::ClientCaps::this_build(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(served.version, 10);
+    // A build from before `title_scrolls` (it pins nothing, the title always
+    // scrolls) keeps getting 0009.
+    let before: String = protocol::FEATURES
+        .iter()
+        .filter(|f| **f != protocol::feature::TITLE_SCROLLS)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(",");
+    let served = active_for(
+        &store,
+        &catalog(),
+        "pixelfed_home",
+        &protocol::ClientCaps::from_header(&before),
     )
     .unwrap()
     .unwrap();

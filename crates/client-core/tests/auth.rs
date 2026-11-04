@@ -1306,8 +1306,8 @@ fn the_engine_fetches_the_newest_layout_its_schema_draws() {
     wait_signed_in(&engine);
     let snap = engine.snapshot();
     let layout: Value = serde_json::from_str(&snap.layout_json).unwrap();
-    // 0009 needs feature `action_sequence`, which this engine sends.
-    assert_eq!(layout["version"], 9);
+    // 0010 needs feature `title_scrolls`, which this engine sends.
+    assert_eq!(layout["version"], 10);
     let ws: Value = serde_json::from_str(&snap.workspace_json).unwrap();
     let routes: Vec<&str> = ws["screens"]
         .as_array()

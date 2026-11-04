@@ -114,14 +114,16 @@ fun RenderUiNode(
     when (node) {
         is UiNode.Workspace -> {
             val scroll = rememberScrollState()
-            // `core://Sticky` content pins below the menu and bell buttons drawn over the top corners.
-            val sticky = remember(scroll) { StickyScroll(scroll, topInset = STICKY_WORKSPACE_INSET) }
-            Column(modifier.fillMaxSize().verticalScroll(scroll).stickyContent(sticky)) {
+            val title: @Composable () -> Unit = {
                 Text(
                     node.title,
                     style = MaterialTheme.typography.headlineMedium,
-                    modifier = Modifier.padding(start = 16.dp + LocalWorkspaceTitleInset.current, end = 16.dp + LocalWorkspaceTitleEndInset.current, top = 12.dp, bottom = 12.dp),
+                    modifier = Modifier
+                        .padding(start = 16.dp + LocalWorkspaceTitleInset.current, end = 16.dp + LocalWorkspaceTitleEndInset.current, top = 12.dp, bottom = 12.dp)
+                        .testTag("workspace-title"),
                 )
+            }
+            val slots: @Composable (StickyScroll) -> Unit = { sticky ->
                 CompositionLocalProvider(LocalStickyScroll provides sticky) {
                     node.slots.forEach { slot ->
                         // Keyed by slot id: a layout change that inserts a slot above (e.g. a new version adding a
@@ -132,6 +134,25 @@ fun RenderUiNode(
                     }
                 }
                 Spacer(Modifier.height(16.dp))
+            }
+            if (node.titleScrolls) {
+                // Feature `title_scrolls`: the title is the first thing in the scrolling view, and `core://Sticky`
+                // content pins below the menu and bell buttons drawn over the top corners.
+                val sticky = remember(scroll) { StickyScroll(scroll, topInset = STICKY_WORKSPACE_INSET) }
+                Column(modifier.fillMaxSize().verticalScroll(scroll).stickyContent(sticky)) {
+                    title()
+                    slots(sticky)
+                }
+            } else {
+                // The title is pinned in a bar beside the menu and bell buttons (decision `pinned-app-title`); only
+                // the slots scroll, so `core://Sticky` content pins right under the title.
+                val sticky = remember(scroll) { StickyScroll(scroll) }
+                Column(modifier.fillMaxSize()) {
+                    title()
+                    Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(scroll).stickyContent(sticky)) {
+                        slots(sticky)
+                    }
+                }
             }
         }
 

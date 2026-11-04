@@ -97,6 +97,11 @@ pub enum UiNode {
         /// screens ignore it.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         screens: Vec<Screen>,
+        /// The title scrolls away with the content (feature
+        /// `title_scrolls`, decision `pinned-app-title`). By default
+        /// clients pin it in a bar above the scrolling content.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        title_scrolls: bool,
     },
     #[serde(rename = "core://Container")]
     Container {
