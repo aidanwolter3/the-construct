@@ -118,9 +118,9 @@ class MenuTest {
         val catalog = FakeAppCatalog()
         catalog.add(
             "pixelfed_home", "Pixelfed", "photo",
-            FakeAppCatalog.Version(FakeAppCatalog.captionFirst(base), "Old feed", 0, schema = 1, incompatible = "retired"),
-            FakeAppCatalog.Version(base, "Current", 0, schema = 2),
-            FakeAppCatalog.Version(base, "Stories", 0, schema = 3, incompatible = "update_required"),
+            FakeAppCatalog.Version(FakeAppCatalog.captionFirst(base), "Old feed", 0, incompatible = "retired"),
+            FakeAppCatalog.Version(base, "Current", 0),
+            FakeAppCatalog.Version(base, "Stories", 0, incompatible = "update_required"),
         )
         val fake = FakeEngineBridge(bundle("pixelfed_home_feed_bundle.json"), apps = catalog)
         // Like a pod, the fake serves the newest version this build can draw.

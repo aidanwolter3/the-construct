@@ -24,7 +24,7 @@ private class Recorder : ConstructEngineBridge {
     }
 }
 
-/** The compose screen of layouts/pixelfed_home/0004.json (schema 9), reached from the feed. */
+/** The compose screen of layouts/pixelfed_home/0009.json, reached from the feed: Share is [create, back]. */
 private val COMPOSE_WORKSPACE = """
 {"type":"core://Workspace","id":"pixelfed_home","title":"Home","slots":[
   {"slot_id":"s","provider_uri":"p","content":{"type":"core://IconButton","icon":"add_photo","content_description":"New post",
@@ -33,20 +33,23 @@ private val COMPOSE_WORKSPACE = """
    "content":{"type":"core://Column","spacing_dp":12,"padding_h_dp":16,"padding_v_dp":12,"children":[
      {"type":"core://MediaPicker","field":"photos","max_items":4,"label":"Add photos"},
      {"type":"core://TextField","field":"caption","placeholder":"Write a caption…","max_length":2000,"lines":4}]},
-   "footer":{"type":"core://Button","label":"Share","on_click":{"intent":"action.mutation.create","query_key":"timeline:home",
+   "footer":{"type":"core://Button","label":"Share","on_click":{"intent":"action.sequence","steps":[{"intent":"action.mutation.create","query_key":"timeline:home",
      "position":"start","entity_uri":"pixelfed://posts/pending-$'$'nonce",
      "entity":{"author_name":"You","caption":"$'$'form?.caption","media_uris":"$'$'attachments.photos","pending_label":"Posting…"},
      "attachments":{"photos":"$'$'form.photos"},"endpoint":"/v1/pixelfed/posts/create",
      "payload":{"caption":"$'$'form?.caption","media":"$'$'attachments.photos","client_id":"$'$'nonce"},
-     "refresh_workspace":true,"dismiss":true}}}]}
+     "refresh_workspace":true},{"intent":"action.navigation.back"}]}}}]}
 """.replace("$'$'", "$")
 
 class MediaTest {
     private fun composeScreen(): Screen =
         assertIs<UiNode.Workspace>(ConstructJson.decodeNode(COMPOSE_WORKSPACE)).screens.single()
 
-    private fun share(): ActionIntent.Create =
-        assertIs<ActionIntent.Create>(assertIs<UiNode.Button>(composeScreen().footer).onClick)
+    private fun share(): ActionIntent.Create {
+        val onClick = assertIs<ActionIntent.Sequence>(assertIs<UiNode.Button>(composeScreen().footer).onClick)
+        assertEquals(ActionIntent.NavigateBack, onClick.steps[1])
+        return assertIs<ActionIntent.Create>(onClick.steps[0])
+    }
 
     @Test
     fun schema8NodesAndCreateFieldsParseAndRoundTrip() {
@@ -57,13 +60,11 @@ class MediaTest {
         assertNull(caption.onSubmit)
         val create = share()
         assertEquals(CreatePosition.Start, create.position)
-        assertTrue(create.dismiss)
         assertEquals(mapOf("photos" to JsonPrimitive("\$form.photos")), create.attachments)
         val ws = ConstructJson.decodeNode(COMPOSE_WORKSPACE)
         assertEquals(ws, ConstructJson.decodeNode(ConstructJson.encodeNode(ws)))
         val encoded = ConstructJson.encodeIntent(create)
         assertTrue(""""position":"start"""" in encoded, encoded)
-        assertTrue(""""dismiss":true""" in encoded, encoded)
         // Older JSON still parses with the defaults, which are omitted again (serde's skip_serializing_if).
         val old = assertIs<ActionIntent.Create>(
             ConstructJson.decodeIntent(
@@ -71,10 +72,16 @@ class MediaTest {
             ),
         )
         assertEquals(CreatePosition.End, old.position)
-        assertFalse(old.dismiss)
         assertEquals(emptyMap(), old.attachments)
         val again = ConstructJson.encodeIntent(old)
-        for (k in listOf("position", "dismiss", "attachments")) assertFalse(k in again, again)
+        for (k in listOf("position", "attachments")) assertFalse(k in again, again)
+        // Schema 13 removed `dismiss`: the pod never serves a version with it to this client, and it parses as nothing.
+        assertEquals(
+            old,
+            ConstructJson.decodeIntent(
+                """{"intent":"action.mutation.create","query_key":"q","entity_uri":"x://a","entity":{},"endpoint":"/e","payload":{},"dismiss":true}""",
+            ),
+        )
         assertNull(assertIs<UiNode.TextField>(ConstructJson.decodeNode("""{"type":"core://TextField","field":"f"}""")).lines)
         assertEquals(UiNode.MediaPicker("p", 2), ConstructJson.decodeNode("""{"type":"core://MediaPicker","field":"p","max_items":2}"""))
         for (icon in listOf("add_photo", "add", "refresh")) assertTrue(ConstructIcons.named(icon) != null, icon)
@@ -132,10 +139,15 @@ class MediaTest {
     }
 
     @Test
-    fun aCreateWithDismissClosesItsScreenAndClearsItsForm() {
+    fun aSequenceOfCreateAndBackClosesTheComposeScreen() {
+        assertEquals(CreatePosition.Start, shareFromCompose(COMPOSE_WORKSPACE).position)
+    }
+
+    /** Opens the compose screen of [workspace], taps Share without and then with a photo; returns what was sent. */
+    private fun shareFromCompose(workspace: String): ActionIntent.Create {
         val bridge = Recorder()
         val controller = ConstructController(bridge)
-        bridge.listener!!(EngineSnapshot(COMPOSE_WORKSPACE, "{}", true, 1, 0))
+        bridge.listener!!(EngineSnapshot(workspace, "{}", true, 1, 0))
         controller.dispatch(ActionIntent.Navigate("pixelfed://compose", PresentationMode.Modal))
         val entry = controller.navigation.top!!
         assertEquals("compose", entry.screen.id)
@@ -146,10 +158,11 @@ class MediaTest {
         entry.form["photos"] = encodeFormList(listOf("att1"))
         entry.form["caption"] = "Hello"
         controller.dispatch(share)
+        // Only the create reaches the engine (the back is the client's), and the screen is closed.
         val sent = assertIs<ActionIntent.Create>(ConstructJson.decodeIntent(bridge.sent.single()))
         assertEquals(JsonArray(listOf(JsonPrimitive("att1"))), sent.attachments["photos"])
         assertEquals(CreatePosition.Start, sent.position)
         assertNull(controller.navigation.top)
-        assertTrue(entry.form.isEmpty())
+        return sent
     }
 }

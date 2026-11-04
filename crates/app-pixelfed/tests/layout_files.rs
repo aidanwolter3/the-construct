@@ -140,7 +140,7 @@ fn invalid_files_are_refused_with_their_path() {
         (files()[1].app_id, files()[1].name),
         ("pixelfed_home", "0002")
     );
-    let cases: [(LayoutSource, &str); 12] = [
+    let cases: Vec<(LayoutSource, &str)> = vec![
         (
             src("pixelfed_demo", "0001", "{"),
             "layouts/pixelfed_demo/0001.json: not valid JSON",
@@ -180,42 +180,6 @@ fn invalid_files_are_refused_with_their_path() {
         (
             src("pixelfed_home", "0001", ok),
             "invalid layout: workspace id changed from 'pixelfed_home' to 'pixelfed_demo'",
-        ),
-        (
-            src(
-                "pixelfed_demo",
-                "0001",
-                leak(ok.replacen("  \"schema\": 1,\n", "", 1)),
-            ),
-            "layouts/pixelfed_demo/0001.json: \"schema\" must be the client schema",
-        ),
-        (
-            src(
-                "pixelfed_demo",
-                "0001",
-                leak(ok.replacen("\"schema\": 1", "\"schema\": 0", 1)),
-            ),
-            "\"schema\" must be the client schema the layout is written for, 1..=",
-        ),
-        (
-            src(
-                "pixelfed_demo",
-                "0001",
-                leak(ok.replacen("\"schema\": 1", "\"schema\": 999", 1)),
-            ),
-            "\"schema\" must be",
-        ),
-        (
-            src(
-                "pixelfed_home",
-                "0001",
-                leak(
-                    files()[1]
-                        .text
-                        .replacen("\"schema\": 2", "\"schema\": 1", 1),
-                ),
-            ),
-            "\"schema\" is 1 but the layout uses vocabulary from schema 2",
         ),
     ];
     for (s, want) in cases {
@@ -392,11 +356,11 @@ fn file_hash_ignores_formatting_and_key_order_but_not_content() {
         );
     }
     assert_eq!(parsed.file_hash.len(), 64);
-    // `schema` is not hashed: it was added to files after they deployed
-    // (it is recorded and append-only on its own, see the store).
+    // A deployed file's `schema` (D36) is not hashed and not read any more
+    // (decision `named-vocabulary`).
     let v2 = leak(one.replacen("\"schema\": 1", "\"schema\": 2", 1));
     let p2 = parse_file(&catalog(), &src("pixelfed_demo", "0001", v2)).unwrap();
-    assert_eq!((p2.file_hash, p2.schema), (parsed.file_hash, 2));
+    assert_eq!(p2.file_hash, parsed.file_hash);
 }
 
 #[test]
@@ -414,32 +378,39 @@ fn sync_appends_new_files_once_and_refuses_changes() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        v, 8,
-        "0008: one post screen with the whole photo and its comments"
+        v, 9,
+        "0009: Share is action.sequence [create, back] (decision named-vocabulary)"
     );
     assert!(pod_core::validate::unknown_node_types(&layout).is_empty());
-    // Each client gets the newest version it can draw.
-    for (schema, version) in [
-        (1, 1),
-        (2, 2),
-        (7, 3),
-        (8, 4),
-        (9, 5),
-        (10, 6),
-        (11, 6),
-        (protocol::SCHEMA_VERSION, 8),
-    ] {
-        let served = active_for(
-            &store,
-            &catalog(),
-            "pixelfed_home",
-            &protocol::ClientCaps::schema(schema),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(served.version, version, "schema {schema}");
-        assert!(protocol::required_schema(&served.layout) <= schema);
-    }
+    // Each client gets the newest version it can draw: a build from before
+    // `action.sequence` (it still drew the create's `dismiss`) gets 0008.
+    let before: String = protocol::FEATURES
+        .iter()
+        .filter(|f| **f != protocol::feature::ACTION_SEQUENCE)
+        .chain([&protocol::feature::CREATE_DISMISS])
+        .copied()
+        .collect::<Vec<_>>()
+        .join(",");
+    let served = active_for(
+        &store,
+        &catalog(),
+        "pixelfed_home",
+        &protocol::ClientCaps::from_header(&before),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(served.version, 8);
+    // 0009 needs feature `action_sequence`; this build has it. (It no longer
+    // draws 0005-0008, which use `dismiss`: decision `named-vocabulary`.)
+    let served = active_for(
+        &store,
+        &catalog(),
+        "pixelfed_home",
+        &protocol::ClientCaps::this_build(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(served.version, 9);
     // A third pixelfed_demo file.
     let one = src("pixelfed_demo", "0003", MINIMAL);
     let two_text = MINIMAL.replace("Minimal demo", "Minimal v2");

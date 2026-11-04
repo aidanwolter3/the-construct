@@ -63,15 +63,15 @@ class AppCatalogTest {
     fun versionsTheBuildCantDrawAreMarked() {
         val page = AppCatalogJson.parseVersions(
             """{"versions":[
-                 {"version":3,"schema":3,"compatible":false,"incompatible":"update_required","note":"Stories"},
-                 {"version":2,"schema":2,"compatible":true},
-                 {"version":1,"schema":1,"compatible":false,"incompatible":"retired"}]}""",
+                 {"version":3,"compatible":false,"incompatible":"update_required","note":"Stories"},
+                 {"version":2,"compatible":true},
+                 {"version":1,"compatible":false,"incompatible":"retired"}]}""",
         )
         assertEquals(
             listOf(
-                AppVersionInfo(3, note = "Stories", schema = 3, incompatible = "update_required"),
-                AppVersionInfo(2, schema = 2),
-                AppVersionInfo(1, schema = 1, incompatible = "retired"),
+                AppVersionInfo(3, note = "Stories", incompatible = "update_required"),
+                AppVersionInfo(2),
+                AppVersionInfo(1, incompatible = "retired"),
             ),
             page.versions,
         )

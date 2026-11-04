@@ -146,7 +146,7 @@ fn e2e_suite() {
                 "endpoint": "/v1/pixelfed/posts/create",
                 "payload": {"caption": "From the e2e suite", "media": "$attachments.photos",
                             "client_id": "e2e-post-0001"},
-                "refresh_workspace": true, "dismiss": true
+                "refresh_workspace": true
             })
             .to_string(),
         );

@@ -1,5 +1,8 @@
 # Additive layout vocabulary is a named feature, not a schema bump
 
+Superseded in part by [named-vocabulary](named-vocabulary.md): the base vocabulary is named too and the
+schema number is gone; clients list everything they draw.
+
 Date: 2026-11-03. Related: D34, D36, D37, [decisions README](README.md).
 
 Every new node type or attribute took "the next schema number". Each PR changed

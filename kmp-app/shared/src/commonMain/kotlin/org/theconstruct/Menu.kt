@@ -1326,7 +1326,7 @@ private fun VersionPicker(controller: ConstructController, state: ConstructState
                 busy = menu.selecting == v.version,
                 tag = "version-${v.version}",
                 onClick = { menu.selectVersion(appId, v.version, scope) },
-                // Greyed out: written for a schema this build can't draw (D36).
+                // Greyed out: uses a feature this build doesn't draw (decision `named-vocabulary`).
                 enabled = v.compatible,
             )
         }

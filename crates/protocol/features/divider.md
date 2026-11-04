@@ -1,0 +1,1 @@
+`core://Divider`: a hairline.

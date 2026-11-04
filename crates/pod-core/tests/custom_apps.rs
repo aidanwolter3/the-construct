@@ -189,10 +189,10 @@ async fn call(
     bearer: Option<&str>,
     body: Option<Value>,
 ) -> (StatusCode, Value) {
-    let mut req = Request::builder().method(method).uri(path).header(
-        protocol::SCHEMA_HEADER,
-        protocol::SCHEMA_VERSION.to_string(),
-    );
+    let mut req = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(protocol::FEATURES_HEADER, protocol::features_header());
     if let Some(t) = bearer {
         req = req.header("authorization", format!("Bearer {t}"));
     }
@@ -513,7 +513,12 @@ async fn a_progress_spinner_is_accepted_and_needs_its_feature() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{v}");
-    assert_eq!(v["versions"][0]["features"], json!(["progress"]), "{v}");
+    let features = v["versions"][0]["features"].as_array().unwrap();
+    assert!(features.contains(&json!("progress")), "{v}");
+    assert!(
+        features.contains(&json!("list")),
+        "base vocabulary is named too: {v}"
+    );
 }
 
 #[tokio::test]

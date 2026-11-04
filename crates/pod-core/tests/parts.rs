@@ -32,15 +32,14 @@ fn file(n: u32, card: &str, with_card_part: bool) -> LayoutSource {
         String::new()
     };
     let text = format!(
-        r#"{{"note": "v{n}", "schema": {schema}, "layout": {{"type": "core://Workspace", "id": "a_home", "title": "A",
+        r#"{{"note": "v{n}", "layout": {{"type": "core://Workspace", "id": "a_home", "title": "A",
           "screens": [{{"id": "item", "route": "a://items/{{id}}", "title": "Item {n}", "data": "/v1/a/screen?id=$route.id",
             "content": {{"type": "core://Text", "style": "Body", "value_expr": "item {n}"}}}}],
           "slots": [{{"slot_id": "feed", "provider_uri": "core://a",
             "content": {{"type": "core://List", "query_key": "a:all",
               "item_template": {{"type": "core://Button", "label": "{card}", "on_click": {{
                 "intent": "action.mutation.optimistic", "entity_uri": "$item.uri", "field": "liked",
-                "value_expr": "true", "rollback_value": false, "endpoint": "/v1/a/act", "payload": {{}}}}}}}}}}]}}{parts}}}"#,
-        schema = protocol::SCHEMA_VERSION
+                "value_expr": "true", "rollback_value": false, "endpoint": "/v1/a/act", "payload": {{}}}}}}}}}}]}}{parts}}}"#
     );
     LayoutSource {
         app_id: "a_home",
@@ -157,10 +156,7 @@ async fn call(pod: &Pod, method: &str, path: &str, body: Option<Value>) -> (Stat
         .method(method)
         .uri(path)
         .header("authorization", "Bearer pod")
-        .header(
-            protocol::SCHEMA_HEADER,
-            protocol::SCHEMA_VERSION.to_string(),
-        );
+        .header(protocol::FEATURES_HEADER, protocol::features_header());
     let body = match body {
         Some(b) => {
             req = req.header("content-type", "application/json");

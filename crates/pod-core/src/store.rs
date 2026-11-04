@@ -236,6 +236,10 @@ const MIGRATIONS: &[Migration] = &[
      ALTER TABLE app_versions ADD COLUMN author TEXT;
      ALTER TABLE app_versions ADD COLUMN meta_json TEXT;",
     ),
+    // v17 (decision `named-vocabulary`): `features` names the base
+    // vocabulary too, so a version's features are everything it uses.
+    // Worked out again for every stored version.
+    Migration::Rust(migrate_v17),
 ];
 
 /// A pod setting inside a transaction (an adapter migration reads its
@@ -250,37 +254,42 @@ pub fn pod_setting_on(tx: &Connection, key: &str) -> rusqlite::Result<Option<Str
 }
 
 fn migrate_v9(tx: &Transaction<'_>) -> rusqlite::Result<()> {
-    tx.execute_batch("ALTER TABLE app_versions ADD COLUMN schema INTEGER;")?;
+    // A version's schema (D36), dropped again by v17 (decision
+    // `named-vocabulary`): v17 works out every version's features instead.
+    tx.execute_batch("ALTER TABLE app_versions ADD COLUMN schema INTEGER;")
+}
+
+fn migrate_v17(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    // A database made by a build that never ran v9's column (tests that
+    // build one by hand) has nothing to drop.
+    let has_schema: bool = tx
+        .prepare("SELECT 1 FROM pragma_table_info('app_versions') WHERE name = 'schema'")?
+        .exists([])?;
+    if has_schema {
+        tx.execute_batch("ALTER TABLE app_versions DROP COLUMN schema;")?;
+    }
     let rows: Vec<(String, i64, String)> = {
-        let mut stmt =
-            tx.prepare("SELECT app_id, version, hash FROM app_versions WHERE file_key IS NULL")?;
+        let mut stmt = tx.prepare("SELECT app_id, version, hash FROM app_versions")?;
         stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<rusqlite::Result<_>>()?
     };
     for (app_id, version, hash) in rows {
-        let schema = schema_of_json(&get_blob(tx, &hash)?);
+        let features = features_of_json(&get_blob(tx, &hash)?);
         tx.execute(
-            "UPDATE app_versions SET schema = ?1 WHERE app_id = ?2 AND version = ?3",
-            params![schema, app_id, version],
+            "UPDATE app_versions SET features = ?1 WHERE app_id = ?2 AND version = ?3",
+            params![features, app_id, version],
         )?;
     }
     Ok(())
 }
 
-/// The schema a stored layout's vocabulary needs
-/// ([`protocol::required_schema`]); 1 for a legacy layout this build cannot
-/// read.
-fn schema_of_json(json: &str) -> u32 {
-    serde_json::from_str::<protocol::UiNode>(json).map_or(1, |n| protocol::required_schema(&n))
-}
-
 /// The layout features a stored layout uses ([`protocol::required_features`]),
-/// as stored: comma-separated, sorted; empty for a legacy layout this build
-/// cannot read.
+/// as stored: comma-separated, sorted; `legacy_nodes` (removed) for a legacy
+/// layout this build cannot read.
 fn features_of_json(json: &str) -> String {
     serde_json::from_str::<protocol::UiNode>(json)
         .map(|n| protocol::required_features(&n).join(","))
-        .unwrap_or_default()
+        .unwrap_or_else(|_| protocol::feature::LEGACY_NODES.to_owned())
 }
 
 /// v6 schema. `layout_versions` (v5) is renamed, converted and dropped.
@@ -617,10 +626,6 @@ pub struct AppVersion {
     /// `<app_id>/NNNN` for a version created from `layouts/<app_id>/NNNN.json`.
     pub file_key: Option<String>,
     pub hash: String,
-    /// The client schema the version was written for (D36); `None` only for
-    /// a file version recorded before v9 whose file is missing from this
-    /// build (see [`AppVersion::schema`]).
-    pub schema: Option<u32>,
     /// The layout features the version uses ([`protocol::required_features`]).
     pub features: Vec<String>,
     /// Who wrote it: `user` or `claude` for a custom app's version, `None`
@@ -631,14 +636,9 @@ pub struct AppVersion {
 }
 
 impl AppVersion {
-    /// [`AppVersion::schema`], or 1 when unknown.
-    pub fn schema(&self) -> u32 {
-        self.schema.unwrap_or(1)
-    }
-
     /// Whether `client` can draw this version, and why not.
     pub fn compatibility(&self, client: &protocol::ClientCaps) -> protocol::Compatibility {
-        client.can_draw(self.schema(), &self.features)
+        client.can_draw(&self.features)
     }
 }
 
@@ -658,9 +658,6 @@ pub struct FileVersion {
     /// Hash of the file's own content (note and layout), independent of the
     /// Rust types: what the append-only check compares.
     pub file_hash: String,
-    /// The file's declared `"schema"` (recorded once, then append-only like
-    /// the content; not part of `file_hash`).
-    pub schema: u32,
     /// `AppVersion::meta_json` of the new version (its declared parts).
     pub meta_json: Option<String>,
 }
@@ -673,9 +670,6 @@ pub struct SyncReport {
     /// Paths of recorded files whose `file_hash` was recorded now (rows from
     /// before migration v8).
     pub adopted: Vec<String>,
-    /// Paths of recorded files whose declared `schema` was recorded now (rows
-    /// from before migration v9).
-    pub adopted_schema: Vec<String>,
     /// One warning per recorded file this build does not have (a rollback
     /// deploy, an older branch): the recorded history is served unchanged.
     pub missing: Vec<String>,
@@ -688,7 +682,6 @@ struct RecordedFile {
     hash: String,
     note: Option<String>,
     file_hash: Option<String>,
-    schema: Option<u32>,
 }
 
 /// NNNN of a file key `<app>/NNNN`.
@@ -742,7 +735,8 @@ pub fn open_session_on(
     attach_sign_in_on(tx, token_hash, sign_in)
 }
 
-const APP_VERSION_COLS: &str = "app_id, version, created_at, source, note, file_key, hash, schema, features, author, meta_json";
+const APP_VERSION_COLS: &str =
+    "app_id, version, created_at, source, note, file_key, hash, features, author, meta_json";
 
 fn app_version_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AppVersion> {
     Ok(AppVersion {
@@ -753,12 +747,11 @@ fn app_version_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AppVersion> {
         note: r.get(4)?,
         file_key: r.get(5)?,
         hash: r.get(6)?,
-        schema: r.get(7)?,
-        features: protocol::parse_features(&r.get::<_, String>(8)?)
+        features: protocol::parse_features(&r.get::<_, String>(7)?)
             .into_iter()
             .collect(),
-        author: r.get(9)?,
-        meta_json: r.get(10)?,
+        author: r.get(8)?,
+        meta_json: r.get(9)?,
     })
 }
 
@@ -785,6 +778,9 @@ type FileRef<'a> = Option<(&'a str, &'a str)>;
 pub(crate) struct Authored<'a> {
     pub author: &'a str,
     pub meta_json: Option<&'a str>,
+    /// The features it uses, worked out by the caller from the layout with
+    /// its built-in parts expanded (comma-separated, sorted).
+    pub features: &'a str,
 }
 
 /// Append a custom app's version: `json` as version `MAX + 1`.
@@ -794,20 +790,19 @@ pub(crate) fn append_authored_version_on(
     json: &str,
     source: &str,
     note: Option<&str>,
-    schema: u32,
     by: Authored<'_>,
 ) -> rusqlite::Result<i64> {
-    let version = append_app_version_on(conn, app_id, json, source, note, None, schema)?;
+    let version = append_app_version_on(conn, app_id, json, source, note, None)?;
     conn.execute(
-        "UPDATE app_versions SET author = ?1, meta_json = ?2 WHERE app_id = ?3 AND version = ?4",
-        params![by.author, by.meta_json, app_id, version],
+        "UPDATE app_versions SET author = ?1, meta_json = ?2, features = ?3
+         WHERE app_id = ?4 AND version = ?5",
+        params![by.author, by.meta_json, by.features, app_id, version],
     )?;
     Ok(version)
 }
 
 /// Append `json` as version `MAX + 1` of the app (blob stored once by hash);
-/// `file` = `(file_key, file_hash)`; `schema` = the schema it was written for.
-/// Its features are worked out from `json`.
+/// `file` = `(file_key, file_hash)`. Its features are worked out from `json`.
 fn append_app_version_on(
     conn: &Connection,
     app_id: &str,
@@ -815,14 +810,12 @@ fn append_app_version_on(
     source: &str,
     note: Option<&str>,
     file: FileRef<'_>,
-    schema: u32,
 ) -> rusqlite::Result<i64> {
     let hash = put_blob(conn, json)?;
     conn.query_row(
         "INSERT INTO app_versions
-             (app_id, version, hash, source, note, file_key, file_hash, created_at, schema,
-              features)
-         SELECT ?1, COALESCE(MAX(version), 0) + 1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
+             (app_id, version, hash, source, note, file_key, file_hash, created_at, features)
+         SELECT ?1, COALESCE(MAX(version), 0) + 1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
          FROM app_versions WHERE app_id = ?1
          RETURNING version",
         params![
@@ -833,7 +826,6 @@ fn append_app_version_on(
             file.map(|f| f.0),
             file.map(|f| f.1),
             now_secs(),
-            schema,
             features_of_json(json)
         ],
         |r| r.get(0),
@@ -849,7 +841,7 @@ fn sync_app_files_on(
 ) -> rusqlite::Result<Result<(), String>> {
     let recorded: Vec<RecordedFile> = {
         let mut stmt = tx.prepare(
-            "SELECT file_key, version, hash, note, file_hash, schema FROM app_versions
+            "SELECT file_key, version, hash, note, file_hash FROM app_versions
              WHERE app_id = ?1 AND file_key IS NOT NULL ORDER BY version",
         )?;
         stmt.query_map([app_id], |r| {
@@ -859,7 +851,6 @@ fn sync_app_files_on(
                 hash: r.get(2)?,
                 note: r.get(3)?,
                 file_hash: r.get(4)?,
-                schema: r.get(5)?,
             })
         })?
         .collect::<rusqlite::Result<_>>()?
@@ -898,27 +889,6 @@ fn sync_app_files_on(
                     version = r.version,
                 )));
             }
-            match r.schema {
-                Some(s) if s != file.schema => {
-                    return Ok(Err(format!(
-                        "{path}: \"schema\" changed from {s} to {new} after it was deployed as \
-                         version {version}; a version's schema is append-only. Restore \"schema\": \
-                         {s}. To stop clients drawing old versions, retire their schema in \
-                         protocol::RETIRED instead (docs/DECISIONS.md D36)",
-                        path = file.path,
-                        new = file.schema,
-                        version = r.version,
-                    )));
-                }
-                Some(_) => {}
-                None => {
-                    tx.execute(
-                        "UPDATE app_versions SET schema = ?1 WHERE app_id = ?2 AND version = ?3",
-                        params![file.schema, app_id, r.version],
-                    )?;
-                    report.adopted_schema.push(file.path.clone());
-                }
-            }
             if r.file_hash.is_none() {
                 tx.execute(
                     "UPDATE app_versions SET file_hash = ?1 WHERE app_id = ?2 AND version = ?3",
@@ -943,7 +913,6 @@ fn sync_app_files_on(
             SOURCE_FILE,
             Some(&file.note),
             Some((&file.key, &file.file_hash)),
-            file.schema,
         )?;
         if let Some(meta) = &file.meta_json {
             tx.execute(
@@ -1365,9 +1334,7 @@ impl Store {
     }
 
     /// Append a version outside the file sync (tests and tooling only; no
-    /// HTTP route reaches this), recorded as written for the current schema
-    /// (this build wrote it), or 1 when this build cannot fully read it.
-    /// Returns the new version number.
+    /// HTTP route reaches this). Returns the new version number.
     pub fn append_app_version(
         &self,
         app_id: &str,
@@ -1375,13 +1342,7 @@ impl Store {
         source: &str,
         note: Option<&str>,
     ) -> rusqlite::Result<i64> {
-        let current = serde_json::from_str::<protocol::UiNode>(json).is_ok_and(|n| {
-            n.walk()
-                .iter()
-                .all(|n| protocol::NODE_TYPES.contains(&n.type_tag().as_ref()))
-        });
-        let schema = if current { protocol::SCHEMA_VERSION } else { 1 };
-        append_app_version_on(&self.conn(), app_id, json, source, note, None, schema)
+        append_app_version_on(&self.conn(), app_id, json, source, note, None)
     }
 
     /// Sync every app's layout files (`(app_id, files in number order)`)
@@ -1452,9 +1413,9 @@ mod tests {
             s.append_app_version("a", layout, SOURCE_MANUAL, None)
                 .unwrap();
         }
-        // No layout before features uses one.
+        // Base vocabulary is named too (decision `named-vocabulary`).
         let v1 = s.app_versions("a", None, 10).unwrap();
-        assert!(v1.iter().all(|v| v.features.is_empty()));
+        assert!(v1.iter().all(|v| v.features == ["workspace"]));
         // Stand in for a layout using vocabulary that is a feature.
         s.conn()
             .execute(
@@ -1462,18 +1423,60 @@ mod tests {
                 [],
             )
             .unwrap();
+        // A client draws exactly what it lists.
         let newest = |header: &str| {
-            let client =
-                protocol::ClientCaps::schema(protocol::SCHEMA_VERSION).with_features_header(header);
+            let client = protocol::ClientCaps::from_header(header);
             crate::layouts::newest_compatible(&s, "a", &client)
                 .unwrap()
                 .map(|v| v.version)
         };
-        assert_eq!(newest(""), Some(2));
-        assert_eq!(newest("foo"), Some(2));
+        assert_eq!(newest("workspace"), Some(2));
+        assert_eq!(newest("workspace,foo"), Some(2));
         assert_eq!(newest("zap,foo,other"), Some(3));
+        assert_eq!(newest(""), None);
         let (v3, _) = s.app_version("a", 3).unwrap().unwrap();
         assert_eq!(v3.features, ["foo", "zap"]);
+    }
+
+    /// v17 works out every stored version's features and drops the schema
+    /// column, so a version using a removed feature (`create_dismiss`) is
+    /// retired, and one this build can't read is legacy.
+    #[test]
+    fn v17_names_the_base_vocabulary_of_stored_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.db");
+        let share = r#"{"type":"core://Workspace","id":"a","title":"A","slots":[{"slot_id":"s","provider_uri":"p","content":{"type":"core://Button","label":"Share","on_click":{"intent":"action.mutation.create","query_key":"q","entity_uri":"x://p/$nonce","entity":{},"endpoint":"/e","payload":{},"dismiss":true}}}]}"#;
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            migrate(&mut conn, 16).unwrap();
+            for (v, json) in [(1, share), (2, "{\"legacy\":true}")] {
+                let hash = put_blob(&conn, json).unwrap();
+                conn.execute(
+                    "INSERT INTO app_versions (app_id, version, hash, source, created_at, schema, features)
+                     VALUES ('a', ?1, ?2, 'manual', 0, 9, '')",
+                    params![v, hash],
+                )
+                .unwrap();
+            }
+        }
+        let s = Store::open(&path).unwrap();
+        let (v, _) = s.app_version("a", 1).unwrap().unwrap();
+        assert_eq!(
+            v.features,
+            ["button", "create", "create_dismiss", "workspace"]
+        );
+        let old = protocol::ClientCaps::from_header("button,create,create_dismiss,workspace");
+        assert_eq!(v.compatibility(&old), protocol::Compatibility::Compatible);
+        assert_eq!(
+            v.compatibility(&protocol::ClientCaps::this_build()),
+            protocol::Compatibility::Retired
+        );
+        let (legacy, _) = s.app_version("a", 2).unwrap().unwrap();
+        assert_eq!(legacy.features, ["legacy_nodes"]);
+        assert_eq!(
+            legacy.compatibility(&protocol::ClientCaps::this_build()),
+            protocol::Compatibility::Retired
+        );
     }
 
     #[test]
@@ -1606,7 +1609,6 @@ mod tests {
             json: json.into(),
             // Stands in for `layouts::file_hash` (the file's own content).
             file_hash: content_hash(&format!("{note}\n{json}")),
-            schema: 1,
             meta_json: None,
         }
     }
@@ -1827,75 +1829,6 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-    }
-
-    #[test]
-    fn a_files_schema_is_recorded_adopted_once_and_then_append_only() {
-        let s = Store::open_in_memory().unwrap();
-        let two = FileVersion {
-            schema: 2,
-            ..file("a", 1, "{}", "one")
-        };
-        sync1(&s, "a", std::slice::from_ref(&two)).unwrap();
-        assert_eq!(s.app_latest_meta("a").unwrap().unwrap().schema, Some(2));
-        // Changing a deployed file's schema is refused, naming the way out.
-        let err = sync1(
-            &s,
-            "a",
-            &[FileVersion {
-                schema: 3,
-                ..two.clone()
-            }],
-        )
-        .unwrap_err();
-        assert!(err.contains("\"schema\" changed from 2 to 3"), "{err}");
-        assert!(err.contains("protocol::RETIRED"), "{err}");
-        // Rows recorded before v9 (schema NULL) adopt the declared schema.
-        s.conn()
-            .execute("UPDATE app_versions SET schema = NULL", [])
-            .unwrap();
-        let report = s
-            .sync_layout_files(&[("a", vec![two.clone()])])
-            .unwrap()
-            .unwrap();
-        assert_eq!(report.adopted_schema, ["layouts/a/0001.json"]);
-        assert_eq!(s.app_latest_meta("a").unwrap().unwrap().schema, Some(2));
-        // Versions appended outside files record what their vocabulary needs.
-        s.append_app_version("a", "{\"legacy\":true}", "agent", None)
-            .unwrap();
-        assert_eq!(s.app_latest_meta("a").unwrap().unwrap().schema, Some(1));
-    }
-
-    #[test]
-    fn v9_records_the_schema_of_versions_not_from_files() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        migrate(&mut conn, 8).unwrap();
-        let screens = r#"{"type":"core://Workspace","id":"a","title":"A","slots":[],
-            "screens":[{"id":"s","route":"x://{id}","title":"S",
-            "content":{"type":"core://Text","value_expr":"hi","style":"Body"}}]}"#;
-        for (v, json, file_key) in [
-            (1, "{\"legacy\":true}", None),
-            (2, screens, None),
-            (3, "{}", Some("a/0001")),
-        ] {
-            let hash = put_blob(&conn, json).unwrap();
-            conn.execute(
-                "INSERT INTO app_versions (app_id, version, hash, source, note, file_key, created_at)
-                 VALUES ('a', ?1, ?2, 'manual', NULL, ?3, 0)",
-                params![v, hash, file_key],
-            )
-            .unwrap();
-        }
-        migrate(&mut conn, 9).unwrap();
-        let schemas: Vec<Option<u32>> = conn
-            .prepare("SELECT schema FROM app_versions ORDER BY version")
-            .unwrap()
-            .query_map([], |r| r.get(0))
-            .unwrap()
-            .collect::<rusqlite::Result<_>>()
-            .unwrap();
-        // File rows wait for the sync to adopt the file's declared schema.
-        assert_eq!(schemas, [Some(1), Some(2), None]);
     }
 
     #[test]

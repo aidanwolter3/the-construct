@@ -297,10 +297,7 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
     let resp = client()
         .get(format!("{}/v1/workspaces/pixelfed_home", env.pod.url))
         .header("host", "10.0.2.2:8080")
-        .header(
-            protocol::SCHEMA_HEADER,
-            protocol::SCHEMA_VERSION.to_string(),
-        )
+        .header(protocol::FEATURES_HEADER, protocol::features_header())
         .bearer_auth(&session)
         .send()
         .await
@@ -739,21 +736,17 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     let url = format!("{}/v1/workspaces/pixelfed_home", pod.url);
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    // No schema header: a client from before screens gets the newest version it can
-    // draw (0001; 0002 adds the comments screen, 0003 the generic nodes, 0004
-    // the cards view and the post screen).
-    assert_eq!(version(&resp).as_deref(), Some("1"));
+    // No features header (a tool, not a client): the latest version.
+    assert_eq!(version(&resp).as_deref(), Some("9"));
     let resp = client()
         .get(&url)
         .bearer_auth("tok")
-        .header(
-            protocol::SCHEMA_HEADER,
-            protocol::SCHEMA_VERSION.to_string(),
-        )
+        .header(protocol::FEATURES_HEADER, protocol::features_header())
         .send()
         .await
         .unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("8"));
+    // A current client: 0009.
+    assert_eq!(version(&resp).as_deref(), Some("9"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 4));
     // A newer version replaces the feed layout; entities still come upstream.
@@ -763,7 +756,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     }
     server::layouts::append_version(state.store(), "pixelfed_home", &node, None).unwrap();
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("9"));
+    assert_eq!(version(&resp).as_deref(), Some("10"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert_eq!(spec.workspace, node);
     assert_eq!(spec.queries["timeline:home"].len(), 5);
