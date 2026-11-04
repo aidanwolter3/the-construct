@@ -106,11 +106,18 @@ pub enum UiNode {
     },
     /// `value_expr`: `$item.<field>` (inside a list or carousel template), text
     /// with embedded `$item.<field>` tokens, `${<uri>#<field>}` placeholders,
-    /// or plain text.
+    /// or plain text. `format` (feature `date_format`) draws the dates it
+    /// binds for the viewer ([`TextFormat`]); `count` (feature `count`)
+    /// puts a count of a query's entities in place of `$count`
+    /// ([`TextCount`]).
     #[serde(rename = "core://Text")]
     Text {
         value_expr: String,
         style: TextStyle,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format: Option<TextFormat>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<TextCount>,
     },
     #[serde(rename = "core://Button")]
     Button {
@@ -594,6 +601,45 @@ pub struct ListFocus {
     pub background: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_color: Option<String>,
+}
+
+/// `core://Text` `format` (feature `date_format`,
+/// docs/decisions/text-dates-and-counts.md): every value the text binds that
+/// is a `YYYY-MM-DD` date is drawn as `date` says, against the viewer's own
+/// clock and time zone (the pod knows neither, and a cached screen must stay
+/// right the next day). Other values are drawn as they are. With `past`, a
+/// text binding a date before today draws `past` instead ("Overdue").
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TextFormat {
+    pub date: DateFormat,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub past: Option<String>,
+}
+
+/// How [`TextFormat`] draws a date.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DateFormat {
+    /// "today", "tomorrow", "yesterday", "in 3 days", "3 days ago" (up to
+    /// six days either way), else as `Short`.
+    Relative,
+    /// "Nov 5", with the year when it is not this year ("Nov 5, 2027").
+    Short,
+}
+
+/// `core://Text` `count` (feature `count`,
+/// docs/decisions/text-dates-and-counts.md): the number of entities of
+/// `queries[query_key]` that match every `where` (as a `core://List`'s
+/// [`ListWhere`]: `equals` may be `$form.<field>`, and a blank one matches
+/// everything) replaces each `$count` in `value_expr`. A count of 0 draws
+/// `zero_text` instead, when set. While the query is not loaded the text is
+/// empty.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TextCount {
+    pub query_key: String,
+    #[serde(rename = "where", default, skip_serializing_if = "Vec::is_empty")]
+    pub where_: Vec<ListWhere>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zero_text: Option<String>,
 }
 
 /// One `core://ChoiceChips` option: `label` is drawn, `value` is stored.

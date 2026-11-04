@@ -647,6 +647,12 @@ client build. The engine and the clients know no app.
 - **Progress (feature `progress`):** `core://Progress` (`size_dp` optional, default 16) is an indeterminate
   circular spinner in a quiet theme colour, with no children or intents. Put it in a `core://Conditional` to show
   work in progress, e.g. a group header that spins while its `section` is still `"Unsorted"`.
+- **Dates and counts (features `date_format`, `count`):** `core://Text` `format: {date: Relative|Short, past?}`
+  draws every `YYYY-MM-DD` value it binds against the device's clock ("Due $item.due" → "Due tomorrow", "Due in 3
+  days", "Due Nov 20"); with `past`, a date before today shows that text instead ("Overdue"). `count: {query_key,
+  where?: [{field, equals}], zero_text?}` puts the number of the query's matching entities in place of `$count`
+  ("$count left"). Drawn by the client, since the pod knows neither the viewer's time zone nor when a cached screen
+  is looked at (decision `text-dates-and-counts`).
 - **A breaking schema change:** bump `protocol::SCHEMA_VERSION` and add `(new schema, oldest layout schema it still
   draws)` to `protocol::RETIRED`. Older versions then show as incompatible to new clients and are never served to
   them; the old files are not edited. `RETIRED` is `[(3, 3)]`: schema 3 removed the `pixelfed://` widgets (D37),
@@ -1159,6 +1165,7 @@ Flags (all optional):
 | `-Pworkspace` | `pixelfed_home` | Workspace (app) id at start. In fixture mode it selects the default fixture. |
 | `-Pscreen` | `phone` | `phone` (390x844 dp), `tablet` (820x1180), `desktop` (1280x800), or `WxH` in dp. |
 | `-Pdensity` | per screen | Pixels per dp: phone 3, tablet 2, desktop 2, `WxH` 2. PNG size = dp x density. |
+| `-Ptoday` | the real date | `YYYY-MM-DD`: the day `core://Text` `format` draws dates against ("tomorrow"), for repeatable shots. |
 | `-Pscript` | `shot initial` | Script text (see below). |
 | `-PscriptFile` | | Script read from a file. Use either this or `-Pscript`, not both. |
 | `-Pmode` | `fixture` | `fixture` or `live`. Live mode is selected automatically when `-PbaseUrl` is given. |

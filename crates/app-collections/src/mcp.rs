@@ -374,8 +374,25 @@ fn hints(def: &Definition) -> Value {
     children.push(out["delete"].clone());
     out["row"] = json!({ "type": "core://Row", "spacing_dp": 12, "padding_h_dp": 16, "padding_v_dp": 6,
         "align": "Center", "children": children });
+    // Display formatting is the client's (decision `text-dates-and-counts`).
+    if let Some(d) = def.live_fields().find(|f| f.kind == model::Kind::Date) {
+        let mut due = json!({ "type": "core://Text", "style": "Secondary",
+            "value_expr": format!("Due $item.{}", d.name),
+            "format": { "date": "Relative", "past": "Overdue" } });
+        if d.optional {
+            due = json!({ "type": "core://Conditional", "value": format!("$item.{}", d.name), "content": due });
+        }
+        out["date"] = due;
+    }
+    let mut open = vec![json!({ "field": "deleted", "equals": "false" })];
+    if let Some(b) = first_bool {
+        open.push(json!({ "field": b.name, "equals": "false" }));
+    }
+    out["count"] = json!({ "type": "core://Text", "style": "Secondary",
+        "value_expr": if first_bool.is_some() { "$count left" } else { "$count" },
+        "count": { "query_key": db::query_key(n), "where": open } });
     out["notes"] = json!(format!(
-        "{} Use \"row\" as the list's item_template. Inside a core://Row, use core://Container (not core://Column, which takes the whole width) and a core://Spacer to push the delete to the end.",
+        "{} Dates and counts are drawn by the device: \"date\" shows a date field as \"Due tomorrow\" or \"Overdue\" (format), \"count\" counts rows (count; add \"zero_text\" for an empty list). Use \"row\" as the list's item_template. Inside a core://Row, use core://Container (not core://Column, which takes the whole width) and a core://Spacer to push the delete to the end.",
         out["notes"].as_str().unwrap_or("")
     ));
     out

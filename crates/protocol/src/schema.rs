@@ -203,8 +203,19 @@ pub fn required_features(node: &UiNode) -> Vec<&'static str> {
 /// feature, e.g. `if let UiNode::Foo { .. } = node { out.insert(feature::FOO); }`
 /// (`crates/protocol/features/README.md`).
 fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
-    if let UiNode::Progress { .. } = node {
-        out.insert(crate::feature::PROGRESS);
+    match node {
+        UiNode::Progress { .. } => {
+            out.insert(crate::feature::PROGRESS);
+        }
+        UiNode::Text { format, count, .. } => {
+            if format.is_some() {
+                out.insert(crate::feature::DATE_FORMAT);
+            }
+            if count.is_some() {
+                out.insert(crate::feature::COUNT);
+            }
+        }
+        _ => {}
     }
     let icons: [Option<&str>; 2] = match node {
         UiNode::IconButton {

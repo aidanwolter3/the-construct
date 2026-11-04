@@ -211,6 +211,11 @@ fn check_values(node: &UiNode) -> Result<(), String> {
         }
         UiNode::Spacer { size_dp: Some(s) } => check_dp("spacer size_dp", *s, MAX_SIZE_DP),
         UiNode::Progress { size_dp: Some(s) } => check_dp("progress size_dp", *s, MAX_SIZE_DP),
+        UiNode::Text {
+            value_expr,
+            count: Some(count),
+            ..
+        } => check_count(value_expr, count),
         UiNode::List {
             indent,
             filter,
@@ -381,6 +386,21 @@ fn check_values(node: &UiNode) -> Result<(), String> {
         }
         _ => Ok(()),
     }
+}
+
+/// A `core://Text` `count` (feature `count`) names a query, its `where`
+/// fields, and is shown: the text has a `$count` (or a `zero_text`).
+fn check_count(value_expr: &str, count: &protocol::TextCount) -> Result<(), String> {
+    if count.query_key.trim().is_empty() {
+        return Err("text count needs a query_key".into());
+    }
+    if count.where_.iter().any(|w| w.field.trim().is_empty()) {
+        return Err("text count where needs a field".into());
+    }
+    if !value_expr.contains("$count") && count.zero_text.is_none() {
+        return Err("text count is set but value_expr has no $count (e.g. \"$count left\")".into());
+    }
+    Ok(())
 }
 
 /// `core://Sticky` (schema 11) pins to the top of a scrolling column, so it
@@ -902,6 +922,28 @@ mod tests {
         ] {
             assert!(check_sticky(&node(bad.clone()), None).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn text_counts_are_checked() {
+        let text = |count: Value, expr: &str| {
+            node(
+                json!({"type": "core://Text", "style": "Body", "value_expr": expr, "count": count}),
+            )
+        };
+        let ok = json!({"query_key": "collection:todos", "where": [{"field": "done", "equals": "false"}]});
+        assert_eq!(check_values(&text(ok.clone(), "$count left")), Ok(()));
+        assert!(check_values(&text(ok, "left")).is_err(), "no $count");
+        let no_key = json!({"query_key": " "});
+        assert!(check_values(&text(no_key, "$count")).is_err());
+        let no_field = json!({"query_key": "q", "where": [{"field": "", "equals": "x"}]});
+        assert!(check_values(&text(no_field, "$count")).is_err());
+        let zero_only = json!({"query_key": "q", "zero_text": "All done"});
+        assert_eq!(check_values(&text(zero_only, "Not done yet")), Ok(()));
+        // A date format needs no check beyond its type.
+        let dated = json!({"type": "core://Text", "style": "Body", "value_expr": "Due $item.due",
+            "format": {"date": "Relative", "past": "Overdue"}});
+        assert_eq!(check_values(&node(dated)), Ok(()));
     }
 
     #[test]

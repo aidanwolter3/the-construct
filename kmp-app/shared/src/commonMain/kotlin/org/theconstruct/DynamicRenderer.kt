@@ -82,6 +82,12 @@ val FEED_MAX_WIDTH = 560.dp
 val LocalConstructQueries: ProvidableCompositionLocal<Map<String, List<String>>> = staticCompositionLocalOf { emptyMap() }
 
 /**
+ * Today's epoch day for `core://Text` `format` (feature `date_format`); null (the default) reads the device's clock
+ * and time zone each time the text draws. Tests and the simulator's `-Ptoday` pin it.
+ */
+val LocalToday: ProvidableCompositionLocal<Long?> = staticCompositionLocalOf { null }
+
+/**
  * Extra start padding for the workspace title, so it sits beside the menu button [ConstructApp] draws over the top-left
  * corner instead of under it. 0 outside [ConstructApp].
  */
@@ -150,7 +156,17 @@ fun RenderUiNode(
         }
 
         is UiNode.Text -> Text(
-            text = interpolate(node.valueExpr, entities, item),
+            text = if (node.format == null && node.count == null) {
+                interpolate(node.valueExpr, entities, item)
+            } else {
+                // Read only by texts that need them: the form recomposes as it is typed into.
+                formatText(
+                    node, entities, item,
+                    queries = if (node.count != null) LocalConstructQueries.current else emptyMap(),
+                    form = if (node.count != null) LocalForm.current else null,
+                    today = LocalToday.current ?: todayEpochDay(),
+                )
+            },
             style = when (node.style) {
                 TextStyle.Headline -> MaterialTheme.typography.headlineMedium
                 TextStyle.Title -> MaterialTheme.typography.titleLarge

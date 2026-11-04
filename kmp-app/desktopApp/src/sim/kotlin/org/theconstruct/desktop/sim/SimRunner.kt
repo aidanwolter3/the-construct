@@ -45,6 +45,7 @@ import org.theconstruct.ImageLoads
 import org.theconstruct.LayoutCalls
 import org.theconstruct.MediaCalls
 import org.theconstruct.LocalBackPresses
+import org.theconstruct.LocalToday
 import org.theconstruct.MenuState
 import org.theconstruct.ServerChoice
 import androidx.compose.ui.semantics.SemanticsActions
@@ -102,6 +103,8 @@ class SimRunner(
     private val outDir: File,
     private val screen: ScreenSpec,
     private val density: Float? = null,
+    /** The epoch day dates are drawn against (`-Ptoday`); null reads the clock. */
+    private val today: Long? = null,
     private val setOnline: ((Boolean) -> Unit)? = null,
     private val modeName: String = "fixture",
     private val textTimeoutMs: Long = 2_000,
@@ -158,7 +161,7 @@ class SimRunner(
                     val backPresses = BackPresses()
                     this@SimRunner.backPresses = backPresses
                     setContent {
-                        CompositionLocalProvider(LocalBackPresses provides backPresses) { ConstructApp(controller, server = serverChoice, mediaPicker = mediaPicker, openLink = {}) }
+                        CompositionLocalProvider(LocalBackPresses provides backPresses, LocalToday provides today) { ConstructApp(controller, server = serverChoice, mediaPicker = mediaPicker, openLink = {}) }
                     }
                     waitForIdle()
                     while (i < steps.size) {
