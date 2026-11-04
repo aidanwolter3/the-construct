@@ -155,6 +155,10 @@ Counts live in memory and restart from zero.
 - **In a pod:** the **Server monitoring** data source (`monitor`, feed `overview`) serves a summary, plain-language
   checks and every counter. The data is server-wide, so a pod reads it only after
   `server pods monitoring <name> on`. Ask Claude to build an app on it.
+- **Alerts:** in such a pod, every custom app on the source gets a "Server warnings" notification channel. The
+  adapter looks at the checks every 5 minutes (while the pod has a registered device), and a check that turns to
+  warning sends one notification ("Server: <check>"); it notifies again only after it has been back to ok (decision
+  [`server-monitoring-alerts`](decisions/server-monitoring-alerts.md)).
 - **Prometheus:** with `CONSTRUCT_METRICS_ADDR`, `GET /metrics` on that address serves the same counters as
   `construct_*` metrics.
 

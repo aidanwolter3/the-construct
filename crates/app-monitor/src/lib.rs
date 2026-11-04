@@ -13,12 +13,21 @@
 //!   ([`checks`]).
 //! - `monitor:metrics`: every counter with its last hour and last day, and
 //!   the gauges (pods, credentials, disk).
+//!
+//! Alerts (decision `server-monitoring-alerts`): in those pods, every custom
+//! app on the source gets a "Server warnings" notification channel, and a
+//! check that turns to warning sends one notification ([`alerts`]); it can
+//! send again only after it has been back to ok.
+
+use std::time::Duration;
 
 use pod_core::metrics::{self, Gauge, Series};
+use pod_core::store::Store;
 use pod_core::{
-    AppAdapter, AppInfo, BoxFuture, EntityDoc, FeedSpec, Hydration, Pod, RequestCtx, SourceManifest,
+    AppAdapter, AppInfo, BoxFuture, EntityDoc, FeedSpec, Hydration, NewNotification, Pod, PollCtx,
+    PollOutcome, RequestCtx, SourceManifest,
 };
-use protocol::{DataBundle, EntityRecord};
+use protocol::{DataBundle, EntityRecord, Importance, NotificationChannel};
 use serde_json::{Value, json};
 
 /// The adapter name and the entity scheme.
@@ -30,6 +39,13 @@ pub const CHECKS_QUERY: &str = "monitor:checks";
 pub const METRICS_QUERY: &str = "monitor:metrics";
 /// Pod setting: `1` lets this pod read the server's monitoring data.
 pub const ENABLED_SETTING: &str = "monitor.enabled";
+/// Pod setting: the ids of the checks that warned at the last look (a JSON
+/// list), so each warning notifies once.
+pub const WARNED_SETTING: &str = "monitor.warned";
+/// The notification channel every app on the source gets.
+pub const ALERT_CHANNEL: &str = "server_warnings";
+/// How often the checks are looked at for alerts.
+pub const ALERT_EVERY: Duration = Duration::from_secs(300);
 
 pub const MANIFEST: SourceManifest = SourceManifest {
     title: "Server monitoring",
@@ -71,7 +87,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ("title", "what it checks"),
                 ("status", "ok or warn"),
                 ("ok", "true when ok"),
-                ("status_text", "OK or Look"),
+                ("status_text", "OK or Warning"),
                 ("detail", "one line with the numbers"),
                 ("value", "the number it judges"),
                 ("color", "status colour, #RRGGBB"),
@@ -207,6 +223,128 @@ impl AppAdapter for MonitorAdapter {
             }
         })
     }
+
+    fn notifies_custom_apps(&self) -> bool {
+        true
+    }
+
+    fn custom_notification_channels(&self, store: &Store) -> Vec<NotificationChannel> {
+        match monitored_apps(store) {
+            Ok(apps) => apps.into_iter().map(|app| channel(&app)).collect(),
+            Err(e) => {
+                tracing::error!(error = %e, "monitoring alerts: apps could not be read");
+                Vec::new()
+            }
+        }
+    }
+
+    fn poll_interval(&self) -> Option<Duration> {
+        Some(ALERT_EVERY)
+    }
+
+    fn poll_notifications<'a>(
+        &'a self,
+        pod: &'a Pod,
+        _ctx: &'a PollCtx,
+    ) -> BoxFuture<'a, PollOutcome> {
+        Box::pin(async move {
+            let config = self.config;
+            let found = pod
+                .blocking(move |s| {
+                    let apps = monitored_apps(s)?;
+                    if apps.is_empty() {
+                        return Ok(Vec::new());
+                    }
+                    let warned: Vec<String> = s
+                        .pod_setting(WARNED_SETTING)?
+                        .and_then(|v| serde_json::from_str(&v).ok())
+                        .unwrap_or_default();
+                    let now_checks = checks(&metrics::series(), &metrics::gauges(), &config);
+                    let (new, still) =
+                        alerts(&now_checks, &warned, &apps, pod_core::util::now_secs());
+                    if still != warned {
+                        s.set_pod_setting(WARNED_SETTING, &json!(still).to_string())?;
+                    }
+                    Ok(new)
+                })
+                .await;
+            match found {
+                Ok(new) => PollOutcome {
+                    new,
+                    ..Default::default()
+                },
+                Err(e) => {
+                    tracing::error!(status = ?e.0, "monitoring alerts could not be checked");
+                    PollOutcome::default()
+                }
+            }
+        })
+    }
+}
+
+// ---------- alerts ----------
+
+/// The custom apps on this source, when the pod may read it (none
+/// otherwise). Blocking.
+pub fn monitored_apps(store: &Store) -> rusqlite::Result<Vec<String>> {
+    if store.pod_setting(ENABLED_SETTING)?.as_deref() != Some("1") {
+        return Ok(Vec::new());
+    }
+    let apps = store.with_conn(pod_core::custom::custom_apps_on)?;
+    Ok(apps
+        .into_iter()
+        .filter(|a| a.feeds.iter().any(|(s, _)| s == NAME))
+        .map(|a| a.id)
+        .collect())
+}
+
+fn channel(app: &str) -> NotificationChannel {
+    NotificationChannel {
+        app_id: app.to_owned(),
+        id: ALERT_CHANNEL.into(),
+        title: "Server warnings".into(),
+        description: "When a check on the server turns to a warning (wrong pod codes, new \
+                      Claude connections, model use, errors, disk)"
+            .into(),
+        default_enabled: true,
+        importance: Importance::High,
+    }
+}
+
+/// What the checks owe at `now`: a notification for each app per check
+/// that warns now and didn't at the last look (`warned`), and the ids
+/// that warn now (the next look's `warned`).
+pub fn alerts(
+    checks: &[Check],
+    warned: &[String],
+    apps: &[String],
+    now: i64,
+) -> (Vec<NewNotification>, Vec<String>) {
+    let mut out = Vec::new();
+    let mut still = Vec::new();
+    for c in checks.iter().filter(|c| c.warn) {
+        still.push(c.id.to_owned());
+        if warned.iter().any(|w| w == c.id) {
+            continue;
+        }
+        for app in apps {
+            out.push(NewNotification {
+                app_id: app.clone(),
+                channel: ALERT_CHANNEL.into(),
+                // One per warning episode: it started at `now`.
+                dedupe_key: format!("monitor:{}:{now}", c.id),
+                title: format!("Server: {}", c.title),
+                body: c.detail.clone(),
+                image_url: None,
+                target_uri: None,
+                group_key: Some("monitor".into()),
+                created_at: now,
+                quiet: false,
+            });
+        }
+    }
+    still.sort();
+    (out, still)
 }
 
 // ---------- checks ----------
@@ -516,7 +654,7 @@ pub fn bundle(
                 "title": c.title,
                 "status": if c.warn { "warn" } else { "ok" },
                 "ok": !c.warn,
-                "status_text": if c.warn { "Look" } else { "OK" },
+                "status_text": if c.warn { "Warning" } else { "OK" },
                 "detail": c.detail,
                 "value": c.value,
                 "color": if c.warn { WARN_COLOR } else { OK_COLOR },
@@ -682,6 +820,33 @@ mod tests {
         let summary = &b.entities["monitor://summary/server"];
         assert_eq!(summary.get_str("headline"), Some("9 checks need a look"));
         assert_eq!(summary.get_str("window_note"), Some(""));
+    }
+
+    #[test]
+    fn a_warning_notifies_once_until_it_clears() {
+        let apps = vec!["c-1".to_owned()];
+        let calm = vec![s(AUTH_FAILURES, ("kind", "pod_code"), 0, 0)];
+        let noisy = vec![s(AUTH_FAILURES, ("kind", "pod_code"), 50, 50)];
+        let cfg = MonitorConfig::default();
+        let g = quiet_gauges();
+        let (sent, warned) = alerts(&checks(&noisy, &g, &cfg), &[], &apps, 100);
+        assert_eq!(warned, ["sign_in_failures"]);
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].title, "Server: Wrong pod codes and unknown tokens");
+        assert_eq!(sent[0].channel, ALERT_CHANNEL);
+        assert_eq!(sent[0].dedupe_key, "monitor:sign_in_failures:100");
+        // Still warning: nothing new.
+        let (sent, warned) = alerts(&checks(&noisy, &g, &cfg), &warned, &apps, 400);
+        assert!(sent.is_empty());
+        // Clears, then warns again: a new notification.
+        let (_, warned) = alerts(&checks(&calm, &g, &cfg), &warned, &apps, 700);
+        assert!(warned.is_empty());
+        let (sent, _) = alerts(&checks(&noisy, &g, &cfg), &warned, &apps, 1000);
+        assert_eq!(sent[0].dedupe_key, "monitor:sign_in_failures:1000");
+        // No apps on the source: nothing is sent, but the state still moves.
+        let (sent, warned) = alerts(&checks(&noisy, &g, &cfg), &[], &[], 1300);
+        assert!(sent.is_empty());
+        assert_eq!(warned, ["sign_in_failures"]);
     }
 
     #[test]

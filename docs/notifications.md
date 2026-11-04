@@ -26,7 +26,8 @@ app needs adapter code only.
 - **Polling:** an adapter implements `AppAdapter::poll_notifications` and `poll_interval`, and keeps its cursor in
   its own tables. Pixelfed polls `GET /api/v1/notifications` every 2 minutes; the first poll stores the recent
   backlog as already read, so nothing floods in. Collections uses the same poll to send due reminders and to run
-  scheduled fills, whose alerts notify. Its channels belong to the custom app showing the collection.
+  scheduled fills, whose alerts notify. Its channels belong to the custom app showing the collection. Server
+  monitoring looks at its checks every 5 minutes and notifies the custom apps built on it when one turns to warning.
 - **From a route:** an adapter calls `AppState::notify` from its own handlers.
 - **Waking pods:** pods open lazily, so the host's scheduler checks every 30 s and opens pods whose
   `host.db` `pods.next_wake_at` is due (8 at a time). A pod polls only while it has a device seen in the last 30 days,
