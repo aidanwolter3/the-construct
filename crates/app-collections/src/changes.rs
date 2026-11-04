@@ -12,6 +12,9 @@
 //! | `{op: recompute_field, field}` | compute the field again for every row now (after editing the rules a lookup reads; a value only the model could answer stays) |
 //! | `{op: set_order, field?, descending?}` | the list order: a field or a list of fields, first key first (none: oldest first) |
 //! | `{op: set_title, title}` | the collection's title |
+//! | `{op: add_reminder, field, title, body?, at?, unless?, label?, app?}` | notify when a row's date is reached (decision `collection-reminders`) |
+//! | `{op: update_reminder, reminder, ...}` | change what it names |
+//! | `{op: remove_reminder, reminder}` | stop it |
 
 use serde_json::Value;
 
@@ -225,9 +228,12 @@ fn apply_op(
         "set_title" => {
             def.title = arg("title").to_owned();
         }
+        "add_reminder" => crate::remind::add(def, op, now)?,
+        "update_reminder" => crate::remind::update(def, op)?,
+        "remove_reminder" => crate::remind::remove(def, op)?,
         other => {
             return Err(format!(
-                "unknown op '{other}' (add_field, rename_field, remove_field, restore_field, update_field, recompute_field, set_order, set_title)"
+                "unknown op '{other}' (add_field, rename_field, remove_field, restore_field, update_field, recompute_field, set_order, set_title, add_reminder, update_reminder, remove_reminder)"
             ));
         }
     }
@@ -296,6 +302,15 @@ pub fn restore(
     for f in def.fields.iter_mut().filter(|f| gone.contains(&f.id)) {
         f.compute.clear();
     }
+    // So does a reminder (an old version's reminders come back with it).
+    let live: Vec<String> = def
+        .fields
+        .iter()
+        .filter(|f| f.live())
+        .map(|f| f.id.clone())
+        .collect();
+    def.reminders
+        .retain(|r| r.sources().iter().all(|id| live.contains(id)));
     model::check_definition(&def, max_fields)?;
     Ok(Planned {
         convert: to_convert(current, &def),
@@ -338,6 +353,7 @@ mod tests {
             order_by: Vec::new(),
             descending: false,
             next_field: 4,
+            reminders: Vec::new(),
         }
     }
 

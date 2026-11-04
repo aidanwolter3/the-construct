@@ -34,7 +34,11 @@ of its options; each input is asked once, and a value set by hand is kept and re
 compute may be a list tried in order, e.g. [lookup with learn: true, model]: rules first, the model only \
 when none matches, and its answers (and hand edits) are added as rules. After editing rules, apply_change \
 {op: recompute_field} computes the field again for every row. \
-order_by may list several fields ([\"section\", \"done\"]; a choice sorts by the order of its options).";
+order_by may list several fields ([\"section\", \"done\"]; a choice sorts by the order of its options). \
+A collection can remind the user: apply_change {op: add_reminder, field: <a date field>, title: \"Due today: \
+{title}\", unless: {field: \"done\", equals: true}, at?: \"09:00\"} sends a notification from the app showing \
+the collection once a row's date is reached (at that time of day in the user's time zone), unless the row \
+then matches unless. Set the zone first with set_time_zone (ask the user if you don't know it).";
 
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({
@@ -91,7 +95,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "apply_change",
-            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, optional?, default?, compute?} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title}]. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. A lookup is not recomputed when its rules change: after editing them, recompute_field computes the field again for every row (a row only the model could answer keeps its value). Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
+            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, optional?, default?, compute?} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title} | {op: add_reminder, field, title, body?, at?, unless?, label?, app?} | {op: update_reminder, reminder: id, ...} | {op: remove_reminder, reminder: id}]. A reminder notifies the user once per row when its date field is reached: on that date at at (HH:MM, default 09:00) in the pod's time zone (set_time_zone), unless the row then has unless {field, equals} (e.g. {field: \"done\", equals: true}); dates before the day it was added never notify, and a reminder more than 7 days late is dropped. title and body are the notification's text with {field} replaced by the row's value; label names it in the user's notification settings (default \"<Title>: <field>\"); app (a custom app id) is the app it comes from and opens, default the oldest custom app with the collection as a feed (with none, nothing is sent). describe_collection lists reminders with their ids. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. A lookup is not recomputed when its rules change: after editing them, recompute_field computes the field again for every row (a row only the model could answer keeps its value). Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
             json!({ "collection": collection, "base_version": { "type": "integer", "description": "The definition version you read" },
                     "changes": { "type": "array", "items": { "type": "object" } }, "apps": apps, "note": note }),
             &["collection", "changes"],
@@ -251,6 +255,7 @@ async fn define(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Val
         title,
         next_field: fields.len() as u32 + 1,
         fields,
+        reminders: Vec::new(),
         order_by: Vec::new(),
         descending: args["descending"].as_bool().unwrap_or(false),
     };
@@ -666,6 +671,19 @@ async fn apply_change(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Valu
     }
     let planned = changes::plan(&def, ops, &others, pod_core::util::now_secs(), caps.text_chars, caps.fields)
         .map_err(|(i, e)| json!({ "error": "invalid_change", "at": format!("/changes/{i}"), "detail": e, "status": 400 }))?;
+    for r in &planned.def.reminders {
+        if let Some(app) = r.app.clone() {
+            let exists = pod
+                .blocking(move |s| s.with_conn(|c| custom::custom_app_on(c, &app)))
+                .await
+                .map_err(db_err)?
+                .is_some();
+            if !exists {
+                return Err(json!({ "error": "invalid_change", "status": 400,
+                    "detail": format!("reminder '{}': no custom app '{}' (list_apps lists them)", r.id, r.app.as_deref().unwrap_or("")) }));
+            }
+        }
+    }
     let note = note_arg(args, "Changed");
     commit(pod, caps, &name, version, planned, args, note).await
 }

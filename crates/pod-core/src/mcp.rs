@@ -291,6 +291,12 @@ fn tools() -> Vec<Value> {
             &["app", "version"],
         ),
         tool(
+            "set_time_zone",
+            "The user's time zone (an IANA name such as America/Denver), used where the pod turns a date or time without a zone into a moment (collection reminders). Ask the user when you don't know it. Without time_zone: answers the current one (UTC when unset).",
+            json!({ "time_zone": { "type": "string", "description": "An IANA zone name, e.g. Europe/Berlin" } }),
+            &[],
+        ),
+        tool(
             "set_hidden",
             "Hide an app from the user's app list (built-in apps too), or show it again.",
             json!({ "app": app, "hidden": { "type": "boolean" } }),
@@ -377,6 +383,7 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
                 Err(json!({ "error": "invalid_arguments", "detail": "\"version\" is required" }))
             }
         },
+        "set_time_zone" => set_time_zone(pod, &args).await,
         "set_hidden" => match (str_arg(&args, "app"), args["hidden"].as_bool()) {
             (Ok(app), Some(hidden)) => custom::set_hidden(pod, app, hidden)
                 .await
@@ -399,6 +406,22 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
         }
     };
     tool_result(r)
+}
+
+async fn set_time_zone(pod: &Pod, args: &Value) -> Result<Value, Value> {
+    let name = args["time_zone"].as_str().map(str::to_owned);
+    let r = crate::blocking(pod, move |s| {
+        Ok(match name {
+            Some(n) => crate::tz::set_time_zone(s, &n).map(Some),
+            None => crate::tz::time_zone_name(s).map_err(|e| e.to_string()),
+        })
+    })
+    .await
+    .map_err(|(s, Json(b))| refused((s, b)))?;
+    match r {
+        Ok(name) => Ok(json!({ "ok": true, "time_zone": name.unwrap_or_else(|| "UTC".into()) })),
+        Err(e) => Err(json!({ "error": "invalid_time_zone", "detail": e })),
+    }
 }
 
 async fn list_apps(pod: &Pod) -> Result<Value, Value> {

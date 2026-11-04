@@ -1,5 +1,6 @@
 # Custom apps keep their own data in Collections, one generic data source that Claude declares data in
 
+Extended by [collection-reminders](collection-reminders.md) (reminders, open question 3 below).
 Extended by [collection-computed-fields](collection-computed-fields.md) (computed fields, multi-key order), which
 amends "no computed fields" below.
 

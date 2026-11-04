@@ -5,6 +5,7 @@
 //! `&auto=1` (the fake then approves with a 302 straight to the redirect URI).
 
 use std::net::{SocketAddr, TcpListener};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -56,6 +57,9 @@ struct Env {
     fake: String,
     pod: String,
     pod_state: Arc<AppState>,
+    /// While true, the pod holds `POST /v1/pixelfed/posts/comment` requests
+    /// (so a test can check the optimistic state before the answer lands).
+    hold_comments: Arc<AtomicBool>,
     rt: Option<tokio::runtime::Runtime>,
 }
 
@@ -88,11 +92,27 @@ impl Env {
         };
         let pod_state = Arc::new(server::state_in_memory().with_pixelfed(pixelfed));
         let (pl, paddr) = bind();
-        spawn_serve(&rt, pl, server::app(Arc::clone(&pod_state)));
+        let hold_comments = Arc::new(AtomicBool::new(false));
+        let hold = Arc::clone(&hold_comments);
+        let pod_app = server::app(Arc::clone(&pod_state)).layer(axum::middleware::from_fn(
+            move |req: axum::extract::Request, next: axum::middleware::Next| {
+                let hold = Arc::clone(&hold);
+                async move {
+                    if req.uri().path() == "/v1/pixelfed/posts/comment" {
+                        while hold.load(Ordering::SeqCst) {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                    }
+                    next.run(req).await
+                }
+            },
+        ));
+        spawn_serve(&rt, pl, pod_app);
         Self {
             fake,
             pod: format!("http://{paddr}"),
             pod_state,
+            hold_comments,
             rt: Some(rt),
         }
     }
@@ -338,10 +358,12 @@ fn loopback_sign_in_stores_session_and_fetches_the_feed() {
     for uri in queries(&snap)["timeline:home"].as_array().unwrap() {
         assert!(ents.get(uri.as_str().unwrap()).is_some(), "{uri} missing");
     }
-    assert_eq!(
-        *states.lock().unwrap(),
-        vec!["signed_out", "pending", "signed_in"]
-    );
+    // The observer runs on an engine thread and may lag behind snapshot().
+    wait_until("the observer to see signed_in", || {
+        states.lock().unwrap().last().map(String::as_str) == Some("signed_in")
+    });
+    let seen = states.lock().unwrap().clone();
+    assert_eq!(seen, vec!["signed_out", "pending", "signed_in"]);
     let token = stored_token(&env, &store);
     assert!(env.session_exists(&token));
     // The browser landed on the loopback listener's success page.
@@ -1034,7 +1056,6 @@ fn stub_bundle(title: &str) -> Value {
 
 fn start_stub_pod(rt: &tokio::runtime::Runtime) -> (String, Arc<StubPod>) {
     use axum::routing::{get, post};
-    use std::sync::atomic::Ordering;
     let pod = Arc::new(StubPod::default());
     let (p1, p2, p3) = (Arc::clone(&pod), Arc::clone(&pod), Arc::clone(&pod));
     let app = axum::Router::new()
@@ -1132,7 +1153,6 @@ fn workspace_title(snap: &StateSnapshot) -> String {
 
 #[test]
 fn auth_stays_pending_until_the_first_feed_and_ignores_a_second_tap() {
-    use std::sync::atomic::Ordering;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -1409,6 +1429,8 @@ fn a_create_is_listed_at_once_then_replaced_by_the_pods_answer() {
         loads(&engine.snapshot())[&path]["state"] == "ready"
     });
 
+    // Hold the pod's answer so the check below sees the optimistic entry.
+    env.hold_comments.store(true, Ordering::SeqCst);
     engine.dispatch(&create_comment_intent(
         CAROUSEL_ID,
         "Golden light!",
@@ -1418,6 +1440,14 @@ fn a_create_is_listed_at_once_then_replaced_by_the_pods_answer() {
     let texts = comment_texts(&engine.snapshot(), CAROUSEL_ID);
     assert_eq!(texts.last().map(String::as_str), Some("Golden light!"));
     assert_eq!(texts.len(), 8);
+    assert!(
+        queries(&engine.snapshot())[format!("comments:{CAROUSEL_ID}")]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|u| u.as_str().unwrap().contains("pending-nonce00000001"))
+    );
+    env.hold_comments.store(false, Ordering::SeqCst);
     wait_until("flushed and reloaded", || {
         let s = engine.snapshot();
         s.pending_actions == 0
@@ -1458,12 +1488,16 @@ fn a_rejected_create_disappears() {
     let engine = loopback_engine(&env, &store);
     engine.dispatch(&env.login_intent());
     wait_signed_in(&engine);
+    // Hold the pod's answer so the rejection can't roll the comment back
+    // before the optimistic check below.
+    env.hold_comments.store(true, Ordering::SeqCst);
     engine.dispatch(&create_comment_intent(
         "999",
         "nobody home",
         "nonce00000002",
     ));
     assert_eq!(comment_texts(&engine.snapshot(), "999"), ["nobody home"]);
+    env.hold_comments.store(false, Ordering::SeqCst);
     wait_until("rejected", || engine.snapshot().pending_actions == 0);
     let snap = engine.snapshot();
     assert!(comment_texts(&snap, "999").is_empty());
