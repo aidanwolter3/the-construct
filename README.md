@@ -44,14 +44,16 @@ crates/client-core   ConstructEngine: fetches the workspace, holds state, applie
                      outbox sync worker), OAuth2 PKCE sign-in (pod session in a secure store), read-only apps
                      API, SSE layout subscriber
 crates/client-ffi    UniFFI bridge (EngineHandle, FfiStateSnapshot, StateObserver) + uniffi-bindgen bin
-crates/fake-pixelfed fake Pixelfed (Mastodon API + OAuth PKCE, admin/fault controls), the primary e2e upstream;
-                     single binary with embedded fixtures, Dockerfile for a sidecar image
 crates/e2e           end-to-end suite: pod + engine in-process against the fake (default) or a real Pixelfed
+fake-pixelfed/       fake Pixelfed (Mastodon API + OAuth PKCE, admin/fault controls), the primary e2e upstream: a
+                     test tool, not part of the product, so it lives outside crates/ with everything it needs:
+                     the crate, fixtures/ (the Mastodon API JSON and media it serves, embedded in its single
+                     binary), its Dockerfile and fly.toml; deployed by .github/workflows/fake-pixelfed.yml
 layouts/             layouts as code: <app>/NNNN.json ({"note", "layout"}), embedded in the pod, append-only
 fixtures/            pixelfed_home_bundle.json (DESIGN.md §2.2C; the pixelfed_demo app),
                      pixelfed_home_feed_bundle.json (simulator), counter_home_bundle.json (test-only: a minimal
-                     stateful workspace for engine and UI tests; no pod serves it); pixelfed/ (Mastodon API JSON + media served by
-                     fake-pixelfed, recorded/ real-instance responses, images/ seed JPEGs)
+                     stateful workspace for engine and UI tests; no pod serves it); pixelfed/ (real Pixelfed:
+                     recorded/ real-instance responses, images/ seed JPEGs for scripts/pixelfed_dev.sh)
 dev/pixelfed/        docker compose stack for the optional local real Pixelfed (dev-only secrets)
 scripts/build_ffi.sh builds libclient_ffi.dylib and regenerates the Kotlin bindings
 scripts/build_android.sh  cross-compiles libclient_ffi.so for Android (cargo-ndk)
@@ -257,7 +259,7 @@ The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PR
 | `FAKE_PIXELFED_PUBLIC_URL` | `http://<bound addr>` (`0.0.0.0` shown as `127.0.0.1`) | Replaces every `{{BASE}}` in the fixture JSON, so emitted media/profile/status URLs point at it. `http://10.0.2.2:8081` when the emulator must load them directly. |
 | `FAKE_PIXELFED_AUTO_APPROVE` | unset | `1`: `GET /oauth/authorize` redirects straight back with a code (same as `auto=1` in the query); otherwise an HTML page with an **Authorize** button. |
 | `FAKE_PIXELFED_TOKEN` | unset | A pre-seeded valid access token, to skip OAuth in QA (survives resets). |
-| `FAKE_PIXELFED_FIXTURES` | embedded | Fixture directory to load instead of the embedded copies (e.g. `fixtures/pixelfed` while editing). |
+| `FAKE_PIXELFED_FIXTURES` | embedded | Fixture directory to load instead of the embedded copies (e.g. `fake-pixelfed/fixtures` while editing). |
 | `FAKE_PIXELFED_THREADS` | `pixelfed` | `mastodon`: `GET /api/v1/statuses/:id/context` returns the whole thread (Mastodon) instead of one level each way (Pixelfed). |
 | `FAKE_PIXELFED_ADMIN` | loopback only | `1` serves `/_admin` on any address, `0` never; unset, only when bound to loopback. |
 | `RUST_LOG` | `info` | `tracing` filter. |
@@ -731,10 +733,16 @@ cd kmp-app && CONSTRUCT_BASE_URL=http://127.0.0.1:8080 CONSTRUCT_WORKSPACE=pixel
 
 ## Fake Pixelfed upstream
 
-`crates/fake-pixelfed` is a Mastodon-compatible stand-in for a Pixelfed instance and the **primary end-to-end
+`fake-pixelfed/` is a Mastodon-compatible stand-in for a Pixelfed instance and the **primary end-to-end
 target** (docs/DECISIONS.md D16): no account, no containers, deterministic fixtures, and controllable faults. The
-real Pixelfed below is optional (recording fixtures, contract test). It serves `fixtures/pixelfed/` (compiled into
-the binary) with in-memory state that resets on restart or on `POST /_admin/reset`.
+real Pixelfed below is optional (recording fixtures, contract test). It serves `fake-pixelfed/fixtures/` (compiled
+into the binary) with in-memory state that resets on restart or on `POST /_admin/reset`. Everything it needs lives
+in that folder (decision `fake-pixelfed-own-directory`); the pod's tests link it as a library.
+
+**Staging.** `https://the-construct-fake-pixelfed.fly.dev` (`fake-pixelfed/fly.toml`) is the staging pod's
+Pixelfed. `.github/workflows/fake-pixelfed.yml` runs its tests and deploys it on a push to `main` that touches
+`fake-pixelfed/`, `Cargo.toml` or `Cargo.lock` (or by hand from the Actions tab), independently of the pod's deploy
+in `ci.yml`. It needs the repo secret `FLY_API_TOKEN_FAKE`.
 
 ```bash
 cargo run -p fake-pixelfed                       # listens on 127.0.0.1:8081
@@ -744,7 +752,7 @@ curl -s -H 'Authorization: Bearer dev' http://127.0.0.1:8081/api/v1/timelines/ho
 
 Its environment variables are listed in [Server runtime configuration](#fake-pixelfed-environment).
 
-**Comments.** `fixtures/pixelfed/comments.json` seeds threaded comments on every timeline post (as many direct
+**Comments.** `fake-pixelfed/fixtures/comments.json` seeds threaded comments on every timeline post (as many direct
 comments as each post's `replies_count`, plus nested replies; authors are the timeline accounts and the signed-in
 `constructdemo`). Each entry is compact (`id`, `in_reply_to_id`, `account` username, `created_at`, plain `text`,
 optional `favourites_count`) and is expanded into a full status; parents must come before their replies. The API
@@ -776,7 +784,7 @@ idle, ~5 MB after a few hundred requests; the Docker container ~1 MB). Image: `r
 `gcr.io/distroless/cc-debian12:nonroot`, 51 MB.
 
 ```bash
-docker build -f crates/fake-pixelfed/Dockerfile -t construct-fake-pixelfed .      # from the repo root
+docker build -f fake-pixelfed/Dockerfile -t construct-fake-pixelfed .             # from the repo root
 docker run --rm -p 127.0.0.1:8081:8081 -e FAKE_PIXELFED_ADMIN=1 \
   -e FAKE_PIXELFED_PUBLIC_URL=http://127.0.0.1:8081 construct-fake-pixelfed
 E2E_FAKE_URL=http://127.0.0.1:8081 cargo test -p e2e --test suite                # suite against it
@@ -1197,7 +1205,7 @@ appears (`open-settings; wait-text 30000 @constructadmin; close-menu`), wait for
 Example boosted`): the account updates before the refetched feed arrives.
 
 **Images** (Coil, DECISIONS D18) are deterministic. In fixture mode the network is never used: any image URL whose
-path ends in `/storage/<file>` or `/v1/pixelfed/media/<file>` is served from `fixtures/pixelfed/media/<file>` (the
+path ends in `/storage/<file>` or `/v1/pixelfed/media/<file>` is served from `fake-pixelfed/fixtures/media/<file>` (the
 `pixelfed_home` fixture points at `http://127.0.0.1:8081/storage/...`, the fake upstream's URLs); every other URL
 fails at once and the widget shows its error state (e.g. `pixelfed_demo`'s pixelfed.social URL). In live mode
 images load over HTTP from wherever the URLs point (the pod's media proxy). Every `shot` first waits up to 5 s for
@@ -1222,7 +1230,7 @@ entries starting with `#` are comments. An argument cannot contain `;`, and sinc
 | `swipe-left <target>` / `swipe-right <target>` | Touch-swipes the selected node; `swipe-left` on a carousel shows the next page. |
 | `scroll-to <target>` | Scrolls the feed until the selected node is visible (e.g. `scroll-to Kept my distance`). |
 | `type <target> <text>` | Replaces the text of the selected text field with `<text>` (clear, then type), e.g. `type tag:server-custom-url http://127.0.0.1:8080`. The target is `tag:<testTag>`, a single word, or `"quoted text"` (may contain spaces); the text is the rest of the command. |
-| `pick <path> [<path>…]` | Queues files the next photo picker (`core://MediaPicker`'s add tile) returns; relative paths resolve against the working directory, `"quoted paths"` may contain spaces. E.g. `click tag:new-post; pick fixtures/pixelfed/media/carousel-1.png; click tag:media-picker-add:photos; click Share`. In fixture mode a shared post shows "Posting…" until the next `wait` / `idle`. |
+| `pick <path> [<path>…]` | Queues files the next photo picker (`core://MediaPicker`'s add tile) returns; relative paths resolve against the working directory, `"quoted paths"` may contain spaces. E.g. `click tag:new-post; pick fake-pixelfed/fixtures/media/carousel-1.png; click tag:media-picker-add:photos; click Share`. In fixture mode a shared post shows "Posting…" until the next `wait` / `idle`. |
 | `offline` / `online` | Fixture mode only: flips the engine's connectivity. |
 | `publish-version <note>` | Fixture mode only: the fake pod publishes a new newest version of the app on screen (its layout with a "What's new: <note>" banner); followers see it at once. |
 | `screen <WxH or preset>` | Restarts the renderer at the new size. Engine state carries over; UI state such as scroll position does not. |

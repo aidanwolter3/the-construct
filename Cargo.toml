@@ -11,7 +11,7 @@ members = [
     "crates/app-collections",
     "crates/app-watcher",
     "crates/server",
-    "crates/fake-pixelfed",
+    "fake-pixelfed",
     "crates/e2e",
 ]
 

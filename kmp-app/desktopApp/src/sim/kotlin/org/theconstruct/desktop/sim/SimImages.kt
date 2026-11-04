@@ -18,7 +18,7 @@ import java.io.FileNotFoundException
  * Image loading for the simulator (README "Simulation mode", DECISIONS: sim image loading).
  *
  * Fixture mode never touches the network: [FixtureMediaInterceptor] serves any image URL whose path ends in
- * `/storage/<file>` or `/v1/pixelfed/media/<file>` from `fixtures/pixelfed/media/<file>`; every other URL fails
+ * `/storage/<file>` or `/v1/pixelfed/media/<file>` from `fake-pixelfed/fixtures/media/<file>`; every other URL fails
  * at once (the widget shows its error state), so screenshots are deterministic. Live mode loads over HTTP
  * (OkHttp) from the pod or wherever the URLs point. Both modes disable the disk cache. `wait-images` (and
  * every `shot`) waits for [org.theconstruct.ImageLoads] to drain.
@@ -29,7 +29,7 @@ object SimImages {
     var lastSuccessNanos: Long = 0L
         private set
 
-    fun install(mode: String, mediaDir: File? = findFixtureDir("pixelfed/media")) {
+    fun install(mode: String, mediaDir: File? = findPixelfedMedia()) {
         val loader = ImageLoader.Builder(PlatformContext.INSTANCE)
             .components {
                 if (mode == "fixture") {

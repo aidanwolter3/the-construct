@@ -22,7 +22,8 @@ Apps today: Pixelfed (`pixelfed_home`), Recipes (`recipes`) and Watcher (`watche
   (`server::adapters`); `server pods …` is the admin CLI.
 - `crates/client-core` — engine: SQLite cache, outbox sync, PKCE sign-in, SSE subscriber.
 - `crates/client-ffi` — UniFFI bridge (Kotlin bindings live in `kmp-app/shared/src/jvmCommonMain`).
-- `crates/fake-pixelfed` — fake upstream (primary test target); `crates/e2e` — end-to-end suite.
+- `fake-pixelfed/` — fake upstream (primary test target), a test tool kept outside `crates/`: the crate, the
+  fixtures it serves, its Dockerfile and `fly.toml`; deployed by its own workflow. `crates/e2e` — end-to-end suite.
 - `layouts/<app>/NNNN.json` — layout versions as code (see below).
 - `kmp-app/` — Gradle: `:shared` (commonMain UI), `:desktopApp` (JVM + simulator), `:androidApp`.
 - `deploy/` (Fly.io), `.github/workflows/ci.yml`, `scripts/`, `fixtures/`, `assets/icon/`.
@@ -78,8 +79,9 @@ Staging needs a pod token (D46). Make a temporary one (24 h, deleted afterwards;
 
 ## Deploys and CI
 - Every PR/push: clippy + Rust tests, JVM tests, simulator screenshots (artifact).
-- **Push to `main` auto-deploys staging** (https://the-construct-pod.fly.dev + fake Pixelfed) when the Rust job
-  passes. Keep `main` green; server schema changes need a migration that works on staging's existing DB.
+- **Push to `main` auto-deploys staging** (https://the-construct-pod.fly.dev) when the Rust job passes. The fake
+  Pixelfed deploys separately (`.github/workflows/fake-pixelfed.yml`) when `fake-pixelfed/` or `Cargo.*` change.
+  Keep `main` green; server schema changes need a migration that works on staging's existing DB.
 - Prefer branches + PRs for non-trivial work; check `gh run list` after pushing.
 - Every PR body must follow `.github/pull_request_template.md` and state (1) **New or removed feature**: no,
   or which (new `crates/protocol/features/` files, or ones moved to `features/removed/`) and (2) **Client update needed**: yes/no (does the desktop/Android app need

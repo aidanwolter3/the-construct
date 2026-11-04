@@ -40,4 +40,4 @@ futures-util = { version = "0.3", default-features = false }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3"
-fake-pixelfed = { path = "../fake-pixelfed" }
+fake-pixelfed = { path = "../../fake-pixelfed" }

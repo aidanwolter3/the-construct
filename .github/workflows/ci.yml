@@ -1,12 +1,11 @@
 name: CI
 
 # Every PR and push: Rust checks, JVM/shared-UI tests and headless simulator screenshots (artifact).
-# Push to main: if Rust checks pass, deploy the pod (and the fake Pixelfed when its files changed) to Fly.io
-# staging. A manual run (workflow_dispatch) on main deploys both.
+# Push to main (or a manual run on main): if Rust checks pass, deploy the pod to Fly.io staging,
 #   https://the-construct-pod.fly.dev   (deploy/fly/pod.toml)
-#   https://the-construct-fake-pixelfed.fly.dev   (deploy/fly/fake-pixelfed.toml)
-# Deploys need repo secrets FLY_API_TOKEN_POD and FLY_API_TOKEN_FAKE (app-scoped Fly deploy tokens);
-# without them the deploy steps are skipped, not failed.
+# The fake Pixelfed it talks to deploys from its own workflow (fake-pixelfed.yml).
+# The deploy needs the repo secret FLY_API_TOKEN_POD (an app-scoped Fly deploy token); without it
+# the deploy steps are skipped, not failed.
 # Third-party actions are pinned to commit SHAs (tag in the comment); Dependabot
 # (.github/dependabot.yml) proposes updates.
 
@@ -107,44 +106,20 @@ jobs:
     concurrency:
       group: deploy-staging
       cancel-in-progress: false
-    # The Fly tokens are passed only to the steps that deploy with them (not job-wide), so checkout,
-    # setup-flyctl and the smoke test never see them.
+    # The Fly token is passed only to the step that deploys with it (not job-wide), so checkout,
+    # setup-flyctl and the smoke test never see it.
     steps:
       - name: Which deploy secrets are set?
         id: secrets
         env:
           HAS_POD: ${{ secrets.FLY_API_TOKEN_POD != '' }}
-          HAS_FAKE: ${{ secrets.FLY_API_TOKEN_FAKE != '' }}
-        run: |
-          echo "pod=$HAS_POD" >> "$GITHUB_OUTPUT"
-          echo "fake=$HAS_FAKE" >> "$GITHUB_OUTPUT"
+        run: echo "pod=$HAS_POD" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 0 # the diff below needs the push's previous head
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6
         with:
           version: 0.4.123
-      - name: Did the fake Pixelfed change?
-        id: fake
-        env:
-          BEFORE: ${{ github.event.before }}
-        run: |
-          paths="crates/fake-pixelfed fixtures/pixelfed Cargo.toml Cargo.lock deploy/fly/fake-pixelfed.toml"
-          if [ "$GITHUB_EVENT_NAME" != push ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            changed=true # manual run, or a previous head we can't compare with: deploy
-          elif git diff --quiet "$BEFORE" "$GITHUB_SHA" -- $paths; then
-            changed=false
-          else
-            changed=true
-          fi
-          echo "fake Pixelfed changed: $changed"
-          echo "changed=$changed" >> "$GITHUB_OUTPUT"
-      - name: Deploy fake Pixelfed
-        if: steps.secrets.outputs.fake == 'true' && steps.fake.outputs.changed == 'true'
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_FAKE }}
-        run: flyctl deploy . --config deploy/fly/fake-pixelfed.toml --dockerfile crates/fake-pixelfed/Dockerfile --remote-only --ha=false
       - name: Deploy pod
         if: steps.secrets.outputs.pod == 'true'
         env:

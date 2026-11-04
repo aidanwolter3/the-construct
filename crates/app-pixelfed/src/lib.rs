@@ -1181,7 +1181,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 mod tests {
     use super::*;
 
-    const FIXTURE: &str = include_str!("../../../fixtures/pixelfed/timeline_home.json");
+    const FIXTURE: &str = include_str!("../../../fake-pixelfed/fixtures/timeline_home.json");
     const BASE: &str = "http://127.0.0.1:8081";
     const PROXY: &str = "http://10.0.2.2:8080/v1/pixelfed/media";
 

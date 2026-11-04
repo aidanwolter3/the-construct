@@ -26,7 +26,7 @@ sealed class SimStep(val command: String, val arg: String = "") {
     object Back : SimStep("back")
     /**
      * Queues [paths] (image files; relative ones resolve against the working directory) for the next photo picker a
-     * `core://MediaPicker` opens, e.g. `pick fixtures/pixelfed/media/a.png; click tag:media-picker-add:photos`.
+     * `core://MediaPicker` opens, e.g. `pick fake-pixelfed/fixtures/media/a.png; click tag:media-picker-add:photos`.
      */
     class Pick(val paths: List<String>) : SimStep("pick", paths.joinToString(" "))
 

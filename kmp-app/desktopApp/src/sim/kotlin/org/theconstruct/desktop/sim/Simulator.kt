@@ -251,7 +251,8 @@ fun findFixture(name: String, from: File = File("").absoluteFile): File? =
         .map { File(it, "fixtures/$name") }
         .firstOrNull { it.isFile }
 
-fun findFixtureDir(name: String, from: File = File("").absoluteFile): File? =
+/** The fake Pixelfed's images (`fake-pixelfed/fixtures/media`), the ones its fixture posts link to. */
+fun findPixelfedMedia(from: File = File("").absoluteFile): File? =
     generateSequence(from.absoluteFile) { it.parentFile }
-        .map { File(it, "fixtures/$name") }
+        .map { File(it, "fake-pixelfed/fixtures/media") }
         .firstOrNull { it.isDirectory }

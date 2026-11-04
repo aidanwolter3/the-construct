@@ -2,7 +2,7 @@
 
 use crate::MediaAllowlist;
 
-/// Default Pixelfed instance: the local fake (`crates/fake-pixelfed`).
+/// Default Pixelfed instance: the local fake (`fake-pixelfed/`).
 pub const DEFAULT_PIXELFED_URL: &str = "http://127.0.0.1:8081";
 
 /// Which Pixelfed instances the pod talks to, and who may own it (D45).
