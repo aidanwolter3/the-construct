@@ -9,7 +9,8 @@ Read [docs/architecture.md](docs/architecture.md) first if you are new to the co
 
 ## Setup
 
-- **Rust** (stable) through [rustup](https://rustup.rs).
+- **Rust** through [rustup](https://rustup.rs). The version is pinned in `rust-toolchain.toml` (CI reads the same
+  file); rustup installs it on the first build.
 - **JDK 21** for the Kotlin clients and the simulator. Gradle runs on the JDK in `JAVA_HOME` (or `java` on `PATH`);
   any JDK 21 works. On a Mac, Android Studio's bundled one is
   `export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"`. To pin a JDK for Gradle without

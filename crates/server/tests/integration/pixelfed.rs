@@ -919,11 +919,11 @@ async fn a_session_from_before_v11_stays_signed_in() {
     let session = sign_in(&env).await;
     env.pod.handle.abort();
     {
-        // Back to the v10 shape: no sign-in rows, no adapter versions, and
-        // none of the tables adapters added later.
+        // Back to the v10 shape: no sign-in rows, no adapter versions, no
+        // migration names, and none of the tables adapters added later.
         let conn = rusqlite::Connection::open(dir.path().join("server.db")).unwrap();
         conn.execute_batch(
-            "DROP TABLE session_sign_ins; DROP TABLE adapter_migrations;
+            "DROP TABLE session_sign_ins; DROP TABLE adapter_migrations; DROP TABLE schema_migrations;
              ALTER TABLE sessions DROP COLUMN pinned; ALTER TABLE app_versions DROP COLUMN features;
              ALTER TABLE app_versions DROP COLUMN author;
              ALTER TABLE app_versions DROP COLUMN meta_json; PRAGMA user_version = 10;",

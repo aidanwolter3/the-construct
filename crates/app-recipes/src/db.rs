@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use pod_core::store::Migration;
+use pod_core::store::Step;
 use protocol::{DataBundle, EntityRecord};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::Deserialize;
@@ -11,15 +11,15 @@ use serde_json::json;
 
 use crate::format::{self, Ingredient, UnitNames};
 
-/// The adapter's migrations. Append-only: never edit or reorder a step that
-/// has shipped (staging has run it).
-pub static MIGRATIONS: &[Migration] = &[
+/// The adapter's migrations, by name (decision `named-migrations`): add
+/// steps at the end; never rename, edit or remove one that shipped.
+pub static MIGRATIONS: &[Step] = &[
     // 1: the schema and the units.
-    Migration::Sql(SCHEMA),
+    Step::sql("schema", SCHEMA),
     // 2: imported the family collection until decision
     // `recipes-start-empty`; now a no-op. Pods that ran it keep the recipes,
-    // new pods start with none. Kept so the step numbers stay the same.
-    Migration::Rust(retired_import),
+    // new pods start with none. Kept: its name is recorded in every pod.
+    Step::rust("family_import", retired_import),
 ];
 
 const SCHEMA: &str = "

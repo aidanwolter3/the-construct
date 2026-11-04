@@ -3,16 +3,20 @@
 use std::path::Path;
 use std::sync::Mutex;
 
+use pod_core::migrations::{self, Counter, Step};
 use pod_core::util::now_secs;
 use rusqlite::{Connection, OptionalExtension, params};
 
-/// Migration `i` upgrades `host.db` from `user_version = i` to `i + 1`.
-/// Append-only: staging has run them.
-const MIGRATIONS: &[&str] = &[
+/// `host.db`'s steps, by name (decision `named-migrations`), recorded in
+/// `schema_migrations` under the scope `host`. Add steps at the end; never
+/// rename, edit or remove one: staging has run them.
+const MIGRATIONS: &[Step] = &[
     // 1 (D46): pods and their credentials. `kind` leaves room for
     // self-service pods; a credential `kind` other than `pod_token` (a
     // passkey, an OAuth login) can come later.
-    "CREATE TABLE pods (
+    Step::sql(
+        "pods_and_credentials",
+        "CREATE TABLE pods (
          id         TEXT PRIMARY KEY NOT NULL,
          name       TEXT NOT NULL UNIQUE,
          kind       TEXT NOT NULL CHECK (kind IN ('admin', 'temporary')),
@@ -26,21 +30,27 @@ const MIGRATIONS: &[&str] = &[
          created_at INTEGER NOT NULL
      );
      CREATE INDEX credentials_pod ON credentials(pod_id);",
+    ),
     // 2 (D52): when each pod next wants its notification polls run (NULL:
     // nothing to poll), so the scheduler opens only pods that need it; and
     // server-wide secrets (the Web Push VAPID key when none is configured).
-    "ALTER TABLE pods ADD COLUMN next_wake_at INTEGER;
+    Step::sql(
+        "wake_times_and_host_secrets",
+        "ALTER TABLE pods ADD COLUMN next_wake_at INTEGER;
      CREATE TABLE host_secrets (
          key   TEXT PRIMARY KEY NOT NULL,
          value TEXT NOT NULL
      );",
+    ),
     // 3 (decision `mcp-connector`): a second credential kind, `mcp`: what
     // Claude holds after the OAuth flow (or `server pods mcp`), good only for
     // its pod's `/v1/mcp`; `label` says whose it is. SQLite can't change a
     // CHECK, so the table is rebuilt. `oauth_clients` are the dynamically
     // registered OAuth clients (RFC 7591) and `oauth_codes` the pending
     // authorization codes (hashed, single use, minutes long).
-    "CREATE TABLE credentials_v3 (
+    Step::sql(
+        "mcp_credentials_and_oauth",
+        "CREATE TABLE credentials_v3 (
          token_hash TEXT PRIMARY KEY NOT NULL,
          pod_id     TEXT NOT NULL REFERENCES pods(id),
          kind       TEXT NOT NULL CHECK (kind IN ('pod_token', 'mcp')),
@@ -66,6 +76,7 @@ const MIGRATIONS: &[&str] = &[
          challenge    TEXT NOT NULL,
          expires_at   INTEGER NOT NULL
      );",
+    ),
 ];
 
 /// What a credential is for (`credentials.kind`).
@@ -169,16 +180,13 @@ impl HostStore {
 
     fn init(mut conn: Connection) -> rusqlite::Result<Self> {
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        loop {
-            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-            let Some(step) = MIGRATIONS.get(version as usize) else {
-                break;
-            };
-            tx.execute_batch(step)?;
-            tx.pragma_update(None, "user_version", version + 1)?;
-            tx.commit()?;
-        }
+        migrations::run(
+            &mut conn,
+            "host",
+            MIGRATIONS,
+            Counter::UserVersion,
+            MIGRATIONS.len(),
+        )?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -569,8 +577,12 @@ mod tests {
     fn migration_3_keeps_pod_tokens_and_adds_mcp_credentials() {
         // A host.db as staging has it: migrations 1 and 2, one pod token.
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(MIGRATIONS[0]).unwrap();
-        conn.execute_batch(MIGRATIONS[1]).unwrap();
+        for step in &MIGRATIONS[..2] {
+            let pod_core::migrations::Migration::Sql(sql) = step.run else {
+                unreachable!()
+            };
+            conn.execute_batch(sql).unwrap();
+        }
         conn.pragma_update(None, "user_version", 2).unwrap();
         conn.execute(
             "INSERT INTO pods (id, name, kind, created_at) VALUES ('p1', 'mine', 'admin', 1)",

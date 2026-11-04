@@ -351,6 +351,7 @@ async fn a_pod_from_before_the_rename_moves_to_the_new_id() {
                          file_key = replace(file_key, 'events/0004', 'watcher/0003')
                          WHERE app_id = 'events';
                      DELETE FROM adapter_migrations WHERE adapter = 'events';
+                     DELETE FROM schema_migrations WHERE scope = 'events';
                      INSERT INTO adapter_migrations (adapter, version) VALUES ('watcher', 3);
                      CREATE TABLE watcher_targets (id TEXT PRIMARY KEY);
                      INSERT INTO pod_settings (key, value) VALUES ('watcher.imported', '1');
@@ -394,6 +395,7 @@ async fn a_pod_from_before_the_rename_moves_to_the_new_id() {
             let old_rows = c.query_row(
                 "SELECT (SELECT count(*) FROM app_versions WHERE app_id = 'watcher')
                       + (SELECT count(*) FROM adapter_migrations WHERE adapter = 'watcher')
+                      + (SELECT count(*) FROM schema_migrations WHERE scope = 'watcher')
                       + (SELECT count(*) FROM pod_settings WHERE key = 'watcher.imported')",
                 [],
                 |r| r.get(0),

@@ -252,7 +252,7 @@ impl AppAdapter for PixelfedAdapter {
         crate::routes::router()
     }
 
-    fn migrations(&self) -> &'static [pod_core::store::Migration] {
+    fn migrations(&self) -> &'static [pod_core::store::Step] {
         crate::db::MIGRATIONS
     }
 

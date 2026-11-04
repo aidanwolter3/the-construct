@@ -25,9 +25,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Line numbers in backtraces but no full debug info: smaller test binaries that link
-  # faster (the test build went from ~49 s to ~36 s). Release builds are unaffected.
-  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # Debug info for dev/test builds is set in Cargo.toml ([profile.dev]); the Rust
+  # version comes from rust-toolchain.toml, the same as local and cloud builds.
 
 jobs:
   rust:
@@ -38,10 +37,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false # no job pushes; keep GITHUB_TOKEN out of .git/config
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: stable
-          components: clippy
+      - name: Install the pinned Rust (rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
@@ -79,9 +76,8 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
-        with:
-          toolchain: stable
+      - name: Install the pinned Rust (rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
       - name: Build the Rust engine for the JVM (target/release/libclient_ffi.so)

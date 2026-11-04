@@ -26,22 +26,24 @@
 
 use std::cmp::Ordering;
 
-use pod_core::store::Migration;
+use pod_core::store::Step;
 use protocol::{DataBundle, EntityRecord};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::{Map, Value, json};
 
 use crate::model::{self, Definition, Field, Kind};
 
-pub static MIGRATIONS: &[Migration] = &[
+/// The adapter's migrations, by name (decision `named-migrations`): add
+/// steps at the end; never rename, edit or remove one that shipped.
+pub static MIGRATIONS: &[Step] = &[
     // 1: the schema.
-    Migration::Sql(SCHEMA),
+    Step::sql("schema", SCHEMA),
     // 2: computed field answers (decision `collection-computed-fields`).
-    Migration::Sql(COMPUTED),
+    Step::sql("computed_fields", COMPUTED),
     // 3: reminders already sent (decision `collection-reminders`).
-    Migration::Sql(REMINDERS),
+    Step::sql("reminders", REMINDERS),
     // 4: fill state and secrets (decision `collection-fillers`).
-    Migration::Sql(FILLS),
+    Step::sql("fills", FILLS),
 ];
 
 const FILLS: &str = "

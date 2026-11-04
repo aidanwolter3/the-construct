@@ -7,3 +7,6 @@ app
 dev
 docs
 **/*.swp
+# Images build with the Rust in their pinned base image; rust-toolchain.toml would
+# make rustup download another toolchain mid-build.
+rust-toolchain.toml

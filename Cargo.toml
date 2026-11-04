@@ -30,3 +30,12 @@ client-core = { path = "crates/client-core" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 uniffi = "0.29"
 rusqlite = { version = "0.39", features = ["bundled"] }
+
+# Dev and test builds keep line numbers in backtraces but drop full debug
+# info: target/ shrinks several-fold, which keeps cloud sessions inside their
+# disk allowance. For a debugger session, set CARGO_PROFILE_DEV_DEBUG=true.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
