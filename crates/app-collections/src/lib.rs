@@ -5,7 +5,9 @@
 //! collection is a name and typed fields (`todos {title: text, done: bool,
 //! due: date?}`), and this one built-in source stores and serves any
 //! collection the same way. There is no stored code: no triggers or upstream
-//! calls. A field may be computed from the row's other fields ([`compute`],
+//! calls. A collection may have reminders ([`remind`], decision
+//! `collection-reminders`): rules that notify when a row's date is reached.
+//! A field may be computed from the row's other fields ([`compute`],
 //! decision `collection-computed-fields`): by a small expression, by rules
 //! kept in another collection ([`lookup`], decision `collection-lookups`),
 //! or by a model's answer to a prompt about them, tried in order.
@@ -40,6 +42,7 @@ pub mod expr;
 pub mod lookup;
 mod mcp;
 pub mod model;
+pub mod remind;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -53,12 +56,13 @@ use axum::{
     routing::{get, post},
 };
 use pod_core::layouts::LayoutSource;
-use pod_core::store::Migration;
+use pod_core::store::{Migration, Store};
 use pod_core::validate::LayoutError;
 use pod_core::{
-    AppAdapter, AppInfo, BoxFuture, EntityDoc, FeedSpec, Hydration, PathSpec, Pod, RequestCtx,
-    SourceManifest,
+    AppAdapter, AppInfo, BoxFuture, EntityDoc, FeedSpec, Hydration, PathSpec, Pod, PollCtx,
+    PollOutcome, RequestCtx, SourceManifest,
 };
+use protocol::NotificationChannel;
 use serde_json::{Map, Value, json};
 
 use crate::db::Row;
@@ -275,6 +279,32 @@ impl AppAdapter for CollectionsAdapter {
             }
         });
         Box::pin(async {})
+    }
+
+    fn notifies_custom_apps(&self) -> bool {
+        true
+    }
+
+    fn custom_notification_channels(&self, store: &Store) -> Vec<NotificationChannel> {
+        remind::channels(store)
+    }
+
+    fn poll_interval(&self) -> Option<std::time::Duration> {
+        Some(remind::MAX_WAIT)
+    }
+
+    fn poll_notifications<'a>(
+        &'a self,
+        pod: &'a Pod,
+        _ctx: &'a PollCtx,
+    ) -> BoxFuture<'a, PollOutcome> {
+        Box::pin(async move {
+            let next = remind::run(pod, pod_core::util::now_secs()).await;
+            PollOutcome {
+                next_in: Some(next),
+                ..Default::default()
+            }
+        })
     }
 
     fn check_custom_layout(

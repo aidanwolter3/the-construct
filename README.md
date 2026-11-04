@@ -350,7 +350,8 @@ curl -fsS -H "Authorization: Bearer $token" -H 'content-type: application/json' 
 Each pod has an MCP endpoint, `POST /v1/mcp` (decision `mcp-connector`), so Claude can build and edit your custom
 apps. Its tools: `list_apps`, `list_data_sources`, `describe_vocabulary`, `get_layout`, `sample_data`,
 `validate_layout`, `create_app`, `update_layout` (a layout or a JSON Patch, with `base_version`), `restore_version`,
-`rename_app`, `delete_app`, `set_hidden`, `list_parts`, `rebase_context`, `dismiss_update`. Writes go through the same validation as the API above and show in the
+`rename_app`, `delete_app`, `set_hidden`, `list_parts`, `rebase_context`, `dismiss_update`, `set_time_zone` (the
+pod's IANA time zone, decision `collection-reminders`). Writes go through the same validation as the API above and show in the
 version history as written by Claude.
 
 - **Claude (web, desktop, mobile):** add a custom connector with the URL `https://<server>/v1/mcp`. Claude finds the
@@ -394,6 +395,10 @@ computed from its row (below).
   the longest key wins), in the write. `model`: a model's answer in the background (last in a list). With
   `[lookup (learn: true), model]` the model is asked only when no rule matches, and its answers and hand edits become
   rules people can see and edit. `apply_change {op: recompute_field}` computes a field again after its rules change.
+- **Reminders** (decision `collection-reminders`): `apply_change {op: add_reminder, field: "due", title: "Due today:
+  {title}", unless: {field: "done", equals: true}, at?: "09:00"}` notifies once per row when its date is reached, at
+  that time in the pod's time zone (`set_time_zone`), unless the row then matches `unless`. It comes from the custom
+  app showing the collection, on a notification channel of its own (D52 pipeline; the Collections adapter polls).
 - **Row edits by Claude** (imports, backfills; Collections only): `edit_rows` first answers a preview (count and
   sample) and a confirm token, which Claude shows the user before applying; `undo_edit` reverts it as one step.
   `add_row` writes one row the user just asked for ("log that I had the oil changed") at once, without the preview,
