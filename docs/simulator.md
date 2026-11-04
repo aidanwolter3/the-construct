@@ -23,7 +23,7 @@ models the outbox (`offline` queues, `online` flushes), and serves a fake app ca
 v1..v2) and notifications (`fixtures/notifications.json`). Images whose path ends in `/storage/<file>` or
 `/v1/pixelfed/media/<file>` come from `fake-pixelfed/fixtures/media/`; every other URL fails at once, so shots are
 deterministic. Screen data comes from `fixtures/pixelfed_screen_data.json`, generated from the pod with
-`UPDATE_FIXTURES=1 cargo test -p server --test fixtures` (the test fails when it is stale).
+`UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::` (the test fails when it is stale).
 
 **Live mode** (`-PbaseUrl=<server>`) runs the real Rust engine against a server, with a fresh temporary storage
 directory unless `-Pstorage` is given. Images load over HTTP. `offline`, `online`, `publish-version` and `notify` are

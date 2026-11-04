@@ -120,13 +120,16 @@ async fn the_operator_turns_monitoring_on_for_a_pod() {
     assert!(checks.contains(&json!("monitor://checks/sign_in_failures")));
     let failures = &entities["monitor://metrics/auth_failures-pod_code"];
     assert!(failures["last_hour"].as_u64().unwrap() >= 1, "{failures}");
-    let admins = &entities["monitor://metrics/pods-admin"];
-    assert_eq!(admins["total"], json!(1.0), "{data}");
+    // The gauges, through a check: the metrics feed is cut at 20 items, and the
+    // counters are process-wide, so the other tests in this binary fill it.
+    let temporary = &entities["monitor://checks/temporary_pods"];
+    assert_eq!(temporary["value"], json!(1.0), "{data}");
 
     // The Prometheus page has the same counters and the gauges.
     let text = tokio::task::spawn_blocking(server::metrics::render)
         .await
         .unwrap();
+    assert!(text.contains("construct_pods{kind=\"admin\"} 1"), "{text}");
     assert!(
         text.contains("construct_pods{kind=\"temporary\"} 1"),
         "{text}"

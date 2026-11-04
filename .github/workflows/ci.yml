@@ -25,6 +25,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Line numbers in backtraces but no full debug info: smaller test binaries that link
+  # faster (the test build went from ~49 s to ~36 s). Release builds are unaffected.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   rust:
@@ -40,9 +43,15 @@ jobs:
           toolchain: stable
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
+        with:
+          tool: cargo-nextest@0.9.145
       - run: scripts/check_decisions.sh
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      # nextest runs tests from different binaries in parallel (cargo test runs one
+      # binary at a time); profile in .config/nextest.toml. It skips doctests.
+      - run: cargo nextest run --workspace --profile ci
+      - run: cargo test --workspace --doc
 
   audit:
     name: Dependency advisories (cargo-deny)

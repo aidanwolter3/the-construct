@@ -21,6 +21,8 @@ issues. `docs/history/` is archived; don't treat it as current.
   `kmp-app/shared/src/jvmCommonMain`); `kmp-app/shared/src/commonMain` the shared UI.
 - `fake-pixelfed/` the fake upstream (primary test target); `crates/e2e` the end-to-end suite.
 - `layouts/<app>/NNNN.json` layout versions; `crates/protocol/features/` the named vocabulary.
+- Each crate's integration tests are one binary, `tests/integration/main.rs`: add a test file as a `mod` there
+  ([docs/testing.md](docs/testing.md)).
 
 ## Commands
 

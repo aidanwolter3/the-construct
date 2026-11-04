@@ -26,13 +26,13 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 keyring = { version = "3.6", default-features = false, features = ["apple-native"] }
 
 [dev-dependencies]
-# tests/outbox.rs runs the real server (in-process, random port).
+# tests/integration/outbox.rs runs the real server (in-process, random port).
 server = { path = "../server" }
-# tests/auth.rs runs the fake Pixelfed upstream behind the real pod.
+# tests/integration/auth.rs runs the fake Pixelfed upstream behind the real pod.
 fake-pixelfed = { path = "../../fake-pixelfed" }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
-# tests/pod_host.rs keeps the host's pods in a temporary directory.
+# tests/integration/pod_host.rs keeps the host's pods in a temporary directory.
 tempfile = "3"
-# tests/attachments.rs writes test photos.
+# tests/integration/attachments.rs writes test photos.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

@@ -29,7 +29,7 @@ layout or note is fine. If another branch took your number first (git reports an
 layouts into the next number: each file is a whole snapshot.
 
 After changing a `pixelfed_home` layout, regenerate the simulator fixtures:
-`UPDATE_FIXTURES=1 cargo test -p server --test fixtures`.
+`UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::`.
 
 ## Structure of a workspace
 

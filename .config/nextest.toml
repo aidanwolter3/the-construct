@@ -1,0 +1,9 @@
+# cargo-nextest (CI runs `cargo nextest run --profile ci`): every test runs in its own
+# process, and tests from different binaries run in parallel. Locally, `cargo test`
+# still works; nextest does not run doctests, so CI also runs `cargo test --doc`.
+
+[profile.ci]
+# Report every failing test, not just the first.
+fail-fast = false
+# Show a failure's output again at the end of the run, where it's easy to find.
+failure-output = "immediate-final"

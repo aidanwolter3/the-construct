@@ -6,8 +6,15 @@ cd kmp-app && ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test   # sh
 ./gradlew :androidApp:assembleDebug          # Android build check (launches nothing)
 ```
 
-CI runs `scripts/check_decisions.sh`, clippy with warnings denied, the Rust tests, a dependency advisory check
-(`cargo-deny`), the JVM tests, and a simulator run whose screenshots are uploaded as an artifact.
+CI runs `scripts/check_decisions.sh`, clippy with warnings denied, the Rust tests (with
+[cargo-nextest](https://nexte.st), which runs tests from different binaries in parallel, plus `cargo test --doc`,
+which nextest skips), a dependency advisory check (`cargo-deny`), the JVM tests, and a simulator run whose
+screenshots are uploaded as an artifact.
+
+A crate's integration tests are one test binary, `tests/integration/main.rs`, with one module per file: add a test
+file as a `mod` there, not as a new `tests/*.rs` (linking one binary per file was most of CI's build time). Pick a
+file's tests with a filter, e.g. `cargo test -p server --test integration fixtures::`. The tests of a crate share a
+process under `cargo test`, so don't assume process-wide state (such as the server's metrics counters) starts empty.
 
 There are no on-device tests: UI is checked with the [headless simulator](simulator.md). Android's ICU regex engine
 rejects some patterns that `java.util.regex` accepts, so `AndroidRegexSyntaxTest` checks every `Regex` in the shared
@@ -16,7 +23,7 @@ code on the JVM. Other Android-only runtime failures show only when the app runs
 ## End-to-end suite
 
 `crates/e2e` runs the real pod and the real engine in-process against a Pixelfed upstream. The engine reaches the pod
-through a TCP proxy the tests can switch off (offline). The same suite (`tests/suite.rs`) runs against either
+through a TCP proxy the tests can switch off (offline). The same suite (`tests/integration/suite.rs`) runs against either
 upstream: sign-in with PKCE and a scripted browser, the feed, a like, an offline like flushed on reconnect, a bookmark,
 sign-out.
 
@@ -30,7 +37,7 @@ scripts/e2e.sh --upstream real          # against a real Pixelfed (default http:
 - **Fake** (`E2E_UPSTREAM=fake`, default): `E2E_FAKE_URL=<url>` uses an already running fake and resets it first.
 - **Real** (`E2E_UPSTREAM=real`): `PIXELFED_INSTANCE_URL`, `E2E_PIXELFED_LOGIN` / `E2E_PIXELFED_PASSWORD` (default
   `alice` / `alice-dev-pass`) and `E2E_PIXELFED_TOKEN` to check upstream state.
-- **Fault tests** (`tests/upstream_faults.rs`): upstream 503 → pod 502 → client retries; 429 → retried, never rolled
+- **Fault tests** (`tests/integration/upstream_faults.rs`): upstream 503 → pod 502 → client retries; 429 → retried, never rolled
   back; an expired upstream token → the pod refreshes transparently; latency past the 10 s timeouts → retried; a
   reset with and without `keep_auth`.
 

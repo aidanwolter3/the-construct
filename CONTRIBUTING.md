@@ -56,7 +56,7 @@ device; say so in the PR when a change needs that. More in [docs/testing.md](doc
    `docs/DECISIONS.md` is closed at D52.
 
 After changing a `pixelfed_home` layout or the fake Pixelfed's comments, regenerate the simulator fixtures:
-`UPDATE_FIXTURES=1 cargo test -p server --test fixtures`.
+`UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::`.
 
 ## Naming
 
