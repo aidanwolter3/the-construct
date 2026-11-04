@@ -86,7 +86,7 @@ class AutoApproveBrowser(private val log: (String) -> Unit = { println("[sim] $i
 }
 
 /**
- * Live-mode "browser" for a REAL Pixelfed instance (README "Local Pixelfed instance"; DECISIONS D21), opt-in
+ * Live-mode "browser" for a REAL Pixelfed instance (docs/testing.md "A local real Pixelfed"; DECISIONS D21), opt-in
  * with `-PpixelfedLogin=<user>:<password>`. Pixelfed's authorize page needs a logged-in web session, so this
  * scripts what a person would do, with its own cookie jar and no redirect following:
  * 1. `GET <origin>/login`, read the CSRF `_token` (the session cookie is set);

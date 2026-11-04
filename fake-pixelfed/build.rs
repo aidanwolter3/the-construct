@@ -1,4 +1,4 @@
-//! Embeds `fixtures/pixelfed/` (the JSON fixtures and `media/`) into the
+//! Embeds `fixtures/` (the JSON fixtures and `media/`) into the
 //! binary, so `fake-pixelfed` runs anywhere as a single file. Generates
 //! `$OUT_DIR/embedded_fixtures.rs`: `static EMBEDDED: &[(&str, &[u8])]`,
 //! paths relative to the fixture directory with `/` separators.
@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let dir = manifest.join("../../fixtures/pixelfed");
+    let dir = manifest.join("fixtures");
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("embedded_fixtures.rs");
 
     let mut files: Vec<(String, PathBuf)> = Vec::new();

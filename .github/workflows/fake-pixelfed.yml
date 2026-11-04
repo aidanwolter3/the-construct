@@ -1,0 +1,81 @@
+name: Fake Pixelfed
+
+# Deploys the fake Pixelfed upstream (fake-pixelfed/) to Fly.io staging, separately from the pod:
+#   https://the-construct-fake-pixelfed.fly.dev   (fake-pixelfed/fly.toml)
+# Runs on a push to main that touches its files (the paths below), or by hand (workflow_dispatch)
+# on main. Its own tests must pass first; the rest of the workspace is tested by ci.yml, which
+# this workflow does not wait for.
+# The deploy needs the repo secret FLY_API_TOKEN_FAKE (an app-scoped Fly deploy token); without
+# it the deploy step is skipped, not failed.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - fake-pixelfed/**
+      - Cargo.toml # workspace dependency versions
+      - Cargo.lock
+      - .github/workflows/fake-pixelfed.yml
+  workflow_dispatch:
+
+# Least privilege for GITHUB_TOKEN.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Fake Pixelfed (clippy + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo clippy -p fake-pixelfed --all-targets --locked -- -D warnings
+      - run: cargo test -p fake-pixelfed --locked
+
+  deploy:
+    name: Deploy fake Pixelfed to Fly.io staging
+    if: github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: deploy-fake-pixelfed
+      cancel-in-progress: false
+    # The Fly token is passed only to the step that deploys with it (not job-wide).
+    steps:
+      - name: Is the deploy secret set?
+        id: secrets
+        env:
+          HAS_FAKE: ${{ secrets.FLY_API_TOKEN_FAKE != '' }}
+        run: echo "fake=$HAS_FAKE" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # 1.6
+        with:
+          version: 0.4.123
+      - name: Deploy
+        if: steps.secrets.outputs.fake == 'true'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_FAKE }}
+        run: flyctl deploy . --config fake-pixelfed/fly.toml --dockerfile fake-pixelfed/Dockerfile --remote-only --ha=false
+      - name: Smoke test
+        if: steps.secrets.outputs.fake == 'true'
+        # An embedded fixture image: the app is up and its fixtures were compiled in.
+        run: |
+          url=https://the-construct-fake-pixelfed.fly.dev/storage/avatar-me.png
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$url") && [ "$code" = 200 ] && break
+            sleep 3
+          done
+          [ "$code" = 200 ] || { echo "$url returned $code"; exit 1; }

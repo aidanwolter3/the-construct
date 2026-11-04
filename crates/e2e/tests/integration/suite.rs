@@ -1,5 +1,5 @@
-//! The end-to-end suite, the same steps against either upstream (README "End-to-end
-//! tests"): sign in via PKCE with a scripted browser, the home feed, a like, a like made
+//! The end-to-end suite, the same steps against either upstream (docs/testing.md "End-to-end
+//! suite"): sign in via PKCE with a scripted browser, the home feed, a like, a like made
 //! offline and flushed on reconnect, a bookmark. Leaves the upstream as it found it.
 //!
 //! `cargo test -p e2e` runs it against the in-process fake (or `E2E_FAKE_URL`);
@@ -133,7 +133,7 @@ fn e2e_suite() {
         up.set_media_processing_polls(2);
         let photo = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/pixelfed/media/carousel-1.png"
+            "/../../fake-pixelfed/fixtures/media/carousel-1.png"
         );
         let staged = engine.stage_attachment(photo).expect("stage the photo");
         engine.dispatch(

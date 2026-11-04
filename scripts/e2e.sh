@@ -3,7 +3,7 @@
 # like, offline like -> flush, bookmark; the real pod and client-core engine in-process. Also
 # crates/e2e/tests/integration/notifications.rs (a like injected on the fake becomes an unread pod
 # notification; skipped against a real upstream).
-# README "End-to-end tests".
+# docs/testing.md "End-to-end suite".
 #
 # Usage: scripts/e2e.sh [--upstream fake|real] [--in-process] [--faults] [-- <cargo test args>]
 #   --upstream fake  (default) build the fake-pixelfed binary, start it on a free loopback port

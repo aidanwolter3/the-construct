@@ -1,4 +1,4 @@
-//! SQLite entity cache and action outbox (DESIGN.md §2.3, docs/DECISIONS.md D13).
+//! SQLite entity cache and action outbox (docs/architecture.md "The engine", docs/DECISIONS.md D13).
 //!
 //! The schema is DESIGN §2.3 plus extra columns, created by `PRAGMA
 //! user_version` migrations. The engine keeps its in-memory `State` as the

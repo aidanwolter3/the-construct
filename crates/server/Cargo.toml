@@ -2,7 +2,6 @@
 name = "server"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 publish.workspace = true
 
 # The pod binary: reads env, builds the adapters (compile-time, D40) and serves
@@ -41,4 +40,4 @@ futures-util = { version = "0.3", default-features = false }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3"
-fake-pixelfed = { path = "../fake-pixelfed" }
+fake-pixelfed = { path = "../../fake-pixelfed" }

@@ -1,6 +1,6 @@
 # Collections remind the user through declarative rules, and the pod has an IANA time zone
 
-Date: 2026-11-04. Related: D52 ([`NOTIFICATIONS.md`](../NOTIFICATIONS.md)), [collections](collections.md) (open
+Date: 2026-11-04. Related: D52 ([`notifications.md`](../notifications.md)), [collections](collections.md) (open
 question 3), [collection-computed-fields](collection-computed-fields.md), [watcher](watcher.md), issue #57, issue #66.
 
 A todo app built on Collections couldn't say "this is due today": a collection holds data, no logic, and nothing in

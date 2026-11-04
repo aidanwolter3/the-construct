@@ -1,6 +1,6 @@
-# Fake Pixelfed upstream as a tiny sidecar image (README "Fake Pixelfed upstream").
+# Fake Pixelfed upstream as a tiny sidecar image (docs/testing.md "Fake Pixelfed").
 #
-#   docker build -f crates/fake-pixelfed/Dockerfile -t construct-fake-pixelfed .   # from the repo root
+#   docker build -f fake-pixelfed/Dockerfile -t construct-fake-pixelfed .   # from the repo root
 #   docker run --rm -p 8081:8081 -e FAKE_PIXELFED_ADMIN=1 \
 #     -e FAKE_PIXELFED_PUBLIC_URL=http://localhost:8081 construct-fake-pixelfed
 #
@@ -25,6 +25,7 @@ ENV CARGO_PROFILE_RELEASE_STRIP=true \
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY fake-pixelfed ./fake-pixelfed
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS build
@@ -32,7 +33,8 @@ COPY --from=planner /src/recipe.json recipe.json
 RUN cargo chef cook --release --locked -p fake-pixelfed --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-COPY fixtures/pixelfed ./fixtures/pixelfed
+# The crate and the fixtures it embeds.
+COPY fake-pixelfed ./fake-pixelfed
 RUN cargo build --release --locked -p fake-pixelfed \
     && cp target/release/fake-pixelfed /fake-pixelfed
 

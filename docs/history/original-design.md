@@ -1,13 +1,17 @@
 # Product Requirements Document & Technical Design Document
 
-> **Note:** the product was renamed from Project Canvas to The Construct (docs/DECISIONS.md D31).
-> Identifiers in this document were updated to match (`org.theconstruct`, `ConstructEngine`, `CONSTRUCT_*`).
+> **Archived.** This is the design the project started from, kept for history: the early decisions in
+> [`../DECISIONS.md`](../DECISIONS.md) refer to its sections (§2.2A and so on). It is **not** how the system works
+> today; read [`../architecture.md`](../architecture.md) for that. The main differences:
 >
-> **Note:** the in-app AI agent flows below (user prompts, `action.agent.prompt` / `PromptAgent`,
-> `POST /v1/agent/modify_layout`, user rollback) are no longer the product. The pod now serves one app at its latest
-> layout version, layouts are developer-authored files in `layouts/` shipped with a deploy, and clients only read the
-> version history (docs/DECISIONS.md D32, D33). The agent code was later deleted (D37), and hosting moved from Hetzner
-> to Fly.io (`deploy/`).
+> - The product was renamed from Project Canvas to The Construct (D31); identifiers below were updated to match.
+> - There are no app-specific nodes: the `pixelfed://` widgets became generic `core://` nodes, and the post card is a
+>   layout (D34–D37). See [`../layouts.md`](../layouts.md).
+> - The in-app AI layout agent (`action.agent.prompt`, `POST /v1/agent/modify_layout`) was built, then removed (D32,
+>   D33, D37). Built-in layouts are files in `layouts/` shipped with a deploy; Claude edits *custom* apps through the
+>   pod's MCP endpoint instead.
+> - One server hosts many pods (D46), apps are adapters (D40), and hosting moved from Hetzner to Fly.io. There is no
+>   web/Wasm client.
 
 **Project:** The Construct (Dynamic Intent Shell & Federated Server-Driven UI)
 

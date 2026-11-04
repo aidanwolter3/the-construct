@@ -198,7 +198,7 @@ async fn screen_data_fixture_is_the_pods_comments_data() {
         let mut bundle = post.clone();
         let mut order = Vec::new();
         for mut c in comments {
-            // The simulator serves /storage/<file> from fixtures/pixelfed/media.
+            // The simulator serves /storage/<file> from fake-pixelfed/fixtures/media.
             unproxy(&mut c, &media);
             let uri = comment_uri(c.get_str("id").unwrap());
             order.push(uri.clone());

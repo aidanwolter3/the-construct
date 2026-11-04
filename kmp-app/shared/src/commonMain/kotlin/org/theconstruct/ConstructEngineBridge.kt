@@ -97,7 +97,7 @@ interface ConstructEngineBridge {
     /** `PUT /v1/apps/{appId}/hidden`: hides the app from every device's list, or shows it again. BLOCKING. */
     fun setAppHidden(appId: String, hidden: Boolean): Unit = throw appsUnavailable()
 
-    // Notifications from apps (D52, docs/NOTIFICATIONS.md). The blocking calls (list, mark read, channels, push key) are
+    // Notifications from apps (D52, docs/notifications.md). The blocking calls (list, mark read, channels, push key) are
     // like the apps calls: off the UI thread, pod JSON in, [LayoutApiException] out. The defaults make a fake without
     // notifications compile: listing throws "not available", the rest do nothing.
 

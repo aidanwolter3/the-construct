@@ -2,7 +2,6 @@
 name = "client-core"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 publish.workspace = true
 
 [dependencies]
@@ -30,7 +29,7 @@ keyring = { version = "3.6", default-features = false, features = ["apple-native
 # tests/integration/outbox.rs runs the real server (in-process, random port).
 server = { path = "../server" }
 # tests/integration/auth.rs runs the fake Pixelfed upstream behind the real pod.
-fake-pixelfed = { path = "../fake-pixelfed" }
+fake-pixelfed = { path = "../../fake-pixelfed" }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
 # tests/integration/pod_host.rs keeps the host's pods in a temporary directory.

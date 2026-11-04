@@ -19,7 +19,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlin.reflect.KClass
 
-// Kotlin mirror of crates/protocol (ast.rs, intent.rs, bundle.rs) and DESIGN.md §2.2.
+// Kotlin mirror of crates/protocol (ast.rs, intent.rs, bundle.rs) and docs/layouts.md.
 // Field names are snake_case on the wire via @SerialName.
 
 // ---------------------------------------------------------------------------

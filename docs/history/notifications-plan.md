@@ -1,7 +1,9 @@
-# Notifications from apps: design (D52)
+# Notifications from apps: build plan (D52)
 
-Status: built (see D52 in `docs/DECISIONS.md` for what changed while building: no wake hook, the FCM fallback needs no
-Firebase project, the engine's offline behaviour). Section 10's phases shipped together.
+> **Archived.** This is the plan the notifications pipeline was built from, kept for history. How it works today is
+> in [`../notifications.md`](../notifications.md). D52 in [`../DECISIONS.md`](../DECISIONS.md) records what changed
+> while building: there is no wake hook, the FCM fallback needs no Firebase project, and the engine's offline
+> behaviour differs. Section 10's phases shipped together; "PROGRESS.md" and `SCHEMA_VERSION` no longer exist.
 
 ## Context
 The goal: Pixelfed notifications (likes, comments, follows, ...) from the pod, on the user's devices, including when the app
@@ -129,7 +131,7 @@ into a generic `pod_core::net` module so both use it.
   replies now open `pixelfed://posts/<post>/comments/<comment>`, see decision `comment-threads-from-notifications`); follow →
   none for now (no profile screen; tapping just opens the app). `image_url` = author avatar through the media proxy
   (`MediaPolicy`, public prefix). `group_key = "<status id>:<type>"` so Android can bundle "3 people liked…".
-- `crates/fake-pixelfed`: `GET /api/v1/notifications` (min_id/max_id/limit, Mastodon shape) backed by in-memory
+- `fake-pixelfed/`: `GET /api/v1/notifications` (min_id/max_id/limit, Mastodon shape) backed by in-memory
   notifications; existing state changes by *other* fixture accounts create them; `POST /_admin/notifications`
   injects one (type, from, status) for tests; faults apply as for other routes.
 
@@ -216,7 +218,7 @@ a PROGRESS.md note; README gets the routes, env vars and sim commands.
 - `crates/pod-host/src/lib.rs` (`spawn_scheduler`, host.db `next_wake_at`, VAPID keys), `crates/server/src/main.rs`,
   `crates/server/src/lib.rs` (`pod_factory` wiring, `pods notify-test`)
 - `crates/app-pixelfed/src/adapter.rs`, `upstream.rs` (`notifications`), `db.rs` (migration 2), new `notify.rs` (mapping)
-- `crates/fake-pixelfed/src/lib.rs`; `crates/e2e`
+- `fake-pixelfed/src/lib.rs`; `crates/e2e`
 - `crates/client-core/src/{lib.rs,events.rs,store.rs}`, `crates/client-ffi/src/lib.rs` + regenerated Kotlin bindings
 - `kmp-app/shared/src/commonMain/...` (`ConstructEngineBridge`, `ConstructApp.kt`, `Menu.kt`, new `Inbox.kt`),
   `kmp-app/desktopApp/.../Main.kt` + `sim/` (FakeEngineBridge, SimScript), `kmp-app/androidApp/` (manifest,

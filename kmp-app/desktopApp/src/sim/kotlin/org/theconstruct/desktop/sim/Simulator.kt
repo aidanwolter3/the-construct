@@ -13,7 +13,7 @@ import java.time.format.DateTimeFormatter
 import kotlin.system.exitProcess
 
 /**
- * Headless simulator entry point (README "Simulation mode"). Run through
+ * Headless simulator entry point (docs/simulator.md). Run through
  * `./gradlew :desktopApp:simulate -P<name>=<value>`, which forwards each property as `--<name>=<value>`.
  *
  * Options: workspace (pixelfed_home), screen (phone), script / scriptFile (default "shot initial"),
@@ -261,7 +261,8 @@ fun findFixture(name: String, from: File = File("").absoluteFile): File? =
         .map { File(it, "fixtures/$name") }
         .firstOrNull { it.isFile }
 
-fun findFixtureDir(name: String, from: File = File("").absoluteFile): File? =
+/** The fake Pixelfed's images (`fake-pixelfed/fixtures/media`), the ones its fixture posts link to. */
+fun findPixelfedMedia(from: File = File("").absoluteFile): File? =
     generateSequence(from.absoluteFile) { it.parentFile }
-        .map { File(it, "fixtures/$name") }
+        .map { File(it, "fake-pixelfed/fixtures/media") }
         .firstOrNull { it.isDirectory }

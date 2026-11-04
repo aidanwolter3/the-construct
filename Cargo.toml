@@ -13,14 +13,13 @@ members = [
     "crates/app-monitor",
     "crates/web-extract",
     "crates/server",
-    "crates/fake-pixelfed",
+    "fake-pixelfed",
     "crates/e2e",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "MIT OR Apache-2.0"
 publish = false
 
 [workspace.dependencies]

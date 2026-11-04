@@ -1,4 +1,4 @@
-# Build context for `docker build -f crates/fake-pixelfed/Dockerfile .` (repo root):
+# Build context (the repo root) for deploy/pod.Dockerfile and fake-pixelfed/Dockerfile:
 # keep it small (target/ alone is many GB).
 target
 **/target
