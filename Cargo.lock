@@ -135,10 +135,14 @@ name = "app-monitor"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "http-body-util",
  "pod-core",
  "protocol",
+ "rusqlite",
  "serde_json",
  "tokio",
+ "tower",
+ "tracing",
 ]
 
 [[package]]
