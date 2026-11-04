@@ -1,12 +1,15 @@
-//! Extractors: a fetched page in, normalized events out. Each target names
-//! one. Cheapest first:
+//! Events: the extractors the Watcher had, now an extractor of fetch
+//! fillers (`extract: "events"`, decision `collection-fillers`). A page
+//! in, normalized events out: from an iCalendar feed (`VEVENT`s, a `TZID`
+//! resolved to its offset on the day) or from a page's schema.org `Event`
+//! JSON-LD (through `@graph`, `ItemList`s and nested events; Meetup and
+//! most event sites embed it). Cancelled events are skipped.
 //!
-//! - `ics`: an iCalendar feed (`VEVENT`s).
-//! - `jsonld`: schema.org `Event` markup in a page's JSON-LD (what most
-//!   event sites, Meetup included, embed for search engines).
-//! - `llm`: Claude reads the page's text and answers the events as JSON.
-//!   The universal fallback for pages with no structure; it costs a model
-//!   call, so it runs only when the page changed.
+//! [`items`] turns them into the items a map reads: `id` (the source's own
+//! id, else a hash of the title, date and venue), `title`, `start` and `end`
+//! (`2026-11-06T19:30-07:00`; a time without an offset placed in the
+//! filler's zone), `venue`, `description` (plain text: HTML and Markdown
+//! reduced), `url` and `tickets_url` (a "tickets" link in the description).
 
 use serde_json::{Value, json};
 
@@ -24,35 +27,6 @@ pub struct RawEvent {
     pub venue: String,
     pub description: String,
     pub url: String,
-}
-
-/// The extractor kinds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
-    Ics,
-    Jsonld,
-    Llm,
-}
-
-impl Kind {
-    pub const ALL: [&'static str; 3] = ["ics", "jsonld", "llm"];
-
-    pub fn parse(s: &str) -> Option<Kind> {
-        match s.trim() {
-            "ics" => Some(Kind::Ics),
-            "jsonld" => Some(Kind::Jsonld),
-            "llm" => Some(Kind::Llm),
-            _ => None,
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Kind::Ics => "ics",
-            Kind::Jsonld => "jsonld",
-            Kind::Llm => "llm",
-        }
-    }
 }
 
 /// Most events kept from one page.
@@ -232,17 +206,7 @@ fn venue_of(v: &Value) -> String {
     }
 }
 
-/// Make `url` absolute against `base` (pages often give paths).
-pub fn absolute(base: &str, url: &str) -> String {
-    let url = url.trim();
-    if url.is_empty() {
-        return String::new();
-    }
-    match reqwest::Url::parse(base).and_then(|b| b.join(url)) {
-        Ok(u) if matches!(u.scheme(), "http" | "https") => u.to_string(),
-        _ => String::new(),
-    }
-}
+use crate::fetch::absolute;
 
 fn walk_ld(v: &Value, base: &str, out: &mut Vec<RawEvent>) {
     if out.len() >= MAX_EVENTS {
@@ -303,153 +267,58 @@ pub fn jsonld(page: &str, base: &str) -> Vec<RawEvent> {
     out
 }
 
-// ---------- LLM ----------
-
-/// How the pod calls the model (`CONSTRUCT_INFER_*`, shared with
-/// Collections; README).
-#[derive(Debug, Clone)]
-pub struct LlmConfig {
-    pub api_key: String,
-    pub model: String,
-    /// The Messages API endpoint (tests point it at a local fake).
-    pub url: String,
+/// Read the events of `body` (an iCalendar feed, else a page's JSON-LD).
+pub fn read(body: &str, base: &str) -> Vec<RawEvent> {
+    if body.trim_start().starts_with("BEGIN:VCALENDAR") {
+        ics(body)
+    } else {
+        jsonld(body, base)
+    }
 }
 
-/// The Messages API endpoint when `CONSTRUCT_INFER_URL` is unset.
-pub const DEFAULT_URL: &str = "https://api.anthropic.com/v1/messages";
-/// Default model of the `llm` extractor.
-pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
-/// Most page text sent to the model.
-pub const MAX_PAGE_CHARS: usize = 60_000;
+/// A stable id for an event without one: its title, date and venue.
+fn derived_id(e: &RawEvent) -> String {
+    use std::hash::{Hash, Hasher};
+    let norm = |s: &str| {
+        s.to_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (
+        norm(&e.title),
+        e.start.iso().get(..10).unwrap_or(""),
+        norm(&e.venue),
+    )
+        .hash(&mut h);
+    format!("event-{:016x}", h.finish())
+}
 
-const SYSTEM: &str = "You extract events from the text of a web page for a notification service. \
-List every upcoming event the page announces: shows, performances, meetups, classes. Skip navigation, \
-ads and events that are clearly over. For each, give the title as the page writes it, the start as \
-ISO 8601 (YYYY-MM-DDTHH:MM, with the UTC offset only when the page states one; YYYY-MM-DD when no time \
-is given), the end the same way or \"\", the venue, a description with everything the page says about \
-the event (lineups, performers, prices), the event's own link if the page has one (else \"\"), and the \
-page's own id for it if it shows one (else \"\"). Use \"\" for anything the page doesn't say; never \
-guess a date. Answer {\"events\": []} when there are none.";
-
-fn schema() -> Value {
-    let s = json!({ "type": "string" });
-    json!({
-        "type": "object",
-        "properties": {
-            "events": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "title": s, "start": s, "end": s, "venue": s,
-                        "description": s, "url": s, "id": s,
-                    },
-                    "required": ["title", "start", "end", "venue", "description", "url", "id"],
-                    "additionalProperties": false,
+/// The events as items: one JSON object each (see the module docs). A
+/// time without an offset is placed in `zone` when there is one; links are
+/// made absolute against `base` (the page's URL).
+pub fn items(events: Vec<RawEvent>, zone: Option<&Zone>, base: &str) -> Vec<Value> {
+    events
+        .into_iter()
+        .map(|e| {
+            let place = |w: When| zone.map_or(w, |z| w.placed_in(z)).stored();
+            let description = html::markdown_to_text(&e.description);
+            json!({
+                "id": e.source_id.clone().unwrap_or_else(|| derived_id(&e)),
+                "title": html::clean_title(&e.title),
+                "start": place(e.start),
+                "end": e.end.map(place),
+                "venue": e.venue,
+                "tickets_url": html::tickets_url(&e.description),
+                "description": description,
+                "url": if e.url.is_empty() { String::new() } else {
+                    let a = crate::fetch::absolute(base, &e.url);
+                    if a.is_empty() { e.url.clone() } else { a }
                 },
-            },
-        },
-        "required": ["events"],
-        "additionalProperties": false,
-    })
-}
-
-/// The request body for `page_text` of `url` (also what tests check).
-pub fn llm_request(model: &str, page_text: &str, url: &str, hint: &str, today: &str) -> Value {
-    let mut prompt = format!(
-        "Today is {today}. The page is {url}.\n\n<page>\n{}\n</page>",
-        html::truncate(page_text, MAX_PAGE_CHARS)
-    );
-    if !hint.trim().is_empty() {
-        prompt.push_str(&format!("\n\nNotes about this page: {}", hint.trim()));
-    }
-    json!({
-        "model": model,
-        "max_tokens": 16000,
-        "system": SYSTEM,
-        "output_config": {
-            "effort": "low",
-            "format": { "type": "json_schema", "schema": schema() },
-        },
-        "fallbacks": "default",
-        "messages": [{ "role": "user", "content": prompt }],
-    })
-}
-
-/// Read the model's answer into events (dropping any without a title or a
-/// date that parses).
-pub fn llm_events(answer: &Value, base: &str) -> Result<Vec<RawEvent>, String> {
-    match answer["stop_reason"].as_str() {
-        Some("refusal") => return Err("the model declined to read this page".into()),
-        Some("max_tokens") => return Err("the model's answer was cut off (too many events)".into()),
-        _ => {}
-    }
-    let text: String = answer["content"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|b| b["type"] == "text")
-        .filter_map(|b| b["text"].as_str())
-        .collect();
-    let parsed: Value = serde_json::from_str(text.trim())
-        .map_err(|e| format!("the model's answer is not JSON: {e}"))?;
-    let mut out = Vec::new();
-    for e in parsed["events"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .take(MAX_EVENTS)
-    {
-        let s = |k: &str| e[k].as_str().unwrap_or("").to_owned();
-        let url = absolute(base, &s("url"));
-        let id = Some(s("id")).filter(|i| !i.trim().is_empty());
-        if let Some(ev) = event(
-            id,
-            &s("title"),
-            &s("start"),
-            &s("end"),
-            &s("venue"),
-            &s("description"),
-            &url,
-        ) {
-            out.push(ev);
-        }
-    }
-    Ok(out)
-}
-
-/// Ask the model for the events of `page_text`.
-pub async fn llm(
-    client: &reqwest::Client,
-    cfg: &LlmConfig,
-    page_text: &str,
-    url: &str,
-    hint: &str,
-    today: &str,
-) -> Result<Vec<RawEvent>, String> {
-    let body = llm_request(&cfg.model, page_text, url, hint, today);
-    let resp = client
-        .post(&cfg.url)
-        .header("x-api-key", &cfg.api_key)
-        .header("anthropic-version", "2026-10-21")
-        .header("anthropic-beta", "server-side-fallback-2026-07-01")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("the model could not be reached: {e}"))?;
-    let status = resp.status();
-    let answer: Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("the model's answer could not be read: {e}"))?;
-    if !status.is_success() {
-        let msg = answer["error"]["message"].as_str().unwrap_or("");
-        return Err(format!(
-            "the model answered {status}: {}",
-            html::truncate(msg, 200)
-        ));
-    }
-    llm_events(&answer, url)
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -516,30 +385,5 @@ END:VCALENDAR\r\n";
         assert_eq!(ev[0].source_id.as_deref(), Some("https://example.org/e/1"));
         assert_eq!(ev[0].venue, "The End");
         assert_eq!(ev[0].description, "Budget Cuts & more");
-    }
-
-    #[test]
-    fn llm_answers() {
-        let answer = json!({ "stop_reason": "end_turn", "content": [{ "type": "text", "text":
-            r#"{"events":[{"title":"Show","start":"2026-11-06T19:30","end":"","venue":"V","description":"d","url":"/x","id":""},
-                          {"title":"Undated","start":"soon","end":"","venue":"","description":"","url":"","id":""}]}"# }] });
-        let ev = llm_events(&answer, "https://a.example/").unwrap();
-        assert_eq!(ev.len(), 1);
-        assert_eq!(ev[0].url, "https://a.example/x");
-        assert!(llm_events(&json!({"stop_reason": "refusal", "content": []}), "").is_err());
-        let req = llm_request(
-            "m",
-            "text",
-            "https://a.example/",
-            "lineups are in the description",
-            "2026-11-03",
-        );
-        assert_eq!(req["output_config"]["format"]["type"], "json_schema");
-        assert!(
-            req["messages"][0]["content"]
-                .as_str()
-                .unwrap()
-                .contains("lineups")
-        );
     }
 }

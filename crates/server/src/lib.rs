@@ -19,22 +19,45 @@ pub use pod_core::*;
 pub use pod_host as host;
 
 /// The pod's adapters, in `GET /v1/apps` order: the Pixelfed feed (with the
-/// `pixelfed` sign-in), the recipes, the watcher (configured from
-/// `CONSTRUCT_INFER_*` and `CONSTRUCT_WATCHER_*`), then the `pixelfed_demo` dev app; and
-/// Collections (no apps of its own: data custom apps declare).
+/// `pixelfed` sign-in), the recipes, the Events app (app `watcher`: the
+/// Collections `events` collection, once the Watcher), then the
+/// `pixelfed_demo` dev app; and
+/// Collections (no apps of its own: data custom apps declare; fillers
+/// configured from `CONSTRUCT_INFER_*` and `CONSTRUCT_FILL_*`).
 pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
     vec![
         Arc::new(PixelfedAdapter::new(pixelfed)),
         Arc::new(app_recipes::RecipesAdapter::new()),
-        Arc::new(app_watcher::WatcherAdapter::new(
-            app_watcher::WatcherConfig::from_env(),
-        )),
+        Arc::new(
+            app_watcher::WatcherAdapter::new()
+                .with_private_hosts(std::env::var(FILL_PRIVATE_HOSTS_VAR).as_deref() == Ok("1")),
+        ),
         app_pixelfed::apps::demo_adapter(),
         Arc::new(
-            app_collections::CollectionsAdapter::new()
-                .with_model(app_collections::compute::MessagesModel::from_env()),
+            app_collections::CollectionsAdapter::with_caps(collections_caps_from_env())
+                .with_model(app_collections::compute::MessagesModel::from_env())
+                .with_agent(app_collections::agent::MessagesAgent::from_env())
+                .with_private_hosts(std::env::var(FILL_PRIVATE_HOSTS_VAR).as_deref() == Ok("1")),
         ),
     ]
+}
+
+/// `1`: Collections' fetch fillers may read private hosts (a local test
+/// setup; never on a shared server).
+pub const FILL_PRIVATE_HOSTS_VAR: &str = "CONSTRUCT_FILL_PRIVATE_HOSTS";
+/// Agent filler fills per day per pod (default 20).
+pub const FILL_AGENT_DAILY_VAR: &str = "CONSTRUCT_FILL_AGENT_DAILY";
+
+/// Collections' caps, with the operator's agent fill ceiling.
+pub fn collections_caps_from_env() -> app_collections::Caps {
+    let mut caps = app_collections::Caps::default();
+    if let Some(n) = std::env::var(FILL_AGENT_DAILY_VAR)
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+    {
+        caps.agent_fills_per_day = n;
+    }
+    caps
 }
 
 /// The env var that lets `CONSTRUCT_OPEN_POD` serve a non-loopback address.
@@ -73,18 +96,23 @@ pub fn check_open_pod(addr: &str, on_fly: bool, insecure_opt_in: bool) -> Result
 }
 
 /// Extra settings of temporary pods (anyone can make one, D46): Pixelfed
-/// only on the default instance, no watcher fetches and no collection
-/// `model` computes, so a visitor can't make the server contact hosts of
-/// their choosing (fetch URLs, register OAuth apps) or spend its model key.
+/// only on the default instance, no collection `model` computes and no
+/// collection fillers (the Events app's websites included), so a visitor
+/// can't make the server
+/// contact hosts of their choosing (fetch URLs, register OAuth apps) or
+/// spend its model key.
 pub fn temporary_pod_settings() -> Vec<(String, String)> {
     vec![
         (
             app_pixelfed::OTHER_INSTANCES_SETTING.to_owned(),
             "0".to_owned(),
         ),
-        (app_watcher::check::FETCH_SETTING.to_owned(), "0".to_owned()),
         (
             app_collections::compute::MODEL_SETTING.to_owned(),
+            "0".to_owned(),
+        ),
+        (
+            app_collections::fill::FILL_SETTING.to_owned(),
             "0".to_owned(),
         ),
     ]

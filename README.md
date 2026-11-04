@@ -36,9 +36,12 @@ crates/app-pixelfed  the Pixelfed adapter: pixelfed_home (auth, feed normalizati
                      its tables) and the pixelfed_demo dev app
 crates/app-recipes   the recipes adapter (D41): a recipe collection in recipes_* tables; new pods start empty
                      (decision `recipes-start-empty`); tests seed data/test-seed.json (made-up recipes)
-crates/app-collections  Collections: data custom apps declare over MCP (collections_* tables)
-crates/app-watcher   the watcher (issue #58): polls websites for events (ics, JSON-LD, LLM extractors), matches
-                     rules, notifies; the watcher app
+crates/app-collections  Collections: data custom apps declare over MCP (collections_* tables), fillers that keep
+                     rows current from the web (fetch recipes, agents) and alerts
+crates/app-watcher   the Events app (app id watcher; once the Watcher): the system collection `events`, filled per
+                     website, and the move of the old Watcher's sites and rules into it
+crates/web-extract   fetching web pages and reading structured data out of them (events, json, jsonld, rss, ics,
+                     embedded JSON, CSS selectors; a small path language), shared by fillers
 crates/server        "the pod" binary: pod-core serving the compile-time adapters (`server::adapters`)
 crates/client-core   ConstructEngine: fetches the workspace, holds state, applies optimistic mutations (SQLite cache +
                      outbox sync worker), OAuth2 PKCE sign-in (pod session in a secure store), read-only apps
@@ -242,8 +245,9 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 | `CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES` | `26214400` (25 MiB) | The same for a temporary pod. |
 | `CONSTRUCT_MIN_FREE_DISK_BYTES` | `104857600` (100 MiB) | Free space kept on the data volume: below it uploads get 507 `low_disk_space` and new temporary pods 503 `low_disk_space`, so the volume never fills and every pod's other writes keep working. |
 | `CONSTRUCT_PUBLIC_URL` | from each request's `Host` | The base URL clients reach the server at, for the OAuth metadata Claude reads (decision `mcp-connector`), e.g. `https://the-construct-pod.fly.dev`. Unset: the request's `Host`, `https` behind Fly or with `X-Forwarded-Proto: https`. |
-| `CONSTRUCT_WATCHER_LLM_MODEL` | `CONSTRUCT_INFER_MODEL`, else `claude-opus-5-5` | The model of the watcher's `llm` extractor (decision [`watcher`](docs/decisions/watcher.md)). The extractor uses the same key and endpoint as Collections, `CONSTRUCT_INFER_API_KEY` and `CONSTRUCT_INFER_URL`; without the key, `llm` is off (`auto` stops at `ics`/`jsonld`, and an `llm` site reports it in its health). The model runs only when a watched page changed. |
-| `CONSTRUCT_WATCHER_PRIVATE_HOSTS` | unset | `1`: watched websites may be on private addresses (local development). Otherwise only public addresses are fetched. |
+| `CONSTRUCT_FILL_MODEL` | `claude-opus-5-5` | The model of Collections' model fillers (`agent`, and `extract: llm`; decision [`collection-fillers`](docs/decisions/collection-fillers.md)). They use the same key and endpoint as computed fields, `CONSTRUCT_INFER_API_KEY` and `CONSTRUCT_INFER_URL`; without the key they report themselves unavailable. An `llm` filler asks only when its page changed. |
+| `CONSTRUCT_FILL_AGENT_DAILY` | `20` | Agent filler fills per pod per day; one filler's `fills_per_day` can't exceed it. |
+| `CONSTRUCT_FILL_PRIVATE_HOSTS` | unset | `1`: fetch fillers (the Events app's websites included) may read private addresses (local development). Otherwise only public addresses are fetched. |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `RUST_LOG=server=debug,info`. |
 
 The layout agent was removed (D37), so `CONSTRUCT_AGENT_OPEN`, `CONSTRUCT_LLM_PROVIDER`, `CONSTRUCT_LLM_MODEL`,
@@ -405,41 +409,60 @@ computed from its row (below).
 - **Caps per pod** (temporary pods too): 20 collections, 40 fields each, 5,000 rows and 4 MiB of values in all, 500
   rows per edit, 4,000 characters per text value.
 
-## Watcher (events from websites)
+### Fillers and alerts (rows kept current from the web)
 
-The **Watcher** app (decision `watcher`, issue #58, `crates/app-watcher`) checks websites for events and sends a
-notification when a new one matches one of its rules ("Improv Boulder lists a show with Budget Cuts"). Each website
-(*target*) has its own rules (decision `watcher-rules-per-site`). Both are rows of config that Claude adds over MCP;
-no deploy per site. The app shows them (Matches and Sites tabs; a site lists its rules and every event, matches
-highlighted) but doesn't edit them.
+A collection can keep itself current (decision [`collection-fillers`](docs/decisions/collection-fillers.md)):
+each of its **fillers** writes its own rows, on a schedule (`every_minutes`), when an app showing it opens with stale
+data (`on_open_minutes`), from Claude (`collections_refresh`) or from a layout's refresh action. No code is stored:
+a filler is data in the definition.
 
-- **Extractors:** `ics` (calendar feeds), `jsonld` (schema.org `Event` markup, which most event sites embed), `llm`
-  (Claude reads the page text; needs `CONSTRUCT_INFER_API_KEY`), `auto` (the default: the first of those
-  that applies). `details: true` fetches each new event's own page once for its full description (lineups).
-- **Checks:** conditional `GET` (`ETag`, `Last-Modified`) and a body hash: an unchanged page costs no extraction. Back
-  off on errors, honour `Retry-After`. Each target shows its health (`4 upcoming events · checked 5 min ago`,
-  failing, no events found). Checks run from the notification poller (while a device is registered) and when the app
-  opens with a target overdue. Temporary pods don't fetch.
-- **Rules:** each belongs to one site: any of / all of / none of phrases, venue, days, a window in days (none: every
-  event of the site). Each new match is one notification (`watcher.matches`), opening the event in the app.
-- **Events** are served as plain text (Markdown descriptions converted) with `tickets_url`, a tickets link found in the
-  description; the layout opens it and the event page with `action.link.open` (layout feature `open_link`).
+- **`fetch`** (no model call per fill): a URL (or each row's own URL in `url_field`), an extractor and a map from
+  fields to paths in each item (`results[*].votes`, `offers.price`; CSS selectors for `selectors`). Extractors:
+  `events` (an ics feed or a page's schema.org events, normalized), `json`, `embedded-json`, `jsonld`, `rss`, `ics`,
+  `selectors`, and `llm` (a model reads the page's text; only when it changed). `zone` places times without an
+  offset, `upcoming` drops past items, `details` reads each new row's own page, headers can send a sealed secret
+  (`{secret:<name>}`, `collections_set_secret`). Conditional `GET` and a body hash skip unchanged pages; errors back
+  off. Values are coerced to the fields' types (`$1,299` is a number; feed dates are dates).
+- **`agent`** (costs model calls): a prompt; a model with web search and fetch answers rows fitting the fields,
+  within its `fills_per_day` and the pod's `CONSTRUCT_FILL_AGENT_DAILY`.
+- **Modes:** `replace` (the filler's rows are its latest answer; with a `key` they keep their ids and the fields
+  people set) or `upsert` by `key`. Filled fields can't be set by hand; a `replace` filler's rows can't be added or
+  deleted by hand.
+- **Alerts** notify once when a row matches: `any` / `all` / `none` phrases, a filler (its rows only), days, a window
+  (`within_days`) on a date or datetime field. Rows are served with `alert_matched` and `alert_names`.
+- A **`datetime`** field (`2026-11-06T19:30-07:00`) is served with `<name>_date`, `<name>_time` and `<name>_text`
+  (`Fri Nov 6 · 7:30 PM`).
 
 | A layout uses | |
 |---|---|
-| feed `["watcher", "matches"]` | upcoming matched events `watcher://events/<id>` under `watcher:matches` |
-| feed `["watcher", "targets"]` | sites `watcher://targets/<id>` (with `health`, `health_text`, `failing`) under `watcher:targets`; rules `watcher://rules/<id>` under `watcher:rules` |
-| `GET /v1/watcher/screens/event?id=…` / `…/screens/target?id=…` | an event (`watcher:event:<id>`); a site (`watcher:target:<id>`), its rules (`…:rules`) and events (`…:events`) |
-| `POST /v1/watcher/targets/create {url, title?, extractor?, interval_minutes?, hint?, details?, time_zone?, utc_offset?, client_id?}` | add a site |
-| `POST /v1/watcher/targets/update {id, …, archived?}` · `POST /v1/watcher/targets/refresh {id}` | change or archive a site; check it now |
-| `POST /v1/watcher/rules/create {target, title?, keywords, exclude?, venue?, days?, within_days?, client_id?}` · `…/rules/update {id, …}` | add a rule to a site, change or archive one |
-| `POST /v1/watcher/events/seen {id, seen}` | mark an event's matches seen |
+| feed `["collections", "<c>"]` | also `collection:<c>:fillers` (each filler's `title`, `url`, `state`, `detail`, `failing`, `alerts_text`) and `collection:<c>:alerted` |
+| `GET /v1/collections/<c>/fillers/<f>` | a filler (`collection:<c>:filler:<f>`), its rows (`…:rows`) and alerts (`…:alerts`) |
+| `GET /v1/collections/<c>/row?id=<id>` | one row (`collection:<c>:row:<id>`) |
+| `POST /v1/collections/<c>/refresh {filler?}` | fill now |
 
-- **MCP tools:** `watcher_status`, `watcher_preview` (fetch and extract now, nothing saved), `watcher_set_target`,
-  `watcher_set_rule`, `watcher_refresh`.
-- **Caps per pod:** 50 sites, 100 rules; events are kept 30 days after they are over.
-- **Try it locally:** `CONSTRUCT_WATCHER_PRIVATE_HOSTS=1 cargo run -p server`, serve a page with an `.ics` or JSON-LD
-  events, and add it and a rule with `POST /v1/watcher/targets/create` and `…/rules/create` (or Claude's MCP tools).
+- **MCP tools:** `collections_preview` (try a recipe, nothing stored; without a map it shows sample items),
+  `collections_status` (each filler's health), `collections_refresh`, `collections_set_secret`; `apply_change` ops
+  `set_filler`, `remove_filler`, `add_alert`, `update_alert`, `remove_alert`.
+- **Off on temporary pods** (`collections.fill = 0`): they can't fetch or ask a model.
+
+## Events (events from websites)
+
+The **Events** app (app id `watcher`, once the Watcher; decisions [`collection-fillers`](docs/decisions/collection-fillers.md),
+`watcher`, issue #58, `crates/app-watcher`) shows every upcoming event of the websites the user watches and notifies
+when one matches ("Improv Boulder lists a show with Budget Cuts"). Its data is the system collection `events`
+(`source_id`, `title`, `start`, `end`, `venue`, `description`, `url`, `tickets_url`, `seen`): each website is a fetch
+filler (`extract: events`, or `llm` for pages without structured events), each rule an alert scoped to that filler.
+Claude adds and changes them with the Collections tools; the app shows Matches (`collection:events:alerted`) and
+Sites (`collection:events:fillers`, with health and alerts), a site's events and an event (tickets and event page
+links, "Mark as seen"). Notifications use the app's `matches` channel. The fields of `events` can't be renamed,
+removed or retyped.
+
+- **From the Watcher:** when a pod starts, its live Watcher sites and rules move into `events` once
+  (`watcher.imported`); each moved site's first fill records its matches without notifying again. A rule's venue
+  becomes a phrase the event must contain. The old `/v1/watcher/*` routes answer 410 for layouts 0001 and 0002; the
+  `watcher_*` tables stay, unread.
+- **Try it locally:** `CONSTRUCT_FILL_PRIVATE_HOSTS=1 cargo run -p server`, serve an `.ics` file, and have Claude add a
+  filler to `events` and an alert (the MCP instructions give the recipe).
 
 ## Notifications
 

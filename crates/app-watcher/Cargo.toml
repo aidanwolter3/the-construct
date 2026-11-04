@@ -5,12 +5,15 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# The watcher adapter (issue #58): polls websites for events, matches them
-# against rules and notifies on new matches. Targets and rules are rows of
-# config in its own `watcher_*` tables, edited from the app or over MCP.
+# The Events app (app id `watcher`; decision `collection-fillers`): the
+# system collection `events`, filled by one fetch filler per website and
+# watched by alerts. Once the Watcher (issue #58): its old `watcher_*`
+# tables stay for their migrations and are moved into `events` once.
 
 [dependencies]
 pod-core = { path = "../pod-core" }
+web-extract = { path = "../web-extract" }
+app-collections = { path = "../app-collections" }
 protocol = { workspace = true }
 serde_json.workspace = true
 rusqlite.workspace = true

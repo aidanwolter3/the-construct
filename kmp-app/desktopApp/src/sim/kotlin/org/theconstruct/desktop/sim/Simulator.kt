@@ -1,6 +1,10 @@
 package org.theconstruct.desktop.sim
 
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import org.theconstruct.ConstructController
+import org.theconstruct.ConstructJson
 import org.theconstruct.engine.UniffiEngineBridge
 import java.io.File
 import java.nio.file.Files
@@ -133,8 +137,13 @@ private fun runCli(args: Array<String>): Int {
         println("[sim] mode=fixture workspace=$workspace fixture=$fixture")
         // A custom fixture without -Pworkspace belongs to the app its bundle names.
         val appId = if (opts["fixture"] != null && opts["workspace"] == null) null else workspace
-        // The fake pod's data path answers (screens, D34), generated from the pod by crates/server/tests/fixtures.rs.
-        val screenData = findFixture("pixelfed_screen_data.json", cwd)?.readText()
+        // The fake pod's data path answers (screens, D34), generated from the pod: Pixelfed's comments by
+        // crates/server/tests/fixtures.rs, the Events app's screens by crates/app-watcher/tests/events.rs.
+        val screenData = listOf("pixelfed_screen_data.json", "events_screen_data.json")
+            .mapNotNull { findFixture(it, cwd)?.readText() }
+            .map { ConstructJson.json.parseToJsonElement(it).jsonObject }
+            .takeIf { it.isNotEmpty() }
+            ?.let { parts -> JsonObject(parts.fold(emptyMap<String, JsonElement>()) { acc, o -> acc + o }).toString() }
         // The fake pod's notifications (D52), shared by every engine of the run.
         val notifications = findFixture("notifications.json", cwd)?.let { FakeNotifications.fromFixture(it.readText()) }
             ?: FakeNotifications()
@@ -241,6 +250,7 @@ fun defaultFixture(workspace: String, from: File): File {
         "pixelfed_demo" -> "pixelfed_home_bundle.json"
         "pixelfed_home" -> "pixelfed_home_feed_bundle.json"
         FakeAppCatalog.KITCHEN -> "custom_kitchen_bundle.json"
+        "watcher" -> "events_bundle.json"
         else -> throw UsageException("no default fixture for workspace '$workspace'; pass -Pfixture=<bundle.json> or use live mode")
     }
     return findFixture(name, from) ?: throw UsageException("fixtures/$name not found above $from")

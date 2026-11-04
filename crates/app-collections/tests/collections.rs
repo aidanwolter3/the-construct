@@ -770,6 +770,7 @@ async fn caps_hold() {
         bytes: 200,
         edit_rows: 2,
         text_chars: 50,
+        ..Caps::default()
     });
     let (err, e) = tool(
         &pod,

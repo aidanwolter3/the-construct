@@ -1,5 +1,7 @@
 # Each watched site has its own rules; the Watcher app only shows sites, rules and events
 
+Superseded by [collection-fillers](collection-fillers.md): the Watcher became the Events app on Collections.
+
 Date: 2026-11-03. Related: [watcher](watcher.md), [open-link-intent](open-link-intent.md), D52, issues #58, #63.
 
 The first Watcher had sites and rules side by side, a rule applying to every site unless it named some. Using it, the
