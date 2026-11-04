@@ -304,11 +304,11 @@ mod tests {
     #[test]
     fn text_of_a_page() {
         let html = "<html><head><title>x</title><style>p{}</style></head><body>\
-            <h1>Shows</h1><p>Budget&nbsp;Cuts &amp; friends</p><script>var a='<p>no</p>';</script>\
+            <h1>Shows</h1><p>Brass&nbsp;Lanterns &amp; friends</p><script>var a='<p>no</p>';</script>\
             <ul><li>Fri<br>7:30</li></ul><s>gone?</s><b>Bold</b>, <a href=x>link</a></body></html>";
         assert_eq!(
             to_text(html),
-            "Shows\nBudget Cuts & friends\nFri\n7:30\ngone? Bold, link"
+            "Shows\nBrass Lanterns & friends\nFri\n7:30\ngone? Bold, link"
         );
     }
 
@@ -321,10 +321,10 @@ mod tests {
 
     #[test]
     fn markdown() {
-        let md = "Improv Boulder\n## Time & Location\n\n\n**[Get Tickets Here!](https://x.example/a)** now\nSee [a [b]](c) and [x]\n\n";
+        let md = "Improv Millbrook\n## Time & Location\n\n\n**[Get Tickets Here!](https://x.example/a)** now\nSee [a [b]](c) and [x]\n\n";
         assert_eq!(
             markdown_to_text(md),
-            "Improv Boulder\nTime & Location\n\nGet Tickets Here! now\nSee [a b] and [x]"
+            "Improv Millbrook\nTime & Location\n\nGet Tickets Here! now\nSee [a b] and [x]"
         );
         assert_eq!(clean_title(" Show:  Nov 6th "), "Show: Nov 6th");
         assert_eq!(

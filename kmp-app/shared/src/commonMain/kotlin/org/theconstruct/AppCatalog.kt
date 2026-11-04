@@ -62,7 +62,7 @@ data class SignInSummary(
     /** The server without its scheme: `https://pixelfed.social` -> `pixelfed.social`. */
     val serverHost: String? get() = server?.substringAfter("://")?.trimEnd('/')
 
-    /** The row's second line: "@aidan · pixelfed.social" ("" when neither is known). */
+    /** The row's second line: "@dana · pixelfed.social" ("" when neither is known). */
     val subtitle: String get() = listOfNotNull(username?.let { "@$it" }, serverHost).joinToString(" · ")
 }
 

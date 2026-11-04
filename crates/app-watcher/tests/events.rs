@@ -36,7 +36,7 @@ struct Site {
 fn event(uid: &str, title: &str, start: &str, description: &str) -> String {
     format!(
         "BEGIN:VEVENT\r\nUID:{uid}\r\nSUMMARY:{title}\r\nDTSTART;TZID=America/Denver:{start}\r\n\
-LOCATION:The End\r\nDESCRIPTION:{description}\r\nEND:VEVENT\r\n"
+LOCATION:The Back Room\r\nDESCRIPTION:{description}\r\nEND:VEVENT\r\n"
     )
 }
 
@@ -146,9 +146,9 @@ fn seed_watcher(pod: &Pod, url: &str) {
             )?;
             c.execute(
                 "INSERT INTO watcher_rules (id, title, spec_json, archived, created_at, updated_at)
-                 VALUES ('r1', 'Budget Cuts', ?1, 0, 1, 1)",
+                 VALUES ('r1', 'Brass Lanterns', ?1, 0, 1, 1)",
                 [
-                    json!({"any": ["Budget Cuts"], "none": ["class"], "targets": ["t1"]})
+                    json!({"any": ["Brass Lanterns"], "none": ["class"], "targets": ["t1"]})
                         .to_string(),
                 ],
             )?;
@@ -165,13 +165,13 @@ async fn the_watcher_moves_to_events_and_keeps_notifying() {
             "bc1",
             "Friday Improv",
             "20991106T193000",
-            "Lineup: Budget Cuts",
+            "Lineup: Brass Lanterns",
         ),
         event(
             "cl1",
             "Improv class",
             "20991107T100000",
-            "Budget Cuts teach",
+            "Brass Lanterns teach",
         ),
     ]);
     let base = serve(site.clone()).await;
@@ -194,7 +194,7 @@ async fn the_watcher_moves_to_events_and_keeps_notifying() {
     let alerts = d["definition"]["alerts"].as_array().unwrap();
     assert_eq!(
         (alerts[0]["name"].clone(), alerts[0]["filler"].clone()),
-        (json!("Budget Cuts"), json!(filler))
+        (json!("Brass Lanterns"), json!(filler))
     );
     // Moving twice adds nothing.
     assert!(prepare(pod.store(), true).unwrap().is_empty());
@@ -219,28 +219,28 @@ async fn the_watcher_moves_to_events_and_keeps_notifying() {
         (
             json!("Friday Improv"),
             json!("Fri Nov 6 · 7:30 PM"),
-            json!("Budget Cuts")
+            json!("Brass Lanterns")
         )
     );
     let sites = listed(&ws, "collection:events:fillers");
     assert_eq!(
         (sites[0]["title"].clone(), sites[0]["alerts_text"].clone()),
-        (json!("Improv Club"), json!("Watching for Budget Cuts"))
+        (json!("Improv Club"), json!("Watching for Brass Lanterns"))
     );
 
-    // A new Budget Cuts show notifies once, on the app's channel.
+    // A new Brass Lanterns show notifies once, on the app's channel.
     *site.ics.lock().unwrap() = calendar(&[
         event(
             "bc1",
             "Friday Improv",
             "20991106T193000",
-            "Lineup: Budget Cuts",
+            "Lineup: Brass Lanterns",
         ),
         event(
             "bc2",
             "Saturday Improv",
             "20991114T193000",
-            "Budget Cuts again",
+            "Brass Lanterns again",
         ),
     ]);
     fill::fill(&pod, COLLECTION, &filler, false).await;
@@ -249,7 +249,7 @@ async fn the_watcher_moves_to_events_and_keeps_notifying() {
     assert_eq!(sent[0]["title"], "Saturday Improv");
     assert_eq!(
         sent[0]["body"],
-        "Sat Nov 14 · 7:30 PM · The End — Budget Cuts"
+        "Sat Nov 14 · 7:30 PM · The Back Room — Brass Lanterns"
     );
     assert_eq!(sent[0]["channel"], "matches");
     app_collections::alerts::run(&pod, None).await;
@@ -342,8 +342,8 @@ async fn describe(pod: &Pod) -> Value {
 
 /// The Events app's simulator fixtures, from a real pod: two sites (one
 /// failing), alerts, matches (one seen). `UPDATE_FIXTURES=1` writes
-/// `fixtures/events_bundle.json` (the app's workspace) and
-/// `fixtures/events_screen_data.json` (its screens' data paths), with the
+/// `kmp-app/desktopApp/src/sim/resources/events_bundle.json` (the app's workspace) and
+/// `kmp-app/desktopApp/src/sim/resources/events_screen_data.json` (its screens' data paths), with the
 /// local site's address replaced by a stable one.
 #[tokio::test]
 async fn simulator_fixture() {
@@ -353,19 +353,19 @@ async fn simulator_fixture() {
             "bc1",
             "Friday Night Improv",
             "20991106T193000",
-            "Lineup: Budget Cuts\\, Sandwich\\, Hot Mess",
+            "Lineup: Brass Lanterns\\, Teacup Riot\\, Open Tab",
         ),
         event(
             "bc2",
-            "Budget Cuts: Live!",
+            "Brass Lanterns: Live!",
             "20991113T200000",
-            "An hour of Budget Cuts",
+            "An hour of Brass Lanterns",
         ),
         event(
             "cl1",
             "Intro to Improv (class)",
             "20991107T100000",
-            "Taught by Budget Cuts",
+            "Taught by Brass Lanterns",
         ),
         event("jm1", "Saturday Jam", "20991107T190000", "Open jam"),
     ]);
@@ -381,7 +381,7 @@ async fn simulator_fixture() {
         &pod,
         "apply_change",
         json!({"collection": "events", "changes": [
-            {"op": "set_filler", "filler": {"kind": "fetch", "title": "Comedy Works",
+            {"op": "set_filler", "filler": {"kind": "fetch", "title": "Laugh Loft",
                 "url": format!("{base}/missing.ics"), "extract": "events", "zone": "America/Denver",
                 "map": {"source_id": "id", "title": "title", "start": "start", "venue": "venue"},
                 "key": "source_id", "upcoming": "start", "every_minutes": 360}}]}),
@@ -389,7 +389,7 @@ async fn simulator_fixture() {
     .await;
     assert!(!err, "{e}");
     let d = describe(&pod).await;
-    let comedy = d["definition"]["fillers"][1]["id"]
+    let loft = d["definition"]["fillers"][1]["id"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -398,7 +398,7 @@ async fn simulator_fixture() {
     for _ in 0..500 {
         let st = pod
             .store()
-            .with_conn(|c| fill::state(c, COLLECTION, &comedy))
+            .with_conn(|c| fill::state(c, COLLECTION, &loft))
             .unwrap();
         if st.last_fill_at.is_some() && !fill::is_busy(&pod, COLLECTION) {
             break;
@@ -419,7 +419,7 @@ async fn simulator_fixture() {
     let (_, ws) = call(&pod, "GET", "/v1/workspaces/watcher", None).await;
     assert_eq!(listed(&ws, "collection:events:fillers")[1]["failing"], true);
     let mut screens = serde_json::Map::new();
-    for f in [&club, &comedy] {
+    for f in [&club, &loft] {
         let path = format!("/v1/collections/events/fillers/{f}");
         let (_, b) = call(&pod, "GET", &path, None).await;
         screens.insert(path, b);
@@ -441,7 +441,8 @@ async fn simulator_fixture() {
     let bundle = json!({"version": "1.0.0", "workspace": ws["workspace"],
         "entities": ws["entities"], "queries": ws["queries"]});
     if std::env::var("UPDATE_FIXTURES").is_ok_and(|v| v == "1") {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../kmp-app/desktopApp/src/sim/resources");
         std::fs::write(root.join("events_bundle.json"), stable(&bundle)).unwrap();
         std::fs::write(
             root.join("events_screen_data.json"),

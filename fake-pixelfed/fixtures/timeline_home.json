@@ -8,7 +8,7 @@
     "in_reply_to_id": null,
     "in_reply_to_account_id": null,
     "reblog": null,
-    "content": "<p>Sunrise over Boulder, three ways &amp; one coffee later <a href=\"{{BASE}}/discover/tags/sunrise?src=hash\" title=\"#sunrise\" class=\"u-url hashtag\" rel=\"external nofollow noopener\">#sunrise</a> <a href=\"{{BASE}}/discover/tags/colorado?src=hash\" title=\"#colorado\" class=\"u-url hashtag\" rel=\"external nofollow noopener\">#colorado</a></p>",
+    "content": "<p>Sunrise over Millbrook, three ways &amp; one coffee later <a href=\"{{BASE}}/discover/tags/sunrise?src=hash\" title=\"#sunrise\" class=\"u-url hashtag\" rel=\"external nofollow noopener\">#sunrise</a> <a href=\"{{BASE}}/discover/tags/highlands?src=hash\" title=\"#highlands\" class=\"u-url hashtag\" rel=\"external nofollow noopener\">#highlands</a></p>",
     "content_text": null,
     "spoiler_text": "",
     "sensitive": false,
@@ -32,8 +32,8 @@
       "followers_count": 1284,
       "following_count": 311,
       "statuses_count": 412,
-      "note": "<p>Landscapes &amp; light.<br />Boulder, CO</p>",
-      "note_text": "Landscapes & light.\nBoulder, CO",
+      "note": "<p>Landscapes &amp; light.<br />Millbrook</p>",
+      "note_text": "Landscapes & light.\nMillbrook",
       "url": "{{BASE}}/alice",
       "avatar": "{{BASE}}/storage/avatar-alice.png",
       "avatar_static": "{{BASE}}/storage/avatar-alice.png",
@@ -59,7 +59,7 @@
         "preview_url": "{{BASE}}/storage/carousel-1_thumb.png",
         "remote_url": null,
         "text_url": null,
-        "description": "Red sky over the Flatirons, number 1",
+        "description": "Red sky over the ridge, number 1",
         "blurhash": "00Ojn}",
         "meta": {
           "original": {
@@ -141,8 +141,8 @@
         "url": "{{BASE}}/discover/tags/sunrise"
       },
       {
-        "name": "colorado",
-        "url": "{{BASE}}/discover/tags/colorado"
+        "name": "highlands",
+        "url": "{{BASE}}/discover/tags/highlands"
       }
     ],
     "emojis": [],
@@ -570,8 +570,8 @@
       "followers_count": 1284,
       "following_count": 311,
       "statuses_count": 412,
-      "note": "<p>Landscapes &amp; light.<br />Boulder, CO</p>",
-      "note_text": "Landscapes & light.\nBoulder, CO",
+      "note": "<p>Landscapes &amp; light.<br />Millbrook</p>",
+      "note_text": "Landscapes & light.\nMillbrook",
       "url": "{{BASE}}/alice",
       "avatar": "{{BASE}}/storage/avatar-alice.png",
       "avatar_static": "{{BASE}}/storage/avatar-alice.png",

@@ -736,8 +736,9 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     let url = format!("{}/v1/workspaces/pixelfed_home", pod.url);
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    // No features header (a tool, not a client): the latest version.
-    assert_eq!(version(&resp).as_deref(), Some("10"));
+    // No features header (a tool, not a client): the latest version (a new
+    // pod has one per app: its newest file, decision `retired-layout-files`).
+    assert_eq!(version(&resp).as_deref(), Some("1"));
     let resp = client()
         .get(&url)
         .bearer_auth("tok")
@@ -745,8 +746,8 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
         .send()
         .await
         .unwrap();
-    // A current client: 0010.
-    assert_eq!(version(&resp).as_deref(), Some("10"));
+    // A current client: the same.
+    assert_eq!(version(&resp).as_deref(), Some("1"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 4));
     // A newer version replaces the feed layout; entities still come upstream.
@@ -756,7 +757,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     }
     server::layouts::append_version(state.store(), "pixelfed_home", &node, None).unwrap();
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("11"));
+    assert_eq!(version(&resp).as_deref(), Some("2"));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert_eq!(spec.workspace, node);
     assert_eq!(spec.queries["timeline:home"].len(), 5);
@@ -1765,7 +1766,7 @@ async fn comments_screen_data_has_the_post_even_from_a_comment() {
         data["entities"][&post_uri]["caption"]
             .as_str()
             .unwrap()
-            .starts_with("Sunrise over Boulder"),
+            .starts_with("Sunrise over Millbrook"),
         "{data}"
     );
     let whole = thread_shape(&data, CAROUSEL);

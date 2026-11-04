@@ -242,8 +242,8 @@ fun requireWritableDir(dir: File, what: String = "output directory") {
 }
 
 /**
- * fixtures/ next to (or above) [from]: the one-post Pixelfed demo for `pixelfed_demo`, the normalized
- * fake-upstream timeline for `pixelfed_home`.
+ * The default bundle for [workspace] ([findFixture]): the one-post Pixelfed demo for `pixelfed_demo`, the
+ * normalized fake-upstream timeline for `pixelfed_home`.
  */
 fun defaultFixture(workspace: String, from: File): File {
     val name = when (workspace) {
@@ -253,12 +253,26 @@ fun defaultFixture(workspace: String, from: File): File {
         "watcher" -> "events_bundle.json"
         else -> throw UsageException("no default fixture for workspace '$workspace'; pass -Pfixture=<bundle.json> or use live mode")
     }
-    return findFixture(name, from) ?: throw UsageException("fixtures/$name not found above $from")
+    return findFixture(name, from) ?: throw UsageException("${fixturePath(name)} not found above $from")
 }
 
+/** The simulator's own fixture files (test and simulator data only; nothing here ships). */
+const val SIM_FIXTURES = "kmp-app/desktopApp/src/sim/resources"
+
+/**
+ * Where fixture [name] lives, relative to the repo root: in [SIM_FIXTURES], except two that belong to other code
+ * and are shared from there: the demo app's data (shipped in the pod) and the protocol tests' counter bundle.
+ */
+fun fixturePath(name: String): String = when (name) {
+    "pixelfed_home_bundle.json" -> "crates/app-pixelfed/demo/bundle.json"
+    "counter_home_bundle.json" -> "crates/protocol/tests/data/counter_home_bundle.json"
+    else -> "$SIM_FIXTURES/$name"
+}
+
+/** Fixture [name] ([fixturePath]) in the repo at or above [from]. */
 fun findFixture(name: String, from: File = File("").absoluteFile): File? =
     generateSequence(from.absoluteFile) { it.parentFile }
-        .map { File(it, "fixtures/$name") }
+        .map { File(it, fixturePath(name)) }
         .firstOrNull { it.isFile }
 
 /** The fake Pixelfed's images (`fake-pixelfed/fixtures/media`), the ones its fixture posts link to. */

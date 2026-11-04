@@ -4,8 +4,8 @@ use protocol::{
 };
 use serde_json::{Value, json};
 
-const PIXELFED_FIXTURE: &str = include_str!("../../../fixtures/pixelfed_home_bundle.json");
-const COUNTER_FIXTURE: &str = include_str!("../../../fixtures/counter_home_bundle.json");
+const PIXELFED_FIXTURE: &str = include_str!("../../app-pixelfed/demo/bundle.json");
+const COUNTER_FIXTURE: &str = include_str!("data/counter_home_bundle.json");
 
 fn like_intent() -> ActionIntent {
     ActionIntent::OptimisticMutate {
@@ -291,10 +291,10 @@ fn pixelfed_fixture_parses() {
     );
 
     let post = &bundle.entities["pixelfed://posts/101"];
-    assert_eq!(post.get_str("caption"), Some("Sunrise over Boulder"));
+    assert_eq!(post.get_str("caption"), Some("Sunrise over Millbrook"));
     assert_eq!(post.get_i64("like_count"), Some(89));
     assert_eq!(post.get_bool("is_liked"), Some(false));
-    assert_eq!(post.get_str("author_name"), Some("Aidan"));
+    assert_eq!(post.get_str("author_name"), Some("Dana"));
     assert_eq!(
         post.get_str_list("media_uris"),
         Some(vec!["pixelfed://media/501"])

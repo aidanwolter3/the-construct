@@ -121,9 +121,9 @@ async fn the_workspace_lists_every_recipe_and_a_screen_loads_one() {
 }
 
 /// A client gets the newest layout whose features it draws: with `sticky`
-/// the search box and chips pinned at the top (0005), without it the
-/// coloured list with category chips (0004, D44), and without `tappable` and
-/// `list_filter` the "View" buttons (0001).
+/// the search box and chips pinned at the top. A new pod has only the newest
+/// file (decision `retired-layout-files`), so a client without `sticky` has
+/// no version it can draw.
 #[tokio::test]
 async fn each_client_gets_the_newest_layout_it_draws() {
     let state = seeded();
@@ -135,23 +135,10 @@ async fn each_client_gets_the_newest_layout_it_draws() {
             .collect::<Vec<_>>()
             .join(",")
     };
-    for (missing, sticky_drawn, search, tappable) in [
-        (&[][..], true, true, true),
-        (&["sticky"][..], false, true, true),
-        (
-            &[
-                "sticky",
-                "tappable",
-                "list_filter",
-                "list_group_by",
-                "box",
-                "choice_chips",
-            ][..],
-            false,
-            false,
-            false,
-        ),
-    ] {
+    let (status, body) = get_as(&state, "/v1/workspaces/recipes", &without(&["sticky"])).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "no_compatible_version");
+    for (missing, sticky_drawn, search, tappable) in [(&[][..], true, true, true)] {
         let schema = format!("{missing:?}");
         let (status, body) = get_as(&state, "/v1/workspaces/recipes", &without(missing)).await;
         assert_eq!(status, StatusCode::OK, "{body}");

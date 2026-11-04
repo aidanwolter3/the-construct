@@ -40,7 +40,7 @@ class MenuTest {
         outDir.deleteRecursively()
     }
 
-    private fun bundle(name: String): String = assertNotNull(findFixture(name), "fixtures/$name not found").readText()
+    private fun bundle(name: String): String = assertNotNull(findFixture(name), "${fixturePath(name)} not found").readText()
 
     private fun feed() = FakeEngineBridge(bundle("pixelfed_home_feed_bundle.json"))
 
@@ -286,7 +286,7 @@ class MenuTest {
         val fake = feed()
         repeat(22) { fake.publishVersion("Change ${it + 1}") }
         val controller = ConstructController(fake, fake.appId)
-        val r = runner(fake, controller).ok("open-history Pixelfed; assert-text Load older; select-version 1; assert-text Sunrise over Boulder")
+        val r = runner(fake, controller).ok("open-history Pixelfed; assert-text Load older; select-version 1; assert-text Sunrise over Millbrook")
         assertEquals("20 version(s) listed", r.steps[0].message)
         assertEquals(1L, controller.pinned.value?.version)
     }
@@ -307,7 +307,7 @@ class MenuTest {
         val controller = ConstructController(first, first.appId) { id ->
             FakeEngineBridge(bundle("pixelfed_home_bundle.json"), appId = id, apps = first.apps).also { opened = it }
         }
-        runner(first, controller).ok("open-history Pixelfed; select-version 2; open-app pixelfed_demo; assert-text Sunrise over Boulder")
+        runner(first, controller).ok("open-history Pixelfed; select-version 2; open-app pixelfed_demo; assert-text Sunrise over Millbrook")
         assertEquals("pixelfed_demo", controller.currentAppId())
         assertNull(controller.pinned.value, "a pin belongs to its app")
         assertNotNull(opened)

@@ -761,7 +761,7 @@ BEGIN:VEVENT\r\nSUMMARY:Gone\r\nSTATUS:CANCELLED\r\nEND:VEVENT\r\nEND:VCALENDAR\
 
     #[test]
     fn events_from_calendars_and_pages() {
-        let cal = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:u1\r\nSUMMARY:Budget  Cuts\r\nDTSTART:20261106T193000\r\nLOCATION:The End\r\n\
+        let cal = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:u1\r\nSUMMARY:Brass  Lanterns\r\nDTSTART:20261106T193000\r\nLOCATION:The Back Room\r\n\
 DESCRIPTION:[Get tickets](https://tix.example/1)\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
         let mut s = spec(Kind::Events, "");
         s.zone = "America/Denver".into();
@@ -773,7 +773,7 @@ DESCRIPTION:[Get tickets](https://tix.example/1)\r\nEND:VEVENT\r\nEND:VCALENDAR\
             ("tickets", "tickets_url"),
         ]);
         let rows = extract(&s, cal, "https://club.example/cal.ics", &m).unwrap();
-        assert_eq!(rows[0]["title"], json!("Budget Cuts"));
+        assert_eq!(rows[0]["title"], json!("Brass Lanterns"));
         assert_eq!(
             rows[0]["start"],
             json!("2026-11-06T19:30-07:00"),

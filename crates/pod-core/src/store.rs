@@ -859,8 +859,12 @@ fn sync_app_files_on(
     let max_recorded = recorded.iter().filter_map(|r| key_number(&r.key)).max();
     let max_file = files.iter().map(|f| f.number).max();
     let next_name = format!("{:04}.json", max_recorded.max(max_file).unwrap_or(0) + 1);
+    // Files below the build's lowest one were retired (deleted from the repo,
+    // decision `retired-layout-files`): their recorded versions stay, quietly.
+    let min_file = files.iter().map(|f| f.number).min();
     for r in &recorded {
-        if !files.iter().any(|f| f.key == r.key) {
+        let retired = matches!((key_number(&r.key), min_file), (Some(n), Some(m)) if n < m);
+        if !retired && !files.iter().any(|f| f.key == r.key) {
             report.missing.push(format!(
                 "layouts/{}.json was deployed as version {} but is missing from this build; \
                  serving the recorded history unchanged",

@@ -69,13 +69,13 @@ async fn private_feed(headers: HeaderMap) -> Response {
     r#"{"data":[{"title":"Hidden"}]}"#.into_response()
 }
 
-/// An improv club's calendar: a past show, a Budget Cuts show, a class.
+/// An improv club's calendar: a past show, a Brass Lanterns show, a class.
 async fn club_ics() -> Response {
     "BEGIN:VCALENDAR\r\n\
 BEGIN:VEVENT\r\nUID:old\r\nSUMMARY:Old show\r\nDTSTART:20200101T193000\r\nEND:VEVENT\r\n\
 BEGIN:VEVENT\r\nUID:bc1\r\nSUMMARY:Friday Improv\r\nDTSTART;TZID=America/Denver:20991106T193000\r\n\
-LOCATION:The End\r\nDESCRIPTION:Lineup: Budget Cuts\\, Sandwich\r\nURL:/shows/bc1\r\nEND:VEVENT\r\n\
-BEGIN:VEVENT\r\nUID:cl1\r\nSUMMARY:Improv class (Budget Cuts teach)\r\nDTSTART:20991107T100000\r\nEND:VEVENT\r\n\
+LOCATION:The Back Room\r\nDESCRIPTION:Lineup: Brass Lanterns\\, Teacup Riot\r\nURL:/shows/bc1\r\nEND:VEVENT\r\n\
+BEGIN:VEVENT\r\nUID:cl1\r\nSUMMARY:Improv class (Brass Lanterns teach)\r\nDTSTART:20991107T100000\r\nEND:VEVENT\r\n\
 END:VCALENDAR\r\n"
         .into_response()
 }
@@ -83,13 +83,13 @@ END:VCALENDAR\r\n"
 /// A show's own page with the full lineup.
 async fn show_page() -> Response {
     r#"<script type="application/ld+json">{"@type":"Event","name":"Friday Improv","startDate":"2099-11-06T19:30:00-07:00",
-       "description":"Full lineup: Budget Cuts, Sandwich and friends."}</script>"#
+       "description":"Full lineup: Brass Lanterns, Teacup Riot and friends."}</script>"#
         .into_response()
 }
 
 /// A page with no structure (read by the llm extractor).
 async fn plain_page() -> Response {
-    "<html><body><h1>Shows</h1><p>Sat Nov 7 2099, 8pm: Budget Cuts live</p></body></html>"
+    "<html><body><h1>Shows</h1><p>Sat Nov 7 2099, 8pm: Brass Lanterns live</p></body></html>"
         .into_response()
 }
 
@@ -534,7 +534,7 @@ async fn event_sites_fill_one_collection_and_alerts_notify_once() {
     let base = serve(Arc::new(Site::default())).await;
     let agent = Arc::new(FakeAgent::default());
     *agent.page_rows.lock().unwrap() = vec![json!({
-        "title": "Budget Cuts live", "start": "2099-11-07T20:00"})];
+        "title": "Brass Lanterns live", "start": "2099-11-07T20:00"})];
     let pod = pod_with(Some(agent.clone()));
     let fields = json!([
         {"name": "source_id", "type": "text", "optional": true},
@@ -566,8 +566,8 @@ async fn event_sites_fill_one_collection_and_alerts_notify_once() {
         titles,
         [
             "Friday Improv",
-            "Improv class (Budget Cuts teach)",
-            "Budget Cuts live"
+            "Improv class (Brass Lanterns teach)",
+            "Brass Lanterns live"
         ],
         "the past show is dropped; ordered by start across both sites"
     );
@@ -576,7 +576,7 @@ async fn event_sites_fill_one_collection_and_alerts_notify_once() {
     assert_eq!(friday["start_text"], "Fri Nov 6 · 7:30 PM");
     assert_eq!(friday["start_date"], "2099-11-06");
     assert_eq!(
-        friday["description"], "Full lineup: Budget Cuts, Sandwich and friends.",
+        friday["description"], "Full lineup: Brass Lanterns, Teacup Riot and friends.",
         "details read the show's own page"
     );
     assert_eq!(
@@ -588,19 +588,22 @@ async fn event_sites_fill_one_collection_and_alerts_notify_once() {
         "the model's time too"
     );
     assert_eq!(r[2]["filler_id"], json!(ids[1]));
-    assert!(agent.pages.lock().unwrap()[0].contains("Budget Cuts live"));
+    assert!(agent.pages.lock().unwrap()[0].contains("Brass Lanterns live"));
     // An alert per site, as the Watcher's rules were.
     let (err, e) = tool(
         &pod,
         "apply_change",
         json!({"collection": "events", "changes": [
-            {"op": "add_alert", "any": ["Budget Cuts"], "none": ["class"], "filler": ids[0]},
-            {"op": "add_alert", "any": ["budget cuts"], "filler": ids[1], "name": "BC (plain)"}]}),
+            {"op": "add_alert", "any": ["Brass Lanterns"], "none": ["class"], "filler": ids[0]},
+            {"op": "add_alert", "any": ["brass lanterns"], "filler": ids[1], "name": "BL (plain)"}]}),
     )
     .await;
     assert!(!err, "{e}");
     let st = ok(&pod, "collections_status", json!({"collection": "events"})).await;
-    assert_eq!(st["fillers"][0]["alerts"][0]["name"], "Budget Cuts", "{st}");
+    assert_eq!(
+        st["fillers"][0]["alerts"][0]["name"], "Brass Lanterns",
+        "{st}"
+    );
     let b = get_data(&pod, "/v1/collections/events/rows").await;
     let matched = listed(&b, "collection:events:alerted");
     assert_eq!(
@@ -608,12 +611,12 @@ async fn event_sites_fill_one_collection_and_alerts_notify_once() {
             .iter()
             .map(|e| e["alert_names"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["Budget Cuts", "BC (plain)"]
+        ["Brass Lanterns", "BL (plain)"]
     );
     let screen = get_data(&pod, &format!("/v1/collections/events/fillers/{}", ids[0])).await;
     assert_eq!(
         listed(&screen, &format!("collection:events:filler:{}", ids[0]))[0]["alerts_text"],
-        "Watching for Budget Cuts"
+        "Watching for Brass Lanterns"
     );
     // Notifications need an app showing the collection.
     let app = ok(
@@ -640,7 +643,7 @@ async fn event_sites_fill_one_collection_and_alerts_notify_once() {
     assert_eq!(
         sent,
         vec![
-            (app_id.clone(), "Budget Cuts live".to_owned()),
+            (app_id.clone(), "Brass Lanterns live".to_owned()),
             (app_id.clone(), "Friday Improv".to_owned())
         ]
     );

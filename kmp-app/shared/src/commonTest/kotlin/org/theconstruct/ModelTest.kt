@@ -83,7 +83,7 @@ class ModelTest {
         assertEquals(UiNode.Divider, card.children.last())
 
         assertEquals(3, spec.entities.size)
-        assertEquals("Sunrise over Boulder", spec.entities.getValue("pixelfed://posts/101")["caption"]?.jsonPrimitive?.content)
+        assertEquals("Sunrise over Millbrook", spec.entities.getValue("pixelfed://posts/101")["caption"]?.jsonPrimitive?.content)
     }
 
     @Test

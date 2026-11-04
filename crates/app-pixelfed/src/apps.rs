@@ -21,12 +21,6 @@ pub fn files() -> Vec<LayoutSource> {
     HOME_FILES.iter().chain(DEMO_FILES).copied().collect()
 }
 
-/// Files deployed with the `pixelfed://` widgets, which were later removed
-/// (D36/D37). They still parse (as `UiNode::Unknown`) and are served to the
-/// clients that draw them.
-pub static HOME_LEGACY: &[(&str, u32)] = &[("pixelfed_home", 1), ("pixelfed_home", 2)];
-pub static DEMO_LEGACY: &[(&str, u32)] = &[("pixelfed_demo", 1)];
-
 /// The signed-in Pixelfed feed.
 pub const HOME: AppInfo = AppInfo {
     id: crate::layout::WORKSPACE_ID,
@@ -58,7 +52,7 @@ const DEMO_MANIFEST: SourceManifest = SourceManifest {
     feeds: &[FeedSpec {
         name: pod_core::static_app::FEED,
         query_keys: &[],
-        doc: "Fixed demo posts (fixtures/pixelfed_home_bundle.json).",
+        doc: "Fixed demo posts (crates/app-pixelfed/demo/bundle.json).",
     }],
     actions: &[PathSpec {
         pattern: "/v1/demo/ack",
@@ -69,12 +63,12 @@ const DEMO_MANIFEST: SourceManifest = SourceManifest {
     ..SourceManifest::new("Pixelfed demo")
 };
 
-static DEMO_JSON: &str = include_str!("../../../fixtures/pixelfed_home_bundle.json");
+static DEMO_JSON: &str = include_str!("../demo/bundle.json");
 
 /// The `pixelfed_demo` bundle (entities and queries; its layout comes from
 /// [`DEMO_FILES`]). Panics on first access if the fixture is invalid.
 pub static DEMO_BUNDLE: LazyLock<WorkspaceSpec> = LazyLock::new(|| {
-    serde_json::from_str(DEMO_JSON).expect("fixtures/pixelfed_home_bundle.json is invalid")
+    serde_json::from_str(DEMO_JSON).expect("crates/app-pixelfed/demo/bundle.json is invalid")
 });
 
 /// Force-parse the embedded fixture. Call at startup to fail fast.
@@ -88,7 +82,6 @@ pub fn demo_adapter() -> Arc<StaticAdapter> {
     Arc::new(
         StaticAdapter::new(DEMO_NAME, DEMO, DEMO_FILES, &DEMO_BUNDLE)
             .with_manifest(DEMO_MANIFEST)
-            .with_legacy_files(DEMO_LEGACY)
             .with_router(demo_router),
     )
 }

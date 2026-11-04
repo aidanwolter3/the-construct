@@ -1350,7 +1350,7 @@ mod tests {
         );
         assert_eq!(
             carousel.get_str("caption"),
-            Some("Sunrise over Boulder, three ways & one coffee later #sunrise #colorado")
+            Some("Sunrise over Millbrook, three ways & one coffee later #sunrise #highlands")
         );
         assert_eq!(
             carousel.get_str("author_uri"),
@@ -1442,11 +1442,9 @@ mod tests {
     /// Real Pixelfed 0.15.2 responses recorded from the local instance
     /// (`scripts/pixelfed_dev.sh record`; D20).
     const RECORDED_REBLOGS: &str =
-        include_str!("../../../fixtures/pixelfed/recorded/timeline_home_reblogs.json");
-    const RECORDED_PLAIN: &str =
-        include_str!("../../../fixtures/pixelfed/recorded/timeline_home.json");
-    const RECORDED_PE: &str =
-        include_str!("../../../fixtures/pixelfed/recorded/timeline_home_pe.json");
+        include_str!("../tests/data/recorded/timeline_home_reblogs.json");
+    const RECORDED_PLAIN: &str = include_str!("../tests/data/recorded/timeline_home.json");
+    const RECORDED_PE: &str = include_str!("../tests/data/recorded/timeline_home_pe.json");
     const REAL_BASE: &str = "http://localhost:8090";
 
     fn normalize_recorded(json: &str) -> (Timeline, MediaUrls) {

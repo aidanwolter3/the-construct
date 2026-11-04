@@ -629,7 +629,7 @@ mod tests {
 
     fn our_post() -> Value {
         json!({"id": "781254316723458049", "account": {"id": ME, "username": "constructdemo"},
-               "content": "<p>Sunrise over Boulder, three ways &amp; one coffee later</p>",
+               "content": "<p>Sunrise over Millbrook, three ways &amp; one coffee later</p>",
                "created_at": "2026-10-31T18:42:10.000000Z"})
     }
 
@@ -665,7 +665,7 @@ mod tests {
         assert_eq!(n.title, "Bob 🚲 liked your post");
         assert_eq!(
             n.body,
-            "Sunrise over Boulder, three ways & one coffee later"
+            "Sunrise over Millbrook, three ways & one coffee later"
         );
         assert_eq!(
             n.target_uri.as_deref(),

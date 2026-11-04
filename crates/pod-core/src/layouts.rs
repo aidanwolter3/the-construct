@@ -13,9 +13,9 @@
 //!
 //! # Adding a layout version
 //!
-//! 1. Copy the newest file, e.g. `layouts/pixelfed_home/0001.json` to
-//!    `layouts/pixelfed_home/0002.json` (4 digits, the next number: numbering
-//!    is contiguous from 0001), and edit it. The format is
+//! 1. Copy the newest file, e.g. `layouts/pixelfed_home/0010.json` to
+//!    `layouts/pixelfed_home/0011.json` (4 digits, the next number: numbering
+//!    is contiguous from the app's oldest file), and edit it. The format is
 //!    `{"note": "short changelog line", "layout": <UiNode>}`; the layout root
 //!    is the app's `core://Workspace` (id = the app id). Clients are served
 //!    the newest version whose features they all draw
@@ -35,7 +35,11 @@
 //! note and layout JSON, independent of how the Rust types serialize it); add
 //! a new file instead. To stop clients drawing old versions, remove the
 //! feature they use (move its file to `crates/protocol/features/removed/`)
-//! rather than editing files. A gap in the numbering, a file that is not a valid
+//! rather than editing files. Old files may be deleted from the repo, oldest
+//! first (decision `retired-layout-files`): an app's files then start above
+//! `0001`, pods that recorded the deleted ones keep them in their history
+//! (no warning), and new pods start from the oldest file present. A gap in
+//! the numbering, a file that is not a valid
 //! layout (structure checked by [`crate::validate::validate_structure`]), an
 //! unknown action intent tag, a root id that is not the app id, or a new file
 //! numbered below a deployed one also stop the start. A deployed file missing
@@ -292,12 +296,10 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
             "invalid layout: {what} (a typo? this build does not know it)"
         )));
     }
-    // Node types this build doesn't know are only allowed where they were
-    // deployed before they were removed (D37), the adapter's legacy files.
+    // Node types this build doesn't know are refused (D37). Versions deployed
+    // before a node type was removed stay in pods' history, served as they are.
     let unknown = crate::validate::unknown_node_types(&parsed);
-    if let Some(t) = unknown.first()
-        && !catalog.is_legacy(src.app_id, number)
-    {
+    if let Some(t) = unknown.first() {
         return Err(fail(format!(
             "invalid layout: unknown node type '{t}' (a typo? this build does not know it)"
         )));
@@ -345,7 +347,9 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
     })
 }
 
-/// Parse every source; per app the numbers must be exactly 1..=N.
+/// Parse every source; per app the numbers must run without gaps from the
+/// app's lowest file (`0001`, or a later one once older files are retired:
+/// decision `retired-layout-files`).
 pub fn parse_files(catalog: &Catalog, sources: &[LayoutSource]) -> Result<Vec<LayoutFile>, String> {
     let mut files = sources
         .iter()
@@ -353,7 +357,9 @@ pub fn parse_files(catalog: &Catalog, sources: &[LayoutSource]) -> Result<Vec<La
         .collect::<Result<Vec<_>, _>>()?;
     files.sort_by(|a, b| (a.app_id.as_str(), a.number).cmp(&(b.app_id.as_str(), b.number)));
     for a in catalog.apps() {
-        for (expected, f) in (1..).zip(files.iter().filter(|f| f.app_id == a.id)) {
+        let mut app_files = files.iter().filter(|f| f.app_id == a.id).peekable();
+        let first = app_files.peek().map_or(1, |f| f.number);
+        for (expected, f) in (first..).zip(app_files) {
             if f.number != expected {
                 return Err(if f.number < expected {
                     format!("{} is listed twice", f.path)
@@ -399,13 +405,15 @@ pub fn sync_sources(
         .map_err(|e| format!("syncing layouts/: {e}"))?
 }
 
-/// An app's first layout (its `0001.json`). Panics if the embedded files are
-/// invalid (the pod would not start either).
+/// An app's oldest layout file in this build (its lowest-numbered one; see
+/// [`parse_files`]). Panics if the embedded files are invalid (the pod would
+/// not start either).
 pub fn builtin(catalog: &Catalog, workspace_id: &str) -> Option<UiNode> {
     let src = catalog
         .files()
         .iter()
-        .find(|f| f.app_id == workspace_id && f.name == "0001")?;
+        .filter(|f| f.app_id == workspace_id)
+        .min_by(|a, b| a.name.cmp(b.name))?;
     Some(
         parse_file(catalog, src)
             .expect("embedded layout files are valid")

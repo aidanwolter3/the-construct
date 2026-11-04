@@ -69,18 +69,11 @@ pub trait AppAdapter: Any + Send + Sync {
     /// The layout files for this adapter's apps, per app in number order.
     ///
     /// Called once at startup by the layout sync, before the pod serves. The
-    /// usual rules apply: numbers have no gaps, and a deployed file is never
-    /// edited or renumbered
-    /// (the pod refuses to start). Every app in `apps` needs at least one file.
+    /// usual rules apply: numbers have no gaps from the app's oldest file, and
+    /// a deployed file is never edited or renumbered (the pod refuses to
+    /// start); old files may be deleted (decision `retired-layout-files`).
+    /// Every app in `apps` needs at least one file.
     fn layout_files(&self) -> &'static [LayoutSource];
-
-    /// Deployed files that hold node types later removed from the protocol
-    /// (`(app_id, number)`). They still parse and are served to the clients
-    /// that draw them; no other file may hold an unknown node type (D37).
-    /// Only ever add to this list when a node type is removed.
-    fn legacy_files(&self) -> &'static [(&'static str, u32)] {
-        &[]
-    }
 
     /// This adapter's own HTTP routes: actions, screen data, sign-in, media.
     ///
@@ -452,7 +445,6 @@ pub struct Catalog {
     /// `(app, index into adapters)`, in `GET /v1/apps` order.
     apps: Vec<(AppInfo, usize)>,
     files: Vec<LayoutSource>,
-    legacy: Vec<(&'static str, u32)>,
     /// `(sign-in id, index into adapters)`.
     sign_ins: Vec<(SignInProvider, usize)>,
 }
@@ -466,7 +458,6 @@ impl Catalog {
     pub fn new(adapters: Vec<Arc<dyn AppAdapter>>) -> Result<Self, String> {
         let mut apps: Vec<(AppInfo, usize)> = Vec::new();
         let mut files = Vec::new();
-        let mut legacy = Vec::new();
         let mut sign_ins: Vec<(SignInProvider, usize)> = Vec::new();
         let mut names: Vec<&'static str> = Vec::new();
         for (i, a) in adapters.iter().enumerate() {
@@ -499,7 +490,6 @@ impl Catalog {
                 sign_ins.push((p, i));
             }
             files.extend_from_slice(a.layout_files());
-            legacy.extend_from_slice(a.legacy_files());
         }
         for (app, _) in &apps {
             if let AuthPolicy::SignIn(id) = app.auth
@@ -570,7 +560,6 @@ impl Catalog {
             manifests,
             apps,
             files,
-            legacy,
             sign_ins,
         })
     }
@@ -660,13 +649,6 @@ impl Catalog {
     /// Every adapter's layout files.
     pub fn files(&self) -> &[LayoutSource] {
         &self.files
-    }
-
-    /// Whether `(app_id, number)` is a legacy file ([`AppAdapter::legacy_files`]).
-    pub fn is_legacy(&self, app_id: &str, number: u32) -> bool {
-        self.legacy
-            .iter()
-            .any(|(a, n)| *a == app_id && *n == number)
     }
 }
 

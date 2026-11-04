@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
 
 /**
  * The comments screen of `layouts/pixelfed_home` (DECISIONS D34) through the generic screen support: the fixture
- * feed's layout declares it, the fake pod answers its data path from `fixtures/pixelfed_screen_data.json`.
+ * feed's layout declares it, the fake pod answers its data path from `kmp-app/desktopApp/src/sim/resources/pixelfed_screen_data.json`.
  */
 class ScreensSimTest {
     private val outDir: File = Files.createTempDirectory("construct-screens-test").toFile()
@@ -40,7 +40,7 @@ class ScreensSimTest {
             fake(),
             "click tag:comment:$CAROUSEL; wait-text 3000 That second frame is unreal; assert-text Comments; " +
                 "assert-text @bob thanks! Up at 5:40 for that one.; assert-text @bob · 16 h; assert-text Which lens?; " +
-                "back; assert-no-text Which lens?; assert-text Sunrise over Boulder",
+                "back; assert-no-text Which lens?; assert-text Sunrise over Millbrook",
         )
         // The Back arrow too.
         run(fake(), "click tag:comment:$CAROUSEL; wait-text 3000 Which lens?; click tag:screen-back; assert-no-text Which lens?")

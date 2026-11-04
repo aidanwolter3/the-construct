@@ -225,8 +225,8 @@ mod tests {
         model::check_definition(&def, 40).unwrap();
         let site = legacy::Target {
             id: "t1".into(),
-            title: "Improv Boulder".into(),
-            url: "https://www.meetup.com/improv-boulder/events/".into(),
+            title: "Improv Millbrook".into(),
+            url: "https://improv-millbrook.example/events/".into(),
             extractor: "auto".into(),
             hint: String::new(),
             details: true,
@@ -237,18 +237,18 @@ mod tests {
             last_extractor: Some("jsonld".into()),
         };
         let f = filler::parse(&def, &filler_spec(&site), "s1".into(), false).unwrap();
-        assert_eq!(f.title, "Improv Boulder");
+        assert_eq!(f.title, "Improv Millbrook");
         assert_eq!(f.every_minutes, Some(360));
         let mut with = def.clone();
         with.fillers.push(f);
         filler::check(&with, 20).unwrap();
         let rule = legacy::Rule {
             id: "r1".into(),
-            title: "Budget Cuts".into(),
+            title: "Brass Lanterns".into(),
             spec: legacy::RuleSpec {
-                any: vec!["Budget Cuts".into()],
+                any: vec!["Brass Lanterns".into()],
                 none: vec!["class".into()],
-                venue: "The End".into(),
+                venue: "The Back Room".into(),
                 days: vec!["fri".into()],
                 targets: vec!["t1".into()],
                 ..legacy::RuleSpec::default()
@@ -258,7 +258,7 @@ mod tests {
         alerts::add(&mut with, &alert_spec(&rule, Some("s1")), 0).unwrap();
         let a = &with.alerts[0];
         assert_eq!(a.filler.as_deref(), Some("s1"));
-        assert_eq!(a.all, vec!["The End".to_owned()]);
+        assert_eq!(a.all, vec!["The Back Room".to_owned()]);
         assert_eq!(a.date_field.as_deref(), Some("f3"));
         model::check_definition(&with, 40).unwrap();
         let llm = legacy::Target {

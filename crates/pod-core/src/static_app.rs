@@ -26,7 +26,6 @@ pub struct StaticAdapter {
     app: AppInfo,
     manifest: SourceManifest,
     files: &'static [LayoutSource],
-    legacy: &'static [(&'static str, u32)],
     data: DataBundle,
     router: fn() -> Router<Pod>,
 }
@@ -49,7 +48,6 @@ impl StaticAdapter {
                 ..SourceManifest::new(app.title)
             },
             files,
-            legacy: &[],
             data: DataBundle {
                 entities: data.entities.clone(),
                 queries: data.queries.clone(),
@@ -64,12 +62,6 @@ impl StaticAdapter {
     /// fixed data.
     pub fn with_manifest(mut self, manifest: SourceManifest) -> Self {
         self.manifest = manifest;
-        self
-    }
-
-    /// See [`AppAdapter::legacy_files`].
-    pub fn with_legacy_files(mut self, legacy: &'static [(&'static str, u32)]) -> Self {
-        self.legacy = legacy;
         self
     }
 
@@ -91,10 +83,6 @@ impl AppAdapter for StaticAdapter {
 
     fn layout_files(&self) -> &'static [LayoutSource] {
         self.files
-    }
-
-    fn legacy_files(&self) -> &'static [(&'static str, u32)] {
-        self.legacy
     }
 
     fn router(&self) -> Router<Pod> {

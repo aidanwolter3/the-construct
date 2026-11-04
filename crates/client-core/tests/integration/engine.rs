@@ -13,7 +13,7 @@ use client_core::{ConstructEngine, StateSnapshot};
 use protocol::WorkspaceSpec;
 use serde_json::Value;
 
-const FIXTURE: &str = include_str!("../../../../fixtures/counter_home_bundle.json");
+const FIXTURE: &str = include_str!("../../../protocol/tests/data/counter_home_bundle.json");
 const TIMEOUT: Duration = Duration::from_secs(10);
 
 const INCREMENT: &str = r#"{"intent":"action.mutation.optimistic","entity_uri":"core://counters/home","field":"count","value_expr":"entity.count + 1","rollback_value":0,"endpoint":"/v1/counters/home/increment","payload":{}}"#;

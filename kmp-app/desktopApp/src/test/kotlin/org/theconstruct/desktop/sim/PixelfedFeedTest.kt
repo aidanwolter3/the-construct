@@ -48,9 +48,9 @@ class PixelfedFeedTest {
         run(
             fake(),
             "wait-images 5000; assert-text Page 1 of 3; assert-text 1/3; " +
-                "assert-text Red sky over the Flatirons, number 1; assert-no-text number 2; " +
+                "assert-text Red sky over the ridge, number 1; assert-no-text number 2; " +
                 "swipe-left tag:carousel:$CAROUSEL; wait-images 5000; assert-text Page 2 of 3; assert-text 2/3; " +
-                "assert-text Green meadow at first light, number 2; assert-no-text Red sky over the Flatirons; " +
+                "assert-text Green meadow at first light, number 2; assert-no-text Red sky over the ridge; " +
                 // Selecting by alt text works too: swipe the visible image back.
                 "swipe-right Green meadow at first light; assert-text Page 1 of 3",
         )
@@ -217,14 +217,15 @@ class PixelfedFeedTest {
         assertEquals(File(media, "avatar-bob.png"), i.resolve("http://10.0.2.2:8080/v1/pixelfed/media/avatar-bob.png?x=1"))
         assertEquals(File(media, "avatar-bob.png"), i.resolve("http://h/v1/pixelfed/media/avatar-bob"))
         assertNull(i.resolve("http://h/v1/pixelfed/media/opaque-key-123"))
-        assertNull(i.resolve("https://pixelfed.social/storage/501.webp"))
+        assertNull(i.resolve("https://pixelfed.example/storage/501.webp"))
         assertNull(i.resolve("http://h/storage/.."))
         assertNull(FixtureMediaInterceptor(null).resolve("http://h/storage/carousel-1.png"))
     }
 
     @Test
     fun defaultFixtureForPixelfedHome() {
-        val repo = assertNotNull(findFixture("pixelfed_home_feed_bundle.json")).parentFile.parentFile
+        val feed = assertNotNull(findFixture("pixelfed_home_feed_bundle.json"))
+        val repo = File(feed.path.removeSuffix(fixturePath(feed.name)))
         assertEquals("pixelfed_home_feed_bundle.json", defaultFixture("pixelfed_home", repo).name)
     }
 

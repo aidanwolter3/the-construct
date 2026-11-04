@@ -342,20 +342,20 @@ pub enum PresentationMode {
       "id": "101",
       "author_uri": "pixelfed://users/42",
       "media_uris": ["pixelfed://media/501"],
-      "caption": "Sunrise over Boulder",
+      "caption": "Sunrise over Millbrook",
       "like_count": 89,
       "is_liked": false,
       "created_at": 1793548800
     },
     "pixelfed://users/42": {
       "id": "42",
-      "username": "aidan",
-      "avatar_url": "https://pixelfed.social/avatars/42.webp"
+      "username": "dana",
+      "avatar_url": "https://pixelfed.example/avatars/42.webp"
     },
     "pixelfed://media/501": {
-      "url": "https://pixelfed.social/storage/501.webp",
+      "url": "https://pixelfed.example/storage/501.webp",
       "aspect_ratio": 1.0,
-      "alt_text": "Morning Flatirons view"
+      "alt_text": "Morning ridge view"
     }
   }
 }

@@ -6,7 +6,8 @@ cd kmp-app && ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test   # sh
 ./gradlew :androidApp:assembleDebug          # Android build check (launches nothing)
 ```
 
-CI runs `scripts/check_decisions.sh`, clippy with warnings denied, the Rust tests (with
+CI runs `scripts/check_decisions.sh`, `scripts/check_test_data.sh` (no test data in the pod binary, decision
+`data-next-to-its-code`), clippy with warnings denied, the Rust tests (with
 [cargo-nextest](https://nexte.st), which runs tests from different binaries in parallel, plus `cargo test --doc`,
 which nextest skips), a dependency advisory check (`cargo-deny`), the JVM tests, and a simulator run whose
 screenshots are uploaded as an artifact.
@@ -97,14 +98,14 @@ image. Staging's fake runs at `https://the-construct-fake-pixelfed.fly.dev` (`fa
 
 ## A local real Pixelfed (optional)
 
-For re-recording `fixtures/pixelfed/recorded/` and as a contract test, `dev/pixelfed/` runs a real Pixelfed (v0.15.2,
+For re-recording `crates/app-pixelfed/tests/data/recorded/` and as a contract test, `dev/pixelfed/` runs a real Pixelfed (v0.15.2,
 digest-pinned) with MariaDB and Redis in Docker (D20). It is loopback-only (`127.0.0.1:8090`), federation and
 registration are off, and every secret in `dev/pixelfed/pixelfed.env` is a committed dev-only dummy.
 
 ```bash
 scripts/pixelfed_dev.sh up       # start the container runtime if needed, compose up, first-run init
 scripts/pixelfed_dev.sh seed     # users and posts; tokens in dev/pixelfed/.seed/ (gitignored)
-scripts/pixelfed_dev.sh record   # re-record the home timelines in fixtures/pixelfed/recorded/
+scripts/pixelfed_dev.sh record   # re-record the home timelines in crates/app-pixelfed/tests/data/recorded/
 scripts/pixelfed_dev.sh status   # | logs [svc] | down (keeps data) | reset (deletes all data)
 ```
 

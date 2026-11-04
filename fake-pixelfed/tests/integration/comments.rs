@@ -482,7 +482,7 @@ async fn only_own_comments_can_be_deleted() {
     )
     .await;
     assert_eq!(s, StatusCode::OK);
-    assert_eq!(deleted["text"], "Adding Boulder to the list.");
+    assert_eq!(deleted["text"], "Adding Millbrook to the list.");
     assert_eq!(status(&router, CAROUSEL).await["replies_count"], 3);
     assert!(
         !state

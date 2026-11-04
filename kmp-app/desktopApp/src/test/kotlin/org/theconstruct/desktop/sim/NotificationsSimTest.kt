@@ -21,7 +21,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/** The bell, the inbox and the notification settings (D52) over [FakeEngineBridge] and `fixtures/notifications.json`. */
+/** The bell, the inbox and the notification settings (D52) over [FakeEngineBridge] and `kmp-app/desktopApp/src/sim/resources/notifications.json`. */
 @OptIn(ExperimentalTestApi::class)
 class NotificationsSimTest {
     private val outDir: File = Files.createTempDirectory("construct-notifications-test").toFile()
@@ -31,7 +31,7 @@ class NotificationsSimTest {
         outDir.deleteRecursively()
     }
 
-    private fun fixture(name: String): String = assertNotNull(findFixture(name), "fixtures/$name not found").readText()
+    private fun fixture(name: String): String = assertNotNull(findFixture(name), "${fixturePath(name)} not found").readText()
 
     private val notifications = FakeNotifications.fromFixture(fixture("notifications.json"))
     private val screenData = fixture("pixelfed_screen_data.json")

@@ -3,7 +3,7 @@
 //!
 //! Layouts can't format dates, so the pod writes the display text
 //! (`Fri Nov 6 · 7:30 PM`) from the source's own wall clock: an event in
-//! Boulder reads in Boulder time, whatever zone the pod runs in. A time
+//! Millbrook reads in Millbrook time, whatever zone the pod runs in. A time
 //! with an offset (`…T19:30-07:00`, `…Z`) is exact; one without is placed
 //! in the target's [`Zone`] when it has one (a named zone follows daylight
 //! saving; a fixed offset doesn't), else read as UTC (only "is it past"

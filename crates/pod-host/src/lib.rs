@@ -1458,10 +1458,10 @@ mod tests {
                 .all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b))
         );
         assert_ne!(t, new_pod_token());
-        for ok in ["aidan", "temp-1a2b", "a"] {
+        for ok in ["dana", "temp-1a2b", "a"] {
             assert!(valid_pod_name(ok), "{ok}");
         }
-        for bad in ["", "-x", "Aidan", "a b", "a/b", &"x".repeat(41)] {
+        for bad in ["", "-x", "Dana", "a b", "a/b", &"x".repeat(41)] {
             assert!(!valid_pod_name(bad), "{bad}");
         }
     }
