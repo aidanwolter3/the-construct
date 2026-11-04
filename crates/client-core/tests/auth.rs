@@ -607,7 +607,11 @@ fn outbox_401_keeps_the_like_pending_until_the_next_sign_in() {
     wait_until("signed out by the 401", || {
         auth(&engine.snapshot())["state"] == "signed_out"
     });
-    assert!(store.get(&session_key(&env.pod)).is_none());
+    // The store is written on a background thread, so the delete can land
+    // just after the snapshot says signed out.
+    wait_until("session deleted from the store", || {
+        store.get(&session_key(&env.pod)).is_none()
+    });
     // Not rolled back, not dropped, not retried in a loop.
     thread::sleep(Duration::from_millis(400));
     let snap = engine.snapshot();
