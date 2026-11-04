@@ -203,13 +203,13 @@ async fn preview(adapter: &WatcherAdapter, pod: &Pod, args: &Value) -> Result<Va
     let body = String::from_utf8_lossy(&bytes);
     let now = pod_core::util::now_secs();
     let hint = args["hint"].as_str().unwrap_or("");
-    let (events, used) = check::extract(adapter, extractor, &body, &url, hint, zone, now)
+    let (events, used) = check::extract(adapter, extractor, &body, &url, hint, zone.as_ref(), now)
         .await
         .map_err(|e| json!({ "error": "extract_failed", "detail": e, "status": 502 }))?;
     let upcoming: Vec<_> = events
         .iter()
         .filter(|e| {
-            let ts = e.start.timestamp(zone);
+            let ts = e.start.timestamp(zone.as_ref());
             db::relevant_until(&e.start, ts, e.start.offset_min.is_some() || zone.is_some()) >= now
         })
         .collect();
@@ -218,8 +218,8 @@ async fn preview(adapter: &WatcherAdapter, pod: &Pod, args: &Value) -> Result<Va
         .take(15)
         .map(|e| {
             json!({ "title": e.title, "start": e.start.stored(),
-                    "when": format!("{} {}", e.start.shifted_to(zone).date_text(),
-                                    e.start.shifted_to(zone).time_text().unwrap_or_default()).trim(),
+                    "when": format!("{} {}", e.start.shifted_to(zone.as_ref()).date_text(),
+                                    e.start.shifted_to(zone.as_ref()).time_text().unwrap_or_default()).trim(),
                     "venue": e.venue, "url": e.url, "source_id": e.source_id,
                     "description": html::truncate(&e.description, 300) })
         })

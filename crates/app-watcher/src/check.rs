@@ -123,7 +123,7 @@ pub async fn fetch(
 }
 
 /// Today's date (`YYYY-MM-DD`) in `zone` (else UTC).
-fn today(now: i64, zone: Option<Zone>) -> String {
+fn today(now: i64, zone: Option<&Zone>) -> String {
     let local = now + i64::from(zone.map_or(0, |z| z.offset_at(now))) * 60;
     let (y, m, d) = civil_from_days(local.div_euclid(86_400));
     format!("{y:04}-{m:02}-{d:02}")
@@ -138,7 +138,7 @@ pub async fn extract(
     body: &str,
     url: &str,
     hint: &str,
-    zone: Option<Zone>,
+    zone: Option<&Zone>,
     now: i64,
 ) -> Result<(Vec<RawEvent>, &'static str), String> {
     let kind = match Kind::parse(extractor) {
@@ -281,11 +281,20 @@ async fn check_inner(pod: &Pod, adapter: &WatcherAdapter, t: &Target, now: i64) 
         return CheckResult::Unchanged;
     }
     let body = String::from_utf8_lossy(&bytes);
-    let (mut events, used) =
-        match extract(adapter, &t.extractor, &body, &t.url, &t.hint, t.zone(), now).await {
-            Ok(x) => x,
-            Err(e) => return failed(e, None),
-        };
+    let (mut events, used) = match extract(
+        adapter,
+        &t.extractor,
+        &body,
+        &t.url,
+        &t.hint,
+        t.zone().as_ref(),
+        now,
+    )
+    .await
+    {
+        Ok(x) => x,
+        Err(e) => return failed(e, None),
+    };
     if t.details {
         let ids: Vec<String> = events.iter().map(|e| db::event_id(&t.id, e)).collect();
         let lookup = ids.clone();
@@ -408,7 +417,7 @@ mod tests {
 
     #[test]
     fn dates_and_backoff() {
-        assert_eq!(today(0, Some(Zone::Fixed(-420))), "1969-12-31");
+        assert_eq!(today(0, Some(&Zone::Fixed(-420))), "1969-12-31");
         let t = Target {
             id: "t".into(),
             title: String::new(),

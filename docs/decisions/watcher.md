@@ -42,7 +42,7 @@ declarative.
 - **Dates** (`when.rs`): an event keeps the source's wall clock and its offset when the source gave one; an
   iCalendar `DTSTART;TZID=America/Denver` gets that zone's offset on that date (a zone name we can't resolve, such
   as a Windows one, is left to the target's zone). A time without an offset is placed in the target's zone, with
-  daylight saving when it is named (the `chrono-tz` database, compiled in: the server image needs no zoneinfo).
+  daylight saving when it is named (`pod_core::tz`'s built-in database: the server image needs no zoneinfo).
   Display text (`Fri Nov 6 · 7:30 PM · The End`) is written by the pod from that wall clock (layouts can't format
   dates), shifted to the target's zone when both are known.
 - **Rules** (`watcher_rules`): any-of, all-of and none-of phrases, a venue, days of the week, a window in days, and

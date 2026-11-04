@@ -21,8 +21,6 @@ tracing = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sha2 = "0.10"
 getrandom = "0.3"
-chrono-tz = { version = "0.10", default-features = false, features = ["std"] }
-chrono = { version = "0.4", default-features = false }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

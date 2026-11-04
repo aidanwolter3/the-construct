@@ -142,7 +142,7 @@ pub fn ics(text: &str) -> Vec<RawEvent> {
                 // `2026-11-06T19:30-07:00`.
                 let date = |k: &str| match find(k) {
                     Some((_, tzid, v)) => match (tzid_zone(tzid), When::parse(v)) {
-                        (Some(tz), Some(w)) => w.placed_in(Zone::Named(tz)).stored(),
+                        (Some(tz), Some(w)) => w.placed_in(&Zone::Named(tz)).stored(),
                         _ => v.clone(),
                     },
                     None => String::new(),
@@ -491,9 +491,9 @@ END:VCALENDAR\r\n";
         assert_eq!(ev[2].start.stored(), "2026-12-10T19:30");
         // A `Z` time on a Denver target shows in Denver time.
         let z = ics("BEGIN:VEVENT\r\nSUMMARY:Z\r\nDTSTART:20260711T013000Z\r\nEND:VEVENT\r\n");
-        let shown = z[0]
-            .start
-            .shifted_to(Some(Zone::Named(chrono_tz::America::Denver)));
+        let shown = z[0].start.shifted_to(Some(&Zone::Named(
+            pod_core::tz::parse("America/Denver").unwrap(),
+        )));
         assert_eq!(
             (shown.date_text(), shown.time_text()),
             ("Fri Jul 10".into(), Some("7:30 PM".into()))

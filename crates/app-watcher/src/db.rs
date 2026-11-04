@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use pod_core::store::Migration;
+use pod_core::tz::jiff::tz::TimeZone;
 
 use crate::extract::RawEvent;
 use crate::rules::{Candidate, RuleSpec};
@@ -194,7 +195,7 @@ pub struct Target {
     /// A fixed offset (minutes east of UTC): used only without a `time_zone`.
     pub utc_offset: Option<i32>,
     /// The site's zone by name (`America/Denver`), following daylight saving.
-    pub time_zone: Option<chrono_tz::Tz>,
+    pub time_zone: Option<TimeZone>,
     pub archived: bool,
     pub created_at: i64,
     pub next_fetch_at: i64,
@@ -240,9 +241,14 @@ fn target_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Target> {
     })
 }
 
+/// A zone's IANA name, as stored.
+fn zone_name(tz: &TimeZone) -> String {
+    Zone::Named(tz.clone()).name()
+}
+
 /// A stored zone name (an unknown one, say from a newer zone database,
 /// reads as none).
-fn zone_column(name: Option<String>) -> Option<chrono_tz::Tz> {
+fn zone_column(name: Option<String>) -> Option<TimeZone> {
     parse_time_zone(name.as_deref().unwrap_or(""))
         .ok()
         .flatten()
@@ -252,11 +258,11 @@ impl Target {
     /// The zone for times without an offset: the named zone, else the
     /// fixed offset.
     pub fn zone(&self) -> Option<Zone> {
-        target_zone(self.time_zone, self.utc_offset)
+        target_zone(self.time_zone.clone(), self.utc_offset)
     }
 }
 
-fn target_zone(tz: Option<chrono_tz::Tz>, offset: Option<i32>) -> Option<Zone> {
+fn target_zone(tz: Option<TimeZone>, offset: Option<i32>) -> Option<Zone> {
     tz.map(Zone::Named).or(offset.map(Zone::Fixed))
 }
 
@@ -335,7 +341,7 @@ pub fn insert_target(
             t.archived,
             client_id,
             t.created_at,
-            t.time_zone.map(|z| z.name())
+            t.time_zone.as_ref().map(zone_name)
         ],
     )?;
     Ok(())
@@ -367,7 +373,7 @@ pub fn update_target(tx: &Transaction<'_>, t: &Target, now: i64) -> rusqlite::Re
             t.utc_offset,
             t.archived,
             now,
-            t.time_zone.map(|z| z.name())
+            t.time_zone.as_ref().map(zone_name)
         ],
     )?;
     if refetch {
@@ -545,7 +551,7 @@ pub fn target_entity(c: &Connection, t: &Target, now: i64) -> rusqlite::Result<E
     );
     v.insert(
         "time_zone".into(),
-        json!(t.time_zone.map(|z| z.name()).unwrap_or_default()),
+        json!(t.time_zone.as_ref().map(zone_name).unwrap_or_default()),
     );
     v.insert("archived".into(), json!(t.archived));
     v.insert("health".into(), json!(status));
@@ -752,8 +758,9 @@ pub fn store_events(
     let mut seen: Vec<String> = Vec::new();
     let mut changed = 0;
     for e in events {
-        let start_ts = e.start.timestamp(t.zone());
-        let offset_known = e.start.offset_min.is_some() || t.zone().is_some();
+        let zone = t.zone();
+        let start_ts = e.start.timestamp(zone.as_ref());
+        let offset_known = e.start.offset_min.is_some() || zone.is_some();
         let until = relevant_until(&e.start, start_ts, offset_known);
         if until < now {
             continue;
@@ -974,7 +981,7 @@ fn event_entity(c: &Connection, id: &str) -> rusqlite::Result<Option<EntityRecor
         (rows.into_iter().map(|(t, _)| t).collect(), seen)
     };
     let zone = target_zone(zone_column(tz), offset);
-    let shown = When::parse(&start).map(|w| w.shifted_to(zone));
+    let shown = When::parse(&start).map(|w| w.shifted_to(zone.as_ref()));
     let date_text = shown.map(|w| w.date_text()).unwrap_or_default();
     let time_text = shown.and_then(|w| w.time_text()).unwrap_or_default();
     let when_text = [date_text.as_str(), time_text.as_str()]
@@ -1240,12 +1247,15 @@ mod tests {
         let mut t = target(&c, "t1").unwrap().unwrap();
         assert_eq!(t.time_zone, None);
         assert_eq!(t.zone(), Some(Zone::Fixed(-420)));
-        t.time_zone = Some(chrono_tz::America::Denver);
+        t.time_zone = Some(pod_core::tz::parse("America/Denver").unwrap());
         let tx = c.transaction().unwrap();
         update_target(&tx, &t, 1).unwrap();
         tx.commit().unwrap();
         let t = target(&c, "t1").unwrap().unwrap();
-        assert_eq!(t.zone(), Some(Zone::Named(chrono_tz::America::Denver)));
+        assert_eq!(
+            t.zone().map(|z| z.name()).as_deref(),
+            Some("America/Denver")
+        );
         assert_eq!(t.utc_offset, Some(-420));
     }
 
