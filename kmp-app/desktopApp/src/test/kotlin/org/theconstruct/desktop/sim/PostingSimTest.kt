@@ -20,7 +20,7 @@ import kotlin.test.assertTrue
 /**
  * Photo posting (DECISIONS D49–D51, docs/posting.md) through the generic pieces: `core://MediaPicker`, the simulator's
  * `pick`, a create with `attachments` / `position: start` followed by `action.navigation.back` in an `action.sequence`,
- * and the fake pod finishing the post on `wait`. The layout mirrors the compose screen of layouts/pixelfed_home/0009.json
+ * and the fake pod finishing the post on `wait`. The layout mirrors the compose screen of the newest layouts/pixelfed_home file
  * on a minimal feed.
  */
 class PostingSimTest {

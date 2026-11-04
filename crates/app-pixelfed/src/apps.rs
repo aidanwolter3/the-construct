@@ -21,12 +21,6 @@ pub fn files() -> Vec<LayoutSource> {
     HOME_FILES.iter().chain(DEMO_FILES).copied().collect()
 }
 
-/// Files deployed with the `pixelfed://` widgets, which were later removed
-/// (D36/D37). They still parse (as `UiNode::Unknown`) and are served to the
-/// clients that draw them.
-pub static HOME_LEGACY: &[(&str, u32)] = &[("pixelfed_home", 1), ("pixelfed_home", 2)];
-pub static DEMO_LEGACY: &[(&str, u32)] = &[("pixelfed_demo", 1)];
-
 /// The signed-in Pixelfed feed.
 pub const HOME: AppInfo = AppInfo {
     id: crate::layout::WORKSPACE_ID,
@@ -88,7 +82,6 @@ pub fn demo_adapter() -> Arc<StaticAdapter> {
     Arc::new(
         StaticAdapter::new(DEMO_NAME, DEMO, DEMO_FILES, &DEMO_BUNDLE)
             .with_manifest(DEMO_MANIFEST)
-            .with_legacy_files(DEMO_LEGACY)
             .with_router(demo_router),
     )
 }

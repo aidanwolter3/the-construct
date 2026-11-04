@@ -21,6 +21,15 @@ fn catalog() -> Catalog {
 fn files() -> Vec<LayoutSource> {
     apps::files()
 }
+
+/// An app's newest layout file.
+fn newest(app_id: &str) -> LayoutSource {
+    files()
+        .into_iter()
+        .filter(|f| f.app_id == app_id)
+        .max_by_key(|f| f.name)
+        .unwrap()
+}
 #[test]
 fn every_file_in_layouts_is_embedded() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../layouts");
@@ -59,30 +68,28 @@ fn every_file_parses_and_validates() {
     let files = parse_files(&catalog(), &files()).unwrap();
     for a in catalog().apps() {
         assert!(
-            files.iter().any(|f| f.app_id == a.id && f.number == 1),
-            "{} has a 0001.json",
+            files.iter().any(|f| f.app_id == a.id),
+            "{} has a layout file",
             a.id
         );
     }
 }
 
 #[test]
-fn first_files_are_the_original_builtin_layouts() {
+fn builtin_is_the_oldest_file_in_the_build() {
     let files = parse_files(&catalog(), &files()).unwrap();
-    for (app_id, note) in [
-        ("pixelfed_home", "Classic feed"),
-        ("pixelfed_demo", "Classic feed"),
-    ] {
-        let f = files
+    for a in catalog().apps() {
+        let oldest = files
             .iter()
-            .find(|f| f.app_id == app_id && f.number == 1)
+            .filter(|f| f.app_id == a.id)
+            .min_by_key(|f| f.number)
             .unwrap();
         assert_eq!(
-            Some(f.layout.clone()),
-            builtin(&catalog(), app_id),
-            "{app_id}"
+            Some(oldest.layout.clone()),
+            builtin(&catalog(), a.id),
+            "{}",
+            a.id
         );
-        assert_eq!(f.note, note);
     }
 }
 
@@ -136,10 +143,6 @@ const MINIMAL: &str = r#"{
 #[test]
 fn invalid_files_are_refused_with_their_path() {
     let ok = MINIMAL;
-    assert_eq!(
-        (files()[1].app_id, files()[1].name),
-        ("pixelfed_home", "0002")
-    );
     let cases: Vec<(LayoutSource, &str)> = vec![
         (
             src("pixelfed_demo", "0001", "{"),
@@ -199,8 +202,10 @@ fn invalid_files_are_refused_with_their_path() {
         err,
         "layouts/pixelfed_demo/0003.json: layout files are numbered without gaps, expected 0002.json next"
     );
-    let err = parse_files(&catalog(), &[src("pixelfed_demo", "0002", ok)]).unwrap_err();
-    assert!(err.contains("expected 0001.json next"), "{err}");
+    // An app's files may start above 0001: the older ones were retired
+    // (decision `retired-layout-files`).
+    let files = parse_files(&catalog(), &[src("pixelfed_demo", "0002", ok)]).unwrap();
+    assert_eq!(files[0].number, 2);
     let err = parse_files(
         &catalog(),
         &[
@@ -233,19 +238,10 @@ fn invalid_files_are_refused_with_their_path() {
 }
 
 #[test]
-fn removed_node_types_only_parse_in_their_deployed_files() {
-    let legacy = files()
-        .into_iter()
-        .find(|f| f.app_id == "pixelfed_home" && f.name == "0001")
-        .unwrap();
-    // The deployed file still parses: its widgets are opaque unknown nodes.
-    let parsed = parse_file(&catalog(), &legacy).unwrap();
-    assert_eq!(
-        pod_core::validate::unknown_node_types(&parsed.layout),
-        ["pixelfed://FeedList"]
-    );
-    // The same content as a new file is refused.
-    let err = parse_file(&catalog(), &src("pixelfed_home", "0004", legacy.text)).unwrap_err();
+fn unknown_node_types_are_refused() {
+    // A node type removed from the protocol (D37) is refused in any file.
+    let removed = leak(MINIMAL.replacen("\"core://Button\"", "\"pixelfed://FeedList\"", 1));
+    let err = parse_file(&catalog(), &src("pixelfed_demo", "0003", removed)).unwrap_err();
     assert!(
         err.contains("unknown node type 'pixelfed://FeedList'"),
         "{err}"
@@ -255,13 +251,9 @@ fn removed_node_types_only_parse_in_their_deployed_files() {
     let err = parse_file(&catalog(), &src("pixelfed_demo", "0003", typo)).unwrap_err();
     assert!(err.contains("unknown node type 'core://Buton'"), "{err}");
     // An unknown icon is refused too.
-    let feed = files()
-        .into_iter()
-        .find(|f| f.app_id == "pixelfed_home" && f.name == "0003")
-        .unwrap()
-        .text;
-    let icon = leak(feed.replacen("\"chat_bubble\"", "\"chat_bubbles\"", 1));
-    let err = parse_file(&catalog(), &src("pixelfed_home", "0003", icon)).unwrap_err();
+    let feed = newest("pixelfed_home");
+    let icon = leak(feed.text.replacen("\"chat_bubble\"", "\"chat_bubbles\"", 1));
+    let err = parse_file(&catalog(), &src("pixelfed_home", feed.name, icon)).unwrap_err();
     assert!(err.contains("unknown icon 'chat_bubbles'"), "{err}");
 }
 
@@ -272,23 +264,20 @@ fn leak(s: String) -> &'static str {
 #[test]
 fn unknown_intent_tags_are_refused_in_files() {
     // The newest feed file: generic nodes, so its intents are typed.
-    let ok = files()
-        .into_iter()
-        .find(|f| f.app_id == "pixelfed_home" && f.name == "0003")
-        .unwrap()
-        .text;
+    let feed = newest("pixelfed_home");
+    let (name, ok) = (feed.name, feed.text);
     // A typo'd tag (would deserialize as ActionIntent::Unknown).
     let typo = leak(ok.replacen(
         "\"action.navigation.open\"",
         "\"action.navigation.opne\"",
         1,
     ));
-    let err = parse_files(&catalog(), &[src("pixelfed_home", "0003", typo)]).unwrap_err();
+    let err = parse_files(&catalog(), &[src("pixelfed_home", name, typo)]).unwrap_err();
     assert!(
-        err.starts_with(
-            "layouts/pixelfed_home/0003.json: invalid layout: unknown action intent \
+        err.starts_with(&format!(
+            "layouts/pixelfed_home/{name}.json: invalid layout: unknown action intent \
              'action.navigation.opne' at /layout/"
-        ),
+        )),
         "{err}"
     );
     // The pointer leads to the object holding the tag.
@@ -302,7 +291,7 @@ fn unknown_intent_tags_are_refused_in_files() {
     // The removed agent intent and the fallback tag itself.
     for tag in ["action.agent.prompt", "action.unknown"] {
         let bad = leak(ok.replacen("\"action.mutation.optimistic\"", &format!("\"{tag}\""), 1));
-        let err = parse_files(&catalog(), &[src("pixelfed_home", "0003", bad)]).unwrap_err();
+        let err = parse_files(&catalog(), &[src("pixelfed_home", name, bad)]).unwrap_err();
         assert!(
             err.contains(&format!("unknown action intent '{tag}'")),
             "{err}"
@@ -374,34 +363,12 @@ fn sync_appends_new_files_once_and_refuses_changes() {
         SyncReport::default(),
         "idempotent"
     );
+    // A new pod starts from the oldest file in the build, as version 1.
     let (v, layout) = latest(&store, &catalog(), "pixelfed_home")
         .unwrap()
         .unwrap();
-    assert_eq!(
-        v, 10,
-        "0010: the title scrolls away with the feed (decision pinned-app-title)"
-    );
+    assert_eq!(v, 1);
     assert!(pod_core::validate::unknown_node_types(&layout).is_empty());
-    // Each client gets the newest version it can draw: a build from before
-    // `action.sequence` (it still drew the create's `dismiss`) gets 0008.
-    let before: String = protocol::FEATURES
-        .iter()
-        .filter(|f| **f != protocol::feature::ACTION_SEQUENCE)
-        .chain([&protocol::feature::CREATE_DISMISS])
-        .copied()
-        .collect::<Vec<_>>()
-        .join(",");
-    let served = active_for(
-        &store,
-        &catalog(),
-        "pixelfed_home",
-        &protocol::ClientCaps::from_header(&before),
-    )
-    .unwrap()
-    .unwrap();
-    assert_eq!(served.version, 8);
-    // 0009 needs feature `action_sequence`; this build has it. (It no longer
-    // draws 0005-0008, which use `dismiss`: decision `named-vocabulary`.)
     let served = active_for(
         &store,
         &catalog(),
@@ -410,63 +377,59 @@ fn sync_appends_new_files_once_and_refuses_changes() {
     )
     .unwrap()
     .unwrap();
-    assert_eq!(served.version, 10);
-    // A build from before `title_scrolls` (it pins nothing, the title always
-    // scrolls) keeps getting 0009.
+    assert_eq!(served.version, 1);
+    // A build from before `title_scrolls` has no version it can draw on a new
+    // pod: the older files are retired (decision `retired-layout-files`).
     let before: String = protocol::FEATURES
         .iter()
         .filter(|f| **f != protocol::feature::TITLE_SCROLLS)
         .copied()
         .collect::<Vec<_>>()
         .join(",");
-    let served = active_for(
-        &store,
-        &catalog(),
-        "pixelfed_home",
-        &protocol::ClientCaps::from_header(&before),
-    )
-    .unwrap()
-    .unwrap();
-    assert_eq!(served.version, 9);
-    // A third pixelfed_demo file.
+    assert!(
+        active_for(
+            &store,
+            &catalog(),
+            "pixelfed_home",
+            &protocol::ClientCaps::from_header(&before),
+        )
+        .unwrap()
+        .is_none()
+    );
+    // A new pixelfed_demo file after the build's newest (0002).
     let one = src("pixelfed_demo", "0003", MINIMAL);
-    let two_text = MINIMAL.replace("Minimal demo", "Minimal v2");
-    let two_text: &'static str = Box::leak(two_text.into_boxed_str());
+    let two_text = leak(MINIMAL.replace("Minimal demo", "Minimal v2"));
     let two = src("pixelfed_demo", "0003", two_text);
     let mut sources = files();
     sources.push(two);
     assert_eq!(
         sync_sources(&store, &catalog(), &sources).unwrap().appended,
-        [("layouts/pixelfed_demo/0003.json".to_owned(), 3)]
+        [("layouts/pixelfed_demo/0003.json".to_owned(), 2)]
     );
     // Changing a deployed file stops the start, naming it.
     let mut changed = files();
     changed.push(src("pixelfed_demo", "0003", one.text));
     assert_eq!(
         sync_sources(&store, &catalog(), &changed).unwrap_err(),
-        "layouts/pixelfed_demo/0003.json changed after it was deployed as version 3; layout files are \
+        "layouts/pixelfed_demo/0003.json changed after it was deployed as version 2; layout files are \
          append-only. To recover, restore the deployed content of layouts/pixelfed_demo/0003.json \
          (git log -p -- layouts/pixelfed_demo/0003.json) and put the change in a new file, 0004.json"
     );
     // Reformatting a file (same layout and note) is not a change.
     let reformatted: Value = serde_json::from_str(two_text).unwrap();
-    let reformatted: &'static str = Box::leak(
-        serde_json::to_string(&reformatted)
-            .unwrap()
-            .into_boxed_str(),
-    );
+    let reformatted = leak(serde_json::to_string(&reformatted).unwrap());
     let mut same = files();
     same.push(src("pixelfed_demo", "0003", reformatted));
     assert_eq!(
         sync_sources(&store, &catalog(), &same).unwrap(),
         SyncReport::default()
     );
-    // A rollback deploy without 0003.json starts, serving v3 unchanged.
+    // A rollback deploy without 0003.json starts, serving v2 unchanged.
     let report = sync(&store, &catalog()).unwrap();
     assert_eq!(
         report.missing,
         [
-            "layouts/pixelfed_demo/0003.json was deployed as version 3 but is missing from this build; \
+            "layouts/pixelfed_demo/0003.json was deployed as version 2 but is missing from this build; \
           serving the recorded history unchanged"
         ]
     );
@@ -476,7 +439,27 @@ fn sync_appends_new_files_once_and_refuses_changes() {
             .unwrap()
             .unwrap()
             .0,
-        3
+        2
+    );
+    // Retiring the old files (deleting them from the build) changes nothing on
+    // a pod that recorded them, and logs nothing.
+    let home = || files().into_iter().filter(|f| f.app_id == "pixelfed_home");
+    let retired: Vec<_> = home()
+        .chain([src("pixelfed_demo", "0003", two_text)])
+        .collect();
+    let report = sync_sources(&store, &catalog(), &retired).unwrap();
+    assert_eq!(report, SyncReport::default());
+    // The next file still appends after them.
+    let three = leak(MINIMAL.replace("Minimal demo", "Minimal v3"));
+    let next: Vec<_> = home()
+        .chain([
+            src("pixelfed_demo", "0003", two_text),
+            src("pixelfed_demo", "0004", three),
+        ])
+        .collect();
+    assert_eq!(
+        sync_sources(&store, &catalog(), &next).unwrap().appended,
+        [("layouts/pixelfed_demo/0004.json".to_owned(), 3)]
     );
 }
 

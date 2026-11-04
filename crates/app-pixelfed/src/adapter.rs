@@ -248,10 +248,6 @@ impl AppAdapter for PixelfedAdapter {
         apps::HOME_FILES
     }
 
-    fn legacy_files(&self) -> &'static [(&'static str, u32)] {
-        apps::HOME_LEGACY
-    }
-
     fn router(&self) -> Router<Pod> {
         crate::routes::router()
     }

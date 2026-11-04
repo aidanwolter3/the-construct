@@ -49,16 +49,47 @@ async fn get(pod: &Pod, path: &str) -> (StatusCode, Option<String>, Value) {
     get_as(pod, path, Some(&protocol::features_header())).await
 }
 
-/// The features header of a build from before `action.sequence`: it still
-/// drew the create's `dismiss` (decision `named-vocabulary`).
-fn before_sequences() -> String {
+/// The features header of a build from before `title_scrolls` (decision
+/// `pinned-app-title`): it can't draw the newest feed layout.
+fn before_title_scrolls() -> String {
     protocol::FEATURES
         .iter()
-        .filter(|f| **f != protocol::feature::ACTION_SEQUENCE)
-        .chain([&protocol::feature::CREATE_DISMISS])
+        .filter(|f| **f != protocol::feature::TITLE_SCROLLS)
         .copied()
         .collect::<Vec<_>>()
         .join(",")
+}
+
+/// A `pixelfed_home` layout from JSON (`slots` as given).
+fn feed_layout(title: &str, slots: Value) -> UiNode {
+    serde_json::from_value(json!({
+        "type": "core://Workspace", "id": "pixelfed_home", "title": title, "slots": slots,
+    }))
+    .unwrap()
+}
+
+/// Give `pixelfed_home` a history whose versions differ in what clients can
+/// draw (a fresh pod has only the newest file, decision
+/// `retired-layout-files`): 1 the newest file (feature `title_scrolls`),
+/// 2 a plain workspace any client draws, 3 a removed node type (retired for
+/// every client, D37), 4 the newest file again.
+fn feed_history(pod: &Pod) {
+    let store = pod.state.store();
+    let plain = feed_layout("Plain", json!([]));
+    let legacy = feed_layout(
+        "Legacy",
+        json!([{"slot_id": "main", "provider_uri": "core://x",
+                "content": {"type": "pixelfed://FeedList"}}]),
+    );
+    assert_eq!(
+        layouts::append_version(store, "pixelfed_home", &plain, Some("Plain")).unwrap(),
+        2
+    );
+    assert_eq!(
+        layouts::append_version(store, "pixelfed_home", &legacy, Some("Legacy")).unwrap(),
+        3
+    );
+    assert_eq!(deploy(pod, "pixelfed_home", "Four"), 4);
 }
 
 /// [`get`] as a client sending `features` (`None`: no header, a client
@@ -117,6 +148,16 @@ fn is_rfc3339(v: &Value) -> bool {
     v.as_str()
         .and_then(server::pixelfed::parse_rfc3339)
         .is_some_and(|t| t > 1_700_000_000)
+}
+
+/// The note of an app's newest file (version 1 on a fresh pod).
+fn newest_note(ws: &str) -> String {
+    layouts::parse_files(&server::catalog(), &server::layout_files())
+        .unwrap()
+        .into_iter()
+        .rfind(|f| f.app_id == ws)
+        .unwrap()
+        .note
 }
 
 /// How many layout files an app has (its latest version on a fresh pod).
@@ -215,7 +256,7 @@ async fn versions_page_newest_first() {
     assert!(body.get("next_before").is_none(), "{body}");
     let first = versions.last().unwrap();
     assert_eq!(first["source"], "file");
-    assert_eq!(first["note"], "Classic feed");
+    assert_eq!(first["note"], newest_note("pixelfed_demo"));
     assert!(is_rfc3339(&first["created_at"]), "{first}");
     assert_eq!(versions[0]["source"], "manual");
     assert_eq!(versions[0]["note"], "T5");
@@ -265,7 +306,7 @@ async fn one_version_carries_its_layout() {
     assert_eq!(body["app_id"], "pixelfed_home");
     assert_eq!(body["version"], 1);
     assert_eq!(body["source"], "file");
-    assert_eq!(body["note"], "Classic feed");
+    assert_eq!(body["note"], newest_note("pixelfed_home"));
     assert!(is_rfc3339(&body["created_at"]));
     let layout: UiNode = serde_json::from_value(body["layout"].clone()).unwrap();
     assert_eq!(
@@ -512,14 +553,15 @@ async fn a_legacy_version_that_is_not_a_ui_node_is_served_as_stored() {
     assert_eq!(body["version"], bad);
 }
 
-/// A database where `pixelfed_demo/0001` was recorded with other content.
+/// A database where `pixelfed_demo/0002` (its newest file) was recorded with
+/// other content.
 fn db_with_a_changed_file(dir: &std::path::Path) {
     let store = server::store::Store::open(&dir.join("server.db")).unwrap();
     let file = server::store::FileVersion {
-        key: "pixelfed_demo/0001".into(),
-        number: 1,
-        path: "layouts/pixelfed_demo/0001.json".into(),
-        note: "Classic feed".into(),
+        key: "pixelfed_demo/0002".into(),
+        number: 2,
+        path: "layouts/pixelfed_demo/0002.json".into(),
+        note: newest_note("pixelfed_demo"),
         json: "{}".into(),
         file_hash: "0".repeat(64),
         meta_json: None,
@@ -530,7 +572,7 @@ fn db_with_a_changed_file(dir: &std::path::Path) {
         .unwrap();
 }
 
-const CHANGED: &str = "layouts/pixelfed_demo/0001.json changed after it was deployed as version 1";
+const CHANGED: &str = "layouts/pixelfed_demo/0002.json changed after it was deployed as version 1";
 
 #[test]
 fn a_sync_error_stops_the_start() {
@@ -686,16 +728,15 @@ async fn sse_sends_current_version_then_new_versions_of_its_workspace() {
 #[tokio::test]
 async fn sse_announces_the_newest_version_the_client_can_draw() {
     let pod = pod().await;
+    feed_history(&pod);
     let app = "pixelfed_home";
     let url = format!("{}/v1/workspaces/{app}/events", pod.url);
-    // 0005-0008 use the create's `dismiss` (feature `create_dismiss`, now
-    // removed); 0009 writes Share as an `action.sequence`, and 0010 lets the
-    // title scroll (feature `title_scrolls`).
-    let old = before_sequences();
+    // Version 2 is the newest one a build without `title_scrolls` draws.
+    let old = before_title_scrolls();
     let mut before = SseReader::connect_as(&url, None, Some(&old)).await;
     let mut current = SseReader::connect(&url, None).await;
-    assert_eq!(before.next_event().await, layout_msg(app, 8));
-    assert_eq!(current.next_event().await, layout_msg(app, 10));
+    assert_eq!(before.next_event().await, layout_msg(app, 2));
+    assert_eq!(current.next_event().await, layout_msg(app, 4));
 
     // Publish a copy of the version `client` is served.
     let publish = |client: protocol::ClientCaps| {
@@ -710,13 +751,18 @@ async fn sse_announces_the_newest_version_the_client_can_draw() {
         pod.state.publish_layout(app, v);
         v
     };
-    // A copy of 0008: the older client, not this build.
-    assert_eq!(publish(protocol::ClientCaps::from_header(&old)), 11);
-    assert_eq!(before.next_event().await, layout_msg(app, 11));
-    // A copy of 0010: this build, whose next event is the next version it
-    // can draw.
-    assert_eq!(publish(protocol::ClientCaps::this_build()), 12);
-    assert_eq!(current.next_event().await, layout_msg(app, 12));
+    // A copy of version 2: the older client, and this build (it draws a
+    // plain workspace too).
+    assert_eq!(publish(protocol::ClientCaps::from_header(&old)), 5);
+    assert_eq!(before.next_event().await, layout_msg(app, 5));
+    assert_eq!(current.next_event().await, layout_msg(app, 5));
+    // A version only this build draws: the older client hears nothing, so
+    // its next event is the next plain version.
+    let v = deploy(&pod, app, "Six");
+    assert_eq!(v, 6);
+    assert_eq!(current.next_event().await, layout_msg(app, 6));
+    assert_eq!(publish(protocol::ClientCaps::from_header(&old)), 7);
+    assert_eq!(before.next_event().await, layout_msg(app, 7));
 }
 
 #[tokio::test]
@@ -832,44 +878,33 @@ async fn versions_say_whether_the_client_can_draw_them() {
             })
             .collect()
     };
+    feed_history(&pod);
     let retired = Some("retired".to_owned());
     let update = Some("update_required".to_owned());
-    // 0001-0002 hold the removed pixelfed:// widgets (D37) and 0005-0008 the
-    // removed create `dismiss`: retired for this build.
+    // Version 3 holds a removed node type (D37): retired for every client.
     let current = page(Some(protocol::features_header())).await;
     assert_eq!(
         rows(&current),
+        [(4, None), (3, retired.clone()), (2, None), (1, None)]
+    );
+    assert_eq!(current["latest_compatible_version"], json!(4));
+    let v4 = &current["versions"][0]["features"];
+    assert!(
+        v4.as_array().unwrap().contains(&json!("title_scrolls")),
+        "{v4}"
+    );
+    // A build from before `title_scrolls`: only the plain version 2.
+    let before = page(Some(before_title_scrolls())).await;
+    assert_eq!(
+        rows(&before),
         [
-            (10, None),
-            (9, None),
-            (8, retired.clone()),
-            (7, retired.clone()),
-            (6, retired.clone()),
-            (5, retired.clone()),
-            (4, None),
-            (3, None),
-            (2, retired.clone()),
-            (1, retired.clone())
+            (4, update.clone()),
+            (3, retired.clone()),
+            (2, None),
+            (1, update)
         ]
     );
-    assert_eq!(current["latest_compatible_version"], json!(10));
-    let v10 = &current["versions"][0]["features"];
-    assert!(
-        v10.as_array().unwrap().contains(&json!("title_scrolls")),
-        "{v10}"
-    );
-    let v9 = &current["versions"][1]["features"];
-    assert!(
-        v9.as_array().unwrap().contains(&json!("action_sequence")),
-        "{v9}"
-    );
-    // A build from before sequences: 0003-0008, not 0009 or 0010.
-    let before = page(Some(before_sequences())).await;
-    assert_eq!(
-        rows(&before)[..3],
-        [(10, update.clone()), (9, update.clone()), (8, None)]
-    );
-    assert_eq!(before["latest_compatible_version"], json!(8));
+    assert_eq!(before["latest_compatible_version"], json!(2));
     // A client that lists nothing draws nothing; a caller that sends no
     // header at all (a tool) is shown everything.
     let nothing = page(Some(String::new())).await;
@@ -878,7 +913,7 @@ async fn versions_say_whether_the_client_can_draw_them() {
     let tool = page(None).await;
     assert!(rows(&tool).iter().all(|r| r.1.is_none()), "{tool}");
     let one = client()
-        .get(format!("{}/v1/apps/pixelfed_home/versions/5", pod.url))
+        .get(format!("{}/v1/apps/pixelfed_home/versions/3", pod.url))
         .header(protocol::FEATURES_HEADER, protocol::features_header())
         .send()
         .await
@@ -895,6 +930,7 @@ async fn versions_say_whether_the_client_can_draw_them() {
 #[tokio::test]
 async fn apps_say_the_newest_version_the_client_can_draw() {
     let pod = pod().await;
+    feed_history(&pod);
     let apps = |features: Option<String>| {
         let mut req = client().get(format!("{}/v1/apps", pod.url));
         if let Some(f) = features {
@@ -903,16 +939,16 @@ async fn apps_say_the_newest_version_the_client_can_draw() {
         async move { req.send().await.unwrap().json::<Value>().await.unwrap() }
     };
     for (features, want) in [
-        (Some(protocol::features_header()), json!(10)),
-        (Some(before_sequences()), json!(8)),
+        (Some(protocol::features_header()), json!(4)),
+        (Some(before_title_scrolls()), json!(2)),
         (Some(String::new()), Value::Null),
-        (None, json!(10)),
+        (None, json!(4)),
     ] {
         let body = apps(features.clone()).await;
         let a = &body["apps"][0];
         assert_eq!(
             (&a["latest_version"], &a["latest_compatible_version"]),
-            (&json!(10), &want),
+            (&json!(4), &want),
             "{features:?}"
         );
     }
@@ -935,8 +971,7 @@ fn newest_layouts_use_no_removed_vocabulary() {
     }
 }
 
-/// `pixelfed_home`'s Share is that sequence: a client without feature
-/// `action_sequence` is served the version before it.
+/// `pixelfed_home`'s Share is a sequence (feature `action_sequence`).
 #[test]
 fn share_is_a_create_then_back() {
     let layout = newest_file("pixelfed_home");

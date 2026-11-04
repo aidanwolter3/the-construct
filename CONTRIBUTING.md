@@ -42,8 +42,9 @@ device; say so in the PR when a change needs that. More in [docs/testing.md](doc
 1. **The core knows no app.** The engine (`client-core`), the shared UI and `pod-core` handle layouts, entities and
    intents in general (D34, D35, D40). App changes ship as layout files plus adapter code in `crates/app-*`. Only new
    generic vocabulary (a node type, an intent, a field) needs a client build.
-2. **Layouts are append-only files.** A new version is the next `layouts/<app>/NNNN.json`; never edit, renumber or
-   delete a deployed one, or the server refuses to start. See [docs/layouts.md](docs/layouts.md).
+2. **Layouts are append-only files.** A new version is the next `layouts/<app>/NNNN.json`; never edit or renumber a
+   deployed one, or the server refuses to start. Old files may be deleted, oldest first (decision
+   `retired-layout-files`). See [docs/layouts.md](docs/layouts.md).
 3. **Vocabulary is named features.** Every node type, intent or field a layout can use has a file in
    `crates/protocol/features/` and an arm in `protocol::required_features`. Remove vocabulary by moving its file to
    `features/removed/`, never by editing layouts. See

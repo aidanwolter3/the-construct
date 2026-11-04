@@ -23,10 +23,15 @@ looks.
 
 There is no list of files to edit: each adapter's `build.rs` embeds its `layouts/<app>/` directory.
 
-**Files are append-only.** Never edit, rename or delete a file that has been deployed: the pod refuses to start and
-names the file. To undo a change, add a new file with the old content. Reformatting a file without changing its
+**Files are append-only.** Never edit or rename a file that has been deployed: the pod refuses to start and names
+the file. To undo a change, add a new file with the old content. Reformatting a file without changing its
 layout or note is fine. If another branch took your number first (git reports an add/add conflict), merge both
 layouts into the next number: each file is a whole snapshot.
+
+**Old files can be deleted** once no client needs them, oldest first (decision `retired-layout-files`); each app
+keeps at least its newest file. An app's files then start above `0001`. A pod that recorded the deleted versions
+keeps them in its history and serves them as before; a new pod starts from the oldest file left, as its version 1,
+so a client too old to draw that file gets `409 no_compatible_version` there.
 
 After changing a `pixelfed_home` layout, regenerate the simulator fixtures:
 `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::`.

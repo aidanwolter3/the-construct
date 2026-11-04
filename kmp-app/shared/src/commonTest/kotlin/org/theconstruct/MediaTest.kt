@@ -24,7 +24,7 @@ private class Recorder : ConstructEngineBridge {
     }
 }
 
-/** The compose screen of layouts/pixelfed_home/0009.json, reached from the feed: Share is [create, back]. */
+/** The compose screen of the newest layouts/pixelfed_home file, reached from the feed: Share is [create, back]. */
 private val COMPOSE_WORKSPACE = """
 {"type":"core://Workspace","id":"pixelfed_home","title":"Home","slots":[
   {"slot_id":"s","provider_uri":"p","content":{"type":"core://IconButton","icon":"add_photo","content_description":"New post",

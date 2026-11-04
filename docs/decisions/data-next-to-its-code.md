@@ -40,8 +40,8 @@ name as the demo post's author, real towns, a real comedy club and venue, a real
 they were replaced with fictional ones. What stays real is reference data, not personal data: IANA time zones
 (`America/Denver`, whose daylight-saving dates the tests rely on), `pixelfed.social` where it is the sign-in
 placeholder or an instance address being parsed, and recognised ticket hosts such as `eventbrite.com`. The one
-deployed layout that names a real troupe in a placeholder (`layouts/watcher/0001.json`) can't be edited; newer
-versions no longer use it.
+deployed layout that named a real troupe in a placeholder (`layouts/watcher/0001.json`) was deleted with the
+other old layout files (decision `retired-layout-files`).
 
 Older decisions name the old `fixtures/…` paths and the old example names; this decision says where the files
 are now and what replaced the names.
