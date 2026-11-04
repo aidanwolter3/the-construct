@@ -1,6 +1,6 @@
 # Android: one push registration per server, and notification taps through a private activity
 
-Date: 2026-11-03. Related: D29 (storage per server), D52 / [`../NOTIFICATIONS.md`](../NOTIFICATIONS.md), security
+Date: 2026-11-03. Related: D29 (storage per server), D52 / [`../notifications.md`](../notifications.md), security
 audit #31 (L11, L12).
 
 The Android app had one UnifiedPush registration (the connector's default instance) and handed its endpoint and Web

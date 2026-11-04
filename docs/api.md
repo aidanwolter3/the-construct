@@ -1,0 +1,102 @@
+# HTTP API
+
+The pod's core routes. Adapters add their own: see [pixelfed.md](pixelfed.md#endpoints) and
+[custom-apps.md](custom-apps.md#collections). Every call except those marked *public* needs
+`Authorization: Bearer <pod session>`. Errors answer `{"error": "<code>", ...}` with a matching status.
+
+Clients also send `X-Construct-Features` (the [layout features](layouts.md#features-and-compatibility) they draw)
+and `X-Construct-Device` (a client-made device id, used by notifications).
+
+## Pods and sessions
+
+| Call | Answer |
+|---|---|
+| `POST /v1/pods/open {"token": "cpod_…"}` *public* | `{session_token}`; 401 `pod_not_found`. 10 tries a minute per client address. |
+| `POST /v1/pods/temporary` *public* | `{session_token, expires_at, pod}`; 404 when disabled, 429, 503 `temporary_pods_full` or `low_disk_space`. |
+| `GET /v1/auth/sign-ins` | Every upstream sign-in on the pod, and the ones it offers. |
+| `POST /v1/auth/logout` | Deletes the session and its sign-ins. |
+| `GET /healthz` *public* | `ok`. |
+
+Images load without a bearer from `/v1/p/<pod id>/…`, which reaches only the paths adapters mark public (such as
+the Pixelfed media proxy and uploads).
+
+## Apps, layouts and the event stream
+
+| Call | Answer |
+|---|---|
+| `GET /v1/apps[?all=1]` | `{apps: [{id, title, icon, kind, latest_version, latest_compatible_version, updated_at, updates_from?}]}`. Hidden apps only with `all=1`. |
+| `GET /v1/apps/{id}/versions[?limit=1..100&before=N]` | `{app_id, latest_version, latest_compatible_version, versions: [{version, created_at, source, note?, features, compatible, incompatible?}], next_before?}`, newest first. |
+| `GET /v1/apps/{id}/versions/{n}` | One version with its `layout`. |
+| `PUT /v1/apps/{id}/hidden {hidden}` | Hides or shows any app in the app list. |
+| `GET /v1/workspaces/{id}` | The app's bundle (`{workspace, entities, queries}`) at the newest version the client can draw, with `X-Construct-Layout-Version`. A stale session gets 401 with a signed-out bundle and `X-Construct-Session: invalid`. |
+| `GET /v1/workspaces/{id}/events` | Server-sent events, below. |
+
+`latest_compatible_version` is what opening the app serves this client (`null` if no version fits).
+`incompatible` is `update_required` (the version uses a feature this client doesn't draw) or `retired` (it uses a
+removed one). A request without `X-Construct-Features` is served the latest version.
+
+**Events.** The stream's first message is the current version, then:
+
+| Event | Data | When |
+|---|---|---|
+| `layout` | `{version, workspace_id}` | A newer version this client can draw exists. |
+| `data` | `{workspace_id}` | The app's data changed for this session (e.g. a post finished uploading); reload. |
+| `notification` | `{id, app_id, channel, title, body, target_uri, unread_total}` | A notification for any app of the pod. |
+| `notifications_read` | the new unread counts | Notifications were marked read on some device. |
+| `deleted` | | The custom app was deleted. |
+
+A `: keepalive` comment comes every 15 s. Streams opened without a session hear only `layout` events. A session's
+stream ends when the session is revoked; one session may hold 8 streams (then 429 `too_many_streams`).
+
+## Custom apps
+
+| Call | Answer |
+|---|---|
+| `POST /v1/custom-apps {title, icon, feeds, note?, layout}` | Creates an app; the pod sets the layout root's `id`. |
+| `GET /v1/custom-apps/{id}` | Its feeds and latest layout. |
+| `PUT /v1/custom-apps/{id}/layout {layout, note?, base_version?}` | A new version; 409 `stale_base` if `base_version` isn't the latest. |
+| `PATCH /v1/custom-apps/{id} {title?, icon?, feeds?}` | Renames or changes feeds. |
+| `POST /v1/custom-apps/{id}/restore {version}` | Appends a copy of an older version. |
+| `POST /v1/custom-apps/{id}/dismiss-update {version}` | Stops reporting `updates_from` for a copied part. |
+| `DELETE /v1/custom-apps/{id}` | Soft delete, purged after 30 days. |
+| `POST /v1/custom-apps/validate {feeds, layout}` | A dry run. |
+
+Every write is validated against the app's data sources; errors name a JSON pointer and what is allowed. Limits per
+pod: 50 apps, 500 versions per app (oldest pruned), 256 KiB per layout, 60 writes a minute.
+
+## Notifications and devices
+
+| Call | Answer |
+|---|---|
+| `GET /v1/notifications?limit=0..100&before=<id>&app=<id>` | `{notifications, unread_total, unread_by_app, next_before?}`, newest first. |
+| `POST /v1/notifications/read {"ids": [...]}` or `{"all": true, "app"?: id}` | `{unread_total, unread_by_app}`. |
+| `GET /v1/notifications/channels` | `{channels: [{app_id, id, title, description, default_enabled, importance, enabled}]}`; `enabled` is the calling device's choice. |
+| `PUT /v1/devices/{id} {platform, name?, push?: {endpoint, p256dh, auth} \| null}` | Registers the device under the session; `push` sets or removes its Web Push subscription. |
+| `PUT /v1/devices/{id}/channels {"<app>.<channel>": bool}` | The device's channel choices. |
+| `DELETE /v1/devices/{id}` | Forgets the device. |
+| `GET /v1/push/key` | `{vapid_public_key}`; 404 `push_unavailable` with `CONSTRUCT_PUSH=off`. |
+
+How the pipeline works: [notifications.md](notifications.md).
+
+## Uploads
+
+| Call | Answer |
+|---|---|
+| `POST /v1/uploads` (raw body, `Idempotency-Key`) | `{upload_id}`. JPEG, PNG or WebP, checked by content; 413 over `CONSTRUCT_UPLOAD_MAX_BYTES`, 507 `upload_quota_exceeded` or `low_disk_space`. |
+| `GET /v1/uploads/{id}` *public* | The file. The id is a 128-bit capability; it lives until an adapter releases it, or 24 h if never claimed. |
+
+How a create carries attachments: [posting.md](posting.md).
+
+## Claude (MCP)
+
+`POST /v1/mcp` is the pod's MCP endpoint, with OAuth discovery at `/.well-known/oauth-protected-resource` and
+`/.well-known/oauth-authorization-server`, and `/oauth/register`, `/oauth/authorize` and `/oauth/token`. The
+credential it issues reaches only `/v1/mcp`. See [custom-apps.md](custom-apps.md#building-apps-with-claude).
+
+## Development and test routes
+
+| Call | Answer |
+|---|---|
+| `POST /v1/demo/ack` | A stateless 200, for the `pixelfed_demo` app's buttons. |
+| `POST /v1/test/fault {"status": 503, "count": 3}` | Only with `CONSTRUCT_TEST_HOOKS=1`: the next `count` POSTs answer `status` without being applied; `count: 0` clears it. |
+| `GET /metrics` | Prometheus text, only on `CONSTRUCT_METRICS_ADDR`. |

@@ -1,4 +1,4 @@
-//! Staged attachments (docs/DECISIONS.md D49, docs/POSTING.md): a picked photo
+//! Staged attachments (docs/DECISIONS.md D49, docs/posting.md): a picked photo
 //! is decoded, turned upright (its EXIF orientation applied), scaled so its
 //! longer side is at most [`MAX_SIDE`] px and written as a JPEG with no
 //! metadata at all (no GPS, no camera details) under the engine's

@@ -1,9 +1,9 @@
-# Staging pod on Fly.io. Deployed by .github/workflows/deploy.yml on push to main; by hand, from the repo root:
+# Staging pod on Fly.io. Deployed by .github/workflows/ci.yml on push to main; by hand, from the repo root:
 #   flyctl deploy . --config deploy/fly/pod.toml --dockerfile deploy/pod.Dockerfile --remote-only
 # Secrets (never in this file): `flyctl secrets set -a the-construct-pod CONSTRUCT_INFER_API_KEY=...` (Collections
 # `model` fields and the watcher's `llm` extractor).
-# CONSTRUCT_SECRETS_KEY seals the upstream Pixelfed tokens in the pod databases (README "Server runtime
-# configuration"). Set it once; existing plaintext rows are sealed when each pod next opens:
+# CONSTRUCT_SECRETS_KEY seals the upstream Pixelfed tokens in the pod databases (docs/server.md
+# "Configuration"). Set it once; existing plaintext rows are sealed when each pod next opens:
 #   flyctl secrets set -a the-construct-pod CONSTRUCT_SECRETS_KEY="$(openssl rand -base64 32)"
 # Keep a copy in a password manager: without it, sealed sign-ins read as signed out. To rotate, set
 # "<new>,<old>", let the pods open once (they re-seal under <new>), then set "<new>".

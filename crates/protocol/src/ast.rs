@@ -1,4 +1,4 @@
-//! Namespaced UI AST (DESIGN.md §2.2A).
+//! Namespaced UI AST (docs/layouts.md).
 //!
 //! Every node is generic (`core://`): apps are composed from these on the pod
 //! (docs/DECISIONS.md D34-D36); no client knows any app. On the wire each node

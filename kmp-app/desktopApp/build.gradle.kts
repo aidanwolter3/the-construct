@@ -10,7 +10,7 @@ kotlin {
     jvmToolchain(21)
 }
 
-// Simulation mode (README "Simulation mode", DECISIONS D8): a separate `sim` source set holds the
+// Simulation mode (docs/simulator.md, DECISIONS D8): a separate `sim` source set holds the
 // headless simulator and fake engine, so the Compose UI test harness stays off the shipping app's
 // runtime classpath. `sim` sees `main` (and :shared's UniFFI bridge); tests see `sim`.
 val sim: SourceSet by sourceSets.creating
@@ -83,7 +83,7 @@ tasks.withType<Test>().configureEach {
 //       -Pscript="shot start; click Like; assert-text Unlike; shot after"
 val simulate by tasks.registering(JavaExec::class) {
     group = "verification"
-    description = "Renders the shared Compose UI headlessly and writes screenshots (see README: Simulation mode)"
+    description = "Renders the shared Compose UI headlessly and writes screenshots (see docs/simulator.md)"
     classpath = sim.runtimeClasspath
     mainClass = "org.theconstruct.desktop.sim.SimulatorKt"
     workingDir = repoRoot

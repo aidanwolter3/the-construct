@@ -1,4 +1,4 @@
-//! Notifications from apps (D52, docs/NOTIFICATIONS.md §6): the device
+//! Notifications from apps (D52, docs/notifications.md): the device
 //! identity, device registration with the pod, the notification cache and
 //! unread counts, the events-stream handlers and the blocking calls the UI
 //! makes (list, mark read, channels, push subscription).

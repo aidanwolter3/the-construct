@@ -1,5 +1,5 @@
-//! The end-to-end suite, the same steps against either upstream (README "End-to-end
-//! tests"): sign in via PKCE with a scripted browser, the home feed, a like, a like made
+//! The end-to-end suite, the same steps against either upstream (docs/testing.md "End-to-end
+//! suite"): sign in via PKCE with a scripted browser, the home feed, a like, a like made
 //! offline and flushed on reconnect, a bookmark. Leaves the upstream as it found it.
 //!
 //! `cargo test -p e2e` runs it against the in-process fake (or `E2E_FAKE_URL`);

@@ -7,7 +7,7 @@ publish.workspace = true
 
 # End-to-end harness: the real pod (`server::app`) and the client-core engine
 # in-process, against the fake Pixelfed (default) or a real instance
-# (E2E_UPSTREAM=real). See README "End-to-end tests".
+# (E2E_UPSTREAM=real). See docs/testing.md "End-to-end suite".
 
 [dependencies]
 server = { path = "../server" }

@@ -1,4 +1,4 @@
-//! End-to-end harness (README "End-to-end tests", docs/DECISIONS.md D16/D20).
+//! End-to-end harness (docs/testing.md "End-to-end suite", docs/DECISIONS.md D16/D20).
 //!
 //! Runs the real pod (`server::app`, in-memory store) and the client-core engine in-process
 //! against a Pixelfed upstream chosen by `E2E_UPSTREAM`:
