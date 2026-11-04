@@ -10,9 +10,11 @@ Read [docs/architecture.md](docs/architecture.md) first if you are new to the co
 ## Setup
 
 - **Rust** (stable) through [rustup](https://rustup.rs).
-- **JDK 21** for the Kotlin clients and the simulator. `kmp-app/gradle.properties` points Gradle at Android Studio's
-  bundled JDK on macOS (`/Applications/Android Studio.app/Contents/jbr/Contents/Home`). With any other JDK, pass
-  `-Dorg.gradle.java.home="$JAVA_HOME"` to every `./gradlew` command.
+- **JDK 21** for the Kotlin clients and the simulator. Gradle runs on the JDK in `JAVA_HOME` (or `java` on `PATH`);
+  any JDK 21 works. On a Mac, Android Studio's bundled one is
+  `export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"`. To pin a JDK for Gradle without
+  exporting `JAVA_HOME`, put `org.gradle.java.home=<path>` in your own `~/.gradle/gradle.properties`, not in the
+  repository's.
 - **The engine library** for the JVM: on macOS, `scripts/build_ffi.sh` builds `libclient_ffi.dylib` (Apple Silicon)
   and regenerates the Kotlin bindings; Gradle runs it before compiling the desktop app. On Linux, run
   `cargo build -p client-ffi --release` and pass `-PskipRustBuild` (the bindings are checked in).

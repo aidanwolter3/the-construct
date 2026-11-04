@@ -78,12 +78,11 @@ jobs:
         run: cargo build -p client-ffi --release
       - name: Shared + desktop tests
         working-directory: kmp-app
-        # gradle.properties pins a macOS JDK path; point Gradle at the runner's JDK instead.
-        run: ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :shared:allTests :desktopApp:test
+        run: ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test
       - name: Simulator screenshots (fixture mode)
         working-directory: kmp-app
         run: |
-          ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate \
+          ./gradlew -PskipRustBuild :desktopApp:simulate \
             -Pworkspace=pixelfed_demo -Pscreen=phone -Pout="$RUNNER_TEMP/sim/pixelfed" \
             -Pscript="shot feed; click Like; assert-text Unlike; shot liked; offline; shot offline"
       - name: Upload screenshots and test reports

@@ -50,12 +50,9 @@ Render the shared UI headlessly to PNGs (no window, no device):
 
 ```bash
 cargo build -p client-ffi --release
-cd kmp-app && ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate \
+cd kmp-app && ./gradlew -PskipRustBuild :desktopApp:simulate \
   -Pworkspace=pixelfed_demo -Pscript="shot feed; click Like; assert-text Unlike; shot liked" -Pout=/tmp/sim
 ```
-
-(`kmp-app/gradle.properties` points Gradle at Android Studio's JDK on macOS; `-Dorg.gradle.java.home` overrides it
-with any JDK 21.)
 
 Run the desktop app against the local server (macOS):
 

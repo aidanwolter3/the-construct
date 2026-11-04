@@ -4,8 +4,7 @@
 against it and writes PNG screenshots. There is no window and a run takes a few seconds, so it works in CI and cloud
 sessions. It is the project's UI check: there are no emulator or on-device tests.
 
-Run it from `kmp-app` (on Linux add `-Dorg.gradle.java.home="$JAVA_HOME"`, see
-[CONTRIBUTING.md](../CONTRIBUTING.md#setup)):
+Run it from `kmp-app` with a JDK 21 (see [CONTRIBUTING.md](../CONTRIBUTING.md#setup)):
 
 ```bash
 ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo -Pscreen=phone -Pout=/tmp/sim \

@@ -30,11 +30,11 @@ cargo run -p server                      # 127.0.0.1:8080; callers without a pod
 cargo run -p fake-pixelfed               # 127.0.0.1:8081
 scripts/e2e.sh                           # e2e suite against the fake binary
 
-# JVM (from kmp-app). The engine library first: cargo build -p client-ffi --release
-./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :shared:allTests :desktopApp:test
+# JVM (from kmp-app; any JDK 21 in JAVA_HOME or on PATH). The engine library first: cargo build -p client-ffi --release
+./gradlew -PskipRustBuild :shared:allTests :desktopApp:test
 
 # Headless simulator: the real shared UI to PNGs. Read the PNGs to check UI changes.
-./gradlew -Dorg.gradle.java.home="$JAVA_HOME" -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo \
+./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_demo \
   -Pscreen=phone -Pout=/tmp/sim -Pscript="shot start; click Like; assert-text Unlike; shot after"
 ```
 
