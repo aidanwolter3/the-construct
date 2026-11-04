@@ -48,9 +48,9 @@ Simulator script commands (shot, click, assert-text, wait-text, open-menu, open-
 publish-version, set-server, offline, …) are documented in README "Simulation mode". Fixture mode needs no
 server; `-PbaseUrl=http://127.0.0.1:8080` runs live against a local pod.
 
-Android/emulator/device checks and the macOS window need the developer's Mac (`scripts/android_smoke.sh`,
-`./gradlew :androidApp:installDebug`); cloud sessions can't run them — say so in your summary when a change
-needs a device check.
+There are no emulator or on-device tests; the simulator is the UI check. Running the app on a phone
+(`./gradlew :androidApp:installDebug`) and the macOS window need the developer's Mac; cloud sessions can't —
+say so in your summary when a change needs a device check.
 
 ### Cloud sessions
 `scripts/cloud_setup.sh` installs the toolchains and warms the caches (client-ffi build + every Gradle
