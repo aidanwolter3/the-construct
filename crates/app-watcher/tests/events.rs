@@ -343,3 +343,114 @@ async fn describe(pod: &Pod) -> Value {
     assert!(!err, "{d}");
     d
 }
+
+/// The Events app's simulator fixtures, from a real pod: two sites (one
+/// failing), alerts, matches (one seen). `UPDATE_FIXTURES=1` writes
+/// `fixtures/events_bundle.json` (the app's workspace) and
+/// `fixtures/events_screen_data.json` (its screens' data paths), with the
+/// local site's address replaced by a stable one.
+#[tokio::test]
+async fn simulator_fixture() {
+    let site = Arc::new(Site::default());
+    *site.ics.lock().unwrap() = calendar(&[
+        event(
+            "bc1",
+            "Friday Night Improv",
+            "20991106T193000",
+            "Lineup: Budget Cuts\\, Sandwich\\, Hot Mess",
+        ),
+        event(
+            "bc2",
+            "Budget Cuts: Live!",
+            "20991113T200000",
+            "An hour of Budget Cuts",
+        ),
+        event(
+            "cl1",
+            "Intro to Improv (class)",
+            "20991107T100000",
+            "Taught by Budget Cuts",
+        ),
+        event("jm1", "Saturday Jam", "20991107T190000", "Open jam"),
+    ]);
+    let base = serve(site.clone()).await;
+    let pod = pod_with_watcher(&base).await;
+    let d = describe(&pod).await;
+    let club = d["definition"]["fillers"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // A second site that fails.
+    let (err, e) = tool(
+        &pod,
+        "apply_change",
+        json!({"collection": "events", "changes": [
+            {"op": "set_filler", "filler": {"kind": "fetch", "title": "Comedy Works",
+                "url": format!("{base}/missing.ics"), "extract": "events", "zone": "America/Denver",
+                "map": {"source_id": "id", "title": "title", "start": "start", "venue": "venue"},
+                "key": "source_id", "upcoming": "start", "every_minutes": 360}}]}),
+    )
+    .await;
+    assert!(!err, "{e}");
+    let d = describe(&pod).await;
+    let comedy = d["definition"]["fillers"][1]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    fill::fill(&pod, COLLECTION, &club, false).await;
+    // set_filler started the failing site's fill in the background.
+    for _ in 0..500 {
+        let st = pod
+            .store()
+            .with_conn(|c| fill::state(c, COLLECTION, &comedy))
+            .unwrap();
+        if st.last_fill_at.is_some() && !fill::is_busy(&pod, COLLECTION) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let (_, ws) = call(&pod, "GET", "/v1/workspaces/watcher", None).await;
+    let matches = listed(&ws, "collection:events:alerted");
+    assert_eq!(matches.len(), 2, "{matches:?}");
+    // One seen.
+    call(
+        &pod,
+        "POST",
+        "/v1/collections/events/update",
+        Some(json!({"id": matches[1]["id"], "seen": true})),
+    )
+    .await;
+    let (_, ws) = call(&pod, "GET", "/v1/workspaces/watcher", None).await;
+    assert_eq!(listed(&ws, "collection:events:fillers")[1]["failing"], true);
+    let mut screens = serde_json::Map::new();
+    for f in [&club, &comedy] {
+        let path = format!("/v1/collections/events/fillers/{f}");
+        let (_, b) = call(&pod, "GET", &path, None).await;
+        screens.insert(path, b);
+    }
+    for e in listed(&ws, "collection:events") {
+        let path = format!(
+            "/v1/collections/events/row?id={}",
+            e["id"].as_str().unwrap()
+        );
+        let (_, b) = call(&pod, "GET", &path, None).await;
+        screens.insert(path, b);
+    }
+    let stable = |v: &Value| {
+        serde_json::to_string_pretty(v)
+            .unwrap()
+            .replace(&base, "https://improvclub.example")
+            + "\n"
+    };
+    let bundle = json!({"version": "1.0.0", "workspace": ws["workspace"],
+        "entities": ws["entities"], "queries": ws["queries"]});
+    if std::env::var("UPDATE_FIXTURES").is_ok_and(|v| v == "1") {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        std::fs::write(root.join("events_bundle.json"), stable(&bundle)).unwrap();
+        std::fs::write(
+            root.join("events_screen_data.json"),
+            stable(&Value::Object(screens)),
+        )
+        .unwrap();
+    }
+}
