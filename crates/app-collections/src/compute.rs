@@ -65,6 +65,11 @@ pub const URL_VAR: &str = "CONSTRUCT_INFER_URL";
 /// [`URL_VAR`] when unset.
 pub const DEFAULT_URL: &str = "https://api.anthropic.com/v1/messages";
 
+/// Pod setting: `0` turns `model` computes off on this pod (temporary pods,
+/// which anyone can make, must not spend the server's model key). Such
+/// fields keep their default, as without a model.
+pub const MODEL_SETTING: &str = "collections.model";
+
 /// A [`FieldModel`] that asks a model over the Anthropic Messages API.
 pub struct MessagesModel {
     client: reqwest::Client,
@@ -546,6 +551,17 @@ pub fn spawn(pod: &Pod, collection: &str, jobs: Vec<Job>) {
     let weak = Arc::downgrade(pod);
     let collection = collection.to_owned();
     tokio::spawn(async move {
+        let Some(pod) = weak.upgrade() else { return };
+        let allowed = pod
+            .blocking(|s| s.pod_setting(MODEL_SETTING))
+            .await
+            .ok()
+            .flatten()
+            .is_none_or(|v| v != "0");
+        drop(pod);
+        if !allowed {
+            return;
+        }
         // (field id, key) → (inputs, lookup input, rows), in a stable order.
         type Group = (Vec<String>, Option<String>, Vec<String>);
         let mut groups: BTreeMap<(String, String), Group> = BTreeMap::new();

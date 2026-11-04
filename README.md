@@ -221,7 +221,7 @@ opened. `GET /healthz` answers 200 `ok` (no auth; the engine's 2 s reconnect pro
 | `CONSTRUCT_TEMP_POD_MAX` | `50` | Live temporary pods at most (then 503 `temporary_pods_full`). |
 | `CONSTRUCT_TEST_HOOKS` | unset | `1` enables `POST /v1/test/fault` (fault injection; otherwise 404). |
 | `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: `GET /v1/apps` also lists the dev app `pixelfed_demo` (it works either way; this only makes it show up in the clients' menu). |
-| `CONSTRUCT_INFER_API_KEY`, `CONSTRUCT_INFER_MODEL` | unset | Both set: Collections answers `model`-computed fields (decision `collection-computed-fields`) by asking this model over the Messages API. Unset: those fields keep their default (`expr` fields need nothing). |
+| `CONSTRUCT_INFER_API_KEY`, `CONSTRUCT_INFER_MODEL` | unset | Both set: Collections answers `model`-computed fields (decision `collection-computed-fields`) by asking this model over the Messages API. Unset: those fields keep their default (`expr` fields need nothing). Temporary pods never ask it (pod setting `collections.model = 0`: anyone can make one, so they must not spend the key). |
 | `CONSTRUCT_INFER_URL` | `https://api.anthropic.com/v1/messages` | The Messages API endpoint for `model`-computed fields. |
 | `PIXELFED_INSTANCE_URL` | `http://127.0.0.1:8081` (the fake) | The default Pixelfed instance: the "Sign in with Pixelfed" button uses it. `http://localhost:8090` for the local real Pixelfed, `https://<instance>` for a public one. |
 | `PIXELFED_PUBLIC_URL` | = instance URL | Base for the default instance's browser-facing links (the authorize page), e.g. `http://10.0.2.2:8081` for the emulator while the pod calls `127.0.0.1:8081`. Also accepted in auth calls. |

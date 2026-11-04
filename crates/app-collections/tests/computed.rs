@@ -296,6 +296,31 @@ async fn a_model_field_is_answered_cached_and_learned() {
 }
 
 #[tokio::test]
+async fn a_pod_with_model_computes_off_never_asks_the_model() {
+    // Temporary pods (anyone can make one) get `collections.model = 0`, so
+    // they can't spend the server's model key.
+    let fake = Arc::new(Fake::default());
+    let pod = pod(Some(fake.clone()));
+    pod.store()
+        .set_pod_setting(app_collections::compute::MODEL_SETTING, "0")
+        .unwrap();
+    define_groceries(&pod).await;
+    ok(
+        &pod,
+        "apply_change",
+        json!({"collection": "groceries", "changes": section_change()}),
+    )
+    .await;
+    add(&pod, json!({"name": "Apples"})).await;
+    add(&pod, json!({"name": "Bread"})).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let r = rows(&pod).await;
+    assert_eq!(section_of(&r, "Apples"), "Other", "{r:?}");
+    assert_eq!(section_of(&r, "Bread"), "Other", "{r:?}");
+    assert!(fake.asked.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn rows_walk_the_store_by_section_option_order_then_unbought_first() {
     let fake = Arc::new(Fake::default());
     let pod = pod(Some(fake));
