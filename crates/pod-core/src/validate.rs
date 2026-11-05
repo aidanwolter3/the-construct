@@ -237,6 +237,25 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             }
             Ok(())
         }
+        UiNode::Drawer {
+            field,
+            before,
+            query_key,
+            item,
+            after,
+            ..
+        } => {
+            if field.trim().is_empty() {
+                return Err("a drawer needs a field".into());
+            }
+            if query_key.is_some() != item.is_some() {
+                return Err("a drawer's query_key and item go together".into());
+            }
+            if before.is_empty() && after.is_empty() && item.is_none() {
+                return Err("a drawer needs at least one page".into());
+            }
+            Ok(())
+        }
         UiNode::AppFrame { app } => {
             if app.trim().is_empty() {
                 Err("an app frame needs an app".into())

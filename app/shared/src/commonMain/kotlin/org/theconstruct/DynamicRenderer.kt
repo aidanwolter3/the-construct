@@ -294,6 +294,8 @@ fun RenderUiNode(
 
         is UiNode.Dock -> DockView(node, entities, onDispatch, modifier)
 
+        is UiNode.Drawer -> DrawerView(node, entities, onDispatch, modifier)
+
         is UiNode.AppFrame -> AppFrameView(node, item, modifier)
 
         is UiNode.Switch -> androidx.compose.material3.Switch(

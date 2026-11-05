@@ -445,6 +445,27 @@ class ConstructController internal constructor(
                 logout()
                 reloadShellData()
             }
+            "show" -> {
+                val page = intent.id?.trim().orEmpty()
+                if (page.isNotEmpty()) _dockRequest.value = page
+            }
+            "show_versions" -> {
+                val app = intent.app?.trim().orEmpty()
+                if (app.isEmpty()) return
+                _versionsApp.value = app
+                background.launch { menu.loadHistory(app) }
+            }
+            "pin_version" -> {
+                val app = intent.app?.trim()?.takeIf { it.isNotEmpty() } ?: _versionsApp.value ?: return
+                val version = intent.id?.trim()?.toLongOrNull() ?: return
+                if (shellMode) _dockRequest.value = app
+                menu.selectVersion(app, version, background)
+            }
+            "follow_latest" -> {
+                val app = intent.app?.trim()?.takeIf { it.isNotEmpty() } ?: _versionsApp.value ?: return
+                _pins.update { it - app }
+                if (_pinned.value?.appId == app) followLatest()
+            }
             "set_server" -> {
                 val choice = serverChoice ?: return
                 choice.options.firstOrNull { it.key == intent.id }?.let { choice.onSelect(it.url) }
@@ -695,15 +716,28 @@ class ConstructController internal constructor(
     fun pin(appId: String, version: Long, layout: UiNode): Boolean {
         if (closed) return false
         navigation.restoreRoot(layout)
-        _pinned.value = PinnedVersion(appId, version, layout)
+        val p = PinnedVersion(appId, version, layout)
+        _pinned.value = p
+        if (shellMode) _pins.update { it + (appId to p) }
         return true
     }
 
     /** Back to the latest version (and following new ones as they are published). */
     fun followLatest() {
+        _pinned.value?.appId?.let { app -> _pins.update { it - app } }
         _pinned.value = null
         navigation.restoreRoot(_state.value.workspace)
     }
+
+    private val _pins = MutableStateFlow<Map<String, PinnedVersion>>(emptyMap())
+
+    /** Shell mode: the version pinned per app on this device (kept while the frame shows other apps). */
+    val pins: StateFlow<Map<String, PinnedVersion>> = _pins.asStateFlow()
+
+    private val _versionsApp = MutableStateFlow<String?>(null)
+
+    /** The app whose versions `local:versions` lists (`action.device` `show_versions`). */
+    val versionsApp: StateFlow<String?> = _versionsApp.asStateFlow()
 
     /** The remembered values of form [scope] for the app on screen (schema 10); empty on any error. */
     internal fun rememberedFormValues(scope: String): Map<String, String> = try {
@@ -756,7 +790,8 @@ class ConstructController internal constructor(
             bridge = next
             _appId.value = id
             if (!keepNotice) _notice.value = null
-            _pinned.value = null
+            // Shell mode keeps a pin per app: back on an app, its pinned version shows again.
+            _pinned.value = if (shellMode) _pins.value[id] else null
             navigation.clear()
             _state.value = ConstructState(isOnline = _state.value.isOnline, engine = engine)
             // A target for the app being opened is re-keyed to its new engine ([openNotification] sets it after this).
@@ -803,6 +838,8 @@ fun ConstructApp(
                 LocalAttachments provides controller.attachments,
             ) {
                 val deviceApps by controller.deviceApps.collectAsState()
+                val pins by controller.pins.collectAsState()
+                val versionsApp by controller.versionsApp.collectAsState()
                 controller.serverChoice = server
                 val inbox = controller.inbox
                 val sources = DeviceSources(
@@ -811,7 +848,10 @@ fun ConstructApp(
                     signIns = (controller.menu.signIns as? Load.Ready)?.value.orEmpty(),
                     providers = controller.menu.providers,
                     server = server,
-                    nowSeconds = remember(inbox.items) { nowEpochSeconds() },
+                    nowSeconds = remember(inbox.items, versionsApp) { nowEpochSeconds() },
+                    pins = pins.mapValues { it.value.version },
+                    versionsApp = versionsApp,
+                    versions = versionsApp?.let { controller.menu.history[it] },
                 )
                 val device = remember(state.isOnline, state.pendingActions, state.auth, unread, deviceApps, sources) {
                     deviceData(state, unread, deviceApps, controller.platform, sources)

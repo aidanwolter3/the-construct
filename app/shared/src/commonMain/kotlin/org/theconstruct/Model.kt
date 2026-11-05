@@ -419,6 +419,22 @@ sealed class UiNode {
     @Serializable
     data class AppFrame(val app: String) : UiNode()
 
+    /**
+     * `core://Drawer` (feature `drawer`): the selected page fills the screen; a menu button opens [drawer], a panel of
+     * any layout ([DrawerView]). Pages are [before], one per entity of [queryKey] from [item], then [after].
+     */
+    @Serializable
+    data class Drawer(
+        val field: String,
+        val before: List<DrawerPage> = emptyList(),
+        @SerialName("query_key") val queryKey: String? = null,
+        val item: DrawerPage? = null,
+        val after: List<DrawerPage> = emptyList(),
+        val drawer: UiNode,
+        val footer: UiNode? = null,
+        val badge: String? = null,
+    ) : UiNode()
+
     /** `core://Switch` (feature `switch`): on while [checked] (a binding) is truthy; a tap dispatches [onClick]. */
     @Serializable
     data class Switch(
@@ -430,6 +446,10 @@ sealed class UiNode {
     /** A node whose `type` this client does not know. [raw] is the full original object. */
     data class Unknown(val type: String, val raw: JsonObject) : UiNode()
 }
+
+/** A page of a [UiNode.Drawer]: the [content] shown while [value] is selected. */
+@Serializable
+data class DrawerPage(val value: String, val content: UiNode)
 
 /** A tab of a [UiNode.Dock]: its button ([label], an [icon] name, a [badge] binding) and the [content] it shows. */
 @Serializable
@@ -669,6 +689,7 @@ object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode
         Variant("core://Dock", UiNode.Dock::class, UiNode.Dock.serializer()),
         Variant("core://AppFrame", UiNode.AppFrame::class, UiNode.AppFrame.serializer()),
         Variant("core://Switch", UiNode.Switch::class, UiNode.Switch.serializer()),
+        Variant("core://Drawer", UiNode.Drawer::class, UiNode.Drawer.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): UiNode = UiNode.Unknown(tag, raw)

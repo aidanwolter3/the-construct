@@ -246,6 +246,7 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
         UiNode::Dock { .. } => add(feature::DOCK),
         UiNode::AppFrame { .. } => add(feature::APP_FRAME),
         UiNode::Switch { .. } => add(feature::SWITCH),
+        UiNode::Drawer { .. } => add(feature::DRAWER),
         // A node type this build does not know (the removed `pixelfed://`
         // widgets): no client draws it any more.
         UiNode::Unknown(_) => add(feature::LEGACY_NODES),
@@ -261,6 +262,8 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
     for i in icons.into_iter().flatten() {
         if TODO_ICONS.contains(&i) {
             add(feature::TODO_ICONS);
+        } else if SHELL_ICONS.contains(&i) {
+            add(feature::ICONS_SHELL);
         } else if ICONS_9.contains(&i) {
             add(feature::ICONS_POST);
         } else if ICONS_6.contains(&i) {
@@ -269,6 +272,8 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
     }
 }
 
+/// Icons of the `icons_shell` feature.
+const SHELL_ICONS: [&str; 2] = ["settings", "notifications"];
 /// Icons of the `todo_icons` feature.
 const TODO_ICONS: [&str; 4] = ["check", "check_box", "check_box_outline_blank", "delete"];
 /// Icons added in schema 6 (D44).
@@ -609,6 +614,9 @@ mod tests {
                 "core://Dock" => json!({"type": t, "field": "tab", "after": [
                     {"value": "a", "label": "A", "content": {"type": "core://Divider"}}]}),
                 "core://AppFrame" => json!({"type": t, "app": "home"}),
+                "core://Drawer" => json!({"type": t, "field": "page",
+                    "after": [{"value": "a", "content": {"type": "core://Divider"}}],
+                    "drawer": {"type": "core://Divider"}}),
                 "core://Switch" => json!({"type": t, "checked": "$item.on",
                     "on_click": {"intent": "action.navigation.back"}}),
                 other => panic!("no sample for {other}"),

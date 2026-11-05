@@ -110,6 +110,7 @@ evaluated against the entity before the change: a JSON literal, `entity.<field>`
 | `core://Badge` | `text`, `icon` | A one-line note with an icon ("Bob boosted"). |
 | `core://Progress` | `size_dp` | An indeterminate spinner. |
 | `core://Dock` | `field`, `before`, `query_key`, `item`, `max_items`, `after`; a tab is `{value, label, icon?, badge?, content}` | The app's navigation: tabs along the bottom (a side rail on wide windows), the selected tab's `content` filling the screen above. Tabs: `before`, one per entity of `query_key` from `item` (`$item` bound, at most `max_items`), then `after`. `$form.<field>` is the selected `value`, remembered on the device. Only as the content of a workspace's one slot; the workspace then has no title bar. `badge` draws a count, or a dot when otherwise truthy. |
+| `core://Drawer` | `field`, `before`, `query_key`, `item`, `after`, `drawer`, `footer`, `badge`; a page is `{value, content}` | The app's navigation as a side drawer: the selected page fills the screen, a menu button at the top left (hidden while a screen is open; `badge` draws a dot) opens `drawer`, a panel of any layout, with `footer` pinned to its bottom. Pages: `before`, one per entity of `query_key` from `item`, then `after`. `$form.<field>` is the open page (mark it with a Conditional whose `equals` is `$item.id`). The panel picks pages with `action.device` `open_app` or `show`; any action in it closes it. Only as the content of a workspace's one slot. |
 | `core://Switch` | `checked`, `on_click`, `content_description` | An on/off switch, on while `checked` (a binding) is truthy; a tap dispatches `on_click`. |
 | `core://AppFrame` | `app` | Another app of the pod drawn whole (its layout, screens, Back) in its space, usually a dock tab's content. `app` is an id or `$item.id`. |
 | `core://TextField` | `field`, `placeholder`, `max_length`, `on_submit`, `lines` | Edits `$form.<field>`. With `on_submit`: a send button that dispatches, then clears. Without: a search box, or a multi-line field with `lines`. |
@@ -118,7 +119,7 @@ evaluated against the entity before the change: a JSON literal, `entity.<field>`
 
 Icons (`protocol::ICONS`): `favorite`, `favorite_border`, `chat_bubble`, `bookmark`, `bookmark_border`, `repeat`,
 `warning`, `send`, `arrow_back`, `close`, `flame`, `timer`, `add_photo`, `add`, `refresh`, `check`, `check_box`,
-`check_box_outline_blank`, `delete`.
+`check_box_outline_blank`, `delete`, `settings`, `notifications`.
 
 A node type the client doesn't know is skipped, and its JSON kept, so old versions still parse.
 
@@ -136,7 +137,7 @@ A node type the client doesn't know is skipped, and its JSON kept, so old versio
 | `action.link.open` | `url` | Opens an `http(s)://` URL in the browser. |
 | `action.auth.login` | `instance_url`, `app_path`, `token_path` | Starts an OAuth2 PKCE sign-in to an upstream. |
 | `action.auth.session` | `path`, `payload` | Opens a pod session (the pod code screen). |
-| `action.device` | `command`, `app`, `id` | Something the device does: `open_app` (`app`; in the shell, selects its dock tab, or shows it untabbed), `open_notification` (`id`), `mark_all_read`, `toggle_channel` (`app`, `id`), `sign_in` (`id` of a provider), `sign_out`, `set_server` (`id` of a server option), `leave_pod` (forget the pod on this device), `refresh`, `open_settings` and `open_inbox` (the native panels). Any layout may use any command. |
+| `action.device` | `command`, `app`, `id` | Something the device does: `open_app` (`app`; in the shell, selects its dock tab, or shows it untabbed), `open_notification` (`id`), `mark_all_read`, `toggle_channel` (`app`, `id`), `sign_in` (`id` of a provider), `sign_out`, `set_server` (`id` of a server option), `show` (`id` of a Drawer or Dock page), `show_versions` (`app`: load its versions into `local:versions`), `pin_version` (`id`: show that version on this device), `follow_latest`, `leave_pod` (forget the pod on this device), `refresh`, `open_settings` and `open_inbox` (the native panels). Any layout may use any command. |
 
 ## Features and compatibility
 
@@ -163,16 +164,18 @@ request. Any layout may bind them; a custom app needs no feed for them.
 | `local://connection` | `online`, `pending` (unsent changes), `label` ("Offline · 2 pending"), `attention` (offline or changes waiting) |
 | `local://inbox` | `unread`, `label` ("3 unread") |
 | `local://apps` | `count`: the pod's apps but `home` |
-| `local:apps` (query) | `local://apps/<id>`: `id`, `title`, `icon`, `kind`, `detail`, `unread` |
+| `local:apps` (query) | `local://apps/<id>`: `id`, `title`, `icon`, `kind`, `detail`, `unread`, `version` ("v12 · latest", "v10 · pinned") |
 | `local:notifications` (query) | `id`, `app_id`, `app_title`, `title`, `body`, `when` ("5 min"), `day` ("Today"), `unread` |
 | `local:channels` (query) | `app_id`, `app_title`, `id`, `title`, `description`, `enabled` |
 | `local:sign_ins` (query) | `id`, `title`, `detail` ("@dana · pixelfed.example") |
 | `local:providers` (query) | `id`, `title`: sign-ins the pod offers that aren't signed in |
+| `local:versions` (query) | the versions of the app `show_versions` named, newest first: `version`, `label`, `detail`, `when`, `compatible`, `showing` |
+| `local://versions` | `app_id`, `app_title`, `pinned` (or "" while following the latest), `loading` |
 | `local:servers` (query) | `id`, `title`, `url`, `selected`: the servers this device can use |
 | `local://device` | `platform` |
 | `local://session` | `open`, `server`, `error`, `message`: the pod sign-in |
 
-A `core://Conditional` value may be such a binding: `{"value": "${local://apps#count}", "equals": "0", ...}`.
+A `core://Conditional` `equals` may bind the item (`"equals": "$item.id"`). A `core://Conditional` value may be such a binding: `{"value": "${local://apps#count}", "equals": "0", ...}`.
 
 ## Reusing built-in parts
 

@@ -52,8 +52,15 @@ Decision:
 - Collections: the filler and alert keys (`filler_title`, `alert_names`, ...) may be bound before the collection has a
   filler or an alert, so the Events blueprint can be referenced on a new pod.
 
-Not done yet: the version picker and app hiding/deleting are still only in the native menu (no layout opens it by
-default); Android's notification permission row isn't offered to layouts; sign-in to a typed-in server needs the
+- **Version 3 of `shell` is a drawer** (`core://Drawer`, feature `drawer`): a menu button at the top left (a dot while
+  anything is unread) opens a panel of any layout listing every app, with a `footer` pinned to its bottom: a gear
+  (Settings) beside a green or grey dot (`local://connection#color`) and a bell (Notifications) beside a red dot while
+  anything is unread (icons `settings` and `notifications`, feature `icons_shell`). The selected page fills the
+  screen; `action.device` `show` picks a fixed page. **App versions** came back as layout: `show_versions` loads an app's history into
+  `local:versions`, `pin_version` shows one on this device (the shell keeps a pin per app across app switches),
+  `follow_latest` drops it; each `local:apps` row says which version shows.
+
+Not done yet: hiding and deleting apps are only in the native menu (no layout opens it by default); Android's notification permission row isn't offered to layouts; sign-in to a typed-in server needs the
 native panel; notifications load the newest page only; the home layout
 updates only when it is drawn on its own engine or the apps list shows a newer version (no live event while a frame
 has the engine); notifications and links open the blueprint by id rather than the user's app built on it; a frame

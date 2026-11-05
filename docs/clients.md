@@ -67,10 +67,14 @@ Opened on `home` (the default), the client runs the layout-first shell (decision
 
 - **Before a pod is open** it draws a bundled sign-in layout: a pod code, or **Try a temporary pod**. It needs no
   server to draw, and shows the sign-in error under the button.
-- **With a pod** it draws the pod's `home` layout. The default (the `shell` blueprint) is a dock along the bottom (a
-  rail on wide windows): up to two apps, then **Apps** (every app; on a new pod, a note to ask the agent for one),
-  **Notifications** (the inbox, by day, with Mark all read) and **Settings** (connection, server, Leave pod,
-  sign-ins, notification switches). All three are layout, so the agent can change them like any app. The app list is reloaded every
+- **With a pod** it draws the pod's `home` layout. The default (the `shell` blueprint, version 3) is a left drawer
+  opened by a menu button at the top left. It lists every app (on a new pod, a note to ask the agent for one); at its
+  bottom a gear opens **Settings** (with a green or grey online dot) and a bell opens **Notifications** (with a red
+  dot while anything is unread). **Notifications** is the inbox, by day, with Mark all read; **Settings** has the
+  connection, server, Leave pod,
+  sign-ins, notification switches, and **App versions**: pick an app, then a version to show on this device, or
+  Follow latest). All of it is layout, so the agent can change it like any app; the dock (`core://Dock`, version 2)
+  is the same set as bottom tabs. The app list is reloaded every
   15 seconds and on every tab change, so an app the agent builds shows up on its own.
 - **Each tab frames an app** (`core://AppFrame`): its layout, screens and Back stay inside the frame. The client's
   one engine follows the framed app; the home layout is kept on the device while it does.

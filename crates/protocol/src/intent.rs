@@ -132,7 +132,11 @@ pub enum ActionIntent {
     /// (`app`), `open_notification` (`id`), `mark_all_read`,
     /// `toggle_channel` (`app`, `id`: a notification channel), `sign_in`
     /// (`id`: a sign-in provider), `sign_out`, `set_server` (`id`: a server
-    /// option). Nothing is sent to the pod unless the command itself talks to
+    /// option), `show` (`id`: a `core://Drawer` or `core://Dock` page),
+    /// `show_versions` (`app`: load its versions as device data),
+    /// `pin_version` (`id`: a version of that app, shown on this device),
+    /// `follow_latest` (that app follows its newest version again).
+    /// Nothing is sent to the pod unless the command itself talks to
     /// it. Any layout may use any command (decision `blueprints-and-home`).
     #[serde(rename = "action.device")]
     Device {
@@ -165,7 +169,7 @@ impl ActionIntent {
 }
 
 /// The `action.device` commands this build knows.
-pub const DEVICE_COMMANDS: [&str; 11] = [
+pub const DEVICE_COMMANDS: [&str; 15] = [
     "open_settings",
     "open_inbox",
     "refresh",
@@ -177,16 +181,22 @@ pub const DEVICE_COMMANDS: [&str; 11] = [
     "sign_in",
     "sign_out",
     "set_server",
+    "show",
+    "show_versions",
+    "pin_version",
+    "follow_latest",
 ];
 
 /// The `action.device` commands that need an `app`, and those that need an
 /// `id`.
-pub const DEVICE_COMMANDS_WITH_APP: [&str; 2] = ["open_app", "toggle_channel"];
-pub const DEVICE_COMMANDS_WITH_ID: [&str; 4] = [
+pub const DEVICE_COMMANDS_WITH_APP: [&str; 3] = ["open_app", "toggle_channel", "show_versions"];
+pub const DEVICE_COMMANDS_WITH_ID: [&str; 6] = [
     "open_notification",
     "toggle_channel",
     "sign_in",
     "set_server",
+    "show",
+    "pin_version",
 ];
 
 /// One extra field update carried by `ActionIntent::OptimisticMutate.also`

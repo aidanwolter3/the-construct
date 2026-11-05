@@ -133,6 +133,27 @@ class ShellTest {
     }
 
     @Test
+    fun deviceDataListsTheVersionsOfOneApp() {
+        val history = VersionHistory(
+            versions = listOf(AppVersionInfo(2, note = "A plain list"), AppVersionInfo(1, note = "Created")),
+            loaded = true,
+        )
+        val apps = listOf(AppSummary("c-a", "Recipes", latestVersion = 2, custom = true))
+        val following = deviceData(ConstructState(), UnreadCounts(), apps, "desktop",
+            DeviceSources(versionsApp = "c-a", versions = history))
+        assertEquals(listOf("local://versions/c-a/2", "local://versions/c-a/1"), following.queries["local:versions"])
+        assertEquals(JsonPrimitive(true), following.entities["local://versions/c-a/2"]!!["showing"])
+        assertEquals(JsonPrimitive("v2 · latest"), following.entities["local://apps/c-a"]!!["version"])
+        val pinned = deviceData(ConstructState(), UnreadCounts(), apps, "desktop",
+            DeviceSources(versionsApp = "c-a", versions = history, pins = mapOf("c-a" to 1L)))
+        assertEquals(JsonPrimitive(true), pinned.entities["local://versions/c-a/1"]!!["showing"])
+        assertEquals(JsonPrimitive("1"), pinned.entities["local://versions"]!!["pinned"])
+        assertEquals(JsonPrimitive("v1 · pinned"), pinned.entities["local://apps/c-a"]!!["version"])
+        // A Conditional's `equals` may name the item.
+        assertTrue(conditionShows("\$form.page", "\$item.id", buildJsonObject { put("id", "c-a") }, mapOf("page" to "c-a")))
+    }
+
+    @Test
     fun theShellShowsBootstrapThenHomeThenRescue() {
         val home = ShellSnapshot(UiNode.Spacer())
         assertEquals(ShellView.Loading, shellView(ConstructState(), null, onHome = true))
@@ -171,6 +192,9 @@ class ShellTest {
         assertEquals("c-bbbbbbbbbb", controller.dockRequest.value)
         controller.dockRequestHandled()
         assertNull(controller.dockRequest.value)
+        controller.dispatchShell(ActionIntent.Device("show", id = "settings"))
+        assertEquals("settings", controller.dockRequest.value)
+        controller.dockRequestHandled()
         controller.dispatchShell(ActionIntent.Device("open_settings"))
         assertTrue(controller.menu.open && controller.menu.settingsOpen)
         controller.dispatchShell(ActionIntent.Device("no_such_command"))

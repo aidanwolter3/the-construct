@@ -113,11 +113,13 @@ fun isTruthy(value: String, item: JsonObject?): Boolean {
  */
 fun conditionShows(
     value: String,
-    equals: String?,
+    rawEquals: String?,
     item: JsonObject?,
     form: Map<String, String>?,
     entities: Map<String, JsonObject> = emptyMap(),
 ): Boolean {
+    // `equals` may name the item (`$item.id`), e.g. to mark the open page in a list of pages.
+    val equals = rawEquals?.let { bindItemTokens(it, item) }
     // `${<uri>#<field>}` (an entity field, e.g. device data `${local://apps#count}`) reads as the field's text.
     if (value.contains("\${")) {
         val text = interpolate(value, entities, item)

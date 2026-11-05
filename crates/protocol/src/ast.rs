@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::intent::ActionIntent;
 
 /// Node types this build knows (an other type is [`UiNode::Unknown`]).
-pub const NODE_TYPES: [&str; 25] = [
+pub const NODE_TYPES: [&str; 26] = [
     "core://Workspace",
     "core://Container",
     "core://Text",
@@ -41,10 +41,11 @@ pub const NODE_TYPES: [&str; 25] = [
     "core://Dock",
     "core://AppFrame",
     "core://Switch",
+    "core://Drawer",
 ];
 
 /// Icon names clients draw (`core://IconButton`, `core://Chip`).
-pub const ICONS: [&str; 19] = [
+pub const ICONS: [&str; 21] = [
     "favorite",
     "favorite_border",
     "chat_bubble",
@@ -67,6 +68,9 @@ pub const ICONS: [&str; 19] = [
     "check_box",
     "check_box_outline_blank",
     "delete",
+    // Feature `icons_shell` (crates/protocol/features/icons_shell.md).
+    "settings",
+    "notifications",
 ];
 
 fn one() -> f64 {
@@ -446,6 +450,36 @@ pub enum UiNode {
     #[serde(rename = "core://AppFrame")]
     AppFrame { app: String },
 
+    // Feature `drawer` (crates/protocol/features/drawer.md)
+    /// The app's main navigation as a side drawer: the selected page's
+    /// `content` fills the screen, and a menu button at the top left (with
+    /// `badge`, a binding drawn as a count or a dot) opens `drawer`, a panel
+    /// of any layout. Pages are `before`, one per entity of `query_key`
+    /// drawn from `item` (`$item` = that entity), then `after`; the selected
+    /// page's `value` is the form value `$form.<field>` (the first page until
+    /// one is picked), kept on the device. `action.device` `open_app` or
+    /// `show` picks a page; any action from inside the panel closes it. Only
+    /// meaningful as the content of a workspace's one slot (decision
+    /// `blueprints-and-home`).
+    #[serde(rename = "core://Drawer")]
+    Drawer {
+        field: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        before: Vec<DrawerPage>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query_key: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item: Option<Box<DrawerPage>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        after: Vec<DrawerPage>,
+        drawer: Box<UiNode>,
+        /// Pinned to the bottom of the panel while `drawer` scrolls above it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        footer: Option<Box<UiNode>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        badge: Option<String>,
+    },
+
     // Feature `switch` (crates/protocol/features/switch.md)
     /// An on/off switch: on while `checked` (a binding such as
     /// `$item.enabled`) is truthy; a tap dispatches `on_click`, which changes
@@ -543,6 +577,21 @@ impl UiNode {
                 .chain(item.as_deref())
                 .chain(after)
                 .map(|t| t.content.as_ref())
+                .collect(),
+            UiNode::Drawer {
+                before,
+                item,
+                after,
+                drawer,
+                footer,
+                ..
+            } => before
+                .iter()
+                .chain(item.as_deref())
+                .chain(after)
+                .map(|p| &p.content)
+                .chain(std::iter::once(drawer.as_ref()))
+                .chain(footer.as_deref())
                 .collect(),
             UiNode::Text { .. }
             | UiNode::AppFrame { .. }
@@ -750,6 +799,14 @@ pub struct DockTab {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub badge: Option<String>,
     pub content: Box<UiNode>,
+}
+
+/// A page of a `core://Drawer`: the `content` shown while its `value` is
+/// selected. In a drawer's `item`, `value` may bind `$item.<field>`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct DrawerPage {
+    pub value: String,
+    pub content: UiNode,
 }
 
 /// A named region of a workspace, filled by a content provider.

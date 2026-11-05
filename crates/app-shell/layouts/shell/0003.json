@@ -1,0 +1,745 @@
+{
+  "note": "A left drawer opened by a menu button: every app, with Settings (online dot) and Notifications (unread dot) icons at its bottom",
+  "layout": {
+    "type": "core://Workspace",
+    "id": "shell",
+    "title": "Home",
+    "slots": [
+      {
+        "slot_id": "drawer",
+        "provider_uri": "local://apps",
+        "content": {
+          "type": "core://Drawer",
+          "field": "page",
+          "query_key": "local:apps",
+          "item": {
+            "value": "$item.id",
+            "content": {
+              "type": "core://AppFrame",
+              "app": "$item.id"
+            }
+          },
+          "after": [
+            {
+              "value": "notifications",
+              "content": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://Row",
+                    "children": [
+                      {
+                        "type": "core://Spacer",
+                        "size_dp": 40
+                      },
+                      {
+                        "type": "core://Text",
+                        "value_expr": "Notifications",
+                        "style": "Headline"
+                      },
+                      {
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "type": "core://Button",
+                        "label": "Mark all read",
+                        "on_click": {
+                          "intent": "action.device",
+                          "command": "mark_all_read"
+                        }
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 12,
+                    "spacing_dp": 8
+                  },
+                  {
+                    "type": "core://List",
+                    "query_key": "local:notifications",
+                    "item_template": {
+                      "type": "core://Tappable",
+                      "on_click": {
+                        "intent": "action.device",
+                        "command": "open_notification",
+                        "id": "$item.id"
+                      },
+                      "content": {
+                        "type": "core://Column",
+                        "children": [
+                          {
+                            "type": "core://Row",
+                            "children": [
+                              {
+                                "type": "core://Text",
+                                "value_expr": "$item.title",
+                                "style": "Body"
+                              },
+                              {
+                                "type": "core://Spacer"
+                              },
+                              {
+                                "type": "core://Conditional",
+                                "value": "$item.unread",
+                                "content": {
+                                  "type": "core://Chip",
+                                  "text": "New"
+                                }
+                              },
+                              {
+                                "type": "core://Text",
+                                "value_expr": "$item.when",
+                                "style": "Caption"
+                              }
+                            ],
+                            "padding_h_dp": 0,
+                            "padding_v_dp": 0,
+                            "spacing_dp": 8
+                          },
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.body",
+                            "content": {
+                              "type": "core://Text",
+                              "value_expr": "$item.body",
+                              "style": "Secondary"
+                            }
+                          },
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.app_title",
+                            "style": "Caption"
+                          }
+                        ],
+                        "padding_h_dp": 16,
+                        "padding_v_dp": 10,
+                        "spacing_dp": 2
+                      },
+                      "tag": "notification-$item.id"
+                    },
+                    "empty_text": "No notifications yet",
+                    "group_by": {
+                      "field": "day",
+                      "header": {
+                        "type": "core://Column",
+                        "children": [
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.day",
+                            "style": "Label"
+                          }
+                        ],
+                        "padding_h_dp": 16,
+                        "padding_v_dp": 8
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "value": "settings",
+              "content": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://Row",
+                    "children": [
+                      {
+                        "type": "core://Spacer",
+                        "size_dp": 40
+                      },
+                      {
+                        "type": "core://Text",
+                        "value_expr": "Settings",
+                        "style": "Headline"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 12,
+                    "spacing_dp": 8
+                  },
+                  {
+                    "type": "core://Column",
+                    "children": [
+                      {
+                        "type": "core://Text",
+                        "value_expr": "Your pod",
+                        "style": "Label"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 8
+                  },
+                  {
+                    "type": "core://Row",
+                    "children": [
+                      {
+                        "type": "core://Text",
+                        "value_expr": "${local://connection#label}",
+                        "style": "Body"
+                      },
+                      {
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "type": "core://Text",
+                        "value_expr": "${local://session#server}",
+                        "style": "Caption"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 4,
+                    "spacing_dp": 8
+                  },
+                  {
+                    "type": "core://List",
+                    "query_key": "local:servers",
+                    "item_template": {
+                      "type": "core://Tappable",
+                      "on_click": {
+                        "intent": "action.device",
+                        "command": "set_server",
+                        "id": "$item.id"
+                      },
+                      "content": {
+                        "type": "core://Column",
+                        "children": [
+                          {
+                            "type": "core://Row",
+                            "children": [
+                              {
+                                "type": "core://Text",
+                                "value_expr": "$item.title",
+                                "style": "Body"
+                              },
+                              {
+                                "type": "core://Spacer"
+                              },
+                              {
+                                "type": "core://Conditional",
+                                "value": "$item.selected",
+                                "content": {
+                                  "type": "core://Text",
+                                  "value_expr": "Current",
+                                  "style": "Caption"
+                                }
+                              }
+                            ],
+                            "spacing_dp": 8
+                          },
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.url",
+                            "style": "Caption"
+                          }
+                        ],
+                        "padding_h_dp": 16,
+                        "padding_v_dp": 8,
+                        "spacing_dp": 2
+                      },
+                      "tag": "server-$item.id"
+                    },
+                    "empty_text": ""
+                  },
+                  {
+                    "type": "core://Row",
+                    "children": [
+                      {
+                        "type": "core://Button",
+                        "label": "Leave pod",
+                        "on_click": {
+                          "intent": "action.device",
+                          "command": "leave_pod"
+                        }
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 8,
+                    "spacing_dp": 8
+                  },
+                  {
+                    "type": "core://Divider"
+                  },
+                  {
+                    "type": "core://Column",
+                    "children": [
+                      {
+                        "type": "core://Text",
+                        "value_expr": "Sign-ins",
+                        "style": "Label"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 8
+                  },
+                  {
+                    "type": "core://List",
+                    "query_key": "local:sign_ins",
+                    "item_template": {
+                      "type": "core://Column",
+                      "children": [
+                        {
+                          "type": "core://Row",
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "value_expr": "$item.title",
+                              "style": "Body"
+                            },
+                            {
+                              "type": "core://Spacer"
+                            },
+                            {
+                              "type": "core://Button",
+                              "label": "Sign out",
+                              "on_click": {
+                                "intent": "action.device",
+                                "command": "sign_out"
+                              }
+                            }
+                          ],
+                          "spacing_dp": 8
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.detail",
+                          "style": "Caption"
+                        }
+                      ],
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 8,
+                      "spacing_dp": 2
+                    },
+                    "empty_text": "Not signed in to anything yet."
+                  },
+                  {
+                    "type": "core://List",
+                    "query_key": "local:providers",
+                    "item_template": {
+                      "type": "core://Row",
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.title",
+                          "style": "Body"
+                        },
+                        {
+                          "type": "core://Spacer"
+                        },
+                        {
+                          "type": "core://Button",
+                          "label": "Sign in",
+                          "on_click": {
+                            "intent": "action.device",
+                            "command": "sign_in",
+                            "id": "$item.id"
+                          }
+                        }
+                      ],
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 12,
+                      "spacing_dp": 8
+                    },
+                    "empty_text": ""
+                  },
+                  {
+                    "type": "core://Divider"
+                  },
+                  {
+                    "type": "core://Column",
+                    "children": [
+                      {
+                        "type": "core://Text",
+                        "value_expr": "Notifications",
+                        "style": "Label"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 8
+                  },
+                  {
+                    "type": "core://List",
+                    "query_key": "local:channels",
+                    "item_template": {
+                      "type": "core://Column",
+                      "children": [
+                        {
+                          "type": "core://Row",
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "value_expr": "$item.title",
+                              "style": "Body"
+                            },
+                            {
+                              "type": "core://Spacer"
+                            },
+                            {
+                              "type": "core://Switch",
+                              "checked": "$item.enabled",
+                              "on_click": {
+                                "intent": "action.device",
+                                "command": "toggle_channel",
+                                "app": "$item.app_id",
+                                "id": "$item.id"
+                              },
+                              "content_description": "$item.title"
+                            }
+                          ],
+                          "spacing_dp": 8
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.app_title",
+                          "style": "Caption"
+                        }
+                      ],
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 8,
+                      "spacing_dp": 2
+                    },
+                    "empty_text": "No app sends notifications yet."
+                  },
+                  {
+                    "type": "core://Divider"
+                  },
+                  {
+                    "type": "core://Column",
+                    "children": [
+                      {
+                        "type": "core://Text",
+                        "value_expr": "App versions",
+                        "style": "Label"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 8
+                  },
+                  {
+                    "type": "core://List",
+                    "query_key": "local:apps",
+                    "empty_text": "No apps yet.",
+                    "item_template": {
+                      "type": "core://Tappable",
+                      "on_click": {
+                        "intent": "action.sequence",
+                        "steps": [
+                          {
+                            "intent": "action.device",
+                            "command": "show_versions",
+                            "app": "$item.id"
+                          },
+                          {
+                            "intent": "action.device",
+                            "command": "show",
+                            "id": "versions"
+                          }
+                        ]
+                      },
+                      "content": {
+                        "type": "core://Row",
+                        "children": [
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.title",
+                            "style": "Body"
+                          },
+                          {
+                            "type": "core://Spacer"
+                          },
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.version",
+                            "style": "Caption"
+                          }
+                        ],
+                        "padding_h_dp": 16,
+                        "padding_v_dp": 12,
+                        "spacing_dp": 8
+                      },
+                      "tag": "versions-$item.id"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "value": "versions",
+              "content": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://Row",
+                    "children": [
+                      {
+                        "type": "core://Spacer",
+                        "size_dp": 40
+                      },
+                      {
+                        "type": "core://Text",
+                        "value_expr": "Versions",
+                        "style": "Headline"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 12,
+                    "spacing_dp": 8
+                  },
+                  {
+                    "type": "core://Column",
+                    "children": [
+                      {
+                        "type": "core://Text",
+                        "value_expr": "${local://versions#app_title}",
+                        "style": "Title"
+                      },
+                      {
+                        "type": "core://Text",
+                        "value_expr": "Pick a version to show it on this device. Your data stays as it is.",
+                        "style": "Secondary"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "spacing_dp": 4
+                  },
+                  {
+                    "type": "core://Conditional",
+                    "value": "${local://versions#pinned}",
+                    "content": {
+                      "type": "core://Row",
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "Showing v${local://versions#pinned}",
+                          "style": "Body"
+                        },
+                        {
+                          "type": "core://Spacer"
+                        },
+                        {
+                          "type": "core://Button",
+                          "label": "Follow latest",
+                          "on_click": {
+                            "intent": "action.device",
+                            "command": "follow_latest"
+                          }
+                        }
+                      ],
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 12,
+                      "spacing_dp": 8
+                    }
+                  },
+                  {
+                    "type": "core://Conditional",
+                    "value": "${local://versions#loading}",
+                    "content": {
+                      "type": "core://Row",
+                      "children": [
+                        {
+                          "type": "core://Progress"
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "Loading versions…",
+                          "style": "Secondary"
+                        }
+                      ],
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 12,
+                      "spacing_dp": 8
+                    }
+                  },
+                  {
+                    "type": "core://List",
+                    "query_key": "local:versions",
+                    "empty_text": "",
+                    "item_template": {
+                      "type": "core://Tappable",
+                      "on_click": {
+                        "intent": "action.device",
+                        "command": "pin_version",
+                        "id": "$item.version"
+                      },
+                      "content": {
+                        "type": "core://Column",
+                        "children": [
+                          {
+                            "type": "core://Row",
+                            "children": [
+                              {
+                                "type": "core://Text",
+                                "value_expr": "$item.label",
+                                "style": "Body"
+                              },
+                              {
+                                "type": "core://Spacer"
+                              },
+                              {
+                                "type": "core://Conditional",
+                                "value": "$item.showing",
+                                "content": {
+                                  "type": "core://Chip",
+                                  "text": "Showing"
+                                }
+                              },
+                              {
+                                "type": "core://Text",
+                                "value_expr": "$item.when",
+                                "style": "Caption"
+                              }
+                            ],
+                            "padding_h_dp": 0,
+                            "padding_v_dp": 0,
+                            "spacing_dp": 8
+                          },
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.detail",
+                            "content": {
+                              "type": "core://Text",
+                              "value_expr": "$item.detail",
+                              "style": "Secondary"
+                            }
+                          }
+                        ],
+                        "padding_h_dp": 16,
+                        "padding_v_dp": 10,
+                        "spacing_dp": 2
+                      },
+                      "tag": "version-$item.version"
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "drawer": {
+            "type": "core://Column",
+            "padding_v_dp": 12,
+            "children": [
+              {
+                "type": "core://List",
+                "query_key": "local:apps",
+                "empty_text": "No apps yet. Ask your agent for one, like “Show me my Pixelfed feed”.",
+                "item_template": {
+                  "type": "core://Tappable",
+                  "on_click": {
+                    "intent": "action.device",
+                    "command": "open_app",
+                    "app": "$item.id"
+                  },
+                  "content": {
+                    "type": "core://Row",
+                    "children": [
+                      {
+                        "type": "core://Text",
+                        "value_expr": "$item.title",
+                        "style": "Body"
+                      },
+                      {
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "type": "core://Conditional",
+                        "value": "$item.unread",
+                        "content": {
+                          "type": "core://Chip",
+                          "text": "$item.unread"
+                        }
+                      },
+                      {
+                        "type": "core://Conditional",
+                        "value": "$form.page",
+                        "content": {
+                          "type": "core://Text",
+                          "value_expr": "●",
+                          "style": "Caption"
+                        },
+                        "equals": "$item.id"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 12,
+                    "spacing_dp": 8
+                  },
+                  "tag": "drawer-app"
+                }
+              }
+            ]
+          },
+          "footer": {
+            "type": "core://Column",
+            "children": [
+              {
+                "type": "core://Divider"
+              },
+              {
+                "type": "core://Row",
+                "children": [
+                  {
+                    "type": "core://IconButton",
+                    "icon": "settings",
+                    "content_description": "Settings",
+                    "on_click": {
+                      "intent": "action.device",
+                      "command": "show",
+                      "id": "settings"
+                    }
+                  },
+                  {
+                    "type": "core://Box",
+                    "background": "${local://connection#color}",
+                    "corner_dp": 5,
+                    "width_dp": 10,
+                    "height_dp": 10,
+                    "content": {
+                      "type": "core://Spacer",
+                      "size_dp": 0
+                    }
+                  },
+                  {
+                    "type": "core://Spacer",
+                    "size_dp": 16
+                  },
+                  {
+                    "type": "core://IconButton",
+                    "icon": "notifications",
+                    "content_description": "Notifications",
+                    "on_click": {
+                      "intent": "action.device",
+                      "command": "show",
+                      "id": "notifications"
+                    }
+                  },
+                  {
+                    "type": "core://Conditional",
+                    "value": "${local://inbox#unread}",
+                    "content": {
+                      "type": "core://Box",
+                      "background": "#D32F2F",
+                      "corner_dp": 5,
+                      "width_dp": 10,
+                      "height_dp": 10,
+                      "content": {
+                        "type": "core://Spacer",
+                        "size_dp": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "core://Spacer"
+                  }
+                ],
+                "padding_h_dp": 8,
+                "padding_v_dp": 8,
+                "spacing_dp": 2
+              }
+            ]
+          },
+          "badge": "${local://inbox#unread}"
+        }
+      }
+    ]
+  }
+}

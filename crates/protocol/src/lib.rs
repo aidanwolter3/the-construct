@@ -13,9 +13,9 @@ pub mod intent;
 pub mod notify;
 
 pub use ast::{
-    Align, ChoiceOption, DateFormat, DockTab, GroupBy, ICONS, ImageShape, Indent, ListBinding,
-    ListFilter, ListFocus, ListWhere, NODE_TYPES, Orientation, Screen, SlotSpec, TextCount,
-    TextFormat, TextStyle, Tone, UiNode,
+    Align, ChoiceOption, DateFormat, DockTab, DrawerPage, GroupBy, ICONS, ImageShape, Indent,
+    ListBinding, ListFilter, ListFocus, ListWhere, NODE_TYPES, Orientation, Screen, SlotSpec,
+    TextCount, TextFormat, TextStyle, Tone, UiNode,
 };
 pub use bundle::{DataBundle, EntityRecord, WorkspaceSpec};
 pub use features::{

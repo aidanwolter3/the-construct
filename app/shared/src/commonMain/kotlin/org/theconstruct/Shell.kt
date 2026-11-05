@@ -10,12 +10,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -29,9 +34,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -40,6 +48,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -81,6 +90,11 @@ data class DeviceSources(
     val providers: List<SignInProvider> = emptyList(),
     val server: ServerChoice? = null,
     val nowSeconds: Long = 0,
+    /** The version pinned per app on this device. */
+    val pins: Map<String, Long> = emptyMap(),
+    /** The app `show_versions` named, and its history as loaded. */
+    val versionsApp: String? = null,
+    val versions: VersionHistory? = null,
 )
 
 /**
@@ -109,6 +123,8 @@ fun deviceData(
         put("pending", pending)
         put("label", connection)
         put("attention", state.isOnline == false || pending > 0)
+        // For a status dot (`core://Box` `background`): green online, grey otherwise.
+        put("color", if (state.isOnline == true) "#2E7D32" else "#9E9E9E")
     }
     entities["local://inbox"] = buildJsonObject {
         put("unread", unread.total)
@@ -124,6 +140,8 @@ fun deviceData(
             put("kind", if (app.custom) "custom" else "blueprint")
             put("detail", app.updatesFrom?.let { "${it.title} has updates" } ?: app.latestVersion?.let { "v$it" } ?: "")
             put("unread", unread.byApp[app.id] ?: 0)
+            val pinned = sources.pins[app.id]
+            put("version", if (pinned != null) "v$pinned · pinned" else app.latestVersion?.let { "v$it · latest" } ?: "")
         }
         uri
     }
@@ -182,6 +200,27 @@ fun deviceData(
             put("title", o.label)
             put("url", o.url)
             put("selected", o.url.trimEnd('/') == server?.currentUrl?.trimEnd('/'))
+        })
+    }
+    val versionsApp = sources.versionsApp
+    val pinnedVersion = versionsApp?.let { sources.pins[it] }
+    entities["local://versions"] = buildJsonObject {
+        put("app_id", versionsApp.orEmpty())
+        put("app_title", versionsApp?.let { titles[it] ?: it }.orEmpty())
+        put("pinned", pinnedVersion?.toString().orEmpty())
+        put("loading", versionsApp != null && sources.versions?.loaded != true)
+    }
+    val history = sources.versions?.versions.orEmpty()
+    val newest = history.firstOrNull { it.compatible }?.version
+    queries["local:versions"] = history.map { v ->
+        add("local:versions", "local://versions/$versionsApp/${v.version}", buildJsonObject {
+            put("app_id", versionsApp.orEmpty())
+            put("version", v.version)
+            put("label", "v${v.version}")
+            put("detail", versionDetail(v))
+            put("when", versionTimeLabel(v.createdAt, sources.nowSeconds))
+            put("compatible", v.compatible)
+            put("showing", if (pinnedVersion != null) v.version == pinnedVersion else v.version == newest)
         })
     }
     return DeviceData(entities, queries)
@@ -297,7 +336,7 @@ internal fun ShellRoot(controller: ConstructController, state: ConstructState, m
 
 /** Whether a workspace is drawn whole by its one slot (a `core://Dock`), with no title bar or page scroll. */
 internal fun fillsScreen(workspace: UiNode.Workspace): Boolean =
-    workspace.slots.size == 1 && workspace.slots[0].content is UiNode.Dock
+    workspace.slots.size == 1 && workspace.slots[0].content.let { it is UiNode.Dock || it is UiNode.Drawer }
 
 /** One tab of a dock as drawn: [item] is the entity it was drawn from (query tabs). */
 private data class DrawnTab(
@@ -375,6 +414,7 @@ internal fun DockView(
         val wide = maxWidth >= 720.dp
         val content: @Composable (Modifier) -> Unit = { m ->
             Box(m) {
+              CompositionLocalProvider(LocalWorkspaceTitleInset provides 0.dp, LocalWorkspaceTitleEndInset provides 0.dp) {
                 if (selected != null) {
                     key(selected.value) {
                         val c = selected.content
@@ -387,6 +427,7 @@ internal fun DockView(
                         }
                     }
                 }
+              }
             }
         }
         if (wide) {
@@ -479,10 +520,9 @@ internal fun AppFrameView(node: UiNode.AppFrame, item: JsonObject?, modifier: Mo
                 LocalFormMemory provides remember(controller) {
                     FormMemory { f, v -> controller.navigation.remember(ROOT_FORM_SCOPE, f, v) }
                 },
-                // A frame's app draws its own frames as messages: one engine shows one app.
+                // A frame's app draws its own frames as messages: one engine shows one app. Its title keeps the inset
+                // its host gives it (a drawer's menu button sits over the top left).
                 LocalShellController provides null,
-                LocalWorkspaceTitleInset provides 0.dp,
-                LocalWorkspaceTitleEndInset provides 0.dp,
             ) {
                 RenderUiNode(workspace, entities, controller::dispatch, Modifier.fillMaxSize())
             }
@@ -500,5 +540,112 @@ private fun FrameMessage(text: String, modifier: Modifier, onRetry: (() -> Unit)
     ) {
         Text(text, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
         if (onRetry != null) TextButton(onClick = onRetry) { Text("Try again") }
+    }
+}
+
+/** A page of a drawer as drawn: [item] is the entity it was drawn from (query pages). */
+private data class DrawnPage(val value: String, val content: UiNode, val item: JsonObject?)
+
+/**
+ * `core://Drawer`: the selected page fills the screen, and a menu button at the top left (hidden while a screen of the
+ * framed app is open) opens [UiNode.Drawer.drawer], a panel of any layout. Any action from inside the panel closes it.
+ * Pages are picked by `action.device` `open_app` / `show` (through [ConstructController.dockRequest]); the selection is
+ * the form value of [UiNode.Drawer.field], remembered on the device. An app asked for that has no page is shown in the
+ * item's frame.
+ */
+@Composable
+internal fun DrawerView(
+    node: UiNode.Drawer,
+    entities: Map<String, JsonObject>,
+    onDispatch: (ActionIntent) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val form = LocalForm.current
+    val memory = LocalFormMemory.current
+    val queries = LocalConstructQueries.current
+    val controller = LocalShellController.current
+    val scope = rememberCoroutineScope()
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val itemPages = remember(node, queries, entities) {
+        val template = node.item ?: return@remember emptyList()
+        listItems(node.queryKey ?: "", queries, entities).orEmpty().map { e ->
+            DrawnPage((resolveRef(template.value, e) ?: template.value).trim(), template.content, e)
+        }
+    }
+    val all = node.before.map { DrawnPage(it.value, it.content, null) } + itemPages +
+        node.after.map { DrawnPage(it.value, it.content, null) }
+    var adHoc by remember { mutableStateOf<String?>(null) }
+    val request = controller?.dockRequest?.collectAsState()?.value
+    LaunchedEffect(request) {
+        if (request != null && form != null) {
+            if (all.none { it.value == request }) adHoc = request
+            form[node.field] = request
+            memory?.save(node.field, request)
+            // Closed from the view's own scope: clearing the request restarts this effect, which would cancel it.
+            scope.launch { drawerState.close() }
+            controller.dockRequestHandled()
+        }
+    }
+    val wanted = form?.get(node.field).orEmpty()
+    val untabbed = node.item?.takeIf { wanted.isNotEmpty() && wanted == adHoc }
+        ?.let { DrawnPage(wanted, it.content, buildJsonObject { put("id", wanted); put("title", wanted) }) }
+    val selected = all.firstOrNull { it.value == wanted } ?: untabbed ?: all.firstOrNull()
+    // The panel reads the page shown as `$form.<field>` (to mark it) even before anything is picked; it gets its own
+    // form with that value, so a default never sticks while the app list is still loading.
+    val panelForm = remember { mutableStateMapOf<String, String>() }
+    SideEffect { selected?.value?.let { panelForm[node.field] = it } }
+    PlatformBackHandler(enabled = drawerState.isOpen) { scope.launch { drawerState.close() } }
+    val screenOpen = controller?.navigation?.top != null
+    val badge = node.badge?.let { interpolate(it, entities, null) }.orEmpty()
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = drawerState.isOpen,
+        modifier = modifier.fillMaxSize().testTag("drawer"),
+        drawerContent = {
+            ModalDrawerSheet(Modifier.width(304.dp)) {
+                val panelDispatch: (ActionIntent) -> Unit = { intent ->
+                    onDispatch(intent)
+                    scope.launch { drawerState.close() }
+                }
+                CompositionLocalProvider(LocalForm provides panelForm) {
+                    Column(Modifier.fillMaxSize().testTag("drawer-panel")) {
+                        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
+                            RenderUiNode(node.drawer, entities, panelDispatch, Modifier.fillMaxWidth())
+                        }
+                        node.footer?.let { RenderUiNode(it, entities, panelDispatch, Modifier.fillMaxWidth()) }
+                    }
+                }
+            }
+        },
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            if (selected != null) {
+                key(selected.value) {
+                    CompositionLocalProvider(
+                        LocalWorkspaceTitleInset provides MENU_BUTTON_INSET,
+                        LocalWorkspaceTitleEndInset provides 0.dp,
+                    ) {
+                        val c = selected.content
+                        if (c is UiNode.AppFrame) {
+                            RenderUiNode(c, entities, onDispatch, Modifier.fillMaxSize(), selected.item)
+                        } else {
+                            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                                RenderUiNode(c, entities, onDispatch, Modifier.fillMaxWidth(), selected.item)
+                            }
+                        }
+                    }
+                }
+            }
+            if (!screenOpen) {
+                MenuButton(
+                    badge = badge.toIntOrNull()?.let { it > 0 } ?: isTruthy(badge, null),
+                    onClick = {
+                        controller?.onDockSelected()
+                        scope.launch { drawerState.open() }
+                    },
+                    modifier = Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 8.dp),
+                )
+            }
+        }
     }
 }

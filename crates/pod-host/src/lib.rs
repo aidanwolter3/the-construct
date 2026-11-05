@@ -565,6 +565,64 @@ impl Host {
     /// A new token for pod `name`; the old one stops working everywhere and
     /// the pod's sign-ins (made with it) end. Claude's MCP credentials stay.
     pub fn rotate(&self, name: &str) -> Result<String, String> {
+        let token = new_pod_token();
+        self.set_token(name, &token)?;
+        Ok(token)
+    }
+
+    /// For local testing only (`server serve --pod-code … --mcp-key …`): the
+    /// admin pod `name`, made if missing, opens with `code`, and `mcp_key`
+    /// (if given) is one of its MCP credentials. The same codes then work
+    /// across restarts. Changing the code ends the pod's sign-ins, as
+    /// [`Self::rotate`] does; an unchanged code changes nothing.
+    pub fn ensure_local_pod(
+        &self,
+        name: &str,
+        code: &str,
+        mcp_key: Option<&str>,
+    ) -> Result<(), String> {
+        if !code.starts_with(TOKEN_PREFIX) || code.len() < TOKEN_PREFIX.len() + 8 {
+            return Err(format!(
+                "a pod code is {TOKEN_PREFIX} and at least 8 more characters"
+            ));
+        }
+        if let Some(k) = mcp_key
+            && (!k.starts_with(oauth::MCP_TOKEN_PREFIX)
+                || k.len() < oauth::MCP_TOKEN_PREFIX.len() + 8)
+        {
+            return Err(format!(
+                "an MCP key is {} and at least 8 more characters",
+                oauth::MCP_TOKEN_PREFIX
+            ));
+        }
+        let pod = match self.store.pod_by_name(name).map_err(|e| e.to_string())? {
+            Some(p) => p,
+            None => {
+                self.make_pod(name, PodKind::Admin, None, &[])?;
+                self.store
+                    .pod_by_name(name)
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| format!("pod {name:?} was not made"))?
+            }
+        };
+        let hash = session_hash(code);
+        let current = self.store.pod_for_token(&hash).map_err(|e| e.to_string())?;
+        if current.as_deref() != Some(pod.id.as_str()) {
+            if current.is_some() {
+                return Err("that pod code belongs to another pod".to_owned());
+            }
+            self.set_token(name, code)?;
+        }
+        if let Some(k) = mcp_key {
+            self.store
+                .insert_mcp_credential_if_missing(&pod.id, &session_hash(k), "local testing")
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Pod `name` opens with `token` from now on (the old one stops working).
+    fn set_token(&self, name: &str, token: &str) -> Result<(), String> {
         let pod = self
             .store
             .pod_by_name(name)
@@ -572,15 +630,14 @@ impl Host {
             .ok_or_else(|| format!("no pod named {name:?}"))?;
         let store =
             Store::open(&self.pod_dir(&pod.id)?.join("server.db")).map_err(|e| e.to_string())?;
-        let token = new_pod_token();
-        let hash = session_hash(&token);
+        let hash = session_hash(token);
         store
             .replace_pinned_session(&hash)
             .map_err(|e| e.to_string())?;
         self.store
             .replace_token(&pod.id, &hash)
             .map_err(|e| e.to_string())?;
-        Ok(token)
+        Ok(())
     }
 
     /// Send pod `name` a test notification (blocking; the admin CLI): the

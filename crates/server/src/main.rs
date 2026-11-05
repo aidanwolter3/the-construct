@@ -110,7 +110,14 @@ fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
-        [] | ["serve"] => match serve() {
+        [] | ["serve"] => match serve(LocalPod::default()) {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("server: {e}");
+                std::process::ExitCode::FAILURE
+            }
+        },
+        ["serve", flags @ ..] => match LocalPod::parse(flags).and_then(serve) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("server: {e}");
@@ -126,7 +133,9 @@ fn main() -> std::process::ExitCode {
         },
         _ => {
             eprintln!(
-                "usage: server [serve]\n       server pods create <name>\n       \
+                "usage: server [serve]\n       \
+                 server serve --pod-code <cpod_…> [--mcp-key <cmcp_…>] [--pod-name <name>]   (local testing)\n       \
+                 server pods create <name>\n       \
                  server pods adopt <name> <path/to/server.db>\n       server pods remove-adopted [dir]\n       \
                  server pods rotate <name>\n       \
                  server pods delete <name>\n       server pods notify-test <name>\n       \
@@ -282,8 +291,46 @@ fn pods(args: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
+/// `server serve --pod-code … [--mcp-key …] [--pod-name …]`: a pod whose
+/// codes stay the same across restarts, for testing on this machine
+/// ([`server::host::Host::ensure_local_pod`]). Refused on Fly and on a
+/// non-loopback address.
+#[derive(Default)]
+struct LocalPod {
+    name: Option<String>,
+    code: Option<String>,
+    mcp_key: Option<String>,
+}
+
+impl LocalPod {
+    fn parse(flags: &[&str]) -> Result<Self, String> {
+        let mut out = LocalPod::default();
+        let mut it = flags.iter();
+        while let Some(flag) = it.next() {
+            let mut value = || {
+                it.next()
+                    .map(|v| (*v).to_owned())
+                    .ok_or_else(|| format!("{flag} needs a value"))
+            };
+            match *flag {
+                "--pod-code" => out.code = Some(value()?),
+                "--mcp-key" => out.mcp_key = Some(value()?),
+                "--pod-name" => out.name = Some(value()?),
+                other => return Err(format!("unknown flag {other}")),
+            }
+        }
+        if out.code.is_none() && (out.mcp_key.is_some() || out.name.is_some()) {
+            return Err("--mcp-key and --pod-name go with --pod-code".to_owned());
+        }
+        Ok(out)
+    }
+}
+
+/// The local pod's name when `--pod-name` isn't given.
+const LOCAL_POD: &str = "local";
+
 #[tokio::main]
-async fn serve() -> Result<(), String> {
+async fn serve(local: LocalPod) -> Result<(), String> {
     let dir = data_dir();
     let pixelfed = server::PixelfedConfig::from_env();
     tracing::info!(
@@ -330,9 +377,27 @@ async fn serve() -> Result<(), String> {
         );
     }
     let open_pod = config.open_pod.is_some();
-    let host = tokio::task::spawn_blocking(move || Host::open(&dir, factory()?, config))
-        .await
-        .map_err(|e| e.to_string())??;
+    if local.code.is_some() && (on_fly || !server::is_loopback_addr(&addr)) {
+        return Err(
+            "--pod-code is for testing on this machine: not on Fly or a non-loopback address"
+                .into(),
+        );
+    }
+    let host = tokio::task::spawn_blocking(move || -> Result<Host, String> {
+        let host = Host::open(&dir, factory()?, config)?;
+        if let Some(code) = &local.code {
+            let name = local.name.as_deref().unwrap_or(LOCAL_POD);
+            host.ensure_local_pod(name, code, local.mcp_key.as_deref())?;
+            tracing::warn!(
+                pod = name,
+                mcp = local.mcp_key.is_some(),
+                "local testing: pod opens with the --pod-code given on the command line"
+            );
+        }
+        Ok(host)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let host = Arc::new(host);
     {
         let h = host.clone();

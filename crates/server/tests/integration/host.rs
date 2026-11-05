@@ -856,3 +856,47 @@ async fn the_scheduler_polls_pods_with_devices() {
         "{first}"
     );
 }
+
+#[tokio::test]
+async fn a_local_pod_keeps_the_codes_it_was_given() {
+    let env = env().await;
+    let ensure = |code: &'static str, key: Option<&'static str>| {
+        let host = env.host.clone();
+        async move {
+            tokio::task::spawn_blocking(move || host.ensure_local_pod("local", code, key))
+                .await
+                .unwrap()
+        }
+    };
+    ensure("cpod_localtest123", Some("cmcp_localtest123"))
+        .await
+        .unwrap();
+    // Again, as on every restart: nothing changes.
+    ensure("cpod_localtest123", Some("cmcp_localtest123"))
+        .await
+        .unwrap();
+    let (status, _, apps) = get(&env.url("/v1/apps"), Some("cpod_localtest123")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(apps["apps"][0]["id"], "home");
+    let resp = client()
+        .post(env.url("/v1/mcp"))
+        .bearer_auth("cmcp_localtest123")
+        .header("accept", "application/json, text/event-stream")
+        .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    // A new code replaces the old one.
+    ensure("cpod_othertest456", None).await.unwrap();
+    let (status, _, _) = get(&env.url("/v1/apps"), Some("cpod_othertest456")).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = get(&env.url("/v1/workspaces/home"), Some("cpod_localtest123")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // Codes that don't look like codes, or belong to another pod, are refused.
+    assert!(ensure("nope", None).await.is_err());
+    assert!(ensure("cpod_localtest123", Some("cmcp_x")).await.is_err());
+    let other = env.create("other").await;
+    let other: &'static str = Box::leak(other.into_boxed_str());
+    assert!(ensure(other, None).await.is_err());
+}
