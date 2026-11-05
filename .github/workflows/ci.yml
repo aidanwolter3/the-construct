@@ -91,28 +91,6 @@ jobs:
           ./gradlew -PskipRustBuild :desktopApp:simulate \
             -Pworkspace=pixelfed_sample_no_login -Pscreen=phone -Pout="$RUNNER_TEMP/sim/pixelfed" \
             -Pscript="shot feed; click Like; assert-text Unlike; shot liked; offline; shot offline"
-      # TEMPORARY (#117 PR only, reverted before merge): before/after shots printed into the log as base64.
-      - name: "TEMP #117 screenshots"
-        if: always()
-        working-directory: app
-        run: |
-          shoot() {
-            local tag=$1
-            ./gradlew -q -PskipRustBuild :desktopApp:simulate -Pfixture=app/desktopApp/src/sim/resources/row_long_text_bundle.json \
-              -Pscreen=phone -Ptoday=2026-11-05 -Pout="$RUNNER_TEMP/s117/$tag-rows" -Pscript="shot rows" || true
-            ./gradlew -q -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_sample_no_login -Pscreen=phone -Ptoday=2026-11-05 \
-              -Pout="$RUNNER_TEMP/s117/$tag-blueprints" \
-              -Pscript="shot feed; open-settings; shot settings; back; open-inbox; shot inbox; back; open-layout events; shot events" || true
-          }
-          shoot after
-          curl -fsSL -o shared/src/commonMain/kotlin/org/theconstruct/DynamicRenderer.kt \
-            https://raw.githubusercontent.com/aidanwolter3/the-construct/065f951/app/shared/src/commonMain/kotlin/org/theconstruct/DynamicRenderer.kt
-          shoot before
-          git checkout -- shared/src/commonMain/kotlin/org/theconstruct/DynamicRenderer.kt
-          cd "$RUNNER_TEMP/s117" && find . -name '*.png' -o -name steps.log | sort
-          cat */steps.log || true
-          tar czf - $(find . -name '*.png') | base64 -w 0 > s117.b64
-          echo "S117-BEGIN"; cat s117.b64; echo; echo "S117-END"
       - name: Upload screenshots and test reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
