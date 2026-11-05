@@ -160,6 +160,42 @@ class ScreensTest {
     }
 
     @Test
+    fun aScreenOpenedFromASheetOrPanelOpensInsideIt() {
+        val bridge = RecordingBridge()
+        val controller = ConstructController(bridge)
+        val panel = WORKSPACE_WITH_SCREEN.replace("\"id\":\"app\"", "\"id\":\"c-panel\"")
+        bridge.listener!!(
+            EngineSnapshot(
+                WORKSPACE_WITH_SCREEN, "{}", true, 1, 0,
+                layoutsJson = """{"c-panel":{"workspace":$panel,"version":1,"gone":false}}""",
+            ),
+        )
+        val nav = controller.navigation
+        for (mode in listOf(PresentationMode.Panel, PresentationMode.Sheet)) {
+            val frame = nav.present("c-panel", presentation = mode)
+            assertEquals(frame, nav.topFrame)
+            controller.dispatchIn("c-panel", frame.form, ActionIntent.Navigate("x://posts/1/thread", PresentationMode.Push))
+            assertEquals(frame, nav.topScreen!!.frame, "$mode: the screen opens inside the frame")
+            assertEquals(frame, nav.topFrame, "a further screen opens in the same frame")
+            // Back pops the screen first, then the frame.
+            assertTrue(nav.back())
+            assertEquals(frame, nav.top)
+            controller.dispatchIn("c-panel", frame.form, ActionIntent.Navigate("x://posts/2/thread", PresentationMode.Push))
+            // Dismissing the frame (a scrim tap, a drag down) closes the screen in it too.
+            nav.dismiss(frame)
+            assertNull(nav.top)
+        }
+        // A pushed layout's screens, and the root's, still cover the whole screen.
+        val pushed = nav.present("c-panel")
+        assertNull(nav.topFrame)
+        controller.dispatchIn("c-panel", pushed.form, ActionIntent.Navigate("x://posts/3/thread", PresentationMode.Push))
+        assertNull(nav.topScreen!!.frame)
+        nav.clear()
+        controller.dispatch(ActionIntent.Navigate("x://posts/4/thread", PresentationMode.Push))
+        assertNull(nav.topScreen!!.frame)
+    }
+
+    @Test
     fun submittingBindsTheVisibleScreensForm() {
         val bridge = RecordingBridge()
         val controller = ConstructController(bridge)

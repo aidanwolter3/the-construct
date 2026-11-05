@@ -3,7 +3,10 @@ package org.theconstruct
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
@@ -56,6 +59,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -67,6 +71,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.Velocity
@@ -310,7 +315,8 @@ internal fun StackHost(controller: ConstructController, state: ConstructState, d
     val shown = remember { mutableListOf<StackEntry>() }
     var gone by remember { mutableIntStateOf(0) }
     gone.let { }
-    val live = nav.stack.toList()
+    // A screen opened inside a sheet or panel is drawn by that frame ([FrameContent]), not over the whole screen.
+    val live = nav.stack.filter { (it as? ScreenEntry)?.frame == null }
     // New entries join at the end; removed ones stay until their exit animation ends.
     live.forEach { if (it !in shown) shown.add(it) }
     val transitions = remember { mutableMapOf<Int, MutableTransitionState<Boolean>>() }
@@ -374,14 +380,83 @@ private fun StackEntryView(
                 is ScreenEntry -> ScreenView(controller, state, entry, device)
                 is LayoutEntry -> when (entry.presentation) {
                     PresentationMode.Sheet -> SheetFrame(entry, drag, onDismiss = { nav.dismiss(entry) }) {
-                        PresentedBody(controller, entry, settingsExtra)
+                        FrameContent(controller, state, device, entry) { PresentedBody(controller, entry, settingsExtra) }
                     }
-                    PresentationMode.Panel -> PanelFrame(entry) { PresentedBody(controller, entry, settingsExtra) }
+                    PresentationMode.Panel -> PanelFrame(entry) {
+                        FrameContent(controller, state, device, entry) { PresentedBody(controller, entry, settingsExtra) }
+                    }
                     else -> PushFrame(controller, entry) { PresentedBody(controller, entry, settingsExtra) }
                 }
             }
         }
     }
+}
+
+/**
+ * A sheet's or panel's content (issue #119): its layout ([base]), and over it the screens opened inside it, in order.
+ * Opening one slides the content left and the screen in from the end, like a push inside the frame; Back (the screen's
+ * arrow or system Back) slides it out again. Layers underneath stay composed (their scroll survives) but leave the
+ * semantics tree. Screens that left stay drawn until they have slid out; while the frame itself leaves, it keeps
+ * showing what it showed.
+ */
+@Composable
+private fun FrameContent(
+    controller: ConstructController,
+    state: ConstructState,
+    device: DeviceData,
+    frame: LayoutEntry,
+    base: @Composable () -> Unit,
+) {
+    val nav = controller.navigation
+    val last = remember { arrayOf<List<ScreenEntry>>(emptyList()) }
+    val live = if (frame in nav.stack) {
+        nav.stack.filterIsInstance<ScreenEntry>().filter { it.frame === frame }.also { last[0] = it }
+    } else {
+        last[0]
+    }
+    // Not Compose state, as in [StackHost]: screens that left are dropped after sliding out, recomposing via [gone].
+    val shown = remember { mutableListOf<ScreenEntry>() }
+    var gone by remember { mutableIntStateOf(0) }
+    gone.let { }
+    live.forEach { if (it !in shown) shown.add(it) }
+    val transitions = remember { mutableMapOf<Int, MutableTransitionState<Boolean>>() }
+    Box(Modifier.fillMaxSize().clipToBounds()) {
+        FrameLayer(covered = live.isNotEmpty()) { base() }
+        for (entry in shown.toList()) {
+            key(entry.key) {
+                val inFrame = entry in live
+                val t = transitions.getOrPut(entry.key) { MutableTransitionState(false) }
+                t.targetState = inFrame
+                if (!inFrame && t.isIdle && !t.currentState) {
+                    LaunchedEffect(Unit) {
+                        shown.remove(entry)
+                        transitions.remove(entry.key)
+                        gone++
+                    }
+                }
+                AnimatedVisibility(
+                    visibleState = t,
+                    enter = slideInHorizontally(tween(FRAME_SLIDE_MS, easing = FastOutSlowInEasing)) { it },
+                    exit = slideOutHorizontally(tween(FRAME_SLIDE_MS, easing = FastOutSlowInEasing)) { it },
+                ) {
+                    FrameLayer(covered = inFrame && entry !== live.last()) {
+                        ScreenView(controller, state, entry, device)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** One layer of [FrameContent]: slid off to the start (and out of the semantics tree) while a screen covers it. */
+@Composable
+private fun FrameLayer(covered: Boolean, content: @Composable () -> Unit) {
+    val shift by animateFloatAsState(if (covered) 1f else 0f, tween(FRAME_SLIDE_MS, easing = FastOutSlowInEasing))
+    Box(
+        Modifier.fillMaxSize()
+            .graphicsLayer { translationX = -shift * size.width }
+            .then(if (covered) Modifier.clearAndSetSemantics { } else Modifier),
+    ) { content() }
 }
 
 /** A presented layout's body; the platform's Settings extra (e.g. Android's notification permission) above Settings. */
@@ -563,6 +638,9 @@ private const val SHEET_DISMISS_FRACTION = 0.25f
 
 /** A sheet flung down faster than this closes, however little it moved. */
 private val SHEET_FLING_VELOCITY = 500.dp
+
+/** How long a screen takes to slide into or out of a sheet or panel (and its content aside). */
+private const val FRAME_SLIDE_MS = 280
 
 /** The widest a side panel gets. */
 private val PANEL_MAX_WIDTH = 340.dp
