@@ -245,6 +245,8 @@ pub enum PresentationMode {
     Sheet,
     /// A layout as a side panel from the start edge (feature `navigate_layout`).
     Panel,
+    /// A layout as a sheet from the top edge, sliding down (feature `top_sheet`).
+    TopSheet,
 }
 
 /// How a presented layout comes in and goes out (decision

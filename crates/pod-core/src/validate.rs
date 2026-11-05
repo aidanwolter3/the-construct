@@ -307,6 +307,24 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             }
             Ok(())
         }
+        UiNode::Swipe {
+            on_swipe_down,
+            on_swipe_up,
+            on_swipe_left,
+            on_swipe_right,
+            ..
+        } => {
+            if [on_swipe_down, on_swipe_up, on_swipe_left, on_swipe_right]
+                .iter()
+                .all(|i| i.is_none())
+            {
+                return Err(
+                    "a swipe needs at least one of on_swipe_down, on_swipe_up, on_swipe_left, on_swipe_right"
+                        .into(),
+                );
+            }
+            Ok(())
+        }
         UiNode::AppFrame { app } => {
             if app.trim().is_empty() {
                 Err("an app frame needs an app".into())

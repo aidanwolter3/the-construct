@@ -1045,8 +1045,13 @@ pub const NODE_DOCS: &[(&str, &str, &str)] = &[
     ),
     (
         "core://Layout",
-        "layout, show_when?, equals?, presentation?: Inline|Sheet|Panel, animation?: none|fade|slide|sheet_up, params?: {name: value}, height_dp?",
-        "Another layout drawn here: Inline (the default) in place (height_dp tall, or as tall as its content; as a workspace's one slot, the whole screen); Sheet or Panel over the screen. show_when (e.g. $form.panel, ${local://inbox#unread}) shows it only while truthy (or equal to equals); dismissing a Sheet or Panel clears that $form field. params bind as $route.<name> in it. layout is an id or a binding ($item.id).",
+        "layout, show_when?, equals?, presentation?: Inline|Sheet|TopSheet|Panel, animation?: none|fade|slide|sheet_up, params?: {name: value}, height_dp?",
+        "Another layout drawn here: Inline (the default) in place (height_dp tall, or as tall as its content; as a workspace's one slot, the whole screen); Sheet (from the bottom), TopSheet (sliding down from the top) or Panel over the screen. show_when (e.g. $form.panel, ${local://inbox#unread}) shows it only while truthy (or equal to equals); dismissing a Sheet, TopSheet or Panel clears that $form field. params bind as $route.<name> in it. layout is an id or a binding ($item.id).",
+    ),
+    (
+        "core://Swipe",
+        "content, on_swipe_down?, on_swipe_up?, on_swipe_left?, on_swipe_right?",
+        "content with swipe gestures: a swipe in a direction runs that intent (at least one). A pull the content can't scroll for counts, so a page inside still scrolls and pulling down at its top is a swipe down (e.g. open the inbox as a TopSheet).",
     ),
     (
         "core://Switch",
@@ -1139,8 +1144,8 @@ fn vocabulary() -> Value {
         "nodes": NODE_DOCS.iter().chain(std::iter::once(&REF_DOC)).map(|(t, f, d)| json!({ "type": t, "fields": f, "doc": d })).collect::<Vec<_>>(),
         "icons": protocol::ICONS,
         "intents": [
-            { "intent": "action.navigation.open", "fields": "target_uri?, layout?, params?: {name: value}, presentation: Push|Modal|Replace|Sheet|Panel, animation?: none|fade|slide|sheet_up",
-              "doc": "With layout: present that layout on the back stack (Push: whole screen; Sheet; Panel), params bound as $route.<name> in it, then its screen matching target_uri if any. Without: open the screen of the layout on top whose route matches target_uri. System Back pops either." },
+            { "intent": "action.navigation.open", "fields": "target_uri?, layout?, params?: {name: value}, presentation: Push|Modal|Replace|Sheet|TopSheet|Panel, animation?: none|fade|slide|sheet_up",
+              "doc": "With layout: present that layout on the back stack (Push: whole screen; Sheet from the bottom; TopSheet sliding down from the top; Panel), params bound as $route.<name> in it, then its screen matching target_uri if any. Without: open the screen of the layout on top whose route matches target_uri. System Back pops either." },
             { "intent": "action.navigation.back", "fields": "", "doc": "Close the screen." },
             { "intent": "action.mutation.optimistic", "fields": "entity_uri, field, value_expr, rollback_value, endpoint, payload, also?: [{field, value_expr}]",
               "doc": "Change a field at once and POST payload to an action endpoint ($value is the new value); rolled back on failure." },

@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use crate::intent::{ActionIntent, Animation};
 
 /// Node types this build knows (an other type is [`UiNode::Unknown`]).
-pub const NODE_TYPES: [&str; 27] = [
+pub const NODE_TYPES: [&str; 28] = [
     "core://Workspace",
     "core://Container",
     "core://Text",
@@ -44,6 +44,7 @@ pub const NODE_TYPES: [&str; 27] = [
     "core://Switch",
     "core://Drawer",
     "core://Layout",
+    "core://Swipe",
 ];
 
 /// Icon names clients draw (`core://IconButton`, `core://Chip`).
@@ -507,7 +508,7 @@ pub enum UiNode {
     // Feature `layout_embed` (crates/protocol/features/layout_embed.md)
     /// Another layout of the pod drawn here (decision `layouts-not-apps`).
     /// `Inline` (the default) draws it in place, `height_dp` tall when set;
-    /// `Sheet` and `Panel` present it over the screen. With `show_when` (a
+    /// `Sheet`, `TopSheet` and `Panel` present it over the screen. With `show_when` (a
     /// binding such as `$form.menu` or `${local://inbox#unread}`) it shows
     /// only while that is truthy, or equals `equals`; dismissing a presented
     /// one clears the `$form` field `show_when` names. `params` bind as
@@ -527,6 +528,24 @@ pub enum UiNode {
         params: BTreeMap<String, String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         height_dp: Option<u16>,
+    },
+
+    // Feature `swipe` (crates/protocol/features/swipe.md)
+    /// `content` with swipe gestures: a swipe in a direction dispatches that
+    /// direction's intent (at least one is set). A pull the content can't
+    /// scroll for counts, so a scrolling page inside still scrolls and a
+    /// downward pull at its top is a swipe down.
+    #[serde(rename = "core://Swipe")]
+    Swipe {
+        content: Box<UiNode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_swipe_down: Option<ActionIntent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_swipe_up: Option<ActionIntent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_swipe_left: Option<ActionIntent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_swipe_right: Option<ActionIntent>,
     },
 
     /// A node of a type this build does not know: its JSON, kept as is.
@@ -601,6 +620,7 @@ impl UiNode {
             UiNode::Conditional { content, .. }
             | UiNode::Tappable { content, .. }
             | UiNode::Box { content, .. }
+            | UiNode::Swipe { content, .. }
             | UiNode::Sticky { content } => {
                 vec![content]
             }
@@ -657,6 +677,16 @@ impl UiNode {
             | UiNode::Tappable { on_click, .. }
             | UiNode::Switch { on_click, .. } => vec![on_click],
             UiNode::TextField { on_submit, .. } => on_submit.iter().collect(),
+            UiNode::Swipe {
+                on_swipe_down,
+                on_swipe_up,
+                on_swipe_left,
+                on_swipe_right,
+                ..
+            } => [on_swipe_down, on_swipe_up, on_swipe_left, on_swipe_right]
+                .into_iter()
+                .flatten()
+                .collect(),
             _ => Vec::new(),
         };
         // The steps of an `action.sequence` count as the node's intents too,
@@ -969,6 +999,8 @@ pub enum EmbedPresentation {
     Sheet,
     /// A side panel over the screen, from the start edge.
     Panel,
+    /// A sheet over the screen from the top edge (feature `top_sheet`).
+    TopSheet,
 }
 
 impl EmbedPresentation {
