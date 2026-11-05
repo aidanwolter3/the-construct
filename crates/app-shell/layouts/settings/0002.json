@@ -1,0 +1,468 @@
+{
+  "note": "Versions list: the Showing chip sits beside the version label, so long notes no longer squeeze it",
+  "layout": {
+    "type": "core://Workspace",
+    "id": "settings",
+    "title": "Settings",
+    "slots": [
+      {
+        "slot_id": "connection",
+        "provider_uri": "local://connection",
+        "content": {
+          "type": "core://Row",
+          "spacing_dp": 8,
+          "padding_h_dp": 16,
+          "padding_v_dp": 8,
+          "children": [
+            {
+              "type": "core://Box",
+              "background": "${local://connection#color}",
+              "corner_dp": 5,
+              "width_dp": 10,
+              "height_dp": 10,
+              "content": {
+                "type": "core://Spacer"
+              }
+            },
+            {
+              "type": "core://Text",
+              "style": "Body",
+              "value_expr": "${local://connection#label}"
+            },
+            {
+              "type": "core://Spacer"
+            },
+            {
+              "type": "core://Text",
+              "style": "Secondary",
+              "value_expr": "${local://session#server}"
+            }
+          ]
+        }
+      },
+      {
+        "slot_id": "layouts",
+        "provider_uri": "local://layouts",
+        "content": {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://Divider"
+            },
+            {
+              "type": "core://Column",
+              "padding_h_dp": 16,
+              "padding_v_dp": 8,
+              "children": [
+                {
+                  "type": "core://Text",
+                  "style": "Label",
+                  "value_expr": "Layouts"
+                }
+              ]
+            },
+            {
+              "type": "core://List",
+              "query_key": "local:layouts",
+              "empty_text": "Only home so far. Ask your agent to build something.",
+              "item_template": {
+                "type": "core://Tappable",
+                "content_description": "Versions of $item.title",
+                "on_click": {
+                  "intent": "action.sequence",
+                  "steps": [
+                    {
+                      "intent": "action.device",
+                      "command": "show_versions",
+                      "app": "$item.id"
+                    },
+                    {
+                      "intent": "action.navigation.open",
+                      "target_uri": "settings://versions/$item.id",
+                      "presentation": "Push"
+                    }
+                  ]
+                },
+                "content": {
+                  "type": "core://Row",
+                  "spacing_dp": 8,
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 10,
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "style": "Body",
+                      "value_expr": "$item.title"
+                    },
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "type": "core://Text",
+                      "style": "Secondary",
+                      "value_expr": "$item.version"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "slot_id": "sign_ins",
+        "provider_uri": "local://sign_ins",
+        "content": {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://Divider"
+            },
+            {
+              "type": "core://Column",
+              "padding_h_dp": 16,
+              "padding_v_dp": 8,
+              "children": [
+                {
+                  "type": "core://Text",
+                  "style": "Label",
+                  "value_expr": "Sign-ins"
+                }
+              ]
+            },
+            {
+              "type": "core://Conditional",
+              "value": "${local://session#status}",
+              "content": {
+                "type": "core://Column",
+                "padding_h_dp": 16,
+                "padding_v_dp": 4,
+                "children": [
+                  {
+                    "type": "core://Text",
+                    "style": "Secondary",
+                    "value_expr": "${local://session#status}"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "core://List",
+              "query_key": "local:sign_ins",
+              "item_template": {
+                "type": "core://Row",
+                "spacing_dp": 8,
+                "padding_h_dp": 16,
+                "padding_v_dp": 4,
+                "children": [
+                  {
+                    "type": "core://Container",
+                    "children": [
+                      {
+                        "type": "core://Text",
+                        "style": "Body",
+                        "value_expr": "$item.title"
+                      },
+                      {
+                        "type": "core://Text",
+                        "style": "Secondary",
+                        "value_expr": "$item.detail"
+                      }
+                    ],
+                    "orientation": "Vertical",
+                    "padding_dp": 0
+                  },
+                  {
+                    "type": "core://Spacer"
+                  },
+                  {
+                    "type": "core://Button",
+                    "label": "Sign out",
+                    "on_click": {
+                      "intent": "action.device",
+                      "command": "sign_out"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "core://List",
+              "query_key": "local:providers",
+              "item_template": {
+                "type": "core://Column",
+                "padding_h_dp": 16,
+                "padding_v_dp": 4,
+                "spacing_dp": 4,
+                "children": [
+                  {
+                    "type": "core://Conditional",
+                    "value": "$item.custom_server",
+                    "content": {
+                      "type": "core://TextField",
+                      "field": "server",
+                      "placeholder": "$item.server_placeholder",
+                      "max_length": 200
+                    }
+                  },
+                  {
+                    "type": "core://Button",
+                    "label": "Sign in to $item.title",
+                    "on_click": {
+                      "intent": "action.device",
+                      "command": "sign_in",
+                      "id": "$item.id",
+                      "value": "$form?.server"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "slot_id": "notifications",
+        "provider_uri": "local://channels",
+        "content": {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://Divider"
+            },
+            {
+              "type": "core://Column",
+              "padding_h_dp": 16,
+              "padding_v_dp": 8,
+              "children": [
+                {
+                  "type": "core://Text",
+                  "style": "Label",
+                  "value_expr": "Notifications"
+                }
+              ]
+            },
+            {
+              "type": "core://List",
+              "query_key": "local:channels",
+              "empty_text": "Nothing sends notifications yet.",
+              "item_template": {
+                "type": "core://Row",
+                "spacing_dp": 8,
+                "padding_h_dp": 16,
+                "padding_v_dp": 4,
+                "children": [
+                  {
+                    "type": "core://Container",
+                    "children": [
+                      {
+                        "type": "core://Text",
+                        "style": "Body",
+                        "value_expr": "$item.title"
+                      },
+                      {
+                        "type": "core://Text",
+                        "style": "Secondary",
+                        "value_expr": "$item.app_title"
+                      }
+                    ],
+                    "orientation": "Vertical",
+                    "padding_dp": 0
+                  },
+                  {
+                    "type": "core://Spacer"
+                  },
+                  {
+                    "type": "core://Switch",
+                    "checked": "$item.enabled",
+                    "content_description": "$item.title",
+                    "on_click": {
+                      "intent": "action.device",
+                      "command": "toggle_channel",
+                      "app": "$item.app_id",
+                      "id": "$item.id"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "slot_id": "server",
+        "provider_uri": "local://servers",
+        "content": {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://Divider"
+            },
+            {
+              "type": "core://List",
+              "query_key": "local:servers",
+              "item_template": {
+                "type": "core://Tappable",
+                "content_description": "Use $item.title",
+                "on_click": {
+                  "intent": "action.device",
+                  "command": "set_server",
+                  "id": "$item.id"
+                },
+                "content": {
+                  "type": "core://Row",
+                  "spacing_dp": 8,
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 8,
+                  "children": [
+                    {
+                      "type": "core://Container",
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "style": "Body",
+                          "value_expr": "$item.title"
+                        },
+                        {
+                          "type": "core://Text",
+                          "style": "Secondary",
+                          "value_expr": "$item.url"
+                        }
+                      ],
+                      "orientation": "Vertical",
+                      "padding_dp": 0
+                    },
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.selected",
+                      "content": {
+                        "type": "core://Chip",
+                        "text": "In use",
+                        "icon": "check"
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "core://Column",
+              "padding_h_dp": 16,
+              "padding_v_dp": 8,
+              "children": [
+                {
+                  "type": "core://Button",
+                  "label": "Leave pod on this device",
+                  "on_click": {
+                    "intent": "action.device",
+                    "command": "leave_pod"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "screens": [
+      {
+        "id": "versions",
+        "route": "settings://versions/{id}",
+        "title": "${local://versions#app_title}",
+        "content": {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://Conditional",
+              "value": "${local://versions#pinned}",
+              "content": {
+                "type": "core://Row",
+                "spacing_dp": 8,
+                "padding_h_dp": 16,
+                "padding_v_dp": 8,
+                "children": [
+                  {
+                    "type": "core://Text",
+                    "style": "Body",
+                    "value_expr": "Showing v${local://versions#pinned} on this device"
+                  },
+                  {
+                    "type": "core://Spacer"
+                  },
+                  {
+                    "type": "core://Button",
+                    "label": "Show latest",
+                    "on_click": {
+                      "intent": "action.device",
+                      "command": "follow_latest",
+                      "app": "$route.id"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "core://List",
+              "query_key": "local:versions",
+              "empty_text": "Loading versions…",
+              "item_template": {
+                "type": "core://Tappable",
+                "content_description": "Show $item.label",
+                "on_click": {
+                  "intent": "action.device",
+                  "command": "pin_version",
+                  "app": "$route.id",
+                  "id": "$item.version"
+                },
+                "content": {
+                  "type": "core://Row",
+                  "spacing_dp": 8,
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 8,
+                  "children": [
+                    {
+                      "type": "core://Container",
+                      "children": [
+                        {
+                          "type": "core://Row",
+                          "spacing_dp": 8,
+                          "align": "Center",
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "style": "Body",
+                              "value_expr": "$item.label · $item.when"
+                            },
+                            {
+                              "type": "core://Conditional",
+                              "value": "$item.showing",
+                              "content": {
+                                "type": "core://Chip",
+                                "text": "Showing",
+                                "icon": "check"
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "type": "core://Text",
+                          "style": "Secondary",
+                          "value_expr": "$item.detail"
+                        }
+                      ],
+                      "orientation": "Vertical",
+                      "padding_dp": 0
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
