@@ -93,7 +93,7 @@ evaluated against the entity before the change: a JSON literal, `entity.<field>`
 | Node | Fields | Notes |
 |---|---|---|
 | `core://Column` | `children`, `spacing_dp`, `padding_h_dp`, `padding_v_dp`, `align` | Children stacked, full width. |
-| `core://Row` | `children`, `spacing_dp`, paddings, `align` | Side by side, vertically centred, no wrapping. A Spacer without a size takes the remaining width. |
+| `core://Row` | `children`, `spacing_dp`, paddings, `align` | Side by side, vertically centred, no wrapping. A Spacer without a size takes the remaining width. Controls (Switch, Chip, Button, IconButton, sized Image or Spacer, Box) keep their natural width; text-like children (Text, Container, Column, or a Conditional or Tappable around one) take what is left, so long text wraps instead of pushing the controls off screen. |
 | `core://Container` | `orientation`, `padding_dp`, `children` | A plain stack; prefer Column and Row. |
 | `core://Box` | `content`, `background`, `content_color`, `border_color`, `corner_dp`, paddings, `width_dp`, `height_dp`, `align`, `fill` | A surface. `fill` (feature `box_fill`): fills the space given, content placed by `align` both ways; as a workspace's one slot, the whole screen with no title bar. Colours are `#RRGGBB` or a binding that resolves to one. |
 | `core://Spacer` | `size_dp` | Empty space. |

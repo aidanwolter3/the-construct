@@ -1,0 +1,235 @@
+{
+  "version": "1.0.0",
+  "workspace": {
+    "type": "core://Workspace",
+    "id": "row_check",
+    "title": "Rows",
+    "slots": [
+      {
+        "slot_id": "rows",
+        "provider_uri": "core://rows",
+        "content": {
+          "type": "core://Column",
+          "spacing_dp": 0,
+          "children": [
+            {
+              "type": "core://Text",
+              "value_expr": "Rows with long text",
+              "style": "Title"
+            },
+            {
+              "type": "core://Row",
+              "spacing_dp": 8,
+              "padding_h_dp": 16,
+              "padding_v_dp": 10,
+              "children": [
+                {
+                  "type": "core://Container",
+                  "orientation": "Vertical",
+                  "padding_dp": 0,
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "value_expr": "Weekly digest",
+                      "style": "Body"
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "A summary of everything that happened on the community garden board this week, sent every Sunday morning before the plots open",
+                      "style": "Secondary"
+                    }
+                  ]
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "type": "core://Switch",
+                  "checked": "true",
+                  "content_description": "Weekly digest",
+                  "on_click": {
+                    "intent": "action.device",
+                    "command": "toggle_channel",
+                    "app": "row_check",
+                    "id": "weekly_digest"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "core://Row",
+              "spacing_dp": 8,
+              "padding_h_dp": 16,
+              "padding_v_dp": 10,
+              "children": [
+                {
+                  "type": "core://Container",
+                  "orientation": "Vertical",
+                  "padding_dp": 0,
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "value_expr": "Version 3 · 2 days ago",
+                      "style": "Body"
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "Moved the watering schedule above the tool library and renamed the compost section to make it easier to find on small screens",
+                      "style": "Secondary"
+                    }
+                  ]
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "type": "core://Chip",
+                  "text": "Showing",
+                  "icon": "check"
+                }
+              ],
+              "align": "Center"
+            },
+            {
+              "type": "core://Row",
+              "spacing_dp": 8,
+              "padding_h_dp": 16,
+              "padding_v_dp": 10,
+              "children": [
+                {
+                  "type": "core://Text",
+                  "value_expr": "Ask before lending the long-handled loppers to anyone outside the allotment association",
+                  "style": "Body"
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "type": "core://Button",
+                  "label": "Ask",
+                  "on_click": {
+                    "intent": "action.device",
+                    "command": "noop"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "core://Row",
+              "spacing_dp": 8,
+              "padding_h_dp": 16,
+              "padding_v_dp": 10,
+              "children": [
+                {
+                  "type": "core://Text",
+                  "value_expr": "Server",
+                  "style": "Body"
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "type": "core://Text",
+                  "value_expr": "https://pod.community-garden-allotments.example/v1/very/long/path",
+                  "style": "Secondary"
+                }
+              ]
+            },
+            {
+              "type": "core://Divider"
+            },
+            {
+              "type": "core://Text",
+              "value_expr": "Rows with short text",
+              "style": "Title"
+            },
+            {
+              "type": "core://Row",
+              "spacing_dp": 8,
+              "padding_h_dp": 16,
+              "padding_v_dp": 10,
+              "children": [
+                {
+                  "type": "core://Container",
+                  "orientation": "Vertical",
+                  "padding_dp": 0,
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "value_expr": "Replies",
+                      "style": "Body"
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "When someone answers you",
+                      "style": "Secondary"
+                    }
+                  ]
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "type": "core://Switch",
+                  "checked": "false",
+                  "content_description": "Replies",
+                  "on_click": {
+                    "intent": "action.device",
+                    "command": "toggle_channel",
+                    "app": "row_check",
+                    "id": "replies"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "core://Row",
+              "spacing_dp": 8,
+              "padding_h_dp": 16,
+              "padding_v_dp": 10,
+              "children": [
+                {
+                  "type": "core://Text",
+                  "value_expr": "Version 2 · last week",
+                  "style": "Body"
+                },
+                {
+                  "type": "core://Conditional",
+                  "value": "true",
+                  "content": {
+                    "type": "core://Chip",
+                    "text": "Showing",
+                    "icon": "check"
+                  }
+                }
+              ],
+              "align": "Center"
+            },
+            {
+              "type": "core://Row",
+              "spacing_dp": 8,
+              "padding_h_dp": 16,
+              "padding_v_dp": 10,
+              "children": [
+                {
+                  "type": "core://Text",
+                  "value_expr": "Tools",
+                  "style": "Body"
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "type": "core://Text",
+                  "value_expr": "12",
+                  "style": "Secondary"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "entities": {}
+}
