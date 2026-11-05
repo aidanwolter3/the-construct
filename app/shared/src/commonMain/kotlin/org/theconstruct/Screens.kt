@@ -187,13 +187,17 @@ sealed class StackEntry(val key: Int) {
     val form: SnapshotStateMap<String, String> = mutableStateMapOf()
 }
 
-/** One open screen of layout [layoutId]: [screen] already route-bound. */
+/**
+ * One open screen of layout [layoutId]: [screen] already route-bound. [frame] is the Sheet or Panel it opened inside
+ * (issue #119): it is drawn within that frame, not over the whole screen.
+ */
 @Stable
 class ScreenEntry internal constructor(
     key: Int,
     val screen: Screen,
     val params: Map<String, String>,
     override val layoutId: String,
+    val frame: LayoutEntry? = null,
 ) : StackEntry(key)
 
 /**
@@ -266,6 +270,16 @@ class Navigation internal constructor(private val controller: ConstructControlle
     /** The topmost open screen, if any. */
     val topScreen: ScreenEntry? get() = stack.lastOrNull() as? ScreenEntry
 
+    /**
+     * The Sheet or Panel the top of the stack is drawn in: the top entry when it is one, or the frame of the screen on
+     * top. A screen opened now opens inside it. Null when the top is the root, a pushed layout or a full screen.
+     */
+    val topFrame: LayoutEntry? get() = when (val t = top) {
+        is LayoutEntry -> t.takeIf { it.presentation == PresentationMode.Sheet || it.presentation == PresentationMode.Panel }
+        is ScreenEntry -> t.frame
+        null -> null
+    }
+
     /** The form the visible entry edits (the root layout's when nothing is open). */
     fun activeForm(): SnapshotStateMap<String, String> = top?.form ?: rootForm
 
@@ -302,12 +316,17 @@ class Navigation internal constructor(private val controller: ConstructControlle
             (owner != controller.rootId && openScreen(intent.targetUri, controller.rootId, intent.presentation))
     }
 
-    /** Pushes the screen of [layoutId] whose route matches [targetUri]; false when none does. */
+    /**
+     * Pushes the screen of [layoutId] whose route matches [targetUri]; false when none does. While a Sheet or Panel is
+     * on top ([topFrame]) and the screen is one of its layout's, the screen opens inside that frame (issue #119); a
+     * screen of another layout (the root's, as a fallback) still covers the whole screen.
+     */
     internal fun openScreen(targetUri: String, layoutId: String, presentation: PresentationMode = PresentationMode.Push): Boolean {
         val workspace = controller.workspaceOf(layoutId) as? UiNode.Workspace ?: return false
         for (screen in workspace.screens) {
             val params = matchRoute(screen.route, targetUri) ?: continue
-            val entry = ScreenEntry(nextKey++, bindRoute(screen, params), params, layoutId)
+            val frame = topFrame?.takeIf { it.layoutId == layoutId }
+            val entry = ScreenEntry(nextKey++, bindRoute(screen, params), params, layoutId, frame)
             val choices = rememberedChoices(listOfNotNull(entry.screen.content, entry.screen.footer))
             if (choices.isNotEmpty()) applyRemembered(entry.form, choices, controller.rememberedFormValues(screen.id))
             if (presentation == PresentationMode.Replace && stack.lastOrNull() is ScreenEntry) {
@@ -412,7 +431,9 @@ internal fun ScreenView(controller: ConstructController, state: ConstructState, 
     val entities = remember(state.entities, device) { state.entities + device.entities }
     val queries = remember(state.queries, device) { state.queries + device.queries }
     val dispatch: (ActionIntent) -> Unit = { controller.dispatchIn(entry.layoutId, entry.form, it) }
-    Surface(Modifier.fillMaxSize().testTag("screen:${entry.screen.id}"), color = MaterialTheme.colorScheme.background) {
+    // Inside a sheet or panel it takes the frame's colour.
+    val color = if (entry.frame != null) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.background
+    Surface(Modifier.fillMaxSize().testTag("screen:${entry.screen.id}"), color = color) {
         val scope = entry.screen.id
         CompositionLocalProvider(
             LocalForm provides entry.form,
