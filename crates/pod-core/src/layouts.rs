@@ -1093,9 +1093,78 @@ async fn announced_async(
     blocking(state, move |s| announced_version(s, &id, &client)).await
 }
 
+/// Other layouts' `(id, announced version)`s and deleted layouts' ids.
+type Others = (Vec<(String, i64)>, Vec<String>);
+
+/// Home's stream (decision `layouts-not-apps`) on connecting and after a
+/// lag: every other layout of the pod with the version it announces, and
+/// the custom layouts deleted but not purged yet. A client that was not
+/// listening while one changed (in the background, offline, the server
+/// restarting) learns of it here; it ignores layouts it hasn't opened and
+/// versions it already has. Blocking.
+fn others_now(
+    store: &Store,
+    catalog: &Catalog,
+    client: &protocol::ClientCaps,
+) -> rusqlite::Result<Others> {
+    let custom = store.with_conn(crate::custom::custom_apps_on)?;
+    let ids = catalog
+        .apps()
+        .map(|a| a.id.to_owned())
+        .chain(custom.into_iter().map(|a| a.id))
+        .filter(|id| id != crate::HOME_APP);
+    let mut live = Vec::new();
+    for id in ids {
+        if let Some(v) = announced_version(store, &id, client)? {
+            live.push((id, v));
+        }
+    }
+    let deleted = store.with_conn(crate::custom::deleted_app_ids_on)?;
+    Ok((live, deleted))
+}
+
+async fn others_async(
+    state: &Arc<AppState>,
+    client: protocol::ClientCaps,
+) -> Result<Others, ApiError> {
+    let st = state.clone();
+    blocking(state, move |s| others_now(s, st.catalog(), &client)).await
+}
+
+/// Queue on home's stream what [`others_now`] finds changed since `others`
+/// (all of it on a fresh stream) and every deleted layout, and remember it.
+fn queue_others(
+    (live, deleted): Others,
+    others: &mut HashMap<String, i64>,
+    queue: &mut std::collections::VecDeque<Event>,
+) {
+    for (id, v) in live {
+        if others.get(&id) == Some(&v) {
+            continue;
+        }
+        others.insert(id.clone(), v);
+        queue.push_back(layout_event(&LayoutEvent {
+            workspace_id: id,
+            version: v,
+        }));
+    }
+    for id in deleted {
+        others.remove(&id);
+        queue.push_back(deleted_event(&id));
+    }
+}
+
+fn deleted_event(id: &str) -> Event {
+    Event::default()
+        .event("deleted")
+        .data(json!({ "workspace_id": id }).to_string())
+}
+
 /// `GET /v1/workspaces/:id/events` (SSE). First message: the current
 /// version; then one `layout` event (`{workspace_id, version}`) each time a
-/// new version of this app changes what the subscriber would be served; a
+/// new version of this app changes what the subscriber would be served (on
+/// home's stream, after the first message, every other layout's version and
+/// deletion: [`others_now`]); a
 /// `: keepalive` comment every [`AppState::sse_keepalive`]. The version is
 /// the newest one the client ([`protocol::FEATURES_HEADER`]) can draw, so a
 /// version it can't draw causes no event (and no refetch). New versions normally arrive
@@ -1189,7 +1258,9 @@ async fn events(
         state: Arc<AppState>,
         id: String,
         /// Home's stream: the version last announced of each other layout.
-        others: std::collections::HashMap<String, i64>,
+        others: HashMap<String, i64>,
+        /// Events to send before waiting for more ([`queue_others`]).
+        queue: std::collections::VecDeque<Event>,
     }
     let recheck = session_hash.as_ref().map(|_| {
         let every = state.sse_keepalive();
@@ -1215,6 +1286,7 @@ async fn events(
             state: state.clone(),
             id,
             others: Default::default(),
+            queue: Default::default(),
         },
         |mut s| async move {
             let event = |s: &S| {
@@ -1228,10 +1300,19 @@ async fn events(
             }
             if s.first {
                 s.first = false;
+                if s.id == crate::HOME_APP {
+                    match others_async(&s.state, s.client.clone()).await {
+                        Ok(o) => queue_others(o, &mut s.others, &mut s.queue),
+                        Err(e) => tracing::warn!(error = ?e, "events: other layouts not announced"),
+                    }
+                }
                 let e = event(&s);
                 return Some((Ok::<_, std::convert::Infallible>(e), s));
             }
             loop {
+                if let Some(e) = s.queue.pop_front() {
+                    return Some((Ok(e), s));
+                }
                 enum Got {
                     Layout(Result<LayoutEvent, broadcast::error::RecvError>),
                     Notify(Option<NotifyEvent>),
@@ -1294,10 +1375,7 @@ async fn events(
                 {
                     if ev.version == DELETED_VERSION {
                         s.others.remove(&ev.workspace_id);
-                        let e = Event::default()
-                            .event("deleted")
-                            .data(json!({ "workspace_id": ev.workspace_id }).to_string());
-                        return Some((Ok(e), s));
+                        return Some((Ok(deleted_event(&ev.workspace_id)), s));
                     }
                     let other = ev.workspace_id.clone();
                     let Ok(Some(v)) = announced_async(&s.state, &other, s.client.clone()).await
@@ -1317,15 +1395,17 @@ async fn events(
                 let lagged = match received {
                     Ok(ev) if ev.workspace_id == s.id && ev.version == DELETED_VERSION => {
                         s.done = true;
-                        let e = Event::default()
-                            .event("deleted")
-                            .data(json!({ "workspace_id": s.id }).to_string());
-                        return Some((Ok(e), s));
+                        return Some((Ok(deleted_event(&s.id)), s));
                     }
                     Ok(ev) if ev.workspace_id == s.id => false,
                     Ok(_) => continue,
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(workspace = %s.id, skipped = n, "layout subscriber lagged; sending current");
+                        if s.id == crate::HOME_APP
+                            && let Ok(o) = others_async(&s.state, s.client.clone()).await
+                        {
+                            queue_others(o, &mut s.others, &mut s.queue);
+                        }
                         true
                     }
                     Err(broadcast::error::RecvError::Closed) => return None,
