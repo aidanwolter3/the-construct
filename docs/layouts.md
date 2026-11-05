@@ -170,7 +170,7 @@ A node type the client doesn't know is skipped, and its JSON kept, so old versio
 | `action.link.open` | `url` | Opens an `http(s)://` URL in the browser. |
 | `action.auth.login` | `instance_url`, `app_path`, `token_path` | Starts an OAuth2 PKCE sign-in to an upstream. |
 | `action.auth.session` | `path`, `payload` | Opens a pod session (the pod code screen). |
-| `action.device` | `command`, `app` (or `layout`), `id`, `value` | Something the device does: `open_notification` (`id`: presents its layout and target), `mark_all_read`, `toggle_channel` (`app`, `id`), `sign_in` (`id` of a provider; `value`: another server, e.g. `$form?.server`), `sign_out`, `set_server` (`id` of a server option), `show_versions` (`app`: a layout; loads its versions into `local:versions`), `pin_version` (`id`: show that version on this device), `follow_latest`, `leave_pod` (forget the pod on this device), `refresh`, `open_settings` and `open_inbox` (present the `settings` layout as a panel and the `inbox` layout as a sheet). Any layout may use any command. `open_app` and `show` were retired with the dock and drawer. |
+| `action.device` | `command`, `app` (or `layout`), `id`, `value` | Something the device does: `open_notification` (`id`: presents its layout and target), `mark_all_read`, `toggle_channel` (`app`, `id`), `sign_in` (`id` of a provider; `value`: another server, e.g. `$form?.server`), `sign_out`, `set_server` (`id` of a server option), `show_versions` (`app`: a layout; loads its versions into `local:versions`), `pin_version` (`id`: show that version on this device), `follow_latest`, `leave_pod` (forget the pod on this device), `refresh`, `open_settings` and `open_inbox` (present the `settings` layout as a panel and the `inbox` layout as a sheet), `request_notification_permission` (Android's prompt to allow notifications, or the app's notification settings once the prompt can't show again; nothing on desktop). Any layout may use any command. `open_app` and `show` were retired with the dock and drawer. |
 
 ## Features and compatibility
 
@@ -205,7 +205,7 @@ request. Any layout may bind them; a custom app needs no feed for them.
 | `local:versions` (query) | the versions of the layout `show_versions` named, newest first: `version`, `label`, `detail`, `when`, `compatible`, `showing` |
 | `local://versions` | `app_id`, `app_title`, `pinned` (or "" while following the latest), `loading` |
 | `local:servers` (query) | `id`, `title`, `url`, `selected`: the servers this device can use |
-| `local://device` | `platform` |
+| `local://device` | `platform`; `notification_permission`: `granted` or `denied` on Android (whether notifications can show), `""` where it doesn't apply (desktop, simulator) |
 | `local://nav` | Where the layout is drawn (feature `nav_data`): `can_go_back`, `presentation` (`root`, `push`, `sheet`, `panel`, `screen`, `inline`), `pushed`, `inline`, `in_frame` (in a sheet or panel) |
 | `local://screen` | In a page screen (feature `nav_data`): `loading`, `error` ("" when none) of its `data` load |
 | `local://theme` | The pod's theme colours for the app's mode (feature `theme`): `card_border`, `accent`, `accent_surface`, `muted_surface`, `page`, `like`, `unread`, `error`; set with MCP `set_theme` |

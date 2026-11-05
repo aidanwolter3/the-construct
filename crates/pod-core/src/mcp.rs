@@ -1512,7 +1512,7 @@ fn vocabulary_with(components: Vec<Value>) -> Value {
             { "intent": "action.link.open", "fields": "url",
               "doc": "Open an http(s) link in the device's browser (e.g. a Get tickets button with url $item.tickets_url). Nothing is sent to the pod." },
             { "intent": "action.device", "fields": "command, app?, id?, value?",
-              "doc": "Something the device does itself. Commands: open_notification (id: presents its layout), mark_all_read, toggle_channel (app, id of a notification channel), sign_in (id of a provider; value: another server, e.g. $form?.server from a core://TextField, for a provider whose local:providers row says custom_server), sign_out, set_server (id of a server option), show_versions (app: a layout; loads its versions into local:versions), pin_version (id: a version of that layout, shown on this device only), follow_latest, leave_pod (forget the pod on this device), refresh, open_settings and open_inbox (present the settings and inbox layouts). Any layout may use any command." },
+              "doc": "Something the device does itself. Commands: open_notification (id: presents its layout), mark_all_read, toggle_channel (app, id of a notification channel), sign_in (id of a provider; value: another server, e.g. $form?.server from a core://TextField, for a provider whose local:providers row says custom_server), sign_out, set_server (id of a server option), show_versions (app: a layout; loads its versions into local:versions), pin_version (id: a version of that layout, shown on this device only), follow_latest, leave_pod (forget the pod on this device), refresh, open_settings and open_inbox (present the settings and inbox layouts), request_notification_permission (the phone's prompt to allow notifications, or the app's notification settings once the prompt can't show again; nothing on desktop). Any layout may use any command." },
         ],
         "local_data": {
             "doc": "Data the device provides, with no feed: bind ${local://<entity>#<field>} anywhere and list local:layouts in a core://List.",
@@ -1527,7 +1527,7 @@ fn vocabulary_with(components: Vec<Value>) -> Value {
             "local:servers": "query of the servers this device can use: id, title, url, selected",
             "local:versions": "query of the versions of the layout show_versions named, newest first: version, label (\"v12\"), detail (its note), when, compatible, showing",
             "local://versions": "app_id, app_title, pinned (the pinned version, or \"\" while following the latest)",
-            "local://device": "platform (android|desktop|simulator)",
+            "local://device": "platform (android|desktop|simulator), notification_permission (granted|denied on Android; \"\" where it doesn't apply): pair \"denied\" with an action.device request_notification_permission button",
             "local://session": "open, server, error, message: the pod sign-in",
         },
         "snippets": snippets(),

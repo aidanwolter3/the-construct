@@ -146,7 +146,10 @@ pub enum ActionIntent {
     /// server), `sign_out`, `set_server` (`id`: a server option),
     /// `show_versions` (`app`, a layout: load its versions as device data),
     /// `pin_version` (`id`: a version of that app, shown on this device),
-    /// `follow_latest` (that app follows its newest version again).
+    /// `follow_latest` (that app follows its newest version again),
+    /// `request_notification_permission` (the OS prompt for notifications,
+    /// or the app's notification settings once the prompt can't show; does
+    /// nothing where there is no such permission).
     /// Nothing is sent to the pod unless the command itself talks to
     /// it. Any layout may use any command (decision `blueprints-and-home`).
     #[serde(rename = "action.device")]
@@ -196,7 +199,7 @@ impl ActionIntent {
 }
 
 /// The `action.device` commands this build knows.
-pub const DEVICE_COMMANDS: [&str; 13] = [
+pub const DEVICE_COMMANDS: [&str; 14] = [
     "open_settings",
     "open_inbox",
     "refresh",
@@ -210,6 +213,7 @@ pub const DEVICE_COMMANDS: [&str; 13] = [
     "show_versions",
     "pin_version",
     "follow_latest",
+    "request_notification_permission",
 ];
 
 /// The `action.device` commands that need an `app`, and those that need an

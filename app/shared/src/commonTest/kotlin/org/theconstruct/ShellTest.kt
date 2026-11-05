@@ -128,6 +128,7 @@ class ShellTest {
         assertEquals(JsonPrimitive(true), d.entities["local://connection"]!!["attention"])
         assertEquals(JsonPrimitive("5 unread"), d.entities["local://inbox"]!!["label"])
         assertEquals(JsonPrimitive("desktop"), d.entities["local://device"]!!["platform"])
+        assertEquals(JsonPrimitive(""), d.entities["local://device"]!!["notification_permission"], "none on desktop")
         // A Conditional can read it: the "No apps yet" welcome shows only with none.
         assertFalse(conditionShows("\${local://apps#count}", "0", null, null, d.entities))
         assertTrue(conditionShows("\${local://apps#count}", null, null, null, d.entities))
@@ -222,6 +223,29 @@ class ShellTest {
         controller.dispatchWithForm(ActionIntent.Device("leave_pod"), emptyMap())
         assertNull(controller.navigation.top)
         assertEquals(1, bridge.forgotten)
+    }
+
+    @Test
+    fun requestNotificationPermissionAsksThePlatformAndDoesNothingWithoutOne() {
+        val bridge = Bridge(HOME_APP)
+        val controller = ConstructController(bridge, HOME_APP, Dispatchers.Unconfined)
+        bridge.emit(homeJson)
+        // Desktop and the simulator: no permission, so nothing happens and nothing reaches the engine.
+        assertEquals("", NoNotificationPermission.state.value)
+        controller.dispatchWithForm(ActionIntent.Device("request_notification_permission"), emptyMap())
+        assertNull(controller.navigation.top)
+        assertTrue(bridge.dispatched.isEmpty())
+        // A platform with one (Android) is asked, and its state is the device data's.
+        val phone = object : NotificationPermissionPlatform {
+            override val state = kotlinx.coroutines.flow.MutableStateFlow("denied")
+            override fun request() { state.value = "granted" }
+        }
+        controller.notificationPermission = phone
+        val before = deviceData(ConstructState(), UnreadCounts(), emptyList(), "android", notificationPermission = phone.state.value)
+        assertEquals(JsonPrimitive("denied"), before.entities["local://device"]!!["notification_permission"])
+        controller.dispatchWithForm(ActionIntent.Device("request_notification_permission"), emptyMap())
+        assertEquals("granted", phone.state.value)
+        assertTrue(bridge.dispatched.isEmpty())
     }
 
     @Test

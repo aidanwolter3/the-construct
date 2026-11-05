@@ -618,7 +618,8 @@ sealed class ActionIntent {
     /**
      * `action.device` (feature `device_action`): something the device does itself ([command] with its [app] (a layout)
      * or [id]: `open_notification`, `mark_all_read`, `toggle_channel`, `sign_in`, `sign_out`, `set_server`,
-     * `show_versions`, `pin_version`, `follow_latest`, `leave_pod`, `refresh`, `open_settings`, `open_inbox`). Handled
+     * `show_versions`, `pin_version`, `follow_latest`, `leave_pod`, `refresh`, `open_settings`, `open_inbox`,
+     * `request_notification_permission`). Handled
      * by [ConstructController], never sent to the engine.
      */
     @Serializable
