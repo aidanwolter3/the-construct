@@ -25,6 +25,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 regex = "1"
 
 [dev-dependencies]
+app-shell = { path = "../app-shell" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

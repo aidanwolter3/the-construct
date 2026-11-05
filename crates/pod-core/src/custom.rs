@@ -322,6 +322,28 @@ pub fn bound_feeds(
     feeds: &[(String, String)],
     layout: &Value,
 ) -> Vec<(String, String)> {
+    feed_bindings(catalog, feeds, layout)
+        .into_iter()
+        .map(|(f, _)| f)
+        .collect()
+}
+
+/// How a layout binds a feed ([`feed_bindings`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Binding {
+    /// It lists one of the feed's query keys.
+    QueryKey,
+    /// It only binds an entity of the feed's source by URI.
+    EntityUri,
+}
+
+/// The feeds of `feeds` that `layout` binds, each with how
+/// ([`bound_feeds`]).
+pub fn feed_bindings(
+    catalog: &Catalog,
+    feeds: &[(String, String)],
+    layout: &Value,
+) -> Vec<((String, String), Binding)> {
     fn keys<'a>(v: &'a Value, out: &mut Vec<&'a str>) {
         match v {
             Value::Object(m) => {
@@ -341,13 +363,10 @@ pub fn bound_feeds(
     let text = layout.to_string();
     feeds
         .iter()
-        .filter(|(source, feed)| {
-            let Some((_, m)) = catalog.source(source) else {
-                return false;
-            };
-            let Some(spec) = m.feed(feed) else {
-                return false;
-            };
+        .filter_map(|f| {
+            let (source, feed) = f;
+            let (_, m) = catalog.source(source)?;
+            let spec = m.feed(feed)?;
             let by_key = spec.query_keys.iter().any(|pattern| {
                 // A pattern feed's keys use its name for the placeholder.
                 let filled = if spec.is_pattern() {
@@ -364,13 +383,93 @@ pub fn bound_feeds(
                 };
                 used.iter().any(|k| crate::source::key_matches(&filled, k))
             });
-            by_key
-                || m.entity_schemes
-                    .iter()
-                    .any(|scheme| text.contains(&format!("${{{scheme}://")))
+            if by_key {
+                return Some((f.clone(), Binding::QueryKey));
+            }
+            m.entity_schemes
+                .iter()
+                .any(|scheme| text.contains(&format!("${{{scheme}://")))
+                .then(|| (f.clone(), Binding::EntityUri))
         })
-        .cloned()
         .collect()
+}
+
+/// Custom app `id`'s latest layout as served to a current client (parts
+/// expanded), with its version. Blocking.
+fn latest_expanded(
+    store: &Store,
+    catalog: &Catalog,
+    id: &str,
+) -> rusqlite::Result<Option<(i64, Value)>> {
+    let Some((v, json)) = store.app_latest(id)? else {
+        return Ok(None);
+    };
+    let doc: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
+    let doc = if crate::parts::may_hold_refs(&json) {
+        crate::parts::expand(store, catalog, &doc, None, crate::parts::Mode::Lenient).unwrap_or(doc)
+    } else {
+        doc
+    };
+    Ok(Some((v.version, doc)))
+}
+
+/// The one layout each feed of `source` belongs to, for notifications
+/// (decision `notification-owner`): `feed -> layout id`. Every layout
+/// reports home's feeds (decision `layouts-not-apps`), so "declares the
+/// feed" picks them all; the owner is the oldest live layout whose latest
+/// version binds the feed by query key, else the oldest that binds one of
+/// its entities by URI, else home (home is the last choice in both). Feeds
+/// no layout declares are left out. Blocking.
+pub fn feed_owners(
+    store: &Store,
+    catalog: &Catalog,
+    source: &str,
+) -> rusqlite::Result<HashMap<String, String>> {
+    let mut apps = store.with_conn(custom_apps_on)?;
+    let home_first = apps.first().is_some_and(|a| a.id == crate::HOME_APP);
+    apps.rotate_left(usize::from(home_first));
+    let mut declared: HashMap<String, String> = HashMap::new();
+    let mut by_key: HashMap<String, String> = HashMap::new();
+    let mut by_uri: HashMap<String, String> = HashMap::new();
+    for app in &apps {
+        let mine: Vec<(String, String)> = app
+            .feeds
+            .iter()
+            .filter(|(s, _)| s == source)
+            .cloned()
+            .collect();
+        if mine.is_empty() {
+            continue;
+        }
+        for (_, f) in &mine {
+            if app.id == crate::HOME_APP {
+                declared.insert(f.clone(), app.id.clone());
+            } else {
+                declared.entry(f.clone()).or_insert_with(|| app.id.clone());
+            }
+        }
+        let Some((_, layout)) = latest_expanded(store, catalog, &app.id)? else {
+            continue;
+        };
+        for ((_, f), how) in feed_bindings(catalog, &mine, &layout) {
+            let into = match how {
+                Binding::QueryKey => &mut by_key,
+                Binding::EntityUri => &mut by_uri,
+            };
+            into.entry(f).or_insert_with(|| app.id.clone());
+        }
+    }
+    Ok(declared
+        .into_iter()
+        .map(|(f, fallback)| {
+            let owner = by_key
+                .get(&f)
+                .or_else(|| by_uri.get(&f))
+                .cloned()
+                .unwrap_or(fallback);
+            (f, owner)
+        })
+        .collect())
 }
 
 /// The hidden app ids ([`HIDDEN_SETTING`]).
@@ -1539,7 +1638,10 @@ pub fn commit_staged(
 
 /// The latest layout of every live custom app with a feed of `source`:
 /// `(app, latest version, layout as served to a current client, parts
-/// expanded)`. Blocking.
+/// expanded)`. Every layout has home's feeds (decision `layouts-not-apps`),
+/// so this is every live layout once home declares a feed of `source`;
+/// callers that want the layouts that show the source check the layout.
+/// Blocking.
 pub fn apps_using(
     store: &Store,
     catalog: &crate::Catalog,
@@ -1550,17 +1652,10 @@ pub fn apps_using(
         if !app.feeds.iter().any(|(s, _)| s == source) {
             continue;
         }
-        let Some((v, json)) = store.app_latest(&app.id)? else {
+        let Some((v, doc)) = latest_expanded(store, catalog, &app.id)? else {
             continue;
         };
-        let doc: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
-        let doc = if crate::parts::may_hold_refs(&json) {
-            crate::parts::expand(store, catalog, &doc, None, crate::parts::Mode::Lenient)
-                .unwrap_or(doc)
-        } else {
-            doc
-        };
-        out.push((app, v.version, doc));
+        out.push((app, v, doc));
     }
     Ok(out)
 }

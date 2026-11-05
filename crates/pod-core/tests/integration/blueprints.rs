@@ -418,3 +418,43 @@ async fn an_app_era_home_becomes_a_list_and_gives_its_feeds_to_home() {
         None
     );
 }
+
+#[tokio::test]
+async fn a_feed_belongs_to_the_layout_that_binds_it_else_home() {
+    let dir = tempfile::tempdir().unwrap();
+    let pod = open(&dir.path().join("server.db"));
+    let owners = || pod_core::custom::feed_owners(pod.store(), pod.catalog(), "a").unwrap();
+    // No layout declares a feed of a: nothing to own.
+    assert!(owners().is_empty());
+    // A layout that binds nothing of a's, made first, with the feed: every
+    // layout reports home's feeds, but none binds it, so home owns it.
+    let empty = json!({"type": "core://Workspace", "title": "E", "slots": [{"slot_id": "s",
+        "provider_uri": "local://x", "content": {"type": "core://Text", "style": "Body", "value_expr": "hi"}}]});
+    let (status, made) = call(
+        &pod,
+        "POST",
+        "/v1/custom-apps",
+        Some(json!({"title": "Empty", "feeds": [["a", "all"]], "layout": empty})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    assert_eq!(owners()["all"], HOME_APP);
+    // The layouts that bind it: one of them owns it (the oldest; made in
+    // the same second, they tie on age), the same one each time.
+    let mut binders = Vec::new();
+    for title in ["First", "Second"] {
+        let (status, made) = call(
+            &pod,
+            "POST",
+            "/v1/custom-apps",
+            Some(json!({"title": title, "layout": list_of("a:all")})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{made}");
+        binders.push(made["id"].as_str().unwrap().to_owned());
+    }
+    let owner = owners()["all"].clone();
+    assert!(binders.contains(&owner), "{owner} of {binders:?}");
+    assert_eq!(owners()["all"], owner);
+    assert_eq!(owners().len(), 1);
+}

@@ -73,8 +73,8 @@ use pod_core::layouts::LayoutSource;
 use pod_core::store::{Step, Store};
 use pod_core::validate::LayoutError;
 use pod_core::{
-    AppAdapter, AppInfo, BoxFuture, EntityDoc, FeedSpec, Hydration, PathSpec, Pod, PollCtx,
-    PollOutcome, RequestCtx, SourceManifest,
+    AppAdapter, AppInfo, BoxFuture, Catalog, EntityDoc, FeedSpec, Hydration, PathSpec, Pod,
+    PollCtx, PollOutcome, RequestCtx, SourceManifest,
 };
 use protocol::NotificationChannel;
 use serde_json::{Map, Value, json};
@@ -442,9 +442,13 @@ impl AppAdapter for CollectionsAdapter {
         true
     }
 
-    fn custom_notification_channels(&self, store: &Store) -> Vec<NotificationChannel> {
-        let mut out = remind::channels(store);
-        out.extend(alerts::channels(store));
+    fn custom_notification_channels(
+        &self,
+        store: &Store,
+        catalog: &Catalog,
+    ) -> Vec<NotificationChannel> {
+        let mut out = remind::channels(store, catalog);
+        out.extend(alerts::channels(store, catalog));
         out
     }
 

@@ -16,12 +16,13 @@
 //! shows its collection: the reminder's `app`, else the oldest live custom
 //! app with the collection as a feed. Without such an app nothing is sent.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use pod_core::custom;
 use pod_core::store::Store;
 use pod_core::tz::jiff::{Timestamp, civil, tz::TimeZone};
-use pod_core::{NewNotification, Pod};
+use pod_core::{Catalog, NewNotification, Pod};
 use protocol::{Importance, NotificationChannel};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -433,24 +434,32 @@ pub fn due(
     (out, next)
 }
 
-/// The custom app reminder `r` of collection `collection` belongs to now.
-pub fn app_for(apps: &[custom::CustomApp], collection: &str, r: &Reminder) -> Option<String> {
+/// The layout reminder `r` of collection `collection` belongs to now: its
+/// own `app` while that layout lives, else the layout that shows the
+/// collection (`owners`, [`custom::feed_owners`]; decision
+/// `notification-owner`).
+pub fn app_for(
+    apps: &[custom::CustomApp],
+    owners: &HashMap<String, String>,
+    collection: &str,
+    r: &Reminder,
+) -> Option<String> {
     if let Some(a) = &r.app
         && apps.iter().any(|x| &x.id == a)
     {
         return Some(a.clone());
     }
-    apps.iter()
-        .find(|a| a.feeds.iter().any(|(s, f)| s == NAME && f == collection))
-        .map(|a| a.id.clone())
+    owners.get(collection).cloned()
 }
 
 /// Every reminder's channel, for the app it belongs to now.
-pub fn channels(store: &Store) -> Vec<NotificationChannel> {
-    let read = store.with_conn(|c| -> rusqlite::Result<_> {
-        Ok((db::all_defs(c)?, custom::custom_apps_on(c)?))
+pub fn channels(store: &Store, catalog: &Catalog) -> Vec<NotificationChannel> {
+    let read = custom::feed_owners(store, catalog, NAME).and_then(|owners| {
+        store.with_conn(|c| -> rusqlite::Result<_> {
+            Ok((db::all_defs(c)?, custom::custom_apps_on(c)?, owners))
+        })
     });
-    let (defs, apps) = match read {
+    let (defs, apps, owners) = match read {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(error = %e, "reminders could not be read");
@@ -460,7 +469,7 @@ pub fn channels(store: &Store) -> Vec<NotificationChannel> {
     let mut out = Vec::new();
     for (_, def) in defs {
         for r in &def.reminders {
-            if let Some(app) = app_for(&apps, &def.name, r) {
+            if let Some(app) = app_for(&apps, &owners, &def.name, r) {
                 out.push(NotificationChannel {
                     app_id: app,
                     id: r.id.clone(),
@@ -498,8 +507,14 @@ fn sent(conn: &Connection, key: &[String; 4]) -> rusqlite::Result<bool> {
     .map(|n| n > 0)
 }
 
-/// What every reminder owes at `now` and hasn't sent.
-pub fn plan(conn: &Connection, tz: &TimeZone, now: i64) -> rusqlite::Result<Plan> {
+/// What every reminder owes at `now` and hasn't sent (`owners`:
+/// [`custom::feed_owners`] of Collections).
+pub fn plan(
+    conn: &Connection,
+    owners: &HashMap<String, String>,
+    tz: &TimeZone,
+    now: i64,
+) -> rusqlite::Result<Plan> {
     let apps = custom::custom_apps_on(conn)?;
     let mut out = Plan::default();
     for (_, def) in db::all_defs(conn)? {
@@ -509,7 +524,7 @@ pub fn plan(conn: &Connection, tz: &TimeZone, now: i64) -> rusqlite::Result<Plan
         out.any = true;
         let rows = db::all_rows(conn, &def.name, false)?;
         for r in &def.reminders {
-            let Some(app) = app_for(&apps, &def.name, r) else {
+            let Some(app) = app_for(&apps, owners, &def.name, r) else {
                 continue;
             };
             let (owed, next) = due(&def, r, &rows, tz, now);
@@ -545,10 +560,12 @@ pub fn plan(conn: &Connection, tz: &TimeZone, now: i64) -> rusqlite::Result<Plan
 /// Send what the pod's reminders owe at `now`; answers how long until the
 /// next look.
 pub async fn run(pod: &Pod, now: i64) -> Duration {
+    let p = pod.clone();
     let planned = pod
         .blocking(move |s| {
             let tz = pod_core::tz::time_zone(s)?;
-            s.with_conn(|c| plan(c, &tz, now))
+            let owners = custom::feed_owners(s, p.catalog(), NAME)?;
+            s.with_conn(|c| plan(c, &owners, &tz, now))
         })
         .await;
     let planned = match planned {
