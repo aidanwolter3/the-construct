@@ -87,8 +87,10 @@ class LayoutsSimTest {
         val (controller, _) = controller()
         val runner = SimRunner(controller, outDir, ScreenSpec.parse("phone"))
         val nav = controller.navigation
+        // The fake engine has no session, so the pod's layouts (Settings' list) load only when asked.
+        controller.refreshDeviceApps()
         // A layout's versions open inside the panel: Settings slides aside (out of the semantics tree) for the screen.
-        runner.ok("open-settings; click Versions of; idle; assert-no-text Leave pod on this device")
+        runner.ok("open-settings; wait-text 5000 Versions of; click Versions of; idle; assert-no-text Leave pod on this device")
         val screen = assertNotNull(nav.topScreen)
         assertEquals("versions", screen.screen.id)
         val panel = assertNotNull(screen.frame, "inside the Settings panel")

@@ -97,7 +97,7 @@ jobs:
         run: |
           ./gradlew -PskipRustBuild :desktopApp:simulate \
             -Pworkspace=pixelfed_sample_no_login -Pscreen=phone -Pout="$RUNNER_TEMP/sim119" \
-            -Pscript="open-settings; shot settings; click Versions of; wait 120; shot settings-sliding; idle; shot settings-versions; back; idle; shot settings-back; back; idle; open-layout events sheet; shot events-sheet; click Open Friday Night Improv; idle; shot events-sheet-event" || true
+            -Pscript="open-layout events panel; shot panel; click Open Friday Night Improv; wait 140; shot panel-sliding; idle; shot panel-screen; back; idle; shot panel-back; back; idle; open-layout events sheet; shot sheet; click Open Friday Night Improv; idle; shot sheet-screen" || true
           cat "$RUNNER_TEMP/sim119/steps.log" || true
           for f in "$RUNNER_TEMP"/sim119/*.png; do
             n=$(basename "$f"); base64 -w 4000 "$f" | sed "s/^/B64 $n /"
