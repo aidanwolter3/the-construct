@@ -168,6 +168,13 @@ pub fn file_hash_with_parts(note: &str, layout: &Value, parts: Option<&Value>) -
     crate::store::content_hash(&out)
 }
 
+/// SHA-256 of `v`'s canonical JSON (sorted keys, no whitespace).
+pub fn canonical_hash(v: &Value) -> String {
+    let mut out = String::new();
+    write_canonical(v, &mut out);
+    crate::store::content_hash(&out)
+}
+
 fn write_canonical(v: &Value, out: &mut String) {
     match v {
         Value::Object(map) => {
@@ -278,9 +285,19 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
         .filter(|n| !n.is_empty())
         .ok_or_else(|| fail("\"note\" must be a non-empty string".into()))?
         .to_owned();
-    let layout = obj
+    let written = obj
         .get("layout")
         .ok_or_else(|| fail("\"layout\" is missing".into()))?;
+    // Server components (decision `plumbing-and-porcelain`) are expanded
+    // here: the pod records the plumbing the file stands for.
+    let expanded;
+    let layout = if src.text.contains(crate::components::USE_TYPE) {
+        expanded = crate::parts::expand_file(catalog, written)
+            .map_err(|e| fail(format!("invalid layout: {e}")))?;
+        &expanded
+    } else {
+        written
+    };
     let parsed = crate::validate::validate_structure(src.app_id, layout)
         .map_err(|e| fail(format!("invalid layout: {e}")))?;
     // An unknown intent tag would deserialize as `ActionIntent::Unknown` and
@@ -328,7 +345,13 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
             {
                 return Err(fail(format!("part name '{name}' must be [a-z0-9_]+")));
             }
-            let node: UiNode = serde_json::from_value(v.clone())
+            let v = if v.to_string().contains(crate::components::USE_TYPE) {
+                crate::parts::expand_file(catalog, v)
+                    .map_err(|e| fail(format!("part '{name}': {e}")))?
+            } else {
+                v.clone()
+            };
+            let node: UiNode = serde_json::from_value(v)
                 .map_err(|e| fail(format!("part '{name}' is not a node: {e}")))?;
             if let Some(t) = crate::validate::unknown_node_types(&node).first() {
                 return Err(fail(format!("part '{name}': unknown node type '{t}'")));
@@ -338,7 +361,7 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
             parts.insert(name.clone(), node);
         }
     }
-    let file_hash = file_hash_with_parts(&note, layout, raw_parts);
+    let file_hash = file_hash_with_parts(&note, written, raw_parts);
     Ok(LayoutFile {
         parts,
         app_id: src.app_id.to_owned(),
@@ -523,11 +546,39 @@ pub fn active_for(
     let Some(latest) = store.app_latest_meta(workspace_id)? else {
         return Ok(None);
     };
-    let Some(v) = newest_compatible(store, workspace_id, client)? else {
-        return Ok(None);
-    };
-    let Some((_, json)) = store.app_version(workspace_id, v.version)? else {
-        return Ok(None);
+    // The newest version whose recorded features fit and, when it uses
+    // components or parts, whose expansion today fits too (a use that
+    // follows a component can expand to newer vocabulary than was recorded;
+    // decision `plumbing-and-porcelain`).
+    let mut before = None;
+    let (v, served) = 'found: loop {
+        let page = store.app_versions(workspace_id, before, DEFAULT_VERSIONS_LIMIT)?;
+        let Some(last) = page.last() else {
+            return Ok(None);
+        };
+        before = Some(last.version);
+        for v in page {
+            if v.compatibility(client) != protocol::Compatibility::Compatible {
+                continue;
+            }
+            let Some((_, json)) = store.app_version(workspace_id, v.version)? else {
+                continue;
+            };
+            let served = crate::parts::serve(store, catalog, &json, Some(client));
+            if crate::parts::may_hold_refs(&json)
+                && let Ok(node) = serde_json::from_str::<UiNode>(&served)
+                && client.can_draw(&protocol::required_features(&node))
+                    != protocol::Compatibility::Compatible
+            {
+                tracing::info!(
+                    app = workspace_id,
+                    version = v.version,
+                    "skipped a version whose expansion the client can't draw"
+                );
+                continue;
+            }
+            break 'found (v, served);
+        }
     };
     if v.version != latest.version {
         tracing::info!(
@@ -544,7 +595,7 @@ pub fn active_for(
     }
     Ok(Some(Served {
         version: v.version,
-        layout: from_json(&crate::parts::serve(store, catalog, &json, Some(client)))?,
+        layout: from_json(&served)?,
     }))
 }
 

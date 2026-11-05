@@ -123,7 +123,7 @@ impl Env {
         let resp = client()
             .get(format!("{}{path}", self.url))
             .bearer_auth(bearer)
-            .header(protocol::FEATURES_HEADER, protocol::features_header())
+            .header(protocol::FEATURES_HEADER, crate::workspace_features())
             .send()
             .await
             .unwrap();
@@ -530,10 +530,19 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     let (err, vocab) = env.tool(&access, "describe_vocabulary", json!({})).await;
     assert!(!err);
     // Every client node type but the three retired ones (decision
-    // `layouts-not-apps`), plus the pod-only core://Ref.
+    // `layouts-not-apps`) is plumbing; core://Use, core://Ref and the
+    // template nodes are porcelain (decision `plumbing-and-porcelain`).
     assert_eq!(
-        vocab["nodes"].as_array().unwrap().len(),
-        protocol::NODE_TYPES.len() - 3 + 1
+        vocab["plumbing"]["nodes"].as_array().unwrap().len(),
+        protocol::NODE_TYPES.len() - 3
+    );
+    assert!(
+        vocab["porcelain"]["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["name"] == "core:workspace"),
+        "{vocab}"
     );
     let (err, parts) = env
         .tool(&access, "list_parts", json!({"app": "pixelfed"}))

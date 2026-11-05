@@ -353,7 +353,7 @@ fn loopback_sign_in_stores_session_and_fetches_the_feed() {
             .unwrap()
             .starts_with(&format!("{}/v1/pixelfed/media/", env.pod))
     );
-    assert!(snap.workspace_json.contains("FeedList") || snap.workspace_json.contains("feed"));
+    assert!(snap.workspace_json.contains("timeline:home"));
     let ents = entities(&snap);
     for uri in queries(&snap)["timeline:home"].as_array().unwrap() {
         assert!(ents.get(uri.as_str().unwrap()).is_some(), "{uri} missing");

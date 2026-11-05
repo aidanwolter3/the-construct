@@ -1,0 +1,93 @@
+{
+  "note": "First version",
+  "component": {
+    "doc": "Who posted: a round avatar beside the name and, below it, the handle.",
+    "params": [
+      {
+        "name": "avatar",
+        "type": "binding",
+        "doc": "The avatar image URL.",
+        "required": true
+      },
+      {
+        "name": "name",
+        "type": "text",
+        "doc": "The name.",
+        "required": true
+      },
+      {
+        "name": "handle",
+        "type": "text",
+        "doc": "The handle (left out when empty).",
+        "default": ""
+      },
+      {
+        "name": "size",
+        "type": "number",
+        "doc": "Avatar size.",
+        "default": 36
+      },
+      {
+        "name": "spacing",
+        "type": "number",
+        "doc": "Space between avatar and name.",
+        "default": 10
+      },
+      {
+        "name": "padding_h",
+        "type": "number",
+        "doc": "Side padding.",
+        "default": 12
+      },
+      {
+        "name": "padding_v",
+        "type": "number",
+        "doc": "Top and bottom padding.",
+        "default": 10
+      }
+    ],
+    "template": {
+      "type": "core://Row",
+      "spacing_dp": "$arg.spacing",
+      "padding_h_dp": "$arg.padding_h",
+      "padding_v_dp": "$arg.padding_v",
+      "children": [
+        {
+          "type": "core://Image",
+          "url": "$arg.avatar",
+          "shape": "Circle",
+          "size_dp": "$arg.size"
+        },
+        {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://Text",
+              "value_expr": "$arg.name",
+              "style": "Label"
+            },
+            {
+              "type": "core://IfArg",
+              "arg": "handle",
+              "then": {
+                "type": "core://Text",
+                "value_expr": "$arg.handle",
+                "style": "Secondary"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "examples": [
+      {
+        "args": {
+          "avatar": "$item.author_avatar_url",
+          "name": "$item.author_name",
+          "handle": "$item.author_handle"
+        },
+        "note": "a post's author"
+      }
+    ]
+  }
+}

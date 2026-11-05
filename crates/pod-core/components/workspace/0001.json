@@ -1,0 +1,201 @@
+{
+  "note": "First version",
+  "component": {
+    "doc": "A page the way a core://Workspace looks: the title in the headline style (with Back when the page was pushed) pinned above its content, which scrolls, then a little space. With title_scrolls the title scrolls away with the content; with fills_screen the one child fills the page and there is no title. Drawn inline in another layout, only the content shows. Copy it to make your own page chrome.",
+    "params": [
+      {
+        "name": "title",
+        "type": "text",
+        "doc": "The page title.",
+        "required": true
+      },
+      {
+        "name": "title_scrolls",
+        "type": "bool",
+        "doc": "The title scrolls with the content.",
+        "default": false
+      },
+      {
+        "name": "fills_screen",
+        "type": "bool",
+        "doc": "The one child fills the page: no title, no scrolling.",
+        "default": false
+      }
+    ],
+    "children": true,
+    "template": {
+      "type": "core://IfArg",
+      "arg": "fills_screen",
+      "then": {
+        "type": "core://Column",
+        "children": [
+          {
+            "type": "core://Conditional",
+            "value": "${local://nav#pushed}",
+            "content": {
+              "type": "core://IconButton",
+              "icon": "arrow_back",
+              "content_description": "Back",
+              "tag": "layout-back",
+              "on_click": {
+                "intent": "action.navigation.back"
+              }
+            }
+          },
+          {
+            "type": "core://Children",
+            "at": 0
+          }
+        ]
+      },
+      "else": {
+        "type": "core://IfArg",
+        "arg": "title_scrolls",
+        "then": {
+          "type": "core://Scroll",
+          "content": {
+            "type": "core://Column",
+            "children": [
+              {
+                "type": "core://Conditional",
+                "value": "${local://nav#inline}",
+                "equals": "false",
+                "content": {
+                  "type": "core://Row",
+                  "children": [
+                    {
+                      "type": "core://Conditional",
+                      "value": "${local://nav#pushed}",
+                      "content": {
+                        "type": "core://IconButton",
+                        "icon": "arrow_back",
+                        "content_description": "Back",
+                        "tag": "layout-back",
+                        "on_click": {
+                          "intent": "action.navigation.back"
+                        }
+                      }
+                    },
+                    {
+                      "type": "core://Column",
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 12,
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$arg.title",
+                          "style": "Headline"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "core://Children"
+              },
+              {
+                "type": "core://Conditional",
+                "value": "${local://nav#inline}",
+                "equals": "false",
+                "content": {
+                  "type": "core://Spacer",
+                  "size_dp": 16
+                }
+              }
+            ]
+          }
+        },
+        "else": {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://Conditional",
+              "value": "${local://nav#inline}",
+              "equals": "false",
+              "content": {
+                "type": "core://Row",
+                "children": [
+                  {
+                    "type": "core://Conditional",
+                    "value": "${local://nav#pushed}",
+                    "content": {
+                      "type": "core://IconButton",
+                      "icon": "arrow_back",
+                      "content_description": "Back",
+                      "tag": "layout-back",
+                      "on_click": {
+                        "intent": "action.navigation.back"
+                      }
+                    }
+                  },
+                  {
+                    "type": "core://Column",
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 12,
+                    "children": [
+                      {
+                        "type": "core://Text",
+                        "value_expr": "$arg.title",
+                        "style": "Headline"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "type": "core://Scroll",
+              "content": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://Children"
+                  },
+                  {
+                    "type": "core://Conditional",
+                    "value": "${local://nav#inline}",
+                    "equals": "false",
+                    "content": {
+                      "type": "core://Spacer",
+                      "size_dp": 16
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "title": "Recipes"
+        },
+        "children": [
+          {
+            "type": "core://Text",
+            "value_expr": "Soup",
+            "style": "Body"
+          }
+        ],
+        "note": "a pinned title"
+      },
+      {
+        "args": {
+          "title": "Feed",
+          "title_scrolls": true
+        },
+        "children": [
+          {
+            "type": "core://Text",
+            "value_expr": "Post",
+            "style": "Body"
+          }
+        ],
+        "note": "a title that scrolls away"
+      }
+    ]
+  }
+}

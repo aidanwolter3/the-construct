@@ -1,0 +1,41 @@
+{
+  "note": "First version",
+  "component": {
+    "doc": "A button that opens a web link, shown only while the link is set.",
+    "params": [
+      {
+        "name": "label",
+        "type": "text",
+        "doc": "The button's text.",
+        "required": true
+      },
+      {
+        "name": "url",
+        "type": "binding",
+        "doc": "The link (a binding such as $item.url).",
+        "required": true
+      }
+    ],
+    "template": {
+      "type": "core://Conditional",
+      "value": "$arg.url",
+      "content": {
+        "type": "core://Button",
+        "label": "$arg.label",
+        "on_click": {
+          "intent": "action.link.open",
+          "url": "$arg.url"
+        }
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "label": "Get tickets",
+          "url": "$item.tickets_url"
+        },
+        "note": "tickets when the event has them"
+      }
+    ]
+  }
+}

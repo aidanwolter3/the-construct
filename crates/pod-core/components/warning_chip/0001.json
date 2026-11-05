@@ -1,0 +1,28 @@
+{
+  "note": "First version",
+  "component": {
+    "doc": "A warning chip: a warning icon and text in the warning tone.",
+    "params": [
+      {
+        "name": "text",
+        "type": "text",
+        "doc": "The warning.",
+        "required": true
+      }
+    ],
+    "template": {
+      "type": "core://Chip",
+      "text": "$arg.text",
+      "icon": "warning",
+      "tone": "Warning"
+    },
+    "examples": [
+      {
+        "args": {
+          "text": "Needs attention"
+        },
+        "note": "a failing source"
+      }
+    ]
+  }
+}

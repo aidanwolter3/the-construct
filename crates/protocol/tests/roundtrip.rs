@@ -188,6 +188,7 @@ fn full_workspace() -> UiNode {
                                 no_match_text: Some("No match".into()),
                             }),
                             group_by: Some(GroupBy {
+                                headers_only: false,
                                 field: "day".into(),
                                 header: Box::new(UiNode::Text {
                                     value_expr: "$item.day".into(),

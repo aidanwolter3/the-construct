@@ -1,0 +1,124 @@
+{
+  "note": "First version",
+  "component": {
+    "doc": "An icon button that flips a boolean field of the item at once and tells an action endpoint ({id, <payload_field>: the new value}); optionally keeps a count field in step (a like with its count).",
+    "params": [
+      {
+        "name": "field",
+        "type": "text",
+        "doc": "The item's boolean field (is_liked).",
+        "required": true
+      },
+      {
+        "name": "icon",
+        "type": "text",
+        "doc": "Icon while off.",
+        "required": true
+      },
+      {
+        "name": "active_icon",
+        "type": "text",
+        "doc": "Icon while on.",
+        "required": true
+      },
+      {
+        "name": "label",
+        "type": "text",
+        "doc": "What it does while off (Like).",
+        "required": true
+      },
+      {
+        "name": "active_label",
+        "type": "text",
+        "doc": "What it does while on (Unlike).",
+        "required": true
+      },
+      {
+        "name": "endpoint",
+        "type": "text",
+        "doc": "The action endpoint.",
+        "required": true
+      },
+      {
+        "name": "payload_field",
+        "type": "text",
+        "doc": "The payload's field for the new value.",
+        "required": true
+      },
+      {
+        "name": "tint",
+        "type": "text",
+        "doc": "Icon colour while on (#RRGGBB).",
+        "default": ""
+      },
+      {
+        "name": "count_field",
+        "type": "text",
+        "doc": "A count field to move by one with it.",
+        "default": ""
+      },
+      {
+        "name": "tag",
+        "type": "text",
+        "doc": "A test tag (bindable).",
+        "default": ""
+      }
+    ],
+    "template": {
+      "type": "core://IconButton",
+      "icon": "$arg.icon",
+      "active_icon": "$arg.active_icon",
+      "active": "$item.$arg.field",
+      "active_tint": {
+        "type": "core://IfArg",
+        "arg": "tint",
+        "then": "$arg.tint"
+      },
+      "content_description": "$arg.label",
+      "active_content_description": "$arg.active_label",
+      "tag": {
+        "type": "core://IfArg",
+        "arg": "tag",
+        "then": "$arg.tag"
+      },
+      "on_click": {
+        "intent": "action.mutation.optimistic",
+        "entity_uri": "$item.uri",
+        "field": "$arg.field",
+        "value_expr": "!entity.$arg.field",
+        "rollback_value": false,
+        "endpoint": "$arg.endpoint",
+        "payload": {
+          "id": "$item.id",
+          "$arg.payload_field": "$value"
+        },
+        "also": {
+          "type": "core://IfArg",
+          "arg": "count_field",
+          "then": [
+            {
+              "field": "$arg.count_field",
+              "value_expr": "entity.$arg.field ? entity.$arg.count_field - 1 : entity.$arg.count_field + 1"
+            }
+          ]
+        }
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "field": "is_liked",
+          "icon": "favorite_border",
+          "active_icon": "favorite",
+          "label": "Like",
+          "active_label": "Unlike",
+          "endpoint": "/v1/pixelfed/posts/like",
+          "payload_field": "liked",
+          "tint": "#ED4956",
+          "count_field": "like_count"
+        },
+        "note": "a like with its count"
+      }
+    ]
+  }
+}

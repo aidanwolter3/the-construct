@@ -179,7 +179,7 @@ fn invalid_files_are_refused_with_their_path() {
                 "0001",
                 r#"{"note": "x", "layout": {"type": "core://Text", "value_expr": "", "style": "Body"}}"#,
             ),
-            "layouts/pixelfed_sample_no_login/0001.json: invalid layout: root must stay a core://Workspace",
+            "layouts/pixelfed_sample_no_login/0001.json: invalid layout: root must be a core://Workspace or a core://Page",
         ),
         (
             src("pixelfed", "0001", ok),

@@ -1,0 +1,81 @@
+{
+  "note": "First version",
+  "component": {
+    "doc": "A bar with a title on the left and actions (icon buttons) on the right.",
+    "params": [
+      {
+        "name": "title",
+        "type": "text",
+        "doc": "The title.",
+        "required": true
+      },
+      {
+        "name": "style",
+        "type": "text",
+        "doc": "A core://Text style.",
+        "default": "Title"
+      },
+      {
+        "name": "padding_h",
+        "type": "number",
+        "doc": "Side padding.",
+        "default": 12
+      },
+      {
+        "name": "padding_v",
+        "type": "number",
+        "doc": "Top and bottom padding.",
+        "default": 4
+      }
+    ],
+    "children": true,
+    "template": {
+      "type": "core://Row",
+      "padding_h_dp": "$arg.padding_h",
+      "padding_v_dp": "$arg.padding_v",
+      "children": [
+        {
+          "type": "core://Text",
+          "value_expr": "$arg.title",
+          "style": "$arg.style"
+        },
+        {
+          "type": "core://Spacer"
+        },
+        {
+          "type": "core://Children"
+        }
+      ]
+    },
+    "examples": [
+      {
+        "args": {
+          "title": "Home"
+        },
+        "children": [
+          {
+            "type": "core://IconButton",
+            "icon": "notifications",
+            "content_description": "Notifications",
+            "on_click": {
+              "intent": "action.navigation.open",
+              "layout": "inbox",
+              "presentation": "Sheet"
+            }
+          },
+          {
+            "type": "core://IconButton",
+            "icon": "settings",
+            "content_description": "Settings",
+            "on_click": {
+              "intent": "action.navigation.open",
+              "layout": "settings",
+              "presentation": "Panel"
+            }
+          }
+        ],
+        "note": "home's header: the title, the bell and the gear on one line"
+      }
+    ]
+  }
+}

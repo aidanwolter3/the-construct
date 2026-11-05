@@ -1,0 +1,85 @@
+{
+  "note": "First version",
+  "component": {
+    "doc": "A section's heading: padded text, optionally under a divider (settings groups, 'Alerts', 'Events').",
+    "params": [
+      {
+        "name": "text",
+        "type": "text",
+        "doc": "The heading (bindings allowed).",
+        "required": true
+      },
+      {
+        "name": "style",
+        "type": "text",
+        "doc": "A core://Text style.",
+        "default": "Label"
+      },
+      {
+        "name": "padding_v",
+        "type": "number",
+        "doc": "Space above and below.",
+        "default": 8
+      },
+      {
+        "name": "divider",
+        "type": "bool",
+        "doc": "Draw a divider above it.",
+        "default": false
+      }
+    ],
+    "template": {
+      "type": "core://IfArg",
+      "arg": "divider",
+      "then": {
+        "type": "core://Fragment",
+        "children": [
+          {
+            "type": "core://Divider"
+          },
+          {
+            "type": "core://Column",
+            "padding_h_dp": 16,
+            "padding_v_dp": "$arg.padding_v",
+            "children": [
+              {
+                "type": "core://Text",
+                "value_expr": "$arg.text",
+                "style": "$arg.style"
+              }
+            ]
+          }
+        ]
+      },
+      "else": {
+        "type": "core://Column",
+        "padding_h_dp": 16,
+        "padding_v_dp": "$arg.padding_v",
+        "children": [
+          {
+            "type": "core://Text",
+            "value_expr": "$arg.text",
+            "style": "$arg.style"
+          }
+        ]
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "text": "Sign-ins",
+          "divider": true
+        },
+        "note": "a settings group"
+      },
+      {
+        "args": {
+          "text": "Alerts",
+          "style": "Title",
+          "padding_v": 4
+        },
+        "note": "a screen section"
+      }
+    ]
+  }
+}

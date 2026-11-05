@@ -271,6 +271,22 @@ const MIGRATIONS: &[Step] = &[
          SELECT 'layouts.convert', '1'
          WHERE EXISTS (SELECT 1 FROM custom_apps) OR EXISTS (SELECT 1 FROM app_versions);",
     ),
+    // Decision `plumbing-and-porcelain`: component definitions, the
+    // server's (`core:`, recorded from files) and the pod's own (`pod:`).
+    Step::sql(
+        "components",
+        "CREATE TABLE components (
+            name       TEXT NOT NULL,
+            version    INTEGER NOT NULL,
+            json       TEXT NOT NULL,
+            note       TEXT,
+            author     TEXT NOT NULL,
+            file_hash  TEXT,
+            meta_json  TEXT,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (name, version)
+        ) WITHOUT ROWID;",
+    ),
 ];
 
 /// A pod setting inside a transaction (an adapter migration reads its

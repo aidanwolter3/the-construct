@@ -46,7 +46,7 @@ fn client() -> reqwest::Client {
 /// `(status, X-Construct-Layout-Version, JSON body)`, as a current client
 /// (it sends this build's features).
 async fn get(pod: &Pod, path: &str) -> (StatusCode, Option<String>, Value) {
-    get_as(pod, path, Some(&protocol::features_header())).await
+    get_as(pod, path, Some(&crate::workspace_features())).await
 }
 
 /// The features header of a build from before `title_scrolls` (decision
@@ -54,7 +54,7 @@ async fn get(pod: &Pod, path: &str) -> (StatusCode, Option<String>, Value) {
 fn before_title_scrolls() -> String {
     protocol::FEATURES
         .iter()
-        .filter(|f| **f != protocol::feature::TITLE_SCROLLS)
+        .filter(|f| **f != protocol::feature::TITLE_SCROLLS && **f != protocol::feature::PAGE)
         .copied()
         .collect::<Vec<_>>()
         .join(",")
@@ -688,7 +688,7 @@ struct SseReader {
 impl SseReader {
     /// As this build.
     async fn connect(url: &str, bearer: Option<&str>) -> Self {
-        Self::connect_as(url, bearer, Some(&protocol::features_header())).await
+        Self::connect_as(url, bearer, Some(&crate::workspace_features())).await
     }
 
     /// With `features`, the request carries `X-Construct-Features` like an
@@ -939,7 +939,7 @@ async fn versions_say_whether_the_client_can_draw_them() {
     let retired = Some("retired".to_owned());
     let update = Some("update_required".to_owned());
     // Version 3 holds a removed node type (D37): retired for every client.
-    let current = page(Some(protocol::features_header())).await;
+    let current = page(Some(crate::workspace_features())).await;
     assert_eq!(
         rows(&current),
         [(4, None), (3, retired.clone()), (2, None), (1, None)]
@@ -971,7 +971,7 @@ async fn versions_say_whether_the_client_can_draw_them() {
     assert!(rows(&tool).iter().all(|r| r.1.is_none()), "{tool}");
     let one = client()
         .get(format!("{}/v1/apps/pixelfed/versions/3", pod.url))
-        .header(protocol::FEATURES_HEADER, protocol::features_header())
+        .header(protocol::FEATURES_HEADER, crate::workspace_features())
         .send()
         .await
         .unwrap()
@@ -996,7 +996,7 @@ async fn apps_say_the_newest_version_the_client_can_draw() {
         async move { req.send().await.unwrap().json::<Value>().await.unwrap() }
     };
     for (features, want) in [
-        (Some(protocol::features_header()), json!(4)),
+        (Some(crate::workspace_features()), json!(4)),
         (Some(before_title_scrolls()), json!(2)),
         (Some(String::new()), Value::Null),
         (None, json!(4)),

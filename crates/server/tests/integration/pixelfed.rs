@@ -297,7 +297,7 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
     let resp = client()
         .get(format!("{}/v1/workspaces/pixelfed", env.pod.url))
         .header("host", "10.0.2.2:8080")
-        .header(protocol::FEATURES_HEADER, protocol::features_header())
+        .header(protocol::FEATURES_HEADER, crate::workspace_features())
         .bearer_auth(&session)
         .send()
         .await
@@ -739,7 +739,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     let resp = client()
         .get(&url)
         .bearer_auth("tok")
-        .header(protocol::FEATURES_HEADER, protocol::features_header())
+        .header(protocol::FEATURES_HEADER, crate::workspace_features())
         .send()
         .await
         .unwrap();
@@ -932,7 +932,7 @@ async fn a_session_from_before_v11_stays_signed_in() {
                  AND (name LIKE 'recipes%' OR name LIKE 'collections%' OR name IN ('pixelfed_session_instance', 'pixelfed_pending_posts'))
                  OR (type = 'table' AND name IN ('pod_settings', 'uploads', 'notifications',
                      'notification_polls', 'devices', 'device_channel_prefs',
-                     'pixelfed_notify_cursor', 'custom_apps'))",
+                     'pixelfed_notify_cursor', 'custom_apps', 'components'))",
             )
             .unwrap()
             .query_map([], |r| r.get(0))
