@@ -250,20 +250,18 @@ fn missing(name: &str) -> Value {
             "detail": "list_collections lists them; define_collection makes one" })
 }
 
-/// The custom apps whose feeds include Collections, by collection: `(app
-/// id, title)` of each app that lists the collection as a feed or binds it.
+/// The layouts that use collection `name`: `(app id, title, version)` of
+/// each one whose latest layout binds it (its query key, a row URI or a
+/// data path).
 fn users(apps: &[(custom::CustomApp, i64, Value)], name: &str) -> Vec<Value> {
     let key = db::query_key(name);
     let scheme = format!("collections://{name}/");
     let route = format!("/v1/collections/{name}/");
+    // Not by feeds: every layout reports home's (decision `layouts-not-apps`).
     apps.iter()
-        .filter(|(a, _, layout)| {
-            a.feeds.iter().any(|(s, f)| s == NAME && f == name) || {
-                let text = layout.to_string();
-                text.contains(&format!("\"{key}\""))
-                    || text.contains(&scheme)
-                    || text.contains(&route)
-            }
+        .filter(|(_, _, layout)| {
+            let text = layout.to_string();
+            text.contains(&format!("\"{key}\"")) || text.contains(&scheme) || text.contains(&route)
         })
         .map(|(a, v, _)| json!({ "app": a.id, "title": a.title, "version": v }))
         .collect()

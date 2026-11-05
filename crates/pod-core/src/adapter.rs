@@ -197,8 +197,12 @@ pub trait AppAdapter: Any + Send + Sync {
     /// thing they stand for exists. The core drops any other. Called often
     /// (every notification, every channel list): keep it to a quick read of
     /// the store (blocking is fine).
-    fn custom_notification_channels(&self, store: &Store) -> Vec<NotificationChannel> {
-        let _ = store;
+    fn custom_notification_channels(
+        &self,
+        store: &Store,
+        catalog: &Catalog,
+    ) -> Vec<NotificationChannel> {
+        let _ = (store, catalog);
         Vec::new()
     }
 

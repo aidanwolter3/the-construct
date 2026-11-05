@@ -17,9 +17,11 @@
 //! its collection (`app`, else the oldest), as reminders are; a system
 //! collection's alerts use its built-in app's channel instead.
 
+use std::collections::HashMap;
+
 use pod_core::custom;
 use pod_core::store::Store;
-use pod_core::{NewNotification, Pod};
+use pod_core::{Catalog, NewNotification, Pod};
 use protocol::{Importance, NotificationChannel};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -628,8 +630,16 @@ fn defaults(def: &Definition) -> (String, String) {
     (format!("{{{first}}}"), format!("{when}{{alert}}"))
 }
 
-/// The app and channel alert `a` of `def` notifies on now.
-fn target(apps: &[custom::CustomApp], def: &Definition, a: &Alert) -> Option<(String, String)> {
+/// The app and channel alert `a` of `def` notifies on now: a system
+/// collection's own, the alert's `app` while it lives, else the layout
+/// that shows the collection (`owners`, [`custom::feed_owners`]; decision
+/// `notification-owner`).
+fn target(
+    apps: &[custom::CustomApp],
+    owners: &HashMap<String, String>,
+    def: &Definition,
+    a: &Alert,
+) -> Option<(String, String)> {
     if let Some(s) = &def.system {
         return Some((s.app.clone(), s.channel.clone()));
     }
@@ -638,17 +648,17 @@ fn target(apps: &[custom::CustomApp], def: &Definition, a: &Alert) -> Option<(St
     {
         return Some((app.clone(), a.id.clone()));
     }
-    apps.iter()
-        .find(|x| x.feeds.iter().any(|(s, f)| s == NAME && *f == def.name))
-        .map(|x| (x.id.clone(), a.id.clone()))
+    owners.get(&def.name).map(|app| (app.clone(), a.id.clone()))
 }
 
 /// Every custom app's alert channels.
-pub fn channels(store: &Store) -> Vec<NotificationChannel> {
-    let read = store.with_conn(|c| -> rusqlite::Result<_> {
-        Ok((db::all_defs(c)?, custom::custom_apps_on(c)?))
+pub fn channels(store: &Store, catalog: &Catalog) -> Vec<NotificationChannel> {
+    let read = custom::feed_owners(store, catalog, NAME).and_then(|owners| {
+        store.with_conn(|c| -> rusqlite::Result<_> {
+            Ok((db::all_defs(c)?, custom::custom_apps_on(c)?, owners))
+        })
     });
-    let Ok((defs, apps)) = read else {
+    let Ok((defs, apps, owners)) = read else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -657,7 +667,7 @@ pub fn channels(store: &Store) -> Vec<NotificationChannel> {
             continue;
         }
         for a in &def.alerts {
-            if let Some((app, channel)) = target(&apps, &def, a) {
+            if let Some((app, channel)) = target(&apps, &owners, &def, a) {
                 out.push(NotificationChannel {
                     app_id: app,
                     id: channel,
@@ -724,8 +734,14 @@ pub fn mark_sent(
 /// One notification an alert owes: `(collection, alert, row)`.
 type Owed = (NewNotification, [String; 3]);
 
-/// What `def`'s alerts owe at `now` (`only`: one collection).
-pub fn plan(conn: &Connection, only: Option<&str>, now: i64) -> rusqlite::Result<Vec<Owed>> {
+/// What `def`'s alerts owe at `now` (`only`: one collection; `owners`:
+/// [`custom::feed_owners`] of Collections).
+pub fn plan(
+    conn: &Connection,
+    owners: &HashMap<String, String>,
+    only: Option<&str>,
+    now: i64,
+) -> rusqlite::Result<Vec<Owed>> {
     let apps = custom::custom_apps_on(conn)?;
     let mut out: Vec<Owed> = Vec::new();
     for (_, def) in db::all_defs(conn)? {
@@ -739,7 +755,7 @@ pub fn plan(conn: &Connection, only: Option<&str>, now: i64) -> rusqlite::Result
                 if !a.matches(&def, row, now) || sent(conn, &def.name, &a.id, &row.id)? {
                     continue;
                 }
-                let Some((app, channel)) = target(&apps, &def, a) else {
+                let Some((app, channel)) = target(&apps, owners, &def, a) else {
                     continue;
                 };
                 let entity = model::row_entity(
@@ -786,8 +802,12 @@ pub fn plan(conn: &Connection, only: Option<&str>, now: i64) -> rusqlite::Result
 pub async fn run(pod: &Pod, only: Option<String>) {
     let now = pod_core::util::now_secs();
     let o = only.clone();
+    let p = pod.clone();
     let Ok(owed) = pod
-        .blocking(move |s| s.with_conn(|c| plan(c, o.as_deref(), now)))
+        .blocking(move |s| {
+            let owners = custom::feed_owners(s, p.catalog(), NAME)?;
+            s.with_conn(|c| plan(c, &owners, o.as_deref(), now))
+        })
         .await
     else {
         return;

@@ -432,7 +432,7 @@ impl AppState {
             }
         };
         for a in senders {
-            for c in a.custom_notification_channels(self.store()) {
+            for c in a.custom_notification_channels(self.store(), self.catalog()) {
                 let fits = live.contains(&c.app_id)
                     && valid_channel_id(&c.id)
                     && !out.iter().any(|o| o.app_id == c.app_id && o.id == c.id);

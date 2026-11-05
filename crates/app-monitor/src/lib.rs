@@ -14,18 +14,19 @@
 //! - `monitor:metrics`: every counter with its last hour and last day, and
 //!   the gauges (pods, credentials, disk).
 //!
-//! Alerts (decision `server-monitoring-alerts`): in those pods, every custom
-//! app on the source gets a "Server warnings" notification channel, and a
-//! check that turns to warning sends one notification ([`alerts`]); it can
-//! send again only after it has been back to ok.
+//! Alerts (decision `server-monitoring-alerts`): in those pods, the one
+//! layout that shows the source (decision `notification-owner`) gets a
+//! "Server warnings" notification channel, and a check that turns to
+//! warning sends one notification ([`alerts`]); it can send again only
+//! after it has been back to ok.
 
 use std::time::Duration;
 
 use pod_core::metrics::{self, Gauge, Series};
 use pod_core::store::Store;
 use pod_core::{
-    AppAdapter, AppInfo, BoxFuture, EntityDoc, FeedSpec, Hydration, NewNotification, Pod, PollCtx,
-    PollOutcome, RequestCtx, SourceManifest,
+    AppAdapter, AppInfo, BoxFuture, Catalog, EntityDoc, FeedSpec, Hydration, NewNotification, Pod,
+    PollCtx, PollOutcome, RequestCtx, SourceManifest,
 };
 use protocol::{DataBundle, EntityRecord, Importance, NotificationChannel};
 use serde_json::{Value, json};
@@ -42,7 +43,7 @@ pub const ENABLED_SETTING: &str = "monitor.enabled";
 /// Pod setting: the ids of the checks that warned at the last look (a JSON
 /// list), so each warning notifies once.
 pub const WARNED_SETTING: &str = "monitor.warned";
-/// The notification channel every app on the source gets.
+/// The notification channel of the layout that shows the source.
 pub const ALERT_CHANNEL: &str = "server_warnings";
 /// How often the checks are looked at for alerts.
 pub const ALERT_EVERY: Duration = Duration::from_secs(300);
@@ -228,9 +229,13 @@ impl AppAdapter for MonitorAdapter {
         true
     }
 
-    fn custom_notification_channels(&self, store: &Store) -> Vec<NotificationChannel> {
-        match monitored_apps(store) {
-            Ok(apps) => apps.into_iter().map(|app| channel(&app)).collect(),
+    fn custom_notification_channels(
+        &self,
+        store: &Store,
+        catalog: &Catalog,
+    ) -> Vec<NotificationChannel> {
+        match monitored_app(store, catalog) {
+            Ok(app) => app.iter().map(|app| channel(app)).collect(),
             Err(e) => {
                 tracing::error!(error = %e, "monitoring alerts: apps could not be read");
                 Vec::new()
@@ -249,9 +254,10 @@ impl AppAdapter for MonitorAdapter {
     ) -> BoxFuture<'a, PollOutcome> {
         Box::pin(async move {
             let config = self.config;
+            let p = pod.clone();
             let found = pod
                 .blocking(move |s| {
-                    let apps = monitored_apps(s)?;
+                    let apps: Vec<String> = monitored_app(s, p.catalog())?.into_iter().collect();
                     if apps.is_empty() {
                         return Ok(Vec::new());
                     }
@@ -284,18 +290,16 @@ impl AppAdapter for MonitorAdapter {
 
 // ---------- alerts ----------
 
-/// The custom apps on this source, when the pod may read it (none
-/// otherwise). Blocking.
-pub fn monitored_apps(store: &Store) -> rusqlite::Result<Vec<String>> {
+/// The layout that gets the "Server warnings" channel, when the pod may
+/// read the source: the one layout the `overview` feed belongs to
+/// ([`pod_core::custom::feed_owners`], decision `notification-owner`), or
+/// none. Every layout has home's feeds (decision `layouts-not-apps`), so
+/// "has the feed" would be every layout. Blocking.
+pub fn monitored_app(store: &Store, catalog: &Catalog) -> rusqlite::Result<Option<String>> {
     if store.pod_setting(ENABLED_SETTING)?.as_deref() != Some("1") {
-        return Ok(Vec::new());
+        return Ok(None);
     }
-    let apps = store.with_conn(pod_core::custom::custom_apps_on)?;
-    Ok(apps
-        .into_iter()
-        .filter(|a| a.feeds.iter().any(|(s, _)| s == NAME))
-        .map(|a| a.id)
-        .collect())
+    Ok(pod_core::custom::feed_owners(store, catalog, NAME)?.remove(OVERVIEW_FEED))
 }
 
 fn channel(app: &str) -> NotificationChannel {

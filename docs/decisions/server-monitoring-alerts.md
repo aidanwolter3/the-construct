@@ -1,5 +1,7 @@
 # Server monitoring alerts: a notification when a check turns to warning
 
+Superseded in part by [notification-owner](notification-owner.md): the channel belongs to the one layout that shows the source.
+
 Date: 2026-11-04. Related: D52, [server-monitoring](server-monitoring.md),
 [collection-reminders](collection-reminders.md).
 

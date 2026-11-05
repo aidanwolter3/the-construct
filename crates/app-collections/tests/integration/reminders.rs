@@ -2,6 +2,9 @@
 //! Claude adds a reminder to a todos collection; a todo due today notifies
 //! once through the D52 pipeline (from the todo app, on the reminder's own
 //! channel), a ticked one never, and the pod's time zone is an IANA name.
+//! Every layout reports home's feeds (decision `layouts-not-apps`): the
+//! reminder belongs to the layout that shows the collection, not home or
+//! another layout (decision `notification-owner`, issue #116).
 
 use std::sync::Arc;
 
@@ -18,9 +21,12 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 fn pod() -> Pod {
-    let pod: Pod = Arc::new(AppState::in_memory(vec![Arc::new(
-        CollectionsAdapter::new(),
-    )]));
+    // With the home blueprint, so the pod has a home whose feeds every
+    // layout reports.
+    let pod: Pod = Arc::new(AppState::in_memory(vec![
+        Arc::new(CollectionsAdapter::new()),
+        app_shell::adapter(),
+    ]));
     pod.store()
         .create_pinned_session(&session_hash("pod"))
         .unwrap();
@@ -91,6 +97,16 @@ async fn todo_app(pod: &Pod) -> String {
             {"name": "title", "type": "text"},
             {"name": "done", "type": "bool", "default": false},
             {"name": "due", "type": "date", "optional": true}]}),
+    )
+    .await;
+    // An older layout that names the feed but doesn't show it.
+    ok(
+        pod,
+        "create_app",
+        json!({"title": "Notes", "feeds": [["collections", "todos"]],
+            "layout": {"type": "core://Workspace", "id": "x", "title": "Notes", "slots": [
+                {"slot_id": "s", "provider_uri": "local://x", "content": {
+                    "type": "core://Text", "style": "Body", "value_expr": "Notes"}}]}}),
     )
     .await;
     let app = ok(

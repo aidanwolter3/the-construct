@@ -1,5 +1,7 @@
 # Collections remind the user through declarative rules, and the pod has an IANA time zone
 
+Superseded in part by [notification-owner](notification-owner.md): a reminder without an `app` belongs to the layout that shows its collection.
+
 Date: 2026-11-04. Related: D52 ([`notifications.md`](../notifications.md)), [collections](collections.md) (open
 question 3), [collection-computed-fields](collection-computed-fields.md), [watcher](watcher.md), issue #57, issue #66.
 
