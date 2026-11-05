@@ -175,7 +175,14 @@ class ModelTest {
             """{"type":"core://List","query_key":"q","item_template":{"type":"core://Divider"},
                "where":{"field":"category_short","equals":"${'$'}form.cat"}}"""
         ))
-        assertEquals(ListWhere("category_short", "\$form.cat"), list.where)
+        assertEquals(listOf(ListWhere("category_short", "\$form.cat")), list.where)
+        // Feature `list_where_all`: several conditions that must all match.
+        val all = assertIs<UiNode.ItemList>(ConstructJson.decodeNode(
+            """{"type":"core://List","query_key":"q","item_template":{"type":"core://Divider"},
+               "where":[{"field":"deleted","equals":"false"},{"field":"category","equals":"${'$'}form.tab"}]}"""
+        ))
+        assertEquals(listOf(ListWhere("deleted", "false"), ListWhere("category", "\$form.tab")), all.where)
+        assertEquals(all, ConstructJson.decodeNode(ConstructJson.encodeNode(all)))
         val row = assertIs<UiNode.Row>(ConstructJson.decodeNode("""{"type":"core://Row","children":[],"align":"Start"}"""))
         assertEquals(Align.Start, row.align)
         assertNull(assertIs<UiNode.Row>(ConstructJson.decodeNode("""{"type":"core://Row","children":[]}""")).align)
@@ -260,6 +267,14 @@ class ModelTest {
         assertTrue(!matchesWhere("Dessert", item, "category_short"), "exact match only")
         assertEquals("Mains", formOrLiteral("\$form.cat", mapOf("cat" to "Mains")))
         assertEquals("", formOrLiteral("\$form.cat", emptyMap()))
+        // Several conditions (feature `list_where_all`): all must match; a blank one matches everything.
+        val row = JsonObject(mapOf("deleted" to JsonPrimitive(false), "category" to JsonPrimitive("Car")))
+        val where = listOf(ListWhere("deleted", "false"), ListWhere("category", "\$form.tab"))
+        assertTrue(matchesAll(whereConditions(where, mapOf("tab" to "Car")), row))
+        assertTrue(matchesAll(whereConditions(where, emptyMap()), row), "a blank tab matches every category")
+        assertTrue(!matchesAll(whereConditions(where, mapOf("tab" to "Pets")), row))
+        val deleted = JsonObject(mapOf("deleted" to JsonPrimitive(true), "category" to JsonPrimitive("Car")))
+        assertTrue(!matchesAll(whereConditions(where, emptyMap()), deleted))
         assertEquals(listOf(2, 2, 1, 3, 3, 3), groupCounts(listOf(true, false, true, true, false, false)))
         assertEquals(emptyList(), groupCounts(emptyList()))
     }

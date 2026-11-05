@@ -144,6 +144,32 @@ data class TextCount(
 data class ListWhere(val field: String, val equals: String)
 
 /**
+ * A `core://List` `where`: one condition (`{field, equals}`) or, feature `list_where_all` (decision `list-where-all`),
+ * a list of them that must all match, like a [TextCount]'s. Read as a list either way; one condition is written back
+ * as an object.
+ */
+object WhereClauseSerializer : KSerializer<List<ListWhere>> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("org.theconstruct.WhereClause")
+
+    override fun deserialize(decoder: Decoder): List<ListWhere> {
+        val input = decoder as? JsonDecoder ?: throw SerializationException("WhereClause supports JSON only")
+        return when (val e = input.decodeJsonElement()) {
+            is JsonObject -> listOf(input.json.decodeFromJsonElement(ListWhere.serializer(), e))
+            is JsonArray -> e.map { input.json.decodeFromJsonElement(ListWhere.serializer(), it) }
+            else -> throw SerializationException("a list where must be an object or an array of objects, got $e")
+        }
+    }
+
+    override fun serialize(encoder: Encoder, value: List<ListWhere>) {
+        val output = encoder as? JsonEncoder ?: throw SerializationException("WhereClause supports JSON only")
+        output.encodeJsonElement(
+            value.singleOrNull()?.let { output.json.encodeToJsonElement(ListWhere.serializer(), it) }
+                ?: JsonArray(value.map { output.json.encodeToJsonElement(ListWhere.serializer(), it) })
+        )
+    }
+}
+
+/**
  * `core://List` `focus` (schema 12, docs/decisions/list-focus.md): the item whose entity URI is [uri] is scrolled into
  * view the first time the list draws it, and drawn on [background] with [contentColor] (`#RRGGBB`).
  */
@@ -212,7 +238,8 @@ sealed class UiNode {
         @SerialName("empty_text") val emptyText: String? = null,
         val filter: ListFilter? = null,
         @SerialName("group_by") val groupBy: GroupBy? = null,
-        @SerialName("where") val where: ListWhere? = null,
+        /** Schema 6 (D44): conditions that must all match ([WhereClauseSerializer]; several: `list_where_all`). */
+        @SerialName("where") @Serializable(with = WhereClauseSerializer::class) val where: List<ListWhere> = emptyList(),
         /** Schema 8 (D48): items in this many equal columns (a grid); 0 and 1 mean one per row. */
         val columns: Int = 0,
         /** Schema 8 (D48): space between items (both ways in a grid). */

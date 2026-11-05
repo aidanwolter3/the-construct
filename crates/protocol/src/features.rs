@@ -15,7 +15,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::{ActionIntent, Align, Position, TextStyle, UiNode};
+use crate::{ActionIntent, Align, Position, TextStyle, UiNode, WhereClause};
 
 include!(concat!(env!("OUT_DIR"), "/features.rs"));
 
@@ -191,8 +191,11 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
             if group_by.is_some() {
                 add(feature::LIST_GROUP_BY);
             }
-            if where_.is_some() {
+            if let Some(w) = where_ {
                 add(feature::LIST_WHERE);
+                if matches!(w, WhereClause::All(_)) {
+                    add(feature::LIST_WHERE_ALL);
+                }
             }
             if *columns > 1 || *spacing_dp > 0 || *padding_h_dp > 0 {
                 add(feature::LIST_GRID);
@@ -333,7 +336,7 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     fn node(v: serde_json::Value) -> UiNode {
         serde_json::from_value(v).unwrap()
@@ -713,6 +716,37 @@ mod tests {
             serde_json::to_value(ws(true)).unwrap()["title_scrolls"],
             true
         );
+    }
+
+    /// Decision `list-where-all`: a list `where` of several conditions
+    /// needs `list_where_all`; one condition is plain `list_where`. Either
+    /// form is served as written.
+    #[test]
+    fn a_list_where_of_several_conditions_needs_its_feature() {
+        let list = |w: Value| {
+            node(json!({"type": "core://List", "query_key": "q", "where": w,
+                "item_template": {"type": "core://Divider"}}))
+        };
+        let one = json!({"field": "deleted", "equals": "false"});
+        let all = json!([{"field": "deleted", "equals": "false"},
+                         {"field": "category", "equals": "$form.tab"}]);
+        let n = list(one.clone());
+        assert_eq!(required_features(&n), ["divider", "list", "list_where"]);
+        assert_eq!(serde_json::to_value(&n).unwrap()["where"], one);
+        let n = list(all.clone());
+        assert_eq!(
+            required_features(&n),
+            ["divider", "list", "list_where", "list_where_all"]
+        );
+        assert_eq!(serde_json::to_value(&n).unwrap()["where"], all);
+        let UiNode::List {
+            where_: Some(w), ..
+        } = &n
+        else {
+            panic!("a list")
+        };
+        assert_eq!(w.conditions().len(), 2);
+        assert_eq!(w.conditions()[1].field, "category");
     }
 
     /// Decision `named-vocabulary`: `dismiss` is removed; only the layouts

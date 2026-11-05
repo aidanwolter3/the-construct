@@ -84,8 +84,8 @@ fun countEntities(
     form: Map<String, String>?,
 ): Int? {
     val items = listItems(count.queryKey, queries, entities) ?: return null
-    val conditions = count.where.map { it.field to formOrLiteral(it.equals, form) }
-    return items.count { item -> conditions.all { (field, value) -> matchesWhere(value, item, field) } }
+    val conditions = whereConditions(count.where, form)
+    return items.count { matchesAll(conditions, it) }
 }
 
 /**

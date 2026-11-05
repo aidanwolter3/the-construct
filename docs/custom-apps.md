@@ -95,7 +95,7 @@ default), and the pod stores, validates and serves the rows.
 | `GET /v1/collections/<c>/row?id=<id>` | One row (`collection:<c>:row:<id>`). |
 | `POST /v1/collections/<c>/create {<field>: …, client_id?}` | For `action.mutation.create`; a repeated `client_id` answers the same row. |
 | `POST /v1/collections/<c>/update {id, <field>: …}` | For `action.mutation.optimistic`; an id `pending-<nonce>` finds a row whose create was just sent. |
-| `POST /v1/collections/<c>/delete {id}` | Sets `deleted`; hide such rows at once with `where: {field: "deleted", equals: "false"}`. |
+| `POST /v1/collections/<c>/delete {id}` | Sets `deleted`; hide such rows at once with `where: {field: "deleted", equals: "false"}`, or, with another filter, `where: [{field: "deleted", equals: "false"}, {field: "category", equals: "$form.tab"}]` (every condition must match). |
 | `GET /v1/collections/<c>/export` | Everything, deleted rows and kept-aside values included. |
 
 `describe_collection` gives ready-made layout snippets for all of these.

@@ -396,6 +396,14 @@ fun groupCounts(starts: List<Boolean>): List<Int> {
 fun matchesWhere(value: String, item: JsonObject, field: String): Boolean =
     value.isBlank() || searchableText(item[field]) == value
 
+/** [where] with each value resolved ([formOrLiteral]): (field, value) pairs for [matchesAll]. */
+fun whereConditions(where: List<ListWhere>, form: Map<String, String>?): List<Pair<String, String>> =
+    where.map { it.field to formOrLiteral(it.equals, form) }
+
+/** Whether [item] passes every condition of a list's or count's `where` ([matchesWhere] each). */
+fun matchesAll(conditions: List<Pair<String, String>>, item: JsonObject): Boolean =
+    conditions.all { (field, value) -> matchesWhere(value, item, field) }
+
 /** A form-or-literal value: the form value for `$form.<field>` (blank when unset), else [value] itself. */
 fun formOrLiteral(value: String, form: Map<String, String>?): String =
     if (value.startsWith("\$form.")) form?.get(value.removePrefix("\$form.")).orEmpty() else value
@@ -413,12 +421,11 @@ private fun ItemList(
     // Reading the form here recomposes the list as the search field is typed into.
     val form = LocalForm.current
     val query = node.filter?.let { filterQuery(it, form) }.orEmpty()
-    val whereValue = node.where?.let { formOrLiteral(it.equals, form) }.orEmpty()
-    val items = remember(all, node.filter, query, node.where, whereValue) {
+    val conditions = whereConditions(node.where, form)
+    val items = remember(all, node.filter, query, conditions) {
         val f = node.filter
-        val w = node.where
         all
-            ?.let { list -> if (w == null || whereValue.isBlank()) list else list.filter { matchesWhere(whereValue, it, w.field) } }
+            ?.let { list -> if (conditions.all { it.second.isBlank() }) list else list.filter { matchesAll(conditions, it) } }
             ?.let { list -> if (f == null || query.isBlank()) list else list.filter { matchesFilter(query, it, f.fields) } }
     }
     val starts = remember(items, node.groupBy) { node.groupBy?.let { g -> items?.let { groupStarts(it, g.field) } } }
