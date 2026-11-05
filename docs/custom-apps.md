@@ -63,6 +63,9 @@ Writes go through the same validation as the HTTP API and appear in the version 
 - **Claude apps (web, desktop, mobile):** add a custom connector with the URL `https://<server>/v1/mcp`. Claude
   discovers the server's OAuth endpoints, registers itself and opens a page where you type your pod code. The
   credential it gets reaches only that pod's `/v1/mcp`: no app routes, sign-ins or pod settings.
+- **Apps that ask for a client ID and secret** (e.g. Gemini): set `CONSTRUCT_OAUTH_CLIENT_ID`,
+  `CONSTRUCT_OAUTH_CLIENT_SECRET` and the app's callback in `CONSTRUCT_OAUTH_CLIENT_REDIRECT_URIS`
+  ([server.md](server.md)), and enter the same ID and secret in the app. You still type your pod code to connect.
 - **Claude Code:** `server pods mcp <name>` prints a credential, then:
 
   ```bash
