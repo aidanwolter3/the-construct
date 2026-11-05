@@ -63,6 +63,9 @@ pub struct PageRequest<'a> {
     /// The filler's notes about the page.
     pub hint: &'a str,
     pub today: &'a str,
+    /// The filler leaves out past items itself (`upcoming`): the model lists
+    /// them too, so a page of only past ones doesn't read as an empty page.
+    pub with_past: bool,
 }
 
 /// Answers an [`AgentRequest`] (an `agent` filler) and a [`PageRequest`]
@@ -107,6 +110,12 @@ pub fn page_request_body(model: &str, req: &PageRequest<'_>) -> Value {
     );
     if !req.hint.trim().is_empty() {
         prompt.push_str(&format!("\n\nNotes about this page: {}", req.hint.trim()));
+    }
+    if req.with_past {
+        prompt.push_str(
+            "\n\nList past items too, with their dates, even when the notes ask for upcoming \
+             ones: the app leaves out past items itself.",
+        );
     }
     json!({
         "model": model,
@@ -480,6 +489,28 @@ mod tests {
                 options: vec!["in".into(), "out".into()],
             },
         ]
+    }
+
+    #[test]
+    fn a_page_read_for_upcoming_items_asks_for_past_ones_too() {
+        let f = fields();
+        let prompt = |with_past| {
+            let req = PageRequest {
+                title: "Shows",
+                fields: &f,
+                page_text: "May 29: a talk",
+                url: "https://club.example/shows",
+                hint: "upcoming shows",
+                today: "2026-11-05",
+                with_past,
+            };
+            page_request_body("m", &req)["messages"][0]["content"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        assert!(prompt(true).contains("List past items too"));
+        assert!(!prompt(false).contains("past items"));
     }
 
     #[test]

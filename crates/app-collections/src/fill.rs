@@ -82,6 +82,8 @@ pub struct State {
     pub empty_runs: i64,
     pub last_rows: Option<i64>,
     pub last_skipped: Option<i64>,
+    /// Items of the last fill left out as past (`upcoming`).
+    pub last_past: Option<i64>,
     pub day: Option<String>,
     pub day_fills: i64,
     /// The next fill records alert matches without notifying (rows a
@@ -95,7 +97,7 @@ pub fn state(conn: &Connection, collection: &str, filler: &str) -> rusqlite::Res
         .query_row(
             "SELECT fingerprint, next_at, etag, last_modified, content_hash, last_fill_at, last_ok_at,
                     last_error, failures, empty_runs, last_rows, last_skipped, day, day_fills,
-                    quiet_next
+                    quiet_next, last_past
              FROM collections_fills WHERE collection = ?1 AND filler = ?2",
             params![collection, filler],
             |r| {
@@ -115,6 +117,7 @@ pub fn state(conn: &Connection, collection: &str, filler: &str) -> rusqlite::Res
                     day: r.get(12)?,
                     day_fills: r.get(13)?,
                     quiet_next: r.get(14)?,
+                    last_past: r.get(15)?,
                 })
             },
         )
@@ -140,15 +143,16 @@ pub fn save_state(
     conn.execute(
         "INSERT INTO collections_fills (collection, filler, fingerprint, next_at, etag,
             last_modified, content_hash, last_fill_at, last_ok_at, last_error, failures,
-            empty_runs, last_rows, last_skipped, day, day_fills, quiet_next)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+            empty_runs, last_rows, last_skipped, day, day_fills, quiet_next, last_past)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
          ON CONFLICT (collection, filler) DO UPDATE SET fingerprint = excluded.fingerprint,
             next_at = excluded.next_at, etag = excluded.etag, last_modified = excluded.last_modified,
             content_hash = excluded.content_hash, last_fill_at = excluded.last_fill_at,
             last_ok_at = excluded.last_ok_at, last_error = excluded.last_error,
             failures = excluded.failures, empty_runs = excluded.empty_runs,
             last_rows = excluded.last_rows, last_skipped = excluded.last_skipped,
-            day = excluded.day, day_fills = excluded.day_fills, quiet_next = excluded.quiet_next",
+            day = excluded.day, day_fills = excluded.day_fills, quiet_next = excluded.quiet_next,
+            last_past = excluded.last_past",
         params![
             collection,
             filler,
@@ -166,7 +170,8 @@ pub fn save_state(
             s.last_skipped,
             s.day,
             s.day_fills,
-            s.quiet_next
+            s.quiet_next,
+            s.last_past
         ],
     )?;
     Ok(())
@@ -556,6 +561,8 @@ pub struct Stored {
     /// Items left out: no key, a repeated key, a required filled value
     /// missing, or past (`upcoming`).
     pub dropped: usize,
+    /// Of `dropped`, the items left out as past.
+    pub past: usize,
 }
 
 impl Stored {
@@ -652,6 +659,7 @@ pub fn store(
                 let past = is_past(i.get(u), now);
                 if past {
                     out.dropped += 1;
+                    out.past += 1;
                 }
                 !past
             })
@@ -1110,6 +1118,7 @@ async fn run_fetch(
                             url: &page,
                             hint,
                             today: &day,
+                            with_past: filler.upcoming.is_some(),
                         })
                         .await?;
                     Ok(by_ids(def, rows, &ids))
@@ -1540,6 +1549,8 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
                     st.fingerprint = fingerprint.clone();
                     st.last_rows = Some(count as i64);
                     st.last_skipped = Some((skipped + stored.dropped) as i64);
+                    st.last_past = Some(stored.past as i64);
+                    // Items that were all past still matched the recipe.
                     st.empty_runs = if count == 0 { st.empty_runs + 1 } else { 0 };
                     st.quiet_next = false;
                     (
@@ -1627,6 +1638,7 @@ pub async fn fill(pod: &Pod, collection: &str, filler_id: &str, force: bool) -> 
                     st.fingerprint = fingerprint.clone();
                     st.last_rows = Some(items as i64);
                     st.last_skipped = Some(skipped as i64);
+                    st.last_past = None;
                     st.empty_runs = if items == 0 && total > 0 {
                         st.empty_runs + 1
                     } else {
@@ -1814,11 +1826,24 @@ pub fn health_state(
             ),
         )
     } else if let Some(t) = st.last_fill_at {
+        let rows = st.last_rows.unwrap_or(0);
+        let past = st.last_past.unwrap_or(0).min(rows);
+        let ones = |n: i64| {
+            if n == 1 {
+                "1 past one".to_owned()
+            } else {
+                format!("{n} past ones")
+            }
+        };
+        let found = match past {
+            0 => format!("{rows} items"),
+            p if p == rows => format!("no upcoming items listed · {} on the page", ones(p)),
+            p => format!("{} items · {} left out", rows - p, ones(p)),
+        };
         (
             "ok",
             format!(
-                "{} items · filled {}{}",
-                st.last_rows.unwrap_or(0),
+                "{found} · filled {}{}",
                 ago(now, t),
                 st.last_error
                     .as_ref()
