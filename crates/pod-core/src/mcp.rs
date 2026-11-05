@@ -155,19 +155,23 @@ fn instructions(pod: &Pod) -> String {
     out
 }
 
-const INSTRUCTIONS: &str = "This is the user's own pod in The Construct. It serves apps whose screens are \
-JSON layouts (server-driven UI) over data sources. The user's app opens on their home app (id home) and shows \
-nothing else: home IS the user's whole interface. A new pod's home is a blank page. Build only what the user \
-asks for, as small as it can be: \"show my photo feed\" is one app (create_app referencing the blueprint that \
-fits: {\"type\": \"core://Ref\", \"app\": <blueprint>, \"part\": \"layout\"} with its feeds) and a home that \
-shows it (update_layout on home: a core://AppFrame of that app as the one slot). Add navigation (a core://Drawer \
-or core://Dock over local:apps) only once there is more than one app, and notifications, settings or sign-in \
-pages only when the user asks; describe_vocabulary has small snippets for each. home can't be deleted. Blueprints \
-are the built-in layouts (list_apps lists them under blueprints, get_layout reads one, list_parts lists their \
-parts); reference a blueprint so it stays current, or copy it to change it and pass copied_from so the user hears \
-when it changes (rebase_context then gives you what to merge). Call list_data_sources and describe_vocabulary \
-first and sample_data to see real fields. Every write is validated (errors give a JSON pointer and what is \
-allowed) and appears live on the user's devices; restore_version undoes an edit.";
+const INSTRUCTIONS: &str = "This is the user's own pod in The Construct. It serves layouts: JSON screens \
+(server-driven UI) over data sources. The user's app opens on the home layout (id home) and shows nothing else: \
+home IS the user's whole interface, and it embeds or presents every other layout. A new pod's home is a blank page \
+with Notifications and Settings buttons. Build only what the user asks for, as small as it can be: \"show my photo \
+feed\" is one layout (create_layout referencing the blueprint that fits: {\"type\": \"core://Ref\", \"app\": \
+<blueprint>, \"part\": \"layout\"}, with its feeds) and a home that shows it (update_layout on home: a core://Layout \
+of that layout as the one slot). With more than one layout, home lists them and each row pushes its layout \
+(action.navigation.open {\"layout\": <id>, \"presentation\": \"Push\"}); system Back comes back. A core://Layout \
+can also show a layout in part of the screen, or as a Sheet or Panel while a condition holds. Home owns every \
+feed: feeds you name when creating a layout are added to home's, and every layout may bind any of home's feeds. \
+The inbox and Settings are the layouts inbox and settings (open them with presentation Sheet and Panel); \
+describe_vocabulary has small snippets. home can't be deleted. Blueprints are the built-in layouts \
+(list_layouts lists them under blueprints, get_layout reads one, list_parts lists their parts); reference a \
+blueprint so it stays current, or copy it to change it and pass copied_from so the user hears when it changes \
+(rebase_context then gives you what to merge). Call list_data_sources and describe_vocabulary first and \
+sample_data to see real fields. Every write is validated (errors give a JSON pointer and what is allowed) and \
+appears live on the user's devices; restore_version undoes an edit.";
 
 // ---------- tools ----------
 
@@ -197,23 +201,23 @@ fn all_tools(pod: &Pod) -> Vec<Value> {
 }
 
 fn tools() -> Vec<Value> {
-    let feeds = json!({ "type": "array", "description": "The app's root feeds: [source, feed] pairs (see list_data_sources)",
+    let feeds = json!({ "type": "array", "description": "Feeds to add to home's (every layout binds home's feeds): [source, feed] pairs (see list_data_sources)",
         "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } });
     let layout = json!({ "type": "object", "description": "A core://Workspace layout (see describe_vocabulary); its id is set by the pod" });
-    let app = json!({ "type": "string", "description": "An app id" });
+    let id = json!({ "type": "string", "description": "A layout id: home, a c-... id from list_layouts, or a blueprint" });
     let note = json!({ "type": "string", "description": "What changed, in the user's words (shown in the version history)" });
-    let copied = json!({ "type": "object", "description": "When the layout copies parts of a built-in app: {app, version} of what was copied",
+    let copied = json!({ "type": "object", "description": "When the layout copies parts of a blueprint: {app, version} of what was copied",
         "properties": { "app": { "type": "string" }, "version": { "type": "integer" } } });
     vec![
         tool(
-            "list_apps",
-            "The user's apps (apps, the home app among them) and the blueprints apps can start from (blueprints), with their feeds and latest version.",
+            "list_layouts",
+            "The user's layouts (home first, with the feeds every layout may bind) and the blueprints layouts can start from, with their latest version.",
             json!({}),
             &[],
         ),
         tool(
             "list_data_sources",
-            "Every data source of the pod: its feeds (what an app's root can show), data paths (screen data), actions (endpoints buttons may call), entity types with their fields, and whether its sign-in is done.",
+            "Every data source of the pod: its feeds (what a layout can show), data paths (screen data), actions (endpoints buttons may call), entity types with their fields, and whether its sign-in is done.",
             json!({}),
             &[],
         ),
@@ -225,9 +229,9 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "get_layout",
-            "An app's layout (latest, or one version), its feeds when custom, and its version history.",
-            json!({ "app": app, "version": { "type": "integer" } }),
-            &["app"],
+            "A layout (latest, or one version), the feeds it may bind, and its version history.",
+            json!({ "id": id, "version": { "type": "integer" } }),
+            &["id"],
         ),
         tool(
             "sample_data",
@@ -239,60 +243,60 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "validate_layout",
-            "Check a layout against feeds without saving it.",
+            "Check a layout against home's feeds (plus feeds, when given) without saving it.",
             json!({ "feeds": feeds, "layout": layout }),
-            &["feeds", "layout"],
+            &["layout"],
         ),
         tool(
-            "create_app",
-            "Create a custom app. It appears on the user's devices at once.",
+            "create_layout",
+            "Create a layout. It can be shown on the user's devices at once (home embeds or presents it). feeds are added to home's.",
             json!({ "title": { "type": "string" }, "icon": { "type": "string", "enum": custom::APP_ICONS },
                     "feeds": feeds, "layout": layout, "note": note, "copied_from": copied }),
-            &["title", "feeds", "layout"],
+            &["title", "layout"],
         ),
         tool(
             "update_layout",
-            "Save a new version of a custom app's layout: a whole layout, or a JSON Patch (RFC 6902) against the latest. Pass base_version (the version you read) so a concurrent edit isn't lost.",
-            json!({ "app": app, "layout": layout,
+            "Save a new version of a layout: a whole layout, or a JSON Patch (RFC 6902) against the latest. Pass base_version (the version you read) so a concurrent edit isn't lost.",
+            json!({ "id": id, "layout": layout,
                     "json_patch": { "type": "array", "items": { "type": "object" } },
                     "note": note, "base_version": { "type": "integer" }, "copied_from": copied }),
-            &["app"],
+            &["id"],
         ),
         tool(
             "restore_version",
-            "Make an old version of a custom app the latest again (appends a copy).",
-            json!({ "app": app, "version": { "type": "integer" }, "note": note }),
-            &["app", "version"],
+            "Make an old version of a layout the latest again (appends a copy).",
+            json!({ "id": id, "version": { "type": "integer" }, "note": note }),
+            &["id", "version"],
         ),
         tool(
-            "rename_app",
-            "Change a custom app's title, icon or feeds (its layout must still fit new feeds).",
-            json!({ "app": app, "title": { "type": "string" }, "icon": { "type": "string", "enum": custom::APP_ICONS }, "feeds": feeds }),
-            &["app"],
+            "rename_layout",
+            "Change a layout's title or icon. feeds: on home, home's whole feed list (refused while another layout binds a feed it drops); on another layout, feeds to add to home's.",
+            json!({ "id": id, "title": { "type": "string" }, "icon": { "type": "string", "enum": custom::APP_ICONS }, "feeds": feeds }),
+            &["id"],
         ),
         tool(
-            "delete_app",
-            "Delete a custom app on every device. Only when the user asked for it.",
-            json!({ "app": app }),
-            &["app"],
+            "delete_layout",
+            "Delete a layout on every device. Only when the user asked for it.",
+            json!({ "id": id }),
+            &["id"],
         ),
         tool(
             "list_parts",
-            "The parts of built-in apps a custom layout can reference with core://Ref (screens, slots and named parts), with each part's layout.",
-            json!({ "app": { "type": "string", "description": "A built-in app (all when left out)" }, "with_layouts": { "type": "boolean" } }),
+            "The parts of blueprints a layout can reference with core://Ref (screens, slots and named parts), with each part's layout.",
+            json!({ "app": { "type": "string", "description": "A blueprint (all when left out)" }, "with_layouts": { "type": "boolean" } }),
             &[],
         ),
         tool(
             "rebase_context",
-            "For a custom app copied from a built-in (copied_from): the built-in layout it was copied from, the built-in's latest, and the custom app's current layout, to merge new built-in changes into the copy. Save the merge with update_layout and copied_from set to the new version; or dismiss_update if the user doesn't want it.",
-            json!({ "app": app }),
-            &["app"],
+            "For a layout copied from a blueprint (copied_from): the blueprint layout it was copied from, the blueprint's latest, and the layout's current version, to merge new blueprint changes into the copy. Save the merge with update_layout and copied_from set to the new version; or dismiss_update if the user doesn't want it.",
+            json!({ "id": id }),
+            &["id"],
         ),
         tool(
             "dismiss_update",
-            "Stop telling the user that the built-in a custom app was copied from has updates (up to a version).",
-            json!({ "app": app, "version": { "type": "integer" } }),
-            &["app", "version"],
+            "Stop telling the user that the blueprint a layout was copied from has updates (up to a version).",
+            json!({ "id": id, "version": { "type": "integer" } }),
+            &["id", "version"],
         ),
         tool(
             "set_time_zone",
@@ -302,9 +306,9 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "set_hidden",
-            "Hide an app from the user's app list (built-in apps too), or show it again.",
-            json!({ "app": app, "hidden": { "type": "boolean" } }),
-            &["app", "hidden"],
+            "Hide a layout from the device's list of layouts (local:layouts), or show it again.",
+            json!({ "id": id, "hidden": { "type": "boolean" } }),
+            &["id", "hidden"],
         ),
     ]
 }
@@ -338,18 +342,27 @@ fn str_arg<'a>(args: &'a Value, k: &str) -> Result<&'a str, Value> {
 
 async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
     let name = params["name"].as_str().unwrap_or("");
-    let args = params
+    let mut args = params
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    // Layout tools name the layout `id` (decision `layouts-not-apps`); the
+    // code below reads `app`, which older callers still send.
+    if args["app"].is_null()
+        && let Some(id) = args["id"].as_str().map(str::to_owned)
+        && name != "validate_layout"
+        && name != "create_layout"
+    {
+        args["app"] = json!(id);
+    }
     let r = match name {
-        "list_apps" => list_apps(pod).await,
+        "list_layouts" | "list_apps" => list_apps(pod).await,
         "list_data_sources" => list_data_sources(pod).await,
         "describe_vocabulary" => Ok(vocabulary()),
         "get_layout" => get_layout(pod, &args).await,
         "sample_data" => sample_data(pod, headers, &args).await,
         "validate_layout" => custom::validate(pod, &args).map_err(refused),
-        "create_app" => custom::create(pod, &args, Writer::Claude)
+        "create_layout" | "create_app" => custom::create(pod, &args, Writer::Claude)
             .await
             .map(|w| json!({ "ok": true, "id": w.id, "version": w.version }))
             .map_err(refused),
@@ -361,14 +374,14 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
                 .map_err(refused),
             Err(e) => Err(e),
         },
-        "rename_app" => match str_arg(&args, "app") {
+        "rename_layout" | "rename_app" => match str_arg(&args, "app") {
             Ok(app) => custom::patch(pod, app, &args)
                 .await
                 .map(|w| json!({ "ok": true, "id": w.id, "version": w.version }))
                 .map_err(refused),
             Err(e) => Err(e),
         },
-        "delete_app" => match str_arg(&args, "app") {
+        "delete_layout" | "delete_app" => match str_arg(&args, "app") {
             Ok(app) => custom::delete(pod, app)
                 .await
                 .map(|()| json!({ "ok": true }))
@@ -435,16 +448,22 @@ async fn list_apps(pod: &Pod) -> Result<Value, Value> {
         .filter(|a| !a.dev || pod.show_dev_apps())
         .copied()
         .collect();
+    // Only home lists the feeds: every layout binds home's.
     let listed = crate::blocking(pod, move |s| {
         let hidden = custom::hidden_apps(s)?;
         let custom_apps = s.with_conn(custom::custom_apps_on)?;
         let row = |a: custom::AppRef| -> rusqlite::Result<Value> {
             let latest = s.app_latest_meta(a.id())?.map(|v| v.version);
-            Ok(json!({
+            let v: rusqlite::Result<Value> = Ok(json!({
                 "id": a.id(), "title": a.title(), "icon": a.icon(), "kind": a.kind(),
                 "hidden": hidden.iter().any(|h| h == a.id()),
-                "feeds": a.feeds(), "latest_version": latest,
-            }))
+                "latest_version": latest,
+            }));
+            let mut v = v?;
+            if a.id() == crate::HOME_APP || !a.is_custom() {
+                v["feeds"] = json!(a.feeds());
+            }
+            Ok(v)
         };
         let apps = custom_apps
             .into_iter()
@@ -458,7 +477,7 @@ async fn list_apps(pod: &Pod) -> Result<Value, Value> {
     })
     .await
     .map_err(|(s, Json(b))| refused((s, b)))?;
-    Ok(json!({ "apps": listed.0, "blueprints": listed.1 }))
+    Ok(json!({ "layouts": listed.0, "blueprints": listed.1 }))
 }
 
 /// The owner's session (the pod token's), for what is signed in and for
@@ -1025,19 +1044,9 @@ pub const NODE_DOCS: &[(&str, &str, &str)] = &[
         "An indeterminate spinner for work in progress, e.g. inside a core://Conditional on a status field",
     ),
     (
-        "core://Dock",
-        "field, before?: [tab], query_key?, item?: tab, max_items?, after?: [tab]; tab = {value, label, icon?, badge?, content}",
-        "An app's main navigation: tabs along the bottom (a side rail on wide windows) and the selected tab's content filling the screen above. Tabs: before, one per entity of query_key drawn from item ($item bound; at most max_items), then after. $form.<field> is the selected value (the first tab until one is picked). Only as the content of a workspace's one slot. The home blueprint docks local:apps with an AppFrame each.",
-    ),
-    (
-        "core://AppFrame",
-        "app",
-        "Another app of the pod drawn whole (its layout, screens and Back) in the space it is given, e.g. a dock tab's content. app is an id or a binding ($item.id).",
-    ),
-    (
-        "core://Drawer",
-        "field, before?: [page], query_key?, item?: page, after?: [page], drawer, footer?, badge?; page = {value, content}",
-        "An app's main navigation as a side drawer: the selected page fills the screen and a menu button at the top left (badge: a count or dot binding) opens drawer, a panel of any layout (footer stays pinned to its bottom). Pages: before, one per entity of query_key from item ($item bound), then after; $form.<field> is the selected value. Pick a page from the panel with action.device open_app (an app) or show (id = a page value); any action in the panel closes it. Only as the content of a workspace's one slot. The home blueprint draws local:apps this way.",
+        "core://Layout",
+        "layout, show_when?, equals?, presentation?: Inline|Sheet|Panel, animation?: none|fade|slide|sheet_up, params?: {name: value}, height_dp?",
+        "Another layout drawn here: Inline (the default) in place (height_dp tall, or as tall as its content; as a workspace's one slot, the whole screen); Sheet or Panel over the screen. show_when (e.g. $form.panel, ${local://inbox#unread}) shows it only while truthy (or equal to equals); dismissing a Sheet or Panel clears that $form field. params bind as $route.<name> in it. layout is an id or a binding ($item.id).",
     ),
     (
         "core://Switch",
@@ -1057,19 +1066,30 @@ pub const REF_DOC: (&str, &str, &str) = (
 /// blocks, never whole pages (the agent builds only what was asked).
 fn snippets() -> Value {
     json!({
-        "home_one_app": {
-            "doc": "home showing one app full screen: home's layout with this as its one slot (replace <app id>)",
-            "layout": {"type": "core://Workspace", "title": "Home", "slots": [{"slot_id": "app", "provider_uri": "local://apps",
-                "content": {"type": "core://AppFrame", "app": "<app id>"}}]}
+        "home_one_layout": {
+            "doc": "home showing one layout full screen: home's layout with this as its one slot (replace <layout id>)",
+            "layout": {"type": "core://Workspace", "title": "Home", "slots": [{"slot_id": "main", "provider_uri": "local://home",
+                "content": {"type": "core://Layout", "layout": "<layout id>"}}]}
         },
-        "drawer_of_apps": {
-            "doc": "a home slot: a menu button opening a panel that lists the pod's apps; the picked app fills the screen",
-            "node": {"type": "core://Drawer", "field": "page", "query_key": "local:apps",
-                "item": {"value": "$item.id", "content": {"type": "core://AppFrame", "app": "$item.id"}},
-                "drawer": {"type": "core://List", "query_key": "local:apps", "item_template": {
-                    "type": "core://Tappable", "on_click": {"intent": "action.device", "command": "open_app", "app": "$item.id"},
-                    "content": {"type": "core://Row", "padding_h_dp": 16, "padding_v_dp": 12,
-                        "children": [{"type": "core://Text", "style": "Body", "value_expr": "$item.title"}]}}}}
+        "home_list_of_layouts": {
+            "doc": "a home slot listing the pod's layouts; a tap pushes the layout, and system Back comes back",
+            "node": {"type": "core://List", "query_key": "local:layouts", "item_template": {
+                "type": "core://Tappable", "on_click": {"intent": "action.navigation.open", "layout": "$item.id", "presentation": "Push"},
+                "content": {"type": "core://Row", "padding_h_dp": 16, "padding_v_dp": 12,
+                    "children": [{"type": "core://Text", "style": "Body", "value_expr": "$item.title"}]}}}
+        },
+        "settings_and_inbox_buttons": {
+            "doc": "buttons that present the inbox as a sheet and Settings as a side panel",
+            "node": {"type": "core://Row", "children": [{"type": "core://Spacer"},
+                {"type": "core://IconButton", "icon": "notifications", "content_description": "Notifications",
+                 "on_click": {"intent": "action.navigation.open", "layout": "inbox", "presentation": "Sheet"}},
+                {"type": "core://IconButton", "icon": "settings", "content_description": "Settings",
+                 "on_click": {"intent": "action.navigation.open", "layout": "settings", "presentation": "Panel"}}]}
+        },
+        "card_of_layout": {
+            "doc": "another layout in a card-sized region of the page",
+            "node": {"type": "core://Box", "corner_dp": 12, "border_color": "#DDDDDD",
+                "content": {"type": "core://Layout", "layout": "<layout id>", "height_dp": 240}}
         },
         "sign_in_row": {
             "doc": "a row per sign-in the pod offers, with a server box where the provider takes one",
@@ -1098,7 +1118,7 @@ fn snippets() -> Value {
                         "command": "toggle_channel", "app": "$item.app_id", "id": "$item.id"}}]}}
         },
         "version_list": {
-            "doc": "an app's versions to pick from on this device; send show_versions (app) first, e.g. in an action.sequence with show",
+            "doc": "a layout's versions to pick from on this device; send show_versions (app: the layout) first, e.g. in an action.sequence with action.navigation.open",
             "node": {"type": "core://List", "query_key": "local:versions", "item_template": {"type": "core://Tappable",
                 "on_click": {"intent": "action.device", "command": "pin_version", "id": "$item.version"},
                 "content": {"type": "core://Row", "padding_h_dp": 16, "padding_v_dp": 8, "children": [
@@ -1119,7 +1139,8 @@ fn vocabulary() -> Value {
         "nodes": NODE_DOCS.iter().chain(std::iter::once(&REF_DOC)).map(|(t, f, d)| json!({ "type": t, "fields": f, "doc": d })).collect::<Vec<_>>(),
         "icons": protocol::ICONS,
         "intents": [
-            { "intent": "action.navigation.open", "fields": "target_uri, presentation: Push|Modal|Replace", "doc": "Open a screen whose route matches target_uri." },
+            { "intent": "action.navigation.open", "fields": "target_uri?, layout?, params?: {name: value}, presentation: Push|Modal|Replace|Sheet|Panel, animation?: none|fade|slide|sheet_up",
+              "doc": "With layout: present that layout on the back stack (Push: whole screen; Sheet; Panel), params bound as $route.<name> in it, then its screen matching target_uri if any. Without: open the screen of the layout on top whose route matches target_uri. System Back pops either." },
             { "intent": "action.navigation.back", "fields": "", "doc": "Close the screen." },
             { "intent": "action.mutation.optimistic", "fields": "entity_uri, field, value_expr, rollback_value, endpoint, payload, also?: [{field, value_expr}]",
               "doc": "Change a field at once and POST payload to an action endpoint ($value is the new value); rolled back on failure." },
@@ -1133,20 +1154,20 @@ fn vocabulary() -> Value {
             { "intent": "action.link.open", "fields": "url",
               "doc": "Open an http(s) link in the device's browser (e.g. a Get tickets button with url $item.tickets_url). Nothing is sent to the pod." },
             { "intent": "action.device", "fields": "command, app?, id?, value?",
-              "doc": "Something the device does itself. Commands: open_app (app), open_notification (id), mark_all_read, toggle_channel (app, id of a notification channel), sign_in (id of a provider; value: another server, e.g. $form?.server from a core://TextField, for a provider whose local:providers row says custom_server), sign_out, set_server (id of a server option), show (id of a core://Drawer or core://Dock page), show_versions (app: load its versions into local:versions), pin_version (id: a version of that app, shown on this device only), follow_latest, leave_pod (forget the pod on this device), refresh, open_settings and open_inbox (the native panels). Any layout may use any command." },
+              "doc": "Something the device does itself. Commands: open_notification (id: presents its layout), mark_all_read, toggle_channel (app, id of a notification channel), sign_in (id of a provider; value: another server, e.g. $form?.server from a core://TextField, for a provider whose local:providers row says custom_server), sign_out, set_server (id of a server option), show_versions (app: a layout; loads its versions into local:versions), pin_version (id: a version of that layout, shown on this device only), follow_latest, leave_pod (forget the pod on this device), refresh, open_settings and open_inbox (present the settings and inbox layouts). Any layout may use any command." },
         ],
         "local_data": {
-            "doc": "Data the device provides, with no feed: bind ${local://<entity>#<field>} anywhere and list local:apps in a core://List or core://Dock.",
+            "doc": "Data the device provides, with no feed: bind ${local://<entity>#<field>} anywhere and list local:layouts in a core://List.",
             "local://connection": "online (bool), pending (count of unsent changes), label (\"Online\", \"Offline · 2 pending\"), attention (true while offline or changes wait)",
             "local://inbox": "unread (count), label (\"3 unread\")",
-            "local://apps": "count (the pod's apps, home excluded)",
-            "local:apps": "query of the pod's apps but home: local://apps/<id> with id, title, icon, kind, detail, unread, version (\"v12 · latest\" or \"v10 · pinned\")",
+            "local://layouts": "count (the pod's layouts, home excluded)",
+            "local:layouts": "query of the pod's layouts but home (hidden ones left out): local://layouts/<id> with id, title, icon, kind, detail, unread, version (\"v12 · latest\" or \"v10 · pinned\")",
             "local:notifications": "query of the newest notifications: id, app_id, app_title, title, body, when (\"5 min\"), day (\"Today\"), unread",
             "local:channels": "query of the notification channels: app_id, app_title, id, title, description, enabled",
             "local:sign_ins": "query of the pod's sign-ins: id, title, detail (\"@dana · photos.example\")",
             "local:providers": "query of the sign-ins the pod offers that aren't signed in: id, title, custom_server (another server may be typed), server_placeholder",
             "local:servers": "query of the servers this device can use: id, title, url, selected",
-            "local:versions": "query of the versions of the app show_versions named, newest first: version, label (\"v12\"), detail (its note), when, compatible, showing",
+            "local:versions": "query of the versions of the layout show_versions named, newest first: version, label (\"v12\"), detail (its note), when, compatible, showing",
             "local://versions": "app_id, app_title, pinned (the pinned version, or \"\" while following the latest)",
             "local://device": "platform (android|desktop|simulator)",
             "local://session": "open, server, error, message: the pod sign-in",
@@ -1160,7 +1181,7 @@ fn vocabulary() -> Value {
             "$nonce": "a fresh id per action",
             "$value": "the new value in a mutation's payload",
         },
-        "rules": "Custom layouts may only use their feeds' sources: data paths, actions, query keys and entity schemes from list_data_sources. No action.auth.* intents (sign in with action.device sign_in instead) and no other /v1/ paths. Data the device provides (local_data) needs no feed. Read get_layout of a blueprint for complete examples.",
+        "rules": "Layouts may only use the sources of home's feeds: data paths, actions, query keys and entity schemes from list_data_sources. No action.auth.* intents (sign in with action.device sign_in instead) and no other /v1/ paths. Data the device provides (local_data) needs no feed. Read get_layout of a blueprint for complete examples.",
     })
 }
 
@@ -1181,6 +1202,10 @@ mod tests {
                 None => json!({"type": "core://Workspace", "id": "home", "title": "Home",
                     "slots": [{"slot_id": "s", "provider_uri": "local://x", "content": snippet["node"]}]}),
             };
+            // Placeholders stand for a real layout id.
+            let doc: Value =
+                serde_json::from_str(&doc.to_string().replace("<layout id>", "c-abcdefghij"))
+                    .unwrap();
             crate::validate::custom_layout("home", &doc, &[])
                 .unwrap_or_else(|e| panic!("snippet {name}: {} at {}", e.message, e.pointer));
         }
@@ -1188,13 +1213,15 @@ mod tests {
 
     #[test]
     fn every_node_type_is_documented() {
-        for t in protocol::NODE_TYPES {
+        // Retired by decision `layouts-not-apps`: never written again.
+        let retired = ["core://Dock", "core://Drawer", "core://AppFrame"];
+        for t in protocol::NODE_TYPES.iter().filter(|t| !retired.contains(t)) {
             assert!(
-                NODE_DOCS.iter().any(|(d, _, _)| *d == t),
+                NODE_DOCS.iter().any(|(d, _, _)| d == t),
                 "{t} has no entry in NODE_DOCS"
             );
         }
-        assert_eq!(NODE_DOCS.len(), protocol::NODE_TYPES.len());
+        assert_eq!(NODE_DOCS.len(), protocol::NODE_TYPES.len() - retired.len());
     }
 
     #[test]

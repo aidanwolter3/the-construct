@@ -878,6 +878,8 @@ internal open class UniffiVTableCallbackInterfaceUrlOpener(
 
 
 
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -924,6 +926,8 @@ fun uniffi_client_ffi_checksum_method_enginehandle_mark_all_notifications_read(
 fun uniffi_client_ffi_checksum_method_enginehandle_mark_notifications_read(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_notification_channels(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_open_layout(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_push_public_key(
 ): Short
@@ -1066,6 +1070,8 @@ fun uniffi_client_ffi_fn_method_enginehandle_mark_notifications_read(`ptr`: Poin
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_notification_channels(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_client_ffi_fn_method_enginehandle_open_layout(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_push_public_key(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_refresh(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -1274,6 +1280,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_notification_channels() != 38638.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_open_layout() != 57911.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_push_public_key() != 54271.toShort()) {
@@ -1887,6 +1896,13 @@ public interface EngineHandleInterface {
     fun `notificationChannels`(): kotlin.String
     
     /**
+     * Show another layout with this engine (decision `layouts-not-apps`):
+     * its cached version at once, then fetched in the background into the
+     * shared store (`layouts_json`). Never blocks.
+     */
+    fun `openLayout`(`id`: kotlin.String)
+    
+    /**
      * The server's VAPID public key (base64url) for a Web Push
      * subscription; `NotFound` when the server sends no push.
      */
@@ -2320,6 +2336,22 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
 
     
     /**
+     * Show another layout with this engine (decision `layouts-not-apps`):
+     * its cached version at once, then fetched in the background into the
+     * shared store (`layouts_json`). Never blocks.
+     */override fun `openLayout`(`id`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_open_layout(
+        it, FfiConverterString.lower(`id`),_status)
+}
+    }
+    
+    
+
+    
+    /**
      * The server's VAPID public key (base64url) for a Web Push
      * subscription; `NotFound` when the server sends no push.
      */
@@ -2633,7 +2665,12 @@ data class FfiStateSnapshot (
      * Unread notifications (D52): `{"unread_total": n, "unread_by_app":
      * {app_id: n}}`; zeros while signed out.
      */
-    var `notificationsJson`: kotlin.String
+    var `notificationsJson`: kotlin.String, 
+    /**
+     * Other layouts this engine shows (decision `layouts-not-apps`):
+     * `{id: {"workspace", "version", "gone"}}`.
+     */
+    var `layoutsJson`: kotlin.String
 ) {
     
     companion object
@@ -2655,6 +2692,7 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
@@ -2668,7 +2706,8 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterString.allocationSize(value.`authJson`) +
             FfiConverterString.allocationSize(value.`layoutJson`) +
             FfiConverterString.allocationSize(value.`loadsJson`) +
-            FfiConverterString.allocationSize(value.`notificationsJson`)
+            FfiConverterString.allocationSize(value.`notificationsJson`) +
+            FfiConverterString.allocationSize(value.`layoutsJson`)
     )
 
     override fun write(value: FfiStateSnapshot, buf: ByteBuffer) {
@@ -2682,6 +2721,7 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
             FfiConverterString.write(value.`layoutJson`, buf)
             FfiConverterString.write(value.`loadsJson`, buf)
             FfiConverterString.write(value.`notificationsJson`, buf)
+            FfiConverterString.write(value.`layoutsJson`, buf)
     }
 }
 

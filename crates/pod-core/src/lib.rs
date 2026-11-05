@@ -71,6 +71,10 @@ pub const HOME_APP: &str = "home";
 /// The blueprint a pod's [`HOME_APP`] starts from.
 pub const HOME_BLUEPRINT: &str = "shell";
 
+/// Blueprints of the pod itself (home, Settings, the inbox): never turned
+/// into a layout of their own by a conversion.
+pub const SYSTEM_BLUEPRINTS: [&str; 3] = [HOME_BLUEPRINT, "settings", "inbox"];
+
 /// A pending injected fault (test hook): the next `remaining` mutation
 /// requests get `status` without being applied.
 #[derive(Debug, Clone, Copy)]
@@ -203,6 +207,8 @@ impl AppState {
         // pod, and apps for the built-ins an older pod showed.
         custom::seed_blueprint_apps(&store, &catalog)
             .map_err(|e| format!("starting the pod's apps from blueprints: {e}"))?;
+        custom::convert_to_layouts(&store, &catalog)
+            .map_err(|e| format!("converting the pod's apps to layouts: {e}"))?;
         Ok(Self {
             locals: Mutex::new(Vec::new()),
             store,
@@ -683,15 +689,6 @@ async fn get_workspace(
             Json(screen).into_response()
         };
     }
-    let feeds = app.feeds();
-    let feeds: Vec<(&str, &str)> = feeds
-        .iter()
-        .map(|(s, f)| (s.as_str(), f.as_str()))
-        .collect();
-    let bundle = match compose(&state, &feeds, &caller, &req, app.is_custom()).await {
-        Ok(bundle) => bundle,
-        Err(r) => return *r,
-    };
     let served = match layouts::active_for_client(&state, &id, &req.headers).await {
         Ok(Some(v)) => v,
         Ok(None) => {
@@ -702,6 +699,27 @@ async fn get_workspace(
             );
         }
         Err(e) => return e.into_response(),
+    };
+    // A pod's own layout loads only the feeds of its scope (home's) that
+    // it binds (decision `layouts-not-apps`); a blueprint its own.
+    let scope = app.feeds();
+    let feeds = if app.is_custom() {
+        let doc = serde_json::to_value(&served.layout).unwrap_or(Value::Null);
+        custom::bound_feeds(&state.catalog, &scope, &doc)
+    } else {
+        scope.clone()
+    };
+    let feeds: Vec<(&str, &str)> = feeds
+        .iter()
+        .map(|(s, f)| (s.as_str(), f.as_str()))
+        .collect();
+    let described: Vec<(&str, &str)> = scope
+        .iter()
+        .map(|(s, f)| (s.as_str(), f.as_str()))
+        .collect();
+    let bundle = match compose(&state, &feeds, &described, &caller, &req, app.is_custom()).await {
+        Ok(bundle) => bundle,
+        Err(r) => return *r,
     };
     let spec = WorkspaceSpec {
         version: BUNDLE_VERSION.into(),
@@ -730,6 +748,7 @@ async fn get_workspace(
 async fn compose(
     state: &Pod,
     feeds: &[(&str, &str)],
+    described: &[(&str, &str)],
     caller: &Caller,
     req: &RequestCtx,
     lenient: bool,
@@ -794,7 +813,7 @@ async fn compose(
     }
     if lenient {
         let mut seen: Vec<&str> = Vec::new();
-        for (source, _) in feeds {
+        for (source, _) in feeds.iter().chain(described) {
             let Some((adapter, manifest)) = state.catalog.source(source) else {
                 continue;
             };

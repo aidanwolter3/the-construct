@@ -197,6 +197,7 @@ class MainActivity : ComponentActivity() {
     private fun handleNotificationTap(intent: Intent?) {
         val app = intent?.getStringExtra(EXTRA_NOTIFICATION_APP) ?: return
         val target = intent.getStringExtra(EXTRA_NOTIFICATION_TARGET)
+        val layout = intent.getStringExtra(EXTRA_NOTIFICATION_LAYOUT)
         val id = intent.getStringExtra(EXTRA_NOTIFICATION_ID)
         val server = intent.getStringExtra(EXTRA_NOTIFICATION_SERVER)
         val trusted = NotificationTaps.trusted(intent)
@@ -211,7 +212,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         Log.i(TAG, "opening notification $id of $app")
-        vm.controller.openNotification(app, target, id)
+        vm.controller.openNotification(app, target, id, layout)
     }
 
     /**
@@ -386,10 +387,8 @@ internal class ConstructViewModel(config: EngineConfig, private val appContext: 
     private fun openSession(config: EngineConfig): Session {
         Log.i(TAG, "starting base_url=${config.baseUrl} workspace=${config.workspace} storage=${config.storageDir}")
         config.storageDir.mkdirs()
-        val open = { workspace: String -> openEngine(config, workspace) }
-        val controller = ConstructController(
-            open(config.workspace), config.workspace, defaultAppId = BuildConfig.CONSTRUCT_WORKSPACE, openBridge = open,
-        )
+        // One engine for every layout on screen (decision `layouts-not-apps`).
+        val controller = ConstructController(openEngine(config, config.workspace), config.workspace)
         // Notifications (D52): live arrivals show as OS notifications while the app is in the background; the
         // push service hands endpoints and messages to this controller while it is alive.
         controller.setDeviceInfo("android", "${Build.MANUFACTURER} ${Build.MODEL}".trim())
@@ -430,13 +429,12 @@ internal class ConstructViewModel(config: EngineConfig, private val appContext: 
         val baseUrl = url.trimEnd('/')
         switchError = null
         if (baseUrl == current.baseUrl) {
-            current.controller.menu.closeMenu()
             return
         }
         val filesDir = appContext.filesDir
         val config = EngineConfig(
             EngineConfig.storageDirFor(filesDir, baseUrl), baseUrl,
-            current.controller.currentAppId() ?: BuildConfig.CONSTRUCT_WORKSPACE,
+            current.controller.rootId,
         )
         val next = try {
             openSession(config)

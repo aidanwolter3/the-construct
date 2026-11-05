@@ -100,6 +100,11 @@ pub const LOAD_OFFLINE: &str = "Can't reach your pod. Check your connection and 
 pub const LOAD_SIGNED_OUT: &str = "Sign in to see this.";
 /// Load error for a 404.
 pub const LOAD_NOT_FOUND: &str = "This isn't available anymore.";
+/// Load error for a layout no version of which this client can draw (409).
+pub const LOAD_NEEDS_UPDATE: &str = "This needs a newer version of the app.";
+/// The data-load key of another layout ([`ConstructEngine::open_layout`]):
+/// `layout:<id>`. Its entities and queries live with the data loads.
+pub const LAYOUT_LOAD_PREFIX: &str = "layout:";
 /// Timeout for a single outbox POST.
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 /// Timeout for one attachment upload (`POST /v1/uploads`, D49).
@@ -357,6 +362,19 @@ pub struct StateSnapshot {
     pub layout_json: String,
     pub loads_json: String,
     pub notifications_json: String,
+    /// The other layouts opened with [`ConstructEngine::open_layout`]
+    /// (decision `layouts-not-apps`): `{id: {"workspace": {...}, "version":
+    /// n|null, "gone": bool}}`. Their data is in `entities_json` and
+    /// `queries_json`; their load state is `loads_json["layout:<id>"]`.
+    pub layouts_json: String,
+}
+
+/// Another layout the engine holds (see [`StateSnapshot::layouts_json`]).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+struct SubLayout {
+    workspace: Option<UiNode>,
+    version: Option<u64>,
+    gone: bool,
 }
 
 /// A pending `action.mutation.create` row: its temporary entity is listed in
@@ -501,6 +519,8 @@ struct State {
     /// `deleted`, or the workspace answered 404). Cleared by a successful
     /// fetch. Reported as `"gone": true` in `layout_json`.
     gone: bool,
+    /// Other layouts, by id ([`StateSnapshot::layouts_json`]).
+    layouts: BTreeMap<String, SubLayout>,
 }
 
 impl State {
@@ -551,6 +571,7 @@ impl State {
             layout_json: self.layout_json(),
             loads_json,
             notifications_json: self.notifications_json(),
+            layouts_json: serde_json::to_string(&self.layouts).unwrap_or_else(|_| "{}".into()),
         }
     }
 
@@ -634,6 +655,22 @@ impl State {
         })();
         match loaded {
             Ok((ws, entities, pending, data, creates, attachments)) => {
+                // Other layouts opened before: their cached layout, shown
+                // at once (offline too) until they are fetched again.
+                for key in data.keys() {
+                    if let Some(id) = key.strip_prefix(LAYOUT_LOAD_PREFIX)
+                        && let Ok(Some(w)) = store.load_workspace(id)
+                    {
+                        self.layouts.insert(
+                            id.to_owned(),
+                            SubLayout {
+                                workspace: Some(w.layout),
+                                version: None,
+                                gone: false,
+                            },
+                        );
+                    }
+                }
                 self.data = data;
                 self.creates = creates;
                 self.attachments = attachments.into_iter().map(|a| (a.id.clone(), a)).collect();
@@ -732,6 +769,27 @@ impl State {
         self.workspace = Some(workspace);
         self.entities = merged;
         self.queries = queries;
+    }
+
+    /// Keep another layout's fetched workspace and version, cached for the
+    /// next launch (its data is the `layout:<id>` data load).
+    fn apply_layout(&mut self, id: &str, workspace: UiNode, version: Option<u64>) {
+        if let Some(store) = self.store.as_mut() {
+            let now = unix_now();
+            let result = store
+                .transaction(|tx| tx.save_workspace(id, &workspace, &[], &BTreeMap::new(), now));
+            if let Err(e) = result {
+                eprintln!("[ConstructEngine] failed to persist layout '{id}': {e}");
+            }
+        }
+        self.layouts.insert(
+            id.to_owned(),
+            SubLayout {
+                workspace: Some(workspace),
+                version,
+                gone: false,
+            },
+        );
     }
 
     /// Merge the answer of data path `path` (docs/DECISIONS.md D34): its
@@ -1675,6 +1733,65 @@ impl ConstructEngine {
     /// signed out). False if the engine uses a loopback redirect, the URL
     /// carries no code/error, or its `state` does not match the in-memory
     /// flow (which then keeps waiting). Never blocks.
+    /// Show another layout of the pod with this engine (decision
+    /// `layouts-not-apps`): its cached version at once, then
+    /// `GET /v1/workspaces/<id>` in the background, its data merged into the
+    /// shared store. A layout already loading is not fetched twice; one
+    /// already loaded is fetched again (e.g. Try again). Reported in
+    /// [`StateSnapshot::layouts_json`], its load state under
+    /// `loads_json["layout:<id>"]`.
+    pub fn open_layout(&self, id: &str) {
+        let id = id.trim();
+        let valid = !id.is_empty()
+            && id.len() <= 64
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+        if !valid {
+            eprintln!("[ConstructEngine] open_layout: '{id}' is not a layout id; ignored");
+            return;
+        }
+        if id == self.inner.workspace_id {
+            self.refresh();
+            return;
+        }
+        let snap = {
+            let mut st = lock(&self.inner.state);
+            if !st.layouts.contains_key(id) {
+                let cached = st
+                    .store
+                    .as_ref()
+                    .and_then(|s| s.load_workspace(id).ok().flatten())
+                    .map(|w| w.layout);
+                st.layouts.insert(
+                    id.to_owned(),
+                    SubLayout {
+                        workspace: cached,
+                        version: None,
+                        gone: false,
+                    },
+                );
+                st.seq += 1;
+                Some(st.snapshot())
+            } else {
+                None
+            }
+        };
+        if let Some(snap) = snap {
+            self.inner.notify(snap);
+        }
+        let path = format!("{LAYOUT_LOAD_PREFIX}{id}");
+        if self.inner.begin_load(&path) {
+            let inner = Arc::clone(&self.inner);
+            let spawned = thread::Builder::new()
+                .name("construct-layout".into())
+                .spawn(move || inner.load_data(&path));
+            if let Err(e) = spawned {
+                eprintln!("[ConstructEngine] cannot start a layout load thread: {e}");
+            }
+        }
+    }
+
     pub fn handle_auth_redirect(&self, url: &str) -> bool {
         self.inner.handle_auth_redirect(url)
     }
@@ -2789,11 +2906,19 @@ impl Inner {
     /// Mark `path` loading (and notify). False if it is already loading or
     /// is not a pod path.
     fn begin_load(&self, path: &str) -> bool {
-        let valid = path.starts_with('/')
-            && !path.starts_with("//")
-            && path.len() <= 2048
-            && !path.chars().any(char::is_whitespace)
-            && same_origin(&self.base_url, &format!("{}{path}", self.base_url));
+        let valid = if let Some(id) = path.strip_prefix(LAYOUT_LOAD_PREFIX) {
+            !id.is_empty()
+                && id.len() <= 64
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        } else {
+            path.starts_with('/')
+                && !path.starts_with("//")
+                && path.len() <= 2048
+                && !path.chars().any(char::is_whitespace)
+                && same_origin(&self.base_url, &format!("{}{path}", self.base_url))
+        };
         let snap = {
             let mut st = lock(&self.state);
             if !valid {
@@ -2822,8 +2947,28 @@ impl Inner {
     fn load_data(&self, path: &str) {
         let net = lock(&self.net);
         let token = self.session_token();
-        let url = format!("{}{path}", self.base_url);
-        let result = fetch_data(&url, token.as_deref(), &self.device_id);
+        // Another layout (decision `layouts-not-apps`): its workspace, whose
+        // data merges like a data path's.
+        let layout_id = path.strip_prefix(LAYOUT_LOAD_PREFIX);
+        let (url, result) = match layout_id {
+            Some(id) => {
+                let url = format!("{}/v1/workspaces/{id}", self.base_url);
+                let r = fetch(&url, token.as_deref(), &self.device_id).map(|(spec, version)| {
+                    let layout = (spec.workspace, version);
+                    let bundle = DataBundle {
+                        entities: spec.entities,
+                        queries: spec.queries,
+                    };
+                    (bundle, Some(layout))
+                });
+                (url, r)
+            }
+            None => {
+                let url = format!("{}{path}", self.base_url);
+                let r = fetch_data(&url, token.as_deref(), &self.device_id).map(|b| (b, None));
+                (url, r)
+            }
+        };
         if self.signal.is_shut_down() {
             return;
         }
@@ -2840,7 +2985,10 @@ impl Inner {
                     );
                     st.loads.remove(path);
                 }
-                Ok(bundle) => {
+                Ok((bundle, layout)) => {
+                    if let (Some(id), Some((workspace, version))) = (layout_id, layout) {
+                        st.apply_layout(id, workspace, version);
+                    }
                     st.apply_data(path, bundle);
                     st.set_online(true);
                 }
@@ -2861,8 +3009,19 @@ impl Inner {
                 }
                 Err(FetchError::Status(code)) => {
                     eprintln!("[ConstructEngine] load {url} failed: HTTP {code}");
+                    if let (Some(id), 404) = (layout_id, code) {
+                        st.layouts
+                            .entry(id.to_owned())
+                            .or_insert(SubLayout {
+                                workspace: None,
+                                version: None,
+                                gone: false,
+                            })
+                            .gone = true;
+                    }
                     let message = match code {
                         404 => LOAD_NOT_FOUND.to_owned(),
+                        409 if layout_id.is_some() => LOAD_NEEDS_UPDATE.to_owned(),
                         502 | 504 => "The service behind your pod didn't answer. Please try again."
                             .to_owned(),
                         c if c >= 500 => {

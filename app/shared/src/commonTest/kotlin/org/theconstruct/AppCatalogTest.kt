@@ -227,9 +227,9 @@ class AppCatalogTest {
         }
         val controller = ConstructController(bridge, "pixelfed")
         controller.pin("pixelfed", 2, older)
-        assertEquals(PinnedVersion("pixelfed", 2, older), controller.pinned.value)
+        assertEquals(PinnedVersion("pixelfed", 2, older), controller.pins.value["pixelfed"])
         controller.followLatest()
-        assertNull(controller.pinned.value)
+        assertNull(controller.pins.value["pixelfed"])
         // A bridge without apps throws a readable error; the old catalog calls still exist for the FFI bridge.
         val e = assertFailsWith<LayoutApiException> { bridge.listApps() }
         assertEquals("Apps aren't available here.", e.message)

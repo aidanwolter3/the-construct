@@ -50,7 +50,7 @@ private var session: Session? by mutableStateOf(null)
 private var switchError: String? by mutableStateOf(null)
 
 /**
- * A controller for [workspace] on [baseUrl], with an engine factory so the menu can open the server's other apps.
+ * A controller for [workspace] (the root layout) on [baseUrl].
  * Sign-in (DECISIONS D19): no secure store (the engine uses the macOS Keychain), the system browser, and a loopback
  * redirect (null redirect URI) that the engine listens for itself.
  */
@@ -61,7 +61,8 @@ private fun openSession(root: File, baseUrl: String, workspace: String): Session
         println("[desktop] opening engine for workspace=$appId")
         return UniffiEngineBridge.create(storage.absolutePath, baseUrl, appId, urlOpener = BrowserOpener)
     }
-    val controller = ConstructController(open(workspace), workspace, defaultAppId = DEFAULT_WORKSPACE, openBridge = ::open)
+    // One engine for every layout on screen (decision `layouts-not-apps`).
+    val controller = ConstructController(open(workspace), workspace)
     controller.setDeviceInfo("desktop", deviceName())
     return Session(baseUrl, controller)
 }
@@ -187,11 +188,10 @@ fun main() {
 private fun switchServer(root: File, current: Session, url: String, defaultWorkspace: String) {
     switchError = null
     if (url.trimEnd('/') == current.baseUrl) {
-        current.controller.menu.closeMenu()
         return
     }
     val next = try {
-        openSession(root, url.trimEnd('/'), current.controller.currentAppId() ?: defaultWorkspace)
+        openSession(root, url.trimEnd('/'), current.controller.rootId)
     } catch (t: Throwable) {
         println("[desktop] cannot start an engine for $url: $t")
         switchError = ServerChoice.switchFailed(url, t)

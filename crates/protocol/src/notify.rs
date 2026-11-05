@@ -69,6 +69,11 @@ pub struct Notification {
     /// tapping just opens the app.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_uri: Option<String>,
+    /// The layout to present for it (decision `layouts-not-apps`): the
+    /// pod's layout built on the blueprint `app_id` names, else `app_id`.
+    /// Filled by the pod as it sends; never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<String>,
     /// Notifications with the same key may be bundled by the platform.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_key: Option<String>,
@@ -132,6 +137,7 @@ mod tests {
                     body: String::new(),
                     image_url: None,
                     target_uri: Some("x://y/1".into()),
+                    layout: None,
                     group_key: None,
                     created_at: 5,
                     read: false,

@@ -153,26 +153,21 @@ class SimScriptTest {
     }
 
     @Test
-    fun menuCommandsParse() {
-        val steps = parseScript(
-            "open-menu; close-menu; open-app Pixelfed sample; open-history pixelfed; select-version v2; " +
-                "select-version LATEST; set-server emulator; set-server http://192.168.1.5:8080/; publish-version Stories row",
-        )
-        assertEquals(SimStep.OpenMenu, steps[0])
-        assertEquals(SimStep.CloseMenu, steps[1])
-        assertEquals("Pixelfed sample", assertIs<SimStep.OpenApp>(steps[2]).app)
-        assertEquals("pixelfed", assertIs<SimStep.OpenHistory>(steps[3]).app)
-        assertEquals(2L, assertIs<SimStep.SelectVersion>(steps[4]).version)
-        assertEquals(null, assertIs<SimStep.SelectVersion>(steps[5]).version)
-        assertEquals("select-version latest", steps[5].toString())
-        assertEquals("emulator", assertIs<SimStep.SetServer>(steps[6]).server)
-        assertEquals("http://192.168.1.5:8080/", assertIs<SimStep.SetServer>(steps[7]).server)
-        assertEquals("Stories row", assertIs<SimStep.PublishVersion>(steps[8]).note)
-        for (bad in listOf("open-menu x", "open-app", "select-version 0", "select-version newest", "set-server ftp://x", "set-server prod", "publish-version")) {
+    fun layoutCommandsParse() {
+        val steps = parseScript("open-layout c-abc; open-layout inbox sheet; open-settings; pin-version home v2; pin-version home latest; publish-version Stories row")
+        assertEquals("c-abc" to "push", assertIs<SimStep.OpenLayout>(steps[0]).let { it.layout to it.presentation })
+        assertEquals("inbox" to "sheet", assertIs<SimStep.OpenLayout>(steps[1]).let { it.layout to it.presentation })
+        assertEquals(SimStep.OpenSettings, steps[2])
+        assertEquals(2L, assertIs<SimStep.PinVersion>(steps[3]).version)
+        assertEquals(null, assertIs<SimStep.PinVersion>(steps[4]).version)
+        assertEquals("pin-version home latest", steps[4].toString())
+        assertEquals("Stories row", assertIs<SimStep.PublishVersion>(steps[5]).note)
+        for (bad in listOf("open-layout", "open-layout a modal", "pin-version home", "pin-version home 0", "open-settings x", "publish-version")) {
             assertFailsWith<ScriptParseException>(bad) { parseScript(bad) }
         }
-        // The old layout browser and AI commands are gone.
-        for (old in listOf("open-layouts", "select-layout classic", "use-layout", "restore-version", "undo")) {
+        // The native menu's commands are gone with it (decision `layouts-not-apps`), as are older ones.
+        for (old in listOf("open-menu", "close-menu", "open-app pixelfed", "select-version 2", "set-server staging", "close-inbox",
+            "open-layouts", "select-layout classic", "use-layout", "restore-version", "undo")) {
             assertFailsWith<ScriptParseException>(old) { parseScript(old) }
         }
         // publish-version needs the fake pod.
@@ -182,25 +177,21 @@ class SimScriptTest {
     @Test
     fun notificationCommandsParse() {
         val steps = parseScript(
-            "notify pixelfed_sample_no_login likes Bob liked your post; open-inbox; click-notification Bob liked; close-inbox; " +
-                "open-notification-settings; toggle-channel pixelfed.likes",
+            "notify pixelfed_sample_no_login likes Bob liked your post; open-inbox; toggle-channel pixelfed.likes",
         )
         val notify = assertIs<SimStep.Notify>(steps[0])
         assertEquals(Triple("pixelfed_sample_no_login", "likes", "Bob liked your post"), Triple(notify.app, notify.channel, notify.title))
         assertEquals("notify pixelfed_sample_no_login likes Bob liked your post", notify.toString())
         assertEquals(SimStep.OpenInbox, steps[1])
-        assertEquals("Bob liked", assertIs<SimStep.ClickNotification>(steps[2]).text)
-        assertEquals(SimStep.CloseInbox, steps[3])
-        assertEquals(SimStep.OpenNotificationSettings, steps[4])
-        assertEquals("pixelfed.likes", assertIs<SimStep.ToggleChannel>(steps[5]).channel)
+        assertEquals("pixelfed.likes", assertIs<SimStep.ToggleChannel>(steps[2]).channel)
         for (bad in listOf(
-            "notify", "notify app", "notify app likes", "open-inbox x", "close-inbox now", "click-notification",
-            "open-notification-settings x", "toggle-channel", "toggle-channel likes", "toggle-channel app.", "toggle-channel .likes",
+            "notify", "notify app", "notify app likes", "open-inbox x",
+            "toggle-channel", "toggle-channel likes", "toggle-channel app.", "toggle-channel .likes",
         )) {
             assertFailsWith<ScriptParseException>(bad) { parseScript(bad) }
         }
         // notify needs the fake pod; the inbox commands also work live.
         assertFailsWith<ScriptParseException> { validateStepsForMode(parseScript("notify a b c"), "live") }
-        validateStepsForMode(parseScript("open-inbox; click-notification x; open-notification-settings; toggle-channel a.b"), "live")
+        validateStepsForMode(parseScript("open-inbox; open-settings; toggle-channel a.b"), "live")
     }
 }

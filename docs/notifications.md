@@ -17,8 +17,10 @@ weighed; the original build plan is in [history/notifications-plan.md](history/n
 ## Who knows what
 
 Only an app's adapter knows where its notifications come from. The pod, the engine and the clients see an app id, a
-**channel** the adapter declares ("Likes"), ready-made title and body text, an optional image, and a `target_uri`
-that the client resolves against that app's own layout routes, like any navigation. Adding notifications to a new
+**channel** the adapter declares ("Likes"), ready-made title and body text, an optional image, a `target_uri`, and
+the `layout` to present it in: the pod's own layout built on that blueprint (a whole reference to it, or copied from
+it), else the blueprint's id (decision `layouts-not-apps`). The client presents that layout and opens the screen of it
+whose route matches `target_uri`, like any navigation. Adding notifications to a new
 app needs adapter code only.
 
 ## Sources
@@ -52,9 +54,9 @@ in a row. Limits per pod: 20 devices, 60 deliveries a minute. The routes are in 
   caches the newest 200 notifications, the channels and the unread counts, so the inbox and badge work offline;
   marking read is optimistic and queued. A listener fires only for live arrivals, so one notification never alerts
   twice. Sign-out unregisters the device and clears the cache.
-- **Shared UI:** a bell next to the app menu with the unread count opens an inbox of every app's notifications,
-  grouped by day. Tapping one opens its app and target and marks it read. Settings → Notifications lists each app's
-  channels with switches (stored per device on the pod).
+- **Layouts:** the `inbox` blueprint lists every notification (`local:notifications`), grouped by day; tapping one
+  presents its layout and target and marks it read. The `settings` blueprint lists the channels with switches (stored
+  per device on the pod). Any layout can open them, or bind `${local://inbox#unread}` for a badge.
 - **Android:** asks for `POST_NOTIFICATIONS` once; creates OS channels `<app_id>.<channel>` grouped per app; shows
   live arrivals while in the background; and receives closed-app push through
   [UnifiedPush](https://unifiedpush.org): a distributor app such as ntfy if installed, otherwise the embedded FCM
@@ -68,7 +70,7 @@ in a row. Limits per pod: 20 devices, 60 deliveries a minute. The routes are in 
 
 - `server pods notify-test <name>` sends a test notification to a pod's inbox and devices.
 - Against the fake Pixelfed, `POST /_admin/notifications` injects one upstream ([testing.md](testing.md#fake-pixelfed)).
-- In the simulator, `notify <app_id> <channel> <title>`, `open-inbox`, `click-notification <text>` and
+- In the simulator, `notify <app_id> <channel> <title>`, `open-inbox`, `click <text>` (a row of the inbox) and
   `toggle-channel <app>.<channel>` script the UI ([simulator.md](simulator.md)).
 
 ## Not done yet

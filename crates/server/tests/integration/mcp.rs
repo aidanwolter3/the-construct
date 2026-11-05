@@ -409,17 +409,17 @@ async fn claude_connects_with_oauth_and_the_pod_code() {
         .map(|t| t["name"].as_str().unwrap())
         .collect();
     for want in [
-        "list_apps",
+        "list_layouts",
         "list_data_sources",
         "describe_vocabulary",
         "get_layout",
         "sample_data",
         "validate_layout",
-        "create_app",
+        "create_layout",
         "update_layout",
         "restore_version",
-        "rename_app",
-        "delete_app",
+        "rename_layout",
+        "delete_layout",
         "set_hidden",
         "list_parts",
         "rebase_context",
@@ -529,10 +529,11 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
 
     let (err, vocab) = env.tool(&access, "describe_vocabulary", json!({})).await;
     assert!(!err);
-    // Every client node type, plus the pod-only core://Ref.
+    // Every client node type but the three retired ones (decision
+    // `layouts-not-apps`), plus the pod-only core://Ref.
     assert_eq!(
         vocab["nodes"].as_array().unwrap().len(),
-        protocol::NODE_TYPES.len() + 1
+        protocol::NODE_TYPES.len() - 3 + 1
     );
     let (err, parts) = env
         .tool(&access, "list_parts", json!({"app": "pixelfed"}))
@@ -624,7 +625,7 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     let (err, created) = env
         .tool(
             &access,
-            "create_app",
+            "create_layout",
             json!({"title": "Dinner", "icon": "recipe", "feeds": [["recipes", "all"]],
             "layout": recipes_layout("Dinner"), "note": "Just the recipes, please"}),
         )
@@ -665,7 +666,11 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     assert!(!err, "{restored}");
     assert_eq!(restored["version"], 3);
     let (err, _) = env
-        .tool(&access, "rename_app", json!({"app": id, "title": "Supper"}))
+        .tool(
+            &access,
+            "rename_layout",
+            json!({"app": id, "title": "Supper"}),
+        )
         .await;
     assert!(!err);
     let (err, _) = env
@@ -676,9 +681,9 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
         )
         .await;
     assert!(!err);
-    let (err, apps) = env.tool(&access, "list_apps", json!({})).await;
+    let (err, apps) = env.tool(&access, "list_layouts", json!({})).await;
     assert!(!err);
-    let rows = apps["apps"].as_array().unwrap();
+    let rows = apps["layouts"].as_array().unwrap();
     assert!(
         apps["blueprints"]
             .as_array()
@@ -714,7 +719,7 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
         )
         .await;
     assert!(err);
-    let (err, _) = env.tool(&access, "delete_app", json!({"app": id})).await;
+    let (err, _) = env.tool(&access, "delete_layout", json!({"app": id})).await;
     assert!(!err);
     let (status, _) = env.get(&format!("/v1/workspaces/{id}"), host_token).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -725,7 +730,7 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     let (err, copy) = env
         .tool(
             &access,
-            "create_app",
+            "create_layout",
             json!({"title": "My recipes", "feeds": [["recipes", "all"]], "layout": now["layout"],
                 "copied_from": {"app": "recipes", "version": now["version"]}}),
         )

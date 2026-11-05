@@ -46,7 +46,11 @@ import org.theconstruct.LayoutCalls
 import org.theconstruct.MediaCalls
 import org.theconstruct.LocalBackPresses
 import org.theconstruct.LocalToday
-import org.theconstruct.MenuState
+import org.theconstruct.ActionIntent
+import org.theconstruct.INBOX_LAYOUT
+import org.theconstruct.Load
+import org.theconstruct.PresentationMode
+import org.theconstruct.SETTINGS_LAYOUT
 import org.theconstruct.ServerChoice
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.performSemanticsAction
@@ -306,98 +310,36 @@ class SimRunner(
             SimStep.Back -> {
                 waitForIdle()
                 val presses = backPresses ?: throw StepFailure("Back is not available")
-                if (!presses.press()) throw StepFailure("nothing on screen handles Back (the menu is closed)")
+                if (!presses.press()) throw StepFailure("nothing on screen handles Back (nothing is open over the root)")
                 waitForIdle()
                 return "" to null
             }
-            SimStep.OpenMenu -> {
-                if (!menuShown()) clickTag("menu-button", "the menu button is not on screen")
-                awaitMenu()
-                awaitLayoutCalls()
-                if (hasTag("apps-error")) return "error shown: ${textUnder("apps-error")}" to null
-                return when {
-                    hasTag("version-picker") -> "version picker"
-                    hasTag("settings") || hasTag("sign-in-detail") -> "settings"
-                    else -> "${appTags().size} app(s)"
-                } to null
-            }
-            SimStep.CloseMenu -> {
-                if (!menuShown()) throw StepFailure("the menu is not open")
-                backToMenuSections()
-                clickTag("menu-close", "")
-                awaitCondition("the menu to close", LAYOUT_TIMEOUT_MS) { !menuShown() && !controller.menu.open }
-                return "" to null
+            is SimStep.OpenLayout -> {
+                val how = when (step.presentation) {
+                    "sheet" -> PresentationMode.Sheet
+                    "panel" -> PresentationMode.Panel
+                    else -> PresentationMode.Push
+                }
+                controller.dispatch(ActionIntent.Navigate(presentation = how, layout = step.layout))
+                return awaitLayout(step.layout) to null
             }
             SimStep.OpenSettings -> {
-                ensureSettings()
-                if (hasTag("sign-ins-error")) return "error shown: ${textUnder("sign-ins-error")}" to null
-                val listed = tagsStartingWith("sign-in-").count { it != "sign-in-detail" }
-                return "$listed sign-in(s)" to null
+                controller.dispatch(ActionIntent.Device("open_settings"))
+                return awaitLayout(SETTINGS_LAYOUT) to null
             }
-            is SimStep.OpenApp -> {
-                val tag = appTag(step.app)
-                val id = tag.removePrefix("app-")
-                if (id != controller.currentAppId() && !controller.canOpenApps) {
-                    throw StepFailure("cannot open '$id': ${MenuState.OPEN_APP_UNAVAILABLE} (its row is disabled)")
-                }
-                clickTag(tag, "")
-                awaitLayoutCalls()
-                if (hasTag("app-error")) throw StepFailure("cannot open '$id': ${textUnder("app-error")}")
-                awaitCondition("app '$id' to load", LAYOUT_TIMEOUT_MS) {
-                    !menuShown() && controller.currentAppId() == id && controller.state.value.workspace != null
-                }
-                return "opened $id" to null
-            }
-            is SimStep.OpenHistory -> {
-                val id = appTag(step.app).removePrefix("app-")
-                clickTag("app-history-$id", "")
-                awaitTag("version-picker", "the version picker of '$id' did not open")
-                awaitLayoutCalls()
-                if (hasTag("versions-error")) return "error shown: ${textUnder("versions-error")}" to null
-                return "${tagsStartingWith("version-").count { VERSION_TAG.matches(it) }} version(s) listed" to null
-            }
-            is SimStep.SelectVersion -> {
-                requireTag("version-picker", "no version picker on screen (use open-history first)")
-                val tag = step.version?.let { "version-$it" } ?: "version-latest"
-                // Older versions are paged: press "Load older" until the row appears or there is no more history.
-                while (!hasTag(tag) && hasTag("versions-more")) {
-                    clickTag("versions-more", "")
-                    awaitLayoutCalls()
-                }
-                if (!hasTag(tag)) {
-                    val listed = tagsStartingWith("version-").filter { VERSION_TAG.matches(it) }.map { "v" + it.removePrefix("version-") }
-                    val err = if (hasTag("versions-error")) "; error shown: ${textUnder("versions-error")}" else ""
-                    throw StepFailure("no version ${step.version} in the history; listed: $listed$err")
-                }
-                val row = onAllNodes(hasTestTag(tag), useUnmergedTree = false).fetchSemanticsNodes().first()
-                if (SemanticsProperties.Disabled in row.config) {
-                    throw StepFailure("v${step.version} can't be shown by this build: ${textUnder(tag)}")
-                }
-                clickTag(tag, "")
-                awaitLayoutCalls()
-                if (hasTag("version-error")) throw StepFailure("error shown: ${textUnder("version-error")}")
-                awaitCondition("the menu to close", LAYOUT_TIMEOUT_MS) { !menuShown() }
-                val pin = controller.pinned.value
-                return (if (pin == null) "following the latest version" else "showing v${pin.version}") to null
-            }
-            is SimStep.SetServer -> {
-                ensureSettings()
-                requireTag("menu-server", "no server picker in Settings")
-                if (!hasTag("server-custom")) clickTag("menu-server", "")
-                val key = step.server.lowercase()
-                if (key in SERVER_PRESETS) {
-                    clickTag("server-$key", "no '$key' server in the menu")
+            is SimStep.PinVersion -> {
+                val intent = if (step.version == null) {
+                    ActionIntent.Device("follow_latest", app = step.layout)
                 } else {
-                    clickTag("server-custom", "")
-                    val field = onAllNodes(hasTestTag("server-custom-url"))
-                    if (field.fetchSemanticsNodes().isEmpty()) throw StepFailure("the custom server URL field did not open")
-                    field[0].performTextClearance()
-                    field[0].performTextInput(step.server)
-                    waitForIdle()
-                    clickTag("server-custom-use", "")
+                    ActionIntent.Device("pin_version", app = step.layout, id = step.version.toString())
                 }
-                waitForIdle()
-                return "server: $serverUrl" to null
+                controller.dispatch(intent)
+                awaitLayoutCalls()
+                val pin = controller.pins.value[step.layout]
+                if (step.version != null && pin?.version != step.version) {
+                    throw StepFailure("v${step.version} of '${step.layout}' could not be shown: ${controller.device.selectError ?: "no such version"}")
+                }
+                return (if (pin == null) "following the latest version" else "showing v${pin.version}") to null
             }
             is SimStep.PublishVersion -> {
                 val publish = publishVersion ?: throw StepFailure("'publish-version' is not supported in $modeName mode")
@@ -413,59 +355,18 @@ class SimRunner(
                 return "unread $before -> ${controller.unread.value.total}" to null
             }
             SimStep.OpenInbox -> {
-                if (!hasTag("inbox")) {
-                    if (menuShown()) throw StepFailure("the menu is open (use close-menu first)")
-                    clickTag("inbox-button", "the bell is not on screen (an open screen covers it: use back first)")
-                }
-                awaitTag("inbox", "the inbox did not open")
-                awaitLayoutCalls()
-                if (hasTag("inbox-message")) return textUnder("inbox-message", self = true) to null
-                return "${tagsStartingWith("notification-row:").size} notification(s) shown" to null
-            }
-            SimStep.CloseInbox -> {
-                if (!hasTag("inbox")) throw StepFailure("the inbox is not open")
-                clickTag("inbox-close", "")
-                awaitCondition("the inbox to close", LAYOUT_TIMEOUT_MS) { !hasTag("inbox") }
-                return "" to null
-            }
-            is SimStep.ClickNotification -> {
-                requireTag("inbox", "the inbox is not open (use open-inbox first)")
-                val rows = tagsStartingWith("notification-row:")
-                val tag = rows.firstOrNull { textUnder(it).contains(step.text, ignoreCase = true) }
-                    ?: throw StepFailure("no notification contains '${step.text}'; shown: ${rows.map { textUnder(it) }}")
-                val engine = controller.state.value.engine
-                clickTag(tag, "")
-                awaitCondition("the notification's app to load", LAYOUT_TIMEOUT_MS) {
-                    !hasTag("inbox") && controller.state.value.workspace != null
-                }
-                awaitLayoutCalls()
-                val opened = controller.currentAppId()
-                val screen = tagsStartingWith("screen:").lastOrNull()?.removePrefix("screen:")
-                val switched = if (controller.state.value.engine != engine) "opened $opened" else "in $opened"
-                return "${tag.removePrefix("notification-row:")}: $switched" + (screen?.let { ", screen $it" } ?: ", no screen") to null
-            }
-            SimStep.OpenNotificationSettings -> {
-                if (!hasTag("notification-settings")) {
-                    ensureSettings()
-                    clickTag("menu-notifications", "no Notifications entry in Settings")
-                }
-                awaitTag("notification-settings", "the notification settings did not open")
-                awaitLayoutCalls()
-                if (hasTag("channels-error")) return "error shown: ${textUnder("channels-error")}" to null
-                return "${tagsStartingWith("channel:").size} channel(s)" to null
+                controller.dispatch(ActionIntent.Device("open_inbox"))
+                val shown = awaitLayout(INBOX_LAYOUT)
+                return "$shown; ${controller.device.notifications.size} notification(s)" to null
             }
             is SimStep.ToggleChannel -> {
-                requireTag("notification-settings", "the notification settings are not open (use open-notification-settings first)")
-                val tag = "channel:${step.channel}"
-                if (!hasTag(tag)) {
-                    throw StepFailure("no channel '${step.channel}'; listed: ${tagsStartingWith("channel:").map { it.removePrefix("channel:") }}")
-                }
-                clickTag(tag, "")
+                val (app, channel) = step.channel.split('.', limit = 2)
                 awaitLayoutCalls()
-                if (hasTag("channel-error")) throw StepFailure("error shown: ${textUnder("channel-error")}")
-                val on = onAllNodes(hasTestTag("channel-switch:${step.channel}"), useUnmergedTree = true).fetchSemanticsNodes()
-                    .firstOrNull()?.config?.getOrNull(SemanticsProperties.ToggleableState) == ToggleableState.On
-                return (if (on) "on" else "off") to null
+                val before = (controller.device.channels as? Load.Ready)?.value?.firstOrNull { it.appId == app && it.id == channel }
+                    ?: throw StepFailure("no channel '${step.channel}'")
+                controller.dispatch(ActionIntent.Device("toggle_channel", app = app, id = channel))
+                awaitLayoutCalls()
+                return (if (before.enabled) "off" else "on") to null
             }
             is SimStep.Screen -> error("handled by run()")
         }
@@ -492,12 +393,6 @@ class SimRunner(
                 )
             }
             how = "$found, scrolled into view"
-        }
-        // The menu button floats over the top-left corner: a node scrolled under it would get the click meant for it.
-        if (underMenuButton(node)) {
-            node.performSemanticsAction(SemanticsActions.OnClick)
-            waitForIdle()
-            return "$how, under the menu button: clicked via its click action"
         }
         // A mouse click, then move the pointer off the node: performClick() injects touch
         // events that leave the button in a hovered state, so later shots show a tint.
@@ -567,68 +462,19 @@ class SimRunner(
         clickNode(all[0], "test tag", "tag:$tag")
     }
 
-    /** The drawer is showing its sections, the version picker, Settings, a sign-in's detail or notification settings. */
-    private fun SkikoComposeUiTest.menuShown(): Boolean =
-        hasTag("menu-drawer") || hasTag("version-picker") || hasTag("settings") || hasTag("sign-in-detail") ||
-            hasTag("notification-settings")
-
-    private fun SkikoComposeUiTest.awaitMenu() {
-        waitForIdle()
+    /** Waits until layout [id] is presented and drawn (or says why not); the step message. */
+    private fun SkikoComposeUiTest.awaitLayout(id: String): String {
+        awaitLayoutCalls()
         try {
-            waitUntil("the menu", LAYOUT_TIMEOUT_MS) { menuShown() }
+            waitUntil("layout $id", LAYOUT_TIMEOUT_MS) {
+                hasTag("layout-body:$id") || hasTag("layout-message")
+            }
         } catch (e: ComposeTimeoutException) {
-            throw StepFailure("the menu did not open; visible text: ${visibleText()}")
+            throw StepFailure("layout '$id' was not drawn; visible text: ${visibleText()}")
         }
-    }
-
-    /** Opens the menu if needed and goes back from the version picker or Settings to the sections. */
-    private fun SkikoComposeUiTest.ensureMenuSections() {
-        if (!menuShown()) {
-            clickTag("menu-button", "the menu button is not on screen")
-            awaitMenu()
-        }
-        backToMenuSections()
-        awaitLayoutCalls()
-    }
-
-    /** Presses the drawer's Back until it shows its sections (at most a detail page, then Settings). */
-    private fun SkikoComposeUiTest.backToMenuSections() {
-        repeat(3) {
-            if (hasTag("menu-drawer")) return
-            clickTag("menu-back", "")
-            waitForIdle()
-        }
-        awaitTag("menu-drawer", "the menu did not go back to its sections")
-    }
-
-    /** Opens the menu's Settings page (from wherever the drawer is) and waits for its calls. */
-    private fun SkikoComposeUiTest.ensureSettings() {
-        if (hasTag("sign-in-detail") || hasTag("notification-settings")) {
-            clickTag("menu-back", "")
-            waitForIdle()
-        }
-        if (!hasTag("settings")) {
-            ensureMenuSections()
-            clickTag("menu-settings", "no Settings row in the menu")
-            awaitTag("settings", "Settings did not open")
-        }
-        awaitLayoutCalls()
-    }
-
-    private fun SkikoComposeUiTest.appTags(): List<String> =
-        tagsStartingWith("app-").filter { tag ->
-            ROW_CONTROLS.none { tag.startsWith(it) } && tag != "app-error" && tag != "app-action-error" && tag != "app-gone"
-        }
-
-    /** The tag of the app row for [app] (an id, else a title, case-insensitive), opening the menu as needed. */
-    private fun SkikoComposeUiTest.appTag(app: String): String {
-        ensureMenuSections()
-        val tags = appTags()
-        tags.firstOrNull { it == "app-$app" }?.let { return it }
-        tags.firstOrNull { it.equals("app-$app", ignoreCase = true) }?.let { return it }
-        tags.firstOrNull { textUnder(it).contains(app, ignoreCase = true) }?.let { return it }
-        val err = if (hasTag("apps-error")) "; error shown: ${textUnder("apps-error")}" else ""
-        throw StepFailure("no app '$app' in the menu; listed: ${tags.map { it.removePrefix("app-") }}$err")
+        if (!hasTag("layout-body:$id")) throw StepFailure("layout '$id' can't be shown: ${textUnder("layout-message")}")
+        val how = listOf("sheet", "panel", "layout").firstOrNull { hasTag("$it:$id") } ?: "inline"
+        return "$id shown (${if (how == "layout") "push" else how})"
     }
 
     /** Text of the node tagged [tag] and its descendants. */
@@ -670,14 +516,6 @@ class SimRunner(
         val clipped = n.layoutInfo.coordinates.boundsInRoot()
         val root = screenRoot().fetchSemanticsNode().boundsInRoot
         return n.layoutInfo.isAttached && !clipped.isEmpty && clipped.contains(center) && root.contains(center)
-    }
-
-    private fun SkikoComposeUiTest.underMenuButton(node: SemanticsNodeInteraction): Boolean {
-        val center = node.fetchSemanticsNode().boundsInRoot.center
-        val tag = node.fetchSemanticsNode().config.getOrNull(SemanticsProperties.TestTag)
-        return listOf("menu-button", "inbox-button").any { b ->
-            b != tag && onAllNodes(hasTestTag(b), useUnmergedTree = true).fetchSemanticsNodes().any { it.boundsInRoot.contains(center) }
-        }
     }
 
     private fun SkikoComposeUiTest.describeBounds(node: SemanticsNodeInteraction): String {
@@ -825,7 +663,6 @@ class SimRunner(
 
     companion object {
         /** Tags of the controls on an app row (not apps themselves). */
-        private val ROW_CONTROLS = listOf("app-history-", "app-more-", "app-custom-", "app-hide-", "app-delete-", "app-updates-")
         private val PRETTY_JSON = Json { prettyPrint = true }
 
         /** How long the menu commands wait for their screen or for the apps calls (live pod calls time out at 15 s). */
@@ -844,7 +681,6 @@ class SimRunner(
             ServerOption("usb", "Local USB", "http://127.0.0.1:8080"),
         )
 
-        private val VERSION_TAG = Regex("version-\\d+")
 
         fun encodePng(image: ImageBitmap): ByteArray =
             Image.makeFromBitmap(image.asSkiaBitmap()).encodeToData(EncodedImageFormat.PNG)?.bytes

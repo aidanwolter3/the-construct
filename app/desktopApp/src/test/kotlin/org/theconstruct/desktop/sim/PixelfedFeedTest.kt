@@ -77,15 +77,13 @@ class PixelfedFeedTest {
         )
         run(
             fake,
-            "assert-no-text @constructdemo; open-menu; assert-no-text @constructdemo; " +
-                "open-settings; assert-text @constructdemo · 127.0.0.1:8081; click tag:sign-in-pixelfed; " +
-                "assert-text Used by; assert-text Sign out of Pixelfed; click tag:menu-sign-out; " +
-                "assert-no-text @constructdemo; assert-no-text Sign out; assert-text Not signed in",
+            "assert-no-text @constructdemo; open-settings; assert-text @constructdemo · 127.0.0.1:8081; " +
+                "click Sign out; assert-no-text @constructdemo; assert-no-text Sign out",
         )
     }
 
     @Test
-    fun pendingAndErrorAuthStatesShowInTheMenu() {
+    fun pendingAndErrorAuthStatesShowInSettings() {
         val bundle = assertNotNull(findFixture("pixelfed_feed_bundle.json")).readText()
         run(FakeEngineBridge(bundle, authJson = """{"state":"pending"}"""), "open-settings; assert-text Signing in; assert-no-text Sign out")
         run(
@@ -104,14 +102,14 @@ class PixelfedFeedTest {
     }
 
     @Test
-    fun longSignInErrorWrapsInTheMenuInsteadOfBeingCut() {
+    fun longSignInErrorWrapsInSettingsInsteadOfBeingCut() {
         val bundle = assertNotNull(findFixture("pixelfed_feed_bundle.json")).readText()
         val reason = "This pod belongs to a different Pixelfed account."
         val controller = ConstructController(FakeEngineBridge(bundle, authJson = """{"state":"error","error":"$reason"}"""))
         SimImages.install("fixture")
         runSkikoComposeUiTest(size = Size(390f, 844f), density = Density(1f)) {
             setContent { ConstructApp(controller) }
-            controller.menu.showSettings()
+            controller.dispatch(org.theconstruct.ActionIntent.Device("open_settings"))
             waitForIdle()
             val layouts = mutableListOf<TextLayoutResult>()
             onNode(hasText(reason, substring = true))

@@ -15,7 +15,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::{ActionIntent, Align, Position, TextStyle, UiNode, WhereClause};
+use crate::{ActionIntent, Align, Position, PresentationMode, TextStyle, UiNode, WhereClause};
 
 include!(concat!(env!("OUT_DIR"), "/features.rs"));
 
@@ -255,6 +255,7 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
         UiNode::AppFrame { .. } => add(feature::APP_FRAME),
         UiNode::Switch { .. } => add(feature::SWITCH),
         UiNode::Drawer { .. } => add(feature::DRAWER),
+        UiNode::Layout { .. } => add(feature::LAYOUT_EMBED),
         // A node type this build does not know (the removed `pixelfed://`
         // widgets): no client draws it any more.
         UiNode::Unknown(_) => add(feature::LEGACY_NODES),
@@ -302,7 +303,21 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
         add(feature::FORM_OPTIONAL);
     }
     match intent {
-        ActionIntent::Navigate { .. } => add(feature::NAVIGATE),
+        ActionIntent::Navigate {
+            layout,
+            presentation,
+            ..
+        } => {
+            add(feature::NAVIGATE);
+            if layout.is_some()
+                || matches!(
+                    presentation,
+                    PresentationMode::Sheet | PresentationMode::Panel
+                )
+            {
+                add(feature::NAVIGATE_LAYOUT);
+            }
+        }
         ActionIntent::NavigateBack => add(feature::NAVIGATE_BACK),
         ActionIntent::OptimisticMutate { .. } => add(feature::OPTIMISTIC_MUTATION),
         ActionIntent::AuthLogin { .. } => add(feature::AUTH_LOGIN),
@@ -328,7 +343,12 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
         ActionIntent::Sequence { .. } => add(feature::ACTION_SEQUENCE),
         ActionIntent::LocalSet { .. } => add(feature::LOCAL_SET),
         ActionIntent::OpenLink { .. } => add(feature::OPEN_LINK),
-        ActionIntent::Device { .. } => add(feature::DEVICE_ACTION),
+        ActionIntent::Device { command, .. } => {
+            add(feature::DEVICE_ACTION);
+            if crate::intent::RETIRED_DEVICE_COMMANDS.contains(&command.as_str()) {
+                add(feature::DEVICE_OPEN_APP);
+            }
+        }
         ActionIntent::Unknown => {}
     }
 }
@@ -627,6 +647,8 @@ mod tests {
                     "drawer": {"type": "core://Divider"}}),
                 "core://Switch" => json!({"type": t, "checked": "$item.on",
                     "on_click": {"intent": "action.navigation.back"}}),
+                "core://Layout" => json!({"type": t, "layout": "inbox", "presentation": "Sheet",
+                    "show_when": "$form.inbox", "animation": "sheet_up", "params": {"id": "1"}}),
                 other => panic!("no sample for {other}"),
             };
             let n: UiNode = serde_json::from_value(v).unwrap_or_else(|e| panic!("{t}: {e}"));
@@ -658,6 +680,41 @@ mod tests {
             ws.walk().len(),
             4,
             "the dock's tab contents are its children"
+        );
+    }
+
+    #[test]
+    fn embedding_and_presenting_layouts_need_their_features() {
+        let ws: UiNode = serde_json::from_value(json!({"type": "core://Workspace", "id": "home",
+            "title": "Home", "slots": [{"slot_id": "s", "provider_uri": "local://home", "content": {
+              "type": "core://Column", "children": [
+                {"type": "core://Layout", "layout": "c-abc"},
+                {"type": "core://Button", "label": "Open", "on_click": {"intent": "action.navigation.open",
+                  "layout": "c-abc", "presentation": "Push", "params": {"id": "1"}}},
+                {"type": "core://Button", "label": "Old", "on_click": {"intent": "action.device",
+                  "command": "open_app", "app": "c-abc"}}]}}]}))
+        .unwrap();
+        let f = required_features(&ws);
+        for want in [
+            feature::LAYOUT_EMBED,
+            feature::NAVIGATE_LAYOUT,
+            feature::DEVICE_OPEN_APP,
+        ] {
+            assert!(f.contains(&want), "{want}: {f:?}");
+        }
+        assert!(REMOVED_FEATURES.contains(&feature::DEVICE_OPEN_APP));
+        assert!(REMOVED_FEATURES.contains(&feature::DOCK));
+        // A plain screen navigation needs only `navigate`, and serializes
+        // as before (no new fields on the wire).
+        let open: ActionIntent = serde_json::from_value(json!({"intent": "action.navigation.open",
+            "target_uri": "x://a", "presentation": "Push"}))
+        .unwrap();
+        let mut out = BTreeSet::new();
+        intent_features(&open, &mut out);
+        assert_eq!(out.into_iter().collect::<Vec<_>>(), [feature::NAVIGATE]);
+        assert_eq!(
+            serde_json::to_value(&open).unwrap(),
+            json!({"intent": "action.navigation.open", "target_uri": "x://a", "presentation": "Push"})
         );
     }
 

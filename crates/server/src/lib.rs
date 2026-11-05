@@ -35,6 +35,8 @@ pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
         Arc::new(app_events::EventsAdapter::new()),
         app_pixelfed::apps::sample_adapter(),
         app_shell::adapter(),
+        app_shell::settings_adapter(),
+        app_shell::inbox_adapter(),
         Arc::new(
             app_collections::CollectionsAdapter::with_caps(collections_caps_from_env())
                 .with_model(app_collections::compute::MessagesModel::from_env())
@@ -188,6 +190,8 @@ pub fn layout_files() -> Vec<layouts::LayoutSource> {
     files.extend_from_slice(app_recipes::FILES);
     files.extend_from_slice(app_events::FILES);
     files.extend_from_slice(app_shell::FILES);
+    files.extend_from_slice(app_shell::SETTINGS_FILES);
+    files.extend_from_slice(app_shell::INBOX_FILES);
     files
 }
 

@@ -61,8 +61,25 @@ enum class Align { Start, Center, End }
 @Serializable
 enum class Tone { Neutral, Warning }
 
+/**
+ * How `action.navigation.open` presents: a screen as Push, Modal or Replace; another layout (decision
+ * `layouts-not-apps`) as Push (the whole screen), Sheet (a bottom sheet) or Panel (a side panel from the start edge).
+ */
 @Serializable
-enum class PresentationMode { Push, Modal, Replace }
+enum class PresentationMode { Push, Modal, Replace, Sheet, Panel }
+
+/** How a `core://Layout` shows its layout: in place, or over the screen as a sheet or a side panel. */
+@Serializable
+enum class EmbedPresentation { Inline, Sheet, Panel }
+
+/** How a presented layout comes in and goes out (named only; the platform picks durations). */
+@Serializable
+enum class Animation {
+    @SerialName("none") None,
+    @SerialName("fade") Fade,
+    @SerialName("slide") Slide,
+    @SerialName("sheet_up") SheetUp,
+}
 
 @Serializable
 enum class ImageShape { Square, Rounded, Circle }
@@ -427,41 +444,20 @@ sealed class UiNode {
     data class Progress(@SerialName("size_dp") val sizeDp: Int? = null) : UiNode()
 
     /**
-     * `core://Dock` (feature `dock`, decision `blueprints-and-home`): the app's main navigation. The tabs are [before],
-     * one per entity of [queryKey] drawn from [item] (`$item` bound; at most [maxItems]), then [after]; the selected
-     * tab's `value` is the form value `$form.<field>`, and its content fills the screen above the bar ([DockView]).
+     * `core://Layout` (feature `layout_embed`, decision `layouts-not-apps`): another layout drawn here ([LayoutNodeView]).
+     * [presentation] Inline (default) draws it in place, [heightDp] tall when set; Sheet and Panel present it over the
+     * screen. With [showWhen] it shows only while that binding is truthy (or equals [equals]); dismissing a presented
+     * one clears the `$form` field [showWhen] names. [params] bind as `$route.<name>` in it.
      */
     @Serializable
-    data class Dock(
-        val field: String,
-        val before: List<DockTab> = emptyList(),
-        @SerialName("query_key") val queryKey: String? = null,
-        val item: DockTab? = null,
-        @SerialName("max_items") val maxItems: Int? = null,
-        val after: List<DockTab> = emptyList(),
-    ) : UiNode()
-
-    /**
-     * `core://AppFrame` (feature `app_frame`): another app of the pod drawn whole in the space it is given ([AppFrameView]).
-     * [app] is an id or a binding (`$item.id`).
-     */
-    @Serializable
-    data class AppFrame(val app: String) : UiNode()
-
-    /**
-     * `core://Drawer` (feature `drawer`): the selected page fills the screen; a menu button opens [drawer], a panel of
-     * any layout ([DrawerView]). Pages are [before], one per entity of [queryKey] from [item], then [after].
-     */
-    @Serializable
-    data class Drawer(
-        val field: String,
-        val before: List<DrawerPage> = emptyList(),
-        @SerialName("query_key") val queryKey: String? = null,
-        val item: DrawerPage? = null,
-        val after: List<DrawerPage> = emptyList(),
-        val drawer: UiNode,
-        val footer: UiNode? = null,
-        val badge: String? = null,
+    data class Layout(
+        val layout: String,
+        @SerialName("show_when") val showWhen: String? = null,
+        val equals: String? = null,
+        val presentation: EmbedPresentation = EmbedPresentation.Inline,
+        val animation: Animation? = null,
+        val params: Map<String, String> = emptyMap(),
+        @SerialName("height_dp") val heightDp: Int? = null,
     ) : UiNode()
 
     /** `core://Switch` (feature `switch`): on while [checked] (a binding) is truthy; a tap dispatches [onClick]. */
@@ -476,20 +472,6 @@ sealed class UiNode {
     data class Unknown(val type: String, val raw: JsonObject) : UiNode()
 }
 
-/** A page of a [UiNode.Drawer]: the [content] shown while [value] is selected. */
-@Serializable
-data class DrawerPage(val value: String, val content: UiNode)
-
-/** A tab of a [UiNode.Dock]: its button ([label], an [icon] name, a [badge] binding) and the [content] it shows. */
-@Serializable
-data class DockTab(
-    val value: String,
-    val label: String,
-    val icon: String? = null,
-    val badge: String? = null,
-    val content: UiNode,
-)
-
 // ---------------------------------------------------------------------------
 // Intents, discriminated by "intent"
 // ---------------------------------------------------------------------------
@@ -498,8 +480,13 @@ data class DockTab(
 sealed class ActionIntent {
     @Serializable
     data class Navigate(
-        @SerialName("target_uri") val targetUri: String,
+        @SerialName("target_uri") val targetUri: String = "",
         val presentation: PresentationMode,
+        /** Another layout to present (feature `navigate_layout`); then [targetUri], if set, opens its screen. */
+        val layout: String? = null,
+        /** `$route.<name>` values of the presented [layout]. */
+        val params: Map<String, String> = emptyMap(),
+        val animation: Animation? = null,
     ) : ActionIntent()
 
     @Serializable
@@ -592,9 +579,10 @@ sealed class ActionIntent {
     data class OpenLink(val url: String) : ActionIntent()
 
     /**
-     * `action.device` (feature `device_action`): something the device does itself ([command] with its [app] or [id]:
-     * `open_app`, `open_notification`, `mark_all_read`, `toggle_channel`, `sign_in`, `sign_out`, `set_server`,
-     * `leave_pod`, `refresh`, `open_settings`, `open_inbox`). Handled by [ConstructController], never sent to the engine.
+     * `action.device` (feature `device_action`): something the device does itself ([command] with its [app] (a layout)
+     * or [id]: `open_notification`, `mark_all_read`, `toggle_channel`, `sign_in`, `sign_out`, `set_server`,
+     * `show_versions`, `pin_version`, `follow_latest`, `leave_pod`, `refresh`, `open_settings`, `open_inbox`). Handled
+     * by [ConstructController], never sent to the engine.
      */
     @Serializable
     data class Device(
@@ -720,10 +708,8 @@ object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode
         Variant("core://MediaPicker", UiNode.MediaPicker::class, UiNode.MediaPicker.serializer()),
         Variant("core://Sticky", UiNode.Sticky::class, UiNode.Sticky.serializer()),
         Variant("core://Progress", UiNode.Progress::class, UiNode.Progress.serializer()),
-        Variant("core://Dock", UiNode.Dock::class, UiNode.Dock.serializer()),
-        Variant("core://AppFrame", UiNode.AppFrame::class, UiNode.AppFrame.serializer()),
         Variant("core://Switch", UiNode.Switch::class, UiNode.Switch.serializer()),
-        Variant("core://Drawer", UiNode.Drawer::class, UiNode.Drawer.serializer()),
+        Variant("core://Layout", UiNode.Layout::class, UiNode.Layout.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): UiNode = UiNode.Unknown(tag, raw)

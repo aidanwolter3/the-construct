@@ -369,7 +369,7 @@ async fn bindings_must_fit_the_collection() {
         "add_row",
         "undo_edit",
         "export_collection",
-        "create_app",
+        "create_layout",
     ] {
         assert!(names.contains(&t), "{t}");
     }
@@ -495,9 +495,9 @@ async fn a_change_that_would_break_another_app_is_refused_whole() {
     // Nothing applied: the definition and both apps are unchanged.
     let d = ok(&pod, "describe_collection", json!({"collection": "todos"})).await;
     assert_eq!(d["latest_version"], 1);
-    let apps = ok(&pod, "list_apps", json!({})).await;
+    let apps = ok(&pod, "list_layouts", json!({})).await;
     assert!(
-        apps["apps"]
+        apps["layouts"]
             .as_array()
             .unwrap()
             .iter()

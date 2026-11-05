@@ -34,7 +34,7 @@ follows the authorize URL with `auto=1`, which the fake Pixelfed approves at onc
 
 ```bash
 ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed -PbaseUrl=http://127.0.0.1:8080 \
-  -Pscript="click Sign in with Pixelfed; open-settings; wait-text 20000 @constructdemo; close-menu; wait-text 20000 Alice Lumen; wait-images 20000; shot feed"
+  -Pscript="click Sign in with Pixelfed; open-settings; wait-text 20000 @constructdemo; back; wait-text 20000 Alice Lumen; wait-images 20000; shot feed"
 ```
 
 For a real Pixelfed, pass `-PpixelfedLogin=<login>:<password>`: the browser then logs in through Pixelfed's web form
@@ -81,18 +81,16 @@ Commands are separated by `;` or newlines; entries starting with `#` are comment
 | `wait-images [ms]` | Waits until no image is loading. |
 | `screen <WxH or preset>` | Restarts the renderer at a new size; engine state carries over. |
 | `offline` / `online` | Fixture mode: flips connectivity. |
-| `publish-version <note>` | Fixture mode: publishes a new version of the app on screen. |
-| `open-menu` / `close-menu` | Opens or closes the drawer. |
-| `open-settings` | Opens Settings and waits for the sign-ins. |
-| `open-app <id or title>` | Opens an app from the drawer. |
-| `open-history <id or title>` | Opens an app's version picker. |
-| `select-version <n or latest>` | Picks a version in the picker. |
-| `set-server <preset or URL>` | Picks `staging`, `emulator`, `usb` or a URL in the server picker. |
+| `publish-version <note>` | Fixture mode: publishes a new version of the root layout. |
+| `open-layout <id> [push\|sheet\|panel]` | Presents a layout (`action.navigation.open {layout}`) and waits until it is drawn. |
+| `open-settings` | Presents the Settings layout as a side panel. |
+| `open-inbox` | Presents the inbox layout as a sheet. |
+| `pin-version <layout> <n or latest>` | Shows a version of a layout on this device (`pin_version`), or the latest again. |
 | `notify <app_id> <channel> <title>` | Fixture mode: a live notification arrives. |
-| `open-inbox` / `close-inbox` | Opens or closes the notification inbox. |
-| `click-notification <text>` | Opens the notification containing the text and waits for its target. |
-| `open-notification-settings` | Opens Settings → Notifications. |
-| `toggle-channel <app>.<channel>` | Flips a channel switch. |
+| `toggle-channel <app>.<channel>` | Flips a channel switch (`toggle_channel`). |
+
+`back` pops the top of the back stack (a presented layout or a screen). In fixture mode the fake pod serves the
+`app-shell` blueprints (`settings`, `inbox`) and the fixtures' layouts to `open-layout`.
 
 A `<target>` is `tag:<testTag>` (exact, else the first tag containing it), a single word, or `"quoted text"`: exact
 text, then exact content description (clickable nodes first), then substrings.
@@ -100,12 +98,12 @@ text, then exact content description (clickable nodes first), then substrings.
 Examples:
 
 ```bash
-# The menu: history, an older version, a newly published one, back to latest
--Pscript="open-menu; open-history Pixelfed; select-version 1; shot v1; publish-version Bigger photos; open-menu; assert-text Newer version available; open-history Pixelfed; select-version latest; shot latest"
+# Layouts over the root: pushed, a side panel, a sheet; Back pops each
+-Pscript="open-layout events; shot events; back; open-settings; shot settings; back; open-inbox; shot inbox; back"
 # Comments: open, write, send
 -Pscript='click tag:comment:pixelfed://posts/781254316723458049; wait-text 3000 Which lens?; type tag:textfield:comment Golden light!; click tag:textfield-send:comment; wait-text 3000 just now; shot sent'
 # Notifications
--Pscript='notify pixelfed_sample_no_login likes Bob liked your post; open-inbox; shot inbox; click-notification commented on; shot comments'
+-Pscript='notify pixelfed_sample_no_login likes Bob liked your post; open-inbox; shot inbox; click @bob commented on your post; shot comments'
 # Posting a photo
 -Pscript='click tag:new-post; pick fake-pixelfed/fixtures/media/carousel-1.png; click tag:media-picker-add:photos; click Share; shot posting'
 ```

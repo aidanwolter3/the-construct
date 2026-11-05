@@ -86,6 +86,11 @@ class FakeEngineBridge(
     val notifications: FakeNotifications? = null,
     /** The device's remembered form values (schema 10), shared by the run's bridges like an engine's cache.db. */
     val formValues: FakeFormValues = FakeFormValues(),
+    /**
+     * The fake pod's other layouts (decision `layouts-not-apps`): a layout id's bundle JSON (`{workspace, entities,
+     * queries}`), or null when the pod has no such layout. [openLayout] loads them into this one engine.
+     */
+    private val layoutBundles: (String) -> String? = { id -> layoutBundle(id, java.io.File("").absoluteFile) },
 ) : ConstructEngineBridge {
     /** [prevValues]: field -> value before this row was applied (null = absent). */
     private class Row(val intent: ActionIntent.OptimisticMutate, var prevValues: Map<String, JsonElement?>)
@@ -131,6 +136,48 @@ class FakeEngineBridge(
     private val loadedQueries: MutableMap<String, Map<String, List<String>>> = LinkedHashMap()
     private val loads: MutableMap<String, JsonObject> = LinkedHashMap()
     private var sentCount = 0
+
+    /** Other layouts opened ([openLayout]): id -> layout, or null once known to be missing. */
+    private val others: MutableMap<String, UiNode?> = LinkedHashMap()
+
+    /**
+     * Loads another layout into this engine at once (the fake pod answers immediately): its entities and queries join
+     * the store, its layout is in the snapshots' `layouts_json`. A layout the fake pod doesn't have is reported gone.
+     */
+    override fun openLayout(id: String) {
+        val raw = layoutBundles(id)
+        synchronized(lock) {
+            if (raw == null) {
+                others[id] = null
+                loads["layout:$id"] = loadJson("error", "This isn't available anymore.")
+            } else {
+                val bundle = ConstructJson.decodeBundle(raw)
+                others[id] = bundle.workspace
+                bundle.entities.forEach { (uri, e) ->
+                    entities.putIfAbsent(uri, e)
+                    server.putIfAbsent(uri, e)
+                }
+                loadedQueries["layout:$id"] = bundle.queries
+                loads["layout:$id"] = loadJson("ready", null)
+            }
+            seq++
+        }
+        emit()
+    }
+
+    private fun layoutsJsonLocked(): String = JsonObject(
+        others.mapValues { (_, ws) ->
+            JsonObject(
+                buildMap {
+                    if (ws != null) {
+                        put("workspace", ConstructJson.json.encodeToJsonElement(UiNode.serializer(), ws))
+                        put("version", JsonPrimitive(1))
+                    }
+                    put("gone", JsonPrimitive(ws == null))
+                },
+            )
+        },
+    ).toString()
 
     init {
         screenData?.let { raw ->
@@ -690,6 +737,7 @@ class FakeEngineBridge(
             JsonObject(mapOf("app_id" to JsonPrimitive(appId), "version" to JsonPrimitive(shownVersion))).toString()
         },
         notificationsJson = notifications?.unreadJson() ?: NO_UNREAD,
+        layoutsJson = layoutsJsonLocked(),
     )
 
     private fun emit() {

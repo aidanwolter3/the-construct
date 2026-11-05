@@ -152,7 +152,7 @@ private fun runCli(args: Array<String>): Int {
         var current = try {
             FakeEngineBridge(
                 fixture.readText(), appId = appId, screenData = screenData, notifications = notifications,
-                formValues = formValues,
+                formValues = formValues, layoutBundles = { id -> layoutBundle(id, cwd) },
             )
         } catch (e: Exception) {
             throw UsageException("bad fixture $fixture: ${e.message}")
@@ -161,15 +161,8 @@ private fun runCli(args: Array<String>): Int {
         publishVersion = { current.publishVersion(it) }
         notify = { app, channel, title -> notifications.inject(app, channel, title) }
         settle = { current.settle() }
-        // open-app: a new fake engine on the app's default fixture, sharing the apps catalog and the connectivity.
-        val openBridge = { id: String ->
-            FakeEngineBridge(
-                defaultFixture(id, cwd).readText(), online = current.online, appId = id, apps = current.apps,
-                screenData = screenData, notifications = notifications, formValues = formValues,
-            )
-                .also { current = it }
-        }
-        controller = ConstructController(current, current.appId, defaultAppId = DEFAULT_WORKSPACE, openBridge = openBridge)
+        // One engine for every layout on screen (decision `layouts-not-apps`).
+        controller = ConstructController(current, current.appId)
     } else {
         // Same default as the desktop app (the staging pod); pass -PbaseUrl=http://127.0.0.1:8080 for a local server.
         val baseUrl = opts["baseUrl"] ?: LIVE_DEFAULT_BASE_URL
@@ -193,8 +186,8 @@ private fun runCli(args: Array<String>): Int {
             secureStore = secureStore,
             urlOpener = opener,
         ).also { liveBridge = it }
-        // open-app: a new engine for that app on the same server and storage (the controller closes the old one).
-        controller = ConstructController(open(workspace), workspace, defaultAppId = DEFAULT_WORKSPACE, openBridge = ::open)
+        // One engine for every layout on screen (decision `layouts-not-apps`).
+        controller = ConstructController(open(workspace), workspace)
         val deadline = System.nanoTime() + timeoutMs * 1_000_000
         while (controller.state.value.workspace == null && System.nanoTime() < deadline) Thread.sleep(50)
         val s = controller.state.value
@@ -267,6 +260,27 @@ fun fixturePath(name: String): String = when (name) {
     "pixelfed_sample_bundle.json" -> "crates/app-pixelfed/sample/bundle.json"
     "counter_home_bundle.json" -> "crates/protocol/tests/data/counter_home_bundle.json"
     else -> "$SIM_FIXTURES/$name"
+}
+
+/**
+ * The fake pod's bundle for layout [id] (fixture mode, decision `layouts-not-apps`): a blueprint of `app-shell` (its
+ * newest layout file, with no data: Settings and the inbox read only device data), else the layout's default fixture;
+ * null when there is none.
+ */
+fun layoutBundle(id: String, from: File): String? {
+    val dir = generateSequence(from.absoluteFile) { it.parentFile }
+        .map { File(it, "crates/app-shell/layouts/$id") }
+        .firstOrNull { it.isDirectory }
+    val newest = dir?.listFiles { f -> f.name.endsWith(".json") }?.maxByOrNull { it.name }
+    if (newest != null) {
+        val layout = ConstructJson.json.parseToJsonElement(newest.readText()).jsonObject["layout"] ?: return null
+        return """{"version": "1.0.0", "workspace": $layout, "entities": {}, "queries": {}}"""
+    }
+    return try {
+        defaultFixture(id, from).readText()
+    } catch (e: UsageException) {
+        null
+    }
 }
 
 /** Fixture [name] ([fixturePath]) in the repo at or above [from]. */

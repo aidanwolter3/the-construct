@@ -28,6 +28,8 @@ data class AppNotification(
     val body: String = "",
     @SerialName("image_url") val imageUrl: String? = null,
     @SerialName("target_uri") val targetUri: String? = null,
+    /** The layout to present for it (decision `layouts-not-apps`); null from older pods: [appId] is the layout. */
+    val layout: String? = null,
     @SerialName("group_key") val groupKey: String? = null,
     @SerialName("created_at") val createdAt: Long,
     val read: Boolean = false,

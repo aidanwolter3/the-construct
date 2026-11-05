@@ -177,38 +177,71 @@ fun bindForm(intent: ActionIntent, form: Map<String, String>, nonce: () -> Strin
     return ConstructJson.json.decodeFromJsonElement(ActionIntent.serializer(), bound)
 }
 
-/** One open screen: [screen] already route-bound; [form] holds its form values. */
+/**
+ * One entry of the back stack (decision `layouts-not-apps`): a presented layout ([LayoutEntry]) or a screen of a
+ * layout ([ScreenEntry]). [layoutId] is the layout it belongs to; [form] holds its form values.
+ */
 @Stable
-class ScreenEntry internal constructor(
-    val key: Int,
-    val screen: Screen,
-    val params: Map<String, String>,
-) {
+sealed class StackEntry(val key: Int) {
+    abstract val layoutId: String
     val form: SnapshotStateMap<String, String> = mutableStateMapOf()
 }
 
-/** The form values of the root layout and of each open screen (Compose state). */
-val LocalForm: ProvidableCompositionLocal<SnapshotStateMap<String, String>?> = staticCompositionLocalOf { null }
+/** One open screen of layout [layoutId]: [screen] already route-bound. */
+@Stable
+class ScreenEntry internal constructor(
+    key: Int,
+    val screen: Screen,
+    val params: Map<String, String>,
+    override val layoutId: String,
+) : StackEntry(key)
 
 /**
- * The back stack, owned by [ConstructController] (survives rotation, like the menu). [open] pushes the screen of the
- * displayed layout whose route matches (and asks the engine to load its data); [back] pops.
+ * A presented layout: [presentation] Push (the whole screen), Sheet or Panel; [params] are its `$route.<name>` values.
+ * [nodeKey] is set when a `core://Layout` presents it while its `show_when` holds; [onDismiss] then clears that.
+ */
+@Stable
+class LayoutEntry internal constructor(
+    key: Int,
+    override val layoutId: String,
+    val params: Map<String, String>,
+    val presentation: PresentationMode,
+    val animation: Animation?,
+    internal val nodeKey: String? = null,
+    internal val onDismiss: (() -> Unit)? = null,
+) : StackEntry(key)
+
+/** The form values of the root layout and of each stack entry (Compose state). */
+val LocalForm: ProvidableCompositionLocal<SnapshotStateMap<String, String>?> = staticCompositionLocalOf { null }
+
+/** [workspace] with every `$route.<name>` replaced by [params] (a presented layout's parameters). */
+fun bindRouteParams(workspace: UiNode, params: Map<String, String>): UiNode {
+    if (params.isEmpty()) return workspace
+    val json = ConstructJson.json.encodeToJsonElement(UiNode.serializer(), workspace)
+    val bound = mapStrings(json) { s -> ROUTE_TOKEN.replace(s) { m -> params[m.groupValues[1]] ?: m.value } }
+    return ConstructJson.json.decodeFromJsonElement(UiNode.serializer(), bound)
+}
+
+/**
+ * The back stack, owned by [ConstructController] (survives rotation): presented layouts and screens, in order. System
+ * Back pops its top ([back]); nothing else needs a Back of its own. [open] presents a layout, or pushes the screen of
+ * the layout on top whose route matches (and asks the engine to load its data).
  *
  * Remembered form values (schema 10): the root form is filled from the device when a layout shows a remembered field
  * for the first time ([restoreRoot]), a screen's form when the screen opens; [remember] saves a new choice.
  */
 @Stable
 class Navigation internal constructor(private val controller: ConstructController) {
-    val stack = mutableStateListOf<ScreenEntry>()
+    val stack = mutableStateListOf<StackEntry>()
     val rootForm: SnapshotStateMap<String, String> = mutableStateMapOf()
     private var nextKey = 0
 
-    /** Remembered root fields already restored for the current app (snapshots arrive on any thread: guarded). */
+    /** Remembered root fields already restored (snapshots arrive on any thread: guarded). */
     private val rootRestored = mutableSetOf<String>()
 
     /**
-     * Restores the remembered fields of [workspace] (the displayed layout) that this app has not restored yet, before
-     * the layout is drawn. A field the user changed meanwhile keeps its value. Reads the device only when a new
+     * Restores the remembered fields of [workspace] (the displayed root layout) that have not been restored yet,
+     * before the layout is drawn. A field the user changed meanwhile keeps its value. Reads the device only when a new
      * remembered field appears.
      */
     internal fun restoreRoot(workspace: UiNode?) {
@@ -228,35 +261,56 @@ class Navigation internal constructor(private val controller: ConstructControlle
         controller.rememberFormValue(scope, field, value)
     }
 
-    val top: ScreenEntry? get() = stack.lastOrNull()
+    val top: StackEntry? get() = stack.lastOrNull()
 
-    /** The form the visible screen edits (the root layout's when no screen is open). */
+    /** The topmost open screen, if any. */
+    val topScreen: ScreenEntry? get() = stack.lastOrNull() as? ScreenEntry
+
+    /** The form the visible entry edits (the root layout's when nothing is open). */
     fun activeForm(): SnapshotStateMap<String, String> = top?.form ?: rootForm
 
+    /** The layout on top: the top entry's, else the root. */
+    fun currentLayout(): String = top?.layoutId ?: controller.rootId
+
     /** Navigation intents this client resolves; true when handled (not sent to the engine). */
-    internal fun handle(intent: ActionIntent): Boolean = when (intent) {
-        is ActionIntent.Navigate -> open(intent)
+    internal fun handle(intent: ActionIntent, from: String? = null): Boolean = when (intent) {
+        is ActionIntent.Navigate -> open(intent, from)
         ActionIntent.NavigateBack -> back()
         else -> false
     }
 
-    /** Whether a screen of the displayed layout matches [targetUri]. */
-    fun canOpen(targetUri: String): Boolean {
-        val workspace = displayedWorkspace(controller.state.value, controller.pinned.value) as? UiNode.Workspace
-            ?: return false
+    /** Whether a screen of layout [layoutId] (the one on top when null) matches [targetUri]. */
+    fun canOpen(targetUri: String, layoutId: String? = null): Boolean {
+        val workspace = controller.workspaceOf(layoutId ?: currentLayout()) as? UiNode.Workspace ?: return false
         return workspace.screens.any { matchRoute(it.route, targetUri) != null }
     }
 
-    /** Opens the screen whose route matches; false when no screen of the displayed layout does. */
-    fun open(intent: ActionIntent.Navigate): Boolean {
-        val workspace = displayedWorkspace(controller.state.value, controller.pinned.value) as? UiNode.Workspace
-            ?: return false
+    /**
+     * `action.navigation.open`: with a `layout`, presents it (then opens its screen matching `target_uri`, once it is
+     * loaded); otherwise opens the screen of layout [from] (the one on top when null, falling back to the root) whose
+     * route matches. False when nothing matched.
+     */
+    fun open(intent: ActionIntent.Navigate, from: String? = null): Boolean {
+        val layout = intent.layout?.trim()?.takeIf { it.isNotEmpty() }
+        if (layout != null) {
+            present(layout, intent.params, intent.presentation, intent.animation)
+            if (intent.targetUri.isNotBlank()) controller.openWhenLoaded(layout, intent.targetUri.trim())
+            return true
+        }
+        val owner = from ?: currentLayout()
+        return openScreen(intent.targetUri, owner, intent.presentation) ||
+            (owner != controller.rootId && openScreen(intent.targetUri, controller.rootId, intent.presentation))
+    }
+
+    /** Pushes the screen of [layoutId] whose route matches [targetUri]; false when none does. */
+    internal fun openScreen(targetUri: String, layoutId: String, presentation: PresentationMode = PresentationMode.Push): Boolean {
+        val workspace = controller.workspaceOf(layoutId) as? UiNode.Workspace ?: return false
         for (screen in workspace.screens) {
-            val params = matchRoute(screen.route, intent.targetUri) ?: continue
-            val entry = ScreenEntry(nextKey++, bindRoute(screen, params), params)
+            val params = matchRoute(screen.route, targetUri) ?: continue
+            val entry = ScreenEntry(nextKey++, bindRoute(screen, params), params, layoutId)
             val choices = rememberedChoices(listOfNotNull(entry.screen.content, entry.screen.footer))
             if (choices.isNotEmpty()) applyRemembered(entry.form, choices, controller.rememberedFormValues(screen.id))
-            if (intent.presentation == PresentationMode.Replace && stack.isNotEmpty()) {
+            if (presentation == PresentationMode.Replace && stack.lastOrNull() is ScreenEntry) {
                 controller.attachments.release(stack[stack.lastIndex].form)
                 stack[stack.lastIndex] = entry
             } else {
@@ -268,20 +322,75 @@ class Navigation internal constructor(private val controller: ConstructControlle
         return false
     }
 
-    /** Pops the top screen (discarding the photos its form still holds); false when none is open. */
+    /**
+     * Presents layout [layoutId] on the stack: Push (Modal too) the whole screen, Sheet a bottom sheet, Panel a side
+     * panel. Replace swaps the top presented layout. The engine loads the layout if it hasn't yet.
+     */
+    fun present(
+        layoutId: String,
+        params: Map<String, String> = emptyMap(),
+        presentation: PresentationMode = PresentationMode.Push,
+        animation: Animation? = null,
+    ): LayoutEntry {
+        val shown = if (presentation == PresentationMode.Modal) PresentationMode.Push else presentation
+        val entry = LayoutEntry(nextKey++, layoutId, params, shown, animation)
+        if (presentation == PresentationMode.Replace && stack.lastOrNull() is LayoutEntry) {
+            release(stack.removeAt(stack.lastIndex))
+            stack.add(LayoutEntry(entry.key, layoutId, params, PresentationMode.Push, animation))
+        } else {
+            stack.add(entry)
+        }
+        controller.openLayout(layoutId)
+        return stack.last() as LayoutEntry
+    }
+
+    /** A `core://Layout`'s Sheet or Panel ([nodeKey]) is shown while its `show_when` holds; [onDismiss] clears it. */
+    internal fun presentFromNode(
+        nodeKey: String,
+        layoutId: String,
+        params: Map<String, String>,
+        presentation: PresentationMode,
+        animation: Animation?,
+        onDismiss: () -> Unit,
+    ) {
+        if (stack.any { (it as? LayoutEntry)?.nodeKey == nodeKey }) return
+        stack.add(LayoutEntry(nextKey++, layoutId, params, presentation, animation, nodeKey, onDismiss))
+        controller.openLayout(layoutId)
+    }
+
+    /** The `core://Layout` [nodeKey] no longer shows: its entry (and what is above it) goes. */
+    internal fun dismissNode(nodeKey: String) {
+        val i = stack.indexOfFirst { (it as? LayoutEntry)?.nodeKey == nodeKey }
+        if (i < 0) return
+        while (stack.size > i) release(stack.removeAt(stack.lastIndex))
+    }
+
+    /** Pops the top entry (discarding the photos its form still holds); false when nothing is open. */
     fun back(): Boolean {
         if (stack.isEmpty()) return false
         val entry = stack.removeAt(stack.lastIndex)
-        controller.attachments.release(entry.form)
+        release(entry)
+        (entry as? LayoutEntry)?.onDismiss?.invoke()
         return true
+    }
+
+    /** Pops [entry] and everything above it (a scrim tap on a sheet under another entry). */
+    fun dismiss(entry: StackEntry) {
+        val i = stack.indexOf(entry)
+        if (i < 0) return
+        while (stack.size > i) back()
+    }
+
+    private fun release(entry: StackEntry) {
+        controller.attachments.release(entry.form)
     }
 
     /** Loads the top screen's data again. */
     fun retry() {
-        top?.screen?.data?.let { controller.send(ActionIntent.LoadData(it)) }
+        topScreen?.screen?.data?.let { controller.send(ActionIntent.LoadData(it)) }
     }
 
-    /** Closes every screen (another app is opening). */
+    /** Closes everything (leaving the pod). */
     fun clear() {
         stack.clear()
         synchronized(rootRestored) {
@@ -293,77 +402,76 @@ class Navigation internal constructor(private val controller: ConstructControlle
 }
 
 /**
- * The top screen over the layout (in-tree, like the menu: headless captures see it): a bar with Back, the title and a
- * spinner while the data loads, the load's error (with Try again), the content (scrolling) and the footer. Tags: `screen:<id>`,
+ * An open screen over its layout (in-tree: headless captures see it): a bar with Back, the title and a spinner while
+ * the data loads, the load's error (with Try again), the content (scrolling) and the footer. Tags: `screen:<id>`,
  * `screen-back`, `screen-loading`, `screen-error`, `screen-retry`.
  */
 @Composable
-internal fun ScreenHost(controller: ConstructController, state: ConstructState) {
+internal fun ScreenView(controller: ConstructController, state: ConstructState, entry: ScreenEntry, device: DeviceData) {
     val nav = controller.navigation
-    val entry = nav.top ?: return
-    PlatformBackHandler(enabled = !controller.menu.open) { nav.back() }
-    key(entry.key) {
-        Surface(Modifier.fillMaxSize().testTag("screen:${entry.screen.id}"), color = MaterialTheme.colorScheme.background) {
-            val scope = entry.screen.id
-            CompositionLocalProvider(
-                LocalForm provides entry.form,
-                LocalFormMemory provides remember(scope) { FormMemory { f, v -> nav.remember(scope, f, v) } },
-                LocalConstructQueries provides state.queries,
-            ) {
-                Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Column(Modifier.fillMaxSize().widthIn(max = FEED_MAX_WIDTH)) {
-                        val load = entry.screen.data?.let { state.loads[it] }
-                        Row(
-                            Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp, top = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            IconButton(onClick = { nav.back() }, modifier = Modifier.testTag("screen-back")) {
-                                Icon(ConstructIcons.ArrowBack, contentDescription = "Back")
-                            }
-                            Text(
-                                interpolate(entry.screen.title, state.entities),
-                                style = MaterialTheme.typography.titleLarge,
-                                modifier = Modifier.weight(1f).semantics { heading() },
-                            )
-                            // Progress sits in the bar (its height is fixed by the Back button), so the content
-                            // below doesn't jump when the load finishes.
-                            if (load?.state == "loading") {
-                                CircularProgressIndicator(
-                                    Modifier.size(16.dp).testTag("screen-loading").semantics { contentDescription = "Loading" },
-                                    strokeWidth = 2.dp,
-                                )
-                            }
+    val entities = remember(state.entities, device) { state.entities + device.entities }
+    val queries = remember(state.queries, device) { state.queries + device.queries }
+    val dispatch: (ActionIntent) -> Unit = { controller.dispatchIn(entry.layoutId, entry.form, it) }
+    Surface(Modifier.fillMaxSize().testTag("screen:${entry.screen.id}"), color = MaterialTheme.colorScheme.background) {
+        val scope = entry.screen.id
+        CompositionLocalProvider(
+            LocalForm provides entry.form,
+            LocalFormMemory provides remember(scope) { FormMemory { f, v -> nav.remember(scope, f, v) } },
+            LocalConstructQueries provides queries,
+        ) {
+            Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(Modifier.fillMaxSize().widthIn(max = FEED_MAX_WIDTH)) {
+                    val load = entry.screen.data?.let { state.loads[it] }
+                    Row(
+                        Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp, top = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(onClick = { nav.dismiss(entry) }, modifier = Modifier.testTag("screen-back")) {
+                            Icon(ConstructIcons.ArrowBack, contentDescription = "Back")
                         }
+                        Text(
+                            interpolate(entry.screen.title, entities),
+                            style = MaterialTheme.typography.titleLarge,
+                            modifier = Modifier.weight(1f).semantics { heading() },
+                        )
+                        // Progress sits in the bar (its height is fixed by the Back button), so the content
+                        // below doesn't jump when the load finishes.
+                        if (load?.state == "loading") {
+                            CircularProgressIndicator(
+                                Modifier.size(16.dp).testTag("screen-loading").semantics { contentDescription = "Loading" },
+                                strokeWidth = 2.dp,
+                            )
+                        }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    LoadErrorRow(load, onRetry = nav::retry)
+                    val scroll = rememberScrollState()
+                    // After a submit from the footer (e.g. a new item at the end of a list), follow the content
+                    // to its end once it grows.
+                    var followEnd by remember { mutableStateOf(false) }
+                    LaunchedEffect(scroll.maxValue, followEnd) {
+                        if (followEnd && scroll.maxValue > 0) {
+                            scroll.animateScrollTo(scroll.maxValue)
+                            followEnd = false
+                        }
+                    }
+                    // The bar above does not scroll, so `core://Sticky` content pins right at the top.
+                    val sticky = remember(scroll) { StickyScroll(scroll) }
+                    Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll).stickyContent(sticky)) {
+                        CompositionLocalProvider(LocalStickyScroll provides sticky) {
+                            RenderUiNode(entry.screen.content, entities, dispatch, Modifier.fillMaxWidth())
+                        }
+                    }
+                    entry.screen.footer?.let { footer ->
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                        LoadErrorRow(load, onRetry = nav::retry)
-                        val scroll = rememberScrollState()
-                        // After a submit from the footer (e.g. a new item at the end of a list), follow the content
-                        // to its end once it grows.
-                        var followEnd by remember { mutableStateOf(false) }
-                        LaunchedEffect(scroll.maxValue, followEnd) {
-                            if (followEnd && scroll.maxValue > 0) {
-                                scroll.animateScrollTo(scroll.maxValue)
-                                followEnd = false
-                            }
-                        }
-                        // The bar above does not scroll, so `core://Sticky` content pins right at the top.
-                        val sticky = remember(scroll) { StickyScroll(scroll) }
-                        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll).stickyContent(sticky)) {
-                            CompositionLocalProvider(LocalStickyScroll provides sticky) {
-                                RenderUiNode(entry.screen.content, state.entities, controller::dispatch, Modifier.fillMaxWidth())
-                            }
-                        }
-                        entry.screen.footer?.let { footer ->
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                            RenderUiNode(
-                                footer, state.entities,
-                                { intent ->
-                                    controller.dispatch(intent)
-                                    followEnd = true
-                                },
-                                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                            )
-                        }
+                        RenderUiNode(
+                            footer, entities,
+                            { intent ->
+                                dispatch(intent)
+                                followEnd = true
+                            },
+                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
                     }
                 }
             }

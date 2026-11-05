@@ -262,6 +262,15 @@ const MIGRATIONS: &[Step] = &[
         "INSERT INTO pod_settings (key, value)
          SELECT 'blueprints.convert', '1' WHERE EXISTS (SELECT 1 FROM app_versions);",
     ),
+    // Decision `layouts-not-apps`: home owns every feed, and a home that
+    // draws a retired navigation node becomes a plain list, on the pod's
+    // next open (`custom::convert_to_layouts`).
+    Step::sql(
+        "layouts_not_apps",
+        "INSERT INTO pod_settings (key, value)
+         SELECT 'layouts.convert', '1'
+         WHERE EXISTS (SELECT 1 FROM custom_apps) OR EXISTS (SELECT 1 FROM app_versions);",
+    ),
 ];
 
 /// A pod setting inside a transaction (an adapter migration reads its
@@ -960,7 +969,7 @@ type FileRef<'a> = Option<(&'a str, &'a str)>;
 
 /// A version written at runtime (a custom app's): who wrote it and extra
 /// facts ([`AppVersion::author`], [`AppVersion::meta_json`]).
-pub(crate) struct Authored<'a> {
+pub struct Authored<'a> {
     pub author: &'a str,
     pub meta_json: Option<&'a str>,
     /// The features it uses, worked out by the caller from the layout with
@@ -969,7 +978,7 @@ pub(crate) struct Authored<'a> {
 }
 
 /// Append a custom app's version: `json` as version `MAX + 1`.
-pub(crate) fn append_authored_version_on(
+pub fn append_authored_version_on(
     conn: &Connection,
     app_id: &str,
     json: &str,

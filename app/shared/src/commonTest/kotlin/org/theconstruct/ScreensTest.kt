@@ -137,14 +137,14 @@ class ScreensTest {
         val controller = ConstructController(bridge)
         bridge.listener!!(EngineSnapshot(WORKSPACE_WITH_SCREEN, "{}", true, 1, 0))
         controller.dispatch(ActionIntent.Navigate("x://posts/42/thread", PresentationMode.Push))
-        val top = controller.navigation.top!!
+        val top = controller.navigation.topScreen!!
         assertEquals("thread", top.screen.id)
         assertEquals(mapOf("id" to "42"), top.params)
         assertEquals(listOf("""{"intent":"action.data.load","path":"/v1/x/thread?id=42"}"""), bridge.sent)
         // Replace swaps the top screen; Push stacks.
         controller.dispatch(ActionIntent.Navigate("x://posts/43/thread", PresentationMode.Replace))
         assertEquals(1, controller.navigation.stack.size)
-        assertEquals("43", controller.navigation.top!!.params["id"])
+        assertEquals("43", controller.navigation.topScreen!!.params["id"])
         controller.dispatch(ActionIntent.Navigate("x://posts/44/thread", PresentationMode.Push))
         assertEquals(2, controller.navigation.stack.size)
         // A target no screen matches goes to the engine.
@@ -165,7 +165,7 @@ class ScreensTest {
         val controller = ConstructController(bridge)
         bridge.listener!!(EngineSnapshot(WORKSPACE_WITH_SCREEN, "{}", true, 1, 0))
         controller.dispatch(ActionIntent.Navigate("x://posts/42/thread", PresentationMode.Push))
-        val entry = controller.navigation.top!!
+        val entry = controller.navigation.topScreen!!
         val submit = assertIs<UiNode.TextField>(entry.screen.footer).onSubmit!!
         controller.dispatch(submit) // blank: nothing sent
         assertEquals(1, bridge.sent.size)

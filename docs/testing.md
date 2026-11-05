@@ -127,8 +127,8 @@ The offline outbox, end to end on the desktop app:
 ```bash
 cargo run -p server                                                    # terminal 1
 cd app && CONSTRUCT_BASE_URL=http://127.0.0.1:8080 CONSTRUCT_WORKSPACE=pixelfed_sample_no_login ./gradlew :desktopApp:run
-# stop the server: the menu button gets a badge and the menu says Offline
-# click the heart and the bookmark: both change at once and the menu shows "2 pending"
+# stop the server: Settings (open it from a layout that has the button) says Offline
+# click the heart and the bookmark: both change at once and Settings shows "Offline · 2 pending"
 sqlite3 ~/.construct/servers/*/cache.db "SELECT id, endpoint, status FROM action_outbox;"
 # start the server again: within a few seconds the rows are sent and deleted
 ```

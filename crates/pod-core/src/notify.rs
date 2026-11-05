@@ -110,6 +110,8 @@ pub struct PollOutcome {
 
 /// What the pod's events streams carry besides layout versions.
 #[derive(Debug, Clone, PartialEq, Eq)]
+// A broadcast message, cloned per subscriber; a box would not save anything.
+#[allow(clippy::large_enum_variant)]
 pub enum NotifyEvent {
     New(NotificationEvent),
     Read(ReadEvent),
@@ -150,6 +152,7 @@ fn row_to_notification(r: &rusqlite::Row<'_>) -> rusqlite::Result<Notification> 
         body: r.get(4)?,
         image_url: r.get(5)?,
         target_uri: r.get(6)?,
+        layout: None,
         group_key: r.get(7)?,
         created_at: r.get(8)?,
         read: r.get::<_, Option<i64>>(9)?.is_some(),
@@ -562,11 +565,15 @@ impl AppState {
             s.transaction(|tx| Ok((insert_on(tx, &items)?, unread_on(tx, &apps)?)))
         })
         .await?;
-        let fresh: Vec<Notification> = inserted
+        let mut fresh: Vec<Notification> = inserted
             .iter()
             .filter(|(_, quiet)| !quiet)
             .map(|(n, _)| n.clone())
             .collect();
+        if !fresh.is_empty() {
+            let map = blocking(self, crate::custom::layouts_for_blueprints).await?;
+            crate::custom::target_layouts(&map, &mut fresh);
+        }
         if !fresh.is_empty() {
             tracing::info!(count = fresh.len(), "new notifications");
         }
@@ -910,6 +917,10 @@ async fn list(
             };
             rows.retain(|n| apps.contains(&n.app_id));
             let (total, by_app) = unread_on(c, &apps)?;
+            Ok((rows, total, by_app))
+        })
+        .and_then(|(mut rows, total, by_app)| {
+            crate::custom::target_layouts(&crate::custom::layouts_for_blueprints(s)?, &mut rows);
             Ok((rows, total, by_app))
         })
     })

@@ -184,7 +184,11 @@ private fun bindJson(e: JsonElement, item: JsonObject): JsonElement = when (e) {
 fun bindIntent(intent: ActionIntent, item: JsonObject?): ActionIntent {
     if (item == null) return intent
     return when (intent) {
-        is ActionIntent.Navigate -> intent.copy(targetUri = bindItemTokens(intent.targetUri, item))
+        is ActionIntent.Navigate -> intent.copy(
+            targetUri = bindItemTokens(intent.targetUri, item),
+            layout = intent.layout?.let { bindItemTokens(it, item) },
+            params = intent.params.mapValues { (_, v) -> bindItemTokens(v, item) },
+        )
         is ActionIntent.OptimisticMutate -> intent.copy(
             entityUri = bindItemTokens(intent.entityUri, item),
             endpoint = bindItemTokens(intent.endpoint, item),

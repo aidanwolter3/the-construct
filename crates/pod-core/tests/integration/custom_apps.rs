@@ -479,8 +479,9 @@ async fn layouts_may_only_use_their_sources() {
     let b = refused(kitchen_a(), json!([["a", "nope"]])).await;
     assert_eq!(b["error"], "invalid_feeds");
     assert!(b["allowed"].as_array().unwrap().contains(&json!("a/all")));
+    // No feeds: the layout has only home's, which don't fill a:all.
     let b = refused(kitchen_a(), json!([])).await;
-    assert_eq!(b["error"], "invalid_feeds");
+    assert_eq!(b["error"], "invalid_layout");
     let (_, b) = call(
         &env.pod,
         "POST",
