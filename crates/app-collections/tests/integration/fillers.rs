@@ -7,6 +7,8 @@
 //! sample items and rows, two event sites fill one collection side by side
 //! (events extractor, zones, past events dropped, details from each event's
 //! page, an llm site read by a fake model) and alerts notify once per match,
+//! a page listing only past events reads as nothing upcoming, not as a
+//! broken recipe,
 //! an agent filler (a fake model) upserts rows within its daily budget, and
 //! temporary pods can't fill.
 
@@ -143,6 +145,8 @@ struct FakeAgent {
     page_rows: Mutex<Vec<Value>>,
     seen_current: Mutex<Vec<usize>>,
     pages: Mutex<Vec<String>>,
+    /// Whether each page read asked for past items too.
+    with_past: Mutex<Vec<bool>>,
 }
 
 fn objects(v: &[Value]) -> Vec<Map<String, Value>> {
@@ -167,6 +171,7 @@ impl FillAgent for FakeAgent {
     ) -> BoxFuture<'a, Result<Vec<Map<String, Value>>, String>> {
         Box::pin(async move {
             self.pages.lock().unwrap().push(req.page_text.to_owned());
+            self.with_past.lock().unwrap().push(req.with_past);
             Ok(objects(&self.page_rows.lock().unwrap()))
         })
     }
@@ -752,6 +757,76 @@ async fn event_sites_fill_one_collection_and_alerts_notify_once() {
     .await;
     let d = ok(&pod, "describe_collection", json!({"collection": "events"})).await;
     assert_eq!(d["definition"]["alerts"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_page_of_only_past_events_isnt_a_broken_recipe() {
+    let base = serve(Arc::new(Site::default())).await;
+    let agent = Arc::new(FakeAgent::default());
+    *agent.page_rows.lock().unwrap() = vec![
+        json!({"title": "Spring talks", "start": "2020-05-29T19:00"}),
+        json!({"title": "Summer talks", "start": "2020-06-26T19:00"}),
+    ];
+    let pod = pod_with(Some(agent.clone()));
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "events", "fields": [
+            {"name": "title", "type": "text", "optional": true},
+            {"name": "start", "type": "datetime", "optional": true}],
+        "fillers": [{"kind": "fetch", "title": "Talk Night", "url": format!("{base}/plain"),
+            "extract": "llm", "fields": ["title", "start"], "hint": "upcoming shows",
+            "zone": "America/Denver", "upcoming": "start"}]}),
+    )
+    .await;
+    settle(&pod, "events").await;
+    let id = filler_ids(&pod, "events").await.remove(0);
+    let status = |pod: Pod| async move {
+        let st = ok(&pod, "collections_status", json!({"collection": "events"})).await;
+        st["fillers"][0].clone()
+    };
+    // The page lists only past shows, fill after fill.
+    for _ in 0..fill::EMPTY_AFTER {
+        fill::fill(&pod, "events", &id, true).await;
+    }
+    assert!(rows(&pod, "events").await.is_empty());
+    let f = status(pod.clone()).await;
+    assert_eq!(f["state"], "ok", "{f}");
+    let detail = f["detail"].as_str().unwrap();
+    assert!(
+        detail.starts_with("no upcoming items listed · 2 past ones on the page · filled"),
+        "{detail}"
+    );
+    assert!(
+        agent.with_past.lock().unwrap().iter().all(|w| *w),
+        "the model is asked for past items too"
+    );
+    // A recipe that extracts nothing is still empty.
+    agent.page_rows.lock().unwrap().clear();
+    for _ in 0..fill::EMPTY_AFTER {
+        fill::fill(&pod, "events", &id, true).await;
+    }
+    let f = status(pod.clone()).await;
+    assert_eq!(f["state"], "empty", "{f}");
+    assert!(
+        f["detail"].as_str().unwrap().contains("check the recipe"),
+        "{f}"
+    );
+    // Some upcoming, some past.
+    *agent.page_rows.lock().unwrap() = vec![
+        json!({"title": "Spring talks", "start": "2020-05-29T19:00"}),
+        json!({"title": "Winter talks", "start": "2099-12-03T19:00"}),
+    ];
+    fill::fill(&pod, "events", &id, true).await;
+    let f = status(pod.clone()).await;
+    assert_eq!(f["state"], "ok", "{f}");
+    assert!(
+        f["detail"]
+            .as_str()
+            .unwrap()
+            .starts_with("1 items · 1 past one left out · filled"),
+        "{f}"
+    );
 }
 
 #[tokio::test]
