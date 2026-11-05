@@ -106,7 +106,7 @@ alerts use its built-in app's channel. Rows are served with `alert_matched` and 
   `remove_filler` (its rows stay, unlocked; its alerts go), `add_alert`, `update_alert`, `remove_alert`; new tools
   `collections_preview` (try a recipe, nothing stored; without a map, sample items to write paths from),
   `collections_status`, `collections_refresh`, `collections_set_secret` (sealed with the server key, never shown
-  back).
+  back, sent only to the host it was stored for: [collection-secret-hosts](collection-secret-hosts.md)).
 
 ## The Events app
 

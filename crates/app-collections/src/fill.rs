@@ -218,25 +218,41 @@ fn secret_context(name: &str) -> String {
     format!("collections_secret:{name}")
 }
 
-/// Store (or with `None`, forget) secret `name`, sealed.
+/// Store secret `name`, sealed, sent only to `host` (or with `None`,
+/// forget it).
 pub fn set_secret(
     store: &pod_core::store::Store,
     name: &str,
-    value: Option<&str>,
+    value: Option<(&str, &str)>,
     now: i64,
 ) -> rusqlite::Result<()> {
-    let sealed = value.map(|v| store.secrets().seal(&secret_context(name), v));
+    let sealed = value.map(|(v, host)| (store.secrets().seal(&secret_context(name), v), host));
     store.with_conn(|c| {
         match sealed {
-            Some(s) => c.execute(
-                "INSERT INTO collections_secrets (name, value, updated_at) VALUES (?1, ?2, ?3)
-                 ON CONFLICT (name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-                params![name, s, now],
+            Some((s, host)) => c.execute(
+                "INSERT INTO collections_secrets (name, value, updated_at, host) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT (name) DO UPDATE SET value = excluded.value,
+                     updated_at = excluded.updated_at, host = excluded.host",
+                params![name, s, now, host],
             )?,
             None => c.execute("DELETE FROM collections_secrets WHERE name = ?1", [name])?,
         };
         Ok(())
     })
+}
+
+/// The host a secret is bound to, from what `collections_set_secret` was
+/// given: a host name or a URL (its host), lowercase.
+pub fn secret_host(given: &str) -> Option<String> {
+    let given = given.trim();
+    let url = if given.contains("://") {
+        given.to_owned()
+    } else {
+        format!("https://{given}")
+    };
+    let host = web_extract::fetch::host_of(&url);
+    let host = host.trim_end_matches('.');
+    (!host.is_empty()).then(|| host.to_owned())
 }
 
 /// The names of the stored secrets.
@@ -245,30 +261,58 @@ pub fn secret_names(conn: &Connection) -> rusqlite::Result<Vec<String>> {
     stmt.query_map([], |r| r.get(0))?.collect()
 }
 
-/// `headers` with each `{secret:<name>}` replaced by the secret's value.
+/// Request headers with their secrets filled in.
+#[derive(Debug, Clone, Default)]
+pub struct Resolved {
+    pub headers: Vec<(String, String)>,
+    /// A secret is in them: send with
+    /// [`crate::CollectionsAdapter::secret_fetch_client`].
+    pub has_secret: bool,
+}
+
+/// `headers` for a request to `url`, with each `{secret:<name>}` replaced
+/// by the secret's value. A secret goes only to the host it was stored
+/// for, so a recipe can't send it anywhere else.
 fn resolve_headers(
     store: &pod_core::store::Store,
     headers: &std::collections::BTreeMap<String, String>,
-) -> Result<Vec<(String, String)>, String> {
-    let mut out = Vec::new();
+    url: &str,
+) -> Result<Resolved, String> {
+    let mut out = Resolved::default();
+    let to = web_extract::fetch::host_of(url);
     for (k, v) in headers {
         let mut value = v.clone();
         for name in crate::filler::secret_refs(v) {
-            let stored: Option<String> = store
+            let stored: Option<(String, Option<String>)> = store
                 .with_conn(|c| {
                     c.query_row(
-                        "SELECT value FROM collections_secrets WHERE name = ?1",
+                        "SELECT value, host FROM collections_secrets WHERE name = ?1",
                         [&name],
-                        |r| r.get(0),
+                        |r| Ok((r.get(0)?, r.get(1)?)),
                     )
                     .optional()
                 })
                 .map_err(|_| "the secrets could not be read".to_owned())?;
-            let Some(stored) = stored else {
+            let Some((stored, host)) = stored else {
                 return Err(format!(
                     "the secret '{name}' is not set (collections_set_secret sets it)"
                 ));
             };
+            match host {
+                None => {
+                    return Err(format!(
+                        "the secret '{name}' has no host: set it again with collections_set_secret \
+                         and the host it is for"
+                    ));
+                }
+                Some(h) if h != to => {
+                    tracing::warn!(secret = %name, "a secret was not sent: the request is for another host");
+                    return Err(format!(
+                        "the secret '{name}' is only sent to {h}, not to {to}"
+                    ));
+                }
+                Some(_) => {}
+            }
             let plain = store
                 .secrets()
                 .open(&secret_context(&name), &stored)
@@ -278,8 +322,9 @@ fn resolve_headers(
                     )
                 })?;
             value = value.replace(&format!("{{secret:{name}}}"), &plain);
+            out.has_secret = true;
         }
-        out.push((k.clone(), value));
+        out.headers.push((k.clone(), value));
     }
     Ok(out)
 }
@@ -288,8 +333,9 @@ fn resolve_headers(
 pub fn resolve_headers_for(
     pod: &Pod,
     headers: &std::collections::BTreeMap<String, String>,
-) -> Result<Vec<(String, String)>, String> {
-    resolve_headers(pod.store(), headers)
+    url: &str,
+) -> Result<Resolved, String> {
+    resolve_headers(pod.store(), headers, url)
 }
 
 /// Up to a few raw items of `body` (no map), for writing paths: what the
@@ -1015,21 +1061,32 @@ async fn run_fetch(
     if filler.is_llm() && adapter.agent().is_none() {
         return Fetch::Failed(NO_AGENT.into(), None);
     }
-    let headers = match resolve_headers(pod.store(), headers) {
-        Ok(h) => h,
-        Err(e) => return Fetch::Failed(e, None),
-    };
     let pairs: Vec<(String, String)> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let ids: Vec<String> = map.keys().cloned().collect();
     let caps = adapter.caps();
     let zone = filler.zone();
-    let client = adapter.fetch_client();
-    let get = |u: String, etag: Option<String>, lm: Option<String>| {
-        let headers = headers.clone();
-        async move {
-            space(pod, &u).await;
-            web_extract::fetch::fetch(client, &u, etag.as_deref(), lm.as_deref(), &headers).await
-        }
+    let get = |u: String, etag: Option<String>, lm: Option<String>| async move {
+        // Per URL: a secret goes only to its own host.
+        let resolved = resolve_headers(pod.store(), headers, &u).map_err(|message| {
+            web_extract::fetch::FetchError {
+                message,
+                retry_after: None,
+            }
+        })?;
+        let client = if resolved.has_secret {
+            adapter.secret_fetch_client()
+        } else {
+            adapter.fetch_client()
+        };
+        space(pod, &u).await;
+        web_extract::fetch::fetch(
+            client,
+            &u,
+            etag.as_deref(),
+            lm.as_deref(),
+            &resolved.headers,
+        )
+        .await
     };
     // One page's rows (by field id).
     let read = |body: String, page: String, day: String| {

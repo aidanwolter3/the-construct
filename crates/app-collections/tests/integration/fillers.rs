@@ -2,7 +2,8 @@
 //! local fake website: a fetch recipe fills election results (replace by
 //! key, conditional requests, hand edits of unfilled fields kept, filled
 //! fields and rows locked), each product row is filled from its own page
-//! (jsonld, prices normalized), a header sends a sealed secret, previews show
+//! (jsonld, prices normalized), a header sends a sealed secret (only to its
+//! own host, not along a redirect off it), previews show
 //! sample items and rows, two event sites fill one collection side by side
 //! (events extractor, zones, past events dropped, details from each event's
 //! page, an llm site read by a fake model) and alerts notify once per match,
@@ -33,6 +34,30 @@ use tower::ServiceExt;
 struct Site {
     results: Mutex<Value>,
     hits: Mutex<usize>,
+    /// `X-Api-Key` values `/echo` received.
+    keys: Mutex<Vec<String>>,
+}
+
+/// Records the `X-Api-Key` it was sent.
+async fn echo(State(site): State<Arc<Site>>, headers: HeaderMap) -> Response {
+    if let Some(k) = headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
+        site.keys.lock().unwrap().push(k.to_owned());
+    }
+    r#"{"data":[{"title":"Echo"}]}"#.into_response()
+}
+
+/// Redirects to `/echo` on another host name for this same server.
+async fn hop(headers: HeaderMap) -> Response {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let port = host.rsplit(':').next().unwrap_or("");
+    (
+        StatusCode::FOUND,
+        [(header::LOCATION, format!("http://localhost:{port}/echo"))],
+    )
+        .into_response()
 }
 
 async fn results(State(site): State<Arc<Site>>, headers: HeaderMap) -> Response {
@@ -101,6 +126,8 @@ async fn serve(site: Arc<Site>) -> String {
         .route("/club.ics", get(club_ics))
         .route("/shows/{id}", get(show_page))
         .route("/plain", get(plain_page))
+        .route("/echo", get(echo))
+        .route("/hop", get(hop))
         .with_state(site);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -515,18 +542,80 @@ async fn rows_fill_from_their_own_pages_and_secrets_stay_sealed() {
             .contains("feed_key"),
         "{st}"
     );
-    let set = ok(
+    let (err, e) = tool(
         &pod,
         "collections_set_secret",
         json!({"name": "feed_key", "value": "s3cret"}),
     )
     .await;
+    assert!(
+        err && e.to_string().contains("host"),
+        "a host is required: {e}"
+    );
+    let set = ok(
+        &pod,
+        "collections_set_secret",
+        json!({"name": "feed_key", "value": "s3cret", "host": base}),
+    )
+    .await;
     assert_eq!(set["secrets"], json!(["feed_key"]));
+    assert_eq!(set["host"], "127.0.0.1");
     assert!(!set.to_string().contains("s3cret"));
     ok(&pod, "collections_refresh", json!({"collection": "hidden"})).await;
     assert_eq!(rows(&pod, "hidden").await[0]["title"], "Hidden");
     let st = ok(&pod, "collections_status", json!({})).await;
     assert!(!st.to_string().contains("s3cret"));
+}
+
+/// A secret goes only to the host it was stored for: not to a recipe's
+/// other URL, and not along a redirect to another host.
+#[tokio::test]
+async fn secrets_go_only_to_their_host() {
+    let site = Arc::new(Site::default());
+    let base = serve(site.clone()).await;
+    let port = base.rsplit(':').next().unwrap().to_owned();
+    let other = format!("http://localhost:{port}");
+    let pod = pod_with(None);
+    ok(
+        &pod,
+        "collections_set_secret",
+        json!({"name": "api_key", "value": "k3y", "host": "127.0.0.1"}),
+    )
+    .await;
+    let recipe = |url: String| {
+        json!({"url": url, "extract": "json", "items": "data", "map": {"title": "title"},
+               "headers": {"X-Api-Key": "{secret:api_key}"}})
+    };
+    // Its own host gets it.
+    ok(&pod, "collections_preview", recipe(format!("{base}/echo"))).await;
+    assert_eq!(*site.keys.lock().unwrap(), ["k3y"]);
+    // Another host doesn't, and isn't asked at all.
+    let (err, e) = tool(&pod, "collections_preview", recipe(format!("{other}/echo"))).await;
+    assert!(
+        err && e.to_string().contains("only sent to 127.0.0.1"),
+        "{e}"
+    );
+    assert_eq!(site.keys.lock().unwrap().len(), 1);
+    // A filler naming another host fails without sending it.
+    ok(&pod, "define_collection", json!({"name": "leak", "fields": [{"name": "title", "type": "text", "optional": true}],
+        "fillers": [{"kind": "fetch", "url": format!("{other}/echo"), "extract": "json", "items": "data",
+                     "map": {"title": "title"}, "headers": {"X-Api-Key": "{secret:api_key}"}}]})).await;
+    settle(&pod, "leak").await;
+    let st = ok(&pod, "collections_status", json!({"collection": "leak"})).await;
+    assert_eq!(st["fillers"][0]["state"], "failing", "{st}");
+    assert_eq!(site.keys.lock().unwrap().len(), 1);
+    // A redirect from its host to another isn't followed with it.
+    let _ = tool(&pod, "collections_preview", recipe(format!("{base}/hop"))).await;
+    assert_eq!(
+        site.keys.lock().unwrap().len(),
+        1,
+        "the redirect carried the key"
+    );
+    // Without a secret, the redirect is followed as before.
+    let mut plain = recipe(format!("{base}/hop"));
+    plain["headers"] = json!({});
+    let p = ok(&pod, "collections_preview", plain).await;
+    assert_eq!(p["items"], 1, "{p}");
 }
 
 #[tokio::test]

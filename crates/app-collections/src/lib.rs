@@ -230,6 +230,9 @@ pub struct CollectionsAdapter {
     /// `CONSTRUCT_FILL_PRIVATE_HOSTS=1`).
     allow_private_hosts: bool,
     fetch_client: reqwest::Client,
+    /// For fetches that carry a secret: redirects stay on the same host,
+    /// since a custom header (unlike `Authorization`) would follow them.
+    secret_fetch_client: reqwest::Client,
 }
 
 impl Default for CollectionsAdapter {
@@ -239,17 +242,39 @@ impl Default for CollectionsAdapter {
             model: None,
             agent: None,
             allow_private_hosts: false,
-            fetch_client: fetch_client(false),
+            fetch_client: fetch_client(false, false),
+            secret_fetch_client: fetch_client(false, true),
         }
     }
 }
 
 /// The HTTP client of fetch fillers: public hosts only unless allowed.
-fn fetch_client(allow_private: bool) -> reqwest::Client {
+/// `same_host`: follow redirects only on the first request's host (for
+/// requests that carry a secret header).
+fn fetch_client(allow_private: bool, same_host: bool) -> reqwest::Client {
     let b = if allow_private {
         pod_core::net::builder(web_extract::fetch::FETCH_TIMEOUT)
     } else {
         pod_core::net::public_builder(web_extract::fetch::FETCH_TIMEOUT)
+    };
+    let b = if same_host {
+        b.redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            let first = attempt.previous().first().and_then(|u| u.host_str());
+            if attempt.previous().len() >= 5 {
+                attempt.error("too many redirects")
+            } else if first != attempt.url().host_str() {
+                tracing::warn!(
+                    "a redirect to another host was not followed: the request carries a secret"
+                );
+                attempt.stop()
+            } else if allow_private || pod_core::net::is_public_https(attempt.url()) {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
+    } else {
+        b
     };
     b.build().expect("an HTTP client")
 }
@@ -270,7 +295,8 @@ impl CollectionsAdapter {
     /// `CONSTRUCT_FILL_PRIVATE_HOSTS=1`).
     pub fn with_private_hosts(mut self, allow: bool) -> Self {
         self.allow_private_hosts = allow;
-        self.fetch_client = fetch_client(allow);
+        self.fetch_client = fetch_client(allow, false);
+        self.secret_fetch_client = fetch_client(allow, true);
         self
     }
 
@@ -280,6 +306,12 @@ impl CollectionsAdapter {
 
     pub fn fetch_client(&self) -> &reqwest::Client {
         &self.fetch_client
+    }
+
+    /// The client for a request that carries a secret header: redirects
+    /// stay on the host the secret is bound to.
+    pub fn secret_fetch_client(&self) -> &reqwest::Client {
+        &self.secret_fetch_client
     }
 
     pub fn agent(&self) -> Option<&Arc<dyn agent::FillAgent>> {

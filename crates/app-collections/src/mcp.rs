@@ -54,8 +54,8 @@ every_minutes schedules fills; on_open_minutes fills when the app opens and the 
 page. A datetime field (2026-11-06T19:30-07:00) is also served as <name>_date, <name>_time and \
 <name>_text. Alerts (apply_change {op: add_alert, any?, all?, none?, filler?, days?, within_days?}) notify \
 once when a row matches, e.g. a show listing a team. collections_status shows each filler's health: say so \
-when one is failing or finds nothing. An API key goes in with collections_set_secret and is sent as a \
-header value \"{secret:<name>}\"; ask the user for it and never repeat it. The Events app (app events) \
+when one is failing or finds nothing. An API key goes in with collections_set_secret (with the host it is for) and is sent as a \
+header value \"{secret:<name>}\", only to that host; ask the user for it and never repeat it. The Events app (app events) \
 shows the collection events: to watch a website for events, add a filler there (extract events, map \
 {source_id: id, title: title, start: start, end: end, venue: venue, url: url, tickets_url: tickets_url}, \
 key source_id, upcoming start, every_minutes 360) and alerts for what the user wants to hear about.";
@@ -176,9 +176,10 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "collections_set_secret",
-            "Store a value a fetch recipe sends in a header (an API key), sealed on the pod: headers name it as \"{secret:<name>}\". It is never shown back. value null forgets it. Answers the stored names.",
+            "Store a value a fetch recipe sends in a header (an API key), sealed on the pod: headers name it as \"{secret:<name>}\". It is never shown back, and is sent only to requests for host (the API's host name, e.g. api.example.com; ask the user which site the key is for). value null forgets it. Answers the stored names.",
             json!({ "name": { "type": "string", "description": "[a-z][a-z0-9_]*" },
-                    "value": { "type": ["string", "null"] } }),
+                    "value": { "type": ["string", "null"] },
+                    "host": { "type": "string", "description": "The host name the secret may be sent to (required with a value)" } }),
             &["name", "value"],
         ),
         tool(
@@ -678,17 +679,32 @@ async fn set_secret(pod: &Pod, args: &Value) -> Result<Value, Value> {
             ));
         }
     };
+    let host = match (&value, args["host"].as_str()) {
+        (None, _) => None,
+        (Some(_), Some(h)) => Some(crate::fill::secret_host(h).ok_or_else(|| {
+            bad("\"host\" is the host name the secret is sent to, e.g. api.example.com")
+        })?),
+        (Some(_), None) => {
+            return Err(bad(
+                "\"host\" is required: the host name the secret may be sent to (e.g. api.example.com)",
+            ));
+        }
+    };
     let now = pod_core::util::now_secs();
     let n = name.clone();
+    let shown = host.clone();
     let names = pod
         .blocking(move |s| {
-            crate::fill::set_secret(s, &n, value.as_deref(), now)?;
+            let v = value.as_deref().zip(host.as_deref());
+            crate::fill::set_secret(s, &n, v, now)?;
             s.with_conn(crate::fill::secret_names)
         })
         .await
         .map_err(db_err)?;
-    Ok(json!({ "ok": true, "secret": name, "secrets": names,
-        "detail": "stored sealed; a filler's header sends it as {secret:<name>}" }))
+    Ok(
+        json!({ "ok": true, "secret": name, "secrets": names, "host": shown,
+        "detail": "stored sealed; a filler's header sends it as {secret:<name>}, only to this host" }),
+    )
 }
 
 /// Most rows or sample items a preview shows.
@@ -810,8 +826,13 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
     for (k, v) in headers {
         sent.insert(k, v);
     }
-    let headers = crate::fill::resolve_headers_for(pod, &sent).map_err(bad)?;
-    let fetched = web_extract::fetch::fetch(adapter.fetch_client(), &url, None, None, &headers)
+    let resolved = crate::fill::resolve_headers_for(pod, &sent, &url).map_err(bad)?;
+    let client = if resolved.has_secret {
+        adapter.secret_fetch_client()
+    } else {
+        adapter.fetch_client()
+    };
+    let fetched = web_extract::fetch::fetch(client, &url, None, None, &resolved.headers)
         .await
         .map_err(|e| fail(StatusCode::BAD_GATEWAY, "fetch_failed", e.message))?;
     let web_extract::fetch::Fetched::Body { bytes, .. } = fetched else {
