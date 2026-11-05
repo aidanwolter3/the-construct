@@ -69,7 +69,8 @@ Opened on `home` (the default), the client runs the layout-first shell (decision
   server to draw, and shows the sign-in error under the button.
 - **With a pod** it draws the pod's `home` layout. The default (the `shell` blueprint) is a dock of the pod's apps
   along the bottom (a rail on wide windows) and a **More** tab: every app, **Inbox** and **Settings** with the
-  connection status. A new pod has no apps: More says to ask the agent for one.
+  connection status. A new pod has no apps: More says to ask the agent for one. The app list is reloaded every
+  15 seconds and on every tab change, so an app the agent builds shows up on its own.
 - **Each tab frames an app** (`core://AppFrame`): its layout, screens and Back stay inside the frame. The client's
   one engine follows the framed app; the home layout is kept on the device while it does.
 - **Settings and the inbox** are the native ones below, opened by the layout (`action.device`).

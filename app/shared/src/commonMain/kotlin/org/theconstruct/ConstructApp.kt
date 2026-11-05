@@ -31,6 +31,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -79,6 +80,9 @@ data class ConstructState(
  * Notifications (D52): [unread] follows the snapshots; [onNotification] hears live arrivals of every engine this
  * controller holds; [openNotification] opens a notification's app and target. Blocking pod calls run on [io].
  */
+/** How often the shell reloads the pod's app list (`local:apps`), so apps the agent builds show up on their own. */
+const val APPS_REFRESH_MS = 15_000L
+
 /** The notice when the app on screen was deleted. */
 const val APP_DELETED = "This app was deleted."
 
@@ -215,6 +219,16 @@ class ConstructController internal constructor(
 
     init {
         subscribe(bridge, 0)
+        // Shell mode: the pod's app list changes when the agent builds or removes an app, and no event says so to
+        // the engine of another app; look again every [APPS_REFRESH_MS] while a home is drawn.
+        if (shellMode) {
+            background.launch {
+                while (!closed) {
+                    delay(APPS_REFRESH_MS)
+                    if (_shell.value != null) refreshDeviceApps()
+                }
+            }
+        }
     }
 
     private fun subscribe(b: ConstructEngineBridge, engine: Int) {
