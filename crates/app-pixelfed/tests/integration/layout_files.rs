@@ -373,8 +373,9 @@ fn sync_appends_new_files_once_and_refuses_changes() {
         "idempotent"
     );
     // A new pod starts from the oldest file in the build, as version 1.
+    let pixelfed_files = files().iter().filter(|f| f.app_id == "pixelfed").count() as i64;
     let (v, layout) = latest(&store, &catalog(), "pixelfed").unwrap().unwrap();
-    assert_eq!(v, 1);
+    assert_eq!(v, pixelfed_files);
     assert!(pod_core::validate::unknown_node_types(&layout).is_empty());
     let served = active_for(
         &store,
@@ -384,7 +385,7 @@ fn sync_appends_new_files_once_and_refuses_changes() {
     )
     .unwrap()
     .unwrap();
-    assert_eq!(served.version, 1);
+    assert_eq!(served.version, pixelfed_files);
     // A build from before `title_scrolls` has no version it can draw on a new
     // pod: the older files are retired (decision `retired-layout-files`).
     let before: String = protocol::FEATURES

@@ -346,8 +346,10 @@ async fn a_pod_from_before_the_rename_moves_to_the_new_id() {
         // Back to the old names, as the pod stored them.
         pod.store()
             .with_conn(|c| {
+                // The pod predates 0005 (decision `plumbing-and-porcelain`).
                 c.execute_batch(
-                    "UPDATE app_versions SET app_id = 'watcher',
+                    "DELETE FROM app_versions WHERE app_id = 'events' AND file_key = 'events/0005';
+                     UPDATE app_versions SET app_id = 'watcher',
                          file_key = replace(file_key, 'events/0004', 'watcher/0003')
                          WHERE app_id = 'events';
                      DELETE FROM adapter_migrations WHERE adapter = 'events';
@@ -403,8 +405,12 @@ async fn a_pod_from_before_the_rename_moves_to_the_new_id() {
             Ok::<_, rusqlite::Error>((versions, keys, old_tables, old_rows))
         })
         .unwrap();
-    assert_eq!(versions, [1, 2], "the history stays, the new file appended");
-    assert_eq!(keys, ["events/0003", "events/0004"]);
+    assert_eq!(
+        versions,
+        [1, 2, 3],
+        "the history stays, the new files appended"
+    );
+    assert_eq!(keys, ["events/0003", "events/0004", "events/0005"]);
     assert_eq!((old_tables, old_rows), (0, 0));
     assert_eq!(
         pod_core::custom::hidden_apps(pod.store()).unwrap(),

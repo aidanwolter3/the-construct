@@ -1,0 +1,608 @@
+{
+  "note": "Same layout, written with components: core:section_header",
+  "layout": {
+    "type": "core://Workspace",
+    "id": "recipes",
+    "title": "Recipes",
+    "slots": [
+      {
+        "slot_id": "recipes",
+        "provider_uri": "recipes://all",
+        "content": {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://Sticky",
+              "content": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://Row",
+                    "children": [
+                      {
+                        "type": "core://TextField",
+                        "field": "q",
+                        "placeholder": "Search recipes or ingredients"
+                      }
+                    ],
+                    "padding_h_dp": 16
+                  },
+                  {
+                    "type": "core://ChoiceChips",
+                    "field": "cat",
+                    "padding_h_dp": 16,
+                    "options": [
+                      {
+                        "label": "All",
+                        "value": ""
+                      },
+                      {
+                        "label": "Salads & sides",
+                        "value": "Appetizers/Sides/Salads"
+                      },
+                      {
+                        "label": "Mains",
+                        "value": "Main Dishes"
+                      },
+                      {
+                        "label": "Rice & grains",
+                        "value": "Side Dishes"
+                      },
+                      {
+                        "label": "Desserts",
+                        "value": "Desserts"
+                      },
+                      {
+                        "label": "Breakfast",
+                        "value": "Breakfast"
+                      },
+                      {
+                        "label": "Baking",
+                        "value": "Baking"
+                      },
+                      {
+                        "label": "Snacks",
+                        "value": "Snacks/Confections"
+                      },
+                      {
+                        "label": "Drinks",
+                        "value": "Drinks"
+                      }
+                    ]
+                  }
+                ],
+                "spacing_dp": 8,
+                "padding_v_dp": 8
+              }
+            },
+            {
+              "type": "core://List",
+              "query_key": "recipes:all",
+              "empty_text": "No recipes yet",
+              "item_template": {
+                "type": "core://Tappable",
+                "on_click": {
+                  "intent": "action.navigation.open",
+                  "presentation": "Push",
+                  "target_uri": "recipes://recipes/$item.id"
+                },
+                "content_description": "Open $item.title",
+                "content": {
+                  "type": "core://Row",
+                  "children": [
+                    {
+                      "type": "core://Box",
+                      "content": {
+                        "type": "core://Text",
+                        "value_expr": "$item.initial",
+                        "style": "Display"
+                      },
+                      "background": "$item.color",
+                      "content_color": "$item.ink",
+                      "corner_dp": 12,
+                      "width_dp": 44,
+                      "height_dp": 44,
+                      "align": "Center"
+                    },
+                    {
+                      "type": "core://Column",
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.title",
+                          "style": "Label"
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.meta",
+                          "style": "Secondary"
+                        }
+                      ],
+                      "spacing_dp": 2
+                    }
+                  ],
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 8,
+                  "spacing_dp": 14
+                }
+              },
+              "filter": {
+                "value": "$form.q",
+                "fields": [
+                  "search_text"
+                ],
+                "no_match_text": "No recipes match"
+              },
+              "where": {
+                "field": "category_short",
+                "equals": "$form.cat"
+              },
+              "group_by": {
+                "field": "category",
+                "header": {
+                  "type": "core://Column",
+                  "children": [
+                    {
+                      "type": "core://Spacer",
+                      "size_dp": 14
+                    },
+                    {
+                      "type": "core://Row",
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.category_short",
+                          "style": "Label"
+                        },
+                        {
+                          "type": "core://Spacer"
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.group_count",
+                          "style": "Secondary"
+                        }
+                      ],
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 0
+                    },
+                    {
+                      "type": "core://Spacer",
+                      "size_dp": 4
+                    }
+                  ]
+                }
+              }
+            }
+          ],
+          "spacing_dp": 8
+        }
+      }
+    ],
+    "screens": [
+      {
+        "id": "recipe",
+        "route": "recipes://recipes/{id}",
+        "title": "${recipes://recipes/$route.id#category_short}",
+        "data": "/v1/recipes/screens/recipe?id=$route.id",
+        "content": {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://Box",
+              "content": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://Text",
+                    "value_expr": "${recipes://recipes/$route.id#title}",
+                    "style": "Display"
+                  }
+                ]
+              },
+              "background": "${recipes://recipes/$route.id#color}",
+              "content_color": "${recipes://recipes/$route.id#ink}",
+              "padding_h_dp": 20,
+              "padding_v_dp": 22
+            },
+            {
+              "type": "core://Spacer",
+              "size_dp": 14
+            },
+            {
+              "type": "core://Row",
+              "children": [
+                {
+                  "type": "core://Box",
+                  "content": {
+                    "type": "core://Row",
+                    "children": [
+                      {
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "type": "core://Box",
+                        "content": {
+                          "type": "core://Column",
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "value_expr": "${recipes://recipes/$route.id#ingredient_count}",
+                              "style": "Title"
+                            },
+                            {
+                              "type": "core://Text",
+                              "value_expr": "Ingredients",
+                              "style": "Caption"
+                            }
+                          ],
+                          "align": "Center"
+                        },
+                        "width_dp": 68
+                      },
+                      {
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "type": "core://Box",
+                        "content": {
+                          "type": "core://Column",
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "value_expr": "${recipes://recipes/$route.id#step_count}",
+                              "style": "Title"
+                            },
+                            {
+                              "type": "core://Text",
+                              "value_expr": "Steps",
+                              "style": "Caption"
+                            }
+                          ],
+                          "align": "Center"
+                        },
+                        "width_dp": 68
+                      },
+                      {
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "type": "core://Box",
+                        "content": {
+                          "type": "core://Column",
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "value_expr": "${recipes://recipes/$route.id#oven_short}",
+                              "style": "Title"
+                            },
+                            {
+                              "type": "core://Text",
+                              "value_expr": "Oven",
+                              "style": "Caption"
+                            }
+                          ],
+                          "align": "Center"
+                        },
+                        "width_dp": 68
+                      },
+                      {
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "type": "core://Box",
+                        "content": {
+                          "type": "core://Column",
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "value_expr": "${recipes://recipes/$route.id#time_short}",
+                              "style": "Title"
+                            },
+                            {
+                              "type": "core://Text",
+                              "value_expr": "Time",
+                              "style": "Caption"
+                            }
+                          ],
+                          "align": "Center"
+                        },
+                        "width_dp": 68
+                      },
+                      {
+                        "type": "core://Spacer"
+                      }
+                    ]
+                  },
+                  "border_color": "#E6E6EA",
+                  "corner_dp": 14,
+                  "padding_v_dp": 10
+                }
+              ],
+              "padding_h_dp": 16
+            },
+            {
+              "type": "core://Column",
+              "children": [
+                {
+                  "type": "core://Spacer",
+                  "size_dp": 20
+                },
+                {
+                  "type": "core://Row",
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "value_expr": "Ingredients",
+                      "style": "Title"
+                    },
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "${recipes://recipes/$route.id#yield_text}",
+                      "style": "Secondary"
+                    }
+                  ]
+                }
+              ],
+              "padding_h_dp": 16
+            },
+            {
+              "type": "core://Spacer",
+              "size_dp": 4
+            },
+            {
+              "type": "core://List",
+              "query_key": "recipe:$route.id:ingredients",
+              "item_template": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://Conditional",
+                    "value": "$item.group",
+                    "content": {
+                      "type": "core://Column",
+                      "children": [
+                        {
+                          "type": "core://Spacer",
+                          "size_dp": 8
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.group",
+                          "style": "Label"
+                        }
+                      ],
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 4
+                    }
+                  },
+                  {
+                    "type": "core://Row",
+                    "children": [
+                      {
+                        "type": "core://Box",
+                        "content": {
+                          "type": "core://Text",
+                          "value_expr": "$item.amount",
+                          "style": "Label"
+                        },
+                        "width_dp": 84,
+                        "align": "End"
+                      },
+                      {
+                        "type": "core://Column",
+                        "children": [
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.thing",
+                            "style": "Body"
+                          },
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.details",
+                            "content": {
+                              "type": "core://Text",
+                              "value_expr": "$item.details",
+                              "style": "Secondary"
+                            }
+                          }
+                        ],
+                        "spacing_dp": 1
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 7,
+                    "spacing_dp": 14,
+                    "align": "Start"
+                  },
+                  {
+                    "type": "core://Column",
+                    "children": [
+                      {
+                        "type": "core://Divider"
+                      }
+                    ],
+                    "padding_h_dp": 16
+                  }
+                ]
+              }
+            },
+            {
+              "type": "core://Column",
+              "children": [
+                {
+                  "type": "core://Spacer",
+                  "size_dp": 20
+                },
+                {
+                  "type": "core://Row",
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "value_expr": "Steps",
+                      "style": "Title"
+                    }
+                  ]
+                }
+              ],
+              "padding_h_dp": 16
+            },
+            {
+              "type": "core://Spacer",
+              "size_dp": 4
+            },
+            {
+              "type": "core://List",
+              "query_key": "recipe:$route.id:steps",
+              "item_template": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://Conditional",
+                    "value": "$item.group",
+                    "content": {
+                      "type": "core://Column",
+                      "children": [
+                        {
+                          "type": "core://Spacer",
+                          "size_dp": 8
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.group",
+                          "style": "Label"
+                        }
+                      ],
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 4
+                    }
+                  },
+                  {
+                    "type": "core://Row",
+                    "children": [
+                      {
+                        "type": "core://Box",
+                        "content": {
+                          "type": "core://Text",
+                          "value_expr": "$item.number",
+                          "style": "Label"
+                        },
+                        "background": "${recipes://recipes/$route.id#color}",
+                        "content_color": "${recipes://recipes/$route.id#ink}",
+                        "corner_dp": 13,
+                        "width_dp": 26,
+                        "height_dp": 26,
+                        "align": "Center"
+                      },
+                      {
+                        "type": "core://Column",
+                        "children": [
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.text",
+                            "style": "Body"
+                          },
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.has_cues",
+                            "content": {
+                              "type": "core://Row",
+                              "children": [
+                                {
+                                  "type": "core://Conditional",
+                                  "value": "$item.temp_text",
+                                  "content": {
+                                    "type": "core://Chip",
+                                    "text": "$item.temp_text",
+                                    "icon": "flame",
+                                    "tone": "Warning"
+                                  }
+                                },
+                                {
+                                  "type": "core://Conditional",
+                                  "value": "$item.time_text",
+                                  "content": {
+                                    "type": "core://Chip",
+                                    "text": "$item.time_text",
+                                    "icon": "timer"
+                                  }
+                                }
+                              ],
+                              "spacing_dp": 6
+                            }
+                          }
+                        ],
+                        "spacing_dp": 6
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 8,
+                    "spacing_dp": 12,
+                    "align": "Start"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "core://List",
+              "query_key": "recipe:$route.id:notes",
+              "item_template": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://Conditional",
+                    "value": "$item.section",
+                    "content": {
+                      "type": "core://Column",
+                      "children": [
+                        {
+                          "type": "core://Spacer",
+                          "size_dp": 20
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.section",
+                          "style": "Title"
+                        }
+                      ],
+                      "padding_h_dp": 16
+                    }
+                  },
+                  {
+                    "type": "core://Use",
+                    "component": "core:section_header",
+                    "args": {
+                      "text": "$item.text",
+                      "style": "Body",
+                      "padding_v": 4
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "core://Spacer",
+              "size_dp": 20
+            },
+            {
+              "type": "core://Use",
+              "component": "core:section_header",
+              "args": {
+                "text": "From the family cookbook · ${recipes://recipes/$route.id#source}",
+                "style": "Caption",
+                "padding_v": 0
+              }
+            },
+            {
+              "type": "core://Spacer",
+              "size_dp": 16
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

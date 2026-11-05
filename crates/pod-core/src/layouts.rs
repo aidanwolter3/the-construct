@@ -307,7 +307,8 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
         .any(|i| matches!(i, protocol::ActionIntent::Unknown))
     {
         let mut found = Vec::new();
-        unknown_intent_tags(layout, "/layout", &mut found);
+        // Pointers into the file as written.
+        unknown_intent_tags(written, "/layout", &mut found);
         let what = match found.first() {
             Some((at, tag)) => format!("unknown action intent '{tag}' at {at}"),
             None => "unknown action intent".to_owned(),

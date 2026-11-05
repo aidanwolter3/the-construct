@@ -3,6 +3,7 @@
 //! Add a new test file as a module here.
 
 mod apps;
+mod components_golden;
 mod fault_hook;
 mod fixtures;
 mod host;

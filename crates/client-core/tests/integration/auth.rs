@@ -1310,9 +1310,9 @@ fn the_engine_fetches_the_newest_layout_its_schema_draws() {
     wait_signed_in(&engine);
     let snap = engine.snapshot();
     let layout: Value = serde_json::from_str(&snap.layout_json).unwrap();
-    // The newest file (version 1 on a new pod) needs feature
-    // `title_scrolls`, which this engine sends.
-    assert_eq!(layout["version"], 1);
+    // The newest file (version 2 on a new pod: 0011, then 0012 written with
+    // components) needs feature `title_scrolls`, which this engine sends.
+    assert_eq!(layout["version"], 2);
     let ws: Value = serde_json::from_str(&snap.workspace_json).unwrap();
     let routes: Vec<&str> = ws["screens"]
         .as_array()
