@@ -66,7 +66,7 @@ All need the pod session unless marked *public*.
 | `POST /v1/pixelfed/posts/create {caption, media, client_id}` | 202: a post with 1–4 uploaded photos, finished in the background ([posting.md](posting.md)). |
 | `POST /v1/pixelfed/posts/pending/retry {client_id}`, `…/discard` | Retry or drop a failed post. |
 | `GET /v1/pixelfed/screens/post?id=<id>` | The post screen's data. |
-| `GET /v1/pixelfed/screens/comments?post_id=<id>` | The comments screen's data: the post (`post:<id>`) and its thread in order (`comments:<id>`, replies after their parent, depth capped at 4). Given a comment, the pod walks up to its post (decision [`comment-threads-from-notifications`](decisions/comment-threads-from-notifications.md)). |
+| `GET /v1/pixelfed/screens/comments?post_id=<id>` | The comments screen's data: the post (`post:<id>`) and its thread in order (`comments:<id>`, replies after their parent, depth capped at 4). Given a comment, the pod walks up to its post (decision [`comment-threads-from-notifications`](decisions/comment-threads-from-notifications.md)). Comments posted through the pod in the last 10 minutes are added when Pixelfed doesn't list them yet (it raises a post's reply count in a background job and lists no replies while it is 0). |
 | `GET /v1/pixelfed/media/{key}` *public* | The media proxy. Every image URL in a bundle on an allowed origin is rewritten to it; others become `null`. |
 
 Upstream errors: 4xx passes through, 5xx and unreachable become 502. Pixelfed lists only direct replies in a

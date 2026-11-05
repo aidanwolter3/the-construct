@@ -31,6 +31,7 @@ pub mod db;
 pub mod layout;
 pub mod notify;
 pub mod posting;
+pub mod recent;
 pub mod routes;
 pub mod upstream;
 

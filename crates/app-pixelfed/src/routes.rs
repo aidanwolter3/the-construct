@@ -937,6 +937,10 @@ async fn comments_screen(
         }
     })
     .await;
+    // Pixelfed can omit a comment for a while after it was posted.
+    let mut context = context;
+    rt.recent_comments
+        .merge_into(&instance.url, &own, &post_id, &mut context);
     let others = match others_allowed(&state).await {
         Ok(o) => o,
         Err(e) => return e.into_response(),
@@ -1086,6 +1090,8 @@ async fn comment(State(state): State<Pod>, headers: HeaderMap, body: Bytes) -> R
         Ok(o) => o,
         Err(e) => return e.into_response(),
     };
+    rt.recent_comments
+        .record(&instance.url, &own, created.clone());
     let mut media = MediaUrls::new(&proxy_base(&headers), rt.media_for(others));
     let comment = normalize_comment(&status, &id, 0, &own, now_secs(), &mut media);
     if let Err(e) = save_media_keys(&state, media).await {

@@ -266,6 +266,11 @@ struct Inner {
     next_media_id: u64,
     /// How many polls new v2 uploads stay "processing" (`/_admin/media`).
     media_processing_polls: u32,
+    /// Leave a new comment's parent `replies_count` alone until
+    /// [`AppState::run_reply_count_jobs`], like Pixelfed's queued job.
+    defer_reply_counts: bool,
+    /// Parents whose `replies_count` the deferred job has yet to raise.
+    deferred_reply_counts: Vec<String>,
     apps: HashMap<String, OAuthApp>,
     next_app_id: u64,
     codes: HashMap<String, AuthCode>,
@@ -700,6 +705,8 @@ impl AppState {
         inner.media.clear();
         inner.next_media_id = 1;
         inner.media_processing_polls = 1;
+        inner.defer_reply_counts = false;
+        inner.deferred_reply_counts.clear();
         inner.faults.clear();
         inner.requests.clear();
         inner.requests_total = 0;
@@ -775,6 +782,24 @@ impl AppState {
     /// stays "processing" (default 1; 0: ready at once).
     pub fn set_media_processing_polls(&self, polls: u32) {
         self.lock().media_processing_polls = polls;
+    }
+
+    /// Defer raising a parent's `replies_count` on a new comment until
+    /// [`Self::run_reply_count_jobs`], as Pixelfed does in a queued job. Its
+    /// `context` lists no replies while the count is 0, so a first comment is
+    /// missing from it until then.
+    pub fn set_reply_counts_deferred(&self, deferred: bool) {
+        self.lock().defer_reply_counts = deferred;
+    }
+
+    /// Raise the `replies_count`s deferred by [`Self::set_reply_counts_deferred`].
+    pub fn run_reply_count_jobs(&self) {
+        let mut inner = self.lock();
+        for id in std::mem::take(&mut inner.deferred_reply_counts) {
+            if let Some(parent) = inner.statuses.get_mut(&id) {
+                parent["replies_count"] = json!(parent["replies_count"].as_i64().unwrap_or(0) + 1);
+            }
+        }
     }
 
     /// Ids of the uploaded media, sorted.
@@ -2487,11 +2512,15 @@ async fn create_status(
     status["visibility"] = json!(visibility);
     status["spoiler_text"] = json!(spoiler_text);
     status["sensitive"] = json!(sensitive);
-    let parent = inner
-        .statuses
-        .get_mut(&parent_id)
-        .expect("target_id checked");
-    parent["replies_count"] = json!(parent["replies_count"].as_i64().unwrap_or(0) + 1);
+    if inner.defer_reply_counts {
+        inner.deferred_reply_counts.push(parent_id.clone());
+    } else {
+        let parent = inner
+            .statuses
+            .get_mut(&parent_id)
+            .expect("target_id checked");
+        parent["replies_count"] = json!(parent["replies_count"].as_i64().unwrap_or(0) + 1);
+    }
     inner.statuses.insert(id.clone(), status);
     inner.created.push(id.clone());
     if let Some(key) = idempotency_key {

@@ -163,6 +163,8 @@ pub struct Runtime {
     /// HTTPS media when users may sign in to any instance.
     pub media: MediaPolicy,
     pub clients: Clients,
+    /// Comments just posted, listed until the upstream lists them.
+    pub recent_comments: crate::recent::RecentComments,
 }
 
 impl Runtime {
@@ -175,6 +177,7 @@ impl Runtime {
             clients: Clients::new(media.clone()),
             media,
             config,
+            recent_comments: Default::default(),
         }
     }
 

@@ -78,6 +78,8 @@ letter, so screenshots show which image is visible.
   the last requests.
 - `POST /_admin/faults {"rules": [...]}` appends fault rules; `DELETE /_admin/faults` clears them.
 - `POST /_admin/notifications` injects a notification.
+- In-process only: `set_reply_counts_deferred(true)` leaves a parent's `replies_count` alone on a new comment until
+  `run_reply_count_jobs()`, like Pixelfed's queued job; `/context` lists no replies while the count is 0.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8081/_admin/faults -H 'content-type: application/json' -d '{"rules":[
