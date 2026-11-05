@@ -332,7 +332,10 @@ async fn embedded_and_presented_layouts_are_checked() {
     let ok = with(json!({"type": "core://Column", "children": [
         {"type": "core://Layout", "layout": "inbox", "presentation": "Sheet", "show_when": "$form.inbox"},
         {"type": "core://Button", "label": "Open", "on_click": {"intent": "action.navigation.open",
-            "layout": "settings", "presentation": "Panel", "animation": "slide"}}]}));
+            "layout": "settings", "presentation": "Panel", "animation": "slide"}},
+        {"type": "core://Button", "label": "Leave", "on_click": {"intent": "action.confirm",
+            "title": "Leave this pod?", "confirm_label": "Leave",
+            "then": {"intent": "action.device", "command": "leave_pod"}}}]}));
     let (status, b) = call(&pod, "POST", "/v1/custom-apps", Some(ok)).await;
     assert_eq!(status, StatusCode::CREATED, "{b}");
     for (bad, says) in [
@@ -347,6 +350,16 @@ async fn embedded_and_presented_layouts_are_checked() {
         (
             json!({"type": "core://Button", "label": "x", "on_click": {"intent": "action.device", "command": "open_app", "app": "home"}}),
             "device_open_app",
+        ),
+        (
+            json!({"type": "core://Button", "label": "x", "on_click": {"intent": "action.confirm",
+                "title": " ", "confirm_label": "Leave", "then": {"intent": "action.device", "command": "leave_pod"}}}),
+            "needs a title and a confirm_label",
+        ),
+        (
+            json!({"type": "core://Button", "label": "x", "on_click": {"intent": "action.confirm",
+                "title": "Sure?", "confirm_label": "Yes", "then": {"intent": "action.device", "command": "explode"}}}),
+            "unknown device command",
         ),
         (
             json!({"type": "core://AppFrame", "app": "home"}),
