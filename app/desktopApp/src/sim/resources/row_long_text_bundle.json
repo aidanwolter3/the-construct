@@ -2,7 +2,7 @@
   "version": "1.0.0",
   "workspace": {
     "type": "core://Workspace",
-    "id": "home",
+    "id": "row_check",
     "title": "Rows",
     "slots": [
       {
@@ -50,7 +50,7 @@
                   "on_click": {
                     "intent": "action.device",
                     "command": "toggle_channel",
-                    "app": "home",
+                    "app": "row_check",
                     "id": "weekly_digest"
                   }
                 }
@@ -176,7 +176,7 @@
                   "on_click": {
                     "intent": "action.device",
                     "command": "toggle_channel",
-                    "app": "home",
+                    "app": "row_check",
                     "id": "replies"
                   }
                 }

@@ -117,7 +117,11 @@ private class FlexRowMeasurePolicy(private val spacing: Dp, private val align: A
         val parts = measurables.map { it.layoutId as? RowPart ?: RowPart.Fixed }
         val bounded = constraints.hasBoundedWidth
         val placeables = arrayOfNulls<Placeable>(count)
-        var used = gap * (count - 1).coerceAtLeast(0)
+        // A gap beside an unsized Spacer is soft: like Compose's Row, it shrinks when space runs out, so the text
+        // before it may use it (rows that just fit look as before). Every other gap is always kept.
+        val soft = BooleanArray((count - 1).coerceAtLeast(0)) { parts[it] == RowPart.Fill || parts[it + 1] == RowPart.Fill }
+        val hardGaps = gap * soft.count { !it }
+        var used = hardGaps
         fun remaining(): Int = if (bounded) (constraints.maxWidth - used).coerceAtLeast(0) else Constraints.Infinity
         fun measureChild(i: Int, maxWidth: Int) {
             val p = measurables[i].measure(Constraints(maxWidth = maxWidth, maxHeight = constraints.maxHeight))
@@ -143,7 +147,13 @@ private class FlexRowMeasurePolicy(private val spacing: Dp, private val align: A
             flexible.forEach { i -> measureChild(i, remaining()) }
         }
 
-        // 3. Unsized Spacers split whatever is left.
+        // 3. Soft gaps take what they can of the rest, in order; unsized Spacers split whatever is left after them.
+        val gaps = IntArray(soft.size) { if (soft[it]) 0 else gap }
+        for (g in soft.indices) if (soft[g]) {
+            val take = if (bounded) minOf(gap, remaining()) else gap
+            gaps[g] = take
+            used += take
+        }
         val fills = (0 until count).filter { parts[it] == RowPart.Fill }
         val fillWidths = shareFill(if (bounded) remaining() else 0, fills.size)
         fills.forEachIndexed { k, i ->
@@ -152,7 +162,7 @@ private class FlexRowMeasurePolicy(private val spacing: Dp, private val align: A
         }
 
         val placed = placeables.map { it!! }
-        val contentWidth = placed.sumOf { it.width } + gap * (count - 1).coerceAtLeast(0)
+        val contentWidth = placed.sumOf { it.width } + gaps.sum()
         val width = if (fills.isNotEmpty() && bounded) {
             constraints.maxWidth
         } else {
@@ -161,9 +171,9 @@ private class FlexRowMeasurePolicy(private val spacing: Dp, private val align: A
         val height = (placed.maxOfOrNull { it.height } ?: 0).coerceIn(constraints.minHeight, constraints.maxHeight)
         return layout(width, height) {
             var x = 0
-            placed.forEach { p ->
+            placed.forEachIndexed { i, p ->
                 p.placeRelative(x, align.align(p.height, height))
-                x += p.width + gap
+                x += p.width + (gaps.getOrNull(i) ?: 0)
             }
         }
     }
