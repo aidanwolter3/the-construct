@@ -17,6 +17,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.hasText
@@ -240,6 +241,23 @@ class SimRunner(
                 waitForIdle()
                 val (node, how) = findTarget(step.target)
                 node.performTouchInput { if (step.direction == "left") swipeLeft() else swipeRight() }
+                waitForIdle()
+                return how to null
+            }
+            is SimStep.DragDown -> {
+                waitForIdle()
+                val (node, how) = findTarget(step.target)
+                // Slow (about 150 dp/s at the end), so the release is a drop, not a fling.
+                node.performTouchInput {
+                    swipe(center, center + Offset(0f, step.dp * density), durationMillis = maxOf(500L, step.dp * 7L))
+                }
+                waitForIdle()
+                return how to null
+            }
+            is SimStep.FlickDown -> {
+                waitForIdle()
+                val (node, how) = findTarget(step.target)
+                node.performTouchInput { swipe(center, center + Offset(0f, FLICK_DP * density), durationMillis = 60L) }
                 waitForIdle()
                 return how to null
             }
@@ -692,3 +710,6 @@ class SimRunner(
         private fun ms(startNanos: Long): Long = (System.nanoTime() - startNanos) / 1_000_000
     }
 }
+
+/** How far `swipe-down` flicks, in dp (in 60 ms: a fling). */
+private const val FLICK_DP = 80f
