@@ -156,21 +156,18 @@ fn instructions(pod: &Pod) -> String {
 }
 
 const INSTRUCTIONS: &str = "This is the user's own pod in The Construct. It serves apps whose screens are \
-JSON layouts (server-driven UI) over data sources. The server ships blueprints (the built-in layouts: list_apps \
-lists them under blueprints; get_layout reads one); the pod shows only the user's own apps, which you build. \
-The user's app opens on their home app (id home) and shows nothing else: home IS the user's whole interface. A \
-new pod's home is a blank page (the 'shell' blueprint); build the user's navigation into home yourself, so every \
-app you build is reachable from it (e.g. a core://Drawer or core://Dock over local:apps with a core://AppFrame \
-per app, and pages for notifications and settings over the local: device data). Earlier shell versions are \
-working examples: version 3 is a full drawer with Notifications and Settings pages, version 2 a dock \
-(get_layout, or reference one with {\"type\": \"core://Ref\", \"app\": \"shell\", \"part\": \"layout\", \
-\"version\": 3}). home can't be deleted. Call list_data_sources and describe_vocabulary first, read a blueprint \
-with get_layout for working examples, sample_data to see real fields, then create_app or update_layout. Every \
-write is validated (errors give a JSON pointer and what is allowed) and appears live on the user's devices; \
-restore_version undoes an edit. Blueprints can't be edited. Decide per request: reference a blueprint \
-({\"type\": \"core://Ref\", \"app\": <blueprint>, \"part\": \"layout\"} as the whole layout, with the \
-blueprint's feeds; or a part, list_parts lists them) so it stays current, or copy it to change it and pass \
-copied_from so the user hears when the blueprint changes (rebase_context then gives you what to merge).";
+JSON layouts (server-driven UI) over data sources. The user's app opens on their home app (id home) and shows \
+nothing else: home IS the user's whole interface. A new pod's home is a blank page. Build only what the user \
+asks for, as small as it can be: \"show my photo feed\" is one app (create_app referencing the blueprint that \
+fits: {\"type\": \"core://Ref\", \"app\": <blueprint>, \"part\": \"layout\"} with its feeds) and a home that \
+shows it (update_layout on home: a core://AppFrame of that app as the one slot). Add navigation (a core://Drawer \
+or core://Dock over local:apps) only once there is more than one app, and notifications, settings or sign-in \
+pages only when the user asks; describe_vocabulary has small snippets for each. home can't be deleted. Blueprints \
+are the built-in layouts (list_apps lists them under blueprints, get_layout reads one, list_parts lists their \
+parts); reference a blueprint so it stays current, or copy it to change it and pass copied_from so the user hears \
+when it changes (rebase_context then gives you what to merge). Call list_data_sources and describe_vocabulary \
+first and sample_data to see real fields. Every write is validated (errors give a JSON pointer and what is \
+allowed) and appears live on the user's devices; restore_version undoes an edit.";
 
 // ---------- tools ----------
 
@@ -1056,6 +1053,66 @@ pub const REF_DOC: (&str, &str, &str) = (
     "A blueprint's part (list_parts): \"layout\" (the whole blueprint, only as a layout's root; the app keeps its own id), a screen:<id> part in screens, any other part as a node. The pod expands it when serving, from the blueprint's newest version (or the pinned one), so it stays current.",
 );
 
+/// Small, single-purpose layout pieces for describe_vocabulary: building
+/// blocks, never whole pages (the agent builds only what was asked).
+fn snippets() -> Value {
+    json!({
+        "home_one_app": {
+            "doc": "home showing one app full screen: home's layout with this as its one slot (replace <app id>)",
+            "layout": {"type": "core://Workspace", "title": "Home", "slots": [{"slot_id": "app", "provider_uri": "local://apps",
+                "content": {"type": "core://AppFrame", "app": "<app id>"}}]}
+        },
+        "drawer_of_apps": {
+            "doc": "a home slot: a menu button opening a panel that lists the pod's apps; the picked app fills the screen",
+            "node": {"type": "core://Drawer", "field": "page", "query_key": "local:apps",
+                "item": {"value": "$item.id", "content": {"type": "core://AppFrame", "app": "$item.id"}},
+                "drawer": {"type": "core://List", "query_key": "local:apps", "item_template": {
+                    "type": "core://Tappable", "on_click": {"intent": "action.device", "command": "open_app", "app": "$item.id"},
+                    "content": {"type": "core://Row", "padding_h_dp": 16, "padding_v_dp": 12,
+                        "children": [{"type": "core://Text", "style": "Body", "value_expr": "$item.title"}]}}}}
+        },
+        "sign_in_row": {
+            "doc": "a row per sign-in the pod offers, with a server box where the provider takes one",
+            "node": {"type": "core://List", "query_key": "local:providers", "item_template": {"type": "core://Row",
+                "padding_h_dp": 16, "spacing_dp": 8, "children": [
+                    {"type": "core://TextField", "field": "server", "placeholder": "Server (optional)"},
+                    {"type": "core://Button", "label": "Sign in to $item.title", "on_click": {"intent": "action.device",
+                        "command": "sign_in", "id": "$item.id", "value": "$form?.server"}}]}}
+        },
+        "notification_list": {
+            "doc": "the inbox, newest first, by day; a tap opens what the notification is about",
+            "node": {"type": "core://List", "query_key": "local:notifications", "empty_text": "No notifications yet",
+                "group_by": {"field": "day", "header": {"type": "core://Text", "style": "Label", "value_expr": "$item.day"}},
+                "item_template": {"type": "core://Tappable",
+                    "on_click": {"intent": "action.device", "command": "open_notification", "id": "$item.id"},
+                    "content": {"type": "core://Column", "padding_h_dp": 16, "padding_v_dp": 8, "children": [
+                        {"type": "core://Text", "style": "Body", "value_expr": "$item.title"},
+                        {"type": "core://Text", "style": "Caption", "value_expr": "$item.app_title · $item.when"}]}}}
+        },
+        "channel_switch": {
+            "doc": "a switch per notification channel",
+            "node": {"type": "core://List", "query_key": "local:channels", "item_template": {"type": "core://Row",
+                "padding_h_dp": 16, "children": [
+                    {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}, {"type": "core://Spacer"},
+                    {"type": "core://Switch", "checked": "$item.enabled", "on_click": {"intent": "action.device",
+                        "command": "toggle_channel", "app": "$item.app_id", "id": "$item.id"}}]}}
+        },
+        "version_list": {
+            "doc": "an app's versions to pick from on this device; send show_versions (app) first, e.g. in an action.sequence with show",
+            "node": {"type": "core://List", "query_key": "local:versions", "item_template": {"type": "core://Tappable",
+                "on_click": {"intent": "action.device", "command": "pin_version", "id": "$item.version"},
+                "content": {"type": "core://Row", "padding_h_dp": 16, "padding_v_dp": 8, "children": [
+                    {"type": "core://Text", "style": "Body", "value_expr": "$item.label"},
+                    {"type": "core://Text", "style": "Caption", "value_expr": "$item.detail"}]}}}
+        },
+        "connection_dot": {
+            "doc": "a dot that is green online and grey offline",
+            "node": {"type": "core://Box", "background": "${local://connection#color}", "corner_dp": 5,
+                "width_dp": 10, "height_dp": 10, "content": {"type": "core://Spacer", "size_dp": 0}}
+        }
+    })
+}
+
 fn vocabulary() -> Value {
     json!({
         "features": protocol::FEATURES,
@@ -1094,6 +1151,7 @@ fn vocabulary() -> Value {
             "local://device": "platform (android|desktop|simulator)",
             "local://session": "open, server, error, message: the pod sign-in",
         },
+        "snippets": snippets(),
         "bindings": {
             "$item.<field>": "a field of the list or carousel item",
             "${<entity uri>#<field>}": "a field of any entity, e.g. ${core://sources/<source>#signed_in}",
@@ -1109,6 +1167,24 @@ fn vocabulary() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_snippet_is_a_valid_custom_layout() {
+        let all = snippets();
+        for (name, snippet) in all.as_object().unwrap() {
+            let doc = match snippet.get("layout") {
+                Some(l) => {
+                    let mut l = l.clone();
+                    l["id"] = json!("home");
+                    l
+                }
+                None => json!({"type": "core://Workspace", "id": "home", "title": "Home",
+                    "slots": [{"slot_id": "s", "provider_uri": "local://x", "content": snippet["node"]}]}),
+            };
+            crate::validate::custom_layout("home", &doc, &[])
+                .unwrap_or_else(|e| panic!("snippet {name}: {} at {}", e.message, e.pointer));
+        }
+    }
 
     #[test]
     fn every_node_type_is_documented() {

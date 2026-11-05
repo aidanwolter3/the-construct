@@ -1,8 +1,7 @@
 //! The `shell` blueprint (decision `blueprints-and-home`): the home layout
-//! every pod starts with. Its one slot is a `core://Dock` over `local:apps`
-//! (the pod's apps, as the device lists them), each tab an
-//! `core://AppFrame`, then a "More" tab with every app, the inbox and
-//! Settings. It reads only data the device provides, so it has no feeds.
+//! every pod starts with, a blank page saying "The Construct" and "Ask your
+//! agent to build anything". The agent builds the rest into the pod's home.
+//! It reads no data, so it has no feeds.
 //!
 //! To add a layout version, add `layouts/shell/NNNN.json` in this crate (see
 //! `pod_core::layouts`); `build.rs` embeds every file there.

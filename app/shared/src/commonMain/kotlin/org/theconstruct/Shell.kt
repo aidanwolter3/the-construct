@@ -344,7 +344,9 @@ internal fun ShellRoot(controller: ConstructController, state: ConstructState, m
 /** Whether a workspace is drawn whole by its one slot (a `core://Dock`), with no title bar or page scroll. */
 internal fun fillsScreen(workspace: UiNode.Workspace): Boolean =
     workspace.slots.size == 1 &&
-        workspace.slots[0].content.let { it is UiNode.Dock || it is UiNode.Drawer || (it is UiNode.Box && it.fill) }
+        workspace.slots[0].content.let {
+            it is UiNode.Dock || it is UiNode.Drawer || it is UiNode.AppFrame || (it is UiNode.Box && it.fill)
+        }
 
 /** One tab of a dock as drawn: [item] is the entity it was drawn from (query tabs). */
 private data class DrawnTab(

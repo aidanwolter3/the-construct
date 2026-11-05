@@ -68,10 +68,10 @@ Opened on `home` (the default), the client runs the layout-first shell (decision
 - **Before a pod is open** it draws a bundled sign-in layout: a pod code, or **Try a temporary pod**. It needs no
   server to draw, and shows the sign-in error under the button.
 - **With a pod** it draws the pod's `home` layout, which is the user's whole interface. A new pod's home is the
-  `shell` blueprint's version 4: a blank off-white page saying "The Construct" and "Ask your agent to build
-  anything". The agent builds the rest into home, navigation included. Versions 2 (a dock) and 3 (a left drawer with
-  Notifications and Settings pages, app versions and status dots) are working examples it can copy or reference.
-- **An app framed in home** (`core://AppFrame`) (`core://AppFrame`): its layout, screens and Back stay inside the frame. The client's
+  `shell` blueprint: a blank off-white page saying "The Construct" and "Ask your agent to build anything". The agent
+  builds the rest into home, only as much as the user asks for: one app filling the screen, then a drawer or dock
+  of apps, notifications or settings pages, from small pieces (`describe_vocabulary` snippets).
+- **An app framed in home** (`core://AppFrame`): its layout, screens and Back stay inside the frame. The client's
   one engine follows the framed app; the home layout is kept on the device while it does.
 - **The native menu and inbox** below are still in the app, opened only by a layout that asks for them
   (`action.device` `open_settings`, `open_inbox`); the version picker is there.

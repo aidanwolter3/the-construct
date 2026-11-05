@@ -38,12 +38,23 @@ Decision:
   request: `local://connection`, `local://inbox`, `local://apps` and the `local:apps` query, `local://device`,
   `local://session`. Custom layouts may bind them without a feed. A `core://Conditional` value may now be a
   `${uri#field}` binding.
-- **The `shell` blueprint** docks `local:apps` (at most 2) with an `AppFrame` each, then three tabs drawn from layout:
-  **Apps** (every app; a welcome with example requests while there are none), **Notifications** (`local:notifications`
-  by day, Mark all read) and **Settings** (connection, `local:servers`, Leave pod, `local:sign_ins` and
-  `local:providers`, `local:channels` with a `core://Switch` each). Device commands for those: `open_notification`,
-  `mark_all_read`, `toggle_channel`, `sign_in`, `sign_out`, `set_server` (`action.device` gains `id`). An app asked
-  for that has no tab (a notification's blueprint app) is shown in the dock's frame, untabbed. Feature `switch`.
+- **The `shell` blueprint is a blank page**: one off-white page (`core://Box` `fill`, feature `box_fill`) saying "The
+  Construct" and "Ask your agent to build anything". The pod owner has the agent build everything into home, only
+  what they ask for. While prototyping, the blueprint was a dock (Apps, Notifications, Settings tabs) and then a left
+  drawer with those pages; agents copied those whole pages into the first app they were asked for, so the versions
+  were removed before merging and only the pieces stay (below), with small single-purpose snippets in
+  `describe_vocabulary` (an app filling home, a drawer of apps, a sign-in row, a notification list, a channel
+  switch, a version list, a connection dot). A `core://AppFrame` as a workspace's one slot fills the screen.
+- **Pieces for navigation and settings:** `core://Drawer` (feature `drawer`: pages, a menu button with a `badge`, a
+  panel of any layout with a pinned `footer`; any action in the panel closes it, and the panel's actions read its
+  own form), `core://Dock` (feature `dock`), `core://Switch` (feature `switch`), icons `settings` and
+  `notifications` (feature `icons_shell`), a `core://Conditional` `equals` that may bind the item, and device data
+  and commands: `local:notifications`, `local:channels`, `local:sign_ins`, `local:providers` (`custom_server`,
+  `server_placeholder`), `local:servers`, `local:versions`, `local://connection#color`; `open_notification`,
+  `mark_all_read`, `toggle_channel`, `sign_in` (`value`: another server, e.g. `$form?.server`), `sign_out`,
+  `set_server`, `show` (a Drawer or Dock page), `show_versions`, `pin_version` (the shell keeps a pin per app across
+  app switches), `follow_latest`. `action.device` carries `app`, `id` and `value`. An app asked for that has no
+  page (a notification's blueprint app) is shown in the drawer's or dock's frame.
 - **Shell mode** (clients open `home` by default): the controller keeps the last home layout it drew and draws it
   over the device data, while its one engine follows the app of the visible frame (switching as today). The native
   menu button and bell are left out; Settings and the inbox open from `action.device`. Before a pod is open the
@@ -51,23 +62,6 @@ Decision:
   a bundled rescue layout (Try again, Leave pod). Repairing a broken home is the agent's job (`restore_version`).
 - Collections: the filler and alert keys (`filler_title`, `alert_names`, ...) may be bound before the collection has a
   filler or an alert, so the Events blueprint can be referenced on a new pod.
-
-- **Version 3 of `shell` is a drawer** (`core://Drawer`, feature `drawer`): a menu button at the top left (a dot while
-  anything is unread) opens a panel of any layout listing every app, with a `footer` pinned to its bottom: a gear
-  (Settings) beside a green or grey dot (`local://connection#color`) and a bell (Notifications) beside a red dot while
-  anything is unread (icons `settings` and `notifications`, feature `icons_shell`). The selected page fills the
-  screen; `action.device` `show` picks a fixed page. **App versions** came back as layout: `show_versions` loads an app's history into
-  `local:versions`, `pin_version` shows one on this device (the shell keeps a pin per app across app switches),
-  `follow_latest` drops it; each `local:apps` row says which version shows.
-
-- **Version 4 of `shell` is blank**: one off-white page (`core://Box` `fill`, feature `box_fill`) saying "The
-  Construct" and "Ask your agent to build anything". The pod owner has the agent build everything, home included;
-  the server instructions say home is the user's whole interface and point at versions 2 and 3 as working examples
-  (by `get_layout`, or a ref pinned with `version`).
-
-- **Signing in from layout:** `sign_in` takes a `value`, the server to sign in to (e.g. a typed `$form?.server`;
-  blank: the provider's default), and `local:providers` says which providers take one (`custom_server`,
-  `server_placeholder`). A drawer panel's actions read the panel's own form.
 
 Not done yet: hiding and deleting apps are only in the native menu (no layout opens it by default); Android's
 notification permission row isn't offered to layouts; notifications load the newest page only; the home layout
