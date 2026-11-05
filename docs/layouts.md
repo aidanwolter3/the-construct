@@ -1,7 +1,10 @@
 # Writing layouts
 
 A layout is JSON: a tree of generic `core://` nodes with intents attached. The pod serves it; every client draws it
-with the same renderer. This page covers the file format, how to publish a new version, and the vocabulary. The
+with the same renderer. The vocabulary has two layers (decision
+[`plumbing-and-porcelain`](decisions/plumbing-and-porcelain.md)): **plumbing**, the nodes, intents and device data the
+app draws ([Nodes](#nodes), [Intents](#intents), [Device data](#device-data)), and **porcelain**, components defined
+as data in terms of plumbing that the pod expands before serving ([Porcelain: components](#porcelain-components)). This page covers the file format, how to publish a new version, and the vocabulary. The
 types themselves are in `crates/protocol/src/ast.rs` (nodes) and `crates/protocol/src/intent.rs` (intents), and each
 feature has a one-paragraph description in `crates/protocol/features/`.
 
@@ -13,7 +16,8 @@ looks.
 
 1. Copy the newest file of the app to the next number (four digits, no gaps), e.g.
    `crates/app-recipes/layouts/recipes/0005.json` to `.../recipes/0006.json`, and edit it.
-2. The file is `{"note": "<one-line changelog>", "layout": <core://Workspace>}`. The note is what the app menu's
+2. The file is `{"note": "<one-line changelog>", "layout": <core://Workspace or core://Page>}`. It may use server
+   components (`core://Use` of `core:<name>`); the pod records the layout they expand to. The note is what the app menu's
    version history shows. The root's `id` must be the app id. Don't declare features: the pod works them out. Older
    files carry a `"schema"` number; it is ignored.
 3. Run `cargo test` (`-p app-pixelfed`, `-p app-recipes` or `-p app-events` is enough). It validates every file:
@@ -38,7 +42,35 @@ so a client too old to draw that file gets `409 no_compatible_version` there.
 After changing a `pixelfed` layout, regenerate the simulator fixtures:
 `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::`.
 
+## Structure of a page
+
+Plumbing (feature `page`): the root is any node, and the app draws nothing around it. A page draws its own header
+and Back, and wraps what scrolls in `core://Scroll`:
+
+```json
+{
+  "type": "core://Page", "id": "recipes", "title": "Recipes",
+  "root": {"type": "core://Column", "children": [
+    {"type": "core://Row", "padding_h_dp": 12, "children": [
+      {"type": "core://Use", "component": "core:back_button"},
+      {"type": "core://Text", "style": "Title", "value_expr": "Recipes"}, {"type": "core://Spacer"},
+      {"type": "core://IconButton", "icon": "settings", "content_description": "Settings",
+       "on_click": {"intent": "action.navigation.open", "layout": "settings", "presentation": "Panel"}}]},
+    {"type": "core://Scroll", "content": {"type": "core://Column", "children": []}}]},
+  "screens": [{"id": "recipe", "route": "recipes://recipes/{id}", "data": "/v1/recipes/screens/recipe?id=$route.id",
+    "item": "recipes://recipes/$route.id", "root": {"type": "core://Use", "component": "core:card", "children": []}}]
+}
+```
+
+`title` names the layout (lists, accessibility) and is not drawn. In the root column a `core://Scroll`, a filling
+`core://Box` or an inline `core://Layout` takes the height the other children leave. A screen's `item` binds `$item`
+throughout it (feature `screen_item`). `local://nav` and `local://screen` say where it is drawn and how its data load
+is going ([Device data](#device-data)).
+
 ## Structure of a workspace
+
+`core://Workspace` is porcelain the app still draws for older builds: a build that draws `page`, `scroll` and
+`nav_data` gets it expanded through `core:workspace` and `core:screen` instead.
 
 ```json
 {
@@ -92,7 +124,9 @@ evaluated against the entity before the change: a JSON literal, `entity.<field>`
 
 | Node | Fields | Notes |
 |---|---|---|
-| `core://Column` | `children`, `spacing_dp`, `padding_h_dp`, `padding_v_dp`, `align` | Children stacked, full width. |
+| `core://Page` | `id`, `title`, `root`, `screens` | A layout's root with no chrome from the app (feature `page`); only as the root. Screens: `{id, route, title?, data?, item?, root}`. |
+| `core://Scroll` | `content`, `follow_end` | `content` scrolls in the height its parent leaves (feature `scroll`); `core://Sticky` pins at its top. Inside another scroll it doesn't scroll itself. `follow_end`: after an action from outside it (a footer's Send), follow the content to its end once it grows. |
+| `core://Column` | `children`, `spacing_dp`, `padding_h_dp`, `padding_v_dp`, `align` | Children stacked, full width. In a page's bounded height, a child that fills (a scroll, a filling box, an inline layout) takes the rest of it. |
 | `core://Row` | `children`, `spacing_dp`, paddings, `align` | Side by side, vertically centred, no wrapping. A Spacer without a size takes the remaining width. Controls (Switch, Chip, Button, IconButton, sized Image or Spacer, Box) keep their natural width; text-like children (Text, Container, Column, or a Conditional or Tappable around one) take what is left, so long text wraps instead of pushing the controls off screen. |
 | `core://Container` | `orientation`, `padding_dp`, `children` | A plain stack; prefer Column and Row. |
 | `core://Box` | `content`, `background`, `content_color`, `border_color`, `corner_dp`, paddings, `width_dp`, `height_dp`, `align`, `fill` | A surface. `fill` (feature `box_fill`): fills the space given, content placed by `align` both ways; as a workspace's one slot, the whole screen with no title bar. Colours are `#RRGGBB` or a binding that resolves to one. |
@@ -102,7 +136,7 @@ evaluated against the entity before the change: a JSON literal, `entity.<field>`
 | `core://Text` | `value_expr`, `style`, `format`, `count` | Styles: `Display`, `Headline`, `Title`, `Label`, `Body`, `Caption`, `Secondary`. `format: {date: Relative\|Short, past?}` draws `YYYY-MM-DD` values against the viewer's clock ("tomorrow", "Overdue"). `count: {query_key, where?, zero_text?}` fills `$count`. |
 | `core://Image` | `url`, `shape`, `size_dp`, `aspect_ratio`, `content_description`, `blurhash` | `shape`: `Square`, `Rounded`, `Circle`. A square of `size_dp`, or full width at `aspect_ratio`. |
 | `core://Carousel` | `items`, `item_template`, `aspect_ratio`, `aspect_field`, `min_aspect`, `max_aspect`, `tag` | A swipeable pager over entity URIs, with page dots. |
-| `core://List` | `query_key`, `item_template`, `empty_text`, `indent`, `filter`, `where`, `group_by`, `columns`, `spacing_dp`, `padding_h_dp`, `focus` | The entities of a query. `filter` searches as you type (every word in one of `fields`, ignoring case and accents); `where: {field, equals}` keeps exact matches, and a list of such conditions keeps items matching all of them (feature `list_where_all`, the same shape as `count`'s `where`); `group_by` draws a header where a field changes; `columns` (2–6) makes a grid; `focus` scrolls to one item and tints it. |
+| `core://List` | `query_key`, `item_template`, `empty_text`, `indent`, `filter`, `where`, `group_by`, `columns`, `spacing_dp`, `padding_h_dp`, `focus` | The entities of a query. `filter` searches as you type (every word in one of `fields`, ignoring case and accents); `where: {field, equals}` keeps exact matches, and a list of such conditions keeps items matching all of them (feature `list_where_all`, the same shape as `count`'s `where`); `group_by` draws a header where a field changes (`headers_only`, feature `list_group_headers`: only the headers, one per distinct value); `columns` (2–6) makes a grid; `focus` scrolls to one item and tints it. |
 | `core://Conditional` | `value`, `content`, `equals` | `content` only when `value` is truthy, or, with `equals`, when it equals that text. Works with `$form` values to switch views. |
 | `core://Button` | `label`, `on_click` | A text button. |
 | `core://IconButton` | `icon`, `content_description`, `on_click`, `active`, `active_icon`, `active_tint`, `active_content_description`, `size_dp`, `tag` | `active` binds a bool (`$item.is_liked`) to switch icon and tint. |
@@ -172,18 +206,60 @@ request. Any layout may bind them; a custom app needs no feed for them.
 | `local://versions` | `app_id`, `app_title`, `pinned` (or "" while following the latest), `loading` |
 | `local:servers` (query) | `id`, `title`, `url`, `selected`: the servers this device can use |
 | `local://device` | `platform` |
+| `local://nav` | Where the layout is drawn (feature `nav_data`): `can_go_back`, `presentation` (`root`, `push`, `sheet`, `panel`, `screen`, `inline`), `pushed`, `inline`, `in_frame` (in a sheet or panel) |
+| `local://screen` | In a page screen (feature `nav_data`): `loading`, `error` ("" when none) of its `data` load |
+| `local://theme` | The pod's theme colours for the app's mode (feature `theme`): `card_border`, `accent`, `accent_surface`, `muted_surface`, `page`, `like`, `unread`, `error`; set with MCP `set_theme` |
 | `local://session` | `open`, `server`, `error`, `message`: the pod sign-in; `status`: an upstream sign-in in progress or failed |
 
 A `core://Conditional` `equals` may bind the item (`"equals": "$item.id"`). A `core://Conditional` value may be such a binding: `{"value": "${local://layouts#count}", "equals": "0", ...}`.
 
-## Reusing built-in parts
+## Porcelain: components
 
-A custom app can embed a part of a built-in layout by reference, and the pod keeps it current:
+A component is a node tree with parameters, defined as data and expanded by the pod before serving, so the app never
+sees one and changing one needs no app build. Use one anywhere a node goes:
 
 ```json
-{ "type": "core://Ref", "app": "pixelfed", "part": "screen:post" }
+{ "type": "core://Use", "component": "core:card", "args": {"spacing": 6}, "children": [
+  { "type": "core://Text", "style": "Label", "value_expr": "$item.title" } ] }
 ```
 
-`part` is `screen:<id>`, `slot:<id>`, a name from the layout file's `"parts"`, or `layout`: the whole blueprint, only
-as a layout's root (the layout keeps its own id; decision [`blueprints-and-home`](decisions/blueprints-and-home.md)).
-See decision [`layout-parts`](decisions/layout-parts.md) and [custom-apps.md](custom-apps.md).
+- **`core:` components** ship with the server: `crates/pod-core/components/<name>/NNNN.json`, `{"note", "component"}`,
+  append-only like layout files. Every blueprint is one too: `core:<blueprint>` is its whole layout (only as a
+  layout's root; the layout keeps its own id) and `core:<blueprint>/<part>` a part (`screen:<id>` in `screens`,
+  `slot:<id>`, or a name from the file's `"parts"`). `{"type": "core://Ref", "app", "part"}` is the older spelling.
+- **`pod:` components** are the pod's own, defined by an agent (MCP `define_component`, `copy_component`), versioned
+  and deletable while no layout uses them.
+- **A definition** is `{"doc", "params": [{"name", "type": "text|number|bool|uri|binding", "default"?, "required"?,
+  "doc"}], "children"?: true, "template", "examples": [{"args", "children"?, "note"}]}`. In the template,
+  `$arg.<name>` is an argument (a string that is only `"$arg.n"` keeps the argument's type; it may name a key too),
+  `{"type": "core://Children"}` is where the caller's children go (`"at": i` for one), `{"type": "core://IfArg",
+  "arg", "equals"?, "then", "else"?}` keeps a branch, and `{"type": "core://Fragment", "children"}` is several
+  siblings. Every example must expand to plumbing.
+- **Following and pinning.** Without `version` a use follows the component: the layout gets a new version when the
+  component changes. With `version` it stays.
+- **Seeing the result.** MCP `expand` shows what a layout, a component use or any node becomes, and the features it
+  needs; `get_component` shows each example expanded.
+
+The server components:
+
+| Component | Parameters | Draws |
+|---|---|---|
+| `core:workspace` | `title`, `title_scrolls`, `fills_screen`; children: the content | A page as a workspace looks: the headline title (Back when pushed), the content scrolling under it, a little space. |
+| `core:screen` | `title`, `data`, `has_footer`; children: content, footer | A screen as the app drew it: Back, title and spinner, the load's error with Try again, scrolling content, footer. |
+| `core:back_button` | | Back, shown while `local://nav#can_go_back`. |
+| `core:header_bar` | `title`, `style`, paddings; children: actions | A title on the left and icon buttons on the right, on one line. |
+| `core:section_header` | `text`, `style`, `padding_v`, `divider` | A section's padded heading, optionally under a divider. |
+| `core:list_row` | `title`, `trailing`, `padding_v` | A row with a title and a quiet trailing text. |
+| `core:card` | `spacing`, `border`; children | A bordered, rounded card of its children in a column. |
+| `core:pill` | `text`, `background`, `color`, `style` | A small tinted tag. |
+| `core:dot` | `color`, `size`, `corner` | A small coloured dot. |
+| `core:warning_chip` | `text` | A warning chip. |
+| `core:link_button` | `label`, `url` | A button opening a link, shown while the link is set. |
+| `core:author_header` | `avatar`, `name`, `handle`, `size`, paddings | A round avatar beside the name and handle. |
+| `core:toggle_action` | `field`, `icon`, `active_icon`, `label`, `active_label`, `endpoint`, `payload_field`, `tint`, `count_field`, `tag` | An icon button that flips a boolean field at once and tells an endpoint, optionally moving a count with it. |
+| `core:stat` | `value`, `label` | A number with a label under it. |
+| `core:message_page` | `title`, `body`, `background`; children: actions | A whole page with a message in the middle and actions under it. |
+
+Their definitions are the files; `get_component` reads them with examples. See decision
+[`plumbing-and-porcelain`](decisions/plumbing-and-porcelain.md), and [`layout-parts`](decisions/layout-parts.md) for
+how references to blueprints follow them.

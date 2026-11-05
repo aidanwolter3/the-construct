@@ -21,6 +21,9 @@ fun rememberedChoices(nodes: Iterable<UiNode>): Map<String, Set<String>> {
                 out.getOrPut(node.field) { LinkedHashSet() }.addAll(node.options.map { it.value })
             }
             is UiNode.Workspace -> node.slots.forEach { walk(it.content) }
+            is UiNode.Page -> walk(node.root)
+            is UiNode.Scroll -> walk(node.content)
+            is UiNode.Sticky -> walk(node.content)
             is UiNode.Container -> node.children.forEach(::walk)
             is UiNode.Row -> node.children.forEach(::walk)
             is UiNode.Column -> node.children.forEach(::walk)

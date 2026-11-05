@@ -157,7 +157,7 @@ async fn call(pod: &Pod, method: &str, path: &str, body: Option<Value>) -> (Stat
         .method(method)
         .uri(path)
         .header("authorization", "Bearer pod")
-        .header(protocol::FEATURES_HEADER, protocol::features_header());
+        .header(protocol::FEATURES_HEADER, crate::workspace_features());
     let body = match body {
         Some(b) => {
             req = req.header("content-type", "application/json");

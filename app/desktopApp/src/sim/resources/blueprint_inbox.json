@@ -1,0 +1,119 @@
+{
+  "id": "inbox",
+  "slots": [
+    {
+      "content": {
+        "children": [
+          {
+            "style": "Secondary",
+            "type": "core://Text",
+            "value_expr": "${local://inbox#label}"
+          },
+          {
+            "type": "core://Spacer"
+          },
+          {
+            "label": "Mark all read",
+            "on_click": {
+              "command": "mark_all_read",
+              "intent": "action.device"
+            },
+            "type": "core://Button"
+          }
+        ],
+        "padding_h_dp": 16,
+        "padding_v_dp": 4,
+        "spacing_dp": 8,
+        "type": "core://Row"
+      },
+      "provider_uri": "local://inbox",
+      "slot_id": "header"
+    },
+    {
+      "content": {
+        "empty_text": "No notifications yet.",
+        "group_by": {
+          "field": "day",
+          "header": {
+            "children": [
+              {
+                "style": "Label",
+                "type": "core://Text",
+                "value_expr": "$item.day"
+              }
+            ],
+            "padding_h_dp": 16,
+            "padding_v_dp": 8,
+            "type": "core://Column"
+          }
+        },
+        "item_template": {
+          "content": {
+            "children": [
+              {
+                "children": [
+                  {
+                    "style": "Secondary",
+                    "type": "core://Text",
+                    "value_expr": "$item.app_title · $item.when"
+                  },
+                  {
+                    "style": "Body",
+                    "type": "core://Text",
+                    "value_expr": "$item.title"
+                  },
+                  {
+                    "content": {
+                      "style": "Secondary",
+                      "type": "core://Text",
+                      "value_expr": "$item.body"
+                    },
+                    "type": "core://Conditional",
+                    "value": "$item.body"
+                  }
+                ],
+                "orientation": "Vertical",
+                "padding_dp": 0,
+                "type": "core://Container"
+              },
+              {
+                "type": "core://Spacer"
+              },
+              {
+                "content": {
+                  "background": "#1E66D0",
+                  "content": {
+                    "type": "core://Spacer"
+                  },
+                  "corner_dp": 4,
+                  "height_dp": 8,
+                  "type": "core://Box",
+                  "width_dp": 8
+                },
+                "type": "core://Conditional",
+                "value": "$item.unread"
+              }
+            ],
+            "padding_h_dp": 16,
+            "padding_v_dp": 8,
+            "spacing_dp": 12,
+            "type": "core://Row"
+          },
+          "content_description": "$item.title",
+          "on_click": {
+            "command": "open_notification",
+            "id": "$item.id",
+            "intent": "action.device"
+          },
+          "type": "core://Tappable"
+        },
+        "query_key": "local:notifications",
+        "type": "core://List"
+      },
+      "provider_uri": "local://notifications",
+      "slot_id": "notifications"
+    }
+  ],
+  "title": "Notifications",
+  "type": "core://Workspace"
+}

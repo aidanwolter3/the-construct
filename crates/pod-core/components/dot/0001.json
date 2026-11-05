@@ -1,0 +1,52 @@
+{
+  "note": "First version",
+  "component": {
+    "doc": "A small coloured dot (unread, online).",
+    "params": [
+      {
+        "name": "color",
+        "type": "text",
+        "doc": "Its colour (#RRGGBB or a binding).",
+        "required": true
+      },
+      {
+        "name": "size",
+        "type": "number",
+        "doc": "Its diameter.",
+        "default": 8
+      },
+      {
+        "name": "corner",
+        "type": "number",
+        "doc": "Corner radius: half the size for a circle.",
+        "default": 4
+      }
+    ],
+    "template": {
+      "type": "core://Box",
+      "background": "$arg.color",
+      "corner_dp": "$arg.corner",
+      "width_dp": "$arg.size",
+      "height_dp": "$arg.size",
+      "content": {
+        "type": "core://Spacer"
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "color": "#1E66D0"
+        },
+        "note": "an unread dot"
+      },
+      {
+        "args": {
+          "color": "${local://connection#color}",
+          "size": 10,
+          "corner": 5
+        },
+        "note": "the connection dot"
+      }
+    ]
+  }
+}

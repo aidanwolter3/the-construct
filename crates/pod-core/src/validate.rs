@@ -71,14 +71,29 @@ pub fn validate_structure(expected_id: &str, doc: &Value) -> Result<UiNode, Stri
     check_bounds(doc)?;
     let node: UiNode = serde_json::from_value(doc.clone())
         .map_err(|e| format!("layout does not deserialize as a UiNode: {e}"))?;
-    let UiNode::Workspace { id, slots, .. } = &node else {
-        return Err("root must stay a core://Workspace".to_owned());
+    let (id, slots) = match &node {
+        UiNode::Workspace { id, slots, .. } => (id, Some(slots)),
+        // Plumbing (feature `page`, decision `plumbing-and-porcelain`).
+        UiNode::Page { id, .. } => (id, None),
+        _ => return Err("root must be a core://Workspace or a core://Page".to_owned()),
     };
     if id != expected_id {
         return Err(format!(
             "workspace id changed from '{expected_id}' to '{id}'"
         ));
     }
+    if let Some(slots) = slots {
+        check_slots(slots)?;
+    }
+    for n in node.walk() {
+        if n.type_tag() == "core://Page" && !std::ptr::eq(n, &node) {
+            return Err("core://Page is only a layout's root".to_owned());
+        }
+    }
+    finish_structure(node)
+}
+
+fn check_slots(slots: &[protocol::SlotSpec]) -> Result<(), String> {
     if slots.is_empty() {
         return Err("workspace must keep at least one slot".to_owned());
     }
@@ -89,6 +104,10 @@ pub fn validate_structure(expected_id: &str, doc: &Value) -> Result<UiNode, Stri
     if let Some(dup) = slots.iter().find(|s| !ids.insert(s.slot_id.as_str())) {
         return Err(format!("duplicate slot_id '{}'", dup.slot_id));
     }
+    Ok(())
+}
+
+fn finish_structure(node: UiNode) -> Result<UiNode, String> {
     for n in node.walk() {
         check_values(n)?;
     }
@@ -597,27 +616,41 @@ fn check_attachments(intent: &ActionIntent) -> Result<(), String> {
 /// used once), `data` a pod path, and every `$route.<name>` used by the screen
 /// naming one of its route's parameters.
 fn check_screens(node: &UiNode) -> Result<(), String> {
-    let UiNode::Workspace { screens, .. } = node else {
-        return Ok(());
+    // (id, route, data, the screen's JSON)
+    let screens: Vec<(&str, &str, Option<&String>, String)> = match node {
+        UiNode::Workspace { screens, .. } => screens
+            .iter()
+            .map(|s| {
+                let text = serde_json::to_string(s).unwrap_or_default();
+                (s.id.as_str(), s.route.as_str(), s.data.as_ref(), text)
+            })
+            .collect(),
+        UiNode::Page { screens, .. } => screens
+            .iter()
+            .map(|s| {
+                let text = serde_json::to_string(s).unwrap_or_default();
+                (s.id.as_str(), s.route.as_str(), s.data.as_ref(), text)
+            })
+            .collect(),
+        _ => return Ok(()),
     };
     let mut ids = std::collections::HashSet::new();
-    for screen in screens {
-        let fail = |e: String| Err(format!("screen '{}': {e}", screen.id));
-        if screen.id.is_empty() || !ids.insert(screen.id.as_str()) {
+    for (id, route, data, text) in screens {
+        let fail = |e: String| Err(format!("screen '{id}': {e}"));
+        if id.is_empty() || !ids.insert(id) {
             return fail("ids must be unique and non-empty".into());
         }
-        let params = match route_params(&screen.route) {
+        let params = match route_params(route) {
             Ok(p) => p,
             Err(e) => return fail(e),
         };
-        if let Some(data) = &screen.data
+        if let Some(data) = data
             && !data.starts_with("/v1/")
         {
             return fail(format!(
                 "data '{data}' must be a pod path starting with /v1/"
             ));
         }
-        let text = serde_json::to_string(screen).map_err(|e| e.to_string())?;
         for used in text.split("$route.").skip(1) {
             let name: String = used
                 .chars()
@@ -625,8 +658,7 @@ fn check_screens(node: &UiNode) -> Result<(), String> {
                 .collect();
             if !params.contains(&name) {
                 return fail(format!(
-                    "'$route.{name}' is not a parameter of route '{}'",
-                    screen.route
+                    "'$route.{name}' is not a parameter of route '{route}'"
                 ));
             }
         }

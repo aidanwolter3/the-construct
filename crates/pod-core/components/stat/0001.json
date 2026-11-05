@@ -1,0 +1,46 @@
+{
+  "note": "First version",
+  "component": {
+    "doc": "A number with a label under it (a count tile).",
+    "params": [
+      {
+        "name": "value",
+        "type": "text",
+        "doc": "The number (bindings allowed).",
+        "required": true
+      },
+      {
+        "name": "label",
+        "type": "text",
+        "doc": "What it counts.",
+        "required": true
+      }
+    ],
+    "template": {
+      "type": "core://Column",
+      "align": "Center",
+      "spacing_dp": 2,
+      "children": [
+        {
+          "type": "core://Text",
+          "value_expr": "$arg.value",
+          "style": "Display"
+        },
+        {
+          "type": "core://Text",
+          "value_expr": "$arg.label",
+          "style": "Secondary"
+        }
+      ]
+    },
+    "examples": [
+      {
+        "args": {
+          "value": "$item.count",
+          "label": "recipes"
+        },
+        "note": "a count"
+      }
+    ]
+  }
+}

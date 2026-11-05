@@ -120,16 +120,18 @@ pub fn required_features(node: &UiNode) -> Vec<&'static str> {
             intent_features(i, &mut out);
         }
     }
-    if uses_local_data(node) {
-        out.insert(feature::LOCAL_DATA);
+    if let Ok(json) = serde_json::to_string(node) {
+        if json.contains("local://") || json.contains("\"local:") {
+            out.insert(feature::LOCAL_DATA);
+        }
+        if json.contains("local://nav#") || json.contains("local://screen#") {
+            out.insert(feature::NAV_DATA);
+        }
+        if json.contains("local://theme#") {
+            out.insert(feature::THEME);
+        }
     }
     out.into_iter().collect()
-}
-
-/// Whether a layout reads data the device provides: a `local://` entity or
-/// a `local:` query key anywhere in it.
-fn uses_local_data(node: &UiNode) -> bool {
-    serde_json::to_string(node).is_ok_and(|j| j.contains("local://") || j.contains("\"local:"))
 }
 
 /// The features one node uses itself (not its children). Add one arm per
@@ -153,6 +155,13 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
                 add(feature::TITLE_SCROLLS);
             }
         }
+        UiNode::Page { screens, .. } => {
+            add(feature::PAGE);
+            if screens.iter().any(|s| s.item.is_some()) {
+                add(feature::SCREEN_ITEM);
+            }
+        }
+        UiNode::Scroll { .. } => add(feature::SCROLL),
         UiNode::Container { .. } => add(feature::CONTAINER),
         UiNode::Text {
             style,
@@ -188,8 +197,11 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
             if filter.is_some() {
                 add(feature::LIST_FILTER);
             }
-            if group_by.is_some() {
+            if let Some(g) = group_by {
                 add(feature::LIST_GROUP_BY);
+                if g.headers_only {
+                    add(feature::LIST_GROUP_HEADERS);
+                }
             }
             if let Some(w) = where_ {
                 add(feature::LIST_WHERE);
@@ -600,10 +612,44 @@ mod tests {
     }
 
     #[test]
+    fn plumbing_features() {
+        let page = node(
+            json!({"type": "core://Page", "id": "a", "root": {"type": "core://Scroll",
+            "content": {"type": "core://Column", "children": [
+                {"type": "core://Text", "value_expr": "${local://nav#can_go_back}", "style": "Body"},
+                {"type": "core://Box", "border_color": "${local://theme#card_border}",
+                 "content": {"type": "core://Divider"}},
+                {"type": "core://List", "query_key": "q", "item_template": {"type": "core://Divider"},
+                 "group_by": {"field": "g", "headers_only": true, "header": {"type": "core://Divider"}}}]}},
+            "screens": [{"id": "s", "route": "x://s/{id}", "item": "x://s/$route.id",
+                         "root": {"type": "core://Divider"}}]}),
+        );
+        let f = required_features(&page);
+        for want in [
+            feature::PAGE,
+            feature::SCROLL,
+            feature::SCREEN_ITEM,
+            feature::NAV_DATA,
+            feature::THEME,
+            feature::LOCAL_DATA,
+            feature::LIST_GROUP_HEADERS,
+        ] {
+            assert!(f.contains(&want), "{want} in {f:?}");
+        }
+        assert!(!f.contains(&feature::WORKSPACE));
+    }
+
+    #[test]
     fn every_known_type_parses_and_reports_its_tag() {
         for t in crate::NODE_TYPES {
             let v = match t {
                 "core://Workspace" => json!({"type": t, "id": "a", "title": "A", "slots": []}),
+                "core://Page" => json!({"type": t, "id": "a", "root": {"type": "core://Divider"},
+                    "screens": [{"id": "s", "route": "x://s/{id}", "item": "x://s/$route.id",
+                                 "root": {"type": "core://Divider"}}]}),
+                "core://Scroll" => {
+                    json!({"type": t, "content": {"type": "core://Divider"}, "follow_end": true})
+                }
                 "core://Container" => {
                     json!({"type": t, "orientation": "Vertical", "padding_dp": 0, "children": []})
                 }

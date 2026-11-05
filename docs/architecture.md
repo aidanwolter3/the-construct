@@ -80,8 +80,16 @@ and **Server monitoring** (`app-monitor`). Users build their own apps on top of 
 ## Layouts
 
 A layout is a tree of generic `core://` nodes (`protocol::UiNode`) with intents (`protocol::ActionIntent`) attached,
-rooted at a `core://Workspace` that can also declare **screens** opened by route. Layouts bind to entities by URI and
-field (`$item.like_count`, `${pixelfed://posts/1#caption}`) and never contain app logic.
+rooted at a `core://Page` (any node, no chrome from the app) or a `core://Workspace`, which can also declare
+**screens** opened by route. Layouts bind to entities by URI and field (`$item.like_count`,
+`${pixelfed://posts/1#caption}`) and never contain app logic.
+
+- **Plumbing and porcelain** (decision `plumbing-and-porcelain`). Plumbing is what the app draws: the nodes, intents
+  and device data, each a named feature. Porcelain is **components** defined as data in terms of plumbing and
+  expanded by the pod (`pod_core::parts`, `pod_core::components`) before serving: the server's (`core:`, files in
+  `crates/pod-core/components/`, and every blueprint and its parts) and the pod's own (`pod:`, made by an agent). A
+  `core://Workspace` is porcelain too: an app that draws the plumbing gets it as a `core://Page`
+  (`core:workspace`, `core:screen`; `pod_core::porcelain`), older apps the workspace.
 
 - **Layouts are code.** Built-in apps' layouts are files, `crates/<adapter>/layouts/<app>/NNNN.json`, embedded in the binary and
   appended to each app's history at startup. Files are append-only: the pod refuses to start if a deployed one

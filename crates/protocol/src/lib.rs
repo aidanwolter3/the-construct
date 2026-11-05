@@ -15,11 +15,11 @@ pub mod notify;
 pub use ast::{
     Align, ChoiceOption, DateFormat, DockTab, DrawerPage, EmbedPresentation, GroupBy, ICONS,
     ImageShape, Indent, ListBinding, ListFilter, ListFocus, ListWhere, NODE_TYPES, Orientation,
-    Screen, SlotSpec, TextCount, TextFormat, TextStyle, Tone, UiNode, WhereClause,
+    PageScreen, Screen, SlotSpec, TextCount, TextFormat, TextStyle, Tone, UiNode, WhereClause,
 };
 pub use bundle::{DataBundle, EntityRecord, WorkspaceSpec};
 pub use features::{
-    ClientCaps, Compatibility, FEATURES, FEATURES_HEADER, REMOVED_FEATURES, feature,
+    ClientCaps, Compatibility, FEATURE_DOCS, FEATURES, FEATURES_HEADER, REMOVED_FEATURES, feature,
     features_header, parse_features, required_features,
 };
 pub use intent::{

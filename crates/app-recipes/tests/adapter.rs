@@ -127,10 +127,12 @@ async fn the_workspace_lists_every_recipe_and_a_screen_loads_one() {
 #[tokio::test]
 async fn each_client_gets_the_newest_layout_it_draws() {
     let state = seeded();
+    // Without `page`: these check the workspace itself, not the plumbing
+    // a client that draws it gets (decision `plumbing-and-porcelain`).
     let without = |missing: &[&str]| {
         protocol::FEATURES
             .iter()
-            .filter(|f| !missing.contains(f))
+            .filter(|f| !missing.contains(f) && **f != "page")
             .copied()
             .collect::<Vec<_>>()
             .join(",")

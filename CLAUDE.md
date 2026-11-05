@@ -23,7 +23,8 @@ issues. `docs/history/` is archived; don't treat it as current.
 - `crates/client-core` the engine; `crates/client-ffi` UniFFI (Kotlin bindings in
   `app/shared/src/jvmCommonMain`); `app/shared/src/commonMain` the shared UI.
 - `fake-pixelfed/` the fake upstream (primary test target); `crates/e2e` the end-to-end suite.
-- `crates/app-*/layouts/<app>/NNNN.json` layout versions; `crates/protocol/features/` the named vocabulary.
+- `crates/app-*/layouts/<app>/NNNN.json` layout versions; `crates/protocol/features/` the named vocabulary (plumbing);
+  `crates/pod-core/components/<name>/NNNN.json` the server components (porcelain, decision `plumbing-and-porcelain`).
 - Each crate's integration tests are one binary, `tests/integration/main.rs`: add a test file as a `mod` there
   ([docs/testing.md](docs/testing.md)).
 - Data files live next to the code that reads them (decision `data-next-to-its-code`): test data in

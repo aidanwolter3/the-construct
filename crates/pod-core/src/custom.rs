@@ -961,7 +961,7 @@ pub fn check_layout_with(
     // References to built-in parts (decision `layout-parts`) are checked
     // expanded (with the built-ins' latest versions): what they bring must
     // fit this app's sources too. They are stored as written.
-    let has_refs = !crate::parts::refs(&layout).is_empty();
+    let has_refs = crate::parts::may_hold_refs(&layout.to_string());
     let expanded = if has_refs {
         crate::parts::expand(
             pod.store(),
@@ -1507,8 +1507,13 @@ pub fn validate(pod: &Pod, body: &Value) -> Result<Value, Refusal> {
         .as_str()
         .filter(|i| is_custom_id(i))
         .unwrap_or("c-aaaaaaaaaa");
-    let (node, _) = check_layout(pod, id, &feeds, &body["layout"])?;
-    Ok(json!({ "ok": true, "features": protocol::required_features(&node) }))
+    let (node, _, expanded) = check_layout_with(pod, id, &feeds, &body["layout"], true)?;
+    let mut out = json!({ "ok": true, "features": protocol::required_features(&node) });
+    // What it expands to (components and parts), when it uses any.
+    if expanded != body["layout"] && crate::parts::may_hold_refs(&body["layout"].to_string()) {
+        out["expanded"] = expanded;
+    }
+    Ok(out)
 }
 
 /// One custom app with its feeds and latest layout (`GET
@@ -1720,6 +1725,86 @@ pub fn ref_updates(
         })?;
         tracing::info!(app = %app.id, version = v, "{note}");
         out.push((app.id, v));
+    }
+    Ok(out)
+}
+
+/// After components changed (`changed`: `(name, new version)`, e.g.
+/// `pod:card` written or `core:card` deployed): append a `ref_update`
+/// version ("pod:card updated to v3") to every live layout whose latest
+/// version uses one of them without a pinned version (decision
+/// `plumbing-and-porcelain`). Returns the versions appended; the caller
+/// publishes them. Blocking.
+pub fn component_updates(
+    store: &Store,
+    catalog: &crate::Catalog,
+    changed: &[(String, i64)],
+) -> rusqlite::Result<Vec<(String, i64)>> {
+    if changed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for app in store.with_conn(custom_apps_on)? {
+        let Some((_, json)) = store.app_latest(&app.id)? else {
+            continue;
+        };
+        if !json.contains(crate::components::USE_TYPE) {
+            continue;
+        }
+        let doc: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
+        let uses = crate::parts::uses(&doc);
+        let Some((name, version)) = changed
+            .iter()
+            .find(|(n, _)| uses.iter().any(|u| u.version.is_none() && u.name == *n))
+        else {
+            continue;
+        };
+        let note = format!("{name} updated to v{version}");
+        let features =
+            crate::parts::expand(store, catalog, &doc, None, crate::parts::Mode::Lenient)
+                .ok()
+                .and_then(|v| serde_json::from_value::<protocol::UiNode>(v).ok())
+                .map_or_else(
+                    || protocol::feature::LEGACY_NODES.to_owned(),
+                    |n| recorded_features(&n),
+                );
+        let id = app.id.clone();
+        let v = store.transaction(|tx| {
+            append(
+                tx,
+                Caps::default(),
+                &id,
+                NewVersion {
+                    json: &json,
+                    source: SOURCE_REF_UPDATE,
+                    note: &note,
+                    features: features.clone(),
+                    by: Writer::Pod,
+                    meta: None,
+                },
+            )
+        })?;
+        tracing::info!(app = %app.id, version = v, "{note}");
+        out.push((app.id, v));
+    }
+    Ok(out)
+}
+
+/// The live layouts whose latest version uses component `name` (any
+/// version of it). Blocking.
+pub fn layouts_using_component(store: &Store, name: &str) -> rusqlite::Result<Vec<String>> {
+    let mut out = Vec::new();
+    for app in store.with_conn(custom_apps_on)? {
+        let Some((_, json)) = store.app_latest(&app.id)? else {
+            continue;
+        };
+        if !json.contains(name) {
+            continue;
+        }
+        let doc: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
+        if crate::parts::uses(&doc).iter().any(|u| u.name == name) {
+            out.push(app.id);
+        }
     }
     Ok(out)
 }

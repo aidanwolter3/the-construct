@@ -1,5 +1,7 @@
 # Custom layouts reuse built-in parts by reference; copies get an update notice
 
+Superseded by [plumbing-and-porcelain](plumbing-and-porcelain.md) for references: parts are components, and `core://Ref` is an alias of `core://Use`.
+
 Date: 2026-11-03. Related: D36, [custom-apps-and-data-sources](custom-apps-and-data-sources.md),
 [mcp-connector](mcp-connector.md), issue #45 (P3).
 

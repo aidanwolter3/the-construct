@@ -1,0 +1,62 @@
+{
+  "id": "shell",
+  "slots": [
+    {
+      "content": {
+        "align": "Center",
+        "background": "#F7F5F0",
+        "content": {
+          "align": "Center",
+          "children": [
+            {
+              "style": "Display",
+              "type": "core://Text",
+              "value_expr": "The Construct"
+            },
+            {
+              "style": "Secondary",
+              "type": "core://Text",
+              "value_expr": "Ask your agent to build anything"
+            },
+            {
+              "align": "Center",
+              "children": [
+                {
+                  "content_description": "Notifications",
+                  "icon": "notifications",
+                  "on_click": {
+                    "intent": "action.navigation.open",
+                    "layout": "inbox",
+                    "presentation": "Sheet"
+                  },
+                  "type": "core://IconButton"
+                },
+                {
+                  "content_description": "Settings",
+                  "icon": "settings",
+                  "on_click": {
+                    "intent": "action.navigation.open",
+                    "layout": "settings",
+                    "presentation": "Panel"
+                  },
+                  "type": "core://IconButton"
+                }
+              ],
+              "spacing_dp": 8,
+              "type": "core://Row"
+            }
+          ],
+          "spacing_dp": 8,
+          "type": "core://Column"
+        },
+        "fill": true,
+        "padding_h_dp": 24,
+        "type": "core://Box"
+      },
+      "provider_uri": "local://home",
+      "slot_id": "home"
+    }
+  ],
+  "title": "The Construct",
+  "type": "core://Workspace"
+}

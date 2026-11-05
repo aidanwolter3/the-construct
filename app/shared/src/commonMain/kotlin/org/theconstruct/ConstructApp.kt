@@ -23,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
@@ -278,7 +279,7 @@ class ConstructController internal constructor(
             return
         }
         if (!pendingTarget.compareAndSet(p, null)) return
-        if (workspace is UiNode.Workspace && workspace.screens.any { matchRoute(it.route, p.targetUri) != null }) {
+        if (screensOf(workspace).any { matchRoute(it.route, p.targetUri) != null }) {
             navigation.openScreen(p.targetUri, p.layoutId)
         }
     }
@@ -698,8 +699,11 @@ fun ConstructApp(
                     versionsApp = versionsApp,
                     versions = versionsApp?.let { d.history[it] },
                 )
-                val device = remember(state.isOnline, state.pendingActions, state.auth, unread, deviceApps, sources) {
-                    deviceData(state, unread, deviceApps, controller.platform, sources)
+                // The app's own mode picks the theme's light or dark colours (`local://theme`).
+                val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+                val themeSet = state.entities["core://theme"]
+                val device = remember(state.isOnline, state.pendingActions, state.auth, unread, deviceApps, sources, dark, themeSet) {
+                    deviceData(state, unread, deviceApps, controller.platform, sources, dark)
                 }
                 CompositionLocalProvider(LocalDeviceData provides device) {
                     Box(Modifier.fillMaxSize()) {

@@ -182,7 +182,7 @@ fn app_version_returns_the_layout_and_errors_are_sentences() {
     assert_eq!(v["app_id"], APP);
     assert_eq!(v["version"], n);
     assert_eq!(v["note"], "two");
-    assert_eq!(v["layout"]["type"], "core://Workspace");
+    assert_eq!(v["layout"]["type"], "core://Page");
     assert_eq!(v["layout"]["title"], "Two");
     let one = parse(&e.app_version(APP, 1).unwrap());
     assert_eq!(one["layout"]["id"], APP);
@@ -455,7 +455,8 @@ fn one_engine_on_home_opens_other_layouts_and_follows_them() {
 
     let e = engine_with_token(&p.base, "home", "pod-token");
     wait_until("home", || {
-        e.snapshot().workspace_json.contains("core://Workspace")
+        // This build draws plumbing: a workspace comes as its core://Page.
+        e.snapshot().workspace_json.contains("core://Page")
     });
     e.open_layout(&id);
     wait_until("the other layout", || {

@@ -14,6 +14,7 @@
 //! list of feeds, which the core runs and merges.
 
 pub mod adapter;
+pub mod components;
 pub mod custom;
 pub mod disk;
 pub mod layouts;
@@ -23,6 +24,7 @@ pub mod migrations;
 pub mod net;
 pub mod notify;
 pub mod parts;
+pub mod porcelain;
 pub mod push;
 pub mod secrets;
 pub mod session;
@@ -179,6 +181,27 @@ impl AppState {
             a.on_open(&store)
                 .map_err(|e| format!("opening the '{}' adapter's data: {e}", a.name()))?;
         }
+        // Server components first: layout files may use them (decision
+        // `plumbing-and-porcelain`).
+        let core = components::core_files(components::CORE_COMPONENT_FILES)?;
+        let pending = parts::Pending {
+            defs: core
+                .iter()
+                .map(|f| (f.name.clone(), f.number, f.def.clone()))
+                .collect(),
+        };
+        for f in &core {
+            let bare = f.name.trim_start_matches(components::CORE);
+            if catalog.is_app(bare) {
+                return Err(format!(
+                    "{}: '{bare}' is a blueprint's id; name the component otherwise",
+                    f.path
+                ));
+            }
+            parts::check_definition(&store, &catalog, &f.name, f.number, &f.def, &pending)
+                .map_err(|e| format!("{}: {e}", f.path))?;
+        }
+        let core_changed = components::sync_core(&store, &core)?;
         let report = layouts::sync(&store, &catalog)?;
         for warning in &report.missing {
             tracing::warn!("{warning}");
@@ -203,6 +226,8 @@ impl AppState {
             .collect();
         custom::ref_updates(&store, &catalog, &changed)
             .map_err(|e| format!("updating custom apps after the layout sync: {e}"))?;
+        custom::component_updates(&store, &catalog, &core_changed)
+            .map_err(|e| format!("updating layouts after the component sync: {e}"))?;
         // Blueprints (decision `blueprints-and-home`): a home app for every
         // pod, and apps for the built-ins an older pod showed.
         custom::seed_blueprint_apps(&store, &catalog)
@@ -832,6 +857,16 @@ async fn compose(
                 e.set("error", err.clone());
             }
             bundle.entities.insert(format!("core://sources/{name}"), e);
+        }
+        // The pod's theme (decision `plumbing-and-porcelain`): the app
+        // serves it as `local://theme` for the device's mode.
+        match blocking(state, porcelain::theme_entity).await {
+            Ok(e) => {
+                bundle
+                    .entities
+                    .insert(porcelain::THEME_ENTITY.to_owned(), e);
+            }
+            Err(e) => return Err(Box::new(e.into_response())),
         }
     }
     Ok(bundle)

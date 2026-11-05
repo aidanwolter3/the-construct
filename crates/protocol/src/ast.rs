@@ -16,8 +16,10 @@ use std::collections::BTreeMap;
 use crate::intent::{ActionIntent, Animation};
 
 /// Node types this build knows (an other type is [`UiNode::Unknown`]).
-pub const NODE_TYPES: [&str; 27] = [
+pub const NODE_TYPES: [&str; 29] = [
     "core://Workspace",
+    "core://Page",
+    "core://Scroll",
     "core://Container",
     "core://Text",
     "core://Button",
@@ -115,6 +117,33 @@ pub enum UiNode {
         /// clients pin it in a bar above the scrolling content.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         title_scrolls: bool,
+    },
+    /// A layout's root in plumbing (feature `page`, decision
+    /// `plumbing-and-porcelain`): any node as `root`, drawn filling the
+    /// space the layout gets, with no chrome from the app (no title, back
+    /// arrow or insets). `title` names the layout (lists, accessibility)
+    /// and is not drawn. `screens` open by route as a workspace's do; each
+    /// draws its own `root`.
+    #[serde(rename = "core://Page")]
+    Page {
+        id: String,
+        #[serde(default)]
+        title: String,
+        root: Box<UiNode>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        screens: Vec<PageScreen>,
+    },
+    /// `content` scrolling vertically (feature `scroll`), filling the
+    /// height its parent leaves (in a `core://Column` with a bounded height,
+    /// the rest of it). `core://Sticky` inside pins at its top. With
+    /// `follow_end`, after any action of the page it follows its content to
+    /// the end once the content grows (a new comment). Inside another
+    /// scrolling view it doesn't scroll itself.
+    #[serde(rename = "core://Scroll")]
+    Scroll {
+        content: Box<UiNode>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        follow_end: bool,
     },
     #[serde(rename = "core://Container")]
     Container {
@@ -587,6 +616,9 @@ impl UiNode {
                         .flat_map(|s| std::iter::once(&s.content).chain(s.footer.as_ref())),
                 )
                 .collect(),
+            UiNode::Page { root, screens, .. } => std::iter::once(root.as_ref())
+                .chain(screens.iter().map(|s| &s.root))
+                .collect(),
             UiNode::Container { children, .. }
             | UiNode::Row { children, .. }
             | UiNode::Column { children, .. } => children.iter().collect(),
@@ -601,7 +633,8 @@ impl UiNode {
             UiNode::Conditional { content, .. }
             | UiNode::Tappable { content, .. }
             | UiNode::Box { content, .. }
-            | UiNode::Sticky { content } => {
+            | UiNode::Sticky { content }
+            | UiNode::Scroll { content, .. } => {
                 vec![content]
             }
             UiNode::Dock {
@@ -696,6 +729,25 @@ pub struct Screen {
     pub footer: Option<UiNode>,
 }
 
+/// A screen of a `core://Page` (feature `page`): opened by `route` as a
+/// workspace's [`Screen`] is, with `$route.<name>` substituted everywhere in
+/// it, and `data` loaded when it opens. It draws `root` filling the screen,
+/// with no chrome from the app. `title` names it (not drawn). `item`
+/// (feature `screen_item`) binds `$item` throughout the screen to the entity
+/// at that URI, e.g. `pixelfed://posts/$route.id`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct PageScreen {
+    pub id: String,
+    pub route: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<String>,
+    pub root: UiNode,
+}
+
 /// `core://List` indentation: `item[field]` (a number) times `step_dp`,
 /// capped at `max` steps (default 4).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -730,6 +782,10 @@ pub struct ListFilter {
 pub struct GroupBy {
     pub field: String,
     pub header: Box<UiNode>,
+    /// Feature `list_group_headers`: draw only the headers, one per run of
+    /// equal values (the distinct values), and not the items.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub headers_only: bool,
 }
 
 /// `core://List` `where` (schema 6, D44): while `equals` (`$form.<field>` or
@@ -875,10 +931,13 @@ pub struct DrawerPage {
     pub content: UiNode,
 }
 
-/// A named region of a workspace, filled by a content provider.
+/// A named region of a workspace. `provider_uri` is a label only: nothing
+/// reads it (optional, decision `plumbing-and-porcelain`); it is still
+/// written, as `""` when unset, because older clients require it.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct SlotSpec {
     pub slot_id: String,
+    #[serde(default)]
     pub provider_uri: String,
     pub content: UiNode,
 }

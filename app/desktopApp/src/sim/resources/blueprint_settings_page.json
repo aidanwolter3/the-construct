@@ -1,0 +1,637 @@
+{
+  "id": "settings",
+  "root": {
+    "children": [
+      {
+        "content": {
+          "children": [
+            {
+              "content": {
+                "content_description": "Back",
+                "icon": "arrow_back",
+                "on_click": {
+                  "intent": "action.navigation.back"
+                },
+                "tag": "layout-back",
+                "type": "core://IconButton"
+              },
+              "type": "core://Conditional",
+              "value": "${local://nav#pushed}"
+            },
+            {
+              "children": [
+                {
+                  "style": "Headline",
+                  "type": "core://Text",
+                  "value_expr": "Settings"
+                }
+              ],
+              "padding_h_dp": 16,
+              "padding_v_dp": 12,
+              "type": "core://Column"
+            }
+          ],
+          "type": "core://Row"
+        },
+        "equals": "false",
+        "type": "core://Conditional",
+        "value": "${local://nav#inline}"
+      },
+      {
+        "content": {
+          "children": [
+            {
+              "children": [
+                {
+                  "background": "${local://connection#color}",
+                  "content": {
+                    "type": "core://Spacer"
+                  },
+                  "corner_dp": 5,
+                  "height_dp": 10,
+                  "type": "core://Box",
+                  "width_dp": 10
+                },
+                {
+                  "style": "Body",
+                  "type": "core://Text",
+                  "value_expr": "${local://connection#label}"
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "style": "Secondary",
+                  "type": "core://Text",
+                  "value_expr": "${local://session#server}"
+                }
+              ],
+              "padding_h_dp": 16,
+              "padding_v_dp": 8,
+              "spacing_dp": 8,
+              "type": "core://Row"
+            },
+            {
+              "children": [
+                {
+                  "type": "core://Divider"
+                },
+                {
+                  "children": [
+                    {
+                      "style": "Label",
+                      "type": "core://Text",
+                      "value_expr": "Layouts"
+                    }
+                  ],
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 8,
+                  "type": "core://Column"
+                },
+                {
+                  "empty_text": "Only home so far. Ask your agent to build something.",
+                  "item_template": {
+                    "content": {
+                      "children": [
+                        {
+                          "style": "Body",
+                          "type": "core://Text",
+                          "value_expr": "$item.title"
+                        },
+                        {
+                          "type": "core://Spacer"
+                        },
+                        {
+                          "style": "Secondary",
+                          "type": "core://Text",
+                          "value_expr": "$item.version"
+                        }
+                      ],
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 10,
+                      "spacing_dp": 8,
+                      "type": "core://Row"
+                    },
+                    "content_description": "Versions of $item.title",
+                    "on_click": {
+                      "intent": "action.sequence",
+                      "steps": [
+                        {
+                          "app": "$item.id",
+                          "command": "show_versions",
+                          "intent": "action.device"
+                        },
+                        {
+                          "intent": "action.navigation.open",
+                          "presentation": "Push",
+                          "target_uri": "settings://versions/$item.id"
+                        }
+                      ]
+                    },
+                    "type": "core://Tappable"
+                  },
+                  "query_key": "local:layouts",
+                  "type": "core://List"
+                }
+              ],
+              "type": "core://Column"
+            },
+            {
+              "children": [
+                {
+                  "type": "core://Divider"
+                },
+                {
+                  "children": [
+                    {
+                      "style": "Label",
+                      "type": "core://Text",
+                      "value_expr": "Sign-ins"
+                    }
+                  ],
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 8,
+                  "type": "core://Column"
+                },
+                {
+                  "content": {
+                    "children": [
+                      {
+                        "style": "Secondary",
+                        "type": "core://Text",
+                        "value_expr": "${local://session#status}"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 4,
+                    "type": "core://Column"
+                  },
+                  "type": "core://Conditional",
+                  "value": "${local://session#status}"
+                },
+                {
+                  "item_template": {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "style": "Body",
+                            "type": "core://Text",
+                            "value_expr": "$item.title"
+                          },
+                          {
+                            "style": "Secondary",
+                            "type": "core://Text",
+                            "value_expr": "$item.detail"
+                          }
+                        ],
+                        "orientation": "Vertical",
+                        "padding_dp": 0,
+                        "type": "core://Container"
+                      },
+                      {
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "label": "Sign out",
+                        "on_click": {
+                          "command": "sign_out",
+                          "intent": "action.device"
+                        },
+                        "type": "core://Button"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 4,
+                    "spacing_dp": 8,
+                    "type": "core://Row"
+                  },
+                  "query_key": "local:sign_ins",
+                  "type": "core://List"
+                },
+                {
+                  "item_template": {
+                    "children": [
+                      {
+                        "content": {
+                          "field": "server",
+                          "max_length": 200,
+                          "placeholder": "$item.server_placeholder",
+                          "type": "core://TextField"
+                        },
+                        "type": "core://Conditional",
+                        "value": "$item.custom_server"
+                      },
+                      {
+                        "label": "Sign in to $item.title",
+                        "on_click": {
+                          "command": "sign_in",
+                          "id": "$item.id",
+                          "intent": "action.device",
+                          "value": "$form?.server"
+                        },
+                        "type": "core://Button"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 4,
+                    "spacing_dp": 4,
+                    "type": "core://Column"
+                  },
+                  "query_key": "local:providers",
+                  "type": "core://List"
+                }
+              ],
+              "type": "core://Column"
+            },
+            {
+              "children": [
+                {
+                  "type": "core://Divider"
+                },
+                {
+                  "children": [
+                    {
+                      "style": "Label",
+                      "type": "core://Text",
+                      "value_expr": "Notifications"
+                    }
+                  ],
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 8,
+                  "type": "core://Column"
+                },
+                {
+                  "empty_text": "Nothing sends notifications yet.",
+                  "group_by": {
+                    "field": "app_title",
+                    "header": {
+                      "children": [
+                        {
+                          "content": {
+                            "align": "Center",
+                            "children": [
+                              {
+                                "style": "Body",
+                                "type": "core://Text",
+                                "value_expr": "$item.app_title"
+                              },
+                              {
+                                "type": "core://Spacer"
+                              },
+                              {
+                                "style": "Secondary",
+                                "type": "core://Text",
+                                "value_expr": "›"
+                              }
+                            ],
+                            "padding_h_dp": 16,
+                            "padding_v_dp": 14,
+                            "spacing_dp": 8,
+                            "type": "core://Row"
+                          },
+                          "content_description": "Notifications from $item.app_title",
+                          "on_click": {
+                            "intent": "action.navigation.open",
+                            "presentation": "Push",
+                            "target_uri": "settings://notifications/$item.app_id"
+                          },
+                          "type": "core://Tappable"
+                        },
+                        {
+                          "type": "core://Divider"
+                        }
+                      ],
+                      "type": "core://Column"
+                    }
+                  },
+                  "item_template": {
+                    "content": {
+                      "size_dp": 0,
+                      "type": "core://Spacer"
+                    },
+                    "type": "core://Conditional",
+                    "value": "$item.never_shown"
+                  },
+                  "query_key": "local:channels",
+                  "type": "core://List"
+                }
+              ],
+              "type": "core://Column"
+            },
+            {
+              "children": [
+                {
+                  "type": "core://Divider"
+                },
+                {
+                  "children": [
+                    {
+                      "label": "Leave pod on this device",
+                      "on_click": {
+                        "command": "leave_pod",
+                        "intent": "action.device"
+                      },
+                      "type": "core://Button"
+                    }
+                  ],
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 8,
+                  "type": "core://Column"
+                }
+              ],
+              "type": "core://Column"
+            },
+            {
+              "content": {
+                "size_dp": 16,
+                "type": "core://Spacer"
+              },
+              "equals": "false",
+              "type": "core://Conditional",
+              "value": "${local://nav#inline}"
+            }
+          ],
+          "type": "core://Column"
+        },
+        "type": "core://Scroll"
+      }
+    ],
+    "type": "core://Column"
+  },
+  "screens": [
+    {
+      "id": "versions",
+      "root": {
+        "children": [
+          {
+            "children": [
+              {
+                "content_description": "Back",
+                "icon": "arrow_back",
+                "on_click": {
+                  "intent": "action.navigation.back"
+                },
+                "tag": "screen-back",
+                "type": "core://IconButton"
+              },
+              {
+                "style": "Title",
+                "type": "core://Text",
+                "value_expr": "${local://versions#app_title}"
+              },
+              {
+                "content": {
+                  "size_dp": 16,
+                  "type": "core://Progress"
+                },
+                "type": "core://Conditional",
+                "value": "${local://screen#loading}"
+              },
+              {
+                "size_dp": 12,
+                "type": "core://Spacer"
+              }
+            ],
+            "padding_v_dp": 4,
+            "spacing_dp": 0,
+            "type": "core://Row"
+          },
+          {
+            "type": "core://Divider"
+          },
+          {
+            "content": {
+              "children": [
+                {
+                  "content": {
+                    "children": [
+                      {
+                        "style": "Body",
+                        "type": "core://Text",
+                        "value_expr": "Showing v${local://versions#pinned} on this device"
+                      },
+                      {
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "label": "Show latest",
+                        "on_click": {
+                          "app": "$route.id",
+                          "command": "follow_latest",
+                          "intent": "action.device"
+                        },
+                        "type": "core://Button"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 8,
+                    "spacing_dp": 8,
+                    "type": "core://Row"
+                  },
+                  "type": "core://Conditional",
+                  "value": "${local://versions#pinned}"
+                },
+                {
+                  "empty_text": "Loading versions…",
+                  "item_template": {
+                    "content": {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "align": "Center",
+                              "children": [
+                                {
+                                  "style": "Body",
+                                  "type": "core://Text",
+                                  "value_expr": "$item.label · $item.when"
+                                },
+                                {
+                                  "content": {
+                                    "icon": "check",
+                                    "text": "Showing",
+                                    "tone": "Neutral",
+                                    "type": "core://Chip"
+                                  },
+                                  "type": "core://Conditional",
+                                  "value": "$item.showing"
+                                }
+                              ],
+                              "spacing_dp": 8,
+                              "type": "core://Row"
+                            },
+                            {
+                              "style": "Secondary",
+                              "type": "core://Text",
+                              "value_expr": "$item.detail"
+                            }
+                          ],
+                          "orientation": "Vertical",
+                          "padding_dp": 0,
+                          "type": "core://Container"
+                        }
+                      ],
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 8,
+                      "spacing_dp": 8,
+                      "type": "core://Row"
+                    },
+                    "content_description": "Show $item.label",
+                    "on_click": {
+                      "app": "$route.id",
+                      "command": "pin_version",
+                      "id": "$item.version",
+                      "intent": "action.device"
+                    },
+                    "type": "core://Tappable"
+                  },
+                  "query_key": "local:versions",
+                  "type": "core://List"
+                }
+              ],
+              "type": "core://Column"
+            },
+            "follow_end": true,
+            "type": "core://Scroll"
+          }
+        ],
+        "type": "core://Column"
+      },
+      "route": "settings://versions/{id}",
+      "title": "${local://versions#app_title}"
+    },
+    {
+      "id": "notifications",
+      "root": {
+        "children": [
+          {
+            "children": [
+              {
+                "content_description": "Back",
+                "icon": "arrow_back",
+                "on_click": {
+                  "intent": "action.navigation.back"
+                },
+                "tag": "screen-back",
+                "type": "core://IconButton"
+              },
+              {
+                "style": "Title",
+                "type": "core://Text",
+                "value_expr": "Notifications"
+              },
+              {
+                "content": {
+                  "size_dp": 16,
+                  "type": "core://Progress"
+                },
+                "type": "core://Conditional",
+                "value": "${local://screen#loading}"
+              },
+              {
+                "size_dp": 12,
+                "type": "core://Spacer"
+              }
+            ],
+            "padding_v_dp": 4,
+            "spacing_dp": 0,
+            "type": "core://Row"
+          },
+          {
+            "type": "core://Divider"
+          },
+          {
+            "content": {
+              "children": [
+                {
+                  "empty_text": "No notifications from this app.",
+                  "group_by": {
+                    "field": "app_title",
+                    "header": {
+                      "children": [
+                        {
+                          "style": "Title",
+                          "type": "core://Text",
+                          "value_expr": "$item.app_title"
+                        }
+                      ],
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 12,
+                      "type": "core://Column"
+                    }
+                  },
+                  "item_template": {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "align": "Center",
+                            "children": [
+                              {
+                                "style": "Body",
+                                "type": "core://Text",
+                                "value_expr": "$item.title"
+                              },
+                              {
+                                "type": "core://Spacer"
+                              },
+                              {
+                                "checked": "$item.enabled",
+                                "content_description": "$item.title",
+                                "on_click": {
+                                  "app": "$item.app_id",
+                                  "command": "toggle_channel",
+                                  "id": "$item.id",
+                                  "intent": "action.device"
+                                },
+                                "type": "core://Switch"
+                              }
+                            ],
+                            "spacing_dp": 12,
+                            "type": "core://Row"
+                          },
+                          {
+                            "content": {
+                              "style": "Secondary",
+                              "type": "core://Text",
+                              "value_expr": "$item.description"
+                            },
+                            "type": "core://Conditional",
+                            "value": "$item.description"
+                          }
+                        ],
+                        "padding_h_dp": 16,
+                        "padding_v_dp": 10,
+                        "spacing_dp": 2,
+                        "type": "core://Column"
+                      },
+                      {
+                        "type": "core://Divider"
+                      }
+                    ],
+                    "type": "core://Column"
+                  },
+                  "query_key": "local:channels",
+                  "type": "core://List",
+                  "where": {
+                    "equals": "$route.app",
+                    "field": "app_id"
+                  }
+                }
+              ],
+              "type": "core://Column"
+            },
+            "follow_end": true,
+            "type": "core://Scroll"
+          }
+        ],
+        "type": "core://Column"
+      },
+      "route": "settings://notifications/{app}",
+      "title": "Notifications"
+    }
+  ],
+  "title": "Settings",
+  "type": "core://Page"
+}

@@ -297,7 +297,7 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
     let resp = client()
         .get(format!("{}/v1/workspaces/pixelfed", env.pod.url))
         .header("host", "10.0.2.2:8080")
-        .header(protocol::FEATURES_HEADER, protocol::features_header())
+        .header(protocol::FEATURES_HEADER, crate::workspace_features())
         .bearer_auth(&session)
         .send()
         .await
@@ -734,17 +734,21 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     // No features header (a tool, not a client): the latest version (a new
-    // pod has one per app: its newest file, decision `retired-layout-files`).
-    assert_eq!(version(&resp).as_deref(), Some("1"));
+    // pod has one per file in the build, decision `retired-layout-files`).
+    let newest = server::layout_files()
+        .iter()
+        .filter(|f| f.app_id == "pixelfed")
+        .count();
+    assert_eq!(version(&resp), Some(newest.to_string()));
     let resp = client()
         .get(&url)
         .bearer_auth("tok")
-        .header(protocol::FEATURES_HEADER, protocol::features_header())
+        .header(protocol::FEATURES_HEADER, crate::workspace_features())
         .send()
         .await
         .unwrap();
     // A current client: the same.
-    assert_eq!(version(&resp).as_deref(), Some("1"));
+    assert_eq!(version(&resp), Some(newest.to_string()));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 4));
     // A newer version replaces the feed layout; entities still come upstream.
@@ -754,7 +758,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     }
     server::layouts::append_version(state.store(), "pixelfed", &node, None).unwrap();
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("2"));
+    assert_eq!(version(&resp), Some((newest + 1).to_string()));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert_eq!(spec.workspace, node);
     assert_eq!(spec.queries["timeline:home"].len(), 5);
@@ -932,7 +936,7 @@ async fn a_session_from_before_v11_stays_signed_in() {
                  AND (name LIKE 'recipes%' OR name LIKE 'collections%' OR name IN ('pixelfed_session_instance', 'pixelfed_pending_posts'))
                  OR (type = 'table' AND name IN ('pod_settings', 'uploads', 'notifications',
                      'notification_polls', 'devices', 'device_channel_prefs',
-                     'pixelfed_notify_cursor', 'custom_apps'))",
+                     'pixelfed_notify_cursor', 'custom_apps', 'components'))",
             )
             .unwrap()
             .query_map([], |r| r.get(0))

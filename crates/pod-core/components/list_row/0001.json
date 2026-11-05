@@ -1,0 +1,56 @@
+{
+  "note": "First version",
+  "component": {
+    "doc": "A row of a list: a title on the left and a quiet trailing text on the right (a value, a version, a count).",
+    "params": [
+      {
+        "name": "title",
+        "type": "text",
+        "doc": "The main text.",
+        "required": true
+      },
+      {
+        "name": "trailing",
+        "type": "text",
+        "doc": "The text at the end.",
+        "default": ""
+      },
+      {
+        "name": "padding_v",
+        "type": "number",
+        "doc": "Space above and below.",
+        "default": 10
+      }
+    ],
+    "template": {
+      "type": "core://Row",
+      "spacing_dp": 8,
+      "padding_h_dp": 16,
+      "padding_v_dp": "$arg.padding_v",
+      "children": [
+        {
+          "type": "core://Text",
+          "value_expr": "$arg.title",
+          "style": "Body"
+        },
+        {
+          "type": "core://Spacer"
+        },
+        {
+          "type": "core://Text",
+          "value_expr": "$arg.trailing",
+          "style": "Secondary"
+        }
+      ]
+    },
+    "examples": [
+      {
+        "args": {
+          "title": "$item.title",
+          "trailing": "$item.version"
+        },
+        "note": "a layout and its version"
+      }
+    ]
+  }
+}

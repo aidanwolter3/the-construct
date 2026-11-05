@@ -171,7 +171,14 @@ describe_vocabulary has small snippets. home can't be deleted. Blueprints are th
 blueprint so it stays current, or copy it to change it and pass copied_from so the user hears when it changes \
 (rebase_context then gives you what to merge). Call list_data_sources and describe_vocabulary first and \
 sample_data to see real fields. Every write is validated (errors give a JSON pointer and what is allowed) and \
-appears live on the user's devices; restore_version undoes an edit.";
+appears live on the user's devices; restore_version undoes an edit. The vocabulary is plumbing (what the app draws) \
+and porcelain: components the pod expands, used with {\"type\": \"core://Use\", \"component\": <name>, \"args\", \
+\"children\"} (list_components; core: ones ship with the server, pod: ones are the user's own). Prefer a component \
+over repeating nodes, and define a pod: component (define_component, or copy_component to change a core: one) when a \
+piece repeats across layouts. expand shows what any layout or component becomes. A layout whose root is a \
+core://Page gets no chrome from the app: it draws its own header (a title with actions on one line) and Back \
+(core:back_button); core://Workspace is drawn as core:workspace. Use ${local://theme#<token>} for colours \
+(set_theme).";
 
 // ---------- tools ----------
 
@@ -229,8 +236,8 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "get_layout",
-            "A layout (latest, or one version), the feeds it may bind, and its version history.",
-            json!({ "id": id, "version": { "type": "integer" } }),
+            "A layout (latest, or one version), the feeds it may bind, and its version history. expanded: true adds what clients get (components expanded to plumbing).",
+            json!({ "id": id, "version": { "type": "integer" }, "expanded": { "type": "boolean" } }),
             &["id"],
         ),
         tool(
@@ -243,7 +250,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "validate_layout",
-            "Check a layout against home's feeds (plus feeds, when given) without saving it.",
+            "Check a layout against home's feeds (plus feeds, when given) without saving it: its features and, when it uses components, what it expands to.",
             json!({ "feeds": feeds, "layout": layout }),
             &["layout"],
         ),
@@ -287,6 +294,56 @@ fn tools() -> Vec<Value> {
             &[],
         ),
         tool(
+            "list_components",
+            "Porcelain the layouts can use: every component (core: ones ship with the server, pod: ones are the user's own) with its doc and parameters, and the blueprints (core:<blueprint>). Use one with {\"type\": \"core://Use\", \"component\": <name>, \"args\": {...}, \"children\": [...]}.",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "get_component",
+            "A component's definition (doc, params, template, examples), each example expanded to the plumbing it becomes, and its version history.",
+            json!({ "name": { "type": "string", "description": "core:<name> or pod:<name>" }, "version": { "type": "integer" } }),
+            &["name"],
+        ),
+        tool(
+            "expand",
+            "What clients get: a layout (id, version?), a component use (component, args?, children?, version?) or any node (node), with every component expanded, as plumbing only, and the features it needs.",
+            json!({ "id": id, "version": { "type": "integer" }, "component": { "type": "string" },
+                    "args": { "type": "object" }, "children": { "type": "array", "items": { "type": "object" } },
+                    "node": { "type": "object" } }),
+            &[],
+        ),
+        tool(
+            "define_component",
+            "Define a pod: component any layout on this pod can use: {doc, params: [{name, type: text|number|bool|uri|binding, default?, required?, doc}], children?: true, template, examples: [{args, children?, note}]}. In the template, $arg.<name> is an argument (a whole \"$arg.n\" keeps its type), {\"type\": \"core://Children\"} is where the caller's children go (\"at\": i for one), and {\"type\": \"core://IfArg\", \"arg\", \"equals\"?, \"then\", \"else\"?} picks a branch. Every example must expand.",
+            json!({ "name": { "type": "string", "description": "pod:<name>" }, "component": { "type": "object" }, "note": note }),
+            &["name", "component"],
+        ),
+        tool(
+            "update_component",
+            "Save a new version of a pod: component. Layouts that use it without a pinned version get a new version that says so.",
+            json!({ "name": { "type": "string" }, "component": { "type": "object" }, "note": note, "base_version": { "type": "integer" } }),
+            &["name", "component"],
+        ),
+        tool(
+            "copy_component",
+            "Copy a component (e.g. core:workspace) into a pod: component you can change; it records copied_from.",
+            json!({ "from": { "type": "string" }, "version": { "type": "integer" }, "name": { "type": "string", "description": "pod:<name> (default: the same name)" }, "note": note }),
+            &["from"],
+        ),
+        tool(
+            "restore_component",
+            "Make an old version of a pod: component the latest again.",
+            json!({ "name": { "type": "string" }, "version": { "type": "integer" } }),
+            &["name", "version"],
+        ),
+        tool(
+            "delete_component",
+            "Delete a pod: component. Refused while a layout uses it (the error lists them). Only when the user asked for it.",
+            json!({ "name": { "type": "string" } }),
+            &["name"],
+        ),
+        tool(
             "rebase_context",
             "For a layout copied from a blueprint (copied_from): the blueprint layout it was copied from, the blueprint's latest, and the layout's current version, to merge new blueprint changes into the copy. Save the merge with update_layout and copied_from set to the new version; or dismiss_update if the user doesn't want it.",
             json!({ "id": id }),
@@ -302,6 +359,12 @@ fn tools() -> Vec<Value> {
             "set_time_zone",
             "The user's time zone (an IANA name such as America/Denver), used where the pod turns a date or time without a zone into a moment (collection reminders). Ask the user when you don't know it. Without time_zone: answers the current one (UTC when unset).",
             json!({ "time_zone": { "type": "string", "description": "An IANA zone name, e.g. Europe/Berlin" } }),
+            &[],
+        ),
+        tool(
+            "set_theme",
+            "The pod's theme colours, each with a light and a dark value; layouts bind them as ${local://theme#<token>} and the app picks the value for the device's mode. Without theme: answers the current theme and its tokens.",
+            json!({ "theme": { "type": "object", "description": "{token: {light?: #RRGGBB, dark?: #RRGGBB}}" } }),
             &[],
         ),
         tool(
@@ -358,7 +421,7 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
     let r = match name {
         "list_layouts" | "list_apps" => list_apps(pod).await,
         "list_data_sources" => list_data_sources(pod).await,
-        "describe_vocabulary" => Ok(vocabulary()),
+        "describe_vocabulary" => vocabulary(pod).await,
         "get_layout" => get_layout(pod, &args).await,
         "sample_data" => sample_data(pod, headers, &args).await,
         "validate_layout" => custom::validate(pod, &args).map_err(refused),
@@ -389,6 +452,14 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
             Err(e) => Err(e),
         },
         "list_parts" => list_parts(pod, &args).await,
+        "list_components" => list_components(pod).await,
+        "get_component" => get_component(pod, &args).await,
+        "expand" => expand_tool(pod, &args).await,
+        "define_component" => write_component(pod, &args, false, None).await,
+        "update_component" => write_component(pod, &args, true, None).await,
+        "copy_component" => copy_component(pod, &args).await,
+        "restore_component" => restore_component(pod, &args).await,
+        "delete_component" => delete_component(pod, &args).await,
         "rebase_context" => rebase_context(pod, &args).await,
         "dismiss_update" => match (str_arg(&args, "app"), args["version"].as_i64()) {
             (Ok(app), Some(v)) => custom::dismiss_update(pod, app, v)
@@ -401,6 +472,7 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
             }
         },
         "set_time_zone" => set_time_zone(pod, &args).await,
+        "set_theme" => set_theme(pod, &args).await,
         "set_hidden" => match (str_arg(&args, "app"), args["hidden"].as_bool()) {
             (Ok(app), Some(hidden)) => custom::set_hidden(pod, app, hidden)
                 .await
@@ -423,6 +495,24 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
         }
     };
     tool_result(r)
+}
+
+async fn set_theme(pod: &Pod, args: &Value) -> Result<Value, Value> {
+    let changes = args["theme"].clone();
+    let r = crate::blocking(pod, move |s| {
+        Ok(if changes.is_null() {
+            crate::porcelain::theme(s).map_err(|e| e.to_string())
+        } else {
+            crate::porcelain::set_theme(s, &changes)
+        })
+    })
+    .await
+    .map_err(store_err)?;
+    match r {
+        Ok(t) => Ok(json!({ "ok": true, "theme": t,
+            "use": "bind ${local://theme#<token>} where a colour goes (core://Box background, border_color, content_color; core://IconButton active_tint); the app picks the light or dark value. Devices pick a change up the next time they load the layout." })),
+        Err(e) => Err(json!({ "error": "invalid_theme", "detail": e })),
+    }
 }
 
 async fn set_time_zone(pod: &Pod, args: &Value) -> Result<Value, Value> {
@@ -541,7 +631,18 @@ async fn get_layout(pod: &Pod, args: &Value) -> Result<Value, Value> {
         return Err(json!({ "error": "version_not_found", "id": app_id }));
     };
     let layout: Value = serde_json::from_str(&json_text).unwrap_or(Value::Null);
-    Ok(json!({
+    let expanded = if args["expanded"].as_bool() == Some(true) {
+        let p = pod.clone();
+        let text = json_text.clone();
+        Some(
+            crate::blocking(pod, move |s| Ok(layout_as_plumbing(s, p.catalog(), &text)))
+                .await
+                .map_err(store_err)?,
+        )
+    } else {
+        None
+    };
+    let mut out = json!({
         "id": app_id,
         "kind": app.kind(),
         "title": app.title(),
@@ -552,7 +653,11 @@ async fn get_layout(pod: &Pod, args: &Value) -> Result<Value, Value> {
             "version": h.version, "note": h.note, "source": h.source, "author": h.author,
             "created_at": crate::layouts::rfc3339(h.created_at),
         })).collect::<Vec<_>>(),
-    }))
+    });
+    if let Some(e) = expanded {
+        out["expanded"] = e;
+    }
+    Ok(out)
 }
 
 async fn list_parts(pod: &Pod, args: &Value) -> Result<Value, Value> {
@@ -809,6 +914,297 @@ fn cut_strings(v: &Value) -> Value {
     }
 }
 
+// ---------- components (decision `plumbing-and-porcelain`) ----------
+
+fn invalid_args(detail: impl Into<String>) -> Value {
+    json!({ "error": "invalid_arguments", "detail": detail.into() })
+}
+
+/// `pod:<name>` from `name` or `pod:<name>`.
+fn pod_name(raw: &str) -> Result<String, Value> {
+    let bare = raw.strip_prefix(crate::components::POD).unwrap_or(raw);
+    if raw.starts_with(crate::components::CORE) {
+        return Err(
+            json!({ "error": "read_only", "detail": "core: components ship with the server and never change; copy_component makes a pod: copy you can change" }),
+        );
+    }
+    if !crate::components::valid_bare_name(bare) {
+        return Err(invalid_args(format!(
+            "a component name is pod:<name>, <name> being [a-z][a-z0-9_]* (at most {} characters)",
+            crate::components::MAX_NAME_CHARS
+        )));
+    }
+    Ok(format!("{}{bare}", crate::components::POD))
+}
+
+fn store_err((s, Json(b)): (StatusCode, Json<Value>)) -> Value {
+    refused((s, b))
+}
+
+/// A stored layout as clients get it: uses expanded (leniently) and, for a
+/// workspace, the plumbing its porcelain stands for.
+fn layout_as_plumbing(s: &crate::store::Store, catalog: &crate::Catalog, json_text: &str) -> Value {
+    let doc: Value = serde_json::from_str(json_text).unwrap_or(Value::Null);
+    let expanded =
+        crate::parts::expand(s, catalog, &doc, None, crate::parts::Mode::Lenient).unwrap_or(doc);
+    crate::porcelain::to_plumbing(s, catalog, &expanded).unwrap_or(expanded)
+}
+
+fn with_features(v: Value) -> Value {
+    let features = serde_json::from_value::<protocol::UiNode>(v.clone())
+        .map(|n| protocol::required_features(&n))
+        .unwrap_or_default();
+    json!({ "expanded": v, "features": features })
+}
+
+async fn list_components(pod: &Pod) -> Result<Value, Value> {
+    let blueprints: Vec<String> = pod
+        .catalog()
+        .apps()
+        .filter(|a| !a.dev || pod.show_dev_apps())
+        .map(|a| format!("{}{}", crate::components::CORE, a.id))
+        .collect();
+    let rows = crate::blocking(pod, crate::components::list)
+        .await
+        .map_err(store_err)?;
+    let components: Vec<Value> = rows
+        .iter()
+        .map(|(m, d)| crate::components::summary(m, d))
+        .collect();
+    Ok(json!({
+        "components": components,
+        "blueprints": blueprints,
+        "use": "{\"type\": \"core://Use\", \"component\": <name>, \"args\": {...}, \"children\": [nodes]} anywhere a node goes (add \"version\" to pin one). core:<blueprint> is a whole blueprint layout (only as a layout's root) and core:<blueprint>/<part> one of its parts (list_parts). The pod expands uses before serving; expand shows the result.",
+    }))
+}
+
+async fn get_component(pod: &Pod, args: &Value) -> Result<Value, Value> {
+    let name = str_arg(args, "name")?.to_owned();
+    let version = args["version"].as_i64();
+    let lookup = name.clone();
+    let p = pod.clone();
+    let found = crate::blocking(pod, move |s| {
+        let def = match version {
+            Some(n) => crate::components::version(s, &lookup, n)?.map(|d| (n, d)),
+            None => crate::components::latest(s, &lookup)?,
+        };
+        let Some((v, def)) = def else { return Ok(None) };
+        let history = crate::components::history(s, &lookup)?;
+        let examples: Vec<Value> = crate::components::Def::parse(&def)
+            .map(|d| d.examples)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| {
+                let node = crate::parts::use_node(
+                    &lookup,
+                    Some(v),
+                    &Value::Object(e.args.clone()),
+                    &Value::Array(e.children.clone()),
+                );
+                let expanded = crate::parts::expand(s, p.catalog(), &node, None, crate::parts::Mode::Strict)
+                    .unwrap_or_else(|e| json!({ "error": e.to_string() }));
+                json!({ "args": e.args, "children": e.children, "note": e.note, "expanded": expanded })
+            })
+            .collect();
+        Ok(Some((v, def, history, examples)))
+    })
+    .await
+    .map_err(store_err)?;
+    let Some((v, def, history, examples)) = found else {
+        return Err(json!({ "error": "component_not_found", "name": name,
+            "detail": "list_components lists them; blueprints are core:<blueprint> (get_layout reads them)" }));
+    };
+    Ok(json!({
+        "name": name,
+        "version": v,
+        "definition": def,
+        "examples": examples,
+        "history": history.iter().map(|h| json!({
+            "version": h.version, "note": h.note, "author": h.author,
+            "created_at": crate::layouts::rfc3339(h.created_at),
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+async fn expand_tool(pod: &Pod, args: &Value) -> Result<Value, Value> {
+    let p = pod.clone();
+    if let Some(id) = args["app"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+    {
+        let version = args["version"].as_i64();
+        let lookup = id.clone();
+        let found = crate::blocking(pod, move |s| {
+            let found = match version {
+                Some(n) => s.app_version(&lookup, n)?,
+                None => s.app_latest(&lookup)?,
+            };
+            Ok(found.map(|(v, j)| (v.version, layout_as_plumbing(s, p.catalog(), &j))))
+        })
+        .await
+        .map_err(store_err)?;
+        let Some((v, expanded)) = found else {
+            return Err(json!({ "error": "layout_not_found", "id": id }));
+        };
+        let mut out = with_features(expanded);
+        out["id"] = json!(id);
+        out["version"] = json!(v);
+        return Ok(out);
+    }
+    let node = if let Some(name) = args["component"].as_str() {
+        crate::parts::use_node(
+            name,
+            args["version"].as_i64(),
+            &args["args"],
+            &args["children"],
+        )
+    } else if args["node"].is_object() {
+        args["node"].clone()
+    } else {
+        return Err(invalid_args(
+            "pass id (a layout, with version?), component (with args?, children?, version?) or node",
+        ));
+    };
+    let expanded = crate::blocking(pod, move |s| {
+        Ok(
+            crate::parts::expand(s, p.catalog(), &node, None, crate::parts::Mode::Strict)
+                .map(|v| crate::porcelain::to_plumbing(s, p.catalog(), &v).unwrap_or(v)),
+        )
+    })
+    .await
+    .map_err(store_err)?
+    .map_err(|e| json!({ "error": "invalid_layout", "detail": e.to_json() }))?;
+    Ok(with_features(expanded))
+}
+
+/// define_component (`update`: false) and update_component.
+async fn write_component(
+    pod: &Pod,
+    args: &Value,
+    update: bool,
+    copied_from: Option<Value>,
+) -> Result<Value, Value> {
+    let name = pod_name(str_arg(args, "name")?)?;
+    let def = args["component"].clone();
+    if !def.is_object() {
+        return Err(invalid_args(
+            "\"component\" is {doc, params, children?, template, examples}",
+        ));
+    }
+    let note = args["note"]
+        .as_str()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .unwrap_or(if update { "Edited" } else { "Defined" })
+        .chars()
+        .take(custom::MAX_NOTE_CHARS)
+        .collect::<String>();
+    custom::allow_write(pod).map_err(refused)?;
+    let p = pod.clone();
+    let base = args["base_version"].as_i64();
+    let r = crate::blocking(pod, move |s| {
+        let latest = crate::components::latest(s, &name)?.map(|(v, _)| v);
+        match (update, latest) {
+            (false, Some(_)) => {
+                return Ok(Err(json!({ "error": "component_exists", "name": name,
+                    "detail": "update_component changes it" })));
+            }
+            (true, None) => {
+                return Ok(Err(json!({ "error": "component_not_found", "name": name,
+                    "detail": "define_component makes it" })));
+            }
+            _ => {}
+        }
+        if let (Some(b), Some(l)) = (base, latest)
+            && b != l
+        {
+            return Ok(Err(json!({ "error": "stale_base", "latest_version": l,
+                "detail": "the component changed since that version; read it again" })));
+        }
+        if latest.is_none() && crate::components::pod_count(s)? >= crate::components::MAX_POD_COMPONENTS {
+            return Ok(Err(json!({ "error": "too_many_components",
+                "detail": format!("at most {} pod components", crate::components::MAX_POD_COMPONENTS) })));
+        }
+        let next = latest.unwrap_or(0) + 1;
+        if let Err(e) = crate::parts::check_definition(s, p.catalog(), &name, next, &def, &crate::parts::Pending::default()) {
+            return Ok(Err(json!({ "error": "invalid_component", "detail": e })));
+        }
+        let meta = copied_from.map(|c| json!({ "copied_from": c }));
+        let v = crate::components::put_pod(s, &name, &def, &note, custom::AUTHOR_CLAUDE, meta.as_ref())?;
+        let updated = custom::component_updates(s, p.catalog(), &[(name.clone(), v)])?;
+        Ok(Ok((name, v, updated)))
+    })
+    .await
+    .map_err(store_err)??;
+    let (name, v, updated) = r;
+    for (id, lv) in &updated {
+        pod.publish_layout(id, *lv);
+    }
+    Ok(json!({ "ok": true, "name": name, "version": v,
+        "layouts_updated": updated.iter().map(|(id, v)| json!({ "id": id, "version": v })).collect::<Vec<_>>() }))
+}
+
+async fn copy_component(pod: &Pod, args: &Value) -> Result<Value, Value> {
+    let from = str_arg(args, "from")?.to_owned();
+    let version = args["version"].as_i64();
+    let lookup = from.clone();
+    let found = crate::blocking(pod, move |s| match version {
+        Some(n) => Ok(crate::components::version(s, &lookup, n)?.map(|d| (n, d))),
+        None => crate::components::latest(s, &lookup),
+    })
+    .await
+    .map_err(store_err)?;
+    let Some((v, def)) = found else {
+        return Err(json!({ "error": "component_not_found", "name": from }));
+    };
+    let bare = from.split_once(':').map_or(from.as_str(), |(_, b)| b);
+    let name = args["name"].as_str().unwrap_or(bare).to_owned();
+    let body = json!({ "name": name, "component": def,
+        "note": args["note"].as_str().map_or_else(|| format!("Copied from {from} v{v}"), str::to_owned) });
+    write_component(
+        pod,
+        &body,
+        false,
+        Some(json!({ "component": from, "version": v })),
+    )
+    .await
+}
+
+async fn restore_component(pod: &Pod, args: &Value) -> Result<Value, Value> {
+    let name = pod_name(str_arg(args, "name")?)?;
+    let version = args["version"]
+        .as_i64()
+        .ok_or_else(|| invalid_args("\"version\" is required"))?;
+    let lookup = name.clone();
+    let def = crate::blocking(pod, move |s| {
+        crate::components::version(s, &lookup, version)
+    })
+    .await
+    .map_err(store_err)?
+    .ok_or_else(|| json!({ "error": "version_not_found", "name": name, "version": version }))?;
+    let body = json!({ "name": name, "component": def, "note": format!("Restored v{version}") });
+    write_component(pod, &body, true, None).await
+}
+
+async fn delete_component(pod: &Pod, args: &Value) -> Result<Value, Value> {
+    let name = pod_name(str_arg(args, "name")?)?;
+    custom::allow_write(pod).map_err(refused)?;
+    crate::blocking(pod, move |s| {
+        let using = custom::layouts_using_component(s, &name)?;
+        if !using.is_empty() {
+            return Ok(Err(json!({ "error": "component_in_use", "name": name, "layouts": using,
+                "detail": "these layouts use it; change them first (update_layout), then delete it" })));
+        }
+        if !crate::components::delete_pod(s, &name)? {
+            return Ok(Err(json!({ "error": "component_not_found", "name": name })));
+        }
+        Ok(Ok(json!({ "ok": true, "name": name })))
+    })
+    .await
+    .map_err(store_err)?
+}
+
 // ---------- JSON Patch (RFC 6902) ----------
 
 fn unescape(token: &str) -> String {
@@ -946,121 +1342,59 @@ pub fn apply_patch(doc: &mut Value, patch: &Value) -> Result<(), String> {
 
 // ---------- vocabulary ----------
 
-/// `(node type, fields, what it is)`: every [`protocol::NODE_TYPES`] entry
-/// (a test checks it).
-pub const NODE_DOCS: &[(&str, &str, &str)] = &[
-    (
-        "core://Workspace",
-        "id, title, slots: [{slot_id, provider_uri, content}], screens: [{id, route, title, data?, content, footer?}]",
-        "The root. Slots stack top to bottom; screens open on navigation (route like scheme://things/{id}; data is a data path loaded when it opens; $route.<param> in it).",
-    ),
-    (
-        "core://Container",
-        "orientation: Vertical|Horizontal, padding_dp, children",
-        "A plain stack.",
-    ),
-    (
-        "core://Text",
-        "value_expr, style: Title|Body|Caption|Headline|Label|Secondary|Display, format?: {date: Relative|Short, past?}, count?: {query_key, where?: [{field, equals}], zero_text?}",
-        "Text; value_expr may bind $item.<field>, ${<uri>#<field>}, $form.<field>. format draws the YYYY-MM-DD dates it binds on the device (Relative: today, tomorrow, in 3 days, 2 days ago, else Nov 5; Short: Nov 5); with past, a date before today shows that text instead (\"Due $item.due\" with past \"Overdue\"). count puts the number of a query's entities matching every where (as in core://List) in place of $count (\"$count left\"); zero_text replaces a count of 0.",
-    ),
-    (
-        "core://Button",
-        "label, on_click",
-        "A button running an intent.",
-    ),
-    (
-        "core://List",
-        "query_key, item_template, empty_text?, columns?, spacing_dp?, padding_h_dp?, filter?: {value, fields}, group_by?: {field, header}, where?: {field, equals}, indent?",
-        "The entities of a query (a feed's or a data path's query key); item_template binds $item.<field> ($item.uri, $item.id).",
-    ),
-    (
-        "core://Image",
-        "url, shape?: Rect|Circle|Rounded, size_dp?, aspect_ratio?, content_description?, blurhash?",
-        "An image (url usually a binding).",
-    ),
-    (
-        "core://TextField",
-        "field, placeholder, max_length?, lines?, on_submit?",
-        "A form field ($form.<field>).",
-    ),
-    (
-        "core://Row",
-        "children, spacing_dp?, padding_h_dp?, padding_v_dp?, align?",
-        "Children side by side.",
-    ),
-    (
-        "core://Column",
-        "children, spacing_dp?, padding_h_dp?, padding_v_dp?, align?",
-        "Children stacked, scrolling as a page.",
-    ),
-    ("core://Spacer", "size_dp?", "Space (or fill)."),
-    ("core://Divider", "", "A hairline."),
-    (
-        "core://Conditional",
-        "value, equals?, content",
-        "Shows content when value (a binding) is truthy, or equals `equals`.",
-    ),
-    (
-        "core://Carousel",
-        "items, item_template, aspect_ratio, aspect_field?, min_aspect?, max_aspect?",
-        "Horizontally paged items (e.g. $item.media_uris).",
-    ),
-    (
-        "core://IconButton",
-        "icon, content_description, on_click, active?, active_icon?, active_tint?, size_dp?",
-        "An icon button; `active` binds a boolean (liked).",
-    ),
-    ("core://Chip", "text, icon?, tone?", "A small label."),
-    ("core://Badge", "text, icon", "An icon with a count."),
-    (
-        "core://Tappable",
-        "on_click, content, content_description?",
-        "Makes content tappable (e.g. open a screen).",
-    ),
-    (
-        "core://Box",
-        "content, background?, content_color?, border_color?, corner_dp?, padding_h_dp?, padding_v_dp?, width_dp?, height_dp?, align?, fill?",
-        "A coloured, rounded box (#RRGGBB or bindings). fill: true fills the space given with content placed by align (Center: the middle); as a workspace's one slot, the whole screen with no title bar.",
-    ),
-    (
-        "core://ChoiceChips",
-        "field, options: [{label, value?}], remember?",
-        "Choice chips writing $form.<field>.",
-    ),
-    (
-        "core://MediaPicker",
-        "field, max_items, label?",
-        "Picks photos for a create's attachments.",
-    ),
-    (
-        "core://Sticky",
-        "content",
-        "Pins content to the top while its column scrolls (not inside a List or Carousel).",
-    ),
-    (
-        "core://Progress",
-        "size_dp?",
-        "An indeterminate spinner for work in progress, e.g. inside a core://Conditional on a status field",
-    ),
-    (
-        "core://Layout",
-        "layout, show_when?, equals?, presentation?: Inline|Sheet|Panel, animation?: none|fade|slide|sheet_up, params?: {name: value}, height_dp?",
-        "Another layout drawn here: Inline (the default) in place (height_dp tall, or as tall as its content; as a workspace's one slot, the whole screen); Sheet or Panel over the screen. show_when (e.g. $form.panel, ${local://inbox#unread}) shows it only while truthy (or equal to equals); dismissing a Sheet or Panel clears that $form field. params bind as $route.<name> in it. layout is an id or a binding ($item.id).",
-    ),
-    (
-        "core://Switch",
-        "checked, on_click, content_description?",
-        "An on/off switch, on while checked (a binding, e.g. $item.enabled) is truthy; a tap dispatches on_click (e.g. action.device toggle_channel).",
-    ),
-];
+/// Node types retired by decision `layouts-not-apps`: never written again.
+const RETIRED_NODES: [&str; 3] = ["core://Dock", "core://Drawer", "core://AppFrame"];
 
-/// The pod-only node of a custom layout (never sent to clients).
-pub const REF_DOC: (&str, &str, &str) = (
-    "core://Ref",
-    "app, part, version?",
-    "A blueprint's part (list_parts): \"layout\" (the whole blueprint, only as a layout's root; the app keeps its own id), a screen:<id> part in screens, any other part as a node. The pod expands it when serving, from the blueprint's newest version (or the pinned one), so it stays current.",
-);
+/// The feature that names node type `t` (`core://IconButton` ->
+/// `icon_button`).
+pub fn node_feature(t: &str) -> String {
+    let n = t.strip_prefix("core://").unwrap_or(t);
+    if n == "Layout" {
+        return "layout_embed".into();
+    }
+    let mut out = String::new();
+    for (i, c) in n.chars().enumerate() {
+        if c.is_ascii_uppercase() && i > 0 {
+            out.push('_');
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out
+}
+
+fn feature_doc(name: &str) -> &'static str {
+    protocol::FEATURE_DOCS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map_or("", |(_, d)| d)
+}
+
+/// Plumbing nodes, generated from the feature files
+/// (`crates/protocol/features/*.md`).
+fn plumbing_nodes() -> Vec<Value> {
+    protocol::NODE_TYPES
+        .iter()
+        .filter(|t| !RETIRED_NODES.contains(t))
+        .map(|t| {
+            let f = node_feature(t);
+            json!({ "type": t, "feature": f, "doc": feature_doc(&f) })
+        })
+        .collect()
+}
+
+/// The porcelain nodes (expanded by the pod, never seen by clients).
+fn porcelain_nodes() -> Value {
+    json!([
+        { "type": crate::components::USE_TYPE, "fields": "component, args?, children?, version?",
+          "doc": "A component (list_components): core:<name> ships with the server, pod:<name> is the user's own, core:<blueprint> is a whole blueprint layout (only as a layout's root; the layout keeps its own id) and core:<blueprint>/<part> a part of one (a screen:<id> part in screens). Without version it follows the component: the layout gets a new version when the component changes." },
+        { "type": crate::parts::REF_TYPE, "fields": "app, part, version?",
+          "doc": "The older name of {core://Use, component: core:<app>/<part>} (part \"layout\": core:<app>)." },
+        { "type": crate::components::CHILDREN_TYPE, "fields": "at?",
+          "doc": "Only in a component's template: where the caller's children go (at: just one of them)." },
+        { "type": crate::components::IF_ARG_TYPE, "fields": "arg, equals?, then, else?",
+          "doc": "Only in a component's template: then when the argument is set and truthy (or equals equals), else otherwise." },
+    ])
+}
 
 /// Small, single-purpose layout pieces for describe_vocabulary: building
 /// blocks, never whole pages (the agent builds only what was asked).
@@ -1133,10 +1467,34 @@ fn snippets() -> Value {
     })
 }
 
-fn vocabulary() -> Value {
+async fn vocabulary(pod: &Pod) -> Result<Value, Value> {
+    let rows = crate::blocking(pod, crate::components::list)
+        .await
+        .map_err(store_err)?;
+    let components: Vec<Value> = rows
+        .iter()
+        .map(|(m, d)| json!({ "name": m.name, "doc": d["doc"],
+            "params": d["params"].as_array().map(|ps| ps.iter().map(|p| p["name"].clone()).collect::<Vec<_>>()) }))
+        .collect();
+    Ok(vocabulary_with(components))
+}
+
+fn vocabulary_with(components: Vec<Value>) -> Value {
+    let features: Vec<Value> = protocol::FEATURE_DOCS
+        .iter()
+        .map(|(n, d)| json!({ "name": n, "doc": d }))
+        .collect();
     json!({
-        "features": protocol::FEATURES,
-        "nodes": NODE_DOCS.iter().chain(std::iter::once(&REF_DOC)).map(|(t, f, d)| json!({ "type": t, "fields": f, "doc": d })).collect::<Vec<_>>(),
+        "plumbing": {
+            "doc": "What the app draws. Adding to it needs an app build; a client gets the newest layout version whose features it draws.",
+            "nodes": plumbing_nodes(),
+            "features": features,
+        },
+        "porcelain": {
+            "doc": "Defined as data in terms of plumbing and expanded by the pod before serving, so it needs no app build. get_component reads a definition; expand shows what anything becomes; copy_component and define_component make the user's own.",
+            "nodes": porcelain_nodes(),
+            "components": components,
+        },
         "icons": protocol::ICONS,
         "intents": [
             { "intent": "action.navigation.open", "fields": "target_uri?, layout?, params?: {name: value}, presentation: Push|Modal|Replace|Sheet|Panel, animation?: none|fade|slide|sheet_up",
@@ -1213,15 +1571,20 @@ mod tests {
 
     #[test]
     fn every_node_type_is_documented() {
-        // Retired by decision `layouts-not-apps`: never written again.
-        let retired = ["core://Dock", "core://Drawer", "core://AppFrame"];
-        for t in protocol::NODE_TYPES.iter().filter(|t| !retired.contains(t)) {
+        for n in plumbing_nodes() {
+            let t = n["type"].as_str().unwrap();
+            let f = n["feature"].as_str().unwrap();
             assert!(
-                NODE_DOCS.iter().any(|(d, _, _)| d == t),
-                "{t} has no entry in NODE_DOCS"
+                protocol::FEATURES.contains(&f),
+                "{t}: no feature file {f}.md"
+            );
+            assert!(
+                n["doc"].as_str().unwrap().contains("Fields:") || t == "core://Divider",
+                "{t}: features/{f}.md lists no fields"
             );
         }
-        assert_eq!(NODE_DOCS.len(), protocol::NODE_TYPES.len() - retired.len());
+        let v = vocabulary_with(Vec::new());
+        assert!(v["porcelain"]["nodes"].as_array().unwrap().len() >= 4);
     }
 
     #[test]

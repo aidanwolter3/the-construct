@@ -179,7 +179,7 @@ fn invalid_files_are_refused_with_their_path() {
                 "0001",
                 r#"{"note": "x", "layout": {"type": "core://Text", "value_expr": "", "style": "Body"}}"#,
             ),
-            "layouts/pixelfed_sample_no_login/0001.json: invalid layout: root must stay a core://Workspace",
+            "layouts/pixelfed_sample_no_login/0001.json: invalid layout: root must be a core://Workspace or a core://Page",
         ),
         (
             src("pixelfed", "0001", ok),
@@ -373,8 +373,9 @@ fn sync_appends_new_files_once_and_refuses_changes() {
         "idempotent"
     );
     // A new pod starts from the oldest file in the build, as version 1.
+    let pixelfed_files = files().iter().filter(|f| f.app_id == "pixelfed").count() as i64;
     let (v, layout) = latest(&store, &catalog(), "pixelfed").unwrap().unwrap();
-    assert_eq!(v, 1);
+    assert_eq!(v, pixelfed_files);
     assert!(pod_core::validate::unknown_node_types(&layout).is_empty());
     let served = active_for(
         &store,
@@ -384,7 +385,7 @@ fn sync_appends_new_files_once_and_refuses_changes() {
     )
     .unwrap()
     .unwrap();
-    assert_eq!(served.version, 1);
+    assert_eq!(served.version, pixelfed_files);
     // A build from before `title_scrolls` has no version it can draw on a new
     // pod: the older files are retired (decision `retired-layout-files`).
     let before: String = protocol::FEATURES
@@ -403,40 +404,40 @@ fn sync_appends_new_files_once_and_refuses_changes() {
         .unwrap()
         .is_none()
     );
-    // A new pixelfed_sample_no_login file after the build's newest (0003).
-    let one = src("pixelfed_sample_no_login", "0004", MINIMAL);
+    // A new pixelfed_sample_no_login file after the build's newest (0004).
+    let one = src("pixelfed_sample_no_login", "0005", MINIMAL);
     let two_text = leak(MINIMAL.replace("Minimal demo", "Minimal v2"));
-    let two = src("pixelfed_sample_no_login", "0004", two_text);
+    let two = src("pixelfed_sample_no_login", "0005", two_text);
     let mut sources = files();
     sources.push(two);
     assert_eq!(
         sync_sources(&store, &catalog(), &sources).unwrap().appended,
-        [("layouts/pixelfed_sample_no_login/0004.json".to_owned(), 2)]
+        [("layouts/pixelfed_sample_no_login/0005.json".to_owned(), 3)]
     );
     // Changing a deployed file stops the start, naming it.
     let mut changed = files();
-    changed.push(src("pixelfed_sample_no_login", "0004", one.text));
+    changed.push(src("pixelfed_sample_no_login", "0005", one.text));
     assert_eq!(
         sync_sources(&store, &catalog(), &changed).unwrap_err(),
-        "layouts/pixelfed_sample_no_login/0004.json changed after it was deployed as version 2; layout files are \
-         append-only. To recover, restore the deployed content of layouts/pixelfed_sample_no_login/0004.json \
-         (git log -p --follow -- layouts/pixelfed_sample_no_login/0004.json) and put the change in a new file, 0005.json"
+        "layouts/pixelfed_sample_no_login/0005.json changed after it was deployed as version 3; layout files are \
+         append-only. To recover, restore the deployed content of layouts/pixelfed_sample_no_login/0005.json \
+         (git log -p --follow -- layouts/pixelfed_sample_no_login/0005.json) and put the change in a new file, 0006.json"
     );
     // Reformatting a file (same layout and note) is not a change.
     let reformatted: Value = serde_json::from_str(two_text).unwrap();
     let reformatted = leak(serde_json::to_string(&reformatted).unwrap());
     let mut same = files();
-    same.push(src("pixelfed_sample_no_login", "0004", reformatted));
+    same.push(src("pixelfed_sample_no_login", "0005", reformatted));
     assert_eq!(
         sync_sources(&store, &catalog(), &same).unwrap(),
         SyncReport::default()
     );
-    // A rollback deploy without 0004.json starts, serving v2 unchanged.
+    // A rollback deploy without 0005.json starts, serving v3 unchanged.
     let report = sync(&store, &catalog()).unwrap();
     assert_eq!(
         report.missing,
         [
-            "layout file pixelfed_sample_no_login/0004.json was deployed as version 2 but is missing from this build; \
+            "layout file pixelfed_sample_no_login/0005.json was deployed as version 3 but is missing from this build; \
           serving the recorded history unchanged"
         ]
     );
@@ -446,13 +447,13 @@ fn sync_appends_new_files_once_and_refuses_changes() {
             .unwrap()
             .unwrap()
             .0,
-        2
+        3
     );
     // Retiring the old files (deleting them from the build) changes nothing on
     // a pod that recorded them, and logs nothing.
     let home = || files().into_iter().filter(|f| f.app_id == "pixelfed");
     let retired: Vec<_> = home()
-        .chain([src("pixelfed_sample_no_login", "0004", two_text)])
+        .chain([src("pixelfed_sample_no_login", "0005", two_text)])
         .collect();
     let report = sync_sources(&store, &catalog(), &retired).unwrap();
     assert_eq!(report, SyncReport::default());
@@ -460,13 +461,13 @@ fn sync_appends_new_files_once_and_refuses_changes() {
     let three = leak(MINIMAL.replace("Minimal demo", "Minimal v3"));
     let next: Vec<_> = home()
         .chain([
-            src("pixelfed_sample_no_login", "0004", two_text),
-            src("pixelfed_sample_no_login", "0005", three),
+            src("pixelfed_sample_no_login", "0005", two_text),
+            src("pixelfed_sample_no_login", "0006", three),
         ])
         .collect();
     assert_eq!(
         sync_sources(&store, &catalog(), &next).unwrap().appended,
-        [("layouts/pixelfed_sample_no_login/0005.json".to_owned(), 3)]
+        [("layouts/pixelfed_sample_no_login/0006.json".to_owned(), 4)]
     );
 }
 

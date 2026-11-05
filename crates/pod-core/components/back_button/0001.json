@@ -1,0 +1,26 @@
+{
+  "note": "First version",
+  "component": {
+    "doc": "Back (the arrow), shown only where the page can go back (local://nav#can_go_back).",
+    "params": [],
+    "template": {
+      "type": "core://Conditional",
+      "value": "${local://nav#can_go_back}",
+      "content": {
+        "type": "core://IconButton",
+        "icon": "arrow_back",
+        "content_description": "Back",
+        "tag": "back",
+        "on_click": {
+          "intent": "action.navigation.back"
+        }
+      }
+    },
+    "examples": [
+      {
+        "args": {},
+        "note": "in a header row"
+      }
+    ]
+  }
+}

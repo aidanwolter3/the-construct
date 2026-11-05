@@ -35,10 +35,11 @@ data class WorkspaceSpec(
     val queries: Map<String, List<String>> = emptyMap(),
 )
 
+/** A workspace slot. [providerUri] is a label nothing reads (optional; decision `plumbing-and-porcelain`). */
 @Serializable
 data class SlotSpec(
     @SerialName("slot_id") val slotId: String,
-    @SerialName("provider_uri") val providerUri: String,
+    @SerialName("provider_uri") val providerUri: String = "",
     val content: UiNode,
 )
 
@@ -100,10 +101,18 @@ enum class CreatePosition {
 data class Screen(
     val id: String,
     val route: String,
-    val title: String,
+    val title: String = "",
     val data: String? = null,
-    val content: UiNode,
+    /** A workspace screen's content (the app draws the screen chrome around it). */
+    val content: UiNode? = null,
     val footer: UiNode? = null,
+    /**
+     * A `core://Page` screen (feature `page`): the whole screen, drawn with no chrome from the app; [content] and
+     * [footer] are then unset.
+     */
+    val root: UiNode? = null,
+    /** Feature `screen_item`: `$item` throughout a page screen is the entity at this URI. */
+    val item: String? = null,
 )
 
 /** `core://List` indentation: `item[field] * stepDp`, at most [max] steps (default 4). */
@@ -131,7 +140,12 @@ data class ListFilter(
  * schema 6 (D44) the header's `$item` also has `group_count`, the number of drawn items in its group.
  */
 @Serializable
-data class GroupBy(val field: String, val header: UiNode)
+data class GroupBy(
+    val field: String,
+    val header: UiNode,
+    /** Feature `list_group_headers`: only the headers are drawn, one per distinct value. */
+    @SerialName("headers_only") val headersOnly: Boolean = false,
+)
 
 /**
  * `core://Text` `format` (feature `date_format`, docs/decisions/text-dates-and-counts.md): every bound value that is a
@@ -216,6 +230,29 @@ sealed class UiNode {
         val screens: List<Screen> = emptyList(),
         /** The title scrolls away with the content (feature `title_scrolls`); by default it is pinned in a top bar. */
         @SerialName("title_scrolls") val titleScrolls: Boolean = false,
+    ) : UiNode()
+
+    /**
+     * `core://Page` (feature `page`, decision `plumbing-and-porcelain`): a layout whose [root] is any node, drawn over
+     * the whole space with no chrome from the app ([NodePage]). [title] names it and is not drawn. [screens] open by
+     * route and draw their own [Screen.root].
+     */
+    @Serializable
+    data class Page(
+        val id: String,
+        val title: String = "",
+        val root: UiNode,
+        val screens: List<Screen> = emptyList(),
+    ) : UiNode()
+
+    /**
+     * `core://Scroll` (feature `scroll`): [content] scrolls, filling the height its parent leaves ([NodeScroll]); with
+     * [followEnd] it follows its content to the end after an action of the page.
+     */
+    @Serializable
+    data class Scroll(
+        val content: UiNode,
+        @SerialName("follow_end") val followEnd: Boolean = false,
     ) : UiNode()
 
     @Serializable
@@ -687,6 +724,8 @@ abstract class TaggedUnionSerializer<T : Any>(serialName: String, private val ke
 object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode", "type") {
     override val variants = listOf<Variant<UiNode>>(
         Variant("core://Workspace", UiNode.Workspace::class, UiNode.Workspace.serializer()),
+        Variant("core://Page", UiNode.Page::class, UiNode.Page.serializer()),
+        Variant("core://Scroll", UiNode.Scroll::class, UiNode.Scroll.serializer()),
         Variant("core://Container", UiNode.Container::class, UiNode.Container.serializer()),
         Variant("core://Text", UiNode.Text::class, UiNode.Text.serializer()),
         Variant("core://Button", UiNode.Button::class, UiNode.Button.serializer()),

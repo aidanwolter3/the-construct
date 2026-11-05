@@ -66,6 +66,13 @@ fn main() {
         write!(out, "{n:?}, ").unwrap();
     }
     out.push_str("];\n\n");
+    out.push_str("/// `(name, description)` of every drawn feature, sorted (`features/*.md`).\n");
+    out.push_str("pub const FEATURE_DOCS: &[(&str, &str)] = &[\n");
+    for n in &drawn {
+        let doc = std::fs::read_to_string(dir.join(format!("{n}.md"))).unwrap_or_default();
+        writeln!(out, "    ({n:?}, {:?}),", doc.trim()).unwrap();
+    }
+    out.push_str("];\n\n");
     out.push_str("/// One constant per layout feature (`features/<name>.md`, `features/removed/<name>.md`).\n");
     out.push_str("pub mod feature {\n");
     for (n, d) in drawn

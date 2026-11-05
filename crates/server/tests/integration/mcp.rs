@@ -123,7 +123,7 @@ impl Env {
         let resp = client()
             .get(format!("{}{path}", self.url))
             .bearer_auth(bearer)
-            .header(protocol::FEATURES_HEADER, protocol::features_header())
+            .header(protocol::FEATURES_HEADER, crate::workspace_features())
             .send()
             .await
             .unwrap();
@@ -530,10 +530,19 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     let (err, vocab) = env.tool(&access, "describe_vocabulary", json!({})).await;
     assert!(!err);
     // Every client node type but the three retired ones (decision
-    // `layouts-not-apps`), plus the pod-only core://Ref.
+    // `layouts-not-apps`) is plumbing; core://Use, core://Ref and the
+    // template nodes are porcelain (decision `plumbing-and-porcelain`).
     assert_eq!(
-        vocab["nodes"].as_array().unwrap().len(),
-        protocol::NODE_TYPES.len() - 3 + 1
+        vocab["plumbing"]["nodes"].as_array().unwrap().len(),
+        protocol::NODE_TYPES.len() - 3
+    );
+    assert!(
+        vocab["porcelain"]["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["name"] == "core:workspace"),
+        "{vocab}"
     );
     let (err, parts) = env
         .tool(&access, "list_parts", json!({"app": "pixelfed"}))
@@ -889,4 +898,230 @@ async fn a_preregistered_client_connects_with_its_secret() {
     post.push(("client_secret", "s3cret".into()));
     let (status, body) = token(post, None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+/// Components through the tools (decision `plumbing-and-porcelain`): listed,
+/// read, expanded, defined, used by a layout (which follows its updates),
+/// refused deletion while used, copied, restored; and the pod theme.
+#[tokio::test]
+async fn components_are_defined_used_and_expanded() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+
+    let (err, list) = env.tool(&access, "list_components", json!({})).await;
+    assert!(!err, "{list}");
+    let names: Vec<&str> = list["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["name"].as_str())
+        .collect();
+    for want in [
+        "core:workspace",
+        "core:screen",
+        "core:card",
+        "core:section_header",
+    ] {
+        assert!(names.contains(&want), "{want} in {names:?}");
+    }
+    assert!(
+        list["blueprints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b == "core:recipes")
+    );
+
+    let (err, ws) = env
+        .tool(&access, "get_component", json!({"name": "core:workspace"}))
+        .await;
+    assert!(!err, "{ws}");
+    assert_eq!(ws["definition"]["params"][0]["name"], "title");
+    let text = ws["examples"][0]["expanded"].to_string();
+    assert!(
+        text.contains("core://Scroll") && !text.contains("$arg."),
+        "{text}"
+    );
+
+    // A fragment of two siblings, alone, becomes a column of them.
+    let (err, x) = env
+        .tool(
+            &access,
+            "expand",
+            json!({"component": "core:section_header", "args": {"text": "Hi", "divider": true}}),
+        )
+        .await;
+    assert!(!err, "{x}");
+    assert_eq!(x["expanded"]["children"][0]["type"], "core://Divider");
+    assert_eq!(
+        x["expanded"]["children"][1]["children"][0]["value_expr"],
+        "Hi"
+    );
+    let (err, x) = env
+        .tool(
+            &access,
+            "expand",
+            json!({"component": "core:card", "args": {"nope": 1}}),
+        )
+        .await;
+    assert!(err, "{x}");
+    assert!(x.to_string().contains("no parameter 'nope'"), "{x}");
+
+    // What clients get for home: plumbing only.
+    let (err, home) = env.tool(&access, "expand", json!({"id": "home"})).await;
+    assert!(!err, "{home}");
+    assert_eq!(home["expanded"]["type"], "core://Page");
+    let features: Vec<&str> = home["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        features.contains(&"page") && !features.contains(&"workspace"),
+        "{features:?}"
+    );
+    let (err, got) = env
+        .tool(
+            &access,
+            "get_layout",
+            json!({"id": "home", "expanded": true}),
+        )
+        .await;
+    assert!(!err);
+    assert_eq!(got["expanded"]["type"], "core://Page");
+
+    let greeting = |text: &str| {
+        json!({"doc": "Says hello.", "params": [{"name": "who", "type": "text", "required": true, "doc": "Whom"}],
+               "template": {"type": "core://Text", "style": "Body", "value_expr": text},
+               "examples": [{"args": {"who": "Ada"}, "note": "hello Ada"}]})
+    };
+    let (err, d) = env
+        .tool(
+            &access,
+            "define_component",
+            json!({"name": "greeting", "component": greeting("Hello $arg.who")}),
+        )
+        .await;
+    assert!(!err, "{d}");
+    assert_eq!(
+        (d["name"].as_str(), d["version"].as_i64()),
+        (Some("pod:greeting"), Some(1))
+    );
+    let (err, d) = env
+        .tool(
+            &access,
+            "define_component",
+            json!({"name": "pod:greeting", "component": greeting("x")}),
+        )
+        .await;
+    assert!(err && d["error"] == "component_exists", "{d}");
+    let (err, d) = env
+        .tool(
+            &access,
+            "define_component",
+            json!({"name": "pod:bad", "component": greeting("$arg.nope")}),
+        )
+        .await;
+    assert!(err && d["error"] == "invalid_component", "{d}");
+    let (err, d) = env
+        .tool(
+            &access,
+            "update_component",
+            json!({"name": "core:card", "component": greeting("x")}),
+        )
+        .await;
+    assert!(err && d["error"] == "read_only", "{d}");
+
+    // A layout uses it, and follows it.
+    let layout = json!({"type": "core://Workspace", "title": "Home", "slots": [
+        {"slot_id": "hi", "content": {"type": "core://Use", "component": "pod:greeting", "args": {"who": "Ada"}}}]});
+    let (err, v) = env
+        .tool(&access, "validate_layout", json!({"layout": layout}))
+        .await;
+    assert!(!err, "{v}");
+    assert_eq!(
+        v["expanded"]["slots"][0]["content"]["value_expr"],
+        "Hello Ada"
+    );
+    let (err, w) = env
+        .tool(
+            &access,
+            "update_layout",
+            json!({"id": "home", "layout": layout}),
+        )
+        .await;
+    assert!(!err, "{w}");
+    let (err, u) = env
+        .tool(
+            &access,
+            "update_component",
+            json!({"name": "pod:greeting", "component": greeting("Hi there $arg.who")}),
+        )
+        .await;
+    assert!(!err, "{u}");
+    assert_eq!(u["layouts_updated"][0]["id"], "home", "{u}");
+    let (status, body) = env.get("/v1/workspaces/home", &pod_code).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let text = body["workspace"].to_string();
+    assert!(
+        text.contains("Hi there Ada") && !text.contains("core://Use"),
+        "{text}"
+    );
+    // The pod's theme comes with it.
+    assert_eq!(body["entities"]["core://theme"]["card_border"], "#E4E4EA");
+
+    let (err, d) = env
+        .tool(&access, "delete_component", json!({"name": "pod:greeting"}))
+        .await;
+    assert!(err && d["error"] == "component_in_use", "{d}");
+    assert_eq!(d["layouts"][0], "home");
+    let (err, r) = env
+        .tool(
+            &access,
+            "restore_component",
+            json!({"name": "greeting", "version": 1}),
+        )
+        .await;
+    assert!(!err && r["version"] == 3, "{r}");
+
+    let (err, c) = env
+        .tool(&access, "copy_component", json!({"from": "core:card"}))
+        .await;
+    assert!(!err, "{c}");
+    assert_eq!(c["name"], "pod:card");
+    let (err, got) = env
+        .tool(&access, "get_component", json!({"name": "pod:card"}))
+        .await;
+    assert!(!err);
+    assert_eq!(got["history"][0]["note"], "Copied from core:card v1");
+    let (err, d) = env
+        .tool(&access, "delete_component", json!({"name": "pod:card"}))
+        .await;
+    assert!(!err, "{d}");
+
+    let (err, t) = env
+        .tool(
+            &access,
+            "set_theme",
+            json!({"theme": {"card_border": {"dark": "#101010"}}}),
+        )
+        .await;
+    assert!(!err, "{t}");
+    assert_eq!(t["theme"]["card_border"]["dark"], "#101010");
+    assert_eq!(t["theme"]["card_border"]["light"], "#E4E4EA");
+    let (err, t) = env
+        .tool(
+            &access,
+            "set_theme",
+            json!({"theme": {"nope": {"dark": "#101010"}}}),
+        )
+        .await;
+    assert!(err && t["error"] == "invalid_theme", "{t}");
+    let (_, body) = env.get("/v1/workspaces/home", &pod_code).await;
+    assert_eq!(
+        body["entities"]["core://theme"]["card_border_dark"],
+        "#101010"
+    );
 }

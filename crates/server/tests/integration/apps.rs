@@ -46,7 +46,7 @@ fn client() -> reqwest::Client {
 /// `(status, X-Construct-Layout-Version, JSON body)`, as a current client
 /// (it sends this build's features).
 async fn get(pod: &Pod, path: &str) -> (StatusCode, Option<String>, Value) {
-    get_as(pod, path, Some(&protocol::features_header())).await
+    get_as(pod, path, Some(&crate::workspace_features())).await
 }
 
 /// The features header of a build from before `title_scrolls` (decision
@@ -54,7 +54,7 @@ async fn get(pod: &Pod, path: &str) -> (StatusCode, Option<String>, Value) {
 fn before_title_scrolls() -> String {
     protocol::FEATURES
         .iter()
-        .filter(|f| **f != protocol::feature::TITLE_SCROLLS)
+        .filter(|f| **f != protocol::feature::TITLE_SCROLLS && **f != protocol::feature::PAGE)
         .copied()
         .collect::<Vec<_>>()
         .join(",")
@@ -75,6 +75,17 @@ fn feed_layout(title: &str, slots: Value) -> UiNode {
 /// every client, D37), 4 the newest file again.
 fn feed_history(pod: &Pod) {
     let store = pod.state.store();
+    // Only the newest file, as version 1 (the build may hold older files
+    // with the same layout, e.g. 0011 before 0012 wrote it with components).
+    store
+        .with_conn(|c| {
+            c.execute_batch(
+                "DELETE FROM app_versions WHERE app_id = 'pixelfed'
+                     AND version < (SELECT MAX(version) FROM app_versions WHERE app_id = 'pixelfed');
+                 UPDATE app_versions SET version = 1 WHERE app_id = 'pixelfed';",
+            )
+        })
+        .unwrap();
     let plain = feed_layout("Plain", json!([]));
     let legacy = feed_layout(
         "Legacy",
@@ -151,6 +162,17 @@ fn is_rfc3339(v: &Value) -> bool {
 }
 
 /// The note of an app's newest file (version 1 on a fresh pod).
+/// The note of an app's oldest file in the build: its version 1 on a fresh
+/// pod.
+fn first_note(ws: &str) -> String {
+    layouts::parse_files(&server::catalog(), &server::layout_files())
+        .unwrap()
+        .into_iter()
+        .find(|f| f.app_id == ws)
+        .unwrap()
+        .note
+}
+
 fn newest_note(ws: &str) -> String {
     layouts::parse_files(&server::catalog(), &server::layout_files())
         .unwrap()
@@ -269,7 +291,7 @@ async fn versions_page_newest_first() {
     assert!(body.get("next_before").is_none(), "{body}");
     let first = versions.last().unwrap();
     assert_eq!(first["source"], "file");
-    assert_eq!(first["note"], newest_note("pixelfed_sample_no_login"));
+    assert_eq!(first["note"], first_note("pixelfed_sample_no_login"));
     assert!(is_rfc3339(&first["created_at"]), "{first}");
     assert_eq!(versions[0]["source"], "manual");
     assert_eq!(versions[0]["note"], "T5");
@@ -331,7 +353,7 @@ async fn one_version_carries_its_layout() {
     assert_eq!(body["app_id"], "pixelfed");
     assert_eq!(body["version"], 1);
     assert_eq!(body["source"], "file");
-    assert_eq!(body["note"], newest_note("pixelfed"));
+    assert_eq!(body["note"], first_note("pixelfed"));
     assert!(is_rfc3339(&body["created_at"]));
     let layout: UiNode = serde_json::from_value(body["layout"].clone()).unwrap();
     assert_eq!(
@@ -688,7 +710,7 @@ struct SseReader {
 impl SseReader {
     /// As this build.
     async fn connect(url: &str, bearer: Option<&str>) -> Self {
-        Self::connect_as(url, bearer, Some(&protocol::features_header())).await
+        Self::connect_as(url, bearer, Some(&crate::workspace_features())).await
     }
 
     /// With `features`, the request carries `X-Construct-Features` like an
@@ -939,7 +961,7 @@ async fn versions_say_whether_the_client_can_draw_them() {
     let retired = Some("retired".to_owned());
     let update = Some("update_required".to_owned());
     // Version 3 holds a removed node type (D37): retired for every client.
-    let current = page(Some(protocol::features_header())).await;
+    let current = page(Some(crate::workspace_features())).await;
     assert_eq!(
         rows(&current),
         [(4, None), (3, retired.clone()), (2, None), (1, None)]
@@ -971,7 +993,7 @@ async fn versions_say_whether_the_client_can_draw_them() {
     assert!(rows(&tool).iter().all(|r| r.1.is_none()), "{tool}");
     let one = client()
         .get(format!("{}/v1/apps/pixelfed/versions/3", pod.url))
-        .header(protocol::FEATURES_HEADER, protocol::features_header())
+        .header(protocol::FEATURES_HEADER, crate::workspace_features())
         .send()
         .await
         .unwrap()
@@ -996,7 +1018,7 @@ async fn apps_say_the_newest_version_the_client_can_draw() {
         async move { req.send().await.unwrap().json::<Value>().await.unwrap() }
     };
     for (features, want) in [
-        (Some(protocol::features_header()), json!(4)),
+        (Some(crate::workspace_features()), json!(4)),
         (Some(before_title_scrolls()), json!(2)),
         (Some(String::new()), Value::Null),
         (None, json!(4)),

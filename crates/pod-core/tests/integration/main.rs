@@ -10,3 +10,15 @@ mod parts;
 mod sources;
 mod sse;
 mod uploads;
+
+/// Every feature this build draws but `page`: such a client gets a
+/// `core://Workspace` as it is, not the plumbing it stands for (decision
+/// `plumbing-and-porcelain`).
+pub fn workspace_features() -> String {
+    protocol::FEATURES
+        .iter()
+        .filter(|f| **f != "page")
+        .copied()
+        .collect::<Vec<_>>()
+        .join(",")
+}

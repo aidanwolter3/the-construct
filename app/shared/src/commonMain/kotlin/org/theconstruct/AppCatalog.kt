@@ -554,6 +554,9 @@ fun findSignInIntent(node: UiNode?): ActionIntent.AuthLogin? = when (node) {
     null -> null
     is UiNode.Button -> node.onClick as? ActionIntent.AuthLogin
     is UiNode.Workspace -> node.slots.firstNotNullOfOrNull { findSignInIntent(it.content) }
+    is UiNode.Page -> findSignInIntent(node.root)
+    is UiNode.Scroll -> findSignInIntent(node.content)
+    is UiNode.Column -> node.children.firstNotNullOfOrNull { findSignInIntent(it) }
     is UiNode.Container -> node.children.firstNotNullOfOrNull { findSignInIntent(it) }
     else -> null
 }

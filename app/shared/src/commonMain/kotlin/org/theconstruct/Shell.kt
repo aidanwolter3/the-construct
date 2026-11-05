@@ -98,8 +98,11 @@ fun deviceData(
     apps: List<AppSummary>,
     platform: String,
     sources: DeviceSources = DeviceSources(),
+    dark: Boolean = false,
 ): DeviceData {
     val entities = LinkedHashMap<String, JsonObject>()
+    // The pod's theme for the app's mode (feature `theme`, decision `plumbing-and-porcelain`).
+    entities["local://theme"] = themeEntity(state.entities["core://theme"], dark)
     val pending = state.pendingActions
     val connection = when (state.isOnline) {
         true -> "Online"
@@ -242,10 +245,14 @@ object BundledLayouts {
     /** When the pod has no home this app can draw: try again, or leave the pod. */
     val rescue: UiNode by lazy { ConstructJson.decodeNode(RESCUE_JSON) }
 
+    // Plumbing (decision `plumbing-and-porcelain`): the title row and a scrolling body, as `core:workspace` draws a
+    // page, written out because no pod is there to expand it.
     private const val BOOTSTRAP_JSON = """
-{"type": "core://Workspace", "id": "bootstrap", "title": "The Construct", "slots": [
-  {"slot_id": "pod", "provider_uri": "local://bootstrap", "content": {"type": "core://Column", "spacing_dp": 12,
-    "padding_h_dp": 16, "padding_v_dp": 8, "children": [
+{"type": "core://Page", "id": "bootstrap", "title": "The Construct", "root": {"type": "core://Column", "children": [
+  {"type": "core://Column", "padding_h_dp": 16, "padding_v_dp": 12, "children": [
+    {"type": "core://Text", "style": "Headline", "value_expr": "The Construct"}]},
+  {"type": "core://Scroll", "content": {"type": "core://Column", "spacing_dp": 12, "padding_h_dp": 16, "padding_v_dp": 8,
+    "children": [
     {"type": "core://Text", "style": "Body",
      "value_expr": "Enter your pod code to open your apps. Your data lives in your own private pod."},
     {"type": "core://TextField", "field": "pod_token", "placeholder": "Pod code", "max_length": 128},
@@ -258,12 +265,14 @@ object BundledLayouts {
     {"type": "core://Button", "label": "Try a temporary pod",
      "on_click": {"intent": "action.auth.session", "path": "/v1/pods/temporary", "payload": {}}}
   ]}}
-]}"""
+]}}"""
 
     private const val RESCUE_JSON = """
-{"type": "core://Workspace", "id": "rescue", "title": "The Construct", "slots": [
-  {"slot_id": "rescue", "provider_uri": "local://rescue", "content": {"type": "core://Column", "spacing_dp": 12,
-    "padding_h_dp": 16, "padding_v_dp": 8, "children": [
+{"type": "core://Page", "id": "rescue", "title": "The Construct", "root": {"type": "core://Column", "children": [
+  {"type": "core://Column", "padding_h_dp": 16, "padding_v_dp": 12, "children": [
+    {"type": "core://Text", "style": "Headline", "value_expr": "The Construct"}]},
+  {"type": "core://Scroll", "content": {"type": "core://Column", "spacing_dp": 12, "padding_h_dp": 16, "padding_v_dp": 8,
+    "children": [
     {"type": "core://Text", "style": "Title", "value_expr": "Your pod has no screen this app can show"},
     {"type": "core://Text", "style": "Body",
      "value_expr": "Nothing on this device is lost. Ask your agent to repair the home layout, then try again."},
@@ -271,7 +280,7 @@ object BundledLayouts {
     {"type": "core://Button", "label": "Leave pod on this device",
      "on_click": {"intent": "action.device", "command": "leave_pod"}}
   ]}}
-]}"""
+]}}"""
 }
 
 /** What the root draws for the pod's home. */
