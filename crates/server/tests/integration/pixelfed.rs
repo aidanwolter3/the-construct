@@ -734,8 +734,12 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     // No features header (a tool, not a client): the latest version (a new
-    // pod has one per app: its newest file, decision `retired-layout-files`).
-    assert_eq!(version(&resp).as_deref(), Some("1"));
+    // pod has one per file in the build, decision `retired-layout-files`).
+    let newest = server::layout_files()
+        .iter()
+        .filter(|f| f.app_id == "pixelfed")
+        .count();
+    assert_eq!(version(&resp), Some(newest.to_string()));
     let resp = client()
         .get(&url)
         .bearer_auth("tok")
@@ -744,7 +748,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
         .await
         .unwrap();
     // A current client: the same.
-    assert_eq!(version(&resp).as_deref(), Some("1"));
+    assert_eq!(version(&resp), Some(newest.to_string()));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert!(matches!(&spec.workspace, UiNode::Workspace { screens, .. } if screens.len() == 4));
     // A newer version replaces the feed layout; entities still come upstream.
@@ -754,7 +758,7 @@ async fn signed_in_feed_layout_is_versioned_signed_out_is_not() {
     }
     server::layouts::append_version(state.store(), "pixelfed", &node, None).unwrap();
     let resp = client().get(&url).bearer_auth("tok").send().await.unwrap();
-    assert_eq!(version(&resp).as_deref(), Some("2"));
+    assert_eq!(version(&resp), Some((newest + 1).to_string()));
     let spec: WorkspaceSpec = resp.json().await.unwrap();
     assert_eq!(spec.workspace, node);
     assert_eq!(spec.queries["timeline:home"].len(), 5);

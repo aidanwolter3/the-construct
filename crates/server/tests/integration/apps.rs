@@ -75,6 +75,17 @@ fn feed_layout(title: &str, slots: Value) -> UiNode {
 /// every client, D37), 4 the newest file again.
 fn feed_history(pod: &Pod) {
     let store = pod.state.store();
+    // Only the newest file, as version 1 (the build may hold older files
+    // with the same layout, e.g. 0011 before 0012 wrote it with components).
+    store
+        .with_conn(|c| {
+            c.execute_batch(
+                "DELETE FROM app_versions WHERE app_id = 'pixelfed'
+                     AND version < (SELECT MAX(version) FROM app_versions WHERE app_id = 'pixelfed');
+                 UPDATE app_versions SET version = 1 WHERE app_id = 'pixelfed';",
+            )
+        })
+        .unwrap();
     let plain = feed_layout("Plain", json!([]));
     let legacy = feed_layout(
         "Legacy",
@@ -151,6 +162,17 @@ fn is_rfc3339(v: &Value) -> bool {
 }
 
 /// The note of an app's newest file (version 1 on a fresh pod).
+/// The note of an app's oldest file in the build: its version 1 on a fresh
+/// pod.
+fn first_note(ws: &str) -> String {
+    layouts::parse_files(&server::catalog(), &server::layout_files())
+        .unwrap()
+        .into_iter()
+        .find(|f| f.app_id == ws)
+        .unwrap()
+        .note
+}
+
 fn newest_note(ws: &str) -> String {
     layouts::parse_files(&server::catalog(), &server::layout_files())
         .unwrap()
@@ -269,7 +291,7 @@ async fn versions_page_newest_first() {
     assert!(body.get("next_before").is_none(), "{body}");
     let first = versions.last().unwrap();
     assert_eq!(first["source"], "file");
-    assert_eq!(first["note"], newest_note("pixelfed_sample_no_login"));
+    assert_eq!(first["note"], first_note("pixelfed_sample_no_login"));
     assert!(is_rfc3339(&first["created_at"]), "{first}");
     assert_eq!(versions[0]["source"], "manual");
     assert_eq!(versions[0]["note"], "T5");
@@ -331,7 +353,7 @@ async fn one_version_carries_its_layout() {
     assert_eq!(body["app_id"], "pixelfed");
     assert_eq!(body["version"], 1);
     assert_eq!(body["source"], "file");
-    assert_eq!(body["note"], newest_note("pixelfed"));
+    assert_eq!(body["note"], first_note("pixelfed"));
     assert!(is_rfc3339(&body["created_at"]));
     let layout: UiNode = serde_json::from_value(body["layout"].clone()).unwrap();
     assert_eq!(
