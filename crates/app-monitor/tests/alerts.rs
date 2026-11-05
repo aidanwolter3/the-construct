@@ -1,7 +1,9 @@
-//! Monitoring alerts (decision `server-monitoring-alerts`) on a real pod: an
-//! app on the source gets a "Server warnings" channel only once the pod may
-//! read the monitoring data, and a check that turns to warning notifies once
-//! through the D52 pipeline.
+//! Monitoring alerts (decision `server-monitoring-alerts`) on a real pod: the
+//! layout that shows the source gets a "Server warnings" channel only once the
+//! pod may read the monitoring data, and a check that turns to warning
+//! notifies once through the D52 pipeline. Every layout reports home's feeds
+//! (decision `layouts-not-apps`); only the one that shows the source gets the
+//! channel (decision `notification-owner`, issue #116).
 
 use std::sync::Arc;
 
@@ -17,9 +19,12 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 fn pod() -> Pod {
-    let pod: Pod = Arc::new(AppState::in_memory(vec![Arc::new(MonitorAdapter::new(
-        MonitorConfig::default(),
-    ))]));
+    // With the home blueprint, so the pod has a home whose feeds every
+    // layout reports.
+    let pod: Pod = Arc::new(AppState::in_memory(vec![
+        Arc::new(MonitorAdapter::new(MonitorConfig::default())),
+        app_shell::adapter(),
+    ]));
     pod.store()
         .create_pinned_session(&session_hash("pod"))
         .unwrap();
@@ -58,8 +63,8 @@ async fn call(
     )
 }
 
-/// A custom app on the monitoring source, made over MCP; its id.
-async fn health_app(pod: &Pod) -> String {
+/// A layout made over MCP; its id.
+async fn create(pod: &Pod, args: Value) -> String {
     let (status, body) = call(
         pod,
         "POST",
@@ -67,13 +72,7 @@ async fn health_app(pod: &Pod) -> String {
         "pod",
         Some(
             json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
-            "name": "create_app",
-            "arguments": {"title": "Server health", "feeds": [["monitor", "overview"]],
-                "layout": {"type": "core://Workspace", "title": "Server health", "slots": [
-                    {"slot_id": "checks", "provider_uri": "monitor://overview", "content": {
-                        "type": "core://List", "query_key": "monitor:checks",
-                        "item_template": {"type": "core://Text", "style": "Body",
-                            "value_expr": "$item.title"}}}]}}}}),
+            "name": "create_layout", "arguments": args}}),
         ),
     )
     .await;
@@ -82,6 +81,32 @@ async fn health_app(pod: &Pod) -> String {
     assert_ne!(r["isError"], true, "{body}");
     let app: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
     app["id"].as_str().unwrap().to_owned()
+}
+
+/// A layout that binds nothing; its id.
+async fn other_app(pod: &Pod, title: &str, feeds: Value) -> String {
+    create(
+        pod,
+        json!({"title": title, "feeds": feeds,
+            "layout": {"type": "core://Workspace", "title": title, "slots": [
+                {"slot_id": "s", "provider_uri": "local://x", "content": {
+                    "type": "core://Text", "style": "Body", "value_expr": title}}]}}),
+    )
+    .await
+}
+
+/// A layout on the monitoring source; its id.
+async fn health_app(pod: &Pod) -> String {
+    create(
+        pod,
+        json!({"title": "Server health",
+            "layout": {"type": "core://Workspace", "title": "Server health", "slots": [
+                {"slot_id": "checks", "provider_uri": "monitor://overview", "content": {
+                    "type": "core://List", "query_key": "monitor:checks",
+                    "item_template": {"type": "core://Text", "style": "Body",
+                        "value_expr": "$item.title"}}}]}}),
+    )
+    .await
 }
 
 async fn warning_channels(pod: &Pod) -> Vec<Value> {
@@ -105,7 +130,10 @@ async fn notifications(pod: &Pod) -> Vec<Value> {
 #[tokio::test]
 async fn a_warning_notifies_the_monitoring_app_once() {
     let pod = pod();
+    // Made before the health layout, naming the feed: it gets no channel.
+    let groceries = other_app(&pod, "Groceries", json!([["monitor", "overview"]])).await;
     let app = health_app(&pod).await;
+    other_app(&pod, "Log", json!([])).await;
     // The pod polls only for a registered device.
     let (status, _) = call(
         &pod,
@@ -124,6 +152,7 @@ async fn a_warning_notifies_the_monitoring_app_once() {
     let channels = warning_channels(&pod).await;
     assert_eq!(channels.len(), 1, "{channels:?}");
     assert_eq!(channels[0]["app_id"], app.as_str());
+    assert_ne!(channels[0]["app_id"], groceries.as_str());
     assert_eq!(channels[0]["enabled"], true);
 
     // Someone tries many tokens: the check warns and notifies.
@@ -131,6 +160,7 @@ async fn a_warning_notifies_the_monitoring_app_once() {
     pod.poll_due().await;
     let got = notifications(&pod).await;
     assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!(got[0]["app_id"], app.as_str());
     assert_eq!(
         got[0]["title"],
         "Server: Wrong pod codes and unknown tokens"

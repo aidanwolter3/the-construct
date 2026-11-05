@@ -19,6 +19,10 @@ sealed class SimStep(val command: String, val arg: String = "") {
     class WaitImages(val timeoutMs: Long) : SimStep("wait-images", timeoutMs.toString())
     /** Swipes the node [target] selects (see docs/simulator.md) towards [direction]: left shows the next carousel page. */
     class Swipe(val direction: String, val target: String) : SimStep("swipe-$direction", target)
+    /** Drags the node [target] selects down by [dp] slowly (no fling), from its center, e.g. a sheet's handle. */
+    class DragDown(val dp: Int, val target: String) : SimStep("drag-down", "$dp $target")
+    /** A quick downward flick from the center of the node [target] selects (a fling, e.g. to close a sheet). */
+    class FlickDown(val target: String) : SimStep("swipe-down", target)
     class ScrollTo(val target: String) : SimStep("scroll-to", target)
     /** Replaces the text of the text field [target] selects with [text]. */
     class Type(val target: String, val text: String) : SimStep("type", "$target $text")
@@ -55,6 +59,9 @@ class ScriptParseException(message: String) : IllegalArgumentException(message)
 
 /** Upper bound for `wait`, 10 minutes. */
 const val MAX_WAIT_MS = 600_000L
+
+/** The longest `drag-down`, in dp. */
+const val MAX_DRAG_DP = 2000
 
 /** Default timeout of `wait-images`. */
 const val DEFAULT_WAIT_IMAGES_MS = 10_000L
@@ -119,6 +126,16 @@ fun parseScript(script: String): List<SimStep> {
                     ?: throw ScriptParseException("${where()}: 'wait-images' takes an optional timeout in ms in 0..$MAX_WAIT_MS"),
             )
             "swipe-left", "swipe-right" -> SimStep.Swipe(command.removePrefix("swipe-"), requireArg("a target (text, content description or tag:<testTag>)"))
+            "swipe-down" -> SimStep.FlickDown(requireArg("a target (text, content description or tag:<testTag>)"))
+            "drag-down" -> {
+                val a = requireArg("a distance in dp and a target")
+                val dp = a.substringBefore(' ').toIntOrNull()?.takeIf { it in 1..MAX_DRAG_DP }
+                val target = a.substringAfter(' ', "").trim()
+                if (dp == null || target.isEmpty()) {
+                    throw ScriptParseException("${where()}: 'drag-down' needs '<dp in 1..$MAX_DRAG_DP> <target>'")
+                }
+                SimStep.DragDown(dp, target)
+            }
             "scroll-to" -> SimStep.ScrollTo(requireArg("a target (text, content description or tag:<testTag>)"))
             "type" -> {
                 val a = requireArg("a target and the text to type")
@@ -180,7 +197,7 @@ fun parseScript(script: String): List<SimStep> {
             )
             else -> throw ScriptParseException(
                 "${where()}: unknown command '$command' (expected one of: " +
-                    "shot, click, wait, idle, assert-text, assert-no-text, wait-text, wait-images, swipe-left, swipe-right, " +
+                    "shot, click, wait, idle, assert-text, assert-no-text, wait-text, wait-images, swipe-left, swipe-right, swipe-down, drag-down, " +
                     "scroll-to, type, back, pick, open-layout, open-settings, open-inbox, pin-version, " +
                     "publish-version, notify, toggle-channel, offline, online, screen)",
             )

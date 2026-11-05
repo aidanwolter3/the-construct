@@ -72,6 +72,8 @@ Commands are separated by `;` or newlines; entries starting with `#` are comment
 | `type <target> <text>` | Replaces a text field's text. |
 | `pick <path> [<path>…]` | Queues files for the next photo picker. |
 | `swipe-left <target>` / `swipe-right <target>` | Swipes a node, e.g. a carousel. |
+| `swipe-down <target>` | A quick downward flick from the node's center (a fling), e.g. `swipe-down tag:sheet-handle` closes a sheet. |
+| `drag-down <dp> <target>` | Drags slowly down by `dp` from the node's center and lets go without a fling, e.g. `drag-down 300 tag:sheet-handle` (a sheet's handle) or `tag:sheet:<layout>` (its content). |
 | `scroll-to <target>` | Scrolls until the node is visible. |
 | `back` | A system Back press. |
 | `wait <ms>` / `idle` | Sleeps and advances the UI clock / waits for idle. |
