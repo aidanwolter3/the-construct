@@ -28,6 +28,10 @@ impl Drop for Env {
 }
 
 async fn env() -> Env {
+    env_with(HostConfig::default()).await
+}
+
+async fn env_with(config: HostConfig) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let factory = server::pod_factory(
         PixelfedConfig::new("http://127.0.0.1:9", None),
@@ -35,7 +39,6 @@ async fn env() -> Env {
         86_400,
         false,
     );
-    let config = HostConfig::default();
     let path = dir.path().to_owned();
     let host = tokio::task::spawn_blocking(move || Host::open(&path, factory, config))
         .await
@@ -740,4 +743,142 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     let (err, unknown) = env.tool(&access, "drop_tables", json!({})).await;
     assert!(err);
     assert_eq!(unknown["error"], "unknown_tool");
+}
+
+/// An app that asks for a client ID and secret (decision
+/// `oauth-preregistered-client`): no registration, the pod code on the
+/// connect page as usual, and its secret at the token endpoint.
+#[tokio::test]
+async fn a_preregistered_client_connects_with_its_secret() {
+    let redirect = "https://app.example/oauth/cb";
+    let env = env_with(HostConfig {
+        oauth_client: Some(server::host::oauth::StaticClient {
+            client_id: "gemini".into(),
+            secret: "s3cret".into(),
+            redirect_uris: vec![redirect.into()],
+        }),
+        ..HostConfig::default()
+    })
+    .await;
+    let pod_code = env.pod("mine").await;
+
+    let asm: Value = client()
+        .get(format!(
+            "{}/.well-known/oauth-authorization-server",
+            env.url
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        asm["token_endpoint_auth_methods_supported"],
+        json!(["none", "client_secret_post", "client_secret_basic"])
+    );
+
+    // An unknown redirect says which setting allows it.
+    let resp = client()
+        .get(format!(
+            "{}/oauth/authorize?client_id=gemini&redirect_uri=https%3A%2F%2Fother.example%2Fcb\
+             &response_type=code&code_challenge_method=S256&code_challenge={}",
+            env.url,
+            "c".repeat(43)
+        ))
+        .send()
+        .await
+        .unwrap();
+    // Error pages are 200s, like the others on this page (no redirect).
+    assert_eq!(resp.status(), StatusCode::OK);
+    let page = resp.text().await.unwrap();
+    assert!(
+        page.contains("CONSTRUCT_OAUTH_CLIENT_REDIRECT_URIS"),
+        "{page}"
+    );
+    assert!(page.contains("https://other.example/cb"), "{page}");
+
+    // The connect page asks for the pod code, as for any client.
+    let authorize = |verifier: &'static str| {
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        let url = env.url.clone();
+        let pod_code = pod_code.clone();
+        async move {
+            let resp = client()
+                .post(format!("{url}/oauth/authorize"))
+                .form(&[
+                    ("client_id", "gemini"),
+                    ("redirect_uri", redirect),
+                    ("response_type", "code"),
+                    ("code_challenge", challenge.as_str()),
+                    ("code_challenge_method", "S256"),
+                    ("pod_code", pod_code.as_str()),
+                    ("decision", "allow"),
+                ])
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::FOUND);
+            let location = resp.headers()["location"].to_str().unwrap().to_owned();
+            assert!(location.starts_with(redirect), "{location}");
+            location
+                .split(['?', '&'])
+                .find_map(|kv| kv.strip_prefix("code="))
+                .unwrap()
+                .to_owned()
+        }
+    };
+    let token = |form: Vec<(&'static str, String)>, basic: Option<&'static str>| {
+        let url = env.url.clone();
+        async move {
+            let mut req = client().post(format!("{url}/oauth/token")).form(&form);
+            if let Some(b) = basic {
+                req = req.header(
+                    "authorization",
+                    format!(
+                        "Basic {}",
+                        base64::engine::general_purpose::STANDARD.encode(b)
+                    ),
+                );
+            }
+            let resp = req.send().await.unwrap();
+            (resp.status(), resp.json::<Value>().await.unwrap())
+        }
+    };
+
+    // Without the secret, or with a wrong one: refused.
+    let v1 = "b".repeat(64).leak();
+    let code = authorize(v1).await;
+    let base = |code: &str, v: &str| {
+        vec![
+            ("grant_type", "authorization_code".to_owned()),
+            ("code", code.to_owned()),
+            ("redirect_uri", redirect.to_owned()),
+            ("code_verifier", v.to_owned()),
+        ]
+    };
+    let mut no_secret = base(&code, v1);
+    no_secret.push(("client_id", "gemini".into()));
+    let (status, body) = token(no_secret, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert_eq!(body["error"], "invalid_client");
+    let (status, _) = token(base(&code, v1), Some("gemini:wrong")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // client_secret_basic.
+    let (status, body) = token(base(&code, v1), Some("gemini:s3cret")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let access = body["access_token"].as_str().unwrap().to_owned();
+    assert!(access.starts_with("cmcp_"));
+    let (status, _) = env.rpc(Some(&access), "tools/list", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // client_secret_post.
+    let v2 = "d".repeat(64).leak();
+    let code = authorize(v2).await;
+    let mut post = base(&code, v2);
+    post.push(("client_id", "gemini".into()));
+    post.push(("client_secret", "s3cret".into()));
+    let (status, body) = token(post, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 }

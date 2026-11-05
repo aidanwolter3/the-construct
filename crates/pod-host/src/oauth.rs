@@ -13,6 +13,12 @@
 //!   a new `mcp` credential of that pod (`cmcp_…`), good only for the pod's
 //!   `/v1/mcp` until revoked (`server pods revoke-mcp`).
 //!
+//! - A pre-registered client (`CONSTRUCT_OAUTH_CLIENT_ID`, `_SECRET`,
+//!   `_REDIRECT_URIS`; decision `oauth-preregistered-client`) for MCP apps
+//!   that ask for a client ID and secret instead of registering: it proves
+//!   itself at the token endpoint with its secret (`client_secret_post` or
+//!   `client_secret_basic`). The user still types the pod code.
+//!
 //! The access token does not expire and no refresh token is issued: the
 //! credential is revocable, reaches nothing but the MCP endpoint, and MCP
 //! clients must not assume refresh tokens.
@@ -47,6 +53,135 @@ pub const SCOPE: &str = "mcp";
 pub const CODE_TTL_SECS: i64 = 300;
 const MAX_REDIRECT_URIS: usize = 5;
 const MAX_URI_LEN: usize = 2048;
+
+/// The pre-registered client: set by the operator, never stored.
+#[derive(Clone, PartialEq, Eq)]
+pub struct StaticClient {
+    pub client_id: String,
+    pub secret: String,
+    pub redirect_uris: Vec<String>,
+}
+
+impl std::fmt::Debug for StaticClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StaticClient")
+            .field("client_id", &self.client_id)
+            .field("secret", &"<redacted>")
+            .field("redirect_uris", &self.redirect_uris)
+            .finish()
+    }
+}
+
+impl StaticClient {
+    /// `CONSTRUCT_OAUTH_CLIENT_ID` and `CONSTRUCT_OAUTH_CLIENT_SECRET` (both,
+    /// or no client) and `CONSTRUCT_OAUTH_CLIENT_REDIRECT_URIS`
+    /// (comma-separated; may start empty: an unknown one is shown on the
+    /// connect page so the operator can add it).
+    pub fn from_env() -> Option<Self> {
+        let var = |k: &str| {
+            std::env::var(k)
+                .ok()
+                .map(|v| v.trim().to_owned())
+                .filter(|v| !v.is_empty())
+        };
+        let (client_id, secret) = match (
+            var("CONSTRUCT_OAUTH_CLIENT_ID"),
+            var("CONSTRUCT_OAUTH_CLIENT_SECRET"),
+        ) {
+            (Some(id), Some(secret)) => (id, secret),
+            (None, None) => return None,
+            _ => {
+                tracing::warn!(
+                    "set both CONSTRUCT_OAUTH_CLIENT_ID and CONSTRUCT_OAUTH_CLIENT_SECRET; \
+                     the pre-registered OAuth client is off"
+                );
+                return None;
+            }
+        };
+        let redirect_uris = var("CONSTRUCT_OAUTH_CLIENT_REDIRECT_URIS")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|u| !u.is_empty())
+            .map(str::to_owned)
+            .collect();
+        Some(Self {
+            client_id,
+            secret,
+            redirect_uris,
+        })
+    }
+
+    fn as_client(&self) -> OAuthClient {
+        OAuthClient {
+            client_id: self.client_id.clone(),
+            name: self.client_id.clone(),
+            redirect_uris: self.redirect_uris.clone(),
+        }
+    }
+
+    /// Compares hashes so the time taken doesn't reveal how much matched.
+    fn secret_matches(&self, given: &str) -> bool {
+        Sha256::digest(given.as_bytes()) == Sha256::digest(self.secret.as_bytes())
+    }
+}
+
+/// A client by id: the pre-registered one, else a registered one.
+/// `Err(())`: a store error.
+async fn find_client(host: &Arc<Host>, client_id: &str) -> Result<Option<OAuthClient>, ()> {
+    if let Some(sc) = &host.config.oauth_client
+        && sc.client_id == client_id
+    {
+        return Ok(Some(sc.as_client()));
+    }
+    let lookup = client_id.to_owned();
+    match host.blocking(move |h| h.store.client(&lookup)).await {
+        Ok(Ok(c)) => Ok(c),
+        _ => Err(()),
+    }
+}
+
+/// `client_id` and `client_secret` from HTTP Basic (RFC 6749 §2.3.1).
+fn basic_credentials(headers: &HeaderMap) -> Option<(String, String)> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let encoded = value
+        .strip_prefix("Basic ")
+        .or_else(|| value.strip_prefix("basic "))?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .ok()?;
+    let decoded = String::from_utf8(decoded).ok()?;
+    let (id, secret) = decoded.split_once(':')?;
+    Some((form_decode(id), form_decode(secret)))
+}
+
+/// Basic credentials are form-encoded before base64 (RFC 6749 §2.3.1).
+fn form_decode(s: &str) -> String {
+    let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => out.push(b' '),
+            b'%' => {
+                match (
+                    bytes.get(i + 1).and_then(|&b| hex(b)),
+                    bytes.get(i + 2).and_then(|&b| hex(b)),
+                ) {
+                    (Some(hi), Some(lo)) => {
+                        out.push(hi << 4 | lo);
+                        i += 2;
+                    }
+                    _ => out.push(b'%'),
+                }
+            }
+            b => out.push(b),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
 
 /// The host's public base URL: `CONSTRUCT_PUBLIC_URL`, else from the
 /// request (`https` behind Fly or with `X-Forwarded-Proto: https`).
@@ -113,7 +248,11 @@ pub(crate) async fn authorization_server(
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
         "code_challenge_methods_supported": ["S256"],
-        "token_endpoint_auth_methods_supported": ["none"],
+        "token_endpoint_auth_methods_supported": if host.config.oauth_client.is_some() {
+            json!(["none", "client_secret_post", "client_secret_basic"])
+        } else {
+            json!(["none"])
+        },
         "scopes_supported": [SCOPE],
         "authorization_response_iss_parameter_supported": true,
     }))
@@ -273,15 +412,27 @@ async fn check_request(
     let Some(client_id) = p.get("client_id").cloned() else {
         return Err(page_error("no client_id"));
     };
-    let lookup = client_id.clone();
-    let client = match host.blocking(move |h| h.store.client(&lookup)).await {
-        Ok(Ok(Some(c))) => c,
-        Ok(Ok(None)) => return Err(page_error("unknown client")),
-        _ => return Err(page_error("a server error")),
+    let client = match find_client(host, &client_id).await {
+        Ok(Some(c)) => c,
+        Ok(None) => return Err(page_error("unknown client")),
+        Err(()) => return Err(page_error("a server error")),
     };
     let redirect_uri = match p.get("redirect_uri") {
         Some(u) if client.redirect_uris.contains(u) => u.clone(),
         None if client.redirect_uris.len() == 1 => client.redirect_uris[0].clone(),
+        Some(u)
+            if host
+                .config
+                .oauth_client
+                .as_ref()
+                .is_some_and(|sc| sc.client_id == client_id) =>
+        {
+            tracing::warn!(redirect_uri = %u, "pre-registered OAuth client: redirect URI not allowed");
+            return Err(page_error(&format!(
+                "the redirect URI isn't registered. To allow it, add {u} to \
+                 CONSTRUCT_OAUTH_CLIENT_REDIRECT_URIS"
+            )));
+        }
         _ => return Err(page_error("the redirect URI isn't registered")),
     };
     let state = p.get("state").cloned();
@@ -564,8 +715,13 @@ pub(crate) async fn token(State(host): State<Arc<Host>>, req: Request) -> Respon
             "only authorization_code",
         );
     }
+    let basic = basic_credentials(&headers);
+    let client_id = p
+        .get("client_id")
+        .cloned()
+        .or_else(|| basic.as_ref().map(|(id, _)| id.clone()));
     let (Some(code), Some(verifier), Some(client_id)) =
-        (p.get("code"), p.get("code_verifier"), p.get("client_id"))
+        (p.get("code"), p.get("code_verifier"), client_id.as_ref())
     else {
         return oauth_error(
             StatusCode::BAD_REQUEST,
@@ -573,6 +729,24 @@ pub(crate) async fn token(State(host): State<Arc<Host>>, req: Request) -> Respon
             "code, code_verifier and client_id are required",
         );
     };
+    if let Some(sc) = &host.config.oauth_client
+        && sc.client_id == *client_id
+    {
+        let given = p.get("client_secret").cloned().or_else(|| {
+            basic
+                .as_ref()
+                .filter(|(id, _)| id == client_id)
+                .map(|(_, secret)| secret.clone())
+        });
+        if !given.is_some_and(|g| sc.secret_matches(&g)) {
+            tracing::warn!("pre-registered OAuth client: wrong or missing secret");
+            return oauth_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid_client",
+                "client authentication failed",
+            );
+        }
+    }
     if let Some(resource) = p.get("resource")
         && !resource_ok(&host, &headers, resource)
     {
@@ -606,9 +780,8 @@ pub(crate) async fn token(State(host): State<Arc<Host>>, req: Request) -> Respon
     if c.client_id != *client_id || challenge != c.challenge || !redirect_ok {
         return bad();
     }
-    let lookup = c.client_id.clone();
-    let label = match host.blocking(move |h| h.store.client(&lookup)).await {
-        Ok(Ok(Some(client))) => client.name,
+    let label = match find_client(&host, &c.client_id).await {
+        Ok(Some(client)) => client.name,
         _ => "An MCP client".into(),
     };
     let access = random_token(MCP_TOKEN_PREFIX);
@@ -658,6 +831,35 @@ impl FormFromRequest for Form<HashMap<String, String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn basic_credentials_are_decoded() {
+        let mut h = HeaderMap::new();
+        let enc = base64::engine::general_purpose::STANDARD.encode("my+app:p%40ss%3Aword");
+        h.insert(
+            header::AUTHORIZATION,
+            format!("Basic {enc}").parse().unwrap(),
+        );
+        assert_eq!(
+            basic_credentials(&h),
+            Some(("my app".into(), "p@ss:word".into()))
+        );
+        h.insert(header::AUTHORIZATION, "Bearer x".parse().unwrap());
+        assert_eq!(basic_credentials(&h), None);
+        assert_eq!(form_decode("100%"), "100%");
+        assert_eq!(form_decode("%zz"), "%zz");
+    }
+
+    #[test]
+    fn static_client_debug_hides_the_secret() {
+        let sc = StaticClient {
+            client_id: "gemini".into(),
+            secret: "s3cret".into(),
+            redirect_uris: vec![],
+        };
+        assert!(!format!("{sc:?}").contains("s3cret"));
+        assert!(sc.secret_matches("s3cret") && !sc.secret_matches("s3cre"));
+    }
 
     #[test]
     fn redirect_uris() {
