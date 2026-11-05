@@ -230,23 +230,8 @@ fun RenderUiNode(
 
         is UiNode.TextField -> FormTextField(node, dispatch, modifier)
 
-        is UiNode.Row -> Row(
-            modifier.padding(horizontal = node.paddingHDp.dp, vertical = node.paddingVDp.dp),
-            horizontalArrangement = Arrangement.spacedBy(node.spacingDp.dp),
-            verticalAlignment = when (node.align) {
-                Align.Start -> Alignment.Top
-                Align.End -> Alignment.Bottom
-                Align.Center, null -> Alignment.CenterVertically
-            },
-        ) {
-            node.children.forEach { child ->
-                if (child is UiNode.Spacer && child.sizeDp == null) {
-                    Spacer(Modifier.weight(1f))
-                } else {
-                    RenderUiNode(child, entities, onDispatch, Modifier, item)
-                }
-            }
-        }
+        // Long text shrinks and wraps; the controls after it stay whole (issue #117, [NodeRow]).
+        is UiNode.Row -> NodeRow(node, entities, onDispatch, item, modifier)
 
         is UiNode.Column -> Column(
             modifier.fillMaxWidth().padding(horizontal = node.paddingHDp.dp, vertical = node.paddingVDp.dp),
