@@ -18,7 +18,7 @@ library already in `target/release`.
 
 | Option (`-D` property or environment variable) | Default | Meaning |
 |---|---|---|
-| `construct.baseUrl` / `CONSTRUCT_BASE_URL` | the menu's saved choice, else staging | The server at launch. Picking a server in Settings still switches the running app. |
+| `construct.baseUrl` / `CONSTRUCT_BASE_URL` | the menu's saved choice, else staging | The server at launch. A layout with a server picker (`local:servers`, `set_server`) still switches the running app. |
 | `construct.workspace` / `CONSTRUCT_WORKSPACE` | `home` | The app opened at launch (`home` runs the shell; any other id runs that app alone with the native menu). |
 
 The engine keeps its cache in `~/.construct/cache.db` for staging and `~/.construct/servers/<url>/` for any other
@@ -84,9 +84,11 @@ The client opens the pod's `home` layout (the default) and draws everything from
   home cover the whole screen, as before.
 - **Settings and the inbox are layouts** (the `settings` and `inbox` blueprints), presented as a side panel and a
   sheet. Settings shows the connection, the pod's layouts (a tap lists a layout's versions; picking one shows it on
-  this device only), sign-ins, notification channels, the servers this device can use (Staging, Local, or the
-  platform's others; each server has its own cache and outbox), and **Leave pod**. On Android the notification
-  permission row sits above it.
+  this device only), sign-ins, notifications (one row per layout that sends them; a tap opens that layout's
+  switches inside the panel), and **Leave pod**. On Android the notification permission row sits above it. The
+  blueprint no longer lists servers: the platform still offers them in `local:servers` (Staging, Local, or its
+  others; each server has its own cache and outbox), so a layout can add a picker with `set_server`; desktop and
+  the simulator also take `CONSTRUCT_BASE_URL` / `-PbaseUrl`.
 - **If the pod has no home this build can draw**, a bundled screen offers Try again and Leave pod. Ask the agent to
   repair the home layout (`restore_version`); clearing the app's data also starts over.
 
