@@ -202,7 +202,7 @@ async fn each_client_gets_the_newest_layout_it_draws() {
                 .find_map(|n| match n {
                     UiNode::List {
                         where_: Some(w), ..
-                    } => Some(w),
+                    } => w.conditions().first(),
                     _ => None,
                 })
                 .unwrap();

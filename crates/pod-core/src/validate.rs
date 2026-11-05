@@ -332,11 +332,17 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             if group_by.as_ref().is_some_and(|g| g.field.trim().is_empty()) {
                 return Err("list group_by needs a field".into());
             }
-            if where_
-                .as_ref()
-                .is_some_and(|w| w.field.trim().is_empty() || w.equals.trim().is_empty())
-            {
-                return Err("list where needs a field and a value".into());
+            if let Some(w) = where_ {
+                let conds = w.conditions();
+                if conds.is_empty() {
+                    return Err("list where needs at least one condition".into());
+                }
+                if conds
+                    .iter()
+                    .any(|w| w.field.trim().is_empty() || w.equals.trim().is_empty())
+                {
+                    return Err("list where needs a field and a value".into());
+                }
             }
             Ok(())
         }
@@ -1000,6 +1006,24 @@ mod tests {
             json!({"filter": {"value": "$form.q", "fields": []}}),
             json!({"filter": {"value": "$form.q", "fields": [""]}}),
             json!({"group_by": {"field": "", "header": {"type": "core://Divider"}}}),
+        ] {
+            assert!(check_values(&list(bad.clone())).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn every_list_where_condition_needs_a_field_and_a_value() {
+        for ok in [
+            json!({"where": {"field": "deleted", "equals": "false"}}),
+            json!({"where": [{"field": "deleted", "equals": "false"},
+                             {"field": "category", "equals": "$form.tab"}]}),
+        ] {
+            assert_eq!(check_values(&list(ok.clone())), Ok(()), "{ok}");
+        }
+        for bad in [
+            json!({"where": {"field": "", "equals": "false"}}),
+            json!({"where": []}),
+            json!({"where": [{"field": "deleted", "equals": "false"}, {"field": "x", "equals": " "}]}),
         ] {
             assert!(check_values(&list(bad.clone())).is_err(), "{bad}");
         }

@@ -196,10 +196,13 @@ fn full_workspace() -> UiNode {
                                     count: None,
                                 }),
                             }),
-                            where_: Some(ListWhere {
-                                field: "kind".into(),
-                                equals: "$form.kind".into(),
-                            }),
+                            where_: Some(
+                                ListWhere {
+                                    field: "kind".into(),
+                                    equals: "$form.kind".into(),
+                                }
+                                .into(),
+                            ),
                             columns: 2,
                             spacing_dp: 12,
                             padding_h_dp: 12,

@@ -488,7 +488,7 @@ fn hints(def: &Definition) -> Value {
         "value_expr": if first_bool.is_some() { "$count left" } else { "$count" },
         "count": { "query_key": db::query_key(n), "where": open } });
     out["notes"] = json!(format!(
-        "{} Dates and counts are drawn by the device: \"date\" shows a date field as \"Due tomorrow\" or \"Overdue\" (format), \"count\" counts rows (count; add \"zero_text\" for an empty list). Use \"row\" as the list's item_template. Inside a core://Row, use core://Container (not core://Column, which takes the whole width) and a core://Spacer to push the delete to the end.",
+        "{} Dates and counts are drawn by the device: \"date\" shows a date field as \"Due tomorrow\" or \"Overdue\" (format), \"count\" counts rows (count; add \"zero_text\" for an empty list). A List's \"where\" may also be a list of conditions that all match, as in \"count\" (e.g. [{{\"field\": \"deleted\", \"equals\": \"false\"}}, {{\"field\": \"category\", \"equals\": \"$form.tab\"}}]: a blank value matches everything). Use \"row\" as the list's item_template. Inside a core://Row, use core://Container (not core://Column, which takes the whole width) and a core://Spacer to push the delete to the end.",
         out["notes"].as_str().unwrap_or("")
     ));
     out

@@ -159,9 +159,10 @@ pub enum UiNode {
         filter: Option<ListFilter>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         group_by: Option<GroupBy>,
-        /// Schema 6 (D44): see [`ListWhere`].
+        /// Schema 6 (D44): see [`ListWhere`]; a list of conditions that all
+        /// match is feature `list_where_all` ([`WhereClause`]).
         #[serde(rename = "where", default, skip_serializing_if = "Option::is_none")]
-        where_: Option<ListWhere>,
+        where_: Option<WhereClause>,
         /// Schema 8 (D48): items side by side in this many equal columns
         /// (a grid); 0 and 1 mean one item per row. Group headers span the
         /// width and start a new row; `indent` applies to one column only.
@@ -711,6 +712,34 @@ pub struct GroupBy {
 pub struct ListWhere {
     pub field: String,
     pub equals: String,
+}
+
+/// A `core://List` `where`: one [`ListWhere`] (`{field, equals}`), or
+/// (feature `list_where_all`, decision `list-where-all`) a list of them that
+/// must all match, the same shape as a `core://Text` [`TextCount`]'s `where`.
+/// Each condition is applied as a single one is (a blank `equals` matches
+/// everything). Untagged, so a layout is served in the form it was written.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum WhereClause {
+    One(ListWhere),
+    All(Vec<ListWhere>),
+}
+
+impl WhereClause {
+    /// Every condition, in order.
+    pub fn conditions(&self) -> &[ListWhere] {
+        match self {
+            WhereClause::One(w) => std::slice::from_ref(w),
+            WhereClause::All(all) => all,
+        }
+    }
+}
+
+impl From<ListWhere> for WhereClause {
+    fn from(w: ListWhere) -> Self {
+        WhereClause::One(w)
+    }
 }
 
 /// `core://List` `focus` (schema 12, docs/decisions/list-focus.md): the item

@@ -8,7 +8,7 @@
 //! What counts as a binding to a row of collection `c`:
 //! - `$item.<f>` inside a `core://List` whose `query_key` is
 //!   `collection:<c>`, and its `filter.fields`, `group_by.field`,
-//!   `where.field`;
+//!   `where.field` (or each `where[].field`);
 //! - a `core://Text` `count`'s `where[].field` when its `query_key` is
 //!   `collection:<c>`;
 //! - `${collections://<c>/...#<f>}`;
@@ -211,10 +211,24 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        for (k, what) in [("group_by", "group_by"), ("where", "where")] {
-            if let Some(f) = map.get(k).and_then(|g| g["field"].as_str()) {
-                self.bindable(&format!("{at}/{k}/field"), def, f, what)?;
+        if let Some(f) = map.get("group_by").and_then(|g| g["field"].as_str()) {
+            self.bindable(&format!("{at}/group_by/field"), def, f, "group_by")?;
+        }
+        // `where` is one condition or a list that must all match.
+        match map.get("where") {
+            Some(Value::Array(conds)) => {
+                for (i, w) in conds.iter().enumerate() {
+                    if let Some(f) = w["field"].as_str() {
+                        self.bindable(&format!("{at}/where/{i}/field"), def, f, "where")?;
+                    }
+                }
             }
+            Some(w) => {
+                if let Some(f) = w["field"].as_str() {
+                    self.bindable(&format!("{at}/where/field"), def, f, "where")?;
+                }
+            }
+            None => {}
         }
         Ok(())
     }
@@ -499,6 +513,18 @@ mod tests {
         let other = json!({"type": "core://Text", "style": "Label", "value_expr": "$count",
             "count": {"query_key": "collection:groceries"}});
         assert!(check(&other, &[], &defs()).is_err());
+    }
+
+    #[test]
+    fn every_list_where_condition_must_name_fields() {
+        let list = |field: &str| {
+            json!({"type": "core://List", "query_key": "collection:todos",
+                "where": [{"field": "deleted", "equals": "false"}, {"field": field, "equals": "$form.tab"}],
+                "item_template": {"type": "core://Divider"}})
+        };
+        assert_eq!(check(&list("done"), &[], &defs()), Ok(()));
+        let e = check(&list("finished"), &[], &defs()).unwrap_err();
+        assert_eq!(e.pointer, "/where/1/field");
     }
 
     #[test]
