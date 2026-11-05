@@ -49,7 +49,12 @@ pub static MIGRATIONS: &[Step] = &[
     // 5: the host each secret may be sent to (security audit: a secret went
     // to any URL a recipe named).
     Step::sql("secret_hosts", SECRET_HOSTS),
+    // 6: items a fill left out as past (`upcoming`), so a page listing only
+    // past events doesn't read as a broken recipe (issue #131).
+    Step::sql("fill_past", FILL_PAST),
 ];
+
+const FILL_PAST: &str = "ALTER TABLE collections_fills ADD COLUMN last_past INTEGER;";
 
 const SECRET_HOSTS: &str = "ALTER TABLE collections_secrets ADD COLUMN host TEXT;";
 
