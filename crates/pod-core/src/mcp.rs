@@ -171,7 +171,14 @@ describe_vocabulary has small snippets. home can't be deleted. Blueprints are th
 blueprint so it stays current, or copy it to change it and pass copied_from so the user hears when it changes \
 (rebase_context then gives you what to merge). Call list_data_sources and describe_vocabulary first and \
 sample_data to see real fields. Every write is validated (errors give a JSON pointer and what is allowed) and \
-appears live on the user's devices; restore_version undoes an edit.";
+appears live on the user's devices; restore_version undoes an edit. The vocabulary is plumbing (what the app draws) \
+and porcelain: components the pod expands, used with {\"type\": \"core://Use\", \"component\": <name>, \"args\", \
+\"children\"} (list_components; core: ones ship with the server, pod: ones are the user's own). Prefer a component \
+over repeating nodes, and define a pod: component (define_component, or copy_component to change a core: one) when a \
+piece repeats across layouts. expand shows what any layout or component becomes. A layout whose root is a \
+core://Page gets no chrome from the app: it draws its own header (a title with actions on one line) and Back \
+(core:back_button); core://Workspace is drawn as core:workspace. Use ${local://theme#<token>} for colours \
+(set_theme).";
 
 // ---------- tools ----------
 

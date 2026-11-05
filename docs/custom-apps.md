@@ -60,9 +60,15 @@ curl -fsS -H "Authorization: Bearer $token" -H 'content-type: application/json' 
   layout can say when a source is signed out or failing (`${core://sources/pixelfed#signed_in}`). A layout signs in
   with `action.device` `sign_in` (`id`: a provider from `local:providers`; `value`: another server, e.g.
   `$form?.server`), e.g. a button shown while `signed_in` is false. The raw `action.auth.*` intents stay refused.
-- **Built-in parts.** `{"type": "core://Ref", "app": "pixelfed", "part": "screen:post"}` reuses a built-in's
-  screen, slot or declared part, expanded and kept current by the pod. A copy instead says `"copied_from": {app,
-  version}`, and `GET /v1/apps` reports `updates_from` when that built-in moves on.
+- **Components.** `{"type": "core://Use", "component": "core:card", "args": {...}, "children": [...]}` uses a
+  component: one the server ships (`core:card`, `core:section_header`, `core:workspace`, …), a blueprint or its part
+  (`core:pixelfed/screen:post`; `core://Ref` is the older spelling), or the pod's own (`pod:<name>`), expanded and
+  kept current by the pod ([layouts.md](layouts.md#porcelain-components)). A copy of a blueprint instead says
+  `"copied_from": {app, version}`, and `GET /v1/apps` reports `updates_from` when that built-in moves on.
+- **Plumbing.** A layout may be a `core://Page` (any node as its root, its own header and Back) instead of a
+  `core://Workspace`; the app then draws nothing around it ([layouts.md](layouts.md#structure-of-a-page)).
+- **Theme.** `${local://theme#card_border}` and the other tokens are the pod's colours for the app's mode; MCP
+  `set_theme` changes them.
 - **Device data.** `${local://connection#label}`, `${local://inbox#unread}`, the `local:layouts` query and the other
   [device data](layouts.md#device-data) need no feed.
 - **Hiding and deleting.** Any layout can be hidden from `local:layouts` on every device; the pod's layouts can be
@@ -89,10 +95,12 @@ Writes go through the same validation as the HTTP API and appear in the version 
 
 Tools: `list_layouts`, `list_data_sources`, `describe_vocabulary`, `get_layout`, `sample_data`, `validate_layout`,
 `create_layout`, `update_layout` (a whole layout or a JSON Patch, with `base_version`), `restore_version`,
-`rename_layout`, `delete_layout`, `set_hidden`, `list_parts`, `rebase_context`, `dismiss_update`, `set_time_zone`, plus
-the Collections tools below. Layouts are named `id` (`app` is still accepted, and the app-era tool names still answer).
-The server's MCP instructions tell Claude how to use them. After this rename, the Claude connector needs "Refresh tools
-list" in its settings.
+`rename_layout`, `delete_layout`, `set_hidden`, `list_parts`, `rebase_context`, `dismiss_update`, `set_time_zone`,
+the component tools `list_components`, `get_component`, `expand` (what a layout or component becomes, as plumbing),
+`define_component`, `update_component`, `copy_component`, `restore_component`, `delete_component`, and `set_theme`,
+plus the Collections tools below. `get_layout` takes `expanded: true`. Layouts are named `id` (`app` is still accepted, and the app-era tool names still answer).
+The server's MCP instructions tell Claude how to use them. After a change to the tools, the Claude connector needs
+"Refresh tools list" in its settings.
 
 ## Collections
 

@@ -92,7 +92,9 @@ Commands are separated by `;` or newlines; entries starting with `#` are comment
 | `toggle-channel <app>.<channel>` | Flips a channel switch (`toggle_channel`). |
 
 `back` pops the top of the back stack (a presented layout or a screen). In fixture mode the fake pod serves the
-`app-shell` blueprints (`settings`, `inbox`) and the fixtures' layouts to `open-layout`.
+`app-shell` blueprints (`settings`, `inbox`) as a pod serves them to this build, as plumbing
+(`app/desktopApp/src/sim/resources/blueprint_<id>_page.json`; `blueprint_<id>.json` is the workspace older builds
+get, written by the same `fixtures::` test), and the fixtures' layouts to `open-layout`.
 
 A `<target>` is `tag:<testTag>` (exact, else the first tag containing it), a single word, or `"quoted text"`: exact
 text, then exact content description (clickable nodes first), then substrings.
