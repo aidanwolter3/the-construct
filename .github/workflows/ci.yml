@@ -91,17 +91,6 @@ jobs:
           ./gradlew -PskipRustBuild :desktopApp:simulate \
             -Pworkspace=pixelfed_sample_no_login -Pscreen=phone -Pout="$RUNNER_TEMP/sim/pixelfed" \
             -Pscript="shot feed; click Like; assert-text Unlike; shot liked; offline; shot offline"
-      - name: TEMP issue 119 screenshots (reverted before merge)
-        if: always()
-        working-directory: app
-        run: |
-          ./gradlew -PskipRustBuild :desktopApp:simulate \
-            -Pworkspace=pixelfed_sample_no_login -Pscreen=phone -Pout="$RUNNER_TEMP/sim119" \
-            -Pscript="open-layout events panel; shot panel; click Open Friday Night Improv; wait 140; shot panel-sliding; idle; shot panel-screen; back; idle; shot panel-back; back; idle; open-layout events sheet; shot sheet; click Open Friday Night Improv; idle; shot sheet-screen" || true
-          cat "$RUNNER_TEMP/sim119/steps.log" || true
-          for f in "$RUNNER_TEMP"/sim119/*.png; do
-            n=$(basename "$f"); base64 -w 4000 "$f" | sed "s/^/B64 $n /"
-          done
       - name: Upload screenshots and test reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
