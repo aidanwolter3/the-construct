@@ -54,7 +54,8 @@ collection side by side.
     page's schema.org events; normalized to `id`, `title`, `start`, `end`, `venue`, `description` as plain text,
     `url`, `tickets_url`), `json`, `embedded-json` (`<script id>`, default `__NEXT_DATA__`), `jsonld` (any
     schema.org `types`), `rss` (and Atom), `ics` (raw `VEVENT` properties), `selectors` (CSS), and `llm`: a model
-    reads the page's text and answers the fields (`fields`, `hint`), only when the page changed.
+    reads the page's text and answers the fields (`fields`, `hint`), only when the page changed; with `upcoming`
+    it is asked for past items too, so the filter (not the model) leaves them out.
   - A small path language picks items and values (`races[*].candidates`, `offers.price`; a key holding a list is
     looked into).
   - Fetch is the Watcher's: conditional `GET`, size and time caps, public hosts only (unless the operator's
@@ -80,6 +81,8 @@ collection side by side.
   `POST /v1/collections/<c>/refresh {filler?}`; and after a filler is set. Failures back off (doubling from the
   interval, at most a day, at least `Retry-After`).
 - **Health** per filler: pending, ok, failing, empty (three fills found nothing), off, unavailable (no model).
+  A fill whose items were all past (`upcoming`) is ok, "no upcoming items listed · N past ones on the page": the
+  recipe works, the page just lists nothing ahead (issue #131).
   Stored in `collections_fills` with the validators, body hash and model fills today.
 - **Temporary pods** get `collections.fill = 0`: they can't fetch or ask a model.
 
