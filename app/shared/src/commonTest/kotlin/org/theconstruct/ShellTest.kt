@@ -192,8 +192,9 @@ class ShellTest {
         assertEquals(ShellView.Rescue, shellView(open.copy(error = "409")))
         assertEquals(ShellView.Loading, shellView(open))
         // The bundled layouts parse.
-        assertIs<UiNode.Workspace>(BundledLayouts.bootstrap)
-        assertIs<UiNode.Workspace>(BundledLayouts.rescue)
+        // Plumbing (decision `plumbing-and-porcelain`): no pod expands them.
+        assertIs<UiNode.Page>(BundledLayouts.bootstrap)
+        assertIs<UiNode.Page>(BundledLayouts.rescue)
     }
 
     @Test

@@ -263,18 +263,15 @@ fun fixturePath(name: String): String = when (name) {
 }
 
 /**
- * The fake pod's bundle for layout [id] (fixture mode, decision `layouts-not-apps`): a blueprint of `app-shell` (its
- * newest layout file, with no data: Settings and the inbox read only device data), else the layout's default fixture;
- * null when there is none.
+ * The fake pod's bundle for layout [id] (fixture mode, decision `layouts-not-apps`): a blueprint of `app-shell` as a pod
+ * serves it to this build (`blueprint_<id>_page.json`, plumbing: decision `plumbing-and-porcelain`; with no data:
+ * Settings and the inbox read only device data), else the layout's default fixture; null when there is none.
+ * `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::` writes the blueprint files.
  */
 fun layoutBundle(id: String, from: File): String? {
-    val dir = generateSequence(from.absoluteFile) { it.parentFile }
-        .map { File(it, "crates/app-shell/layouts/$id") }
-        .firstOrNull { it.isDirectory }
-    val newest = dir?.listFiles { f -> f.name.endsWith(".json") }?.maxByOrNull { it.name }
-    if (newest != null) {
-        val layout = ConstructJson.json.parseToJsonElement(newest.readText()).jsonObject["layout"] ?: return null
-        return """{"version": "1.0.0", "workspace": $layout, "entities": {}, "queries": {}}"""
+    val blueprint = findFixture("blueprint_${id}_page.json", from)
+    if (blueprint != null) {
+        return """{"version": "1.0.0", "workspace": ${blueprint.readText()}, "entities": {}, "queries": {}}"""
     }
     return try {
         defaultFixture(id, from).readText()

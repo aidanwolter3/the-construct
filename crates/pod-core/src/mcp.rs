@@ -957,7 +957,7 @@ async fn list_components(pod: &Pod) -> Result<Value, Value> {
         .filter(|a| !a.dev || pod.show_dev_apps())
         .map(|a| format!("{}{}", crate::components::CORE, a.id))
         .collect();
-    let rows = crate::blocking(pod, |s| crate::components::list(s))
+    let rows = crate::blocking(pod, crate::components::list)
         .await
         .map_err(store_err)?;
     let components: Vec<Value> = rows
@@ -1183,7 +1183,7 @@ async fn restore_component(pod: &Pod, args: &Value) -> Result<Value, Value> {
 async fn delete_component(pod: &Pod, args: &Value) -> Result<Value, Value> {
     let name = pod_name(str_arg(args, "name")?)?;
     custom::allow_write(pod).map_err(refused)?;
-    let r = crate::blocking(pod, move |s| {
+    crate::blocking(pod, move |s| {
         let using = custom::layouts_using_component(s, &name)?;
         if !using.is_empty() {
             return Ok(Err(json!({ "error": "component_in_use", "name": name, "layouts": using,
@@ -1195,8 +1195,7 @@ async fn delete_component(pod: &Pod, args: &Value) -> Result<Value, Value> {
         Ok(Ok(json!({ "ok": true, "name": name })))
     })
     .await
-    .map_err(store_err)?;
-    r
+    .map_err(store_err)?
 }
 
 // ---------- JSON Patch (RFC 6902) ----------
@@ -1462,7 +1461,7 @@ fn snippets() -> Value {
 }
 
 async fn vocabulary(pod: &Pod) -> Result<Value, Value> {
-    let rows = crate::blocking(pod, |s| crate::components::list(s))
+    let rows = crate::blocking(pod, crate::components::list)
         .await
         .map_err(store_err)?;
     let components: Vec<Value> = rows

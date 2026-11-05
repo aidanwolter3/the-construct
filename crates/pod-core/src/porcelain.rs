@@ -172,7 +172,7 @@ pub fn theme_entity(store: &Store) -> rusqlite::Result<protocol::EntityRecord> {
     let mut e = protocol::EntityRecord::default();
     for (t, v) in theme(store)? {
         e.set(&t, v["light"].as_str().unwrap_or(""));
-        e.set(&format!("{t}_dark"), v["dark"].as_str().unwrap_or(""));
+        e.set(format!("{t}_dark"), v["dark"].as_str().unwrap_or(""));
     }
     Ok(e)
 }

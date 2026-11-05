@@ -217,3 +217,33 @@ async fn screen_data_fixture_is_the_pods_comments_data() {
         &(serde_json::to_string_pretty(&out).unwrap() + "\n"),
     );
 }
+
+/// The shell's blueprints (home, Settings, the inbox) for the simulator's
+/// fixture mode, as a pod serves them (decision `plumbing-and-porcelain`):
+/// `blueprint_<id>.json` the workspace (server components expanded, as an
+/// older app gets it) and `blueprint_<id>_page.json` the plumbing this
+/// build's app gets. The golden screenshot test draws both.
+#[test]
+fn shell_blueprints() {
+    let state = server::state_in_memory();
+    for id in ["shell", "settings", "inbox"] {
+        let file = server::layouts::parse_files(&server::catalog(), &server::layout_files())
+            .unwrap()
+            .into_iter()
+            .rfind(|f| f.app_id == id)
+            .unwrap();
+        let workspace = server::layouts::node_value(&file.layout);
+        let page =
+            server::porcelain::to_plumbing(state.store(), state.catalog(), &workspace).unwrap();
+        assert_eq!(page["type"], "core://Page");
+        assert!(!page.to_string().contains("core://Use"), "{page}");
+        for (name, layout) in [
+            (format!("blueprint_{id}.json"), workspace),
+            (format!("blueprint_{id}_page.json"), page),
+        ] {
+            let mut text = serde_json::to_string_pretty(&layout).unwrap();
+            text.push('\n');
+            check_or_write(&name, &text);
+        }
+    }
+}

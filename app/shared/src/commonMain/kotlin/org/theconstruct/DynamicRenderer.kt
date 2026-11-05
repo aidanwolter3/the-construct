@@ -66,12 +66,6 @@ import kotlinx.serialization.json.JsonPrimitive
 /** The most lines a `core://TextField` grows to (its `lines` is clamped to this). */
 private const val MAX_TEXT_FIELD_LINES = 12
 
-/**
- * How far below the top of the workspace pinned `core://Sticky` content stops: clear of the menu and bell buttons
- * (40 dp, 8 dp from the top) that [ConstructApp] draws over it.
- */
-val STICKY_WORKSPACE_INSET = 56.dp
-
 /** The diameter of a `core://Progress` spinner without `size_dp`. */
 const val PROGRESS_DEFAULT_SIZE_DP = 16
 
@@ -87,14 +81,8 @@ val LocalConstructQueries: ProvidableCompositionLocal<Map<String, List<String>>>
  */
 val LocalToday: ProvidableCompositionLocal<Long?> = staticCompositionLocalOf { null }
 
-/**
- * Extra start padding for the workspace title, so it sits beside the menu button [ConstructApp] draws over the top-left
- * corner instead of under it. 0 outside [ConstructApp].
- */
+/** Extra start padding for the workspace title, beside the Back a pushed workspace gets ([PushFrame]). */
 val LocalWorkspaceTitleInset: ProvidableCompositionLocal<Dp> = staticCompositionLocalOf { 0.dp }
-
-/** Extra end padding for the workspace title, so it stays clear of the bell [ConstructApp] draws top-right. */
-val LocalWorkspaceTitleEndInset: ProvidableCompositionLocal<Dp> = staticCompositionLocalOf { 0.dp }
 
 /**
  * Renders one [UiNode]. [item] is the current item context inside a list or carousel template (the entity's
@@ -135,7 +123,7 @@ fun RenderUiNode(
                     node.title,
                     style = MaterialTheme.typography.headlineMedium,
                     modifier = Modifier
-                        .padding(start = 16.dp + LocalWorkspaceTitleInset.current, end = 16.dp + LocalWorkspaceTitleEndInset.current, top = 12.dp, bottom = 12.dp)
+                        .padding(start = 16.dp + LocalWorkspaceTitleInset.current, end = 16.dp, top = 12.dp, bottom = 12.dp)
                         .testTag("workspace-title"),
                 )
             }
@@ -152,16 +140,15 @@ fun RenderUiNode(
                 Spacer(Modifier.height(16.dp))
             }
             if (node.titleScrolls) {
-                // Feature `title_scrolls`: the title is the first thing in the scrolling view, and `core://Sticky`
-                // content pins below the menu and bell buttons drawn over the top corners.
-                val sticky = remember(scroll) { StickyScroll(scroll, topInset = STICKY_WORKSPACE_INSET) }
+                // Feature `title_scrolls`: the title is the first thing in the scrolling view.
+                val sticky = remember(scroll) { StickyScroll(scroll) }
                 Column(modifier.fillMaxSize().verticalScroll(scroll).stickyContent(sticky)) {
                     title()
                     slots(sticky)
                 }
             } else {
-                // The title is pinned in a bar beside the menu and bell buttons (decision `pinned-app-title`); only
-                // the slots scroll, so `core://Sticky` content pins right under the title.
+                // The title is pinned in a bar (decision `pinned-app-title`); only the slots scroll, so
+                // `core://Sticky` content pins right under the title.
                 val sticky = remember(scroll) { StickyScroll(scroll) }
                 Column(modifier.fillMaxSize()) {
                     title()
@@ -171,6 +158,11 @@ fun RenderUiNode(
                 }
             }
         }
+
+        // Plumbing (decision `plumbing-and-porcelain`): no chrome from the app.
+        is UiNode.Page -> NodePage(node, entities, onDispatch, modifier, item)
+
+        is UiNode.Scroll -> NodeScroll(node, entities, onDispatch, item, modifier)
 
         is UiNode.Container -> {
             val mod = modifier.padding(node.paddingDp.dp)
@@ -233,16 +225,30 @@ fun RenderUiNode(
         // Long text shrinks and wraps; the controls after it stay whole (issue #117, [NodeRow]).
         is UiNode.Row -> NodeRow(node, entities, onDispatch, item, modifier)
 
-        is UiNode.Column -> Column(
-            modifier.fillMaxWidth().padding(horizontal = node.paddingHDp.dp, vertical = node.paddingVDp.dp),
-            verticalArrangement = Arrangement.spacedBy(node.spacingDp.dp),
-            horizontalAlignment = when (node.align) {
-                Align.Start -> Alignment.Start
-                Align.Center -> Alignment.CenterHorizontally
-                Align.End -> Alignment.End
-            },
-        ) {
-            node.children.forEach { RenderUiNode(it, entities, onDispatch, Modifier, item) }
+        is UiNode.Column -> {
+            // In a bounded height (a page), a child that fills ([fillsHeight]: a scroll, a filling box, an inline
+            // layout) takes the rest of it; the others keep their own height.
+            val bounded = LocalBoundedHeight.current
+            Column(
+                modifier.fillMaxWidth().padding(horizontal = node.paddingHDp.dp, vertical = node.paddingVDp.dp),
+                verticalArrangement = Arrangement.spacedBy(node.spacingDp.dp),
+                horizontalAlignment = when (node.align) {
+                    Align.Start -> Alignment.Start
+                    Align.Center -> Alignment.CenterHorizontally
+                    Align.End -> Alignment.End
+                },
+            ) {
+                node.children.forEach { child ->
+                    if (bounded) {
+                        val fills = fillsHeight(child)
+                        CompositionLocalProvider(LocalBoundedHeight provides fills, LocalFillLayout provides fills) {
+                            RenderUiNode(child, entities, onDispatch, if (fills) Modifier.weight(1f) else Modifier, item)
+                        }
+                    } else {
+                        RenderUiNode(child, entities, onDispatch, Modifier, item)
+                    }
+                }
+            }
         }
 
         is UiNode.Spacer -> Spacer(modifier.size((node.sizeDp ?: 0).dp))
@@ -473,6 +479,8 @@ private fun ItemList(
                     RenderUiNode(header, entities, onDispatch, Modifier.widthIn(max = FEED_MAX_WIDTH).fillMaxWidth(), headed)
                 }
             }
+            // Feature `list_group_headers`: one header per distinct value, no items.
+            if (node.groupBy?.headersOnly == true) return@forEachIndexed
             // Keyed by entity URI, so per-item state follows the item when the list changes.
             key(item["uri"]) {
                 // Phone: full width. Wider screens: a centered, readable column.

@@ -249,8 +249,12 @@ class Navigation internal constructor(private val controller: ConstructControlle
      * remembered field appears.
      */
     internal fun restoreRoot(workspace: UiNode?) {
-        val ws = workspace as? UiNode.Workspace ?: return
-        val choices = rememberedChoices(ws.slots.map { it.content })
+        val nodes = when (workspace) {
+            is UiNode.Workspace -> workspace.slots.map { it.content }
+            is UiNode.Page -> listOf(workspace.root)
+            else -> return
+        }
+        val choices = rememberedChoices(nodes)
         if (choices.isEmpty()) return
         synchronized(rootRestored) {
             val fresh = choices.filterKeys { it !in rootRestored }
@@ -295,8 +299,8 @@ class Navigation internal constructor(private val controller: ConstructControlle
 
     /** Whether a screen of layout [layoutId] (the one on top when null) matches [targetUri]. */
     fun canOpen(targetUri: String, layoutId: String? = null): Boolean {
-        val workspace = controller.workspaceOf(layoutId ?: currentLayout()) as? UiNode.Workspace ?: return false
-        return workspace.screens.any { matchRoute(it.route, targetUri) != null }
+        val workspace = controller.workspaceOf(layoutId ?: currentLayout()) ?: return false
+        return screensOf(workspace).any { matchRoute(it.route, targetUri) != null }
     }
 
     /**
@@ -322,12 +326,12 @@ class Navigation internal constructor(private val controller: ConstructControlle
      * screen of another layout (the root's, as a fallback) still covers the whole screen.
      */
     internal fun openScreen(targetUri: String, layoutId: String, presentation: PresentationMode = PresentationMode.Push): Boolean {
-        val workspace = controller.workspaceOf(layoutId) as? UiNode.Workspace ?: return false
-        for (screen in workspace.screens) {
+        val workspace = controller.workspaceOf(layoutId) ?: return false
+        for (screen in screensOf(workspace)) {
             val params = matchRoute(screen.route, targetUri) ?: continue
             val frame = topFrame?.takeIf { it.layoutId == layoutId }
             val entry = ScreenEntry(nextKey++, bindRoute(screen, params), params, layoutId, frame)
-            val choices = rememberedChoices(listOfNotNull(entry.screen.content, entry.screen.footer))
+            val choices = rememberedChoices(listOfNotNull(entry.screen.content, entry.screen.footer, entry.screen.root))
             if (choices.isNotEmpty()) applyRemembered(entry.form, choices, controller.rememberedFormValues(screen.id))
             if (presentation == PresentationMode.Replace && stack.lastOrNull() is ScreenEntry) {
                 controller.attachments.release(stack[stack.lastIndex].form)
@@ -431,6 +435,12 @@ internal fun ScreenView(controller: ConstructController, state: ConstructState, 
     val entities = remember(state.entities, device) { state.entities + device.entities }
     val queries = remember(state.queries, device) { state.queries + device.queries }
     val dispatch: (ActionIntent) -> Unit = { controller.dispatchIn(entry.layoutId, entry.form, it) }
+    val root = entry.screen.root
+    if (root != null) {
+        PageScreenView(entry, root, state, entities, queries, dispatch)
+        return
+    }
+    val content = entry.screen.content ?: return
     // Inside a sheet or panel it takes the frame's colour.
     val color = if (entry.frame != null) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.background
     Surface(Modifier.fillMaxSize().testTag("screen:${entry.screen.id}"), color = color) {
@@ -480,7 +490,7 @@ internal fun ScreenView(controller: ConstructController, state: ConstructState, 
                     val sticky = remember(scroll) { StickyScroll(scroll) }
                     Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll).stickyContent(sticky)) {
                         CompositionLocalProvider(LocalStickyScroll provides sticky) {
-                            RenderUiNode(entry.screen.content, entities, dispatch, Modifier.fillMaxWidth())
+                            RenderUiNode(content, entities, dispatch, Modifier.fillMaxWidth())
                         }
                     }
                     entry.screen.footer?.let { footer ->
@@ -496,6 +506,39 @@ internal fun ScreenView(controller: ConstructController, state: ConstructState, 
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * A `core://Page` screen (feature `page`): its root over the whole screen, with no chrome from the app; `local://screen`
+ * is its data load and `$item` the entity its `item` names (feature `screen_item`). Tag: `screen:<id>`.
+ */
+@Composable
+private fun PageScreenView(
+    entry: ScreenEntry,
+    root: UiNode,
+    state: ConstructState,
+    entities: Map<String, JsonObject>,
+    queries: Map<String, List<String>>,
+    dispatch: (ActionIntent) -> Unit,
+) {
+    val controller = LocalController.current
+    val load = entry.screen.data?.let { state.loads[it] }
+    val withScreen = remember(entities, load) { entities + ("local://screen" to screenEntity(load)) }
+    val item = entry.screen.item?.let { uri -> entities[uri]?.let { JsonObject(it + ("uri" to JsonPrimitive(uri))) } }
+    val color = if (entry.frame != null) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.background
+    Surface(Modifier.fillMaxSize().testTag("screen:${entry.screen.id}"), color = color) {
+        val scope = entry.screen.id
+        CompositionLocalProvider(
+            LocalForm provides entry.form,
+            LocalFormMemory provides remember(scope) {
+                FormMemory { f, v -> controller?.navigation?.remember(scope, f, v) }
+            },
+            LocalConstructQueries provides queries,
+            LocalNav provides NavContext("screen", canGoBack = true, inFrame = entry.frame != null),
+        ) {
+            PlumbingRoot(root, withScreen, dispatch, Modifier.fillMaxSize(), item)
         }
     }
 }

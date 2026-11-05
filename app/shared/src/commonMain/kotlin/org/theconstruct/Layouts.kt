@@ -376,16 +376,28 @@ private fun StackEntryView(
                 },
             ),
         ) {
-            when (entry) {
-                is ScreenEntry -> ScreenView(controller, state, entry, device)
-                is LayoutEntry -> when (entry.presentation) {
-                    PresentationMode.Sheet -> SheetFrame(entry, drag, onDismiss = { nav.dismiss(entry) }) {
-                        FrameContent(controller, state, device, entry) { PresentedBody(controller, entry, settingsExtra) }
+            // Where the layout is drawn, for a plumbing page's own Back (`local://nav`, feature `nav_data`).
+            val navContext = when (presentation) {
+                PresentationMode.Sheet -> NavContext("sheet", canGoBack = true, inFrame = true)
+                PresentationMode.Panel -> NavContext("panel", canGoBack = true, inFrame = true)
+                else -> NavContext("push", canGoBack = true)
+            }
+            CompositionLocalProvider(LocalNav provides navContext) {
+                when (entry) {
+                    is ScreenEntry -> ScreenView(controller, state, entry, device)
+                    is LayoutEntry -> when (entry.presentation) {
+                        PresentationMode.Sheet -> SheetFrame(entry, drag, onDismiss = { nav.dismiss(entry) }) {
+                            FrameContent(controller, state, device, entry) { PresentedBody(controller, entry, settingsExtra) }
+                        }
+                        PresentationMode.Panel -> PanelFrame(entry) {
+                            FrameContent(controller, state, device, entry) { PresentedBody(controller, entry, settingsExtra) }
+                        }
+                        else -> {
+                            // A plumbing page draws its own Back (decision `plumbing-and-porcelain`).
+                            val page = controller.workspaceOf(entry.layoutId, state) is UiNode.Page
+                            PushFrame(controller, entry, chrome = !page) { PresentedBody(controller, entry, settingsExtra) }
+                        }
                     }
-                    PresentationMode.Panel -> PanelFrame(entry) {
-                        FrameContent(controller, state, device, entry) { PresentedBody(controller, entry, settingsExtra) }
-                    }
-                    else -> PushFrame(controller, entry) { PresentedBody(controller, entry, settingsExtra) }
                 }
             }
         }
@@ -468,10 +480,22 @@ private fun PresentedBody(controller: ConstructController, entry: LayoutEntry, s
     }
 }
 
-/** A pushed layout: the whole screen, with Back at the top start beside its title. */
+/**
+ * A pushed layout: the whole screen, with Back at the top start beside its title. Without [chrome] (a plumbing page),
+ * the layout draws its own Back.
+ */
 @Composable
-private fun PushFrame(controller: ConstructController, entry: LayoutEntry, content: @Composable () -> Unit) {
+private fun PushFrame(
+    controller: ConstructController,
+    entry: LayoutEntry,
+    chrome: Boolean = true,
+    content: @Composable () -> Unit,
+) {
     Surface(Modifier.fillMaxSize().testTag("layout:${entry.layoutId}"), color = MaterialTheme.colorScheme.background) {
+        if (!chrome) {
+            content()
+            return@Surface
+        }
         Box(Modifier.fillMaxSize()) {
             CompositionLocalProvider(LocalWorkspaceTitleInset provides PUSH_BACK_INSET) { content() }
             IconButton(
