@@ -307,6 +307,13 @@ pub fn custom_apps_on(conn: &Connection) -> rusqlite::Result<Vec<CustomApp>> {
     Ok(apps)
 }
 
+/// Custom apps deleted but not purged yet (their ids).
+pub fn deleted_app_ids_on(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut stmt =
+        conn.prepare_cached("SELECT id FROM custom_apps WHERE deleted_at IS NOT NULL ORDER BY id")?;
+    stmt.query_map([], |r| r.get(0))?.collect()
+}
+
 /// The feeds of `feeds` that `layout` (as served, parts expanded) binds:
 /// those whose query keys it lists, or whose source's entities it binds by
 /// URI. Only these load with it (decision `layouts-not-apps`).

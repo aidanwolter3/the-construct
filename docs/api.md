@@ -46,7 +46,10 @@ removed one). A request without `X-Construct-Features` is served the latest vers
 | `deleted` | `{workspace_id}` | The custom app was deleted. |
 
 `home`'s stream carries every layout of the pod (decision `layouts-not-apps`): `layout` and `deleted` events of any
-layout (by `workspace_id`), and `data` events for every source of home's feeds.
+layout (by `workspace_id`), and `data` events for every source of home's feeds. Right after home's first message
+(and again after the server drops events for a slow reader) it sends a `layout` event with every other layout's current
+version and a `deleted` event for each deleted layout not purged yet. So a client that wasn't listening (in the
+background, offline, the server restarting) catches up; it ignores layouts it hasn't opened and versions it has.
 
 A `: keepalive` comment comes every 15 s. Streams opened without a session hear only `layout` events. A session's
 stream ends when the session is revoked; one session may hold 8 streams (then 429 `too_many_streams`).

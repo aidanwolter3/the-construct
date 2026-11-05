@@ -127,7 +127,8 @@ UniFFI (`crates/client-ffi`; Kotlin bindings in `app/shared/src/jvmCommonMain`).
   `open_layout` loads any other layout into the same store, cached like a data path (`layout:<id>`), and reports it
   in the snapshot's `layouts_json`.
 - **Event stream.** While online, the engine keeps `GET /v1/workspaces/<root>/events` open; home's stream carries
-  every layout's events. `layout` events trigger a refetch of that layout when a newer drawable version exists;
+  every layout's events, starting with every layout's current version so a reconnect catches up. `layout` events
+  trigger a refetch of that layout when a newer drawable version exists;
   `deleted` marks it gone; `data` events say the data changed (D50); `notification` events feed the inbox (D52).
 - **Snapshots.** The UI observes immutable state snapshots (layout, entities, connectivity, pending count, sign-in
   state, unread counts) and dispatches intents back as JSON.

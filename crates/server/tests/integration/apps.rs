@@ -1054,3 +1054,85 @@ fn share_is_a_create_then_back() {
         protocol::required_features(&layout)
     );
 }
+
+/// Home's stream (decision `layouts-not-apps`) starts with every other
+/// layout's version and every deleted layout, so an engine that was not
+/// listening (in the background, offline, the server restarting) catches up
+/// on what changed meanwhile.
+#[tokio::test]
+async fn home_stream_starts_with_every_layouts_version() {
+    let pod = pod().await;
+    pod.state
+        .store()
+        .create_pinned_session(&session_hash("pod-token"))
+        .unwrap();
+    let layout = |text: &str| {
+        json!({"type": "core://Workspace", "id": "x", "title": "Note",
+            "slots": [{"slot_id": "r", "provider_uri": "",
+              "content": {"type": "core://Text", "style": "Body", "value_expr": text}}]})
+    };
+    let create = || async {
+        let b: Value = client()
+            .post(format!("{}/v1/custom-apps", pod.url))
+            .bearer_auth("pod-token")
+            .json(&json!({"title": "Note", "layout": layout("one")}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        b["id"].as_str().unwrap().to_owned()
+    };
+    let (kept, gone) = (create().await, create().await);
+    // Changed and deleted while nobody listens.
+    let resp = client()
+        .put(format!("{}/v1/custom-apps/{kept}/layout", pod.url))
+        .bearer_auth("pod-token")
+        .json(&json!({"layout": layout("two")}))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success());
+    let resp = client()
+        .delete(format!("{}/v1/custom-apps/{gone}", pod.url))
+        .bearer_auth("pod-token")
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success());
+
+    let url = format!("{}/v1/workspaces/home/events", pod.url);
+    let mut sse = SseReader::connect(&url, Some("pod-token")).await;
+    let home = pod.state.store().app_latest_meta("home").unwrap().unwrap();
+    assert_eq!(sse.next_event().await, layout_msg("home", home.version));
+    let mut events = Vec::new();
+    loop {
+        let e = sse.next_event().await;
+        let last = e.contains(&gone);
+        events.push(e);
+        if last {
+            break;
+        }
+    }
+    assert!(events.contains(&layout_msg(&kept, 2)), "{events:?}");
+    assert!(
+        events.contains(&layout_msg("inbox", files("inbox"))),
+        "{events:?}"
+    );
+    assert_eq!(
+        events.last().unwrap(),
+        &format!("event: deleted\ndata: {}", json!({ "workspace_id": gone }))
+    );
+    assert!(!events.iter().any(|e| e.contains("\"home\"")), "{events:?}");
+    // Then changes as they happen, once each.
+    let resp = client()
+        .put(format!("{}/v1/custom-apps/{kept}/layout", pod.url))
+        .bearer_auth("pod-token")
+        .json(&json!({"layout": layout("three")}))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success());
+    assert_eq!(sse.next_event().await, layout_msg(&kept, 3));
+}
