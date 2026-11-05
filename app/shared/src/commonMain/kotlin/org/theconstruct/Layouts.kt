@@ -506,7 +506,7 @@ private fun SheetFrame(entry: LayoutEntry, drag: SheetDrag, onDismiss: () -> Uni
                             Orientation.Vertical,
                             onDragStopped = { velocity -> drag.settle(velocity) },
                         )
-                        .padding(top = 10.dp, bottom = 10.dp)
+                        .padding(top = 8.dp, bottom = 4.dp)
                         .testTag("sheet-handle"),
                     contentAlignment = Alignment.Center,
                 ) {
