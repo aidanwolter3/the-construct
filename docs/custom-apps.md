@@ -22,9 +22,10 @@ Built-in apps are blueprints: served by id, but listed only with `GET /v1/apps?b
 ```
 
 Give it the blueprint's feeds (`list_apps` shows them). To change a blueprint, copy its layout (`get_layout`) and
-pass `copied_from`. Every pod's **`home`** app (the screen clients open first) starts as a reference to the `shell`
-blueprint: a `core://Dock` of the pod's apps (`local:apps`) and a More tab with every app, the inbox and Settings. It
-can't be deleted; change its layout to change the user's navigation. A pod made before blueprints got an app
+pass `copied_from`. Every pod's **`home`** app is the screen clients open, and the only one: it is the user's whole
+interface. It starts as a reference to the `shell` blueprint, a blank page, and the agent builds navigation into it
+(e.g. a `core://Drawer` over `local:apps` with a `core://AppFrame` per app; `shell` versions 2 and 3 are full
+examples, with Notifications and Settings pages). It can't be deleted. A pod made before blueprints got an app
 referencing each built-in it showed, so nothing disappeared.
 
 ## Custom apps

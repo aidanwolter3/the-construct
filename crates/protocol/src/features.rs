@@ -233,7 +233,12 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
         UiNode::Chip { .. } => add(feature::CHIP),
         UiNode::Badge { .. } => add(feature::BADGE),
         UiNode::Tappable { .. } => add(feature::TAPPABLE),
-        UiNode::Box { .. } => add(feature::BOX),
+        UiNode::Box { fill, .. } => {
+            add(feature::BOX);
+            if *fill {
+                add(feature::BOX_FILL);
+            }
+        }
         UiNode::ChoiceChips { remember, .. } => {
             add(feature::CHOICE_CHIPS);
             if *remember {

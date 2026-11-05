@@ -355,6 +355,8 @@ sealed class UiNode {
         @SerialName("width_dp") val widthDp: Int? = null,
         @SerialName("height_dp") val heightDp: Int? = null,
         val align: Align = Align.Start,
+        /** Feature `box_fill`: fill the space given, [content] placed by [align] in both directions. */
+        val fill: Boolean = false,
     ) : UiNode()
 
     /**

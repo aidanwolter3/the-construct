@@ -158,12 +158,17 @@ fn instructions(pod: &Pod) -> String {
 const INSTRUCTIONS: &str = "This is the user's own pod in The Construct. It serves apps whose screens are \
 JSON layouts (server-driven UI) over data sources. The server ships blueprints (the built-in layouts: list_apps \
 lists them under blueprints; get_layout reads one); the pod shows only the user's own apps, which you build. \
-A new pod has one app, home (the user's home screen: a dock of their apps, a reference to the home blueprint \
-'shell'); it can't be deleted, but you may change it. Call list_data_sources and describe_vocabulary first, read \
-a blueprint with get_layout for working examples, sample_data to see real fields, then create_app or \
-update_layout. Every write is validated (errors give a JSON pointer and what is allowed) and appears live on \
-the user's devices; restore_version undoes an edit. Blueprints can't be edited. Decide per request: reference a \
-blueprint ({\"type\": \"core://Ref\", \"app\": <blueprint>, \"part\": \"layout\"} as the whole layout, with the \
+The user's app opens on their home app (id home) and shows nothing else: home IS the user's whole interface. A \
+new pod's home is a blank page (the 'shell' blueprint); build the user's navigation into home yourself, so every \
+app you build is reachable from it (e.g. a core://Drawer or core://Dock over local:apps with a core://AppFrame \
+per app, and pages for notifications and settings over the local: device data). Earlier shell versions are \
+working examples: version 3 is a full drawer with Notifications and Settings pages, version 2 a dock \
+(get_layout, or reference one with {\"type\": \"core://Ref\", \"app\": \"shell\", \"part\": \"layout\", \
+\"version\": 3}). home can't be deleted. Call list_data_sources and describe_vocabulary first, read a blueprint \
+with get_layout for working examples, sample_data to see real fields, then create_app or update_layout. Every \
+write is validated (errors give a JSON pointer and what is allowed) and appears live on the user's devices; \
+restore_version undoes an edit. Blueprints can't be edited. Decide per request: reference a blueprint \
+({\"type\": \"core://Ref\", \"app\": <blueprint>, \"part\": \"layout\"} as the whole layout, with the \
 blueprint's feeds; or a part, list_parts lists them) so it stays current, or copy it to change it and pass \
 copied_from so the user hears when the blueprint changes (rebase_context then gives you what to merge).";
 
@@ -999,8 +1004,8 @@ pub const NODE_DOCS: &[(&str, &str, &str)] = &[
     ),
     (
         "core://Box",
-        "content, background?, content_color?, border_color?, corner_dp?, padding_h_dp?, padding_v_dp?, width_dp?, height_dp?, align?",
-        "A coloured, rounded box (#RRGGBB or bindings).",
+        "content, background?, content_color?, border_color?, corner_dp?, padding_h_dp?, padding_v_dp?, width_dp?, height_dp?, align?, fill?",
+        "A coloured, rounded box (#RRGGBB or bindings). fill: true fills the space given with content placed by align (Center: the middle); as a workspace's one slot, the whole screen with no title bar.",
     ),
     (
         "core://ChoiceChips",

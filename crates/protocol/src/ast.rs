@@ -77,6 +77,10 @@ fn one() -> f64 {
     1.0
 }
 
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 fn is_zero(v: &u16) -> bool {
     *v == 0
 }
@@ -362,6 +366,11 @@ pub enum UiNode {
         height_dp: Option<u16>,
         #[serde(default, skip_serializing_if = "is_start")]
         align: Align,
+        /// Feature `box_fill`: fill the space given, with `content` placed by
+        /// `align` in both directions (`Center`: the middle). As a
+        /// workspace's one slot it fills the whole screen, with no title bar.
+        #[serde(default, skip_serializing_if = "is_false")]
+        fill: bool,
     },
     /// A one-line, sideways-scrolling row of chips editing the form value
     /// `$form.<field>` (like a `core://TextField`): tapping an option sets

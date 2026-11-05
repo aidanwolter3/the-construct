@@ -60,6 +60,11 @@ Decision:
   `local:versions`, `pin_version` shows one on this device (the shell keeps a pin per app across app switches),
   `follow_latest` drops it; each `local:apps` row says which version shows.
 
+- **Version 4 of `shell` is blank**: one off-white page (`core://Box` `fill`, feature `box_fill`) saying "The
+  Construct" and "Ask your agent to build anything". The pod owner has the agent build everything, home included;
+  the server instructions say home is the user's whole interface and point at versions 2 and 3 as working examples
+  (by `get_layout`, or a ref pinned with `version`).
+
 Not done yet: hiding and deleting apps are only in the native menu (no layout opens it by default); Android's notification permission row isn't offered to layouts; sign-in to a typed-in server needs the
 native panel; notifications load the newest page only; the home layout
 updates only when it is drawn on its own engine or the apps list shows a newer version (no live event while a frame

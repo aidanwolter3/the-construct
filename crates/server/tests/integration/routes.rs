@@ -54,7 +54,7 @@ async fn removed_counter_app_is_gone() {
     let spec: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(
         spec["workspace"]["slots"][0]["content"]["type"],
-        "core://Drawer"
+        "core://Box"
     );
     let (status, _) = send(
         Request::post("/v1/counters/home/increment")

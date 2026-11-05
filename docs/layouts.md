@@ -94,7 +94,7 @@ evaluated against the entity before the change: a JSON literal, `entity.<field>`
 | `core://Column` | `children`, `spacing_dp`, `padding_h_dp`, `padding_v_dp`, `align` | Children stacked, full width. |
 | `core://Row` | `children`, `spacing_dp`, paddings, `align` | Side by side, vertically centred, no wrapping. A Spacer without a size takes the remaining width. |
 | `core://Container` | `orientation`, `padding_dp`, `children` | A plain stack; prefer Column and Row. |
-| `core://Box` | `content`, `background`, `content_color`, `border_color`, `corner_dp`, paddings, `width_dp`, `height_dp`, `align` | A surface. Colours are `#RRGGBB` or a binding that resolves to one. |
+| `core://Box` | `content`, `background`, `content_color`, `border_color`, `corner_dp`, paddings, `width_dp`, `height_dp`, `align`, `fill` | A surface. `fill` (feature `box_fill`): fills the space given, content placed by `align` both ways; as a workspace's one slot, the whole screen with no title bar. Colours are `#RRGGBB` or a binding that resolves to one. |
 | `core://Spacer` | `size_dp` | Empty space. |
 | `core://Divider` | | A thin line. |
 | `core://Sticky` | `content` | Scrolls until it reaches the top, then stays pinned while the rest of its parent scrolls under it. Not inside a List or Carousel template, or another Sticky. |
