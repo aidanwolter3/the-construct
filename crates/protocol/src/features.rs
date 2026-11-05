@@ -120,7 +120,16 @@ pub fn required_features(node: &UiNode) -> Vec<&'static str> {
             intent_features(i, &mut out);
         }
     }
+    if uses_local_data(node) {
+        out.insert(feature::LOCAL_DATA);
+    }
     out.into_iter().collect()
+}
+
+/// Whether a layout reads data the device provides: a `local://` entity or
+/// a `local:` query key anywhere in it.
+fn uses_local_data(node: &UiNode) -> bool {
+    serde_json::to_string(node).is_ok_and(|j| j.contains("local://") || j.contains("\"local:"))
 }
 
 /// The features one node uses itself (not its children). Add one arm per
@@ -234,6 +243,8 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
         UiNode::MediaPicker { .. } => add(feature::MEDIA_PICKER),
         UiNode::Sticky { .. } => add(feature::STICKY),
         UiNode::Progress { .. } => add(feature::PROGRESS),
+        UiNode::Dock { .. } => add(feature::DOCK),
+        UiNode::AppFrame { .. } => add(feature::APP_FRAME),
         // A node type this build does not know (the removed `pixelfed://`
         // widgets): no client draws it any more.
         UiNode::Unknown(_) => add(feature::LEGACY_NODES),
@@ -303,6 +314,7 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
         ActionIntent::Sequence { .. } => add(feature::ACTION_SEQUENCE),
         ActionIntent::LocalSet { .. } => add(feature::LOCAL_SET),
         ActionIntent::OpenLink { .. } => add(feature::OPEN_LINK),
+        ActionIntent::Device { .. } => add(feature::DEVICE_ACTION),
         ActionIntent::Unknown => {}
     }
 }
@@ -593,12 +605,41 @@ mod tests {
                 "core://MediaPicker" => json!({"type": t, "field": "f", "max_items": 4}),
                 "core://Sticky" => json!({"type": t, "content": {"type": "core://Divider"}}),
                 "core://Progress" => json!({"type": t}),
+                "core://Dock" => json!({"type": t, "field": "tab", "after": [
+                    {"value": "a", "label": "A", "content": {"type": "core://Divider"}}]}),
+                "core://AppFrame" => json!({"type": t, "app": "home"}),
                 other => panic!("no sample for {other}"),
             };
             let n: UiNode = serde_json::from_value(v).unwrap_or_else(|e| panic!("{t}: {e}"));
             assert!(!matches!(n, UiNode::Unknown(_)), "{t}");
             assert_eq!(n.type_tag(), t);
         }
+    }
+
+    #[test]
+    fn the_shell_vocabulary_needs_its_features() {
+        let ws: UiNode = serde_json::from_value(json!({"type": "core://Workspace", "id": "home",
+            "title": "Home", "slots": [{"slot_id": "dock", "provider_uri": "local://apps", "content": {
+              "type": "core://Dock", "field": "tab", "query_key": "local:apps",
+              "item": {"value": "$item.id", "label": "$item.title",
+                       "content": {"type": "core://AppFrame", "app": "$item.id"}},
+              "after": [{"value": "more", "label": "More", "content": {"type": "core://Button",
+                "label": "Settings", "on_click": {"intent": "action.device", "command": "open_settings"}}}]}}]}))
+        .unwrap();
+        let f = required_features(&ws);
+        for want in [
+            feature::DOCK,
+            feature::APP_FRAME,
+            feature::DEVICE_ACTION,
+            feature::LOCAL_DATA,
+        ] {
+            assert!(f.contains(&want), "{want}: {f:?}");
+        }
+        assert_eq!(
+            ws.walk().len(),
+            4,
+            "the dock's tab contents are its children"
+        );
     }
 
     #[test]

@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::intent::ActionIntent;
 
 /// Node types this build knows (an other type is [`UiNode::Unknown`]).
-pub const NODE_TYPES: [&str; 22] = [
+pub const NODE_TYPES: [&str; 24] = [
     "core://Workspace",
     "core://Container",
     "core://Text",
@@ -38,6 +38,8 @@ pub const NODE_TYPES: [&str; 22] = [
     "core://MediaPicker",
     "core://Sticky",
     "core://Progress",
+    "core://Dock",
+    "core://AppFrame",
 ];
 
 /// Icon names clients draw (`core://IconButton`, `core://Chip`).
@@ -411,6 +413,38 @@ pub enum UiNode {
         size_dp: Option<u16>,
     },
 
+    // Feature `dock` (crates/protocol/features/dock.md)
+    /// The app's main navigation: a bar of tabs along the bottom (a rail
+    /// down the side on wide windows) and, above it, the selected tab's
+    /// `content`, filling the rest of the screen. The tabs are `before`,
+    /// then one per entity of `query_key` drawn from `item` (`$item` = that
+    /// entity; at most `max_items` of them), then `after`. The selected
+    /// tab's `value` is the form value `$form.<field>` (the first tab until
+    /// one is picked), kept on the device. Only meaningful as the content
+    /// of a workspace's one slot (decision `blueprints-and-home`).
+    #[serde(rename = "core://Dock")]
+    Dock {
+        field: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        before: Vec<DockTab>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query_key: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item: Option<Box<DockTab>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_items: Option<u8>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        after: Vec<DockTab>,
+    },
+
+    // Feature `app_frame` (crates/protocol/features/app_frame.md)
+    /// Another app of the pod, drawn here whole: its layout, its screens
+    /// and its Back stack, filling the space it is given. `app` is an app
+    /// id or a binding to one (`$item.id`). A frame whose app can't be drawn
+    /// says so in its own space; the rest of the layout keeps working.
+    #[serde(rename = "core://AppFrame")]
+    AppFrame { app: String },
+
     /// A node of a type this build does not know: its JSON, kept as is.
     #[serde(skip)]
     Unknown(Value),
@@ -486,7 +520,19 @@ impl UiNode {
             | UiNode::Sticky { content } => {
                 vec![content]
             }
+            UiNode::Dock {
+                before,
+                item,
+                after,
+                ..
+            } => before
+                .iter()
+                .chain(item.as_deref())
+                .chain(after)
+                .map(|t| t.content.as_ref())
+                .collect(),
             UiNode::Text { .. }
+            | UiNode::AppFrame { .. }
             | UiNode::Button { .. }
             | UiNode::Image { .. }
             | UiNode::TextField { .. }
@@ -674,6 +720,21 @@ pub enum ImageShape {
     Square,
     Rounded,
     Circle,
+}
+
+/// A tab of a `core://Dock`: what its button shows (`label`, an `icon`
+/// name, an optional `badge` binding drawn as a count or a dot) and the
+/// `content` shown while it is selected. In a dock's `item`, every field may
+/// bind `$item.<field>`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct DockTab {
+    pub value: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub badge: Option<String>,
+    pub content: Box<UiNode>,
 }
 
 /// A named region of a workspace, filled by a content provider.

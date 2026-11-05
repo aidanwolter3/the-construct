@@ -1,0 +1,13 @@
+[package]
+name = "app-shell"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The `shell` blueprint (decision `blueprints-and-home`): the default home
+# layout every pod's `home` app references, a dock of the pod's apps drawn
+# from data the device provides. No data of its own.
+
+[dependencies]
+pod-core = { path = "../pod-core" }
+protocol = { workspace = true }

@@ -272,8 +272,9 @@ async fn a_pod_token_opens_its_pod_and_new_pods_have_no_recipes() {
             .as_array()
             .map_or(0, Vec::len);
         assert_eq!(n, 0, "decision `recipes-start-empty`");
+        // A new pod lists only its home app (decision `blueprints-and-home`).
         let (_, _, apps) = get(&env.url("/v1/apps"), Some(token)).await;
-        assert!(apps["apps"].as_array().unwrap().len() >= 2, "{apps}");
+        assert_eq!(apps["apps"][0]["id"], "home", "{apps}");
     }
 }
 

@@ -112,7 +112,10 @@ fun RenderUiNode(
 ) {
     val dispatch: (ActionIntent) -> Unit = { onDispatch(bindIntent(it, item)) }
     when (node) {
-        is UiNode.Workspace -> {
+        is UiNode.Workspace -> if (fillsScreen(node)) {
+            // A dock fills the screen itself (decision `blueprints-and-home`): no title bar, no page scroll.
+            RenderUiNode(node.slots[0].content, entities, onDispatch, modifier.fillMaxSize(), item)
+        } else {
             val scroll = rememberScrollState()
             val title: @Composable () -> Unit = {
                 Text(
@@ -248,7 +251,7 @@ fun RenderUiNode(
 
         UiNode.Divider -> HorizontalDivider(modifier, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-        is UiNode.Conditional -> if (conditionShows(node.value, node.equals, item, LocalForm.current)) {
+        is UiNode.Conditional -> if (conditionShows(node.value, node.equals, item, LocalForm.current, entities)) {
             RenderUiNode(node.content, entities, onDispatch, modifier, item)
         }
 
@@ -288,6 +291,10 @@ fun RenderUiNode(
                 strokeWidth = maxOf(1.5.dp, size / 8),
             )
         }
+
+        is UiNode.Dock -> DockView(node, entities, onDispatch, modifier)
+
+        is UiNode.AppFrame -> AppFrameView(node, item, modifier)
 
         is UiNode.Unknown -> Text(
             "Unsupported component: ${node.type.ifEmpty { "<missing type>" }}",

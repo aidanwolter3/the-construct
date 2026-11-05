@@ -397,9 +397,41 @@ sealed class UiNode {
     @Serializable
     data class Progress(@SerialName("size_dp") val sizeDp: Int? = null) : UiNode()
 
+    /**
+     * `core://Dock` (feature `dock`, decision `blueprints-and-home`): the app's main navigation. The tabs are [before],
+     * one per entity of [queryKey] drawn from [item] (`$item` bound; at most [maxItems]), then [after]; the selected
+     * tab's `value` is the form value `$form.<field>`, and its content fills the screen above the bar ([DockView]).
+     */
+    @Serializable
+    data class Dock(
+        val field: String,
+        val before: List<DockTab> = emptyList(),
+        @SerialName("query_key") val queryKey: String? = null,
+        val item: DockTab? = null,
+        @SerialName("max_items") val maxItems: Int? = null,
+        val after: List<DockTab> = emptyList(),
+    ) : UiNode()
+
+    /**
+     * `core://AppFrame` (feature `app_frame`): another app of the pod drawn whole in the space it is given ([AppFrameView]).
+     * [app] is an id or a binding (`$item.id`).
+     */
+    @Serializable
+    data class AppFrame(val app: String) : UiNode()
+
     /** A node whose `type` this client does not know. [raw] is the full original object. */
     data class Unknown(val type: String, val raw: JsonObject) : UiNode()
 }
+
+/** A tab of a [UiNode.Dock]: its button ([label], an [icon] name, a [badge] binding) and the [content] it shows. */
+@Serializable
+data class DockTab(
+    val value: String,
+    val label: String,
+    val icon: String? = null,
+    val badge: String? = null,
+    val content: UiNode,
+)
 
 // ---------------------------------------------------------------------------
 // Intents, discriminated by "intent"
@@ -501,6 +533,14 @@ sealed class ActionIntent {
      */
     @Serializable
     data class OpenLink(val url: String) : ActionIntent()
+
+    /**
+     * `action.device` (feature `device_action`): something the device does itself ([command]: `open_settings`,
+     * `open_inbox`, `refresh`, `leave_pod`, `open_app` with [app]). Handled by [ConstructController], never sent to the
+     * engine.
+     */
+    @Serializable
+    data class Device(val command: String, val app: String? = null) : ActionIntent()
 
     /**
      * An intent whose `intent` tag this client does not know (e.g. the removed `action.agent.prompt`). [raw] is the full
@@ -618,6 +658,8 @@ object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode
         Variant("core://MediaPicker", UiNode.MediaPicker::class, UiNode.MediaPicker.serializer()),
         Variant("core://Sticky", UiNode.Sticky::class, UiNode.Sticky.serializer()),
         Variant("core://Progress", UiNode.Progress::class, UiNode.Progress.serializer()),
+        Variant("core://Dock", UiNode.Dock::class, UiNode.Dock.serializer()),
+        Variant("core://AppFrame", UiNode.AppFrame::class, UiNode.AppFrame.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): UiNode = UiNode.Unknown(tag, raw)
@@ -636,6 +678,7 @@ object ActionIntentSerializer : TaggedUnionSerializer<ActionIntent>("org.thecons
         Variant("action.sequence", ActionIntent.Sequence::class, ActionIntent.Sequence.serializer()),
         Variant("action.local.set", ActionIntent.LocalSet::class, ActionIntent.LocalSet.serializer()),
         Variant("action.link.open", ActionIntent.OpenLink::class, ActionIntent.OpenLink.serializer()),
+        Variant("action.device", ActionIntent.Device::class, ActionIntent.Device.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): ActionIntent = ActionIntent.Unknown(tag, raw)

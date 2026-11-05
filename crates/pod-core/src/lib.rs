@@ -64,6 +64,13 @@ pub use static_app::StaticAdapter;
 /// `WorkspaceSpec::version` of the bundles the pod builds.
 pub const BUNDLE_VERSION: &str = "1.0.0";
 
+/// Every pod's own home app (decision `blueprints-and-home`): the one app
+/// clients open first. It starts as a reference to [`HOME_BLUEPRINT`] and is
+/// the user's to change.
+pub const HOME_APP: &str = "home";
+/// The blueprint a pod's [`HOME_APP`] starts from.
+pub const HOME_BLUEPRINT: &str = "shell";
+
 /// A pending injected fault (test hook): the next `remaining` mutation
 /// requests get `status` without being applied.
 #[derive(Debug, Clone, Copy)]
@@ -192,6 +199,10 @@ impl AppState {
             .collect();
         custom::ref_updates(&store, &catalog, &changed)
             .map_err(|e| format!("updating custom apps after the layout sync: {e}"))?;
+        // Blueprints (decision `blueprints-and-home`): a home app for every
+        // pod, and apps for the built-ins an older pod showed.
+        custom::seed_blueprint_apps(&store, &catalog)
+            .map_err(|e| format!("starting the pod's apps from blueprints: {e}"))?;
         Ok(Self {
             locals: Mutex::new(Vec::new()),
             store,

@@ -18,7 +18,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -138,6 +140,43 @@ class ConstructController internal constructor(
     /** The back stack of screens and their form values (D34). */
     val navigation: Navigation = Navigation(this)
 
+    // -----------------------------------------------------------------------------------------------------------------
+    // Shell mode (decision `blueprints-and-home`, Shell.kt)
+    // -----------------------------------------------------------------------------------------------------------------
+
+    /**
+     * Shell mode: the platform opened the pod's [HOME_APP]. The home layout is then drawn from [shell] (kept while the
+     * engine shows the app of the selected `core://AppFrame`), and the native menu button and bell are left out.
+     */
+    val shellMode: Boolean = appId == HOME_APP
+
+    private val _shell = MutableStateFlow<ShellSnapshot?>(null)
+
+    /** The home layout as last seen (shell mode). */
+    val shell: StateFlow<ShellSnapshot?> = _shell.asStateFlow()
+
+    /** The shell's own form (the dock's selected tab): kept apart from the framed app's, which [openApp] clears. */
+    val shellForm: SnapshotStateMap<String, String> = mutableStateMapOf()
+
+    private var shellFormRestored = false
+
+    private val _dockRequest = MutableStateFlow<String?>(null)
+
+    /** An app `action.device` `open_app` asked the dock to show, until the dock has selected it. */
+    val dockRequest: StateFlow<String?> = _dockRequest.asStateFlow()
+
+    internal fun dockRequestHandled() {
+        _dockRequest.value = null
+    }
+
+    private val _deviceApps = MutableStateFlow<List<AppSummary>>(emptyList())
+
+    /** The pod's apps for the device data (`local:apps`); reloaded by [refreshDeviceApps]. */
+    val deviceApps: StateFlow<List<AppSummary>> = _deviceApps.asStateFlow()
+
+    /** The platform name for `local://device` (from [setDeviceInfo]). */
+    val platform: String get() = deviceInfo?.first ?: "unknown"
+
     private val switchLock = Any()
 
     /** Background work that must not block the caller (marking read, push registration); cancelled by [close]. */
@@ -245,6 +284,7 @@ class ConstructController internal constructor(
         }
         val now = _state.value
         if (now.engine == engine && now.seq == snapshot.seq) {
+            if (shellMode) captureShell(now)
             _unread.value = NotificationsJson.parseUnread(snapshot.notificationsJson)
             applyPendingTarget()
             if (now.activeLayout.gone) appGone(engine)
@@ -279,6 +319,12 @@ class ConstructController internal constructor(
         run(bound)
     }
 
+    /** [dispatch] for the shell's own layout: its form is [shellForm]. */
+    fun dispatchShell(intent: ActionIntent) {
+        val bound = bindForm(intent, shellForm) ?: return
+        run(bound)
+    }
+
     /** Carries out a bound intent; the steps of an `action.sequence` one after another, each as if tapped alone. */
     private fun run(bound: ActionIntent) {
         if (bound is ActionIntent.Sequence) {
@@ -287,6 +333,10 @@ class ConstructController internal constructor(
         }
         if (bound is ActionIntent.OpenLink) {
             openLink(bound.url)
+            return
+        }
+        if (bound is ActionIntent.Device) {
+            device(bound)
             return
         }
         if (navigation.handle(bound)) return
@@ -330,6 +380,97 @@ class ConstructController internal constructor(
             println("[Construct] dispatch failed: $t")
             _state.update { it.copy(error = "Dispatch failed: ${t.message}") }
         }
+    }
+
+    /**
+     * `action.device` (feature `device_action`): open Settings or the inbox, refresh, leave the pod, or open an app (in
+     * shell mode the dock selects it; otherwise the engine switches to it). An unknown command is logged and ignored.
+     */
+    private fun device(intent: ActionIntent.Device) {
+        when (intent.command) {
+            "open_settings" -> menu.showSettings()
+            "open_inbox" -> inbox.openInbox()
+            "refresh" -> {
+                refreshDeviceApps()
+                if (shellMode && _shell.value == null) refreshFrame(HOME_APP)
+            }
+            "leave_pod" -> {
+                leavePod()
+                if (shellMode) {
+                    _shell.value = null
+                    shellForm.clear()
+                    shellFormRestored = false
+                    _deviceApps.value = emptyList()
+                    openApp(HOME_APP)
+                }
+            }
+            "open_app" -> {
+                val app = intent.app?.trim().orEmpty()
+                if (app.isEmpty()) return
+                if (shellMode) _dockRequest.value = app else openApp(app)
+            }
+            else -> println("[Construct] action.device: unknown command '${intent.command}'; ignored")
+        }
+    }
+
+    /**
+     * Shell mode: keeps the home layout from a snapshot of the engine on [HOME_APP] (the bundled layouts stand in until
+     * then), restores the shell's remembered form values once, and loads the device's app list.
+     */
+    private fun captureShell(state: ConstructState) {
+        if (currentAppId() != HOME_APP || !state.auth.session) return
+        val workspace = displayedWorkspace(state, _pinned.value) ?: return
+        val first = _shell.value == null
+        _shell.value = ShellSnapshot(workspace, state.entities, state.queries, state.activeLayout.version)
+        if (!shellFormRestored) {
+            shellFormRestored = true
+            val remembered = try {
+                rememberedFormValues(SHELL_FORM_SCOPE)
+            } catch (t: Throwable) {
+                emptyMap()
+            }
+            remembered.forEach { (k, v) -> if (k !in shellForm) shellForm[k] = v }
+        }
+        if (first) refreshDeviceApps()
+    }
+
+    /** Reloads the pod's apps for the device data, and the home layout when a newer drawable version exists. */
+    fun refreshDeviceApps() {
+        if (closed) return
+        background.launch {
+            val list = try {
+                apps.apps()
+            } catch (e: Throwable) {
+                println("[Construct] loading the apps for the device data failed: $e")
+                return@launch
+            }
+            _deviceApps.value = list
+            val home = list.firstOrNull { it.id == HOME_APP } ?: return@launch
+            val have = _shell.value ?: return@launch
+            val newest = home.latestCompatibleVersion ?: return@launch
+            if (have.version != null && newest > have.version && currentAppId() != HOME_APP) {
+                try {
+                    val layout = apps.spec(HOME_APP, newest)
+                    _shell.update { cur -> cur?.copy(workspace = layout, version = newest) }
+                } catch (e: Throwable) {
+                    println("[Construct] loading home v$newest failed: $e")
+                }
+            }
+        }
+    }
+
+    /** The dock selected a tab: the app list may have changed meanwhile. */
+    internal fun onDockSelected() = refreshDeviceApps()
+
+    /** Starts the frame's app again on a fresh engine (Try again on a frame that failed, or on the rescue screen). */
+    fun refreshFrame(id: String) {
+        if (closed || openBridge == null) return
+        if (currentAppId() == id) {
+            // openApp is a no-op for the app on screen: forget it first.
+            _appId.value = null
+            _state.update { it.copy(activeLayout = ActiveLayout()) }
+        }
+        if (!openApp(id)) _appId.value = id
     }
 
     /** Signs out (the menu's "Sign out"); the engine notifies `signed_out` and refetches. */
@@ -602,10 +743,19 @@ fun ConstructApp(
                 LocalMediaPickerPlatform provides mediaPicker,
                 LocalAttachments provides controller.attachments,
             ) {
+                val deviceApps by controller.deviceApps.collectAsState()
+                val device = remember(state.isOnline, state.pendingActions, state.auth, unread, deviceApps) {
+                    deviceData(state, unread, deviceApps, controller.platform)
+                }
                 MenuDrawer(controller, state, pin, server, notificationSettingsExtra) {
+                  CompositionLocalProvider(LocalDeviceData provides device) {
                     Box(Modifier.fillMaxSize()) {
                         val workspace = displayedWorkspace(state, pin).takeUnless { state.activeLayout.gone }
-                        if (workspace == null && state.activeLayout.gone) {
+                        if (controller.shellMode) {
+                            // The layout-first shell (decision `blueprints-and-home`): the home layout draws the
+                            // navigation and frames the apps; screens open inside the frame.
+                            ShellRoot(controller, state, Modifier.fillMaxSize())
+                        } else if (workspace == null && state.activeLayout.gone) {
                             Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(APP_DELETED, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("app-gone"))
                                 Text(
@@ -630,7 +780,7 @@ fun ConstructApp(
                             }
                         } else {
                             CompositionLocalProvider(
-                                LocalConstructQueries provides state.queries,
+                                LocalConstructQueries provides state.queries + device.queries,
                                 LocalWorkspaceTitleInset provides MENU_BUTTON_INSET,
                                 LocalWorkspaceTitleEndInset provides BELL_BUTTON_INSET,
                                 LocalForm provides controller.navigation.rootForm,
@@ -638,27 +788,30 @@ fun ConstructApp(
                                     FormMemory { f, v -> controller.navigation.remember(ROOT_FORM_SCOPE, f, v) }
                                 },
                             ) {
-                                RenderUiNode(workspace, state.entities, controller::dispatch, Modifier.fillMaxSize())
+                                RenderUiNode(workspace, state.entities + device.entities, controller::dispatch, Modifier.fillMaxSize())
                             }
                         }
-                        MenuButton(
-                            badge = showMenuBadge(state, pin),
-                            onClick = controller.menu::openMenu,
-                            modifier = Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 8.dp),
-                        )
-                        BellButton(
-                            unread = unread.total,
-                            onClick = controller.inbox::openInbox,
-                            modifier = Modifier.align(Alignment.TopEnd).padding(end = 8.dp, top = 8.dp),
-                        )
-                        // An open screen covers the layout and the buttons; the drawer still opens over it.
-                        ScreenHost(controller, state)
+                        if (!controller.shellMode) {
+                            MenuButton(
+                                badge = showMenuBadge(state, pin),
+                                onClick = controller.menu::openMenu,
+                                modifier = Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 8.dp),
+                            )
+                            BellButton(
+                                unread = unread.total,
+                                onClick = controller.inbox::openInbox,
+                                modifier = Modifier.align(Alignment.TopEnd).padding(end = 8.dp, top = 8.dp),
+                            )
+                            // An open screen covers the layout and the buttons; the drawer still opens over it.
+                            ScreenHost(controller, state)
+                        }
                         notice?.takeUnless { state.activeLayout.gone }?.let {
                             NoticeBar(it, onDismiss = controller::dismissNotice, modifier = Modifier.align(Alignment.BottomCenter))
                         }
                         // The inbox covers everything but the drawer.
                         InboxPanel(controller)
                     }
+                  }
                 }
             }
         }

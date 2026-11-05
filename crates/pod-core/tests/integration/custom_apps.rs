@@ -315,7 +315,7 @@ async fn a_custom_app_is_listed_and_served_over_several_sources() {
     assert_eq!(status, StatusCode::CREATED, "{b}");
     let id = b["id"].as_str().unwrap().to_owned();
     // Listed after the built-ins, marked custom.
-    let (_, apps) = call(&env.pod, "GET", "/v1/apps", None, None).await;
+    let (_, apps) = call(&env.pod, "GET", "/v1/apps?blueprints=1", None, None).await;
     let rows = apps["apps"].as_array().unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["kind"], "builtin");
@@ -489,7 +489,7 @@ async fn layouts_may_only_use_their_sources() {
     .await;
     assert_eq!(status, StatusCode::OK, "{b}");
     assert_eq!(b["ok"], true);
-    let (_, apps) = call(&env.pod, "GET", "/v1/apps", None, None).await;
+    let (_, apps) = call(&env.pod, "GET", "/v1/apps?blueprints=1", None, None).await;
     assert_eq!(apps["apps"].as_array().unwrap().len(), 1, "nothing created");
 }
 
@@ -600,7 +600,7 @@ async fn edits_append_history_and_restore_appends_a_copy() {
     };
     let (status, _) = patch(json!({"title": "My kitchen", "icon": "photo"})).await;
     assert_eq!(status, StatusCode::OK);
-    let (_, apps) = call(&env.pod, "GET", "/v1/apps", None, None).await;
+    let (_, apps) = call(&env.pod, "GET", "/v1/apps?blueprints=1", None, None).await;
     assert_eq!(apps["apps"][1]["title"], "My kitchen");
     let (status, b) = patch(json!({"feeds": [["b", "all"]]})).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
@@ -631,7 +631,7 @@ async fn hiding_and_deleting_apps() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{b}");
-    let (_, apps) = call(&env.pod, "GET", "/v1/apps", None, None).await;
+    let (_, apps) = call(&env.pod, "GET", "/v1/apps?blueprints=1", None, None).await;
     let ids: Vec<&str> = apps["apps"]
         .as_array()
         .unwrap()
@@ -639,7 +639,7 @@ async fn hiding_and_deleting_apps() {
         .map(|a| a["id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, [id.as_str()]);
-    let (_, apps) = call(&env.pod, "GET", "/v1/apps?all=1", None, None).await;
+    let (_, apps) = call(&env.pod, "GET", "/v1/apps?all=1&blueprints=1", None, None).await;
     assert_eq!(apps["apps"][0]["hidden"], true);
     // A hidden app still serves.
     let (status, _) = call(&env.pod, "GET", "/v1/workspaces/a_home", None, None).await;
@@ -652,7 +652,7 @@ async fn hiding_and_deleting_apps() {
         Some(json!({"hidden": false})),
     )
     .await;
-    let (_, apps) = call(&env.pod, "GET", "/v1/apps", None, None).await;
+    let (_, apps) = call(&env.pod, "GET", "/v1/apps?blueprints=1", None, None).await;
     assert_eq!(apps["apps"].as_array().unwrap().len(), 2);
 
     // Deleting: an open events stream hears `deleted` and ends.
@@ -685,7 +685,7 @@ async fn hiding_and_deleting_apps() {
     );
     let (status, _) = call(&env.pod, "GET", &format!("/v1/workspaces/{id}"), None, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    let (_, apps) = call(&env.pod, "GET", "/v1/apps?all=1", None, None).await;
+    let (_, apps) = call(&env.pod, "GET", "/v1/apps?all=1&blueprints=1", None, None).await;
     assert_eq!(apps["apps"].as_array().unwrap().len(), 1);
     let (status, _) = call(
         &env.pod,

@@ -222,7 +222,7 @@ async fn a_layout_only_app_is_served_and_listed() {
     // A bearer that is not a session is ignored by a public app.
     let (status, _, _) = get_json(&state, "/v1/workspaces/open", Some("stale")).await;
     assert_eq!(status, StatusCode::OK);
-    let (_, apps, _) = get_json(&state, "/v1/apps", None).await;
+    let (_, apps, _) = get_json(&state, "/v1/apps?blueprints=1", None).await;
     let ids: Vec<&str> = apps["apps"]
         .as_array()
         .unwrap()

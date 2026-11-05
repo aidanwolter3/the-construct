@@ -8,8 +8,8 @@ import java.util.prefs.Preferences
 /** The staging pod (deploy/, Fly.io), the default server (D29). */
 internal const val DEFAULT_BASE_URL = "https://the-construct-pod.fly.dev"
 
-/** The app shown at launch unless -Dconstruct.workspace / CONSTRUCT_WORKSPACE names another. */
-internal const val DEFAULT_WORKSPACE = "pixelfed"
+/** The app shown at launch unless -Dconstruct.workspace / CONSTRUCT_WORKSPACE names another: the pod's home (decision `blueprints-and-home`). */
+internal const val DEFAULT_WORKSPACE = org.theconstruct.HOME_APP
 
 /** The menu's Server presets on desktop (a local pod is on the host's loopback; the emulator alias makes no sense here). */
 internal val DESKTOP_SERVERS = listOf(

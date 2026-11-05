@@ -3,6 +3,7 @@
 //! Add a new test file as a module here.
 
 mod adapters;
+mod blueprints;
 mod custom_apps;
 mod notifications;
 mod parts;

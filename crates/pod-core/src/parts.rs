@@ -25,6 +25,10 @@ use crate::validate::LayoutError;
 
 /// The node type of a reference.
 pub const REF_TYPE: &str = "core://Ref";
+/// The part that is a blueprint's whole layout (decision
+/// `blueprints-and-home`): only a layout's root may reference it, and the
+/// expansion keeps the referencing app's own id.
+pub const LAYOUT_PART: &str = "layout";
 /// Refs inside parts are expanded this deep at most.
 const MAX_DEPTH: usize = 4;
 
@@ -39,6 +43,7 @@ impl Parts {
     /// The parts of a layout (its screens and slots) and the declared ones.
     pub fn of(version: i64, layout: &Value, declared: Option<&Value>) -> Self {
         let mut parts = BTreeMap::new();
+        parts.insert(LAYOUT_PART.to_owned(), layout.clone());
         for s in layout["screens"].as_array().into_iter().flatten() {
             if let Some(id) = s["id"].as_str() {
                 parts.insert(format!("screen:{id}"), s.clone());
@@ -189,6 +194,11 @@ impl Expander<'_> {
                     .unresolved(at, &r, "references nest too deep")
                     .map(|_| None);
             }
+            if r.part == LAYOUT_PART && (!at.is_empty() || in_screens) {
+                return Ok(self
+                    .unresolved(at, &r, "a whole layout can only be referenced at the root")?
+                    .or_else(|| (!in_screens).then(placeholder)));
+            }
             let screen_part = r.part.starts_with("screen:");
             if screen_part != in_screens {
                 let why = if in_screens {
@@ -215,7 +225,20 @@ impl Expander<'_> {
                     .unresolved(at, &r, why)?
                     .or_else(|| (!in_screens).then(placeholder)));
             };
-            return self.walk(&part, at, in_screens, depth + 1);
+            let mut out = self.walk(&part, at, in_screens, depth + 1)?;
+            // A whole layout keeps the referencing app's id (and title, when
+            // the reference names one).
+            if r.part == LAYOUT_PART
+                && let (Some(o), Some(from)) =
+                    (out.as_mut().and_then(Value::as_object_mut), v.as_object())
+            {
+                for k in ["id", "title"] {
+                    if let Some(x) = from.get(k) {
+                        o.insert(k.to_owned(), x.clone());
+                    }
+                }
+            }
+            return Ok(out);
         }
         Ok(Some(match v {
             Value::Object(m) => {

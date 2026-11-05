@@ -156,14 +156,16 @@ fn instructions(pod: &Pod) -> String {
 }
 
 const INSTRUCTIONS: &str = "This is the user's own pod in The Construct. It serves apps whose screens are \
-JSON layouts (server-driven UI) over data sources. You can build and edit the user's custom apps: \
-call list_data_sources and describe_vocabulary first, read a built-in app's layout with get_layout for \
-working examples, sample_data to see real fields, then create_app or update_layout. Every write is \
-validated (errors give a JSON pointer and what is allowed) and appears live on the user's devices; \
-restore_version undoes an edit. Built-in apps can't be edited, only hidden. To start from a built-in app, \
-reuse its parts by reference ({\"type\": \"core://Ref\", \"app\": ..., \"part\": ...}; list_parts lists them): \
-they stay current. Copy a part only to change it, and pass copied_from so the user hears when the \
-built-in changes (rebase_context then gives you what to merge).";
+JSON layouts (server-driven UI) over data sources. The server ships blueprints (the built-in layouts: list_apps \
+lists them under blueprints; get_layout reads one); the pod shows only the user's own apps, which you build. \
+A new pod has one app, home (the user's home screen: a dock of their apps, a reference to the home blueprint \
+'shell'); it can't be deleted, but you may change it. Call list_data_sources and describe_vocabulary first, read \
+a blueprint with get_layout for working examples, sample_data to see real fields, then create_app or \
+update_layout. Every write is validated (errors give a JSON pointer and what is allowed) and appears live on \
+the user's devices; restore_version undoes an edit. Blueprints can't be edited. Decide per request: reference a \
+blueprint ({\"type\": \"core://Ref\", \"app\": <blueprint>, \"part\": \"layout\"} as the whole layout, with the \
+blueprint's feeds; or a part, list_parts lists them) so it stays current, or copy it to change it and pass \
+copied_from so the user hears when the blueprint changes (rebase_context then gives you what to merge).";
 
 // ---------- tools ----------
 
@@ -203,7 +205,7 @@ fn tools() -> Vec<Value> {
     vec![
         tool(
             "list_apps",
-            "The pod's apps (built-in and custom) with their kind, hidden flag and latest version.",
+            "The user's apps (apps, the home app among them) and the blueprints apps can start from (blueprints), with their feeds and latest version.",
             json!({}),
             &[],
         ),
@@ -434,25 +436,27 @@ async fn list_apps(pod: &Pod) -> Result<Value, Value> {
     let listed = crate::blocking(pod, move |s| {
         let hidden = custom::hidden_apps(s)?;
         let custom_apps = s.with_conn(custom::custom_apps_on)?;
-        let apps: Vec<custom::AppRef> = builtin
+        let row = |a: custom::AppRef| -> rusqlite::Result<Value> {
+            let latest = s.app_latest_meta(a.id())?.map(|v| v.version);
+            Ok(json!({
+                "id": a.id(), "title": a.title(), "icon": a.icon(), "kind": a.kind(),
+                "hidden": hidden.iter().any(|h| h == a.id()),
+                "feeds": a.feeds(), "latest_version": latest,
+            }))
+        };
+        let apps = custom_apps
             .into_iter()
-            .map(custom::AppRef::Builtin)
-            .chain(custom_apps.into_iter().map(custom::AppRef::Custom))
-            .collect();
-        apps.into_iter()
-            .map(|a| {
-                let latest = s.app_latest_meta(a.id())?.map(|v| v.version);
-                Ok(json!({
-                    "id": a.id(), "title": a.title(), "icon": a.icon(), "kind": a.kind(),
-                    "hidden": hidden.iter().any(|h| h == a.id()),
-                    "feeds": a.feeds(), "latest_version": latest,
-                }))
-            })
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .map(|a| row(custom::AppRef::Custom(a)))
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let blueprints = builtin
+            .into_iter()
+            .map(|a| row(custom::AppRef::Builtin(a)))
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok((apps, blueprints))
     })
     .await
     .map_err(|(s, Json(b))| refused((s, b)))?;
-    Ok(json!({ "apps": listed }))
+    Ok(json!({ "apps": listed.0, "blueprints": listed.1 }))
 }
 
 /// The owner's session (the pod token's), for what is signed in and for
@@ -1018,13 +1022,23 @@ pub const NODE_DOCS: &[(&str, &str, &str)] = &[
         "size_dp?",
         "An indeterminate spinner for work in progress, e.g. inside a core://Conditional on a status field",
     ),
+    (
+        "core://Dock",
+        "field, before?: [tab], query_key?, item?: tab, max_items?, after?: [tab]; tab = {value, label, icon?, badge?, content}",
+        "An app's main navigation: tabs along the bottom (a side rail on wide windows) and the selected tab's content filling the screen above. Tabs: before, one per entity of query_key drawn from item ($item bound; at most max_items), then after. $form.<field> is the selected value (the first tab until one is picked). Only as the content of a workspace's one slot. The home blueprint docks local:apps with an AppFrame each.",
+    ),
+    (
+        "core://AppFrame",
+        "app",
+        "Another app of the pod drawn whole (its layout, screens and Back) in the space it is given, e.g. a dock tab's content. app is an id or a binding ($item.id).",
+    ),
 ];
 
 /// The pod-only node of a custom layout (never sent to clients).
 pub const REF_DOC: (&str, &str, &str) = (
     "core://Ref",
     "app, part, version?",
-    "A built-in app's part (list_parts): a screen:<id> part in screens, any other part as a node. The pod expands it when serving, from the built-in's newest version (or the pinned one), so it stays current.",
+    "A blueprint's part (list_parts): \"layout\" (the whole blueprint, only as a layout's root; the app keeps its own id), a screen:<id> part in screens, any other part as a node. The pod expands it when serving, from the blueprint's newest version (or the pinned one), so it stays current.",
 );
 
 fn vocabulary() -> Value {
@@ -1046,7 +1060,17 @@ fn vocabulary() -> Value {
               "doc": "Set fields of a loaded entity on this device only (no request), e.g. view state like added/expanded shown with core://Conditional. The next load of the entity from the pod replaces it." },
             { "intent": "action.link.open", "fields": "url",
               "doc": "Open an http(s) link in the device's browser (e.g. a Get tickets button with url $item.tickets_url). Nothing is sent to the pod." },
+            { "intent": "action.device", "fields": "command: open_settings|open_inbox|refresh|leave_pod|open_app, app? (open_app)",
+              "doc": "Something the device does itself: open Settings or the inbox, refresh, forget the pod on this device, or open one of the pod's apps. Any layout may use any command." },
         ],
+        "local_data": {
+            "doc": "Data the device provides, with no feed: bind ${local://<entity>#<field>} anywhere and list local:apps in a core://List or core://Dock.",
+            "local://connection": "online (bool), pending (count of unsent changes), label (\"Online\", \"Offline · 2 pending\"), attention (true while offline or changes wait)",
+            "local://inbox": "unread (count), label (\"3 unread\")",
+            "local://apps": "count (the pod's apps, home excluded)",
+            "local:apps": "query of the pod's apps but home: local://apps/<id> with id, title, icon, kind, detail, unread",
+            "local://device": "platform (android|desktop|simulator)",
+        },
         "bindings": {
             "$item.<field>": "a field of the list or carousel item",
             "${<entity uri>#<field>}": "a field of any entity, e.g. ${core://sources/<source>#signed_in}",
@@ -1055,7 +1079,7 @@ fn vocabulary() -> Value {
             "$nonce": "a fresh id per action",
             "$value": "the new value in a mutation's payload",
         },
-        "rules": "Custom layouts may only use their feeds' sources: data paths, actions, query keys and entity schemes from list_data_sources. No sign-in intents and no other /v1/ paths. Read get_layout of a built-in app for complete examples.",
+        "rules": "Custom layouts may only use their feeds' sources: data paths, actions, query keys and entity schemes from list_data_sources. No sign-in intents and no other /v1/ paths. Data the device provides (local_data) needs no feed. Read get_layout of a blueprint for complete examples.",
     })
 }
 

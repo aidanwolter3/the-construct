@@ -24,7 +24,7 @@ the Pixelfed media proxy and uploads).
 
 | Call | Answer |
 |---|---|
-| `GET /v1/apps[?all=1]` | `{apps: [{id, title, icon, kind, latest_version, latest_compatible_version, updated_at, updates_from?}]}`. Hidden apps only with `all=1`. |
+| `GET /v1/apps[?all=1][&blueprints=1]` | `{apps: [{id, title, icon, kind, latest_version, latest_compatible_version, updated_at, updates_from?}]}`: the pod's own apps, `home` first. Hidden apps only with `all=1`; the blueprints (`kind: builtin`) only with `blueprints=1` (decision `blueprints-and-home`). |
 | `GET /v1/apps/{id}/versions[?limit=1..100&before=N]` | `{app_id, latest_version, latest_compatible_version, versions: [{version, created_at, source, note?, features, compatible, incompatible?}], next_before?}`, newest first. |
 | `GET /v1/apps/{id}/versions/{n}` | One version with its `layout`. |
 | `PUT /v1/apps/{id}/hidden {hidden}` | Hides or shows any app in the app list. |

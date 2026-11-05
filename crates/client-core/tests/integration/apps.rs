@@ -99,35 +99,28 @@ fn versions(page: &Value) -> Vec<i64> {
 }
 
 #[test]
-fn list_apps_shows_the_app_and_dev_apps_on_request() {
-    let p = pod(server::state_in_memory());
-    let e = engine(&p.base, "pixelfed");
-    let apps = parse(&e.list_apps().unwrap());
-    let ids: Vec<&str> = apps["apps"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|a| a["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids, ["pixelfed", "recipes", "events"]);
-    let app = &apps["apps"][0];
-    assert_eq!(app["title"], "Pixelfed");
-    assert_eq!(app["latest_version"], latest(&p, "pixelfed"));
-    assert!(app["updated_at"].as_str().unwrap().ends_with('Z'));
-
-    let dev = pod(server::state_in_memory().with_dev_apps(true));
-    let e = engine(&dev.base, APP);
-    let apps = parse(&e.list_apps().unwrap());
-    let ids: Vec<&str> = apps["apps"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|a| a["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(
-        ids,
-        ["pixelfed", "recipes", "events", "pixelfed_sample_no_login"]
-    );
+fn list_apps_shows_the_pods_own_apps() {
+    // Built-in apps are blueprints (decision `blueprints-and-home`): a new pod
+    // lists only its home app, dev apps or not.
+    for state in [
+        server::state_in_memory(),
+        server::state_in_memory().with_dev_apps(true),
+    ] {
+        let p = pod(state);
+        let e = engine(&p.base, "pixelfed");
+        let apps = parse(&e.list_apps().unwrap());
+        let ids: Vec<&str> = apps["apps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["home"]);
+        let app = &apps["apps"][0];
+        assert_eq!(app["title"], "Home");
+        assert_eq!(app["latest_version"], latest(&p, "home"));
+        assert!(app["updated_at"].as_str().unwrap().ends_with('Z'));
+    }
 }
 
 #[test]
@@ -402,17 +395,17 @@ fn custom_apps_are_listed_hidden_and_deleted_and_the_engine_leaves_a_deleted_one
     assert_eq!(row["hidden"], false);
 
     // Hidden apps stay in the engine's list (it asks for all of them), marked.
-    e.set_app_hidden("recipes", true).unwrap();
+    e.set_app_hidden(&id, true).unwrap();
     let apps = parse(&e.list_apps().unwrap());
-    let recipes = apps["apps"]
+    let hidden = apps["apps"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|a| a["id"] == "recipes")
+        .find(|a| a["id"] == id.as_str())
         .unwrap()
         .clone();
-    assert_eq!(recipes["hidden"], true);
-    e.set_app_hidden("recipes", false).unwrap();
+    assert_eq!(hidden["hidden"], true);
+    e.set_app_hidden(&id, false).unwrap();
 
     // Deleting it: the engine on it hears `deleted` and says the app is gone
     // (give its events stream time to connect first).

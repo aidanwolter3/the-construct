@@ -677,7 +677,10 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     assert!(!err);
     let rows = apps["apps"].as_array().unwrap();
     assert!(
-        rows.iter()
+        apps["blueprints"]
+            .as_array()
+            .unwrap()
+            .iter()
             .any(|a| a["id"] == "recipes" && a["hidden"] == true)
     );
     assert!(

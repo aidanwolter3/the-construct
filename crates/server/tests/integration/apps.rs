@@ -171,10 +171,13 @@ fn files(app: &str) -> i64 {
 #[tokio::test]
 async fn apps_lists_dev_apps_only_when_shown() {
     let pod = pod().await;
-    let (status, _, body) = get(&pod, "/v1/apps").await;
+    let (status, _, body) = get(&pod, "/v1/apps?blueprints=1").await;
     assert_eq!(status, StatusCode::OK);
     let apps = body["apps"].as_array().unwrap();
-    assert_eq!(apps.len(), 3, "{body}");
+    // The blueprints, then the pod's own home app (decision `blueprints-and-home`).
+    assert_eq!(apps.len(), 5, "{body}");
+    assert_eq!(apps[3]["id"], "shell");
+    assert_eq!(apps[4]["id"], "home");
     let a = &apps[0];
     assert_eq!(
         (&a["id"], &a["title"], &a["icon"], &a["latest_version"]),
@@ -197,7 +200,7 @@ async fn apps_lists_dev_apps_only_when_shown() {
 
     let dev = spawn(server::state_in_memory().with_dev_apps(true)).await;
     deploy(&dev, "pixelfed_sample_no_login", "Two");
-    let (_, _, body) = get(&dev, "/v1/apps").await;
+    let (_, _, body) = get(&dev, "/v1/apps?blueprints=1").await;
     let got: Vec<(&str, &str, &str, i64)> = body["apps"]
         .as_array()
         .unwrap()
@@ -223,6 +226,8 @@ async fn apps_lists_dev_apps_only_when_shown() {
                 "photo",
                 files("pixelfed_sample_no_login") + 1
             ),
+            ("shell", "Home", "dashboard", files("shell")),
+            ("home", "Home", "dashboard", 1),
         ]
     );
     // Hidden apps' endpoints work without the flag.
@@ -979,7 +984,7 @@ async fn apps_say_the_newest_version_the_client_can_draw() {
     let pod = pod().await;
     feed_history(&pod);
     let apps = |features: Option<String>| {
-        let mut req = client().get(format!("{}/v1/apps", pod.url));
+        let mut req = client().get(format!("{}/v1/apps?blueprints=1", pod.url));
         if let Some(f) = features {
             req = req.header(protocol::FEATURES_HEADER, f);
         }

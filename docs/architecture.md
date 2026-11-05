@@ -63,6 +63,11 @@ The server binary picks the adapters at compile time (`server::adapters`). Apps 
 | `pixelfed_sample_no_login` | Pixelfed sample | `app-pixelfed` (static) | A one-post sample that needs no sign-in; listed only with `CONSTRUCT_SHOW_DEV_APPS=1` |
 | `recipes` | Recipes | `app-recipes` | A recipe collection with search, categories and recipe cards (D41) |
 | `events` | Events | `app-events` | Upcoming events from websites the user watches, with alerts (decision `collection-fillers`) |
+| `shell` | Home | `app-shell` | The home blueprint: a dock of the pod's apps, which every pod's `home` app references |
+
+These are **blueprints** (decision `blueprints-and-home`): served by id and updated by deploys, but not listed. A
+pod's apps are its own: a new pod has only `home`, a reference to the `shell` blueprint, and the user's agent adds
+apps that reference or copy blueprints.
 
 Two more sources have no app of their own: **Collections** (`app-collections`), typed data that custom apps declare,
 and **Server monitoring** (`app-monitor`). Users build their own apps on top of all of these; see
@@ -123,7 +128,9 @@ UniFFI (`crates/client-ffi`; Kotlin bindings in `app/shared/src/jvmCommonMain`).
 ## The clients
 
 `app/shared/src/commonMain` is one Compose Multiplatform UI used by every client: the node renderer, screens and
-navigation, the app menu and version picker, Settings, and the notification inbox. Platform code is thin:
+navigation, the shell (the pod's `home` layout with the app of the selected tab framed in it, a bundled sign-in
+layout before a pod is open, decision `blueprints-and-home`), the app menu and version picker, Settings, and the
+notification inbox. Platform code is thin:
 
 - **Desktop** (`:desktopApp`, JVM): loads the engine through JNA; the loopback OAuth redirect; tray notifications.
 - **Android** (`:androidApp`): the engine cross-compiled to `libclient_ffi.so`; App Link sign-in redirect; Android

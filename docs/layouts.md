@@ -7,7 +7,7 @@ feature has a one-paragraph description in `crates/protocol/features/`.
 
 ## Publishing a new layout version
 
-Built-in apps' layouts live in their adapter crate, `crates/<adapter>/layouts/<app>/NNNN.json` (Pixelfed's in
+Built-in apps' layouts (the blueprints) live in their adapter crate, `crates/<adapter>/layouts/<app>/NNNN.json` (Pixelfed's in
 `crates/app-pixelfed/layouts/pixelfed/`, the Events app's in `crates/app-events/layouts/events/`). Adding a file is the only way to change how a built-in app
 looks.
 
@@ -80,6 +80,7 @@ After changing a `pixelfed` layout, regenerate the simulator fixtures:
 | `$nonce` | in intents | a fresh value per dispatch (one per `action.sequence`), for temporary URIs and idempotency keys |
 | `$attachments.<name>` | in a create | staged attachments: local URIs in `entity`, upload ids in `payload` |
 | `$count` | in a Text with `count` | the number of matching entities |
+| `${local://<entity>#<field>}`, `local:apps` | anywhere | [device data](#device-data), with no feed |
 
 Mutation expressions (`value_expr` of `action.mutation.optimistic` and `action.local.set`) are a small subset
 evaluated against the entity before the change: a JSON literal, `entity.<field>`, `!entity.<field>`,
@@ -108,6 +109,8 @@ evaluated against the entity before the change: a JSON literal, `entity.<field>`
 | `core://Chip` | `text`, `icon`, `tone` | A small label; `tone` `Neutral` or `Warning`. |
 | `core://Badge` | `text`, `icon` | A one-line note with an icon ("Bob boosted"). |
 | `core://Progress` | `size_dp` | An indeterminate spinner. |
+| `core://Dock` | `field`, `before`, `query_key`, `item`, `max_items`, `after`; a tab is `{value, label, icon?, badge?, content}` | The app's navigation: tabs along the bottom (a side rail on wide windows), the selected tab's `content` filling the screen above. Tabs: `before`, one per entity of `query_key` from `item` (`$item` bound, at most `max_items`), then `after`. `$form.<field>` is the selected `value`, remembered on the device. Only as the content of a workspace's one slot; the workspace then has no title bar. `badge` draws a count, or a dot when otherwise truthy. |
+| `core://AppFrame` | `app` | Another app of the pod drawn whole (its layout, screens, Back) in its space, usually a dock tab's content. `app` is an id or `$item.id`. |
 | `core://TextField` | `field`, `placeholder`, `max_length`, `on_submit`, `lines` | Edits `$form.<field>`. With `on_submit`: a send button that dispatches, then clears. Without: a search box, or a multi-line field with `lines`. |
 | `core://ChoiceChips` | `field`, `options: [{label, value}]`, `padding_h_dp`, `remember` | A chip row editing `$form.<field>`. `remember` keeps the choice on the device. |
 | `core://MediaPicker` | `field`, `max_items`, `label` | Picks photos; `$form.<field>` is the list of staged attachment ids. |
@@ -132,6 +135,7 @@ A node type the client doesn't know is skipped, and its JSON kept, so old versio
 | `action.link.open` | `url` | Opens an `http(s)://` URL in the browser. |
 | `action.auth.login` | `instance_url`, `app_path`, `token_path` | Starts an OAuth2 PKCE sign-in to an upstream. |
 | `action.auth.session` | `path`, `payload` | Opens a pod session (the pod code screen). |
+| `action.device` | `command`, `app` | Something the device does: `open_settings`, `open_inbox`, `refresh`, `leave_pod` (forget the pod on this device), `open_app` (with `app`; in the shell, selects its dock tab). Any layout may use any command. |
 
 ## Features and compatibility
 
@@ -148,6 +152,22 @@ removed). See decision [`named-vocabulary`](decisions/named-vocabulary.md).
 - **Removing vocabulary** never edits layout files: move the feature's file to `crates/protocol/features/removed/`,
   and only the versions that use it are retired.
 
+## Device data
+
+Feature `local_data` (decision `blueprints-and-home`): entities and a query the client fills itself, with no pod
+request. Any layout may bind them; a custom app needs no feed for them.
+
+| Entity or query | Fields |
+|---|---|
+| `local://connection` | `online`, `pending` (unsent changes), `label` ("Offline · 2 pending"), `attention` (offline or changes waiting) |
+| `local://inbox` | `unread`, `label` ("3 unread") |
+| `local://apps` | `count`: the pod's apps but `home` |
+| `local:apps` (query) | `local://apps/<id>`: `id`, `title`, `icon`, `kind`, `detail`, `unread` |
+| `local://device` | `platform` |
+| `local://session` | `open`, `error`, `message`: the pod sign-in |
+
+A `core://Conditional` value may be such a binding: `{"value": "${local://apps#count}", "equals": "0", ...}`.
+
 ## Reusing built-in parts
 
 A custom app can embed a part of a built-in layout by reference, and the pod keeps it current:
@@ -156,5 +176,6 @@ A custom app can embed a part of a built-in layout by reference, and the pod kee
 { "type": "core://Ref", "app": "pixelfed", "part": "screen:post" }
 ```
 
-`part` is `screen:<id>`, `slot:<id>`, or a name from the layout file's `"parts"`. See decision
-[`layout-parts`](decisions/layout-parts.md) and [custom-apps.md](custom-apps.md).
+`part` is `screen:<id>`, `slot:<id>`, a name from the layout file's `"parts"`, or `layout`: the whole blueprint, only
+as a layout's root (the app keeps its own id; decision [`blueprints-and-home`](decisions/blueprints-and-home.md)).
+See decision [`layout-parts`](decisions/layout-parts.md) and [custom-apps.md](custom-apps.md).

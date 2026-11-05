@@ -1,18 +1,38 @@
 # Custom apps, Collections and Events
 
-Besides the built-in apps, a pod's user can have apps of their own: any layout the [vocabulary](layouts.md) can draw,
-over the feeds, screen data and actions the pod's data sources declare. They are usually built by Claude through
-the pod's MCP endpoint. Data an app keeps itself (a todo list, a maintenance log) lives in **Collections**.
+A pod's apps are the user's own: any layout the [vocabulary](layouts.md) can draw, over the feeds, screen data and
+actions the pod's data sources declare. They are usually built by Claude through the pod's MCP endpoint, often from a
+**blueprint** (a built-in layout the server ships and updates, such as `pixelfed`, `recipes` or `events`). A new pod
+has one app, `home`; nothing else until the user asks for it. Data an app keeps itself (a todo list, a maintenance
+log) lives in **Collections**.
 
 Decisions: [`custom-apps-and-data-sources`](decisions/custom-apps-and-data-sources.md),
 [`mcp-connector`](decisions/mcp-connector.md), [`layout-parts`](decisions/layout-parts.md),
-[`collections`](decisions/collections.md) and the `collection-*` decisions.
+[`collections`](decisions/collections.md), [`blueprints-and-home`](decisions/blueprints-and-home.md) and the
+`collection-*` decisions.
+
+## Blueprints and the home app
+
+Built-in apps are blueprints: served by id, but listed only with `GET /v1/apps?blueprints=1` (MCP `list_apps` answers
+`{apps, blueprints}`). An app can be a whole blueprint by reference, kept current by the pod:
+
+```json
+{"title": "Recipes", "icon": "recipe", "feeds": [["recipes", "all"]],
+ "layout": {"type": "core://Ref", "app": "recipes", "part": "layout"}}
+```
+
+Give it the blueprint's feeds (`list_apps` shows them). To change a blueprint, copy its layout (`get_layout`) and
+pass `copied_from`. Every pod's **`home`** app (the screen clients open first) starts as a reference to the `shell`
+blueprint: a `core://Dock` of the pod's apps (`local:apps`) and a More tab with every app, the inbox and Settings. It
+can't be deleted; change its layout to change the user's navigation. A pod made before blueprints got an app
+referencing each built-in it showed, so nothing disappeared.
 
 ## Custom apps
 
 A custom app is a title, an icon, a list of **feeds** (`["recipes", "all"]`, `["pixelfed", "home"]`,
 `["collections", "todos"]`) and a layout history. It is served exactly like a built-in app (workspace, events
-stream, versions, feature negotiation) and marked `"kind": "custom"` in `GET /v1/apps`.
+stream, versions, feature negotiation) and marked `"kind": "custom"` in `GET /v1/apps`. Ids are `c-` and 10
+characters, except the pod's own `home`.
 
 ```bash
 pod=http://127.0.0.1:8080; token=cpod_…
@@ -30,8 +50,10 @@ curl -fsS -H "Authorization: Bearer $token" -H 'content-type: application/json' 
 - **Built-in parts.** `{"type": "core://Ref", "app": "pixelfed", "part": "screen:post"}` reuses a built-in's
   screen, slot or declared part, expanded and kept current by the pod. A copy instead says `"copied_from": {app,
   version}`, and `GET /v1/apps` reports `updates_from` when that built-in moves on.
+- **Device data.** `${local://connection#label}`, `${local://inbox#unread}`, the `local:apps` query and the other
+  [device data](layouts.md#device-data) need no feed.
 - **Hiding and deleting.** Any app can be hidden from the app list on every device; custom apps can be deleted
-  (purged after 30 days).
+  (purged after 30 days), except `home`.
 
 ## Building apps with Claude
 

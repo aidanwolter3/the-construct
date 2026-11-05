@@ -102,6 +102,18 @@ pub fn validate_structure(expected_id: &str, doc: &Value) -> Result<UiNode, Stri
                 endpoint
             }
             ActionIntent::LoadData { path } => path,
+            ActionIntent::Device { command, app } => {
+                if !protocol::DEVICE_COMMANDS.contains(&command.as_str()) {
+                    return Err(format!(
+                        "unknown device command '{command}' (known: {})",
+                        protocol::DEVICE_COMMANDS.join(", ")
+                    ));
+                }
+                if command == "open_app" && app.as_deref().is_none_or(|a| a.trim().is_empty()) {
+                    return Err("action.device open_app needs an app".to_owned());
+                }
+                continue;
+            }
             ActionIntent::AuthLogin {
                 app_path,
                 token_path,
@@ -149,6 +161,9 @@ fn check_aspect(what: &str, a: f32) -> Result<(), String> {
     }
 }
 
+/// Tabs a `core://Dock` holds at most (fixed ones; and its query items).
+const MAX_DOCK_TABS: usize = 6;
+
 fn check_dp(what: &str, v: u16, max: u16) -> Result<(), String> {
     if v > max {
         Err(format!("{what} {v} (max {max})"))
@@ -192,6 +207,38 @@ fn check_color(c: &str) -> Result<(), String> {
 /// names clients must know (icons, tints).
 fn check_values(node: &UiNode) -> Result<(), String> {
     match node {
+        UiNode::Dock {
+            field,
+            before,
+            query_key,
+            item,
+            max_items,
+            after,
+        } => {
+            if field.trim().is_empty() {
+                return Err("a dock needs a field".into());
+            }
+            if query_key.is_some() != item.is_some() {
+                return Err("a dock's query_key and item go together".into());
+            }
+            if before.len() + after.len() > MAX_DOCK_TABS {
+                return Err(format!("a dock has at most {MAX_DOCK_TABS} fixed tabs"));
+            }
+            if max_items.is_some_and(|m| m == 0 || usize::from(m) > MAX_DOCK_TABS) {
+                return Err(format!("dock max_items is 1..={MAX_DOCK_TABS}"));
+            }
+            if before.is_empty() && after.is_empty() && item.is_none() {
+                return Err("a dock needs at least one tab".into());
+            }
+            Ok(())
+        }
+        UiNode::AppFrame { app } => {
+            if app.trim().is_empty() {
+                Err("an app frame needs an app".into())
+            } else {
+                Ok(())
+            }
+        }
         UiNode::Container { padding_dp, .. } => check_dp("padding_dp", *padding_dp, MAX_PADDING_DP),
         UiNode::Row {
             spacing_dp,
@@ -667,6 +714,11 @@ fn escape_pointer(k: &str) -> String {
     k.replace('~', "~0").replace('/', "~1")
 }
 
+/// The entity scheme of data the device provides (feature `local_data`).
+pub const LOCAL_SCHEME: &str = "local";
+/// The query-key prefix of data the device provides.
+pub const LOCAL_QUERY_PREFIX: &str = "local:";
+
 /// What a custom layout may use, from its sources' manifests.
 struct Caps<'a> {
     sources: &'a [(&'a str, &'a crate::source::SourceManifest)],
@@ -725,6 +777,10 @@ impl<'a> Caps<'a> {
     }
 
     fn query_key(&self, at: &str, key: &str) -> Result<(), LayoutError> {
+        // Data the device provides (feature `local_data`).
+        if key.starts_with(LOCAL_QUERY_PREFIX) {
+            return Ok(());
+        }
         if self.keys().any(|p| crate::source::key_matches(p, key)) {
             return Ok(());
         }
@@ -748,7 +804,7 @@ impl<'a> Caps<'a> {
             if rest.starts_with("sources/") {
                 return Ok(());
             }
-        } else if self.schemes().any(|s| s == scheme) {
+        } else if scheme == LOCAL_SCHEME || self.schemes().any(|s| s == scheme) {
             return Ok(());
         }
         Err(LayoutError::new(

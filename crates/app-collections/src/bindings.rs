@@ -97,7 +97,10 @@ impl<'a> Checker<'a> {
         name: &str,
         what: &str,
     ) -> Result<(), LayoutError> {
-        if def.field(name).is_some() || SYSTEM_FIELDS.contains(&name) {
+        if def.field(name).is_some()
+            || SYSTEM_FIELDS.contains(&name)
+            || def.bindable().iter().any(|b| b == name)
+        {
             return Ok(());
         }
         let why = if def.is_removed_name(name) {
@@ -422,6 +425,11 @@ mod tests {
                 .contains("no collection")
         );
         assert!(check(&ok, &["groceries".into()], &defs()).is_err());
+        // Filler and alert keys may be bound before there is a filler or an
+        // alert (a blueprint on a new pod): they read blank until then.
+        let derived = list(json!({"type": "core://Text",
+            "value_expr": "$item.filler_title ${collections://todos/1#alert_names}"}));
+        assert_eq!(check(&derived, &[], &defs()), Ok(()));
     }
 
     #[test]

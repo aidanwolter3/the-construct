@@ -126,6 +126,19 @@ pub enum ActionIntent {
     #[serde(rename = "action.link.open")]
     OpenLink { url: String },
 
+    /// Feature `device_action`: something the device does itself, named by
+    /// `command` ([`DEVICE_COMMANDS`]): `open_settings`, `open_inbox`,
+    /// `refresh`, `leave_pod` (forget the pod on this device), or `open_app`
+    /// with `app` (open that app of the pod). Nothing is sent to the pod
+    /// unless the command itself talks to it. Any layout may use any
+    /// command (decision `blueprints-and-home`).
+    #[serde(rename = "action.device")]
+    Device {
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app: Option<String>,
+    },
+
     /// Any intent tag this build does not know, e.g. the removed
     /// `action.agent.prompt` (D32), which AI edits could put into layouts
     /// that legacy app versions still hold. Deserializing one drops its
@@ -146,6 +159,15 @@ impl ActionIntent {
         out
     }
 }
+
+/// The `action.device` commands this build knows.
+pub const DEVICE_COMMANDS: [&str; 5] = [
+    "open_settings",
+    "open_inbox",
+    "refresh",
+    "leave_pod",
+    "open_app",
+];
 
 /// One extra field update carried by `ActionIntent::OptimisticMutate.also`
 /// (and `ActionIntent::LocalSet.also`).

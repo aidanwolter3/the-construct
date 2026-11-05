@@ -47,8 +47,15 @@ async fn pixelfed_workspace_parses() {
 
 #[tokio::test]
 async fn removed_counter_app_is_gone() {
-    let (status, _) = get("/v1/workspaces/home").await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    // `home` is now every pod's home app (decision `blueprints-and-home`),
+    // not the counter that once had the id.
+    let (status, body) = get("/v1/workspaces/home").await;
+    assert_eq!(status, StatusCode::OK);
+    let spec: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        spec["workspace"]["slots"][0]["content"]["type"],
+        "core://Dock"
+    );
     let (status, _) = send(
         Request::post("/v1/counters/home/increment")
             .body(Body::empty())

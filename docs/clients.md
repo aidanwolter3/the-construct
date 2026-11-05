@@ -2,7 +2,7 @@
 
 Desktop and Android run the same shared Compose UI (`app/shared`) over the same Rust engine
 (`crates/client-core`). Every client defaults to the staging server, `https://the-construct-pod.fly.dev`, and to the
-Pixelfed app. Build prerequisites are in [CONTRIBUTING.md](../CONTRIBUTING.md#setup).
+pod's `home` app (the shell, below). Build prerequisites are in [CONTRIBUTING.md](../CONTRIBUTING.md#setup).
 
 ## Desktop
 
@@ -19,7 +19,7 @@ library already in `target/release`.
 | Option (`-D` property or environment variable) | Default | Meaning |
 |---|---|---|
 | `construct.baseUrl` / `CONSTRUCT_BASE_URL` | the menu's saved choice, else staging | The server at launch. Picking a server in Settings still switches the running app. |
-| `construct.workspace` / `CONSTRUCT_WORKSPACE` | `pixelfed` | The app opened at launch. |
+| `construct.workspace` / `CONSTRUCT_WORKSPACE` | `home` | The app opened at launch (`home` runs the shell; any other id runs that app alone with the native menu). |
 
 The engine keeps its cache in `~/.construct/cache.db` for staging and `~/.construct/servers/<url>/` for any other
 server, so data and queued actions never cross servers. Sessions are kept in the macOS Keychain (service
@@ -49,7 +49,7 @@ adb logcat -s ConstructEngine:V         # Kotlin log lines and the engine's outp
 | `-PskipRustBuild` | | Package the `.so` files already in `jniLibs` without running cargo. |
 | `-PandroidAbis` | `arm64-v8a,x86_64` | ABIs to build and package. |
 | `-PconstructBaseUrl` | staging | The built-in server (`http://10.0.2.2:8080` is the host machine from the emulator). |
-| `-PconstructWorkspace` | `pixelfed` | The built-in app. |
+| `-PconstructWorkspace` | `home` | The app opened at launch. |
 | `-PconstructAppLinkHost` | the staging host | The host whose App Link the sign-in redirect uses. |
 | `-PnoFcmFallback` | | Leave out the embedded FCM push distributor. |
 
@@ -61,9 +61,25 @@ Debug builds also take intent extras, read when the engine starts (use `am start
 Settings must be `https://` otherwise. That rule covers images (loaded by Kotlin); the engine's own traffic goes
 through Rust and is not restricted by Android's network security config.
 
+## The shell
+
+Opened on `home` (the default), the client runs the layout-first shell (decision `blueprints-and-home`):
+
+- **Before a pod is open** it draws a bundled sign-in layout: a pod code, or **Try a temporary pod**. It needs no
+  server to draw, and shows the sign-in error under the button.
+- **With a pod** it draws the pod's `home` layout. The default (the `shell` blueprint) is a dock of the pod's apps
+  along the bottom (a rail on wide windows) and a **More** tab: every app, **Inbox** and **Settings** with the
+  connection status. A new pod has no apps: More says to ask the agent for one.
+- **Each tab frames an app** (`core://AppFrame`): its layout, screens and Back stay inside the frame. The client's
+  one engine follows the framed app; the home layout is kept on the device while it does.
+- **Settings and the inbox** are the native ones below, opened by the layout (`action.device`).
+- **If the pod has no home this build can draw**, a bundled screen offers Try again and Leave pod. Ask the agent to
+  repair the home layout (`restore_version`); clearing the app's data also starts over.
+
 ## The app menu
 
-The screen shows only the layout, with a **menu button** at the top left and a **bell** at the top right. The menu
+Opened on any other app, the screen shows only the layout, with a **menu button** at the top left and a **bell** at
+the top right. The menu
 button gets a dot when the device is offline, when actions wait to be sent, or when the version on screen has a
 newer one.
 

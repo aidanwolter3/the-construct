@@ -13,16 +13,16 @@ pub mod intent;
 pub mod notify;
 
 pub use ast::{
-    Align, ChoiceOption, DateFormat, GroupBy, ICONS, ImageShape, Indent, ListBinding, ListFilter,
-    ListFocus, ListWhere, NODE_TYPES, Orientation, Screen, SlotSpec, TextCount, TextFormat,
-    TextStyle, Tone, UiNode,
+    Align, ChoiceOption, DateFormat, DockTab, GroupBy, ICONS, ImageShape, Indent, ListBinding,
+    ListFilter, ListFocus, ListWhere, NODE_TYPES, Orientation, Screen, SlotSpec, TextCount,
+    TextFormat, TextStyle, Tone, UiNode,
 };
 pub use bundle::{DataBundle, EntityRecord, WorkspaceSpec};
 pub use features::{
     ClientCaps, Compatibility, FEATURES, FEATURES_HEADER, REMOVED_FEATURES, feature,
     features_header, parse_features, required_features,
 };
-pub use intent::{ActionIntent, FieldUpdate, Position, PresentationMode};
+pub use intent::{ActionIntent, DEVICE_COMMANDS, FieldUpdate, Position, PresentationMode};
 pub use notify::{
     DEVICE_HEADER, Importance, Notification, NotificationChannel, NotificationEvent,
     NotificationList, PushPayload, ReadEvent, channel_key,

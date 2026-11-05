@@ -253,6 +253,15 @@ const MIGRATIONS: &[Step] = &[
     // vocabulary too, so a version's features are everything it uses.
     // Worked out again for every stored version.
     Step::rust("named_vocabulary_features", migrate_v17),
+    // Decision `blueprints-and-home`: built-in apps became blueprints, which
+    // pods don't list. A pod that existed before (it has layout history)
+    // gets an app for each built-in it showed, on its next open
+    // (`custom::seed_blueprint_apps`); a new pod starts with none.
+    Step::sql(
+        "blueprints",
+        "INSERT INTO pod_settings (key, value)
+         SELECT 'blueprints.convert', '1' WHERE EXISTS (SELECT 1 FROM app_versions);",
+    ),
 ];
 
 /// A pod setting inside a transaction (an adapter migration reads its

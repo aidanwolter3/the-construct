@@ -39,7 +39,7 @@ use axum::{
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
-use crate::adapter::{AppInfo, AuthPolicy};
+use crate::adapter::{AppInfo, AuthPolicy, Catalog};
 use crate::session::{Caller, unauthorized};
 use crate::source::SourceManifest;
 use crate::store::{Authored, Store};
@@ -209,14 +209,16 @@ impl AppRef {
     }
 }
 
-/// Whether `id` has the shape of a custom app id.
+/// Whether `id` has the shape of a custom app id: `c-` and 10 base32
+/// characters, or the pod's own [`crate::HOME_APP`].
 pub fn is_custom_id(id: &str) -> bool {
-    id.strip_prefix("c-").is_some_and(|rest| {
-        rest.len() == 10
-            && rest
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b))
-    })
+    id == crate::HOME_APP
+        || id.strip_prefix("c-").is_some_and(|rest| {
+            rest.len() == 10
+                && rest
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b))
+        })
 }
 
 /// A new custom app id.
@@ -256,12 +258,13 @@ pub fn custom_app_on(conn: &Connection, id: &str) -> rusqlite::Result<Option<Cus
     .optional()
 }
 
-/// Every live custom app, oldest first.
+/// Every live custom app: the home app first, then oldest first.
 pub fn custom_apps_on(conn: &Connection) -> rusqlite::Result<Vec<CustomApp>> {
     let mut stmt = conn.prepare_cached(&format!(
-        "SELECT {APP_COLS} FROM custom_apps WHERE deleted_at IS NULL ORDER BY created_at, id"
+        "SELECT {APP_COLS} FROM custom_apps WHERE deleted_at IS NULL
+         ORDER BY id = ?1 DESC, created_at, id"
     ))?;
-    stmt.query_map([], app_row)?.collect()
+    stmt.query_map([crate::HOME_APP], app_row)?.collect()
 }
 
 /// The hidden app ids ([`HIDDEN_SETTING`]).
@@ -286,6 +289,120 @@ pub fn purge(store: &Store, now: i64) -> rusqlite::Result<usize> {
             "DELETE FROM custom_apps WHERE deleted_at IS NOT NULL AND deleted_at <= ?1",
             [cutoff],
         )
+    })
+}
+
+/// Pod setting: set by the `blueprints` migration on a pod that existed
+/// before blueprints; [`seed_blueprint_apps`] converts it once and clears it.
+pub const CONVERT_SETTING: &str = "blueprints.convert";
+/// The `source` of a version [`seed_blueprint_apps`] wrote.
+pub const SOURCE_BLUEPRINT: &str = "blueprint";
+
+/// An app [`seed_blueprint_apps`] creates: id, title, icon, feeds, layout,
+/// note.
+type Seed = (String, String, String, Vec<(String, String)>, Value, String);
+
+/// A layout that is the whole of blueprint `app`, as app `id`.
+pub fn blueprint_ref(app: &str, id: &str) -> Value {
+    json!({ "type": crate::parts::REF_TYPE, "app": app, "part": crate::parts::LAYOUT_PART, "id": id })
+}
+
+/// Start a pod's apps from blueprints (decision `blueprints-and-home`):
+/// the [`crate::HOME_APP`] (a reference to [`crate::HOME_BLUEPRINT`]) when
+/// the pod has none and the catalog has the blueprint; and once, on a pod
+/// made before blueprints ([`CONVERT_SETTING`]), one app referencing each
+/// built-in it showed (not hidden, not dev), so nothing disappears.
+pub fn seed_blueprint_apps(store: &Store, catalog: &Catalog) -> rusqlite::Result<()> {
+    let convert = store.pod_setting(CONVERT_SETTING)?.is_some();
+    let has_home: bool = store.with_conn(|c| {
+        c.query_row(
+            "SELECT EXISTS (SELECT 1 FROM custom_apps WHERE id = ?1)",
+            [crate::HOME_APP],
+            |r| r.get(0),
+        )
+    })?;
+    let mut apps: Vec<Seed> = Vec::new();
+    if !has_home && catalog.is_app(crate::HOME_BLUEPRINT) {
+        apps.push((
+            crate::HOME_APP.to_owned(),
+            "Home".to_owned(),
+            "dashboard".to_owned(),
+            Vec::new(),
+            blueprint_ref(crate::HOME_BLUEPRINT, crate::HOME_APP),
+            "Started from the Home blueprint".to_owned(),
+        ));
+    }
+    if convert {
+        let hidden = hidden_apps(store)?;
+        for a in catalog.apps() {
+            if a.dev || a.id == crate::HOME_BLUEPRINT || hidden.iter().any(|h| h == a.id) {
+                continue;
+            }
+            let id = new_custom_id();
+            let icon = if APP_ICONS.contains(&a.icon) {
+                a.icon
+            } else {
+                "dashboard"
+            };
+            let feeds = a
+                .feeds
+                .iter()
+                .map(|(s, f)| ((*s).to_owned(), (*f).to_owned()))
+                .collect();
+            let layout = blueprint_ref(a.id, &id);
+            apps.push((
+                id,
+                a.title.to_owned(),
+                icon.to_owned(),
+                feeds,
+                layout,
+                format!("Kept from before blueprints: the {} blueprint", a.title),
+            ));
+        }
+    }
+    if apps.is_empty() && !convert {
+        return Ok(());
+    }
+    let mut rows = Vec::new();
+    for (id, title, icon, feeds, layout, note) in apps {
+        let expanded =
+            crate::parts::expand(store, catalog, &layout, None, crate::parts::Mode::Lenient)
+                .unwrap_or(Value::Null);
+        let features = serde_json::from_value::<protocol::UiNode>(expanded)
+            .map(|n| recorded_features(&n))
+            .unwrap_or_default();
+        rows.push((id, title, icon, feeds, layout.to_string(), note, features));
+    }
+    store.transaction(|tx| {
+        let now = now_secs();
+        for (id, title, icon, feeds, json, note, features) in &rows {
+            tx.execute(
+                "INSERT INTO custom_apps (id, title, icon, feeds_json, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                params![
+                    id,
+                    title,
+                    icon,
+                    serde_json::to_string(feeds).expect("serializes"),
+                    now
+                ],
+            )?;
+            crate::store::append_authored_version_on(
+                tx,
+                id,
+                json,
+                SOURCE_BLUEPRINT,
+                Some(note),
+                Authored {
+                    author: AUTHOR_POD,
+                    meta_json: None,
+                    features,
+                },
+            )?;
+            tracing::info!(app = %id, "app started from a blueprint");
+        }
+        tx.execute("DELETE FROM pod_settings WHERE key = ?1", [CONVERT_SETTING])?;
+        Ok(())
     })
 }
 
@@ -875,6 +992,12 @@ pub async fn restore(pod: &Pod, id: &str, body: &Value, by: Writer) -> Result<Wr
 /// Soft-delete app `id`; its open event streams end with `event: deleted`.
 pub async fn delete(pod: &Pod, id: &str) -> Result<(), Refusal> {
     load(pod, id).await?;
+    if id == crate::HOME_APP {
+        return Err(refuse(
+            StatusCode::CONFLICT,
+            json!({ "error": "home_app", "detail": "the home app can't be deleted; change its layout instead (restore_version undoes a change)" }),
+        ));
+    }
     let app_id = id.to_owned();
     write(pod, move |tx| {
         tx.execute(
