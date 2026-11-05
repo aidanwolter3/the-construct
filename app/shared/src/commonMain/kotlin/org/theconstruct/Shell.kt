@@ -192,7 +192,14 @@ fun deviceData(
     val listedSignIns = sources.signIns.map { it.id }.toSet()
     queries["local:providers"] = sources.providers
         .filter { !it.signedIn && it.intent != null && it.id !in listedSignIns }
-        .map { p -> add("local:providers", "local://providers/${p.id}", buildJsonObject { put("id", p.id); put("title", p.title) }) }
+        .map { p ->
+            add("local:providers", "local://providers/${p.id}", buildJsonObject {
+                put("id", p.id)
+                put("title", p.title)
+                put("custom_server", p.serverPlaceholder != null)
+                put("server_placeholder", p.serverPlaceholder.orEmpty())
+            })
+        }
     val server = sources.server
     queries["local:servers"] = server?.options.orEmpty().map { o ->
         add("local:servers", "local://servers/${o.key}", buildJsonObject {
@@ -604,8 +611,9 @@ internal fun DrawerView(
         modifier = modifier.fillMaxSize().testTag("drawer"),
         drawerContent = {
             ModalDrawerSheet(Modifier.width(304.dp)) {
+                // The panel's actions read its own form (what is typed there, and the page shown).
                 val panelDispatch: (ActionIntent) -> Unit = { intent ->
-                    onDispatch(intent)
+                    if (controller != null) controller.dispatchWithForm(intent, panelForm) else onDispatch(intent)
                     scope.launch { drawerState.close() }
                 }
                 CompositionLocalProvider(LocalForm provides panelForm) {

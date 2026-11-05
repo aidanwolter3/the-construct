@@ -65,8 +65,12 @@ Decision:
   the server instructions say home is the user's whole interface and point at versions 2 and 3 as working examples
   (by `get_layout`, or a ref pinned with `version`).
 
-Not done yet: hiding and deleting apps are only in the native menu (no layout opens it by default); Android's notification permission row isn't offered to layouts; sign-in to a typed-in server needs the
-native panel; notifications load the newest page only; the home layout
+- **Signing in from layout:** `sign_in` takes a `value`, the server to sign in to (e.g. a typed `$form?.server`;
+  blank: the provider's default), and `local:providers` says which providers take one (`custom_server`,
+  `server_placeholder`). A drawer panel's actions read the panel's own form.
+
+Not done yet: hiding and deleting apps are only in the native menu (no layout opens it by default); Android's
+notification permission row isn't offered to layouts; notifications load the newest page only; the home layout
 updates only when it is drawn on its own engine or the apps list shows a newer version (no live event while a frame
 has the engine); notifications and links open the blueprint by id rather than the user's app built on it; a frame
 inside a framed app shows a message; old clients can't draw `home` and need an update.

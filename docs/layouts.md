@@ -137,7 +137,7 @@ A node type the client doesn't know is skipped, and its JSON kept, so old versio
 | `action.link.open` | `url` | Opens an `http(s)://` URL in the browser. |
 | `action.auth.login` | `instance_url`, `app_path`, `token_path` | Starts an OAuth2 PKCE sign-in to an upstream. |
 | `action.auth.session` | `path`, `payload` | Opens a pod session (the pod code screen). |
-| `action.device` | `command`, `app`, `id` | Something the device does: `open_app` (`app`; in the shell, selects its dock tab, or shows it untabbed), `open_notification` (`id`), `mark_all_read`, `toggle_channel` (`app`, `id`), `sign_in` (`id` of a provider), `sign_out`, `set_server` (`id` of a server option), `show` (`id` of a Drawer or Dock page), `show_versions` (`app`: load its versions into `local:versions`), `pin_version` (`id`: show that version on this device), `follow_latest`, `leave_pod` (forget the pod on this device), `refresh`, `open_settings` and `open_inbox` (the native panels). Any layout may use any command. |
+| `action.device` | `command`, `app`, `id` | Something the device does: `open_app` (`app`; in the shell, selects its dock tab, or shows it untabbed), `open_notification` (`id`), `mark_all_read`, `toggle_channel` (`app`, `id`), `sign_in` (`id` of a provider; `value`: another server, e.g. `$form?.server`), `sign_out`, `set_server` (`id` of a server option), `show` (`id` of a Drawer or Dock page), `show_versions` (`app`: load its versions into `local:versions`), `pin_version` (`id`: show that version on this device), `follow_latest`, `leave_pod` (forget the pod on this device), `refresh`, `open_settings` and `open_inbox` (the native panels). Any layout may use any command. |
 
 ## Features and compatibility
 
@@ -168,7 +168,7 @@ request. Any layout may bind them; a custom app needs no feed for them.
 | `local:notifications` (query) | `id`, `app_id`, `app_title`, `title`, `body`, `when` ("5 min"), `day` ("Today"), `unread` |
 | `local:channels` (query) | `app_id`, `app_title`, `id`, `title`, `description`, `enabled` |
 | `local:sign_ins` (query) | `id`, `title`, `detail` ("@dana · pixelfed.example") |
-| `local:providers` (query) | `id`, `title`: sign-ins the pod offers that aren't signed in |
+| `local:providers` (query) | `id`, `title`, `custom_server` (another server may be typed), `server_placeholder`: sign-ins the pod offers that aren't signed in |
 | `local:versions` (query) | the versions of the app `show_versions` named, newest first: `version`, `label`, `detail`, `when`, `compatible`, `showing` |
 | `local://versions` | `app_id`, `app_title`, `pinned` (or "" while following the latest), `loading` |
 | `local:servers` (query) | `id`, `title`, `url`, `selected`: the servers this device can use |

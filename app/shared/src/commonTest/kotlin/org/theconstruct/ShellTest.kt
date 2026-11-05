@@ -36,6 +36,11 @@ class ShellTest {
             closed++
         }
 
+        override fun signIns(): String =
+            """{"sign_ins": [], "providers": [{"id": "pixelfed", "title": "Pixelfed", "server_placeholder": "pixelfed.social",
+              "intent": {"intent": "action.auth.login", "instance_url": "https://default.example",
+                         "app_path": "/v1/auth/pixelfed/app", "token_path": "/v1/auth/pixelfed/token"}}]}"""
+
         override fun listApps(): String =
             """{"apps": [{"id": "home", "title": "Home"}, {"id": "c-aaaaaaaaaa", "title": "Kitchen", "kind": "custom"}]}"""
 
@@ -204,6 +209,22 @@ class ShellTest {
         controller.dispatchShell(ActionIntent.Device("leave_pod"))
         assertNull(controller.shell.value)
         assertEquals(listOf("c-aaaaaaaaaa", HOME_APP), opened)
+    }
+
+    @Test
+    fun signInGoesToATypedServerOrTheDefault() = kotlinx.coroutines.runBlocking {
+        val bridge = Bridge(HOME_APP)
+        val controller = ConstructController(bridge, HOME_APP, Dispatchers.Unconfined) { Bridge(it) }
+        controller.menu.loadSignIns()
+        val signIn = ActionIntent.Device("sign_in", id = "pixelfed", value = "${'$'}form?.server")
+        controller.dispatchWithForm(signIn, mapOf("server" to "photos.example"))
+        controller.dispatchWithForm(signIn, emptyMap())
+        val sent = bridge.dispatched.map { ConstructJson.decodeIntent(it) as ActionIntent.AuthLogin }
+        assertEquals(listOf("photos.example", "https://default.example"), sent.map { it.instanceUrl })
+        val provider = deviceData(ConstructState(), UnreadCounts(), emptyList(), "desktop",
+            DeviceSources(providers = controller.menu.providers)).entities["local://providers/pixelfed"]!!
+        assertEquals(JsonPrimitive(true), provider["custom_server"])
+        assertEquals(JsonPrimitive("pixelfed.social"), provider["server_placeholder"])
     }
 
     @Test

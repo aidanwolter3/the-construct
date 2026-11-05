@@ -102,7 +102,9 @@ pub fn validate_structure(expected_id: &str, doc: &Value) -> Result<UiNode, Stri
                 endpoint
             }
             ActionIntent::LoadData { path } => path,
-            ActionIntent::Device { command, app, id } => {
+            ActionIntent::Device {
+                command, app, id, ..
+            } => {
                 let c = command.as_str();
                 if !protocol::DEVICE_COMMANDS.contains(&c) {
                     return Err(format!(

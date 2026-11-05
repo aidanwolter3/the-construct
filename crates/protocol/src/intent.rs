@@ -131,7 +131,7 @@ pub enum ActionIntent {
     /// `refresh`, `leave_pod` (forget the pod on this device), `open_app`
     /// (`app`), `open_notification` (`id`), `mark_all_read`,
     /// `toggle_channel` (`app`, `id`: a notification channel), `sign_in`
-    /// (`id`: a sign-in provider), `sign_out`, `set_server` (`id`: a server
+    /// (`id`: a sign-in provider; `value`: another server), `sign_out`, `set_server` (`id`: a server
     /// option), `show` (`id`: a `core://Drawer` or `core://Dock` page),
     /// `show_versions` (`app`: load its versions as device data),
     /// `pin_version` (`id`: a version of that app, shown on this device),
@@ -145,6 +145,10 @@ pub enum ActionIntent {
         app: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        /// A command's free value: for `sign_in`, the server to sign in to
+        /// (usually `$form?.server`; blank: the provider's default).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<String>,
     },
 
     /// Any intent tag this build does not know, e.g. the removed

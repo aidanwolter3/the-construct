@@ -206,6 +206,7 @@ fun bindIntent(intent: ActionIntent, item: JsonObject?): ActionIntent {
         is ActionIntent.Device -> intent.copy(
             app = intent.app?.let { bindItemTokens(it, item) },
             id = intent.id?.let { bindItemTokens(it, item) },
+            value = intent.value?.let { bindItemTokens(it, item) },
         )
         ActionIntent.NavigateBack -> intent
         is ActionIntent.Unknown -> intent.copy(

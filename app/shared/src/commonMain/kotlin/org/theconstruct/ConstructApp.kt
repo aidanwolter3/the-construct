@@ -336,8 +336,11 @@ class ConstructController internal constructor(
     }
 
     /** [dispatch] for the shell's own layout: its form is [shellForm]. */
-    fun dispatchShell(intent: ActionIntent) {
-        val bound = bindForm(intent, shellForm) ?: return
+    fun dispatchShell(intent: ActionIntent) = dispatchWithForm(intent, shellForm)
+
+    /** [dispatch] with `$form` values from [form] (e.g. a drawer panel's own form). */
+    fun dispatchWithForm(intent: ActionIntent, form: Map<String, String>) {
+        val bound = bindForm(intent, form) ?: return
         run(bound)
     }
 
@@ -440,7 +443,14 @@ class ConstructController internal constructor(
                     ?.firstOrNull { it.appId == intent.app && it.id == intent.id } ?: return
                 inbox.setChannelEnabled(c, !c.enabled, background)
             }
-            "sign_in" -> menu.providers.firstOrNull { it.id == intent.id }?.let(menu::startSignIn)
+            "sign_in" -> {
+                val provider = menu.providers.firstOrNull { it.id == intent.id } ?: return
+                val start = provider.intent ?: return
+                // Another server, when the layout passes one (a typed `$form?.server`); else the provider's default.
+                val server = intent.value?.trim().orEmpty()
+                menu.closeMenu()
+                send(if (server.isNotEmpty() && provider.serverPlaceholder != null) start.copy(instanceUrl = server) else start)
+            }
             "sign_out" -> {
                 logout()
                 reloadShellData()

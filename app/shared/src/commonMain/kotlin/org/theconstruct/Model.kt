@@ -570,7 +570,12 @@ sealed class ActionIntent {
      * `leave_pod`, `refresh`, `open_settings`, `open_inbox`). Handled by [ConstructController], never sent to the engine.
      */
     @Serializable
-    data class Device(val command: String, val app: String? = null, val id: String? = null) : ActionIntent()
+    data class Device(
+        val command: String,
+        val app: String? = null,
+        val id: String? = null,
+        val value: String? = null,
+    ) : ActionIntent()
 
     /**
      * An intent whose `intent` tag this client does not know (e.g. the removed `action.agent.prompt`). [raw] is the full
