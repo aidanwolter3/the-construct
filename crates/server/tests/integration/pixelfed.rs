@@ -1903,6 +1903,60 @@ async fn replies_to_comments_are_fetched_one_level_at_a_time() {
     assert_eq!(ids, ["101", "104", "105", new_id.as_str(), "106", "107"]);
 }
 
+/// Pixelfed raises a parent's `replies_count` in a queued job and its
+/// `context` lists no replies while that is 0, so a first comment is missing
+/// from it for a while. The comments screen still lists a comment just posted,
+/// and lists it once when the upstream catches up.
+#[tokio::test]
+async fn a_comment_just_posted_is_listed_before_the_upstream_lists_it() {
+    let env = env().await;
+    let session = sign_in(&env).await;
+    let fake = env.fake.fake.as_ref().unwrap();
+    fake.set_reply_counts_deferred(true);
+    let url = format!("{}/v1/pixelfed/posts/comment", env.pod.url);
+    let comment = |id: String, text: &'static str| {
+        let (url, session) = (url.clone(), session.clone());
+        async move {
+            let (status, body) =
+                post_json(&url, Some(&session), json!({ "id": id, "text": text })).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            body["comment"]["id"].as_str().unwrap().to_owned()
+        }
+    };
+    // A comment with no replies yet, then the first reply to it.
+    let first = comment(CAROUSEL.to_owned(), "Which film?").await;
+    let reply = comment(first.clone(), "Portra 400").await;
+    let listed = |data: &Value| -> Vec<(String, i64)> {
+        data["queries"][format!("comments:{CAROUSEL}")]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| {
+                let u = u.as_str().unwrap();
+                (u.to_owned(), data["entities"][u]["depth"].as_i64().unwrap())
+            })
+            .collect()
+    };
+    let expected_tail = [
+        (format!("pixelfed://comments/{first}"), 0),
+        (format!("pixelfed://comments/{reply}"), 1),
+    ];
+    let (status, data) = get_comments_screen(&env.pod.url, Some(&session), CAROUSEL).await;
+    assert_eq!(status, StatusCode::OK, "{data}");
+    assert!(listed(&data).ends_with(&expected_tail), "{data}");
+    assert_eq!(
+        data["entities"][format!("pixelfed://comments/{reply}")]["text"],
+        "Portra 400"
+    );
+
+    fake.run_reply_count_jobs();
+    let (_, data) = get_comments_screen(&env.pod.url, Some(&session), CAROUSEL).await;
+    let list = listed(&data);
+    assert!(list.ends_with(&expected_tail), "{data}");
+    let uri = format!("pixelfed://comments/{reply}");
+    assert_eq!(list.iter().filter(|(u, _)| *u == uri).count(), 1);
+}
+
 #[tokio::test]
 async fn posting_a_comment_reaches_the_upstream() {
     let env = env().await;
