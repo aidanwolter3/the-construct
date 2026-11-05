@@ -166,6 +166,10 @@ pub struct HostConfig {
     /// (`CONSTRUCT_ANDROID_PACKAGE`, `CONSTRUCT_ANDROID_CERT_SHA256`; decision
     /// `android-app-link-sign-in-redirect`).
     pub android: app_links::AndroidAppLinks,
+    /// A pre-registered OAuth client for MCP apps that can't register
+    /// themselves (`CONSTRUCT_OAUTH_CLIENT_ID`, `_SECRET`, `_REDIRECT_URIS`;
+    /// decision `oauth-preregistered-client`).
+    pub oauth_client: Option<oauth::StaticClient>,
 }
 
 impl HostConfig {
@@ -200,6 +204,7 @@ impl HostConfig {
             hsts: var("FLY_APP_NAME").is_some(),
             public_url: var("CONSTRUCT_PUBLIC_URL"),
             android: app_links::AndroidAppLinks::from_env(),
+            oauth_client: oauth::StaticClient::from_env(),
         }
     }
 }

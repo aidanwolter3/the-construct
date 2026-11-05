@@ -7,6 +7,9 @@
 #   flyctl secrets set -a the-construct-pod CONSTRUCT_SECRETS_KEY="$(openssl rand -base64 32)"
 # Keep a copy in a password manager: without it, sealed sign-ins read as signed out. To rotate, set
 # "<new>,<old>", let the pods open once (they re-seal under <new>), then set "<new>".
+# MCP apps that want a client ID and secret (Gemini): set the ID, secret and the app's callback together, e.g.
+#   flyctl secrets set -a the-construct-pod CONSTRUCT_OAUTH_CLIENT_ID=gemini \
+#     CONSTRUCT_OAUTH_CLIENT_SECRET="$(openssl rand -hex 32)" CONSTRUCT_OAUTH_CLIENT_REDIRECT_URIS=<callback>
 # Pods (D46): one server, a pod per user. Admin pods and their codes are made on the machine, never in git:
 #   fly ssh console -a the-construct-pod -C "/server pods create <name>"     (prints the pod code once)
 #   fly ssh console -a the-construct-pod -C "/server pods list"
