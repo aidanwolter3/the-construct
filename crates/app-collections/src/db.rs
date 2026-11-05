@@ -19,7 +19,9 @@
 //!   filler wrote carry its id (`collections_rows.filler`).
 //! - `collections_alerts_sent`: which row an alert already notified about.
 //! - `collections_secrets`: values fetch recipes send in headers
-//!   (`{secret:<name>}`), sealed with the server key; never shown back.
+//!   (`{secret:<name>}`), sealed with the server key; never shown back,
+//!   and sent only to the `host` each was stored for (none: rows from
+//!   before hosts, sent nowhere until set again).
 //! - `collections_reminders_sent`: which row a reminder (decision
 //!   `collection-reminders`) already notified about, for which date, so
 //!   each fires once even after the core's notification retention.
@@ -44,7 +46,12 @@ pub static MIGRATIONS: &[Step] = &[
     Step::sql("reminders", REMINDERS),
     // 4: fill state and secrets (decision `collection-fillers`).
     Step::sql("fills", FILLS),
+    // 5: the host each secret may be sent to (security audit: a secret went
+    // to any URL a recipe named).
+    Step::sql("secret_hosts", SECRET_HOSTS),
 ];
+
+const SECRET_HOSTS: &str = "ALTER TABLE collections_secrets ADD COLUMN host TEXT;";
 
 const FILLS: &str = "
 ALTER TABLE collections_rows ADD COLUMN filler TEXT;

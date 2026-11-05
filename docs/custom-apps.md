@@ -135,7 +135,8 @@ A collection can keep itself current from the web (decision
   each item. Extractors: `events` (an iCalendar feed or a page's schema.org events), `json`, `embedded-json`,
   `jsonld`, `rss`, `ics`, `selectors` (CSS), and `llm` (a model reads the page's text, only when it changed).
   Conditional requests and a body hash skip unchanged pages; errors back off; values are coerced to the fields'
-  types. Headers can carry a sealed secret (`collections_set_secret`). Extraction lives in `crates/web-extract`.
+  types. Headers can carry a sealed secret (`collections_set_secret`, with the host it may be sent to; a
+  request to any other host, or a redirect off it, doesn't get it). Extraction lives in `crates/web-extract`.
 - **`agent`** (costs model calls): a prompt; a model with web search answers rows that fit the fields, within a
   daily budget.
 - **Modes:** `replace` (the filler's rows are its latest answer, kept stable by `key`) or `upsert` by `key`. Filled
