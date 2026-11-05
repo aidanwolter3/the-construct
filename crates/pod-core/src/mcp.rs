@@ -496,7 +496,7 @@ async fn list_data_sources(pod: &Pod) -> Result<Value, Value> {
         .collect();
     Ok(json!({
         "sources": sources,
-        "note": "A custom app's root also gets core://sources/<id> entities {title, signed_in, error?}: show a hint such as \"Connect it in Settings\" with core://Conditional on ${core://sources/<id>#signed_in}. Sign-ins start from Settings; layouts can't hold sign-in buttons.",
+        "note": "A custom app's root also gets core://sources/<id> entities {title, signed_in, error?}: show a hint such as \"Connect it in Settings\" with core://Conditional on ${core://sources/<id>#signed_in}. To sign in, use action.device sign_in (id: the provider from local:providers; value: another server, e.g. $form?.server from a core://TextField), anywhere in a layout, e.g. under that hint; see the sign_in_row snippet. The raw action.auth.* intents are not for custom layouts.",
     }))
 }
 
@@ -1160,7 +1160,7 @@ fn vocabulary() -> Value {
             "$nonce": "a fresh id per action",
             "$value": "the new value in a mutation's payload",
         },
-        "rules": "Custom layouts may only use their feeds' sources: data paths, actions, query keys and entity schemes from list_data_sources. No sign-in intents and no other /v1/ paths. Data the device provides (local_data) needs no feed. Read get_layout of a blueprint for complete examples.",
+        "rules": "Custom layouts may only use their feeds' sources: data paths, actions, query keys and entity schemes from list_data_sources. No action.auth.* intents (sign in with action.device sign_in instead) and no other /v1/ paths. Data the device provides (local_data) needs no feed. Read get_layout of a blueprint for complete examples.",
     })
 }
 

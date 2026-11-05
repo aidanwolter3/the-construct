@@ -235,8 +235,9 @@ pub trait AppAdapter: Any + Send + Sync {
     }
 
     /// How a client starts sign-in `sign_in` (one of [`Self::sign_ins`])
-    /// from its Settings, without a signed-out screen (custom apps hold no
-    /// sign-in buttons): `GET /v1/auth/sign-ins` lists it under `providers`.
+    /// without a signed-out screen (from its Settings, or a layout's
+    /// `action.device` `sign_in`): `GET /v1/auth/sign-ins` lists it under
+    /// `providers`.
     /// Default: `None`, the provider is listed without a way to start it.
     fn sign_in_start<'a>(
         &'a self,

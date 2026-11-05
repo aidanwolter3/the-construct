@@ -47,8 +47,9 @@ curl -fsS -H "Authorization: Bearer $token" -H 'content-type: application/json' 
   those feeds fill and call the data paths and endpoints their manifests declare. Errors name a JSON pointer and
   what is allowed. The routes are in [api.md](api.md#custom-apps).
 - **Source status.** The root gets a `core://sources/<source>` entity per source, `{title, signed_in, error?}`, so a
-  layout can say when a source is signed out or failing (`${core://sources/pixelfed#signed_in}`). Sign-ins start
-  from Settings; custom layouts can't hold sign-in buttons.
+  layout can say when a source is signed out or failing (`${core://sources/pixelfed#signed_in}`). A layout signs in
+  with `action.device` `sign_in` (`id`: a provider from `local:providers`; `value`: another server, e.g.
+  `$form?.server`), e.g. a button shown while `signed_in` is false. The raw `action.auth.*` intents stay refused.
 - **Built-in parts.** `{"type": "core://Ref", "app": "pixelfed", "part": "screen:post"}` reuses a built-in's
   screen, slot or declared part, expanded and kept current by the pod. A copy instead says `"copied_from": {app,
   version}`, and `GET /v1/apps` reports `updates_from` when that built-in moves on.

@@ -665,7 +665,7 @@ impl std::fmt::Display for LayoutError {
 /// 3. capabilities, against `sources` (the app's feeds' sources): screen
 ///    `data` and `action.data.load` paths fit a declared data path;
 ///    mutation and create endpoints fit a declared action; no
-///    `action.auth.*` (sign-ins start from Settings); every `query_key`
+///    `action.auth.*` (a sign-in starts with `action.device` `sign_in`); every `query_key`
 ///    fits a key the sources fill; entity URIs (`entity_uri`, `${uri#field}`
 ///    bindings) use a declared scheme or `core://sources/<id>`; no other
 ///    pod path (`/v1/...`) appears anywhere.
@@ -886,8 +886,9 @@ impl<'a> Caps<'a> {
                 return Err(LayoutError::new(
                     at,
                     format!(
-                        "'{t}' is not allowed in a custom app: sign-ins start from Settings \
-                         (show a hint with core://sources/<source>#signed_in instead)"
+                        "'{t}' is not allowed in a custom app: start a sign-in with \
+                         {{\"intent\": \"action.device\", \"command\": \"sign_in\", \"id\": <provider from local:providers>}} \
+                         (and show it while core://sources/<source>#signed_in is false)"
                     ),
                 ));
             }

@@ -444,12 +444,24 @@ async fn layouts_may_only_use_their_sources() {
     l["slots"][0]["content"]["item_template"] =
         json!({"type": "core://Text", "style": "Body", "value_expr": "${b://1#from}"});
     refused(l, json!([["a", "all"]])).await;
-    // A sign-in button.
+    // A raw sign-in intent: refused, pointing at action.device sign_in.
     let mut l = kitchen_a();
     l["slots"][0]["content"]["item_template"]["on_click"] = json!({"intent": "action.auth.login", "instance_url": "x", "app_path": "/v1/a/act",
                "token_path": "/v1/a/act"});
     let b = refused(l, json!([["a", "all"]])).await;
-    assert!(b["detail"].as_str().unwrap().contains("Settings"), "{b}");
+    assert!(b["detail"].as_str().unwrap().contains("sign_in"), "{b}");
+    // A sign-in button through the device is fine.
+    let mut l = kitchen_a();
+    l["slots"][0]["content"]["item_template"]["on_click"] = json!({"intent": "action.device", "command": "sign_in", "id": "a", "value": "$form?.server"});
+    let (status, b) = call(
+        &env.pod,
+        "POST",
+        "/v1/custom-apps/validate",
+        Some("pod"),
+        Some(json!({"feeds": [["a", "all"]], "layout": l})),
+    )
+    .await;
+    assert_eq!((status, &b["ok"]), (StatusCode::OK, &json!(true)), "{b}");
     // A pod path anywhere else (an image URL).
     let mut l = kitchen_a();
     l["slots"][0]["content"]["item_template"] =
