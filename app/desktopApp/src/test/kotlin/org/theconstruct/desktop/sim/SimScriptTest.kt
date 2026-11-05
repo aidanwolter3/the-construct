@@ -137,6 +137,20 @@ class SimScriptTest {
     }
 
     @Test
+    fun dragAndFlickDown() {
+        val steps = parseScript("drag-down 300 tag:sheet-handle; swipe-down tag:sheet:inbox")
+        val drag = assertIs<SimStep.DragDown>(steps[0])
+        assertEquals(300, drag.dp)
+        assertEquals("tag:sheet-handle", drag.target)
+        assertEquals("drag-down", drag.command)
+        assertEquals("tag:sheet:inbox", assertIs<SimStep.FlickDown>(steps[1]).target)
+        assertFailsWith<ScriptParseException> { parseScript("drag-down tag:sheet-handle") }
+        assertFailsWith<ScriptParseException> { parseScript("drag-down 300") }
+        assertFailsWith<ScriptParseException> { parseScript("drag-down 0 x") }
+        assertFailsWith<ScriptParseException> { parseScript("swipe-down") }
+    }
+
+    @Test
     fun typeTakesATargetThenText() {
         val steps = parseScript("type tag:server-custom-url http://10.0.0.5:8080; type \"Server URL\" media first ")
         val a = assertIs<SimStep.Type>(steps[0])

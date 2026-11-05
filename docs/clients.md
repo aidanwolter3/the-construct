@@ -75,7 +75,8 @@ The client opens the pod's `home` layout (the default) and draws everything from
   whole screen, or as a sheet or panel). One engine serves them all and shares their data.
 - **Back:** every presented layout and screen is one entry of the back stack. System Back (and the Back arrow of a
   pushed layout or screen, or a tap on a sheet's or panel's scrim) pops the top one; with nothing left, the platform's
-  own Back runs.
+  own Back runs. A sheet also closes when dragged down: by its handle, or from its content while that is scrolled to
+  the top. Released past a quarter of its height, or flung down, it closes; otherwise it springs back.
 - **Settings and the inbox are layouts** (the `settings` and `inbox` blueprints), presented as a side panel and a
   sheet. Settings shows the connection, the pod's layouts (a tap lists a layout's versions; picking one shows it on
   this device only), sign-ins, notification channels, the servers this device can use (Staging, Local, or the

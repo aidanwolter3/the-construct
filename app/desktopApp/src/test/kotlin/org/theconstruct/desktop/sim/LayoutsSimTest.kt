@@ -1,6 +1,7 @@
 package org.theconstruct.desktop.sim
 
 import org.theconstruct.ConstructController
+import org.theconstruct.INBOX_LAYOUT
 import org.theconstruct.LayoutEntry
 import org.theconstruct.PresentationMode
 import java.io.File
@@ -49,6 +50,35 @@ class LayoutsSimTest {
         assertEquals("events shown (push)", r.steps[0].message)
         assertEquals("settings shown (panel)", r.steps[2].message)
         assertNull(controller.navigation.top, "three Backs popped all three")
+    }
+
+    @Test
+    fun aSheetDraggedPastAQuarterOfItsHeightCloses() {
+        val (controller, _) = controller()
+        val runner = SimRunner(controller, outDir, ScreenSpec.parse("phone"))
+        // The phone's sheet is about 717 dp tall: 100 dp is short of a quarter and springs back.
+        runner.ok("open-inbox; drag-down 100 tag:sheet-handle; idle")
+        assertEquals(INBOX_LAYOUT, assertIs<LayoutEntry>(controller.navigation.top).layoutId, "a short drag springs back")
+        runner.ok("drag-down 300 tag:sheet-handle; idle")
+        assertNull(controller.navigation.top, "past a quarter closes it")
+    }
+
+    @Test
+    fun aSheetFlungDownCloses() {
+        val (controller, _) = controller()
+        SimRunner(controller, outDir, ScreenSpec.parse("phone")).ok("open-inbox; swipe-down tag:sheet-handle; idle")
+        assertNull(controller.navigation.top, "a fling closes it however short")
+    }
+
+    @Test
+    fun aSheetPulledDownByItsContentAtTheTopCloses() {
+        val (controller, _) = controller()
+        val runner = SimRunner(controller, outDir, ScreenSpec.parse("phone"))
+        // From the sheet's middle: its content, scrolled to the top.
+        runner.ok("open-inbox; drag-down 100 tag:sheet:inbox; idle")
+        assertEquals(INBOX_LAYOUT, assertIs<LayoutEntry>(controller.navigation.top).layoutId, "a short pull springs back")
+        runner.ok("drag-down 300 tag:sheet:inbox; idle")
+        assertNull(controller.navigation.top, "a long pull closes it")
     }
 
     @Test
