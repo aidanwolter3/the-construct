@@ -1,8 +1,9 @@
 # The Construct — notes for Claude
 
 Server-driven UI: a Rust pod serves app layouts (JSON `UiNode` trees) and entities; desktop, Android and a headless
-simulator draw them with shared Compose code over a shared Rust engine. Apps: Pixelfed (`pixelfed`), Recipes
-(`recipes`) and Events (`events`), plus users' custom apps and Collections.
+simulator draw them with shared Compose code over a shared Rust engine. Built-in apps are blueprints, not listed:
+Pixelfed (`pixelfed`), Recipes (`recipes`), Events (`events`) and the home dock (`shell`). A pod's apps are the
+user's own (custom apps, from blueprints or Collections), starting with `home`, which clients open first.
 
 **Read [CONTRIBUTING.md](CONTRIBUTING.md) first: its rules and checks apply to you.** Then, as the task needs:
 [docs/architecture.md](docs/architecture.md) (read before changing architecture), [docs/layouts.md](docs/layouts.md)
@@ -15,7 +16,7 @@ issues. `docs/history/` is archived; don't treat it as current.
 - `crates/protocol` wire types; `crates/pod-core` the generic pod (knows apps only through `AppAdapter`,
   `adapter.rs`; `validate.rs` checks layout files); `crates/pod-host` many pods per server; `crates/server` the
   binary and `server pods` CLI.
-- `crates/app-pixelfed`, `app-recipes`, `app-collections`, `app-events` (Events), `app-monitor`: the adapters.
+- `crates/app-pixelfed`, `app-recipes`, `app-collections`, `app-events` (Events), `app-monitor`, `app-shell` (the home blueprint): the adapters.
   `crates/web-extract`: page fetching and extraction for fillers.
 - `crates/client-core` the engine; `crates/client-ffi` UniFFI (Kotlin bindings in
   `app/shared/src/jvmCommonMain`); `app/shared/src/commonMain` the shared UI.

@@ -156,14 +156,18 @@ fn instructions(pod: &Pod) -> String {
 }
 
 const INSTRUCTIONS: &str = "This is the user's own pod in The Construct. It serves apps whose screens are \
-JSON layouts (server-driven UI) over data sources. You can build and edit the user's custom apps: \
-call list_data_sources and describe_vocabulary first, read a built-in app's layout with get_layout for \
-working examples, sample_data to see real fields, then create_app or update_layout. Every write is \
-validated (errors give a JSON pointer and what is allowed) and appears live on the user's devices; \
-restore_version undoes an edit. Built-in apps can't be edited, only hidden. To start from a built-in app, \
-reuse its parts by reference ({\"type\": \"core://Ref\", \"app\": ..., \"part\": ...}; list_parts lists them): \
-they stay current. Copy a part only to change it, and pass copied_from so the user hears when the \
-built-in changes (rebase_context then gives you what to merge).";
+JSON layouts (server-driven UI) over data sources. The user's app opens on their home app (id home) and shows \
+nothing else: home IS the user's whole interface. A new pod's home is a blank page. Build only what the user \
+asks for, as small as it can be: \"show my photo feed\" is one app (create_app referencing the blueprint that \
+fits: {\"type\": \"core://Ref\", \"app\": <blueprint>, \"part\": \"layout\"} with its feeds) and a home that \
+shows it (update_layout on home: a core://AppFrame of that app as the one slot). Add navigation (a core://Drawer \
+or core://Dock over local:apps) only once there is more than one app, and notifications, settings or sign-in \
+pages only when the user asks; describe_vocabulary has small snippets for each. home can't be deleted. Blueprints \
+are the built-in layouts (list_apps lists them under blueprints, get_layout reads one, list_parts lists their \
+parts); reference a blueprint so it stays current, or copy it to change it and pass copied_from so the user hears \
+when it changes (rebase_context then gives you what to merge). Call list_data_sources and describe_vocabulary \
+first and sample_data to see real fields. Every write is validated (errors give a JSON pointer and what is \
+allowed) and appears live on the user's devices; restore_version undoes an edit.";
 
 // ---------- tools ----------
 
@@ -203,7 +207,7 @@ fn tools() -> Vec<Value> {
     vec![
         tool(
             "list_apps",
-            "The pod's apps (built-in and custom) with their kind, hidden flag and latest version.",
+            "The user's apps (apps, the home app among them) and the blueprints apps can start from (blueprints), with their feeds and latest version.",
             json!({}),
             &[],
         ),
@@ -434,25 +438,27 @@ async fn list_apps(pod: &Pod) -> Result<Value, Value> {
     let listed = crate::blocking(pod, move |s| {
         let hidden = custom::hidden_apps(s)?;
         let custom_apps = s.with_conn(custom::custom_apps_on)?;
-        let apps: Vec<custom::AppRef> = builtin
+        let row = |a: custom::AppRef| -> rusqlite::Result<Value> {
+            let latest = s.app_latest_meta(a.id())?.map(|v| v.version);
+            Ok(json!({
+                "id": a.id(), "title": a.title(), "icon": a.icon(), "kind": a.kind(),
+                "hidden": hidden.iter().any(|h| h == a.id()),
+                "feeds": a.feeds(), "latest_version": latest,
+            }))
+        };
+        let apps = custom_apps
             .into_iter()
-            .map(custom::AppRef::Builtin)
-            .chain(custom_apps.into_iter().map(custom::AppRef::Custom))
-            .collect();
-        apps.into_iter()
-            .map(|a| {
-                let latest = s.app_latest_meta(a.id())?.map(|v| v.version);
-                Ok(json!({
-                    "id": a.id(), "title": a.title(), "icon": a.icon(), "kind": a.kind(),
-                    "hidden": hidden.iter().any(|h| h == a.id()),
-                    "feeds": a.feeds(), "latest_version": latest,
-                }))
-            })
-            .collect::<rusqlite::Result<Vec<_>>>()
+            .map(|a| row(custom::AppRef::Custom(a)))
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let blueprints = builtin
+            .into_iter()
+            .map(|a| row(custom::AppRef::Builtin(a)))
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok((apps, blueprints))
     })
     .await
     .map_err(|(s, Json(b))| refused((s, b)))?;
-    Ok(json!({ "apps": listed }))
+    Ok(json!({ "apps": listed.0, "blueprints": listed.1 }))
 }
 
 /// The owner's session (the pod token's), for what is signed in and for
@@ -490,7 +496,7 @@ async fn list_data_sources(pod: &Pod) -> Result<Value, Value> {
         .collect();
     Ok(json!({
         "sources": sources,
-        "note": "A custom app's root also gets core://sources/<id> entities {title, signed_in, error?}: show a hint such as \"Connect it in Settings\" with core://Conditional on ${core://sources/<id>#signed_in}. Sign-ins start from Settings; layouts can't hold sign-in buttons.",
+        "note": "A custom app's root also gets core://sources/<id> entities {title, signed_in, error?}: show a hint such as \"Connect it in Settings\" with core://Conditional on ${core://sources/<id>#signed_in}. To sign in, use action.device sign_in (id: the provider from local:providers; value: another server, e.g. $form?.server from a core://TextField), anywhere in a layout, e.g. under that hint; see the sign_in_row snippet. The raw action.auth.* intents are not for custom layouts.",
     }))
 }
 
@@ -995,8 +1001,8 @@ pub const NODE_DOCS: &[(&str, &str, &str)] = &[
     ),
     (
         "core://Box",
-        "content, background?, content_color?, border_color?, corner_dp?, padding_h_dp?, padding_v_dp?, width_dp?, height_dp?, align?",
-        "A coloured, rounded box (#RRGGBB or bindings).",
+        "content, background?, content_color?, border_color?, corner_dp?, padding_h_dp?, padding_v_dp?, width_dp?, height_dp?, align?, fill?",
+        "A coloured, rounded box (#RRGGBB or bindings). fill: true fills the space given with content placed by align (Center: the middle); as a workspace's one slot, the whole screen with no title bar.",
     ),
     (
         "core://ChoiceChips",
@@ -1018,14 +1024,94 @@ pub const NODE_DOCS: &[(&str, &str, &str)] = &[
         "size_dp?",
         "An indeterminate spinner for work in progress, e.g. inside a core://Conditional on a status field",
     ),
+    (
+        "core://Dock",
+        "field, before?: [tab], query_key?, item?: tab, max_items?, after?: [tab]; tab = {value, label, icon?, badge?, content}",
+        "An app's main navigation: tabs along the bottom (a side rail on wide windows) and the selected tab's content filling the screen above. Tabs: before, one per entity of query_key drawn from item ($item bound; at most max_items), then after. $form.<field> is the selected value (the first tab until one is picked). Only as the content of a workspace's one slot. The home blueprint docks local:apps with an AppFrame each.",
+    ),
+    (
+        "core://AppFrame",
+        "app",
+        "Another app of the pod drawn whole (its layout, screens and Back) in the space it is given, e.g. a dock tab's content. app is an id or a binding ($item.id).",
+    ),
+    (
+        "core://Drawer",
+        "field, before?: [page], query_key?, item?: page, after?: [page], drawer, footer?, badge?; page = {value, content}",
+        "An app's main navigation as a side drawer: the selected page fills the screen and a menu button at the top left (badge: a count or dot binding) opens drawer, a panel of any layout (footer stays pinned to its bottom). Pages: before, one per entity of query_key from item ($item bound), then after; $form.<field> is the selected value. Pick a page from the panel with action.device open_app (an app) or show (id = a page value); any action in the panel closes it. Only as the content of a workspace's one slot. The home blueprint draws local:apps this way.",
+    ),
+    (
+        "core://Switch",
+        "checked, on_click, content_description?",
+        "An on/off switch, on while checked (a binding, e.g. $item.enabled) is truthy; a tap dispatches on_click (e.g. action.device toggle_channel).",
+    ),
 ];
 
 /// The pod-only node of a custom layout (never sent to clients).
 pub const REF_DOC: (&str, &str, &str) = (
     "core://Ref",
     "app, part, version?",
-    "A built-in app's part (list_parts): a screen:<id> part in screens, any other part as a node. The pod expands it when serving, from the built-in's newest version (or the pinned one), so it stays current.",
+    "A blueprint's part (list_parts): \"layout\" (the whole blueprint, only as a layout's root; the app keeps its own id), a screen:<id> part in screens, any other part as a node. The pod expands it when serving, from the blueprint's newest version (or the pinned one), so it stays current.",
 );
+
+/// Small, single-purpose layout pieces for describe_vocabulary: building
+/// blocks, never whole pages (the agent builds only what was asked).
+fn snippets() -> Value {
+    json!({
+        "home_one_app": {
+            "doc": "home showing one app full screen: home's layout with this as its one slot (replace <app id>)",
+            "layout": {"type": "core://Workspace", "title": "Home", "slots": [{"slot_id": "app", "provider_uri": "local://apps",
+                "content": {"type": "core://AppFrame", "app": "<app id>"}}]}
+        },
+        "drawer_of_apps": {
+            "doc": "a home slot: a menu button opening a panel that lists the pod's apps; the picked app fills the screen",
+            "node": {"type": "core://Drawer", "field": "page", "query_key": "local:apps",
+                "item": {"value": "$item.id", "content": {"type": "core://AppFrame", "app": "$item.id"}},
+                "drawer": {"type": "core://List", "query_key": "local:apps", "item_template": {
+                    "type": "core://Tappable", "on_click": {"intent": "action.device", "command": "open_app", "app": "$item.id"},
+                    "content": {"type": "core://Row", "padding_h_dp": 16, "padding_v_dp": 12,
+                        "children": [{"type": "core://Text", "style": "Body", "value_expr": "$item.title"}]}}}}
+        },
+        "sign_in_row": {
+            "doc": "a row per sign-in the pod offers, with a server box where the provider takes one",
+            "node": {"type": "core://List", "query_key": "local:providers", "item_template": {"type": "core://Row",
+                "padding_h_dp": 16, "spacing_dp": 8, "children": [
+                    {"type": "core://TextField", "field": "server", "placeholder": "Server (optional)"},
+                    {"type": "core://Button", "label": "Sign in to $item.title", "on_click": {"intent": "action.device",
+                        "command": "sign_in", "id": "$item.id", "value": "$form?.server"}}]}}
+        },
+        "notification_list": {
+            "doc": "the inbox, newest first, by day; a tap opens what the notification is about",
+            "node": {"type": "core://List", "query_key": "local:notifications", "empty_text": "No notifications yet",
+                "group_by": {"field": "day", "header": {"type": "core://Text", "style": "Label", "value_expr": "$item.day"}},
+                "item_template": {"type": "core://Tappable",
+                    "on_click": {"intent": "action.device", "command": "open_notification", "id": "$item.id"},
+                    "content": {"type": "core://Column", "padding_h_dp": 16, "padding_v_dp": 8, "children": [
+                        {"type": "core://Text", "style": "Body", "value_expr": "$item.title"},
+                        {"type": "core://Text", "style": "Caption", "value_expr": "$item.app_title · $item.when"}]}}}
+        },
+        "channel_switch": {
+            "doc": "a switch per notification channel",
+            "node": {"type": "core://List", "query_key": "local:channels", "item_template": {"type": "core://Row",
+                "padding_h_dp": 16, "children": [
+                    {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}, {"type": "core://Spacer"},
+                    {"type": "core://Switch", "checked": "$item.enabled", "on_click": {"intent": "action.device",
+                        "command": "toggle_channel", "app": "$item.app_id", "id": "$item.id"}}]}}
+        },
+        "version_list": {
+            "doc": "an app's versions to pick from on this device; send show_versions (app) first, e.g. in an action.sequence with show",
+            "node": {"type": "core://List", "query_key": "local:versions", "item_template": {"type": "core://Tappable",
+                "on_click": {"intent": "action.device", "command": "pin_version", "id": "$item.version"},
+                "content": {"type": "core://Row", "padding_h_dp": 16, "padding_v_dp": 8, "children": [
+                    {"type": "core://Text", "style": "Body", "value_expr": "$item.label"},
+                    {"type": "core://Text", "style": "Caption", "value_expr": "$item.detail"}]}}}
+        },
+        "connection_dot": {
+            "doc": "a dot that is green online and grey offline",
+            "node": {"type": "core://Box", "background": "${local://connection#color}", "corner_dp": 5,
+                "width_dp": 10, "height_dp": 10, "content": {"type": "core://Spacer", "size_dp": 0}}
+        }
+    })
+}
 
 fn vocabulary() -> Value {
     json!({
@@ -1046,7 +1132,26 @@ fn vocabulary() -> Value {
               "doc": "Set fields of a loaded entity on this device only (no request), e.g. view state like added/expanded shown with core://Conditional. The next load of the entity from the pod replaces it." },
             { "intent": "action.link.open", "fields": "url",
               "doc": "Open an http(s) link in the device's browser (e.g. a Get tickets button with url $item.tickets_url). Nothing is sent to the pod." },
+            { "intent": "action.device", "fields": "command, app?, id?, value?",
+              "doc": "Something the device does itself. Commands: open_app (app), open_notification (id), mark_all_read, toggle_channel (app, id of a notification channel), sign_in (id of a provider; value: another server, e.g. $form?.server from a core://TextField, for a provider whose local:providers row says custom_server), sign_out, set_server (id of a server option), show (id of a core://Drawer or core://Dock page), show_versions (app: load its versions into local:versions), pin_version (id: a version of that app, shown on this device only), follow_latest, leave_pod (forget the pod on this device), refresh, open_settings and open_inbox (the native panels). Any layout may use any command." },
         ],
+        "local_data": {
+            "doc": "Data the device provides, with no feed: bind ${local://<entity>#<field>} anywhere and list local:apps in a core://List or core://Dock.",
+            "local://connection": "online (bool), pending (count of unsent changes), label (\"Online\", \"Offline · 2 pending\"), attention (true while offline or changes wait)",
+            "local://inbox": "unread (count), label (\"3 unread\")",
+            "local://apps": "count (the pod's apps, home excluded)",
+            "local:apps": "query of the pod's apps but home: local://apps/<id> with id, title, icon, kind, detail, unread, version (\"v12 · latest\" or \"v10 · pinned\")",
+            "local:notifications": "query of the newest notifications: id, app_id, app_title, title, body, when (\"5 min\"), day (\"Today\"), unread",
+            "local:channels": "query of the notification channels: app_id, app_title, id, title, description, enabled",
+            "local:sign_ins": "query of the pod's sign-ins: id, title, detail (\"@dana · photos.example\")",
+            "local:providers": "query of the sign-ins the pod offers that aren't signed in: id, title, custom_server (another server may be typed), server_placeholder",
+            "local:servers": "query of the servers this device can use: id, title, url, selected",
+            "local:versions": "query of the versions of the app show_versions named, newest first: version, label (\"v12\"), detail (its note), when, compatible, showing",
+            "local://versions": "app_id, app_title, pinned (the pinned version, or \"\" while following the latest)",
+            "local://device": "platform (android|desktop|simulator)",
+            "local://session": "open, server, error, message: the pod sign-in",
+        },
+        "snippets": snippets(),
         "bindings": {
             "$item.<field>": "a field of the list or carousel item",
             "${<entity uri>#<field>}": "a field of any entity, e.g. ${core://sources/<source>#signed_in}",
@@ -1055,13 +1160,31 @@ fn vocabulary() -> Value {
             "$nonce": "a fresh id per action",
             "$value": "the new value in a mutation's payload",
         },
-        "rules": "Custom layouts may only use their feeds' sources: data paths, actions, query keys and entity schemes from list_data_sources. No sign-in intents and no other /v1/ paths. Read get_layout of a built-in app for complete examples.",
+        "rules": "Custom layouts may only use their feeds' sources: data paths, actions, query keys and entity schemes from list_data_sources. No action.auth.* intents (sign in with action.device sign_in instead) and no other /v1/ paths. Data the device provides (local_data) needs no feed. Read get_layout of a blueprint for complete examples.",
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_snippet_is_a_valid_custom_layout() {
+        let all = snippets();
+        for (name, snippet) in all.as_object().unwrap() {
+            let doc = match snippet.get("layout") {
+                Some(l) => {
+                    let mut l = l.clone();
+                    l["id"] = json!("home");
+                    l
+                }
+                None => json!({"type": "core://Workspace", "id": "home", "title": "Home",
+                    "slots": [{"slot_id": "s", "provider_uri": "local://x", "content": snippet["node"]}]}),
+            };
+            crate::validate::custom_layout("home", &doc, &[])
+                .unwrap_or_else(|e| panic!("snippet {name}: {} at {}", e.message, e.pointer));
+        }
+    }
 
     #[test]
     fn every_node_type_is_documented() {

@@ -1,0 +1,38 @@
+{
+  "note": "A blank page: the pod owner asks their agent to build everything, the home screen included",
+  "layout": {
+    "type": "core://Workspace",
+    "id": "shell",
+    "title": "The Construct",
+    "slots": [
+      {
+        "slot_id": "home",
+        "provider_uri": "local://home",
+        "content": {
+          "type": "core://Box",
+          "fill": true,
+          "background": "#F7F5F0",
+          "align": "Center",
+          "padding_h_dp": 24,
+          "content": {
+            "type": "core://Column",
+            "align": "Center",
+            "spacing_dp": 8,
+            "children": [
+              {
+                "type": "core://Text",
+                "style": "Display",
+                "value_expr": "The Construct"
+              },
+              {
+                "type": "core://Text",
+                "style": "Secondary",
+                "value_expr": "Ask your agent to build anything"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

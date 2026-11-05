@@ -243,6 +243,22 @@ impl HostStore {
     }
 
     /// Add an MCP credential to a pod.
+    /// [`Self::insert_mcp_credential`], doing nothing when that credential
+    /// already exists.
+    pub fn insert_mcp_credential_if_missing(
+        &self,
+        pod_id: &str,
+        token_hash: &str,
+        label: &str,
+    ) -> rusqlite::Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO credentials (token_hash, pod_id, kind, created_at, label)
+             VALUES (?1, ?2, 'mcp', ?3, ?4)",
+            params![token_hash, pod_id, now_secs(), label],
+        )?;
+        Ok(())
+    }
+
     pub fn insert_mcp_credential(
         &self,
         pod_id: &str,

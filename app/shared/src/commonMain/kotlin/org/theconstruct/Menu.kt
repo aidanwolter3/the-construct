@@ -232,6 +232,8 @@ class MenuState internal constructor(private val controller: ConstructController
             settingsOpen -> {
                 settingsOpen = false
                 serverExpanded = false
+                // The shell opens Settings on its own (`action.device`): Back closes the drawer there.
+                if (controller.shellMode) closeMenu()
             }
             historyAppId != null -> {
                 historyAppId = null

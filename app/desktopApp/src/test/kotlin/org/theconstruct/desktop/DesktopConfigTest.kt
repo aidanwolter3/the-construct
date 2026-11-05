@@ -24,6 +24,6 @@ class DesktopConfigTest {
 
     @Test
     fun defaultAppIsPixelfed() {
-        assertEquals("pixelfed", DEFAULT_WORKSPACE)
+        assertEquals(org.theconstruct.HOME_APP, DEFAULT_WORKSPACE)
     }
 }

@@ -126,6 +126,21 @@ server pods remove-adopted [dir]               # delete the originals adopt left
 
 Pod codes never go into git or config files; keep yours in a password manager.
 
+### Fixed codes for local testing
+
+To test on your own machine with codes that don't change between runs, give `serve` the codes yourself:
+
+```bash
+cargo run -p server -- serve --pod-code cpod_localtest123 --mcp-key cmcp_localtest123
+```
+
+The server makes an admin pod named `local` (another with `--pod-name <name>`) if there is none, makes it open with
+`--pod-code`, and adds `--mcp-key` as one of its MCP credentials. Run it the same way every time and the desktop app
+and `claude mcp add --transport http construct-local http://127.0.0.1:8080/v1/mcp --header "Authorization: Bearer
+cmcp_localtest123"` keep working. A different `--pod-code` replaces the pod's code (ending its sign-ins, as `rotate`
+does). The flags are refused on Fly and on a non-loopback `CONSTRUCT_ADDR`: codes on a command line are for this
+machine only.
+
 ### Temporary pods
 
 With `CONSTRUCT_TEMP_PODS=1`, `POST /v1/pods/temporary` makes a pod that is deleted with everything in it after

@@ -8,7 +8,7 @@ plugins {
 // Configuration-time properties (configuration-cache friendly, like :shared's buildRustFfi):
 //   -PconstructBaseUrl=http://...   default server for BuildConfig.CONSTRUCT_BASE_URL (default: the staging pod;
 //                                local: http://10.0.2.2:8080 on the emulator, http://127.0.0.1:8080 with adb reverse)
-//   -PconstructWorkspace=<id>       default workspace for BuildConfig.CONSTRUCT_WORKSPACE (default: pixelfed)
+//   -PconstructWorkspace=<id>       default workspace for BuildConfig.CONSTRUCT_WORKSPACE (default: home, the pod's home app)
 //   -PandroidAbis=arm64-v8a,x86_64   ABIs to build with cargo-ndk and package
 //   -PskipRustBuild              don't run scripts/build_android.sh (use the existing jniLibs)
 //   -PnoFcmFallback              leave out the embedded FCM distributor (D52): closed-app notifications then need a
@@ -18,7 +18,7 @@ plugins {
 //                                CONSTRUCT_ANDROID_CERT_SHA256 (decision android-app-link-sign-in-redirect)
 val stagingBaseUrl = "https://the-construct-pod.fly.dev"
 val constructBaseUrl = providers.gradleProperty("constructBaseUrl").getOrElse(stagingBaseUrl)
-val constructWorkspace = providers.gradleProperty("constructWorkspace").getOrElse("pixelfed")
+val constructWorkspace = providers.gradleProperty("constructWorkspace").getOrElse("home")
 val constructAppLinkHost = providers.gradleProperty("constructAppLinkHost")
     .getOrElse(stagingBaseUrl.removePrefix("https://")).trim().lowercase()
 require(Regex("[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+").matches(constructAppLinkHost)) {

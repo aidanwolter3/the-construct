@@ -157,6 +157,8 @@ internal object ConstructIcons {
         "check_box" -> CheckBox
         "check_box_outline_blank" -> CheckBoxOutlineBlank
         "delete" -> Delete
+        "settings" -> Settings
+        "notifications" -> Notifications
         else -> null
     }
 }

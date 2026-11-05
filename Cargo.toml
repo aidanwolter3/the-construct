@@ -11,6 +11,7 @@ members = [
     "crates/app-collections",
     "crates/app-events",
     "crates/app-monitor",
+    "crates/app-shell",
     "crates/web-extract",
     "crates/server",
     "fake-pixelfed",

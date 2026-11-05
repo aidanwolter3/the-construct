@@ -19,6 +19,7 @@ pod-core = { path = "../pod-core" }
 pod-host = { path = "../pod-host" }
 app-pixelfed = { path = "../app-pixelfed" }
 app-recipes = { path = "../app-recipes" }
+app-shell = { path = "../app-shell" }
 app-collections = { path = "../app-collections" }
 app-events = { path = "../app-events" }
 app-monitor = { path = "../app-monitor" }

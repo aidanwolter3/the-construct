@@ -315,7 +315,7 @@ async fn a_custom_app_is_listed_and_served_over_several_sources() {
     assert_eq!(status, StatusCode::CREATED, "{b}");
     let id = b["id"].as_str().unwrap().to_owned();
     // Listed after the built-ins, marked custom.
-    let (_, apps) = call(&env.pod, "GET", "/v1/apps", None, None).await;
+    let (_, apps) = call(&env.pod, "GET", "/v1/apps?blueprints=1", None, None).await;
     let rows = apps["apps"].as_array().unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["kind"], "builtin");
@@ -444,12 +444,24 @@ async fn layouts_may_only_use_their_sources() {
     l["slots"][0]["content"]["item_template"] =
         json!({"type": "core://Text", "style": "Body", "value_expr": "${b://1#from}"});
     refused(l, json!([["a", "all"]])).await;
-    // A sign-in button.
+    // A raw sign-in intent: refused, pointing at action.device sign_in.
     let mut l = kitchen_a();
     l["slots"][0]["content"]["item_template"]["on_click"] = json!({"intent": "action.auth.login", "instance_url": "x", "app_path": "/v1/a/act",
                "token_path": "/v1/a/act"});
     let b = refused(l, json!([["a", "all"]])).await;
-    assert!(b["detail"].as_str().unwrap().contains("Settings"), "{b}");
+    assert!(b["detail"].as_str().unwrap().contains("sign_in"), "{b}");
+    // A sign-in button through the device is fine.
+    let mut l = kitchen_a();
+    l["slots"][0]["content"]["item_template"]["on_click"] = json!({"intent": "action.device", "command": "sign_in", "id": "a", "value": "$form?.server"});
+    let (status, b) = call(
+        &env.pod,
+        "POST",
+        "/v1/custom-apps/validate",
+        Some("pod"),
+        Some(json!({"feeds": [["a", "all"]], "layout": l})),
+    )
+    .await;
+    assert_eq!((status, &b["ok"]), (StatusCode::OK, &json!(true)), "{b}");
     // A pod path anywhere else (an image URL).
     let mut l = kitchen_a();
     l["slots"][0]["content"]["item_template"] =
@@ -489,7 +501,7 @@ async fn layouts_may_only_use_their_sources() {
     .await;
     assert_eq!(status, StatusCode::OK, "{b}");
     assert_eq!(b["ok"], true);
-    let (_, apps) = call(&env.pod, "GET", "/v1/apps", None, None).await;
+    let (_, apps) = call(&env.pod, "GET", "/v1/apps?blueprints=1", None, None).await;
     assert_eq!(apps["apps"].as_array().unwrap().len(), 1, "nothing created");
 }
 
@@ -600,7 +612,7 @@ async fn edits_append_history_and_restore_appends_a_copy() {
     };
     let (status, _) = patch(json!({"title": "My kitchen", "icon": "photo"})).await;
     assert_eq!(status, StatusCode::OK);
-    let (_, apps) = call(&env.pod, "GET", "/v1/apps", None, None).await;
+    let (_, apps) = call(&env.pod, "GET", "/v1/apps?blueprints=1", None, None).await;
     assert_eq!(apps["apps"][1]["title"], "My kitchen");
     let (status, b) = patch(json!({"feeds": [["b", "all"]]})).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{b}");
@@ -631,7 +643,7 @@ async fn hiding_and_deleting_apps() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{b}");
-    let (_, apps) = call(&env.pod, "GET", "/v1/apps", None, None).await;
+    let (_, apps) = call(&env.pod, "GET", "/v1/apps?blueprints=1", None, None).await;
     let ids: Vec<&str> = apps["apps"]
         .as_array()
         .unwrap()
@@ -639,7 +651,7 @@ async fn hiding_and_deleting_apps() {
         .map(|a| a["id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, [id.as_str()]);
-    let (_, apps) = call(&env.pod, "GET", "/v1/apps?all=1", None, None).await;
+    let (_, apps) = call(&env.pod, "GET", "/v1/apps?all=1&blueprints=1", None, None).await;
     assert_eq!(apps["apps"][0]["hidden"], true);
     // A hidden app still serves.
     let (status, _) = call(&env.pod, "GET", "/v1/workspaces/a_home", None, None).await;
@@ -652,7 +664,7 @@ async fn hiding_and_deleting_apps() {
         Some(json!({"hidden": false})),
     )
     .await;
-    let (_, apps) = call(&env.pod, "GET", "/v1/apps", None, None).await;
+    let (_, apps) = call(&env.pod, "GET", "/v1/apps?blueprints=1", None, None).await;
     assert_eq!(apps["apps"].as_array().unwrap().len(), 2);
 
     // Deleting: an open events stream hears `deleted` and ends.
@@ -685,7 +697,7 @@ async fn hiding_and_deleting_apps() {
     );
     let (status, _) = call(&env.pod, "GET", &format!("/v1/workspaces/{id}"), None, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    let (_, apps) = call(&env.pod, "GET", "/v1/apps?all=1", None, None).await;
+    let (_, apps) = call(&env.pod, "GET", "/v1/apps?all=1&blueprints=1", None, None).await;
     assert_eq!(apps["apps"].as_array().unwrap().len(), 1);
     let (status, _) = call(
         &env.pod,

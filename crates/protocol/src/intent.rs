@@ -126,6 +126,31 @@ pub enum ActionIntent {
     #[serde(rename = "action.link.open")]
     OpenLink { url: String },
 
+    /// Feature `device_action`: something the device does itself, named by
+    /// `command` ([`DEVICE_COMMANDS`]): `open_settings`, `open_inbox`,
+    /// `refresh`, `leave_pod` (forget the pod on this device), `open_app`
+    /// (`app`), `open_notification` (`id`), `mark_all_read`,
+    /// `toggle_channel` (`app`, `id`: a notification channel), `sign_in`
+    /// (`id`: a sign-in provider; `value`: another server), `sign_out`, `set_server` (`id`: a server
+    /// option), `show` (`id`: a `core://Drawer` or `core://Dock` page),
+    /// `show_versions` (`app`: load its versions as device data),
+    /// `pin_version` (`id`: a version of that app, shown on this device),
+    /// `follow_latest` (that app follows its newest version again).
+    /// Nothing is sent to the pod unless the command itself talks to
+    /// it. Any layout may use any command (decision `blueprints-and-home`).
+    #[serde(rename = "action.device")]
+    Device {
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// A command's free value: for `sign_in`, the server to sign in to
+        /// (usually `$form?.server`; blank: the provider's default).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<String>,
+    },
+
     /// Any intent tag this build does not know, e.g. the removed
     /// `action.agent.prompt` (D32), which AI edits could put into layouts
     /// that legacy app versions still hold. Deserializing one drops its
@@ -146,6 +171,37 @@ impl ActionIntent {
         out
     }
 }
+
+/// The `action.device` commands this build knows.
+pub const DEVICE_COMMANDS: [&str; 15] = [
+    "open_settings",
+    "open_inbox",
+    "refresh",
+    "leave_pod",
+    "open_app",
+    "open_notification",
+    "mark_all_read",
+    "toggle_channel",
+    "sign_in",
+    "sign_out",
+    "set_server",
+    "show",
+    "show_versions",
+    "pin_version",
+    "follow_latest",
+];
+
+/// The `action.device` commands that need an `app`, and those that need an
+/// `id`.
+pub const DEVICE_COMMANDS_WITH_APP: [&str; 3] = ["open_app", "toggle_channel", "show_versions"];
+pub const DEVICE_COMMANDS_WITH_ID: [&str; 6] = [
+    "open_notification",
+    "toggle_channel",
+    "sign_in",
+    "set_server",
+    "show",
+    "pin_version",
+];
 
 /// One extra field update carried by `ActionIntent::OptimisticMutate.also`
 /// (and `ActionIntent::LocalSet.also`).

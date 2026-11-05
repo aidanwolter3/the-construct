@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::intent::ActionIntent;
 
 /// Node types this build knows (an other type is [`UiNode::Unknown`]).
-pub const NODE_TYPES: [&str; 22] = [
+pub const NODE_TYPES: [&str; 26] = [
     "core://Workspace",
     "core://Container",
     "core://Text",
@@ -38,10 +38,14 @@ pub const NODE_TYPES: [&str; 22] = [
     "core://MediaPicker",
     "core://Sticky",
     "core://Progress",
+    "core://Dock",
+    "core://AppFrame",
+    "core://Switch",
+    "core://Drawer",
 ];
 
 /// Icon names clients draw (`core://IconButton`, `core://Chip`).
-pub const ICONS: [&str; 19] = [
+pub const ICONS: [&str; 21] = [
     "favorite",
     "favorite_border",
     "chat_bubble",
@@ -64,10 +68,17 @@ pub const ICONS: [&str; 19] = [
     "check_box",
     "check_box_outline_blank",
     "delete",
+    // Feature `icons_shell` (crates/protocol/features/icons_shell.md).
+    "settings",
+    "notifications",
 ];
 
 fn one() -> f64 {
     1.0
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 fn is_zero(v: &u16) -> bool {
@@ -355,6 +366,11 @@ pub enum UiNode {
         height_dp: Option<u16>,
         #[serde(default, skip_serializing_if = "is_start")]
         align: Align,
+        /// Feature `box_fill`: fill the space given, with `content` placed by
+        /// `align` in both directions (`Center`: the middle). As a
+        /// workspace's one slot it fills the whole screen, with no title bar.
+        #[serde(default, skip_serializing_if = "is_false")]
+        fill: bool,
     },
     /// A one-line, sideways-scrolling row of chips editing the form value
     /// `$form.<field>` (like a `core://TextField`): tapping an option sets
@@ -409,6 +425,80 @@ pub enum UiNode {
     Progress {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         size_dp: Option<u16>,
+    },
+
+    // Feature `dock` (crates/protocol/features/dock.md)
+    /// The app's main navigation: a bar of tabs along the bottom (a rail
+    /// down the side on wide windows) and, above it, the selected tab's
+    /// `content`, filling the rest of the screen. The tabs are `before`,
+    /// then one per entity of `query_key` drawn from `item` (`$item` = that
+    /// entity; at most `max_items` of them), then `after`. The selected
+    /// tab's `value` is the form value `$form.<field>` (the first tab until
+    /// one is picked), kept on the device. Only meaningful as the content
+    /// of a workspace's one slot (decision `blueprints-and-home`).
+    #[serde(rename = "core://Dock")]
+    Dock {
+        field: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        before: Vec<DockTab>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query_key: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item: Option<Box<DockTab>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_items: Option<u8>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        after: Vec<DockTab>,
+    },
+
+    // Feature `app_frame` (crates/protocol/features/app_frame.md)
+    /// Another app of the pod, drawn here whole: its layout, its screens
+    /// and its Back stack, filling the space it is given. `app` is an app
+    /// id or a binding to one (`$item.id`). A frame whose app can't be drawn
+    /// says so in its own space; the rest of the layout keeps working.
+    #[serde(rename = "core://AppFrame")]
+    AppFrame { app: String },
+
+    // Feature `drawer` (crates/protocol/features/drawer.md)
+    /// The app's main navigation as a side drawer: the selected page's
+    /// `content` fills the screen, and a menu button at the top left (with
+    /// `badge`, a binding drawn as a count or a dot) opens `drawer`, a panel
+    /// of any layout. Pages are `before`, one per entity of `query_key`
+    /// drawn from `item` (`$item` = that entity), then `after`; the selected
+    /// page's `value` is the form value `$form.<field>` (the first page until
+    /// one is picked), kept on the device. `action.device` `open_app` or
+    /// `show` picks a page; any action from inside the panel closes it. Only
+    /// meaningful as the content of a workspace's one slot (decision
+    /// `blueprints-and-home`).
+    #[serde(rename = "core://Drawer")]
+    Drawer {
+        field: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        before: Vec<DrawerPage>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query_key: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item: Option<Box<DrawerPage>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        after: Vec<DrawerPage>,
+        drawer: Box<UiNode>,
+        /// Pinned to the bottom of the panel while `drawer` scrolls above it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        footer: Option<Box<UiNode>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        badge: Option<String>,
+    },
+
+    // Feature `switch` (crates/protocol/features/switch.md)
+    /// An on/off switch: on while `checked` (a binding such as
+    /// `$item.enabled`) is truthy; a tap dispatches `on_click`, which changes
+    /// what `checked` reads (e.g. `action.device` `toggle_channel`).
+    #[serde(rename = "core://Switch")]
+    Switch {
+        checked: String,
+        on_click: ActionIntent,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_description: Option<String>,
     },
 
     /// A node of a type this build does not know: its JSON, kept as is.
@@ -486,7 +576,35 @@ impl UiNode {
             | UiNode::Sticky { content } => {
                 vec![content]
             }
+            UiNode::Dock {
+                before,
+                item,
+                after,
+                ..
+            } => before
+                .iter()
+                .chain(item.as_deref())
+                .chain(after)
+                .map(|t| t.content.as_ref())
+                .collect(),
+            UiNode::Drawer {
+                before,
+                item,
+                after,
+                drawer,
+                footer,
+                ..
+            } => before
+                .iter()
+                .chain(item.as_deref())
+                .chain(after)
+                .map(|p| &p.content)
+                .chain(std::iter::once(drawer.as_ref()))
+                .chain(footer.as_deref())
+                .collect(),
             UiNode::Text { .. }
+            | UiNode::AppFrame { .. }
+            | UiNode::Switch { .. }
             | UiNode::Button { .. }
             | UiNode::Image { .. }
             | UiNode::TextField { .. }
@@ -507,7 +625,8 @@ impl UiNode {
         let direct: Vec<&ActionIntent> = match self {
             UiNode::Button { on_click, .. }
             | UiNode::IconButton { on_click, .. }
-            | UiNode::Tappable { on_click, .. } => vec![on_click],
+            | UiNode::Tappable { on_click, .. }
+            | UiNode::Switch { on_click, .. } => vec![on_click],
             UiNode::TextField { on_submit, .. } => on_submit.iter().collect(),
             _ => Vec::new(),
         };
@@ -674,6 +793,29 @@ pub enum ImageShape {
     Square,
     Rounded,
     Circle,
+}
+
+/// A tab of a `core://Dock`: what its button shows (`label`, an `icon`
+/// name, an optional `badge` binding drawn as a count or a dot) and the
+/// `content` shown while it is selected. In a dock's `item`, every field may
+/// bind `$item.<field>`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct DockTab {
+    pub value: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub badge: Option<String>,
+    pub content: Box<UiNode>,
+}
+
+/// A page of a `core://Drawer`: the `content` shown while its `value` is
+/// selected. In a drawer's `item`, `value` may bind `$item.<field>`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct DrawerPage {
+    pub value: String,
+    pub content: UiNode,
 }
 
 /// A named region of a workspace, filled by a content provider.

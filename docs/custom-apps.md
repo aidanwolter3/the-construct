@@ -1,18 +1,40 @@
 # Custom apps, Collections and Events
 
-Besides the built-in apps, a pod's user can have apps of their own: any layout the [vocabulary](layouts.md) can draw,
-over the feeds, screen data and actions the pod's data sources declare. They are usually built by Claude through
-the pod's MCP endpoint. Data an app keeps itself (a todo list, a maintenance log) lives in **Collections**.
+A pod's apps are the user's own: any layout the [vocabulary](layouts.md) can draw, over the feeds, screen data and
+actions the pod's data sources declare. They are usually built by Claude through the pod's MCP endpoint, often from a
+**blueprint** (a built-in layout the server ships and updates, such as `pixelfed`, `recipes` or `events`). A new pod
+has one app, `home`; nothing else until the user asks for it. Data an app keeps itself (a todo list, a maintenance
+log) lives in **Collections**.
 
 Decisions: [`custom-apps-and-data-sources`](decisions/custom-apps-and-data-sources.md),
 [`mcp-connector`](decisions/mcp-connector.md), [`layout-parts`](decisions/layout-parts.md),
-[`collections`](decisions/collections.md) and the `collection-*` decisions.
+[`collections`](decisions/collections.md), [`blueprints-and-home`](decisions/blueprints-and-home.md) and the
+`collection-*` decisions.
+
+## Blueprints and the home app
+
+Built-in apps are blueprints: served by id, but listed only with `GET /v1/apps?blueprints=1` (MCP `list_apps` answers
+`{apps, blueprints}`). An app can be a whole blueprint by reference, kept current by the pod:
+
+```json
+{"title": "Recipes", "icon": "recipe", "feeds": [["recipes", "all"]],
+ "layout": {"type": "core://Ref", "app": "recipes", "part": "layout"}}
+```
+
+Give it the blueprint's feeds (`list_apps` shows them). To change a blueprint, copy its layout (`get_layout`) and
+pass `copied_from`. Every pod's **`home`** app is the screen clients open, and the only one: it is the user's whole
+interface. It starts as a reference to the `shell` blueprint, a blank page, and the agent builds into it only what
+the user asks for: one app is a `core://AppFrame` as home's one slot; more apps add a `core://Drawer` or
+`core://Dock` over `local:apps`; notifications, sign-in or settings come from the `describe_vocabulary` snippets.
+It can't be deleted. A pod made before blueprints got an app
+referencing each built-in it showed, so nothing disappeared.
 
 ## Custom apps
 
 A custom app is a title, an icon, a list of **feeds** (`["recipes", "all"]`, `["pixelfed", "home"]`,
 `["collections", "todos"]`) and a layout history. It is served exactly like a built-in app (workspace, events
-stream, versions, feature negotiation) and marked `"kind": "custom"` in `GET /v1/apps`.
+stream, versions, feature negotiation) and marked `"kind": "custom"` in `GET /v1/apps`. Ids are `c-` and 10
+characters, except the pod's own `home`.
 
 ```bash
 pod=http://127.0.0.1:8080; token=cpod_…
@@ -25,13 +47,16 @@ curl -fsS -H "Authorization: Bearer $token" -H 'content-type: application/json' 
   those feeds fill and call the data paths and endpoints their manifests declare. Errors name a JSON pointer and
   what is allowed. The routes are in [api.md](api.md#custom-apps).
 - **Source status.** The root gets a `core://sources/<source>` entity per source, `{title, signed_in, error?}`, so a
-  layout can say when a source is signed out or failing (`${core://sources/pixelfed#signed_in}`). Sign-ins start
-  from Settings; custom layouts can't hold sign-in buttons.
+  layout can say when a source is signed out or failing (`${core://sources/pixelfed#signed_in}`). A layout signs in
+  with `action.device` `sign_in` (`id`: a provider from `local:providers`; `value`: another server, e.g.
+  `$form?.server`), e.g. a button shown while `signed_in` is false. The raw `action.auth.*` intents stay refused.
 - **Built-in parts.** `{"type": "core://Ref", "app": "pixelfed", "part": "screen:post"}` reuses a built-in's
   screen, slot or declared part, expanded and kept current by the pod. A copy instead says `"copied_from": {app,
   version}`, and `GET /v1/apps` reports `updates_from` when that built-in moves on.
+- **Device data.** `${local://connection#label}`, `${local://inbox#unread}`, the `local:apps` query and the other
+  [device data](layouts.md#device-data) need no feed.
 - **Hiding and deleting.** Any app can be hidden from the app list on every device; custom apps can be deleted
-  (purged after 30 days).
+  (purged after 30 days), except `home`.
 
 ## Building apps with Claude
 

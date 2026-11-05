@@ -23,7 +23,8 @@ pub use pod_host as host;
 /// The pod's adapters, in `GET /v1/apps` order: the Pixelfed feed (with the
 /// `pixelfed` sign-in), the recipes, the Events app (the
 /// Collections `events` collection), then the
-/// `pixelfed_sample_no_login` dev app; and
+/// `pixelfed_sample_no_login` dev app, the `shell` blueprint (every pod's
+/// home app starts from it, decision `blueprints-and-home`); and
 /// Collections (no apps of its own: data custom apps declare; fillers
 /// configured from `CONSTRUCT_INFER_*` and `CONSTRUCT_FILL_*`), and the
 /// server monitoring source (no apps; decision `server-monitoring`).
@@ -33,6 +34,7 @@ pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
         Arc::new(app_recipes::RecipesAdapter::new()),
         Arc::new(app_events::EventsAdapter::new()),
         app_pixelfed::apps::sample_adapter(),
+        app_shell::adapter(),
         Arc::new(
             app_collections::CollectionsAdapter::with_caps(collections_caps_from_env())
                 .with_model(app_collections::compute::MessagesModel::from_env())
@@ -185,6 +187,7 @@ pub fn layout_files() -> Vec<layouts::LayoutSource> {
     let mut files = app_pixelfed::apps::files();
     files.extend_from_slice(app_recipes::FILES);
     files.extend_from_slice(app_events::FILES);
+    files.extend_from_slice(app_shell::FILES);
     files
 }
 

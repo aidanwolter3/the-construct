@@ -269,7 +269,7 @@ internal fun NodeBox(
     val fg = color(node.contentColor)
     val border = color(node.borderColor)
     val shape = RoundedCornerShape(node.cornerDp.coerceAtLeast(0).dp)
-    var mod = modifier
+    var mod = if (node.fill) modifier.fillMaxSize() else modifier
     node.widthDp?.takeIf { it > 0 }?.let { mod = mod.width(it.dp) }
     node.heightDp?.takeIf { it > 0 }?.let { mod = mod.height(it.dp) }
     mod = mod.clip(shape)

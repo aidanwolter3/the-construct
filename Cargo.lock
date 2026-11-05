@@ -199,6 +199,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "app-shell"
+version = "0.1.0"
+dependencies = [
+ "pod-core",
+ "protocol",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2986,6 +2994,7 @@ dependencies = [
  "app-monitor",
  "app-pixelfed",
  "app-recipes",
+ "app-shell",
  "axum",
  "base64 0.22.1",
  "fake-pixelfed",

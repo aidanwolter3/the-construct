@@ -355,6 +355,8 @@ sealed class UiNode {
         @SerialName("width_dp") val widthDp: Int? = null,
         @SerialName("height_dp") val heightDp: Int? = null,
         val align: Align = Align.Start,
+        /** Feature `box_fill`: fill the space given, [content] placed by [align] in both directions. */
+        val fill: Boolean = false,
     ) : UiNode()
 
     /**
@@ -397,9 +399,69 @@ sealed class UiNode {
     @Serializable
     data class Progress(@SerialName("size_dp") val sizeDp: Int? = null) : UiNode()
 
+    /**
+     * `core://Dock` (feature `dock`, decision `blueprints-and-home`): the app's main navigation. The tabs are [before],
+     * one per entity of [queryKey] drawn from [item] (`$item` bound; at most [maxItems]), then [after]; the selected
+     * tab's `value` is the form value `$form.<field>`, and its content fills the screen above the bar ([DockView]).
+     */
+    @Serializable
+    data class Dock(
+        val field: String,
+        val before: List<DockTab> = emptyList(),
+        @SerialName("query_key") val queryKey: String? = null,
+        val item: DockTab? = null,
+        @SerialName("max_items") val maxItems: Int? = null,
+        val after: List<DockTab> = emptyList(),
+    ) : UiNode()
+
+    /**
+     * `core://AppFrame` (feature `app_frame`): another app of the pod drawn whole in the space it is given ([AppFrameView]).
+     * [app] is an id or a binding (`$item.id`).
+     */
+    @Serializable
+    data class AppFrame(val app: String) : UiNode()
+
+    /**
+     * `core://Drawer` (feature `drawer`): the selected page fills the screen; a menu button opens [drawer], a panel of
+     * any layout ([DrawerView]). Pages are [before], one per entity of [queryKey] from [item], then [after].
+     */
+    @Serializable
+    data class Drawer(
+        val field: String,
+        val before: List<DrawerPage> = emptyList(),
+        @SerialName("query_key") val queryKey: String? = null,
+        val item: DrawerPage? = null,
+        val after: List<DrawerPage> = emptyList(),
+        val drawer: UiNode,
+        val footer: UiNode? = null,
+        val badge: String? = null,
+    ) : UiNode()
+
+    /** `core://Switch` (feature `switch`): on while [checked] (a binding) is truthy; a tap dispatches [onClick]. */
+    @Serializable
+    data class Switch(
+        val checked: String,
+        @SerialName("on_click") val onClick: ActionIntent,
+        @SerialName("content_description") val contentDescription: String? = null,
+    ) : UiNode()
+
     /** A node whose `type` this client does not know. [raw] is the full original object. */
     data class Unknown(val type: String, val raw: JsonObject) : UiNode()
 }
+
+/** A page of a [UiNode.Drawer]: the [content] shown while [value] is selected. */
+@Serializable
+data class DrawerPage(val value: String, val content: UiNode)
+
+/** A tab of a [UiNode.Dock]: its button ([label], an [icon] name, a [badge] binding) and the [content] it shows. */
+@Serializable
+data class DockTab(
+    val value: String,
+    val label: String,
+    val icon: String? = null,
+    val badge: String? = null,
+    val content: UiNode,
+)
 
 // ---------------------------------------------------------------------------
 // Intents, discriminated by "intent"
@@ -501,6 +563,19 @@ sealed class ActionIntent {
      */
     @Serializable
     data class OpenLink(val url: String) : ActionIntent()
+
+    /**
+     * `action.device` (feature `device_action`): something the device does itself ([command] with its [app] or [id]:
+     * `open_app`, `open_notification`, `mark_all_read`, `toggle_channel`, `sign_in`, `sign_out`, `set_server`,
+     * `leave_pod`, `refresh`, `open_settings`, `open_inbox`). Handled by [ConstructController], never sent to the engine.
+     */
+    @Serializable
+    data class Device(
+        val command: String,
+        val app: String? = null,
+        val id: String? = null,
+        val value: String? = null,
+    ) : ActionIntent()
 
     /**
      * An intent whose `intent` tag this client does not know (e.g. the removed `action.agent.prompt`). [raw] is the full
@@ -618,6 +693,10 @@ object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode
         Variant("core://MediaPicker", UiNode.MediaPicker::class, UiNode.MediaPicker.serializer()),
         Variant("core://Sticky", UiNode.Sticky::class, UiNode.Sticky.serializer()),
         Variant("core://Progress", UiNode.Progress::class, UiNode.Progress.serializer()),
+        Variant("core://Dock", UiNode.Dock::class, UiNode.Dock.serializer()),
+        Variant("core://AppFrame", UiNode.AppFrame::class, UiNode.AppFrame.serializer()),
+        Variant("core://Switch", UiNode.Switch::class, UiNode.Switch.serializer()),
+        Variant("core://Drawer", UiNode.Drawer::class, UiNode.Drawer.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): UiNode = UiNode.Unknown(tag, raw)
@@ -636,6 +715,7 @@ object ActionIntentSerializer : TaggedUnionSerializer<ActionIntent>("org.thecons
         Variant("action.sequence", ActionIntent.Sequence::class, ActionIntent.Sequence.serializer()),
         Variant("action.local.set", ActionIntent.LocalSet::class, ActionIntent.LocalSet.serializer()),
         Variant("action.link.open", ActionIntent.OpenLink::class, ActionIntent.OpenLink.serializer()),
+        Variant("action.device", ActionIntent.Device::class, ActionIntent.Device.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): ActionIntent = ActionIntent.Unknown(tag, raw)

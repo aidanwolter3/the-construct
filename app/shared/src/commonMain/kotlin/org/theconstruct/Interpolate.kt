@@ -111,7 +111,20 @@ fun isTruthy(value: String, item: JsonObject?): Boolean {
  * [isTruthy]. Without [equals], the value must be truthy; with it, the value as text (null and missing are "") must
  * equal [equals].
  */
-fun conditionShows(value: String, equals: String?, item: JsonObject?, form: Map<String, String>?): Boolean {
+fun conditionShows(
+    value: String,
+    rawEquals: String?,
+    item: JsonObject?,
+    form: Map<String, String>?,
+    entities: Map<String, JsonObject> = emptyMap(),
+): Boolean {
+    // `equals` may name the item (`$item.id`), e.g. to mark the open page in a list of pages.
+    val equals = rawEquals?.let { bindItemTokens(it, item) }
+    // `${<uri>#<field>}` (an entity field, e.g. device data `${local://apps#count}`) reads as the field's text.
+    if (value.contains("\${")) {
+        val text = interpolate(value, entities, item)
+        return if (equals == null) isTruthy(text, null) else text == equals
+    }
     val formValue = if (value.startsWith("\$form.")) form?.get(value.removePrefix("\$form.")).orEmpty() else null
     if (equals == null) return if (formValue != null) isTruthy(formValue, null) else isTruthy(value, item)
     val text = formValue ?: run {
@@ -190,6 +203,11 @@ fun bindIntent(intent: ActionIntent, item: JsonObject?): ActionIntent {
         is ActionIntent.Sequence -> intent.copy(steps = intent.steps.map { bindIntent(it, item) })
         is ActionIntent.LocalSet -> intent.copy(entityUri = bindItemTokens(intent.entityUri, item))
         is ActionIntent.OpenLink -> intent.copy(url = bindItemTokens(intent.url, item))
+        is ActionIntent.Device -> intent.copy(
+            app = intent.app?.let { bindItemTokens(it, item) },
+            id = intent.id?.let { bindItemTokens(it, item) },
+            value = intent.value?.let { bindItemTokens(it, item) },
+        )
         ActionIntent.NavigateBack -> intent
         is ActionIntent.Unknown -> intent.copy(
             raw = JsonObject(intent.raw.mapValues { (k, v) -> if (k == "intent") v else bindJson(v, item) })

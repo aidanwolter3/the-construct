@@ -704,10 +704,11 @@ fn version_json(v: &AppVersion, client: &protocol::ClientCaps) -> Value {
     out
 }
 
-/// `GET /v1/apps[?all=1]` -> `{"apps": [{id, title, icon, kind, hidden,
-/// latest_version, latest_compatible_version, updated_at, updates_from?}]}`
-/// (public): built-in apps, then custom ones (`kind` `builtin` | `custom`)
-/// oldest first. Hidden apps (`PUT /v1/apps/:id/hidden`) are listed only
+/// `GET /v1/apps[?all=1][&blueprints=1]` -> `{"apps": [{id, title, icon,
+/// kind, hidden, latest_version, latest_compatible_version, updated_at,
+/// updates_from?}]}` (public): the pod's own apps (`kind` `custom`, the
+/// home app among them) oldest first; with `blueprints=1` the built-in
+/// blueprints first (`kind` `builtin`, decision `blueprints-and-home`). Hidden apps (`PUT /v1/apps/:id/hidden`) are listed only
 /// with `?all=1`. Dev apps only with `CONSTRUCT_SHOW_DEV_APPS=1`.
 /// `latest_compatible_version` is the newest version the client
 /// ([`protocol::FEATURES_HEADER`]) can draw,
@@ -718,13 +719,20 @@ async fn list_apps(
     headers: HeaderMap,
 ) -> Response {
     let client = client_caps(&headers);
-    let all = query.get("all").is_some_and(|v| v == "1" || v == "true");
-    let builtin: Vec<AppInfo> = state
-        .catalog()
-        .apps()
-        .filter(|a| !a.dev || state.show_dev_apps())
-        .copied()
-        .collect();
+    let flag = |k: &str| query.get(k).is_some_and(|v| v == "1" || v == "true");
+    let all = flag("all");
+    // Built-in apps are blueprints (decision `blueprints-and-home`): a pod
+    // lists only its own apps, and the blueprints with `?blueprints=1`.
+    let builtin: Vec<AppInfo> = if flag("blueprints") {
+        state
+            .catalog()
+            .apps()
+            .filter(|a| !a.dev || state.show_dev_apps())
+            .copied()
+            .collect()
+    } else {
+        Vec::new()
+    };
     let st = state.clone();
     let listed = blocking(&state, move |s| {
         let hidden = crate::custom::hidden_apps(s)?;
