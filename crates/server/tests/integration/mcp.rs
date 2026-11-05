@@ -922,6 +922,7 @@ async fn components_are_defined_used_and_expanded() {
         "core:screen",
         "core:card",
         "core:section_header",
+        "core:pixelfed_sign_in",
     ] {
         assert!(names.contains(&want), "{want} in {names:?}");
     }
@@ -1100,6 +1101,31 @@ async fn components_are_defined_used_and_expanded() {
         .tool(&access, "delete_component", json!({"name": "pod:card"}))
         .await;
     assert!(!err, "{d}");
+
+    // An adapter's server component (issue #135): Pixelfed's signed-out
+    // screen is listed, its examples expand, and a pod may copy it.
+    let (err, sign_in) = env
+        .tool(
+            &access,
+            "get_component",
+            json!({"name": "core:pixelfed_sign_in"}),
+        )
+        .await;
+    assert!(!err, "{sign_in}");
+    let text = sign_in["examples"][1]["expanded"].to_string();
+    assert!(
+        text.contains("Sign in with Pixelfed") && text.contains("$form.instance"),
+        "{text}"
+    );
+    let (err, c) = env
+        .tool(
+            &access,
+            "copy_component",
+            json!({"from": "core:pixelfed_sign_in", "name": "pod:my_sign_in"}),
+        )
+        .await;
+    assert!(!err, "{c}");
+    assert_eq!(c["name"], "pod:my_sign_in");
 
     let (err, t) = env
         .tool(

@@ -183,7 +183,7 @@ impl AppState {
         }
         // Server components first: layout files may use them (decision
         // `plumbing-and-porcelain`).
-        let core = components::core_files(components::CORE_COMPONENT_FILES)?;
+        let core = components::core_files(catalog.component_files())?;
         let pending = parts::Pending {
             defs: core
                 .iter()
@@ -657,13 +657,49 @@ pub async fn blocking<T: Send + 'static>(
     }
 }
 
-/// The signed-out screen for `app`, which requires `sign_in`.
-fn signed_out(state: &Pod, sign_in: &str, app: &AppInfo, req: &RequestCtx) -> WorkspaceSpec {
+/// The signed-out screen for `app`, which requires `sign_in`, expanded
+/// ([`served_screen`]).
+async fn signed_out(
+    state: &Pod,
+    sign_in: &str,
+    app: &AppInfo,
+    req: &RequestCtx,
+) -> Result<WorkspaceSpec, ApiError> {
     let adapter = state
         .catalog
         .sign_in_adapter(sign_in)
         .expect("the catalog checked every app's sign-in");
-    adapter.signed_out(sign_in, app, req)
+    served_screen(state, req, adapter.signed_out(sign_in, app, req)).await
+}
+
+/// An adapter's screen (signed out, stale sign-in) with its component uses
+/// expanded (leniently, as when serving a layout): an adapter builds its
+/// screens from server components, such as Pixelfed's
+/// `core:pixelfed_sign_in`. The workspace itself stays a workspace, drawn
+/// by the app as before.
+async fn served_screen(
+    state: &Pod,
+    req: &RequestCtx,
+    mut screen: WorkspaceSpec,
+) -> Result<WorkspaceSpec, ApiError> {
+    let json = serde_json::to_string(&screen.workspace).unwrap_or_default();
+    if !parts::may_hold_refs(&json) {
+        return Ok(screen);
+    }
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&json) else {
+        return Ok(screen);
+    };
+    let client = req.client.clone();
+    let st = state.clone();
+    let expanded = state
+        .blocking(move |s| {
+            Ok(parts::expand(s, st.catalog(), &doc, Some(&client), parts::Mode::Lenient).ok())
+        })
+        .await?;
+    if let Some(node) = expanded.and_then(|v| serde_json::from_value(v).ok()) {
+        screen.workspace = node;
+    }
+    Ok(screen)
 }
 
 /// `GET /v1/workspaces/:id`: the app's data, its feeds' merged
@@ -707,7 +743,10 @@ async fn get_workspace(
         && let AuthPolicy::SignIn(sign_in) = info.auth
         && !caller.has(sign_in)
     {
-        let screen = signed_out(&state, sign_in, info, &req);
+        let screen = match signed_out(&state, sign_in, info, &req).await {
+            Ok(s) => s,
+            Err(e) => return e.into_response(),
+        };
         return if stale {
             session::stale_session(screen)
         } else {
@@ -806,10 +845,17 @@ async fn compose(
                 bundle.queries.extend(data.queries);
             }
             Hydration::Screen(screen) if !lenient => {
-                return Err(Box::new(Json(screen).into_response()));
+                return Err(Box::new(match served_screen(state, req, screen).await {
+                    Ok(screen) => Json(screen).into_response(),
+                    Err(e) => e.into_response(),
+                }));
             }
             Hydration::Screen(_) => errors.push((source, "unavailable".into())),
             Hydration::StaleSession(screen) => {
+                let screen = match served_screen(state, req, screen).await {
+                    Ok(screen) => screen,
+                    Err(e) => return Err(Box::new(e.into_response())),
+                };
                 // A pinned session stays; only the unusable sign-in goes.
                 if let (Some(session), Some(sign_in)) = (&req.session, sign_in)
                     && session.pinned
