@@ -58,6 +58,42 @@ class ScreensTest {
     }
 
     @Test
+    fun confirmRunsItsThenAndTheRestOfTheSequenceOnlyOnConfirm() {
+        val bridge = RecordingBridge()
+        val controller = ConstructController(bridge)
+        val opened = mutableListOf<String>()
+        controller.linkOpener = { opened += it }
+        val d = '$'
+        val intent = ConstructJson.decodeIntent(
+            """{"intent":"action.sequence","steps":[
+              {"intent":"action.confirm","title":"Open ${d}item.name?","confirm_label":"Open",
+               "then":{"intent":"action.link.open","url":"https://a.example/${d}item.name"}},
+              {"intent":"action.link.open","url":"https://b.example"}]}"""
+        )
+        val bound = bindIntent(intent, JsonObject(mapOf("name" to JsonPrimitive("x"))))
+        controller.dispatch(bound)
+        val pending = assertIs<PendingConfirm>(controller.pendingConfirm.value)
+        assertEquals("Open x?", pending.intent.title)
+        assertEquals("Open", pending.intent.confirmLabel)
+        assertEquals(emptyList(), opened)
+        // Cancel: nothing runs, the later step neither.
+        controller.cancelConfirm()
+        assertNull(controller.pendingConfirm.value)
+        assertEquals(emptyList(), opened)
+        // Confirm: `then`, then the rest of the sequence; never sent to the engine.
+        controller.dispatch(bound)
+        controller.confirm()
+        assertNull(controller.pendingConfirm.value)
+        assertEquals(listOf("https://a.example/x", "https://b.example"), opened)
+        controller.confirm()
+        assertEquals(2, opened.size)
+        assertEquals(emptyList(), bridge.sent)
+        // It round-trips in the Rust shape.
+        val wire = """{"intent":"action.confirm","title":"Sure?","confirm_label":"Yes","then":{"intent":"action.navigation.back"}}"""
+        assertEquals(wire, ConstructJson.encodeIntent(ConstructJson.decodeIntent(wire)))
+    }
+
+    @Test
     fun routesMatchWholeSegments() {
         assertEquals(mapOf("id" to "42"), matchRoute("x://posts/{id}/thread", "x://posts/42/thread"))
         assertEquals(mapOf("a" to "1", "b" to "z_9-"), matchRoute("x://{a}/m/{b}", "x://1/m/z_9-"))

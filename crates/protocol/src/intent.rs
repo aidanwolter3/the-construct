@@ -163,6 +163,19 @@ pub enum ActionIntent {
         value: Option<String>,
     },
 
+    /// Feature `action_confirm`: ask before a step that can't be undone.
+    /// The app shows its own dialog (`title`, `message`, a `confirm_label`
+    /// button and Cancel) and runs `then` only on confirm. Inside an
+    /// `action.sequence`, the steps after it run only on confirm too.
+    #[serde(rename = "action.confirm")]
+    Confirm {
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+        confirm_label: String,
+        then: Box<ActionIntent>,
+    },
+
     /// Any intent tag this build does not know, e.g. the removed
     /// `action.agent.prompt` (D32), which AI edits could put into layouts
     /// that legacy app versions still hold. Deserializing one drops its
@@ -185,11 +198,16 @@ impl ActionIntent {
         }
     }
 
-    /// This intent and, for a sequence, every step inside it (depth first).
+    /// This intent and every intent inside it (a sequence's steps, a
+    /// confirm's `then`), depth first.
     pub fn flatten(&self) -> Vec<&ActionIntent> {
         let mut out = vec![self];
-        if let ActionIntent::Sequence { steps } = self {
-            out.extend(steps.iter().flat_map(ActionIntent::flatten));
+        match self {
+            ActionIntent::Sequence { steps } => {
+                out.extend(steps.iter().flat_map(ActionIntent::flatten));
+            }
+            ActionIntent::Confirm { then, .. } => out.extend(then.flatten()),
+            _ => {}
         }
         out
     }

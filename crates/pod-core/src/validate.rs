@@ -131,6 +131,17 @@ fn finish_structure(node: UiNode) -> Result<UiNode, String> {
                 }
                 continue;
             }
+            ActionIntent::Confirm {
+                title,
+                confirm_label,
+                ..
+            } => {
+                // `then` is checked as an intent of its own (`flatten`).
+                if title.trim().is_empty() || confirm_label.trim().is_empty() {
+                    return Err("action.confirm needs a title and a confirm_label".into());
+                }
+                continue;
+            }
             ActionIntent::Device {
                 command, app, id, ..
             } => {
