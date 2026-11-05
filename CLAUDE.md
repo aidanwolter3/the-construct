@@ -1,9 +1,11 @@
 # The Construct — notes for Claude
 
 Server-driven UI: a Rust pod serves app layouts (JSON `UiNode` trees) and entities; desktop, Android and a headless
-simulator draw them with shared Compose code over a shared Rust engine. Built-in apps are blueprints, not listed:
-Pixelfed (`pixelfed`), Recipes (`recipes`), Events (`events`) and the home dock (`shell`). A pod's apps are the
-user's own (custom apps, from blueprints or Collections), starting with `home`, which clients open first.
+simulator draw them with shared Compose code over a shared Rust engine. Built-in layouts are blueprints, not listed:
+Pixelfed (`pixelfed`), Recipes (`recipes`), Events (`events`), the blank home (`shell`), Settings (`settings`) and the
+inbox (`inbox`). There are no apps at runtime: a pod's layouts are the user's own (from blueprints or Collections),
+starting with `home`, which clients open first and which embeds and presents the others on one engine
+(decision `layouts-not-apps`).
 
 **Read [CONTRIBUTING.md](CONTRIBUTING.md) first: its rules and checks apply to you.** Then, as the task needs:
 [docs/architecture.md](docs/architecture.md) (read before changing architecture), [docs/layouts.md](docs/layouts.md)

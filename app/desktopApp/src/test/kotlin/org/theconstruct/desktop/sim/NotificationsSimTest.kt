@@ -21,7 +21,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/** The bell, the inbox and the notification settings (D52) over [FakeEngineBridge] and `app/desktopApp/src/sim/resources/notifications.json`. */
+/** The inbox and notification settings as layouts (D52, decision `layouts-not-apps`) over [FakeEngineBridge] and `app/desktopApp/src/sim/resources/notifications.json`. */
 @OptIn(ExperimentalTestApi::class)
 class NotificationsSimTest {
     private val outDir: File = Files.createTempDirectory("construct-notifications-test").toFile()
@@ -36,16 +36,14 @@ class NotificationsSimTest {
     private val notifications = FakeNotifications.fromFixture(fixture("notifications.json"))
     private val screenData = fixture("pixelfed_screen_data.json")
 
-    /** A run like the simulator's fixture mode: [start] on screen, other apps openable, shared notifications. */
-    private fun controller(start: String = "pixelfed_sample_no_login"): Pair<ConstructController, () -> FakeEngineBridge> {
+    /** A run like the simulator's fixture mode: [start] is the root, the inbox and other layouts present over it. */
+    private fun controller(start: String = "pixelfed_sample_no_login"): Pair<ConstructController, FakeEngineBridge> {
         val bundles = mapOf("pixelfed_sample_no_login" to "pixelfed_sample_bundle.json", "pixelfed" to "pixelfed_feed_bundle.json")
-        var current = FakeEngineBridge(fixture(bundles.getValue(start)), appId = start, screenData = screenData, notifications = notifications)
-        val controller = ConstructController(current, start) { id ->
-            FakeEngineBridge(
-                fixture(bundles.getValue(id)), appId = id, apps = current.apps, screenData = screenData, notifications = notifications,
-            ).also { current = it }
-        }
-        return controller to { current }
+        val bridge = FakeEngineBridge(
+            fixture(bundles.getValue(start)), appId = start, screenData = screenData, notifications = notifications,
+            layoutBundles = { id -> layoutBundle(id, File("").absoluteFile) },
+        )
+        return ConstructController(bridge, start) to bridge
     }
 
     private fun runner(controller: ConstructController) = SimRunner(
@@ -61,70 +59,36 @@ class NotificationsSimTest {
         onAllNodes(hasTestTag(tag), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
 
     @Test
-    fun theBellShowsTheUnreadCountAndTheInboxListsTheFixtures() {
+    fun theInboxLayoutListsTheFixturesAndMarksThemRead() {
         val (controller, _) = controller()
         assertEquals(3, controller.unread.value.total, "three unread in the fixture")
         val live = mutableListOf<AppNotification>()
         controller.onNotification = { live += it }
-        SimImages.install("fixture")
-        runSkikoComposeUiTest(size = Size(390f, 844f), density = Density(1f)) {
-            setContent { ConstructApp(controller) }
-            waitForIdle()
-            assertTrue(has("inbox-button"))
-            onNode(hasText("3") and hasParent(hasTestTag("inbox-badge")), useUnmergedTree = true).assertExists()
-
-            notifications.inject("pixelfed_sample_no_login", "likes", "Bob liked your post")
-            waitForIdle()
-            assertEquals(listOf("Bob liked your post"), live.map { it.title }, "a live arrival reaches the platform hook")
-            onNode(hasText("4") and hasParent(hasTestTag("inbox-badge")), useUnmergedTree = true).assertExists()
-
-            onNode(hasTestTag("inbox-button")).performClick()
-            waitUntil(timeoutMillis = 5_000) { has("notification-row:fx-1") || has("notification-row:fx-2") }
-            assertTrue(has("inbox"))
-            assertTrue(has("notification-row:sim-1"), "the live one is listed")
-            onNode(hasText("Today")).assertExists()
-            onNode(hasText("Yesterday")).assertExists()
-            onNode(hasText("@bob commented on your post")).assertExists()
-
-            onNode(hasTestTag("inbox-mark-all")).performClick()
-            waitUntil(timeoutMillis = 5_000) { controller.unread.value.total == 0 }
-            waitForIdle()
-            assertFalse(has("inbox-badge"))
-        }
-    }
-
-    @Test
-    fun clickingANotificationOpensItsAppAndTargetScreenAndMarksItRead() {
-        val (controller, current) = controller()
-        runner(controller).ok(
-            "notify pixelfed_sample_no_login likes Bob liked your post; open-inbox; click-notification commented on; " +
-                "assert-text Comments; assert-text Which lens?",
+        val r = runner(controller).ok(
+            "notify pixelfed_sample_no_login likes Bob liked your post; open-inbox; assert-text Today; assert-text Yesterday; " +
+                "assert-text @bob commented on your post; assert-text Bob liked your post; assert-text 4 unread; click Mark all read",
         )
-        assertEquals("pixelfed", controller.currentAppId())
-        // A comment notification opens the whole thread at the comment (layout 0007).
-        assertEquals("comment_thread", controller.navigation.top?.screen?.id)
-        assertEquals(
-            mapOf("id" to "781254316723458049", "comment" to "781300000000000107"),
-            controller.navigation.top?.params,
-        )
-        assertEquals("pixelfed", current().appId)
-        // fx-6 read; fx-5, fx-4 and the live one still unread.
-        assertEquals(3, controller.unread.value.total)
+        assertTrue(r.steps[1].message.startsWith("inbox shown (sheet)"), r.steps[1].message)
+        assertEquals(listOf("Bob liked your post"), live.map { it.title }, "a live arrival reaches the platform hook")
+        assertEquals(0, controller.unread.value.total)
     }
 
     @Test
-    fun aNotificationWithoutATargetJustOpensItsApp() {
+    fun clickingANotificationOpensItsTargetScreenAndMarksItRead() {
         val (controller, _) = controller("pixelfed")
-        val r = runner(controller).ok("open-inbox; click-notification followed you")
-        assertTrue(r.steps.last().message.contains("no screen"), r.steps.last().message)
-        assertEquals(null, controller.navigation.top)
+        runner(controller).ok("open-inbox; click @bob commented on your post; assert-text Comments; assert-text Which lens?")
+        // The root is the notification's layout: the inbox closes and its screen opens over the root.
+        val top = assertNotNull(controller.navigation.topScreen)
+        assertEquals("comment_thread", top.screen.id)
+        assertEquals(mapOf("id" to "781254316723458049", "comment" to "781300000000000107"), top.params)
+        assertEquals(1, controller.navigation.stack.size, "the inbox closed")
+        assertEquals(2, controller.unread.value.total)
     }
 
     @Test
-    fun channelSwitchesSaveAndShowTheirState() {
+    fun channelSwitchesSave() {
         val (controller, _) = controller("pixelfed")
-        val r = runner(controller).ok("open-notification-settings; toggle-channel pixelfed.likes; toggle-channel pixelfed.other; close-menu")
-        assertEquals("6 channel(s)", r.steps[0].message)
+        val r = runner(controller).ok("open-settings; toggle-channel pixelfed.likes; toggle-channel pixelfed.other")
         assertEquals("off", r.steps[1].message)
         assertEquals("on", r.steps[2].message)
         assertEquals(
@@ -135,11 +99,11 @@ class NotificationsSimTest {
     }
 
     @Test
-    fun aFakeWithoutNotificationsSaysSo() {
-        val fake = FakeEngineBridge(fixture("pixelfed_feed_bundle.json"))
+    fun aFakeWithoutNotificationsListsNone() {
+        val fake = FakeEngineBridge(fixture("pixelfed_feed_bundle.json"), layoutBundles = { layoutBundle(it, File("").absoluteFile) })
         val controller = ConstructController(fake, fake.appId)
-        val r = runner(controller).ok("open-inbox; close-inbox")
-        assertEquals("Notifications aren't available here.", r.steps[0].message)
+        val r = runner(controller).ok("open-inbox; assert-text No notifications yet.")
+        assertTrue(r.steps[0].message.endsWith("0 notification(s)"), r.steps[0].message)
         assertEquals(0, controller.unread.value.total)
         val failed = SimRunner(controller, outDir, ScreenSpec.parse("phone")).run(parseScript("notify a b c"))
         assertFalse(failed.ok, "notify needs the fixture mode's notifications")

@@ -1,5 +1,8 @@
 # Built-in apps are blueprints; every pod opens on its own `home` app, a dock drawn from a layout
 
+Superseded in part by [layouts-not-apps](layouts-not-apps.md): the Dock, Drawer, AppFrame, shell mode and the native
+menu and inbox are gone; blueprints, home and device data stay.
+
 Date: 2026-11-05. Related: D34, D46, D52, [custom-apps-and-data-sources](custom-apps-and-data-sources.md),
 [layout-parts](layout-parts.md), [named-vocabulary](named-vocabulary.md),
 [settings-page-and-sign-ins](settings-page-and-sign-ins.md).

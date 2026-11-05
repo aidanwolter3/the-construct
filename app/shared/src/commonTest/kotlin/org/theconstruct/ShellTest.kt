@@ -11,7 +11,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** The layout-first shell (decision `blueprints-and-home`): its vocabulary, device data and controller. */
+/** Home and the layouts it embeds and presents (decisions `blueprints-and-home`, `layouts-not-apps`). */
 class ShellTest {
     private class Bridge(val app: String) : ConstructEngineBridge {
         var listener: ((EngineSnapshot) -> Unit)? = null
@@ -53,36 +53,58 @@ class ShellTest {
         )
     }
 
-    private val dockJson = """
-        {"type": "core://Workspace", "id": "home", "title": "Home", "slots": [{"slot_id": "dock", "provider_uri": "local://apps",
-          "content": {"type": "core://Dock", "field": "tab", "query_key": "local:apps", "max_items": 4,
-            "item": {"value": "${'$'}item.id", "label": "${'$'}item.title", "badge": "${'$'}item.unread",
-                     "content": {"type": "core://AppFrame", "app": "${'$'}item.id"}},
-            "after": [{"value": "more", "label": "More", "icon": "more",
-              "content": {"type": "core://Button", "label": "Settings",
-                "on_click": {"intent": "action.device", "command": "open_settings"}}}]}}]}
+    private val homeJson = """
+        {"type": "core://Workspace", "id": "home", "title": "Home", "slots": [
+          {"slot_id": "card", "provider_uri": "local://home",
+           "content": {"type": "core://Layout", "layout": "c-card", "height_dp": 120}},
+          {"slot_id": "sheet", "provider_uri": "local://home",
+           "content": {"type": "core://Layout", "layout": "inbox", "presentation": "Sheet", "show_when": "${'$'}form.inbox",
+                       "animation": "sheet_up", "params": {"tab": "all"}}},
+          {"slot_id": "list", "provider_uri": "local://layouts",
+           "content": {"type": "core://List", "query_key": "local:layouts", "item_template": {"type": "core://Tappable",
+             "on_click": {"intent": "action.navigation.open", "layout": "${'$'}item.id", "presentation": "Push"},
+             "content": {"type": "core://Text", "style": "Body", "value_expr": "${'$'}item.title"}}}}]}
     """.trimIndent()
 
     @Test
-    fun dockFrameAndDeviceIntentRoundTrip() {
-        val ws = assertIs<UiNode.Workspace>(ConstructJson.decodeNode(dockJson))
-        assertTrue(fillsScreen(ws))
-        val dock = assertIs<UiNode.Dock>(ws.slots[0].content)
-        assertEquals("local:apps", dock.queryKey)
-        assertEquals(4, dock.maxItems)
-        assertIs<UiNode.AppFrame>(dock.item!!.content)
-        val button = assertIs<UiNode.Button>(dock.after[0].content)
-        assertEquals(ActionIntent.Device("open_settings"), button.onClick)
+    fun layoutNodesAndLayoutNavigationRoundTrip() {
+        val ws = assertIs<UiNode.Workspace>(ConstructJson.decodeNode(homeJson))
+        assertFalse(fillsScreen(ws))
+        val card = assertIs<UiNode.Layout>(ws.slots[0].content)
+        assertEquals(EmbedPresentation.Inline, card.presentation)
+        assertEquals(120, card.heightDp)
+        val sheet = assertIs<UiNode.Layout>(ws.slots[1].content)
+        assertEquals(EmbedPresentation.Sheet, sheet.presentation)
+        assertEquals(Animation.SheetUp, sheet.animation)
+        assertEquals(mapOf("tab" to "all"), sheet.params)
         // Re-encodes to what the pod sent.
         assertEquals(ws, ConstructJson.decodeNode(ConstructJson.json.encodeToString(UiNode.serializer(), ws)))
-        // `open_app` binds `$item.id` like any intent.
-        val bound = bindIntent(ActionIntent.Device("open_app", "${'$'}item.id"), buildJsonObject { put("id", "c-x") })
-        assertEquals(ActionIntent.Device("open_app", "c-x"), bound)
+        // A layout node as the one slot fills the screen.
+        assertTrue(fillsScreen(ws.copy(slots = listOf(ws.slots[0]))))
+        // `layout` and `params` bind `$item` like any intent field.
+        val list = assertIs<UiNode.ItemList>(ws.slots[2].content)
+        val open = assertIs<UiNode.Tappable>(list.itemTemplate).onClick
+        val bound = bindIntent(open, buildJsonObject { put("id", "c-x") })
+        assertEquals(ActionIntent.Navigate(presentation = PresentationMode.Push, layout = "c-x"), bound)
         val toggle = bindIntent(
             ActionIntent.Device("toggle_channel", "${'$'}item.app_id", "${'$'}item.id"),
             buildJsonObject { put("app_id", "c-x"); put("id", "likes") },
         )
         assertEquals(ActionIntent.Device("toggle_channel", "c-x", "likes"), toggle)
+        // A plain screen navigation encodes as before.
+        assertEquals(
+            """{"intent":"action.navigation.open","target_uri":"x://a","presentation":"Push"}""",
+            ConstructJson.encodeIntent(ActionIntent.Navigate("x://a", PresentationMode.Push)),
+        )
+    }
+
+    @Test
+    fun routeParamsBindInAPresentedLayout() {
+        val ws = ConstructJson.decodeNode(
+            """{"type": "core://Workspace", "id": "x", "title": "Post ${'$'}route.id", "slots": []}""",
+        )
+        assertEquals("Post 7", (bindRouteParams(ws, mapOf("id" to "7")) as UiNode.Workspace).title)
+        assertEquals(ws, bindRouteParams(ws, emptyMap()))
     }
 
     @Test
@@ -94,7 +116,9 @@ class ShellTest {
         )
         val state = ConstructState(isOnline = false, pendingActions = 2)
         val d = deviceData(state, UnreadCounts(5, mapOf("c-a" to 2)), apps, "desktop")
-        assertEquals(listOf("local://apps/c-a"), d.queries["local:apps"])
+        assertEquals(listOf("local://layouts/c-a"), d.queries["local:layouts"])
+        assertEquals(listOf("local://apps/c-a"), d.queries["local:apps"], "the old name, for older layouts")
+        assertEquals(JsonPrimitive(1), d.entities["local://layouts"]!!["count"])
         val kitchen = d.entities["local://apps/c-a"]!!
         assertEquals(JsonPrimitive("Kitchen"), kitchen["title"])
         assertEquals(JsonPrimitive(2), kitchen["unread"])
@@ -160,83 +184,78 @@ class ShellTest {
 
     @Test
     fun theShellShowsBootstrapThenHomeThenRescue() {
-        val home = ShellSnapshot(UiNode.Spacer())
-        assertEquals(ShellView.Loading, shellView(ConstructState(), null, onHome = true))
+        assertEquals(ShellView.Loading, shellView(ConstructState()))
         val signedOut = ConstructState(seq = 1, auth = AuthInfo(session = false))
-        assertEquals(ShellView.Bootstrap, shellView(signedOut, home, onHome = true))
+        assertEquals(ShellView.Bootstrap, shellView(signedOut))
         val open = ConstructState(seq = 1, auth = AuthInfo(session = true))
-        assertEquals(ShellView.Home(home), shellView(open, home, onHome = false))
-        assertEquals(ShellView.Rescue, shellView(open.copy(error = "409"), null, onHome = true))
-        assertEquals(ShellView.Loading, shellView(open, null, onHome = false))
+        assertEquals(ShellView.Home, shellView(open.copy(workspace = UiNode.Spacer())))
+        assertEquals(ShellView.Rescue, shellView(open.copy(error = "409")))
+        assertEquals(ShellView.Loading, shellView(open))
         // The bundled layouts parse.
         assertIs<UiNode.Workspace>(BundledLayouts.bootstrap)
         assertIs<UiNode.Workspace>(BundledLayouts.rescue)
     }
 
     @Test
-    fun shellModeKeepsHomeAndRoutesDeviceActions() {
-        val homeBridge = Bridge(HOME_APP)
-        val opened = mutableListOf<String>()
-        val controller = ConstructController(homeBridge, HOME_APP, Dispatchers.Unconfined) { id ->
-            opened += id
-            Bridge(id)
-        }
+    fun deviceActionsPresentSettingsAndTheInboxAndRetiredOnesDoNothing() {
+        val bridge = Bridge(HOME_APP)
+        val controller = ConstructController(bridge, HOME_APP, Dispatchers.Unconfined)
         assertTrue(controller.shellMode)
-        homeBridge.emit(dockJson)
-        val shell = controller.shell.value
-        assertIs<UiNode.Workspace>(shell?.workspace)
-        assertEquals(1L, shell?.version)
+        bridge.emit(homeJson)
+        controller.dispatchWithForm(ActionIntent.Device("open_settings"), emptyMap())
+        val settings = assertIs<LayoutEntry>(controller.navigation.top)
+        assertEquals(SETTINGS_LAYOUT to PresentationMode.Panel, settings.layoutId to settings.presentation)
+        controller.dispatchWithForm(ActionIntent.Device("open_inbox"), emptyMap())
+        val inbox = assertIs<LayoutEntry>(controller.navigation.top)
+        assertEquals(INBOX_LAYOUT to PresentationMode.Sheet, inbox.layoutId to inbox.presentation)
+        // Retired and unknown commands do nothing and never reach the engine.
+        controller.dispatchWithForm(ActionIntent.Device("open_app", "c-bbbbbbbbbb"), emptyMap())
+        controller.dispatchWithForm(ActionIntent.Device("show", id = "settings"), emptyMap())
+        controller.dispatchWithForm(ActionIntent.Device("no_such_command"), emptyMap())
+        assertEquals(2, controller.navigation.stack.size)
+        assertTrue(bridge.dispatched.isEmpty())
+        // Back pops one at a time.
+        assertTrue(controller.navigation.back())
+        assertEquals(SETTINGS_LAYOUT, controller.navigation.currentLayout())
+        // Leaving the pod closes everything and forgets the session.
+        controller.dispatchWithForm(ActionIntent.Device("leave_pod"), emptyMap())
+        assertNull(controller.navigation.top)
+        assertEquals(1, bridge.forgotten)
+    }
 
-        // The frame's app takes the engine; the home layout stays.
-        assertTrue(controller.openApp("c-aaaaaaaaaa"))
-        assertEquals(listOf("c-aaaaaaaaaa"), opened)
-        assertEquals(shell, controller.shell.value)
-
-        // open_app goes to the dock; nothing reaches the engine.
-        controller.dispatchShell(ActionIntent.Device("open_app", "c-bbbbbbbbbb"))
-        assertEquals("c-bbbbbbbbbb", controller.dockRequest.value)
-        controller.dockRequestHandled()
-        assertNull(controller.dockRequest.value)
-        controller.dispatchShell(ActionIntent.Device("show", id = "settings"))
-        assertEquals("settings", controller.dockRequest.value)
-        controller.dockRequestHandled()
-        controller.dispatchShell(ActionIntent.Device("open_settings"))
-        assertTrue(controller.menu.open && controller.menu.settingsOpen)
-        controller.dispatchShell(ActionIntent.Device("no_such_command"))
-        assertTrue(homeBridge.dispatched.isEmpty())
-
-        // Leaving the pod forgets the home layout and goes back to home for the next pod.
-        controller.dispatchShell(ActionIntent.Device("leave_pod"))
-        assertNull(controller.shell.value)
-        assertEquals(listOf("c-aaaaaaaaaa", HOME_APP), opened)
+    @Test
+    fun aSheetFromALayoutNodeClearsItsFieldWhenDismissed() {
+        val bridge = Bridge(HOME_APP)
+        val controller = ConstructController(bridge, HOME_APP, Dispatchers.Unconfined)
+        val form = controller.navigation.rootForm
+        form["inbox"] = "1"
+        controller.navigation.presentFromNode("node-1", INBOX_LAYOUT, emptyMap(), PresentationMode.Sheet, null) {
+            form.remove("inbox")
+        }
+        controller.navigation.presentFromNode("node-1", INBOX_LAYOUT, emptyMap(), PresentationMode.Sheet, null) {}
+        assertEquals(1, controller.navigation.stack.size, "one entry per node")
+        assertTrue(controller.navigation.back())
+        assertNull(form["inbox"], "Back clears show_when's field, so it stays closed")
+        // The node going away takes its entry (and what is above it) with it.
+        controller.navigation.presentFromNode("node-2", INBOX_LAYOUT, emptyMap(), PresentationMode.Sheet, null) {}
+        controller.navigation.present("c-x")
+        controller.navigation.dismissNode("node-2")
+        assertNull(controller.navigation.top)
     }
 
     @Test
     fun signInGoesToATypedServerOrTheDefault() = kotlinx.coroutines.runBlocking {
         val bridge = Bridge(HOME_APP)
-        val controller = ConstructController(bridge, HOME_APP, Dispatchers.Unconfined) { Bridge(it) }
-        controller.menu.loadSignIns()
+        val controller = ConstructController(bridge, HOME_APP, Dispatchers.Unconfined)
+        controller.device.loadSignIns()
         val signIn = ActionIntent.Device("sign_in", id = "pixelfed", value = "${'$'}form?.server")
         controller.dispatchWithForm(signIn, mapOf("server" to "photos.example"))
         controller.dispatchWithForm(signIn, emptyMap())
         val sent = bridge.dispatched.map { ConstructJson.decodeIntent(it) as ActionIntent.AuthLogin }
         assertEquals(listOf("photos.example", "https://default.example"), sent.map { it.instanceUrl })
         val provider = deviceData(ConstructState(), UnreadCounts(), emptyList(), "desktop",
-            DeviceSources(providers = controller.menu.providers)).entities["local://providers/pixelfed"]!!
+            DeviceSources(providers = controller.device.providers)).entities["local://providers/pixelfed"]!!
         assertEquals(JsonPrimitive(true), provider["custom_server"])
         assertEquals(JsonPrimitive("pixelfed.social"), provider["server_placeholder"])
-    }
-
-    @Test
-    fun outsideShellModeOpenAppSwitchesTheEngine() {
-        val opened = mutableListOf<String>()
-        val controller = ConstructController(Bridge("a"), "a", Dispatchers.Unconfined) { id ->
-            opened += id
-            Bridge(id)
-        }
-        assertFalse(controller.shellMode)
-        controller.dispatch(ActionIntent.Device("open_app", "b"))
-        assertEquals(listOf("b"), opened)
-        assertNull(controller.dockRequest.value)
     }
 }

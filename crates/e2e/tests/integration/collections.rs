@@ -101,7 +101,7 @@ fn a_todo_app_syncs_live_and_survives_a_change_made_while_offline() {
             {"name": "due", "type": "date", "optional": true}]}),
     );
     let app = mcp(
-        "create_app",
+        "create_layout",
         json!({"title": "Todos", "feeds": [["collections", "todos"]], "layout": todo_app()}),
     )["id"]
         .as_str()

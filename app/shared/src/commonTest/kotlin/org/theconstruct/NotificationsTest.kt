@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -17,6 +18,11 @@ private class NotifyingBridge(val appId: String) : ConstructEngineBridge {
     val deviceInfo = mutableListOf<Pair<String, String>>()
     var pushRegistrations = 0
     var closes = 0
+    val openedLayouts = mutableListOf<String>()
+
+    override fun openLayout(id: String) {
+        openedLayouts += id
+    }
     private var seq = 1L
 
     override fun subscribe(onState: (EngineSnapshot) -> Unit) {
@@ -55,9 +61,9 @@ private class NotifyingBridge(val appId: String) : ConstructEngineBridge {
     override fun handlePushMessage(payloadJson: String): String? = payloadJson.takeIf { it.contains("\"id\"") }
 
     /** A snapshot of [workspace] (versioned unless [version] is null) with [unread] notifications. */
-    fun emit(workspace: String = WORKSPACE, unread: String = NO_UNREAD, version: Long? = 1) {
+    fun emit(workspace: String = WORKSPACE, unread: String = NO_UNREAD, version: Long? = 1, layouts: String = "{}") {
         val layout = if (version == null) """{"app_id":"$appId"}""" else """{"app_id":"$appId","version":$version}"""
-        listener!!(EngineSnapshot(workspace, "{}", true, seq++, 0, layoutJson = layout, notificationsJson = unread))
+        listener!!(EngineSnapshot(workspace, "{}", true, seq++, 0, layoutJson = layout, notificationsJson = unread, layoutsJson = layouts))
     }
 
     companion object {
@@ -153,7 +159,7 @@ class NotificationsTest {
     @Test
     fun unreadFollowsSnapshotsAndFakesWithoutNotificationsReadZero() {
         val bridge = NotifyingBridge("a")
-        val controller = ConstructController(bridge, "a", Dispatchers.Unconfined, null)
+        val controller = ConstructController(bridge, "a", Dispatchers.Unconfined)
         assertEquals(0, controller.unread.value.total)
         bridge.emit(unread = """{"unread_total":4,"unread_by_app":{"a":3,"b":1}}""")
         assertEquals(UnreadCounts(4, mapOf("a" to 3, "b" to 1)), controller.unread.value)
@@ -165,101 +171,96 @@ class NotificationsTest {
         }
         val e = runCatching { plain.listNotifications() }.exceptionOrNull()
         assertEquals("Notifications aren't available here.", e?.message)
-        val c = ConstructController(plain, null, Dispatchers.Unconfined, null)
+        val c = ConstructController(plain, null, Dispatchers.Unconfined)
         assertTrue(c.notificationChannels().isEmpty())
         assertNull(c.pushPublicKey())
         assertNull(c.handlePushMessage("{}"))
     }
 
     @Test
-    fun liveNotificationsReachTheHookFromEveryEngineAndDeviceInfoCarriesOver() {
-        val first = NotifyingBridge("a")
-        val second = NotifyingBridge("b")
-        val controller = ConstructController(first, "a", Dispatchers.Unconfined) { second }
+    fun liveNotificationsReachTheHook() {
+        val bridge = NotifyingBridge("a")
+        val controller = ConstructController(bridge, "a", Dispatchers.Unconfined)
         controller.setDeviceInfo("desktop", "host")
-        assertEquals(listOf("desktop" to "host"), first.deviceInfo)
+        assertEquals(listOf("desktop" to "host"), bridge.deviceInfo)
         val heard = mutableListOf<AppNotification>()
         controller.onNotification = { heard += it }
-        first.live!!(NOTIFICATION)
-        first.live!!("not json") // dropped, never thrown into the engine
+        bridge.live!!(NOTIFICATION)
+        bridge.live!!("not json") // dropped, never thrown into the engine
         assertEquals(listOf("n1"), heard.map { it.id })
-
-        assertTrue(controller.openApp("b"))
-        assertEquals(listOf("desktop" to "host"), second.deviceInfo, "applied to engines created later")
-        second.live!!(NOTIFICATION.replace("n1", "n2"))
-        first.live!!(NOTIFICATION.replace("n1", "n3")) // the replaced engine: ignored
-        assertEquals(listOf("n1", "n2"), heard.map { it.id })
-
         // A throwing hook doesn't escape either.
         controller.onNotification = { throw IllegalStateException("boom") }
-        second.live!!(NOTIFICATION)
+        bridge.live!!(NOTIFICATION)
     }
 
     @Test
-    fun openNotificationRoutesInTheAppOnScreen() {
+    fun openNotificationRoutesInTheRoot() {
         val bridge = NotifyingBridge("a")
-        val controller = ConstructController(bridge, "a", Dispatchers.Unconfined, null)
+        val controller = ConstructController(bridge, "a", Dispatchers.Unconfined)
         bridge.emit()
         controller.openNotification("a", "x://posts/7/comments", "n1")
-        assertEquals("comments", controller.navigation.top?.screen?.id)
-        assertEquals(mapOf("id" to "7"), controller.navigation.top?.params)
+        assertEquals("comments", controller.navigation.topScreen?.screen?.id)
+        assertEquals(mapOf("id" to "7"), controller.navigation.topScreen?.params)
         assertEquals(listOf(listOf("n1")), bridge.markedRead)
         assertEquals(UnreadCounts(1, mapOf("a" to 1)), controller.unread.value, "the mark-read answer updates the count")
 
-        // No target, or one no screen matches: the app stays as it is.
+        // No target, or one no screen matches: nothing opens.
         controller.navigation.clear()
         controller.openNotification("a", null, null)
         controller.openNotification("a", "x://users/7", "n2")
         assertNull(controller.navigation.top)
         assertEquals(listOf(listOf("n1"), listOf("n2")), bridge.markedRead)
-        assertEquals(0, bridge.closes)
     }
 
     @Test
-    fun openNotificationOpensAnotherAppAndWaitsForItsWorkspace() {
-        val first = NotifyingBridge("a")
-        val second = NotifyingBridge("b")
-        val opened = mutableListOf<String>()
+    fun openNotificationPresentsItsLayoutAndWaitsForIt() {
+        val bridge = NotifyingBridge("home")
         // Cold start: the notification is opened before any snapshot arrived.
-        val controller = ConstructController(first, "a", Dispatchers.Unconfined) { id -> opened += id; second }
-        controller.openNotification("b", "x://posts/9/comments", "n9")
-        assertEquals(listOf("b"), opened)
-        assertEquals("b", controller.currentAppId())
-        assertEquals(1, first.closes)
-        assertNull(controller.navigation.top, "waits for the app's workspace")
-        // The signed-out screen first (unversioned, no screens): still waiting.
-        second.emit(PLAIN_WORKSPACE, version = null)
-        assertNull(controller.navigation.top)
-        second.emit()
-        assertEquals("comments", controller.navigation.top?.screen?.id)
-        assertEquals(mapOf("id" to "9"), controller.navigation.top?.params)
-        // Applied once: later snapshots don't push it again.
-        second.emit()
+        val controller = ConstructController(bridge, "home", Dispatchers.Unconfined)
+        controller.openNotification("pixelfed", "x://posts/9/comments", "n9", layout = "c-photos")
+        assertEquals(listOf("c-photos"), bridge.openedLayouts, "the same engine loads it")
+        assertEquals(0, bridge.closes)
+        val presented = assertIs<LayoutEntry>(controller.navigation.top)
+        assertEquals("c-photos", presented.layoutId)
+        // Its screen waits for the layout.
+        bridge.emit(PLAIN_WORKSPACE)
         assertEquals(1, controller.navigation.stack.size)
-        assertEquals(listOf(listOf("n9")), first.markedRead, "marked read on the engine current when tapped")
+        bridge.emit(PLAIN_WORKSPACE, layouts = """{"c-photos":{"workspace":$WORKSPACE,"version":2,"gone":false}}""")
+        val screen = assertNotNull(controller.navigation.topScreen)
+        assertEquals("comments", screen.screen.id)
+        assertEquals("c-photos", screen.layoutId)
+        assertEquals(mapOf("id" to "9"), screen.params)
+        // Applied once.
+        bridge.emit(PLAIN_WORKSPACE, layouts = """{"c-photos":{"workspace":$WORKSPACE,"version":2,"gone":false}}""")
+        assertEquals(2, controller.navigation.stack.size)
+        assertEquals(listOf(listOf("n9")), bridge.markedRead)
+        // Back pops the screen, then the layout.
+        assertTrue(controller.navigation.back())
+        assertTrue(controller.navigation.back())
+        assertNull(controller.navigation.top)
+        // Without a layout (an older pod), the blueprint's id is the layout.
+        controller.openNotification("pixelfed", null, null)
+        assertEquals("pixelfed", controller.navigation.top?.layoutId)
     }
 
     @Test
-    fun aTargetTheAppCannotShowIsDroppedAndAnotherAppSwitchCancelsIt() {
-        val bridges = mutableMapOf<String, NotifyingBridge>()
-        val controller = ConstructController(NotifyingBridge("a"), "a", Dispatchers.Unconfined) { id ->
-            NotifyingBridge(id).also { bridges[id] = it }
-        }
-        controller.openNotification("b", "x://nowhere/1", null)
-        bridges.getValue("b").emit()
-        assertNull(controller.navigation.top)
-
-        controller.openNotification("c", "x://posts/1/comments", null)
-        assertTrue(controller.openApp("d"), "the user switches apps before c loaded")
-        bridges.getValue("c").emit()
-        bridges.getValue("d").emit()
-        assertNull(controller.navigation.top, "the pending target belonged to c")
+    fun aTargetIsDroppedWhenItsLayoutIsClosedOrGone() {
+        val bridge = NotifyingBridge("home")
+        val controller = ConstructController(bridge, "home", Dispatchers.Unconfined)
+        bridge.emit(PLAIN_WORKSPACE)
+        controller.openNotification("b", "x://posts/1/comments", null, layout = "b")
+        controller.navigation.back() // closed before it loaded
+        bridge.emit(PLAIN_WORKSPACE, layouts = """{"b":{"workspace":$WORKSPACE,"version":1,"gone":false}}""")
+        assertNull(controller.navigation.top, "the pending target belonged to the closed layout")
+        controller.openNotification("c", "x://posts/1/comments", null, layout = "c")
+        bridge.emit(PLAIN_WORKSPACE, layouts = """{"c":{"gone":true}}""")
+        assertEquals(1, controller.navigation.stack.size, "only the layout, which says it's gone")
     }
 
     @Test
     fun pushAndChannelHelpersNeverThrow() {
         val bridge = NotifyingBridge("a")
-        val controller = ConstructController(bridge, "a", Dispatchers.Unconfined, null)
+        val controller = ConstructController(bridge, "a", Dispatchers.Unconfined)
         controller.registerPush("https://push.example/x", "k", "a") // the bridge throws: logged
         assertEquals(1, bridge.pushRegistrations)
         assertEquals(listOf("likes"), controller.notificationChannels().map { it.id })

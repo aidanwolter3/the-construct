@@ -67,8 +67,11 @@ pub const SOURCE_REF_UPDATE: &str = "ref_update";
 pub const AUTHOR_POD: &str = "pod";
 /// Soft-deleted custom apps are purged this long after deletion.
 pub const PURGE_AFTER_SECS: i64 = 30 * 86_400;
-/// Most feeds one custom app may list.
+/// Most feeds one write may add.
 pub const MAX_FEEDS: usize = 8;
+/// Most feeds home may declare: every layout's scope (decision
+/// `layouts-not-apps`).
+pub const MAX_HOME_FEEDS: usize = 32;
 /// Longest title.
 pub const MAX_TITLE_CHARS: usize = 60;
 /// The app icons a custom app may have (clients draw any other name as a
@@ -248,23 +251,119 @@ fn app_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CustomApp> {
 
 const APP_COLS: &str = "id, title, icon, feeds_json, created_at, updated_at";
 
-/// A live (not deleted) custom app.
-pub fn custom_app_on(conn: &Connection, id: &str) -> rusqlite::Result<Option<CustomApp>> {
-    conn.query_row(
-        &format!("SELECT {APP_COLS} FROM custom_apps WHERE id = ?1 AND deleted_at IS NULL"),
-        [id],
-        app_row,
-    )
-    .optional()
+/// Home's own feeds (`None` on a pod without a home): the feeds every
+/// layout of the pod may bind (decision `layouts-not-apps`).
+pub fn home_feeds_on(conn: &Connection) -> rusqlite::Result<Option<Vec<(String, String)>>> {
+    let json: Option<String> = conn
+        .query_row(
+            "SELECT feeds_json FROM custom_apps WHERE id = ?1 AND deleted_at IS NULL",
+            [crate::HOME_APP],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(json.map(|j| serde_json::from_str(&j).unwrap_or_default()))
 }
 
-/// Every live custom app: the home app first, then oldest first.
+/// A live (not deleted) custom app. Its `feeds` are its scope: home's feeds
+/// (decision `layouts-not-apps`), or its own on a pod without a home.
+pub fn custom_app_on(conn: &Connection, id: &str) -> rusqlite::Result<Option<CustomApp>> {
+    let app = conn
+        .query_row(
+            &format!("SELECT {APP_COLS} FROM custom_apps WHERE id = ?1 AND deleted_at IS NULL"),
+            [id],
+            app_row,
+        )
+        .optional()?;
+    let Some(mut app) = app else {
+        return Ok(None);
+    };
+    if app.id != crate::HOME_APP
+        && let Some(home) = home_feeds_on(conn)?
+    {
+        app.feeds = home;
+    }
+    Ok(Some(app))
+}
+
+/// Every live custom app: the home app first, then oldest first (feeds as
+/// in [`custom_app_on`]).
 pub fn custom_apps_on(conn: &Connection) -> rusqlite::Result<Vec<CustomApp>> {
     let mut stmt = conn.prepare_cached(&format!(
         "SELECT {APP_COLS} FROM custom_apps WHERE deleted_at IS NULL
          ORDER BY id = ?1 DESC, created_at, id"
     ))?;
-    stmt.query_map([crate::HOME_APP], app_row)?.collect()
+    let mut apps: Vec<CustomApp> = stmt
+        .query_map([crate::HOME_APP], app_row)?
+        .collect::<Result<_, _>>()?;
+    if let Some(home) = apps
+        .iter()
+        .find(|a| a.id == crate::HOME_APP)
+        .map(|a| a.feeds.clone())
+    {
+        for a in apps.iter_mut().filter(|a| a.id != crate::HOME_APP) {
+            a.feeds = home.clone();
+        }
+    }
+    Ok(apps)
+}
+
+/// The feeds of `feeds` that `layout` (as served, parts expanded) binds:
+/// those whose query keys it lists, or whose source's entities it binds by
+/// URI. Only these load with it (decision `layouts-not-apps`).
+pub fn bound_feeds(
+    catalog: &Catalog,
+    feeds: &[(String, String)],
+    layout: &Value,
+) -> Vec<(String, String)> {
+    fn keys<'a>(v: &'a Value, out: &mut Vec<&'a str>) {
+        match v {
+            Value::Object(m) => {
+                for (k, c) in m {
+                    match (k.as_str(), c) {
+                        ("query_key", Value::String(q)) => out.push(q),
+                        _ => keys(c, out),
+                    }
+                }
+            }
+            Value::Array(a) => a.iter().for_each(|c| keys(c, out)),
+            _ => {}
+        }
+    }
+    let mut used = Vec::new();
+    keys(layout, &mut used);
+    let text = layout.to_string();
+    feeds
+        .iter()
+        .filter(|(source, feed)| {
+            let Some((_, m)) = catalog.source(source) else {
+                return false;
+            };
+            let Some(spec) = m.feed(feed) else {
+                return false;
+            };
+            let by_key = spec.query_keys.iter().any(|pattern| {
+                // A pattern feed's keys use its name for the placeholder.
+                let filled = if spec.is_pattern() {
+                    let open = pattern.find('{');
+                    let close = pattern.find('}');
+                    match (open, close) {
+                        (Some(o), Some(c)) if o < c => {
+                            format!("{}{}{}", &pattern[..o], feed, &pattern[c + 1..])
+                        }
+                        _ => (*pattern).to_owned(),
+                    }
+                } else {
+                    (*pattern).to_owned()
+                };
+                used.iter().any(|k| crate::source::key_matches(&filled, k))
+            });
+            by_key
+                || m.entity_schemes
+                    .iter()
+                    .any(|scheme| text.contains(&format!("${{{scheme}://")))
+        })
+        .cloned()
+        .collect()
 }
 
 /// The hidden app ids ([`HIDDEN_SETTING`]).
@@ -335,7 +434,8 @@ pub fn seed_blueprint_apps(store: &Store, catalog: &Catalog) -> rusqlite::Result
     if convert {
         let hidden = hidden_apps(store)?;
         for a in catalog.apps() {
-            if a.dev || a.id == crate::HOME_BLUEPRINT || hidden.iter().any(|h| h == a.id) {
+            if a.dev || crate::SYSTEM_BLUEPRINTS.contains(&a.id) || hidden.iter().any(|h| h == a.id)
+            {
                 continue;
             }
             let id = new_custom_id();
@@ -402,6 +502,129 @@ pub fn seed_blueprint_apps(store: &Store, catalog: &Catalog) -> rusqlite::Result
             tracing::info!(app = %id, "app started from a blueprint");
         }
         tx.execute("DELETE FROM pod_settings WHERE key = ?1", [CONVERT_SETTING])?;
+        if convert {
+            // The apps just made bring their feeds; home owns them
+            // ([`convert_to_layouts`], next).
+            tx.execute(
+                "INSERT OR REPLACE INTO pod_settings (key, value) VALUES (?1, '1')",
+                [LAYOUTS_CONVERT_SETTING],
+            )?;
+        }
+        Ok(())
+    })
+}
+
+/// Pod setting: set by the `layouts_not_apps` migration; cleared by
+/// [`convert_to_layouts`].
+pub const LAYOUTS_CONVERT_SETTING: &str = "layouts.convert";
+/// The `source` of a home version [`convert_to_layouts`] wrote.
+pub const SOURCE_LAYOUTS: &str = "layouts";
+
+/// Home as a plain list of the pod's layouts, each pushing its layout, with
+/// the inbox and Settings at the top (decision `layouts-not-apps`).
+pub fn home_list_layout() -> Value {
+    json!({
+        "type": "core://Workspace", "id": crate::HOME_APP, "title": "Home",
+        "slots": [{"slot_id": "home", "provider_uri": "local://home", "content": {
+            "type": "core://Column", "children": [
+                {"type": "core://Row", "padding_h_dp": 8, "children": [
+                    {"type": "core://Spacer"},
+                    {"type": "core://IconButton", "icon": "notifications", "content_description": "Notifications",
+                     "on_click": {"intent": "action.navigation.open", "layout": "inbox", "presentation": "Sheet"}},
+                    {"type": "core://IconButton", "icon": "settings", "content_description": "Settings",
+                     "on_click": {"intent": "action.navigation.open", "layout": "settings", "presentation": "Panel"}}
+                ]},
+                {"type": "core://List", "query_key": "local:layouts",
+                 "empty_text": "Nothing here yet. Ask your agent to build something.",
+                 "item_template": {"type": "core://Tappable",
+                    "on_click": {"intent": "action.navigation.open", "layout": "$item.id", "presentation": "Push"},
+                    "content": {"type": "core://Column", "padding_h_dp": 16, "padding_v_dp": 12, "spacing_dp": 2,
+                        "children": [
+                            {"type": "core://Text", "style": "Title", "value_expr": "$item.title"},
+                            {"type": "core://Text", "style": "Secondary", "value_expr": "$item.version"}
+                        ]}}}
+            ]}}]
+    })
+}
+
+/// Once, after the `layouts_not_apps` migration ([`LAYOUTS_CONVERT_SETTING`]):
+/// home's feeds become every live layout's feeds (each once, at most
+/// [`MAX_HOME_FEEDS`], in order: home's, then oldest layout first), the
+/// others' are cleared; and a home whose latest version uses a retired
+/// node or command gets a new version, [`home_list_layout`].
+pub fn convert_to_layouts(store: &Store, catalog: &Catalog) -> rusqlite::Result<()> {
+    if store.pod_setting(LAYOUTS_CONVERT_SETTING)?.is_none() {
+        return Ok(());
+    }
+    // Raw rows: `custom_apps_on` reports home's feeds for every layout.
+    let raw: Vec<(String, String)> = store.with_conn(|c| {
+        let mut stmt = c.prepare(
+            "SELECT id, feeds_json FROM custom_apps WHERE deleted_at IS NULL
+             ORDER BY id = ?1 DESC, created_at, id",
+        )?;
+        stmt.query_map([crate::HOME_APP], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()
+    })?;
+    let mut feeds: Vec<(String, String)> = Vec::new();
+    for (_, json) in &raw {
+        for f in serde_json::from_str::<Vec<(String, String)>>(json).unwrap_or_default() {
+            if !feeds.contains(&f) && feeds.len() < MAX_HOME_FEEDS {
+                feeds.push(f);
+            }
+        }
+    }
+    let has_home = raw.iter().any(|(id, _)| id == crate::HOME_APP);
+    let retired = has_home
+        && store.app_latest(crate::HOME_APP)?.is_some_and(|(_, json)| {
+            let doc: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
+            let doc = if crate::parts::may_hold_refs(&json) {
+                crate::parts::expand(store, catalog, &doc, None, crate::parts::Mode::Lenient)
+                    .unwrap_or(doc)
+            } else {
+                doc
+            };
+            serde_json::from_value::<protocol::UiNode>(doc).is_ok_and(|n| {
+                protocol::required_features(&n)
+                    .iter()
+                    .any(|f| protocol::REMOVED_FEATURES.contains(f))
+            })
+        });
+    let list = home_list_layout();
+    let list_features = serde_json::from_value::<protocol::UiNode>(list.clone())
+        .map(|n| recorded_features(&n))
+        .unwrap_or_default();
+    store.transaction(|tx| {
+        if has_home {
+            tx.execute(
+                "UPDATE custom_apps SET feeds_json = CASE WHEN id = ?1 THEN ?2 ELSE '[]' END
+                 WHERE deleted_at IS NULL",
+                params![
+                    crate::HOME_APP,
+                    serde_json::to_string(&feeds).expect("serializes")
+                ],
+            )?;
+        }
+        if retired {
+            crate::store::append_authored_version_on(
+                tx,
+                crate::HOME_APP,
+                &list.to_string(),
+                SOURCE_LAYOUTS,
+                Some("A list of your layouts: the dock and drawer were retired"),
+                Authored {
+                    author: AUTHOR_POD,
+                    meta_json: None,
+                    features: &list_features,
+                },
+            )?;
+            tracing::info!("home converted to a list of layouts");
+        }
+        tx.execute(
+            "DELETE FROM pod_settings WHERE key = ?1",
+            [LAYOUTS_CONVERT_SETTING],
+        )?;
         Ok(())
     })
 }
@@ -440,6 +663,15 @@ pub fn invalid_layout(e: &LayoutError) -> Refusal {
 /// each a declared feed of a source custom apps may use (not a dev source
 /// unless dev apps are shown).
 pub fn check_feeds(pod: &Pod, v: &Value) -> Result<Vec<(String, String)>, Refusal> {
+    check_feeds_upto(pod, v, MAX_FEEDS)
+}
+
+/// [`check_feeds`] with at most `max` feeds; `null` or `[]` is none.
+pub fn check_feeds_upto(
+    pod: &Pod,
+    v: &Value,
+    max: usize,
+) -> Result<Vec<(String, String)>, Refusal> {
     let offered = || -> Vec<String> {
         pod.catalog()
             .sources()
@@ -452,13 +684,16 @@ pub fn check_feeds(pod: &Pod, v: &Value) -> Result<Vec<(String, String)>, Refusa
         r.1["allowed"] = json!(offered());
         r
     };
+    if v.is_null() {
+        return Ok(Vec::new());
+    }
     let Some(items) = v.as_array() else {
         return Err(bad(
             "\"feeds\" must be a list of [source, feed] pairs".into()
         ));
     };
-    if items.is_empty() || items.len() > MAX_FEEDS {
-        return Err(bad(format!("an app lists 1..={MAX_FEEDS} feeds")));
+    if items.len() > max {
+        return Err(bad(format!("at most {max} feeds")));
     }
     let mut out: Vec<(String, String)> = Vec::new();
     for item in items {
@@ -488,6 +723,83 @@ pub fn check_feeds(pod: &Pod, v: &Value) -> Result<Vec<(String, String)>, Refusa
         out.push((source, feed));
     }
     Ok(out)
+}
+
+/// Home's feeds, or `None` on a pod without a home.
+async fn home_feeds(pod: &Pod) -> Result<Option<Vec<(String, String)>>, Refusal> {
+    blocking(pod, |s| s.with_conn(home_feeds_on))
+        .await
+        .map_err(|(st, Json(b))| (st, b))
+}
+
+/// `home` with `extra` added (in order, each once): the scope of a write
+/// that names feeds, and whether home grows. Refused past
+/// [`MAX_HOME_FEEDS`].
+fn grow(
+    home: &[(String, String)],
+    extra: &[(String, String)],
+) -> Result<(Vec<(String, String)>, bool), Refusal> {
+    let mut out = home.to_vec();
+    for f in extra {
+        if !out.contains(f) {
+            out.push(f.clone());
+        }
+    }
+    if out.len() > MAX_HOME_FEEDS {
+        return Err(invalid(
+            "invalid_feeds",
+            format!("home declares at most {MAX_HOME_FEEDS} feeds; remove one it no longer needs"),
+        ));
+    }
+    let grew = out.len() > home.len();
+    Ok((out, grew))
+}
+
+/// Check that every live layout but `except` still fits `feeds` (home's
+/// new feeds): refused naming the first layout and what it binds.
+async fn check_scope(pod: &Pod, feeds: &[(String, String)], except: &str) -> Result<(), Refusal> {
+    let rows = blocking(pod, move |s| {
+        let mut out = Vec::new();
+        for app in s.with_conn(custom_apps_on)? {
+            if let Some((_, json)) = s.app_latest(&app.id)? {
+                out.push((app, json));
+            }
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|(st, Json(b))| (st, b))?;
+    for (app, json) in rows {
+        if app.id == except {
+            continue;
+        }
+        let layout: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
+        if let Err((_, body)) = check_layout_with(pod, &app.id, feeds, &layout, false) {
+            let what = body["detail"].as_str().unwrap_or("").to_owned();
+            return Err(refuse(
+                StatusCode::CONFLICT,
+                json!({ "error": "feed_in_use", "layout": app.id, "title": app.title,
+                        "at": body["at"],
+                        "detail": format!("layout '{}' ({}) still binds a feed this change drops: {what}", app.title, app.id) }),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Write home's feeds in `tx`.
+fn set_home_feeds(
+    tx: &rusqlite::Transaction<'_>,
+    feeds: &[(String, String)],
+) -> rusqlite::Result<()> {
+    tx.execute(
+        "UPDATE custom_apps SET feeds_json = ?1 WHERE id = ?2",
+        params![
+            serde_json::to_string(feeds).expect("serializes"),
+            crate::HOME_APP
+        ],
+    )?;
+    Ok(())
 }
 
 /// The manifests of `feeds`' sources, each once.
@@ -782,14 +1094,23 @@ fn append(
 pub async fn create(pod: &Pod, body: &Value, by: Writer) -> Result<Written, Refusal> {
     let title = check_title(Some(&body["title"]))?.expect("checked");
     let icon = check_icon(Some(body.get("icon").unwrap_or(&json!("photo"))))?.expect("checked");
-    let feeds = check_feeds(pod, &body["feeds"])?;
+    // Feeds named here join home's: every layout binds home's (decision
+    // `layouts-not-apps`). On a pod without a home they are the app's own.
+    let extra = check_feeds(pod, &body["feeds"])?;
     let note = check_note(body.get("note"), "Created")?;
     let meta = check_copied_from(pod, body)?;
     let id = new_custom_id();
-    let (layout, json) = check_layout(pod, &id, &feeds, &body["layout"])?;
+    let home = home_feeds(pod).await?;
+    let (scope, grew) = match &home {
+        Some(h) => grow(h, &extra)?,
+        None => (extra.clone(), false),
+    };
+    let (layout, json) = check_layout(pod, &id, &scope, &body["layout"])?;
     let features = recorded_features(&layout);
     let caps = pod.custom.caps;
-    let feeds_json = serde_json::to_string(&feeds).expect("serializes");
+    let own: &[(String, String)] = if home.is_some() { &[] } else { &extra };
+    let feeds_json = serde_json::to_string(own).expect("serializes");
+    let new_home = grew.then(|| scope.clone());
     let app_id = id.clone();
     let version = write(pod, move |tx| {
         let live: i64 = tx.query_row(
@@ -810,6 +1131,9 @@ pub async fn create(pod: &Pod, body: &Value, by: Writer) -> Result<Written, Refu
              VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
             params![app_id, title, icon, feeds_json, now],
         )?;
+        if let Some(feeds) = &new_home {
+            set_home_feeds(tx, feeds)?;
+        }
         Ok(append(
             tx,
             caps,
@@ -903,8 +1227,19 @@ pub async fn patch(pod: &Pod, id: &str, body: &Value) -> Result<Written, Refusal
     let app = load(pod, id).await?;
     let title = check_title(body.get("title"))?;
     let icon = check_icon(body.get("icon"))?;
+    let is_home = id == crate::HOME_APP;
+    let home = home_feeds(pod).await?;
+    // Home's feeds are replaced (every other layout must still fit them);
+    // another layout's join home's (decision `layouts-not-apps`).
     let feeds = match body.get("feeds") {
-        Some(v) => Some(check_feeds(pod, v)?),
+        Some(v) if is_home || home.is_none() => {
+            let max = if is_home { MAX_HOME_FEEDS } else { MAX_FEEDS };
+            Some(check_feeds_upto(pod, v, max)?)
+        }
+        Some(v) => {
+            let extra = check_feeds(pod, v)?;
+            Some(grow(home.as_deref().unwrap_or_default(), &extra)?.0)
+        }
         None => None,
     };
     if let Some(feeds) = &feeds {
@@ -916,7 +1251,12 @@ pub async fn patch(pod: &Pod, id: &str, body: &Value) -> Result<Written, Refusal
             let layout: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
             check_layout(pod, id, feeds, &layout)?;
         }
+        if is_home {
+            check_scope(pod, feeds, id).await?;
+        }
     }
+    // The feeds are written on home (or, on a pod without a home, the app).
+    let target = if home.is_some() { crate::HOME_APP } else { id }.to_owned();
     let feeds_json = feeds
         .as_ref()
         .map(|f| serde_json::to_string(f).expect("serializes"));
@@ -924,9 +1264,15 @@ pub async fn patch(pod: &Pod, id: &str, body: &Value) -> Result<Written, Refusal
     let version = write(pod, move |tx| {
         tx.execute(
             "UPDATE custom_apps SET title = COALESCE(?1, title), icon = COALESCE(?2, icon),
-             feeds_json = COALESCE(?3, feeds_json), updated_at = ?4 WHERE id = ?5",
-            params![title, icon, feeds_json, now_secs(), app_id],
+             updated_at = ?3 WHERE id = ?4",
+            params![title, icon, now_secs(), app_id],
         )?;
+        if let Some(f) = &feeds_json {
+            tx.execute(
+                "UPDATE custom_apps SET feeds_json = ?1 WHERE id = ?2",
+                params![f, target],
+            )?;
+        }
         Ok(crate::store::latest_app_version_on(tx, &app_id)?.map_or(0, |v| v.version))
     })
     .await?;
@@ -1040,7 +1386,17 @@ pub async fn set_hidden(pod: &Pod, id: &str, hidden: bool) -> Result<(), Refusal
 
 /// A dry run of a create: `{feeds, layout}` -> `{ok, features}`.
 pub fn validate(pod: &Pod, body: &Value) -> Result<Value, Refusal> {
-    let feeds = check_feeds(pod, &body["feeds"])?;
+    let extra = check_feeds(pod, &body["feeds"])?;
+    let home = pod.store().with_conn(home_feeds_on).map_err(|_| {
+        refuse(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"error": "store_error"}),
+        )
+    })?;
+    let feeds = match &home {
+        Some(h) => grow(h, &extra)?.0,
+        None => extra,
+    };
     let id = body["id"]
         .as_str()
         .filter(|i| is_custom_id(i))
@@ -1286,6 +1642,51 @@ pub fn copied_from(store: &Store, id: &str) -> rusqlite::Result<Option<(String, 
             let c = &m["copied_from"];
             Some((c["app"].as_str()?.to_owned(), c["version"].as_i64()?))
         }))
+}
+
+/// The pod's own layouts built on each blueprint: `blueprint id -> layout
+/// id`, the first live layout (oldest first, home last) whose latest
+/// version is a whole reference to it or was copied from it (decision
+/// `layouts-not-apps`: notifications open these). Blocking.
+pub fn layouts_for_blueprints(store: &Store) -> rusqlite::Result<HashMap<String, String>> {
+    let mut out = HashMap::new();
+    let mut apps = store.with_conn(custom_apps_on)?;
+    // Home is listed first; it is the last choice.
+    let home_first = apps.first().is_some_and(|a| a.id == crate::HOME_APP);
+    apps.rotate_left(usize::from(home_first));
+    for app in apps {
+        let Some((_, json)) = store.app_latest(&app.id)? else {
+            continue;
+        };
+        let mut built_on: Vec<String> = Vec::new();
+        if crate::parts::may_hold_refs(&json) {
+            let doc: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
+            built_on.extend(
+                crate::parts::refs(&doc)
+                    .into_iter()
+                    .filter(|r| r.part == "layout")
+                    .map(|r| r.app),
+            );
+        }
+        if let Some((from, _)) = copied_from(store, &app.id)? {
+            built_on.push(from);
+        }
+        for b in built_on {
+            out.entry(b).or_insert_with(|| app.id.clone());
+        }
+    }
+    Ok(out)
+}
+
+/// Set each notification's `layout` ([`layouts_for_blueprints`]).
+pub fn target_layouts(map: &HashMap<String, String>, items: &mut [protocol::Notification]) {
+    for n in items {
+        n.layout = Some(
+            map.get(&n.app_id)
+                .cloned()
+                .unwrap_or_else(|| n.app_id.clone()),
+        );
+    }
 }
 
 /// `GET /v1/apps` `updates_from` of a custom app copied from a built-in:

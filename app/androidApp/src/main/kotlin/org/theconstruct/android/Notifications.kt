@@ -20,6 +20,7 @@ private const val TAG = "ConstructNotify"
 /** Intent extras of a tapped notification (DECISIONS D52): [MainActivity] opens the app and its target. */
 internal const val EXTRA_NOTIFICATION_APP = "notificationApp"
 internal const val EXTRA_NOTIFICATION_TARGET = "notificationTarget"
+internal const val EXTRA_NOTIFICATION_LAYOUT = "notificationLayout"
 internal const val EXTRA_NOTIFICATION_ID = "notificationId"
 
 /** The push instance ([Push.instanceFor]) of the server that sent it: only that server's session opens the target. */
@@ -114,6 +115,7 @@ internal object AppNotifications {
             .putExtra(EXTRA_NOTIFICATION_ID, n.id)
             .putExtra(EXTRA_NOTIFICATION_SERVER, server)
             .apply { n.targetUri?.let { putExtra(EXTRA_NOTIFICATION_TARGET, it) } }
+            .apply { n.layout?.let { putExtra(EXTRA_NOTIFICATION_LAYOUT, it) } }
         val pending = PendingIntent.getActivity(
             context, "$server ${n.id}".hashCode(), open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )

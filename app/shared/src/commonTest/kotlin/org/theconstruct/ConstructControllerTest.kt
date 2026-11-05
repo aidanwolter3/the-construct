@@ -27,6 +27,11 @@ private class FakeBridge : ConstructEngineBridge {
 
     var logouts = 0
     var closes = 0
+    val openedLayouts = mutableListOf<String>()
+
+    override fun openLayout(id: String) {
+        openedLayouts += id
+    }
 
     override fun close() {
         closes++
@@ -175,53 +180,49 @@ class ConstructControllerTest {
     }
 
     @Test
-    fun openAppSwapsEnginesAndIgnoresTheOldOne() {
-        val first = FakeBridge()
-        val second = FakeBridge()
-        val opened = mutableListOf<String>()
-        val controller = ConstructController(first, "pixelfed") { id -> opened += id; second }
+    fun oneEngineServesEveryLayout() {
+        val bridge = FakeBridge()
+        val controller = ConstructController(bridge, "home")
         val (ws, ents) = snapshotOf(COUNTER_BUNDLE_JSON)
-        first.emit(ws, ents, true, seq = 40)
-        controller.pin("pixelfed", 1, UiNode.Text("old", TextStyle.Body))
-        assertTrue(controller.openApp("pixelfed"), "already on screen")
-        assertEquals(emptyList(), opened)
-
-        assertTrue(controller.openApp("home"))
-        assertEquals(listOf("home"), opened)
-        assertEquals(1, first.closes)
-        assertEquals("home", controller.currentAppId())
-        assertNull(controller.pinned.value, "a pin belongs to its app")
-        assertNull(controller.state.value.workspace, "Loading... until the new engine's first snapshot")
-        // The new engine's seq starts again; the old engine's late snapshots are dropped.
-        second.emit(ws, COUNT_1, true, seq = 1)
-        first.emit(ws, COUNT_3, false, seq = 41)
-        assertEquals(1, controller.state.value.entities["core://counters/home"]!!["count"]!!.jsonPrimitive.int)
-        assertEquals(true, controller.state.value.isOnline)
-        controller.dispatch(ActionIntent.NavigateBack)
-        assertEquals(1, second.dispatched.size)
-        assertEquals(0, first.dispatched.size)
+        bridge.emit(ws, ents, true, seq = 1)
+        // Presenting another layout asks the same engine for it; nothing is closed or swapped.
+        controller.dispatch(ActionIntent.Navigate(presentation = PresentationMode.Push, layout = "c-other"))
+        assertEquals(listOf("c-other"), bridge.openedLayouts)
+        assertEquals(0, bridge.closes)
+        assertEquals("c-other", controller.navigation.currentLayout())
+        assertNull(controller.workspaceOf("c-other"), "spinner until the engine has it")
+        bridge.listener!!(
+            EngineSnapshot(
+                ws, ents, true, 2, 0,
+                layoutsJson = """{"c-other":{"workspace":{"type":"core://Workspace","id":"c-other","title":"Other","slots":[]},"version":4,"gone":false}}""",
+            ),
+        )
+        assertEquals("Other", (controller.workspaceOf("c-other") as UiNode.Workspace).title)
+        assertEquals(4, controller.state.value.layouts["c-other"]!!.version)
+        // A pin is per layout.
+        controller.pin("c-other", 1, UiNode.Text("old", TextStyle.Body))
+        assertIs<UiNode.Text>(controller.workspaceOf("c-other"))
+        assertIs<UiNode.Workspace>(controller.workspaceOf("home"))
+        controller.followLatest("c-other")
+        assertIs<UiNode.Workspace>(controller.workspaceOf("c-other"))
+        // System Back pops the presented layout.
+        assertTrue(controller.navigation.back())
+        assertEquals("home", controller.navigation.currentLayout())
+        assertFalse(controller.navigation.back(), "nothing left: the platform's own Back")
     }
 
     @Test
-    fun connectivityIsUnknownUntilTheFirstSnapshotAndCarriesAcrossOpenApp() {
-        val first = FakeBridge()
-        val second = FakeBridge()
-        val controller = ConstructController(first, "pixelfed") { second }
+    fun connectivityIsUnknownUntilTheFirstSnapshot() {
+        val bridge = FakeBridge()
+        val controller = ConstructController(bridge, "pixelfed")
         assertNull(controller.state.value.isOnline, "unknown at cold start")
         assertFalse(showMenuBadge(controller.state.value, null), "no offline badge while unknown")
         val (ws, ents) = snapshotOf(COUNTER_BUNDLE_JSON)
-        first.emit(ws, ents, false)
+        bridge.emit(ws, ents, false)
         assertEquals(false, controller.state.value.isOnline)
         assertTrue(showMenuBadge(controller.state.value, null))
-        first.emit(ws, ents, true)
-        assertTrue(controller.openApp("home"))
-        assertEquals(true, controller.state.value.isOnline, "same server: connectivity carries over until the new engine reports")
-        assertFalse(showMenuBadge(controller.state.value, null))
-        // The new engine's cached snapshot comes before its first fetch: still unknown, so no offline flash.
-        second.emit(ws, ents, null, seq = 1)
-        assertEquals(true, controller.state.value.isOnline)
-        assertFalse(showMenuBadge(controller.state.value, null), "no badge while the new engine connects")
-        second.emit(ws, ents, false, seq = 2)
+        // A later snapshot that doesn't know keeps the last answer.
+        bridge.emit(ws, ents, null)
         assertEquals(false, controller.state.value.isOnline)
     }
 
@@ -237,55 +238,24 @@ class ConstructControllerTest {
     }
 
     @Test
-    fun openAppAndPinAfterCloseDoNothing() {
-        val first = FakeBridge()
-        var created = 0
-        val controller = ConstructController(first, "pixelfed") { created++; FakeBridge() }
-        controller.close()
-        controller.close()
-        assertEquals(1, first.closes, "close is idempotent")
-        assertTrue(controller.isClosed)
-        assertFalse(controller.openApp("home"))
-        assertFalse(controller.openApp("pixelfed"), "not even the app on screen")
-        assertEquals(0, created, "no engine is created after close")
-        assertEquals("pixelfed", controller.currentAppId())
-        assertFalse(controller.pin("pixelfed", 1, UiNode.Text("old", TextStyle.Body)))
-        assertNull(controller.pinned.value)
-    }
-
-    @Test
-    fun anEngineCreatedWhileClosingIsClosed() {
-        val first = FakeBridge()
-        val next = FakeBridge()
-        lateinit var controller: ConstructController
-        // The UI goes away while the factory runs (here: re-entrantly, from the factory itself).
-        controller = ConstructController(first, "pixelfed") { controller.close(); next }
-        assertFalse(controller.openApp("home"))
-        assertEquals(1, first.closes)
-        assertEquals(1, next.closes, "the engine created meanwhile is closed, not leaked")
-        assertEquals("pixelfed", controller.currentAppId())
-        assertNull(next.listener, "never subscribed: its snapshots can't reach the UI")
-    }
-
-    @Test
-    fun openAppWithoutAFactoryChangesNothing() {
+    fun pinAndOpenLayoutAfterCloseDoNothing() {
         val bridge = FakeBridge()
         val controller = ConstructController(bridge, "pixelfed")
-        assertFalse(controller.canOpenApps)
-        assertFalse(controller.openApp("home"))
-        assertEquals("pixelfed", controller.currentAppId())
-        assertEquals(0, bridge.closes)
-        // A factory that throws is reported the same way.
-        val failing = ConstructController(bridge, "pixelfed") { throw IllegalStateException("no engine") }
-        assertFalse(failing.openApp("home"))
-        assertEquals("pixelfed", failing.currentAppId())
+        controller.close()
+        controller.close()
+        assertEquals(1, bridge.closes, "close is idempotent")
+        assertTrue(controller.isClosed)
+        controller.openLayout("c-other")
+        assertEquals(emptyList(), bridge.openedLayouts)
+        assertFalse(controller.pin("pixelfed", 1, UiNode.Text("old", TextStyle.Body)))
+        assertTrue(controller.pins.value.isEmpty())
     }
 
     @Test
     fun appIdFallsBackToTheSnapshot() {
         val bridge = FakeBridge()
         val controller = ConstructController(bridge)
-        assertNull(controller.currentAppId())
+        assertEquals(HOME_APP, controller.currentAppId(), "home until the engine says")
         bridge.listener!!(EngineSnapshot("null", "{}", true, 1, 0, layoutJson = """{"app_id":"pixelfed","version":7}"""))
         assertEquals("pixelfed", controller.currentAppId())
         assertEquals(ActiveLayout("pixelfed", 7), controller.state.value.activeLayout)
@@ -297,32 +267,17 @@ class ConstructControllerTest {
     }
 
     @Test
-    fun aDeletedAppOnScreenFallsBackToTheDefaultAppWithANotice() {
-        val first = FakeBridge()
-        val second = FakeBridge()
-        val opened = mutableListOf<String>()
-        val controller = ConstructController(first, "c-kitchen2dm", kotlinx.coroutines.Dispatchers.Unconfined, "pixelfed") { id ->
-            opened += id
-            second
-        }
+    fun aDeletedRootSaysSo() {
+        val bridge = FakeBridge()
+        val controller = ConstructController(bridge, "c-kitchen2dm")
         val (ws, ents) = snapshotOf(COUNTER_BUNDLE_JSON)
-        first.emitLayout(ws, ents, """{"app_id":"c-kitchen2dm","version":3}""")
+        bridge.emitLayout(ws, ents, """{"app_id":"c-kitchen2dm","version":3}""")
         assertNull(controller.notice.value)
-        first.emitLayout(ws, ents, """{"app_id":"c-kitchen2dm","gone":true}""")
-        // (The background dispatcher is Unconfined here: the switch already happened.)
-        assertEquals(listOf("pixelfed"), opened)
-        assertFalse(controller.state.value.activeLayout.gone, "the new engine's state")
-        assertEquals("pixelfed", controller.currentAppId())
-        assertEquals(APP_DELETED, controller.notice.value, "the notice outlives the switch")
-        assertEquals(1, first.closes)
+        bridge.emitLayout(ws, ents, """{"app_id":"c-kitchen2dm","gone":true}""")
+        assertTrue(controller.state.value.activeLayout.gone)
+        assertEquals(APP_DELETED, controller.notice.value)
+        assertEquals(0, bridge.closes, "the engine stays")
         controller.dismissNotice()
         assertNull(controller.notice.value)
-        // Without a default (or when the default itself is gone): stay, with the notice.
-        val lone = FakeBridge()
-        val stay = ConstructController(lone, "pixelfed", kotlinx.coroutines.Dispatchers.Unconfined, "pixelfed") { error("no switch") }
-        lone.emitLayout(ws, ents, """{"app_id":"pixelfed","gone":true}""")
-        assertTrue(stay.state.value.activeLayout.gone)
-        assertEquals(APP_DELETED, stay.notice.value)
-        assertEquals("pixelfed", stay.currentAppId())
     }
 }

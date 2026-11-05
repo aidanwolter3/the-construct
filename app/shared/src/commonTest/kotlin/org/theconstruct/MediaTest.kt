@@ -149,7 +149,7 @@ class MediaTest {
         val controller = ConstructController(bridge)
         bridge.listener!!(EngineSnapshot(workspace, "{}", true, 1, 0))
         controller.dispatch(ActionIntent.Navigate("pixelfed://compose", PresentationMode.Modal))
-        val entry = controller.navigation.top!!
+        val entry = controller.navigation.topScreen!!
         assertEquals("compose", entry.screen.id)
         val share = assertIs<UiNode.Button>(entry.screen.footer).onClick
         controller.dispatch(share) // no photos: nothing sent, the screen stays

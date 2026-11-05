@@ -8,7 +8,7 @@ engine, and know nothing about any particular app.
                          ┌──────────────── server (crates/server) ─────────────────┐
   Pixelfed, web pages,   │  pod-host: one process, many pods, routed by pod token   │
   the Messages API  ◀───▶│  ┌──────────── pod (crates/pod-core) ────────────────┐   │
-                         │  │ apps, layout versions, sessions, sign-ins, SQLite  │   │
+                         │  │ layouts, versions, sessions, sign-ins, SQLite      │   │
                          │  │ adapters: app-pixelfed, app-recipes,               │   │
                          │  │           app-collections, app-events, app-monitor│   │
                          │  └────────────────────────────────────────────────────┘   │
@@ -63,11 +63,15 @@ The server binary picks the adapters at compile time (`server::adapters`). Apps 
 | `pixelfed_sample_no_login` | Pixelfed sample | `app-pixelfed` (static) | A one-post sample that needs no sign-in; listed only with `CONSTRUCT_SHOW_DEV_APPS=1` |
 | `recipes` | Recipes | `app-recipes` | A recipe collection with search, categories and recipe cards (D41) |
 | `events` | Events | `app-events` | Upcoming events from websites the user watches, with alerts (decision `collection-fillers`) |
-| `shell` | Home | `app-shell` | The home blueprint: a dock of the pod's apps, which every pod's `home` app references |
+| `shell` | Home | `app-shell` | The home blueprint: a blank page with Notifications and Settings, which every pod's `home` references |
+| `settings` | Settings | `app-shell` | Settings as a layout over device data: connection, layouts and versions, sign-ins, channels, server |
+| `inbox` | Notifications | `app-shell` | The notification inbox as a layout over device data |
 
-These are **blueprints** (decision `blueprints-and-home`): served by id and updated by deploys, but not listed. A
-pod's apps are its own: a new pod has only `home`, a reference to the `shell` blueprint, and the user's agent adds
-apps that reference or copy blueprints.
+These are **blueprints** (decision `blueprints-and-home`): served by id and updated by deploys, but not listed.
+There are no apps at runtime (decision `layouts-not-apps`): a pod has **layouts**, starting with `home`, the root
+every client opens, which embeds (`core://Layout`) and presents (`action.navigation.open {layout}`) the others. A new
+pod has only `home`, a reference to the `shell` blueprint; the user's agent adds layouts that reference or copy
+blueprints. Home owns every feed; each layout binds any of them, and loads only the ones it binds.
 
 Two more sources have no app of their own: **Collections** (`app-collections`), typed data that custom apps declare,
 and **Server monitoring** (`app-monitor`). Users build their own apps on top of all of these; see
@@ -119,18 +123,21 @@ UniFFI (`crates/client-ffi`; Kotlin bindings in `app/shared/src/jvmCommonMain`).
   refetch re-applies changes still pending, so nothing visibly flickers (D14, D35).
 - **Sign-in.** The engine runs OAuth2 PKCE for upstream sign-ins itself and keeps only a pod session in a platform
   secure store; upstream tokens never leave the pod (D17, D19).
-- **Event stream.** While online, the engine keeps `GET /v1/workspaces/<app>/events` open. `layout` events trigger a
-  refetch when a newer drawable version exists; `data` events say the app's data changed (D50); `notification`
-  events feed the inbox (D52).
+- **One engine for every layout** (decision `layouts-not-apps`). The engine opens on the root layout (`home`);
+  `open_layout` loads any other layout into the same store, cached like a data path (`layout:<id>`), and reports it
+  in the snapshot's `layouts_json`.
+- **Event stream.** While online, the engine keeps `GET /v1/workspaces/<root>/events` open; home's stream carries
+  every layout's events. `layout` events trigger a refetch of that layout when a newer drawable version exists;
+  `deleted` marks it gone; `data` events say the data changed (D50); `notification` events feed the inbox (D52).
 - **Snapshots.** The UI observes immutable state snapshots (layout, entities, connectivity, pending count, sign-in
   state, unread counts) and dispatches intents back as JSON.
 
 ## The clients
 
-`app/shared/src/commonMain` is one Compose Multiplatform UI used by every client: the node renderer, screens and
-navigation, the shell (the pod's `home` layout with the app of the selected tab framed in it, a bundled sign-in
-layout before a pod is open, decision `blueprints-and-home`), the app menu and version picker, Settings, and the
-notification inbox. Platform code is thin:
+`app/shared/src/commonMain` is one Compose Multiplatform UI used by every client: the node renderer, the root layout
+(`home`, or a bundled sign-in layout before a pod is open), and one back stack of presented layouts (pushed, sheets,
+side panels, animated in and out) and screens, popped by system Back (decision `layouts-not-apps`). Settings and the
+inbox are layouts too. Platform code is thin:
 
 - **Desktop** (`:desktopApp`, JVM): loads the engine through JNA; the loopback OAuth redirect; tray notifications.
 - **Android** (`:androidApp`): the engine cross-compiled to `libclient_ffi.so`; App Link sign-in redirect; Android

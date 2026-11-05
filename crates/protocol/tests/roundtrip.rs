@@ -86,10 +86,10 @@ fn post_template(author_tag: Option<String>, items: ListBinding) -> UiNode {
                     UiNode::IconButton {
                         icon: "chat_bubble".into(),
                         content_description: "Comment".into(),
-                        on_click: ActionIntent::Navigate {
-                            target_uri: "pixelfed://posts/$item.id/comments".into(),
-                            presentation: PresentationMode::Modal,
-                        },
+                        on_click: ActionIntent::open(
+                            "pixelfed://posts/$item.id/comments",
+                            PresentationMode::Modal,
+                        ),
                         active: None,
                         active_icon: None,
                         active_tint: None,
@@ -387,10 +387,7 @@ fn aspect_ratio_f32_round_trip_semantics() {
 fn every_action_intent_round_trips() {
     let cases: Vec<(ActionIntent, Value)> = vec![
         (
-            ActionIntent::Navigate {
-                target_uri: "pixelfed://bookmarks".into(),
-                presentation: PresentationMode::Push,
-            },
+            ActionIntent::open("pixelfed://bookmarks", PresentationMode::Push),
             json!({
                 "intent": "action.navigation.open",
                 "target_uri": "pixelfed://bookmarks",

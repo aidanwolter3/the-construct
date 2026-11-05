@@ -52,8 +52,8 @@ class SimulatorTest {
         val fake = FakeEngineBridge(bundle("counter_home_bundle.json"))
         val result = run(
             fake,
-            "shot initial; click Increment; click Increment; assert-text Count: 2; offline; open-menu; assert-text Offline; " +
-                "assert-no-text Online; close-menu; shot offline",
+            "shot initial; click Increment; click Increment; assert-text Count: 2; offline; open-settings; assert-text Offline; " +
+                "assert-no-text Online; back; shot offline",
         )
         assertTrue(result.ok, result.steps.joinToString("\n") { it.logLine() })
 
@@ -74,8 +74,8 @@ class SimulatorTest {
         val fake = FakeEngineBridge(bundle("counter_home_bundle.json"))
         val result = run(
             fake,
-            "open-menu; assert-no-text pending; close-menu; offline; click Increment; click Increment; click Increment; " +
-                "open-menu; assert-text 3 pending; assert-text Count: 3; online; assert-no-text pending; wait-text 1000 Count: 3",
+            "open-settings; assert-no-text pending; back; offline; click Increment; click Increment; click Increment; " +
+                "open-settings; assert-text 3 pending; assert-text Count: 3; online; assert-no-text pending; wait-text 1000 Count: 3",
         )
         assertTrue(result.ok, result.steps.joinToString("\n") { it.logLine() })
         assertEquals(0, fake.pendingActions)

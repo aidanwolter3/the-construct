@@ -41,27 +41,33 @@ removed one). A request without `X-Construct-Features` is served the latest vers
 |---|---|---|
 | `layout` | `{version, workspace_id}` | A newer version this client can draw exists. |
 | `data` | `{workspace_id}` | The app's data changed for this session (e.g. a post finished uploading); reload. |
-| `notification` | `{id, app_id, channel, title, body, target_uri, unread_total}` | A notification for any app of the pod. |
+| `notification` | `{id, app_id, channel, title, body, target_uri, layout, unread_total}` | A notification for any app of the pod; `layout` is the layout to present it in. |
 | `notifications_read` | the new unread counts | Notifications were marked read on some device. |
-| `deleted` | | The custom app was deleted. |
+| `deleted` | `{workspace_id}` | The custom app was deleted. |
+
+`home`'s stream carries every layout of the pod (decision `layouts-not-apps`): `layout` and `deleted` events of any
+layout (by `workspace_id`), and `data` events for every source of home's feeds.
 
 A `: keepalive` comment comes every 15 s. Streams opened without a session hear only `layout` events. A session's
 stream ends when the session is revoked; one session may hold 8 streams (then 429 `too_many_streams`).
 
 ## Custom apps
 
+The pod's own layouts (decision `layouts-not-apps`; the routes keep their app-era names). Home owns the feeds: `feeds`
+on another layout are added to home's.
+
 | Call | Answer |
 |---|---|
-| `POST /v1/custom-apps {title, icon, feeds, note?, layout}` | Creates an app; the pod sets the layout root's `id`. |
-| `GET /v1/custom-apps/{id}` | Its feeds and latest layout. |
+| `POST /v1/custom-apps {title, icon, feeds?, note?, layout}` | Creates a layout; the pod sets the layout root's `id`; `feeds` join home's. |
+| `GET /v1/custom-apps/{id}` | Its feeds (home's: the scope it binds) and latest layout. |
 | `PUT /v1/custom-apps/{id}/layout {layout, note?, base_version?}` | A new version; 409 `stale_base` if `base_version` isn't the latest. |
-| `PATCH /v1/custom-apps/{id} {title?, icon?, feeds?}` | Renames or changes feeds. |
+| `PATCH /v1/custom-apps/{id} {title?, icon?, feeds?}` | Renames; on home, replaces the feeds (409 `feed_in_use` while another layout binds one it drops); on another layout, adds feeds to home's. |
 | `POST /v1/custom-apps/{id}/restore {version}` | Appends a copy of an older version. |
 | `POST /v1/custom-apps/{id}/dismiss-update {version}` | Stops reporting `updates_from` for a copied part. |
 | `DELETE /v1/custom-apps/{id}` | Soft delete, purged after 30 days. |
 | `POST /v1/custom-apps/validate {feeds, layout}` | A dry run. |
 
-Every write is validated against the app's data sources; errors name a JSON pointer and what is allowed. Limits per
+Every write is validated against the sources of home's feeds; errors name a JSON pointer and what is allowed. Limits per
 pod: 50 apps, 500 versions per app (oldest pruned), 256 KiB per layout, 60 writes a minute.
 
 ## Notifications and devices

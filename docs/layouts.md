@@ -63,7 +63,8 @@ After changing a `pixelfed` layout, regenerate the simulator fixtures:
 
 - **Slots** are stacked top to bottom on the app's main page, which scrolls. The title is pinned in a bar above it,
   unless `title_scrolls` is true.
-- **Screens** open when an `action.navigation.open` has a `target_uri` matching their `route`. `{name}` segments
+- **Screens** open when an `action.navigation.open` has a `target_uri` matching their `route` (the screens of the
+  layout on top of the back stack, else home's). `{name}` segments
   capture route parameters, which `$route.<name>` substitutes anywhere in the screen. `data` is a pod path loaded
   when the screen opens; it answers `{entities, queries}`. `content` scrolls; `footer` stays at the bottom. Back (the
   arrow, Android Back, `action.navigation.back`) closes the screen.
@@ -80,7 +81,7 @@ After changing a `pixelfed` layout, regenerate the simulator fixtures:
 | `$nonce` | in intents | a fresh value per dispatch (one per `action.sequence`), for temporary URIs and idempotency keys |
 | `$attachments.<name>` | in a create | staged attachments: local URIs in `entity`, upload ids in `payload` |
 | `$count` | in a Text with `count` | the number of matching entities |
-| `${local://<entity>#<field>}`, `local:apps` | anywhere | [device data](#device-data), with no feed |
+| `${local://<entity>#<field>}`, `local:layouts` | anywhere | [device data](#device-data), with no feed |
 
 Mutation expressions (`value_expr` of `action.mutation.optimistic` and `action.local.set`) are a small subset
 evaluated against the entity before the change: a JSON literal, `entity.<field>`, `!entity.<field>`,
@@ -109,10 +110,8 @@ evaluated against the entity before the change: a JSON literal, `entity.<field>`
 | `core://Chip` | `text`, `icon`, `tone` | A small label; `tone` `Neutral` or `Warning`. |
 | `core://Badge` | `text`, `icon` | A one-line note with an icon ("Bob boosted"). |
 | `core://Progress` | `size_dp` | An indeterminate spinner. |
-| `core://Dock` | `field`, `before`, `query_key`, `item`, `max_items`, `after`; a tab is `{value, label, icon?, badge?, content}` | The app's navigation: tabs along the bottom (a side rail on wide windows), the selected tab's `content` filling the screen above. Tabs: `before`, one per entity of `query_key` from `item` (`$item` bound, at most `max_items`), then `after`. `$form.<field>` is the selected `value`, remembered on the device. Only as the content of a workspace's one slot; the workspace then has no title bar. `badge` draws a count, or a dot when otherwise truthy. |
-| `core://Drawer` | `field`, `before`, `query_key`, `item`, `after`, `drawer`, `footer`, `badge`; a page is `{value, content}` | The app's navigation as a side drawer: the selected page fills the screen, a menu button at the top left (hidden while a screen is open; `badge` draws a dot) opens `drawer`, a panel of any layout, with `footer` pinned to its bottom. Pages: `before`, one per entity of `query_key` from `item`, then `after`. `$form.<field>` is the open page (mark it with a Conditional whose `equals` is `$item.id`). The panel picks pages with `action.device` `open_app` or `show`; any action in it closes it. Only as the content of a workspace's one slot. |
 | `core://Switch` | `checked`, `on_click`, `content_description` | An on/off switch, on while `checked` (a binding) is truthy; a tap dispatches `on_click`. |
-| `core://AppFrame` | `app` | Another app of the pod drawn whole (its layout, screens, Back) in its space, usually a dock tab's content. `app` is an id or `$item.id`. |
+| `core://Layout` | `layout`, `show_when`, `equals`, `presentation` (`Inline`, `Sheet`, `Panel`), `animation`, `params`, `height_dp` | Another layout of the pod (decision `layouts-not-apps`). `Inline` draws it in place: `height_dp` tall, the whole screen as a workspace's one slot, else as tall as its content (its slots only). `Sheet` and `Panel` present it over the screen. With `show_when` (e.g. `$form.panel`, `${local://inbox#unread}`) it shows only while that holds (or equals `equals`); dismissing a sheet or panel clears that `$form` field. `params` bind as `$route.<name>` in it. `layout` is an id or `$item.id`. |
 | `core://TextField` | `field`, `placeholder`, `max_length`, `on_submit`, `lines` | Edits `$form.<field>`. With `on_submit`: a send button that dispatches, then clears. Without: a search box, or a multi-line field with `lines`. |
 | `core://ChoiceChips` | `field`, `options: [{label, value}]`, `padding_h_dp`, `remember` | A chip row editing `$form.<field>`. `remember` keeps the choice on the device. |
 | `core://MediaPicker` | `field`, `max_items`, `label` | Picks photos; `$form.<field>` is the list of staged attachment ids. |
@@ -127,8 +126,8 @@ A node type the client doesn't know is skipped, and its JSON kept, so old versio
 
 | Intent | Fields | Does |
 |---|---|---|
-| `action.navigation.open` | `target_uri`, `presentation` (`Push`, `Modal`, `Replace`) | Opens the screen whose route matches. |
-| `action.navigation.back` | | Closes the top screen. |
+| `action.navigation.open` | `target_uri`, `presentation` (`Push`, `Modal`, `Replace`, `Sheet`, `Panel`), `layout`, `params`, `animation` | Without `layout`: opens the screen of the layout on top (else home's) whose route matches. With `layout` (feature `navigate_layout`): presents that layout on the back stack (Push: the whole screen with Back; Sheet; Panel), `params` as its `$route.<name>`, then its screen matching `target_uri`, if any. |
+| `action.navigation.back` | | Pops the top of the back stack (a screen or a presented layout), as system Back does. |
 | `action.mutation.optimistic` | `entity_uri`, `field`, `value_expr`, `rollback_value`, `endpoint`, `payload`, `also` | Changes fields at once and sends `payload` to `endpoint` through the outbox; a refusal rolls back. |
 | `action.mutation.create` | `query_key`, `entity_uri`, `entity`, `endpoint`, `payload`, `refresh_workspace`, `attachments`, `position` | Adds `entity` to the list at once, uploads attachments, sends the create, then reloads what lists the query. A refusal removes it. |
 | `action.local.set` | `entity_uri`, `field`, `value_expr`, `also` | Changes fields on this device only (view state). |
@@ -137,7 +136,7 @@ A node type the client doesn't know is skipped, and its JSON kept, so old versio
 | `action.link.open` | `url` | Opens an `http(s)://` URL in the browser. |
 | `action.auth.login` | `instance_url`, `app_path`, `token_path` | Starts an OAuth2 PKCE sign-in to an upstream. |
 | `action.auth.session` | `path`, `payload` | Opens a pod session (the pod code screen). |
-| `action.device` | `command`, `app`, `id` | Something the device does: `open_app` (`app`; in the shell, selects its dock tab, or shows it untabbed), `open_notification` (`id`), `mark_all_read`, `toggle_channel` (`app`, `id`), `sign_in` (`id` of a provider; `value`: another server, e.g. `$form?.server`), `sign_out`, `set_server` (`id` of a server option), `show` (`id` of a Drawer or Dock page), `show_versions` (`app`: load its versions into `local:versions`), `pin_version` (`id`: show that version on this device), `follow_latest`, `leave_pod` (forget the pod on this device), `refresh`, `open_settings` and `open_inbox` (the native panels). Any layout may use any command. |
+| `action.device` | `command`, `app` (or `layout`), `id`, `value` | Something the device does: `open_notification` (`id`: presents its layout and target), `mark_all_read`, `toggle_channel` (`app`, `id`), `sign_in` (`id` of a provider; `value`: another server, e.g. `$form?.server`), `sign_out`, `set_server` (`id` of a server option), `show_versions` (`app`: a layout; loads its versions into `local:versions`), `pin_version` (`id`: show that version on this device), `follow_latest`, `leave_pod` (forget the pod on this device), `refresh`, `open_settings` and `open_inbox` (present the `settings` layout as a panel and the `inbox` layout as a sheet). Any layout may use any command. `open_app` and `show` were retired with the dock and drawer. |
 
 ## Features and compatibility
 
@@ -163,19 +162,19 @@ request. Any layout may bind them; a custom app needs no feed for them.
 |---|---|
 | `local://connection` | `online`, `pending` (unsent changes), `label` ("Offline · 2 pending"), `attention` (offline or changes waiting) |
 | `local://inbox` | `unread`, `label` ("3 unread") |
-| `local://apps` | `count`: the pod's apps but `home` |
-| `local:apps` (query) | `local://apps/<id>`: `id`, `title`, `icon`, `kind`, `detail`, `unread`, `version` ("v12 · latest", "v10 · pinned") |
+| `local://layouts` | `count`: the pod's layouts but `home` |
+| `local:layouts` (query) | `local://layouts/<id>`: `id`, `title`, `icon`, `kind`, `detail`, `unread`, `version` ("v12 · latest", "v10 · pinned"); hidden ones left out. `local:apps` (`local://apps/<id>`) is its old name. |
 | `local:notifications` (query) | `id`, `app_id`, `app_title`, `title`, `body`, `when` ("5 min"), `day` ("Today"), `unread` |
 | `local:channels` (query) | `app_id`, `app_title`, `id`, `title`, `description`, `enabled` |
 | `local:sign_ins` (query) | `id`, `title`, `detail` ("@dana · pixelfed.example") |
 | `local:providers` (query) | `id`, `title`, `custom_server` (another server may be typed), `server_placeholder`: sign-ins the pod offers that aren't signed in |
-| `local:versions` (query) | the versions of the app `show_versions` named, newest first: `version`, `label`, `detail`, `when`, `compatible`, `showing` |
+| `local:versions` (query) | the versions of the layout `show_versions` named, newest first: `version`, `label`, `detail`, `when`, `compatible`, `showing` |
 | `local://versions` | `app_id`, `app_title`, `pinned` (or "" while following the latest), `loading` |
 | `local:servers` (query) | `id`, `title`, `url`, `selected`: the servers this device can use |
 | `local://device` | `platform` |
-| `local://session` | `open`, `server`, `error`, `message`: the pod sign-in |
+| `local://session` | `open`, `server`, `error`, `message`: the pod sign-in; `status`: an upstream sign-in in progress or failed |
 
-A `core://Conditional` `equals` may bind the item (`"equals": "$item.id"`). A `core://Conditional` value may be such a binding: `{"value": "${local://apps#count}", "equals": "0", ...}`.
+A `core://Conditional` `equals` may bind the item (`"equals": "$item.id"`). A `core://Conditional` value may be such a binding: `{"value": "${local://layouts#count}", "equals": "0", ...}`.
 
 ## Reusing built-in parts
 
@@ -186,5 +185,5 @@ A custom app can embed a part of a built-in layout by reference, and the pod kee
 ```
 
 `part` is `screen:<id>`, `slot:<id>`, a name from the layout file's `"parts"`, or `layout`: the whole blueprint, only
-as a layout's root (the app keeps its own id; decision [`blueprints-and-home`](decisions/blueprints-and-home.md)).
+as a layout's root (the layout keeps its own id; decision [`blueprints-and-home`](decisions/blueprints-and-home.md)).
 See decision [`layout-parts`](decisions/layout-parts.md) and [custom-apps.md](custom-apps.md).

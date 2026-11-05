@@ -11,30 +11,40 @@ Decisions: [`custom-apps-and-data-sources`](decisions/custom-apps-and-data-sourc
 [`collections`](decisions/collections.md), [`blueprints-and-home`](decisions/blueprints-and-home.md) and the
 `collection-*` decisions.
 
-## Blueprints and the home app
+## Blueprints and the home layout
 
-Built-in apps are blueprints: served by id, but listed only with `GET /v1/apps?blueprints=1` (MCP `list_apps` answers
-`{apps, blueprints}`). An app can be a whole blueprint by reference, kept current by the pod:
+There are no apps at runtime (decision `layouts-not-apps`): the pod's units are **layouts**, and the HTTP routes keep
+their app-era names (`/v1/apps`, `/v1/custom-apps`) for released clients. Built-in layouts are blueprints: served by
+id, but listed only with `GET /v1/apps?blueprints=1` (MCP `list_layouts` answers `{layouts, blueprints}`). A layout
+can be a whole blueprint by reference, kept current by the pod:
 
 ```json
 {"title": "Recipes", "icon": "recipe", "feeds": [["recipes", "all"]],
  "layout": {"type": "core://Ref", "app": "recipes", "part": "layout"}}
 ```
 
-Give it the blueprint's feeds (`list_apps` shows them). To change a blueprint, copy its layout (`get_layout`) and
-pass `copied_from`. Every pod's **`home`** app is the screen clients open, and the only one: it is the user's whole
-interface. It starts as a reference to the `shell` blueprint, a blank page, and the agent builds into it only what
-the user asks for: one app is a `core://AppFrame` as home's one slot; more apps add a `core://Drawer` or
-`core://Dock` over `local:apps`; notifications, sign-in or settings come from the `describe_vocabulary` snippets.
-It can't be deleted. A pod made before blueprints got an app
-referencing each built-in it showed, so nothing disappeared.
+Name the blueprint's feeds (`list_layouts` shows them): they join home's. To change a blueprint, copy its layout
+(`get_layout`) and pass `copied_from`. Every pod's **`home`** layout is the screen clients open, and the only one: it
+is the user's whole interface, and it embeds or presents every other layout. It starts as a reference to the `shell`
+blueprint, a blank page with Notifications and Settings buttons, and the agent builds into it only what the user asks
+for: one layout is a `core://Layout` as home's one slot; with more, home lists `local:layouts` and each row pushes
+its layout (`action.navigation.open {"layout": "$item.id", "presentation": "Push"}`); a `core://Layout` can also put
+a layout in a card-sized region, or show it as a sheet or side panel while a condition holds. The `settings` and
+`inbox` blueprints are Settings and the inbox. Snippets for each are in `describe_vocabulary`. Home can't be deleted.
+A pod made before blueprints got a layout referencing each built-in it showed, so nothing disappeared; migration
+`layouts_not_apps` turned a home that used the retired dock or drawer into a list of layouts.
 
-## Custom apps
+## The pod's layouts
 
-A custom app is a title, an icon, a list of **feeds** (`["recipes", "all"]`, `["pixelfed", "home"]`,
-`["collections", "todos"]`) and a layout history. It is served exactly like a built-in app (workspace, events
-stream, versions, feature negotiation) and marked `"kind": "custom"` in `GET /v1/apps`. Ids are `c-` and 10
-characters, except the pod's own `home`.
+A layout of the pod is a title, an icon and a version history. It is served exactly like a blueprint (workspace,
+versions, feature negotiation) and marked `"kind": "custom"` in `GET /v1/apps`. Ids are `c-` and 10 characters,
+except `home`.
+
+**Home owns the feeds** (`["recipes", "all"]`, `["pixelfed", "home"]`, `["collections", "todos"]`, at most 32): every
+layout may bind any of them, and a layout's request loads only the feeds whose query keys it binds. Feeds named when
+creating a layout (or renaming one) are added to home's. Changing home's own feed list is refused (409
+`feed_in_use`, naming the layout) while another layout still binds a feed it would drop. Home's event stream carries
+every layout's new versions and deletions, and every data change of its feeds, so one engine follows them all.
 
 ```bash
 pod=http://127.0.0.1:8080; token=cpod_…
@@ -43,7 +53,7 @@ curl -fsS -H "Authorization: Bearer $token" -H 'content-type: application/json' 
   "note": "Recipes next to my feed", "layout": {"type": "core://Workspace", "title": "Kitchen", "slots": []}}'
 ```
 
-- **Validation.** Every write is checked against the sources the app's feeds name: a layout may only bind query keys
+- **Validation.** Every write is checked against the sources of home's feeds: a layout may only bind query keys
   those feeds fill and call the data paths and endpoints their manifests declare. Errors name a JSON pointer and
   what is allowed. The routes are in [api.md](api.md#custom-apps).
 - **Source status.** The root gets a `core://sources/<source>` entity per source, `{title, signed_in, error?}`, so a
@@ -53,14 +63,14 @@ curl -fsS -H "Authorization: Bearer $token" -H 'content-type: application/json' 
 - **Built-in parts.** `{"type": "core://Ref", "app": "pixelfed", "part": "screen:post"}` reuses a built-in's
   screen, slot or declared part, expanded and kept current by the pod. A copy instead says `"copied_from": {app,
   version}`, and `GET /v1/apps` reports `updates_from` when that built-in moves on.
-- **Device data.** `${local://connection#label}`, `${local://inbox#unread}`, the `local:apps` query and the other
+- **Device data.** `${local://connection#label}`, `${local://inbox#unread}`, the `local:layouts` query and the other
   [device data](layouts.md#device-data) need no feed.
-- **Hiding and deleting.** Any app can be hidden from the app list on every device; custom apps can be deleted
-  (purged after 30 days), except `home`.
+- **Hiding and deleting.** Any layout can be hidden from `local:layouts` on every device; the pod's layouts can be
+  deleted (purged after 30 days), except `home`. A deleted layout says so where it was shown.
 
 ## Building apps with Claude
 
-Each pod has an MCP endpoint, `POST /v1/mcp`, so Claude can read the pod's sources and build and edit its custom apps.
+Each pod has an MCP endpoint, `POST /v1/mcp`, so Claude can read the pod's sources and build and edit its layouts.
 Writes go through the same validation as the HTTP API and appear in the version history as written by Claude.
 
 - **Claude apps (web, desktop, mobile):** add a custom connector with the URL `https://<server>/v1/mcp`. Claude
@@ -77,10 +87,12 @@ Writes go through the same validation as the HTTP API and appear in the version 
 
 - **Disconnect:** `server pods revoke-mcp <name>`. Rotating the pod code keeps Claude connected.
 
-Tools: `list_apps`, `list_data_sources`, `describe_vocabulary`, `get_layout`, `sample_data`, `validate_layout`,
-`create_app`, `update_layout` (a whole layout or a JSON Patch, with `base_version`), `restore_version`, `rename_app`,
-`delete_app`, `set_hidden`, `list_parts`, `rebase_context`, `dismiss_update`, `set_time_zone`, plus the Collections
-tools below. The server's MCP instructions tell Claude how to use them.
+Tools: `list_layouts`, `list_data_sources`, `describe_vocabulary`, `get_layout`, `sample_data`, `validate_layout`,
+`create_layout`, `update_layout` (a whole layout or a JSON Patch, with `base_version`), `restore_version`,
+`rename_layout`, `delete_layout`, `set_hidden`, `list_parts`, `rebase_context`, `dismiss_update`, `set_time_zone`, plus
+the Collections tools below. Layouts are named `id` (`app` is still accepted, and the app-era tool names still answer).
+The server's MCP instructions tell Claude how to use them. After this rename, the Claude connector needs "Refresh tools
+list" in its settings.
 
 ## Collections
 

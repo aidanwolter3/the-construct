@@ -408,10 +408,7 @@ async fn pixelfed_full_auth_flow_and_signed_in_feed() {
     );
     assert_eq!(
         button("comment:$item.uri"),
-        ActionIntent::Navigate {
-            target_uri: "pixelfed://posts/$item.id".into(),
-            presentation: PresentationMode::Push,
-        }
+        ActionIntent::open("pixelfed://posts/$item.id", PresentationMode::Push)
     );
 }
 

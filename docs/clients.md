@@ -61,47 +61,33 @@ Debug builds also take intent extras, read when the engine starts (use `am start
 Settings must be `https://` otherwise. That rule covers images (loaded by Kotlin); the engine's own traffic goes
 through Rust and is not restricted by Android's network security config.
 
-## The shell
+## Home and the layouts it shows
 
-Opened on `home` (the default), the client runs the layout-first shell (decision `blueprints-and-home`):
+The client opens the pod's `home` layout (the default) and draws everything from it (decision `layouts-not-apps`):
 
 - **Before a pod is open** it draws a bundled sign-in layout: a pod code, or **Try a temporary pod**. It needs no
   server to draw, and shows the sign-in error under the button.
-- **With a pod** it draws the pod's `home` layout, which is the user's whole interface. A new pod's home is the
-  `shell` blueprint: a blank off-white page saying "The Construct" and "Ask your agent to build anything". The agent
-  builds the rest into home, only as much as the user asks for: one app filling the screen, then a drawer or dock
-  of apps, notifications or settings pages, from small pieces (`describe_vocabulary` snippets).
-- **An app framed in home** (`core://AppFrame`): its layout, screens and Back stay inside the frame. The client's
-  one engine follows the framed app; the home layout is kept on the device while it does.
-- **The native menu and inbox** below are still in the app, opened only by a layout that asks for them
-  (`action.device` `open_settings`, `open_inbox`); the version picker is there.
+- **With a pod** it draws `home`, the user's whole interface. A new pod's home is the `shell` blueprint: a blank
+  off-white page saying "The Construct", with Notifications and Settings buttons. The agent builds the rest into home,
+  only as much as the user asks for.
+- **Other layouts** show inside home (`core://Layout`: in place, in a card-sized region, or as a sheet or side panel
+  while a condition holds), or are presented on the back stack (`action.navigation.open {layout}`: pushed over the
+  whole screen, or as a sheet or panel). One engine serves them all and shares their data.
+- **Back:** every presented layout and screen is one entry of the back stack. System Back (and the Back arrow of a
+  pushed layout or screen, or a tap on a sheet's or panel's scrim) pops the top one; with nothing left, the platform's
+  own Back runs.
+- **Settings and the inbox are layouts** (the `settings` and `inbox` blueprints), presented as a side panel and a
+  sheet. Settings shows the connection, the pod's layouts (a tap lists a layout's versions; picking one shows it on
+  this device only), sign-ins, notification channels, the servers this device can use (Staging, Local, or the
+  platform's others; each server has its own cache and outbox), and **Leave pod**. On Android the notification
+  permission row sits above it.
 - **If the pod has no home this build can draw**, a bundled screen offers Try again and Leave pod. Ask the agent to
   repair the home layout (`restore_version`); clearing the app's data also starts over.
-
-## The app menu
-
-Opened on any other app, the screen shows only the layout, with a **menu button** at the top left and a **bell** at
-the top right. The menu
-button gets a dot when the device is offline, when actions wait to be sent, or when the version on screen has a
-newer one.
-
-- **Apps:** every app of the pod. A row's history button opens the **version picker**: "Latest", then every version
-  newest first with its note. Picking one shows that layout over your current data, on this device only; "Latest"
-  follows new versions again. Versions this build can't draw are greyed out. A row's **⋮** hides the app (on every
-  device) or deletes a custom app.
-- **Settings:**
-  - **Your pod:** the connection, the server picker, and **Leave pod**, which forgets the pod code on this device.
-  - **Sign-ins:** every upstream sign-in on the pod (e.g. "Pixelfed · @you · pixelfed.social"), with **Sign out**,
-    and a **Sign in** row for each one the pod offers.
-  - **Notifications:** each app's channels with switches.
-  - **Server:** Staging, Local (desktop `http://127.0.0.1:8080`; Android emulator `http://10.0.2.2:8080` or USB
-    `http://127.0.0.1:8080`), or a custom URL. Switching starts a new engine on that server, in place; each server has
-    its own cache and outbox.
 
 ## Offline behaviour
 
 The last workspace and every loaded screen are cached, so the app opens and scrolls offline. A tap changes the screen
-at once and queues the request; the menu shows "N pending". Queued actions are sent in order when the server is
+at once and queues the request; Settings shows "N pending" (and `local://connection` lets a layout show it too). Queued actions are sent in order when the server is
 reachable again, including after a restart. If the server refuses one, its change is rolled back. Details:
 [architecture.md](architecture.md#the-engine).
 

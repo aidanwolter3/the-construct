@@ -30,37 +30,26 @@ sealed class SimStep(val command: String, val arg: String = "") {
      */
     class Pick(val paths: List<String>) : SimStep("pick", paths.joinToString(" "))
 
-    // Hamburger menu: each waits for idle and for the apps calls, and fails with a hint when its control is missing.
-    object OpenMenu : SimStep("open-menu")
-    object CloseMenu : SimStep("close-menu")
-    /** Opens the menu's Settings page and waits for its list of sign-ins. */
+    // Layouts (decision `layouts-not-apps`): each waits for idle and for the layout to be drawn.
+    /** Presents layout [layout] ([presentation]: push, sheet or panel), like `action.navigation.open {layout}`. */
+    class OpenLayout(val layout: String, val presentation: String) : SimStep("open-layout", "$layout $presentation")
+    /** Presents the Settings layout as a side panel (`action.device` `open_settings`). */
     object OpenSettings : SimStep("open-settings")
-    /** [app]: an app id (`pixelfed`) or its title (`Pixelfed`). */
-    class OpenApp(val app: String) : SimStep("open-app", app)
-    class OpenHistory(val app: String) : SimStep("open-history", app)
-    /** [version] null = "Latest". */
-    class SelectVersion(val version: Long?) : SimStep("select-version", version?.toString() ?: "latest")
-    /** [server]: `staging`, `emulator`, `usb` or an http(s) URL. */
-    class SetServer(val server: String) : SimStep("set-server", server)
+    /** Shows [version] of [layout] on this device (`action.device` `pin_version`); null: follow the latest again. */
+    class PinVersion(val layout: String, val version: Long?) : SimStep("pin-version", "$layout ${version ?: "latest"}")
     /** Fixture mode only: the fake pod publishes a new newest version of the app on screen. */
     class PublishVersion(val note: String) : SimStep("publish-version", note)
 
     // Notifications (D52).
     /** Fixture mode only: a live notification from [app]'s [channel] (fires the listener, bumps the unread count). */
     class Notify(val app: String, val channel: String, val title: String) : SimStep("notify", "$app $channel $title")
+    /** Presents the inbox layout as a sheet (`action.device` `open_inbox`). */
     object OpenInbox : SimStep("open-inbox")
-    object CloseInbox : SimStep("close-inbox")
-    /** Clicks the inbox row containing [text] (opens its app and target). */
-    class ClickNotification(val text: String) : SimStep("click-notification", text)
-    object OpenNotificationSettings : SimStep("open-notification-settings")
     /** [channel]: `<app>.<channel id>` (e.g. `pixelfed.likes`). */
     class ToggleChannel(val channel: String) : SimStep("toggle-channel", channel)
 
     override fun toString(): String = if (arg.isEmpty()) command else "$command $arg"
 }
-
-/** The `set-server` presets (the menu's `server-<key>` rows in the simulator). */
-val SERVER_PRESETS = listOf("staging", "emulator", "usb")
 
 class ScriptParseException(message: String) : IllegalArgumentException(message)
 
@@ -144,28 +133,25 @@ fun parseScript(script: String): List<SimStep> {
                 splitPaths(requireArg("one or more file paths"))
                     ?: throw ScriptParseException("${where()}: 'pick' needs file paths (quote a path with spaces: \"my photo.jpg\")"),
             )
-            "open-menu" -> { noArg(); SimStep.OpenMenu }
-            "close-menu" -> { noArg(); SimStep.CloseMenu }
             "open-settings" -> { noArg(); SimStep.OpenSettings }
-            "open-app" -> SimStep.OpenApp(requireArg("an app id or title (e.g. pixelfed or Pixelfed)"))
-            "open-history" -> SimStep.OpenHistory(requireArg("an app id or title (e.g. pixelfed or Pixelfed)"))
-            "select-version" -> {
-                val a = requireArg("a version number or 'latest'")
-                SimStep.SelectVersion(
-                    if (a.equals("latest", ignoreCase = true)) {
-                        null
-                    } else {
-                        a.removePrefix("v").toLongOrNull()?.takeIf { it >= 1 }
-                            ?: throw ScriptParseException("${where()}: 'select-version' needs a version number >= 1 (e.g. 2 or v2) or 'latest'")
-                    },
-                )
-            }
-            "set-server" -> {
-                val a = requireArg("staging, emulator, usb or an http(s)://host[:port] URL")
-                if (a.lowercase() !in SERVER_PRESETS && ServerUrls.parse(a) == null) {
-                    throw ScriptParseException("${where()}: 'set-server' needs staging, emulator, usb or an http(s)://host[:port] URL")
+            "open-layout" -> {
+                val parts = requireArg("a layout id and push, sheet or panel").split(Regex("\\s+"))
+                val how = parts.getOrNull(1)?.lowercase() ?: "push"
+                if (parts.size > 2 || how !in listOf("push", "sheet", "panel")) {
+                    throw ScriptParseException("${where()}: 'open-layout' needs '<layout id> [push|sheet|panel]'")
                 }
-                SimStep.SetServer(a)
+                SimStep.OpenLayout(parts[0], how)
+            }
+            "pin-version" -> {
+                val parts = requireArg("a layout id and a version number or 'latest'").split(Regex("\\s+"))
+                val v = parts.getOrNull(1)
+                val version = when {
+                    v == null || parts.size > 2 -> throw ScriptParseException("${where()}: 'pin-version' needs '<layout id> <version|latest>'")
+                    v.equals("latest", ignoreCase = true) -> null
+                    else -> v.removePrefix("v").toLongOrNull()?.takeIf { it >= 1 }
+                        ?: throw ScriptParseException("${where()}: 'pin-version' needs a version number >= 1 (e.g. 2 or v2) or 'latest'")
+                }
+                SimStep.PinVersion(parts[0], version)
             }
             "publish-version" -> SimStep.PublishVersion(requireArg("a note (the changelog line)"))
             "notify" -> {
@@ -176,9 +162,6 @@ fun parseScript(script: String): List<SimStep> {
                 SimStep.Notify(parts[0], parts[1], parts[2].trim())
             }
             "open-inbox" -> { noArg(); SimStep.OpenInbox }
-            "close-inbox" -> { noArg(); SimStep.CloseInbox }
-            "click-notification" -> SimStep.ClickNotification(requireArg("text of the notification to click"))
-            "open-notification-settings" -> { noArg(); SimStep.OpenNotificationSettings }
             "toggle-channel" -> {
                 val a = requireArg("'<app_id>.<channel>' (e.g. pixelfed.likes)")
                 if (!a.contains('.') || a.startsWith('.') || a.endsWith('.') || a.any { it.isWhitespace() }) {
@@ -198,9 +181,8 @@ fun parseScript(script: String): List<SimStep> {
             else -> throw ScriptParseException(
                 "${where()}: unknown command '$command' (expected one of: " +
                     "shot, click, wait, idle, assert-text, assert-no-text, wait-text, wait-images, swipe-left, swipe-right, " +
-                    "scroll-to, type, back, pick, open-menu, close-menu, open-settings, open-app, open-history, select-version, set-server, " +
-                    "publish-version, notify, open-inbox, close-inbox, click-notification, open-notification-settings, " +
-                    "toggle-channel, offline, online, screen)",
+                    "scroll-to, type, back, pick, open-layout, open-settings, open-inbox, pin-version, " +
+                    "publish-version, notify, toggle-channel, offline, online, screen)",
             )
         }
     }

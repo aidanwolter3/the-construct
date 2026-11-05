@@ -41,6 +41,9 @@ pub struct FfiStateSnapshot {
     /// Unread notifications (D52): `{"unread_total": n, "unread_by_app":
     /// {app_id: n}}`; zeros while signed out.
     pub notifications_json: String,
+    /// Other layouts this engine shows (decision `layouts-not-apps`):
+    /// `{id: {"workspace", "version", "gone"}}`.
+    pub layouts_json: String,
 }
 
 impl From<StateSnapshot> for FfiStateSnapshot {
@@ -56,6 +59,7 @@ impl From<StateSnapshot> for FfiStateSnapshot {
             layout_json: s.layout_json,
             loads_json: s.loads_json,
             notifications_json: s.notifications_json,
+            layouts_json: s.layouts_json,
         }
     }
 }
@@ -281,6 +285,13 @@ impl EngineHandle {
     /// Re-fetch the workspace on the calling thread (blocking), then notify.
     pub fn refresh(&self) {
         self.inner.refresh();
+    }
+
+    /// Show another layout with this engine (decision `layouts-not-apps`):
+    /// its cached version at once, then fetched in the background into the
+    /// shared store (`layouts_json`). Never blocks.
+    pub fn open_layout(&self, id: String) {
+        self.inner.open_layout(&id);
     }
 
     /// Stage a picked photo (D49): blocking (call off the UI thread). Returns
@@ -644,6 +655,7 @@ mod tests {
             layout_json: r#"{"app_id":"home","version":5}"#.into(),
             loads_json: r#"{"/v1/x":{"state":"ready"}}"#.into(),
             notifications_json: r#"{"unread_total":1,"unread_by_app":{"a":1}}"#.into(),
+            layouts_json: "{}".into(),
         };
         let ffi: FfiStateSnapshot = core.clone().into();
         assert_eq!(ffi.queries_json, core.queries_json);

@@ -58,6 +58,16 @@ class UniffiEngineBridge(val handle: EngineHandle) : ConstructEngineBridge {
         handle.logout()
     }
 
+    override fun openLayout(id: String) {
+        if (closed) return
+        handle.openLayout(id)
+    }
+
+    override fun refresh() {
+        if (closed) return
+        handle.refresh()
+    }
+
     override fun forgetSession() {
         if (closed) return
         engineLog("forget session")
@@ -281,6 +291,7 @@ internal fun FfiStateSnapshot.toEngineSnapshot(): EngineSnapshot = EngineSnapsho
     layoutJson = layoutJson,
     loadsJson = loadsJson,
     notificationsJson = notificationsJson,
+    layoutsJson = layoutsJson,
 )
 
 /** A negative limit can't be meant; 0 makes the pod answer 400 with a readable error. */

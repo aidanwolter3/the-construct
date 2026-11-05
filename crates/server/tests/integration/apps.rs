@@ -174,10 +174,13 @@ async fn apps_lists_dev_apps_only_when_shown() {
     let (status, _, body) = get(&pod, "/v1/apps?blueprints=1").await;
     assert_eq!(status, StatusCode::OK);
     let apps = body["apps"].as_array().unwrap();
-    // The blueprints, then the pod's own home app (decision `blueprints-and-home`).
-    assert_eq!(apps.len(), 5, "{body}");
+    // The blueprints (Settings and the inbox among them, decision
+    // `layouts-not-apps`), then the pod's own home (decision `blueprints-and-home`).
+    assert_eq!(apps.len(), 7, "{body}");
     assert_eq!(apps[3]["id"], "shell");
-    assert_eq!(apps[4]["id"], "home");
+    assert_eq!(apps[4]["id"], "settings");
+    assert_eq!(apps[5]["id"], "inbox");
+    assert_eq!(apps[6]["id"], "home");
     let a = &apps[0];
     assert_eq!(
         (&a["id"], &a["title"], &a["icon"], &a["latest_version"]),
@@ -227,6 +230,8 @@ async fn apps_lists_dev_apps_only_when_shown() {
                 files("pixelfed_sample_no_login") + 1
             ),
             ("shell", "Home", "dashboard", files("shell")),
+            ("settings", "Settings", "dashboard", files("settings")),
+            ("inbox", "Notifications", "dashboard", files("inbox")),
             ("home", "Home", "dashboard", 1),
         ]
     );

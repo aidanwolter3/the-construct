@@ -53,25 +53,13 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-// The layout-first shell (decision `blueprints-and-home`): every pod has a `home` app, which starts as a reference
-// to the home blueprint (a `core://Dock` of the pod's apps). When a platform opens [HOME_APP], [ConstructController]
-// runs in shell mode: it keeps the last home layout it saw ([ShellSnapshot]) and draws it with [ShellRoot], while its
-// one engine follows the app shown in the selected `core://AppFrame`. Before a pod is open it draws the bundled
-// sign-in layout ([BundledLayouts.bootstrap]); when the pod has no home it can draw, the bundled rescue layout.
+// The pod's home (decisions `blueprints-and-home`, `layouts-not-apps`): every pod has a `home` layout, the root clients
+// open first; it embeds and presents the pod's other layouts. Before a pod is open the client draws the bundled sign-in
+// layout ([BundledLayouts.bootstrap]); when the pod has no home it can draw, the bundled rescue layout. The device data
+// ([deviceData]) is what layouts bind with no feed.
 
 /** The app id of every pod's home app (`pod_core::HOME_APP`). */
 const val HOME_APP = "home"
-
-/** The form scope of the shell's own form values (the dock's selected tab). */
-const val SHELL_FORM_SCOPE = "shell"
-
-/** The home layout as last drawn: its workspace and the data its engine loaded with it. */
-data class ShellSnapshot(
-    val workspace: UiNode,
-    val entities: Map<String, JsonObject> = emptyMap(),
-    val queries: Map<String, List<String>> = emptyMap(),
-    val version: Long? = null,
-)
 
 /** Data the device provides to layouts (feature `local_data`): `local://` entities and `local:` queries. */
 data class DeviceData(
@@ -131,9 +119,7 @@ fun deviceData(
         put("label", if (unread.total == 0) "All read" else "${unread.total} unread")
     }
     val listed = apps.filter { it.id != HOME_APP && !it.hidden }
-    val uris = listed.map { app ->
-        val uri = "local://apps/${app.id}"
-        entities[uri] = buildJsonObject {
+    fun row(app: AppSummary) = buildJsonObject {
             put("id", app.id)
             put("title", app.title)
             put("icon", app.icon)
@@ -143,8 +129,10 @@ fun deviceData(
             val pinned = sources.pins[app.id]
             put("version", if (pinned != null) "v$pinned · pinned" else app.latestVersion?.let { "v$it · latest" } ?: "")
         }
-        uri
-    }
+    // `local:layouts` (decision `layouts-not-apps`); `local:apps`, its old name, for layouts written before.
+    val layoutUris = listed.map { app -> "local://layouts/${app.id}".also { entities[it] = row(app) } }
+    val uris = listed.map { app -> "local://apps/${app.id}".also { entities[it] = row(app) } }
+    entities["local://layouts"] = buildJsonObject { put("count", listed.size) }
     entities["local://apps"] = buildJsonObject { put("count", listed.size) }
     entities["local://device"] = buildJsonObject { put("platform", platform) }
     entities["local://session"] = buildJsonObject {
@@ -152,9 +140,19 @@ fun deviceData(
         put("server", sources.server?.currentUrl.orEmpty())
         put("error", state.auth.error.orEmpty())
         put("message", state.auth.message.orEmpty())
+        // A sign-in in progress or failed, for Settings: the engine's progress message, or the error.
+        put(
+            "status",
+            when (state.auth.state) {
+                "pending" -> state.auth.message ?: "Signing in…"
+                "error" -> state.auth.error.orEmpty()
+                else -> ""
+            },
+        )
     }
     val titles = apps.associate { it.id to it.title }
     val queries = LinkedHashMap<String, List<String>>()
+    queries["local:layouts"] = layoutUris
     queries["local:apps"] = uris
     fun add(query: String, uri: String, entity: JsonObject): String {
         entities[uri] = entity
@@ -236,9 +234,6 @@ fun deviceData(
 /** The device data, for every layout on screen (provided by [ConstructApp]). */
 val LocalDeviceData: ProvidableCompositionLocal<DeviceData> = staticCompositionLocalOf { DeviceData() }
 
-/** The shell's controller, for `core://AppFrame` (null outside shell mode: frames then say they can't open apps). */
-val LocalShellController: ProvidableCompositionLocal<ConstructController?> = staticCompositionLocalOf { null }
-
 /** Layouts bundled with the app: they draw with no pod at all. */
 object BundledLayouts {
     /** The first screen: a pod code, or a temporary pod (the same intents as the pod host's "Open your pod"). */
@@ -279,384 +274,26 @@ object BundledLayouts {
 ]}"""
 }
 
-/** What the shell draws now. */
-internal sealed class ShellView {
-    data object Loading : ShellView()
-    data object Bootstrap : ShellView()
-    data object Rescue : ShellView()
-    data class Home(val snapshot: ShellSnapshot) : ShellView()
-}
+/** What the root draws for the pod's home. */
+internal enum class ShellView { Loading, Bootstrap, Rescue, Home }
 
 /**
- * Bootstrap until the engine holds a pod session; then the home layout once seen (it is kept while the engine shows
- * other apps); the rescue layout when the engine, on home, has no layout and an error; loading meanwhile.
+ * Bootstrap until the engine holds a pod session; home once the engine has it; the rescue layout when the engine has
+ * no home it can draw and says why; loading meanwhile.
  */
-internal fun shellView(state: ConstructState, shell: ShellSnapshot?, onHome: Boolean): ShellView = when {
+internal fun shellView(state: ConstructState): ShellView = when {
     state.seq >= 0 && !state.auth.session -> ShellView.Bootstrap
-    shell != null -> ShellView.Home(shell)
-    onHome && state.workspace == null && state.error != null -> ShellView.Rescue
-    onHome && state.seq >= 0 && state.workspace != null -> ShellView.Rescue // home is there but isn't drawable
+    state.workspace != null -> ShellView.Home
+    state.error != null -> ShellView.Rescue
     else -> ShellView.Loading
 }
 
-/** The shell (shell mode's root): the bundled layouts, or the home layout over the device data. */
-@Composable
-internal fun ShellRoot(controller: ConstructController, state: ConstructState, modifier: Modifier = Modifier) {
-    val shell by controller.shell.collectAsState()
-    val appId by controller.appId.collectAsState()
-    val dataToken by controller.shellDataToken.collectAsState()
-    // The pod data the device data shows (notifications, channels, sign-ins): loaded with the home, and again
-    // whenever [ConstructController.reloadShellData] asks.
-    LaunchedEffect(dataToken, shell != null, state.auth.session) {
-        if (shell != null && state.auth.session) {
-            controller.inbox.load()
-            controller.inbox.loadChannels()
-            controller.menu.loadSignIns()
-        }
-    }
-    val device = LocalDeviceData.current
-    val view = shellView(state, shell, onHome = (appId ?: state.activeLayout.appId) == HOME_APP)
-    val content: Pair<UiNode, ShellSnapshot?>? = when (view) {
-        ShellView.Loading -> null
-        ShellView.Bootstrap -> BundledLayouts.bootstrap to null
-        ShellView.Rescue -> BundledLayouts.rescue to null
-        is ShellView.Home -> view.snapshot.workspace to view.snapshot
-    }
-    if (content == null) {
-        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-        return
-    }
-    val (node, snapshot) = content
-    val entities = remember(snapshot?.entities, device) { (snapshot?.entities ?: emptyMap()) + device.entities }
-    val queries = remember(snapshot?.queries, device) { (snapshot?.queries ?: emptyMap()) + device.queries }
-    CompositionLocalProvider(
-        LocalConstructQueries provides queries,
-        LocalForm provides controller.shellForm,
-        LocalFormMemory provides remember(controller) {
-            FormMemory { f, v -> controller.navigation.remember(SHELL_FORM_SCOPE, f, v) }
-        },
-        LocalShellController provides controller,
-    ) {
-        RenderUiNode(node, entities, controller::dispatchShell, modifier.fillMaxSize().testTag("shell"))
-    }
-}
-
-/** Whether a workspace is drawn whole by its one slot (a `core://Dock`), with no title bar or page scroll. */
+/**
+ * Whether a workspace is drawn whole by its one slot (a filling `core://Box`, or an inline `core://Layout`), with no
+ * title bar or page scroll.
+ */
 internal fun fillsScreen(workspace: UiNode.Workspace): Boolean =
     workspace.slots.size == 1 &&
         workspace.slots[0].content.let {
-            it is UiNode.Dock || it is UiNode.Drawer || it is UiNode.AppFrame || (it is UiNode.Box && it.fill)
+            (it is UiNode.Box && it.fill) || (it is UiNode.Layout && it.presentation == EmbedPresentation.Inline && it.showWhen == null)
         }
-
-/** One tab of a dock as drawn: [item] is the entity it was drawn from (query tabs). */
-private data class DrawnTab(
-    val value: String,
-    val label: String,
-    val icon: String,
-    val badge: String,
-    val content: UiNode,
-    val item: JsonObject?,
-)
-
-private fun DockTab.drawn(entities: Map<String, JsonObject>, item: JsonObject?): DrawnTab = DrawnTab(
-    value = (resolveRef(value, item) ?: value).trim(),
-    label = interpolate(label, entities, item),
-    icon = icon?.let { resolveRef(it, item) ?: it }.orEmpty(),
-    badge = badge?.let { interpolate(it, entities, item) }.orEmpty(),
-    content = content,
-    item = item,
-)
-
-/** A tab's icon: an app icon name, or one of the shell's own (`more`, `home`, `settings`, `inbox`). */
-internal fun dockIcon(name: String): ImageVector = when (name) {
-    "more", "menu", "apps" -> ConstructIcons.Menu
-    "settings" -> ConstructIcons.Settings
-    "inbox", "notifications" -> ConstructIcons.Notifications
-    else -> appIcon(name)
-}
-
-/**
- * `core://Dock`: a bar of tabs along the bottom (a rail down the side when the window is wide) and the selected tab's
- * content filling the rest. The selection is the form value of [UiNode.Dock.field], remembered on the device; a tab
- * that is no longer there falls back to the first. `action.device` `open_app` selects the app's tab (or shows the
- * app when it is past `max_items`).
- */
-@Composable
-internal fun DockView(
-    node: UiNode.Dock,
-    entities: Map<String, JsonObject>,
-    onDispatch: (ActionIntent) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val form = LocalForm.current
-    val memory = LocalFormMemory.current
-    val queries = LocalConstructQueries.current
-    val controller = LocalShellController.current
-    val itemTabs = remember(node, queries, entities) {
-        val template = node.item ?: return@remember emptyList()
-        listItems(node.queryKey ?: "", queries, entities).orEmpty().map { template.drawn(entities, it) }
-    }
-    val before = node.before.map { it.drawn(entities, null) }
-    val after = node.after.map { it.drawn(entities, null) }
-    val shown = before + itemTabs.take(node.maxItems ?: itemTabs.size) + after
-    val all = before + itemTabs + after
-    // An app asked for that has no tab (e.g. a notification's blueprint app): shown in the item's frame, untabbed.
-    var adHoc by remember { mutableStateOf<String?>(null) }
-    val request = controller?.dockRequest?.collectAsState()?.value
-    LaunchedEffect(request) {
-        if (request != null && form != null) {
-            if (all.none { it.value == request }) adHoc = request
-            form[node.field] = request
-            memory?.save(node.field, request)
-            controller.dockRequestHandled()
-        }
-    }
-    val wanted = form?.get(node.field).orEmpty()
-    val untabbed = node.item?.takeIf { wanted.isNotEmpty() && wanted == adHoc }
-        ?.drawn(entities, buildJsonObject { put("id", wanted); put("title", wanted) })
-    val selected = all.firstOrNull { it.value == wanted } ?: untabbed ?: shown.firstOrNull()
-    val select: (DrawnTab) -> Unit = { tab ->
-        form?.set(node.field, tab.value)
-        memory?.save(node.field, tab.value)
-        controller?.onDockSelected()
-    }
-    BoxWithConstraints(modifier.fillMaxSize().testTag("dock")) {
-        val wide = maxWidth >= 720.dp
-        val content: @Composable (Modifier) -> Unit = { m ->
-            Box(m) {
-              CompositionLocalProvider(LocalWorkspaceTitleInset provides 0.dp, LocalWorkspaceTitleEndInset provides 0.dp) {
-                if (selected != null) {
-                    key(selected.value) {
-                        val c = selected.content
-                        if (c is UiNode.AppFrame) {
-                            RenderUiNode(c, entities, onDispatch, Modifier.fillMaxSize(), selected.item)
-                        } else {
-                            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                                RenderUiNode(c, entities, onDispatch, Modifier.fillMaxWidth(), selected.item)
-                            }
-                        }
-                    }
-                }
-              }
-            }
-        }
-        if (wide) {
-            Row(Modifier.fillMaxSize()) {
-                NavigationRail(Modifier.fillMaxHeight()) {
-                    shown.forEach { tab ->
-                        NavigationRailItem(
-                            selected = tab.value == selected?.value,
-                            onClick = { select(tab) },
-                            icon = { TabIcon(tab) },
-                            label = { Text(tab.label, maxLines = 1) },
-                            modifier = Modifier.testTag("dock-tab-${tab.value}"),
-                        )
-                    }
-                }
-                content(Modifier.weight(1f).fillMaxHeight())
-            }
-        } else {
-            Column(Modifier.fillMaxSize()) {
-                content(Modifier.weight(1f).fillMaxWidth())
-                NavigationBar {
-                    shown.forEach { tab ->
-                        NavigationBarItem(
-                            selected = tab.value == selected?.value,
-                            onClick = { select(tab) },
-                            icon = { TabIcon(tab) },
-                            label = { Text(tab.label, maxLines = 1) },
-                            modifier = Modifier.testTag("dock-tab-${tab.value}"),
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** A tab's icon with its badge: a count when the badge is a positive number, a dot when it is otherwise truthy. */
-@Composable
-private fun TabIcon(tab: DrawnTab) {
-    val count = tab.badge.toIntOrNull()
-    val dot = count == null && isTruthy(tab.badge, null)
-    BadgedBox(badge = {
-        when {
-            count != null && count > 0 -> Badge { Text(if (count > 99) "99+" else "$count") }
-            dot -> Badge()
-        }
-    }) {
-        Icon(dockIcon(tab.icon), contentDescription = null, modifier = Modifier.size(22.dp))
-    }
-}
-
-/**
- * `core://AppFrame`: the app [UiNode.AppFrame.app] drawn whole by the shell's engine. The engine follows the frame on
- * screen ([ConstructController.openApp]); until it has the app's layout the frame shows a spinner, and an app that
- * can't be drawn says so here while the rest of the shell keeps working.
- */
-@Composable
-internal fun AppFrameView(node: UiNode.AppFrame, item: JsonObject?, modifier: Modifier = Modifier) {
-    val controller = LocalShellController.current
-    val appId = (resolveRef(node.app, item) ?: node.app).trim()
-    if (controller == null || !controller.canOpenApps) {
-        FrameMessage("Apps can't be shown inside other apps here.", modifier)
-        return
-    }
-    val state by controller.state.collectAsState()
-    val pin by controller.pinned.collectAsState()
-    val current by controller.appId.collectAsState()
-    val device = LocalDeviceData.current
-    LaunchedEffect(appId) {
-        if (appId.isNotEmpty() && controller.currentAppId() != appId) controller.openApp(appId)
-    }
-    val onThis = (current ?: state.activeLayout.appId) == appId
-    val workspace = if (onThis) displayedWorkspace(state, pin) else null
-    when {
-        onThis && state.activeLayout.gone -> FrameMessage(APP_DELETED, modifier)
-        workspace == null && onThis && state.error != null -> FrameMessage(
-            "This app can't be drawn: ${state.error}",
-            modifier,
-            onRetry = { controller.refreshFrame(appId) },
-        )
-        workspace == null -> Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(Modifier.testTag("frame-loading"))
-        }
-        else -> Box(modifier.fillMaxSize().testTag("frame-$appId")) {
-            val entities = remember(state.entities, device) { state.entities + device.entities }
-            val queries = remember(state.queries, device) { state.queries + device.queries }
-            CompositionLocalProvider(
-                LocalConstructQueries provides queries,
-                LocalForm provides controller.navigation.rootForm,
-                LocalFormMemory provides remember(controller) {
-                    FormMemory { f, v -> controller.navigation.remember(ROOT_FORM_SCOPE, f, v) }
-                },
-                // A frame's app draws its own frames as messages: one engine shows one app. Its title keeps the inset
-                // its host gives it (a drawer's menu button sits over the top left).
-                LocalShellController provides null,
-            ) {
-                RenderUiNode(workspace, entities, controller::dispatch, Modifier.fillMaxSize())
-            }
-            ScreenHost(controller, state)
-        }
-    }
-}
-
-@Composable
-private fun FrameMessage(text: String, modifier: Modifier, onRetry: (() -> Unit)? = null) {
-    Column(
-        modifier.fillMaxSize().padding(24.dp).testTag("frame-message"),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(text, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
-        if (onRetry != null) TextButton(onClick = onRetry) { Text("Try again") }
-    }
-}
-
-/** A page of a drawer as drawn: [item] is the entity it was drawn from (query pages). */
-private data class DrawnPage(val value: String, val content: UiNode, val item: JsonObject?)
-
-/**
- * `core://Drawer`: the selected page fills the screen, and a menu button at the top left (hidden while a screen of the
- * framed app is open) opens [UiNode.Drawer.drawer], a panel of any layout. Any action from inside the panel closes it.
- * Pages are picked by `action.device` `open_app` / `show` (through [ConstructController.dockRequest]); the selection is
- * the form value of [UiNode.Drawer.field], remembered on the device. An app asked for that has no page is shown in the
- * item's frame.
- */
-@Composable
-internal fun DrawerView(
-    node: UiNode.Drawer,
-    entities: Map<String, JsonObject>,
-    onDispatch: (ActionIntent) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val form = LocalForm.current
-    val memory = LocalFormMemory.current
-    val queries = LocalConstructQueries.current
-    val controller = LocalShellController.current
-    val scope = rememberCoroutineScope()
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-    val itemPages = remember(node, queries, entities) {
-        val template = node.item ?: return@remember emptyList()
-        listItems(node.queryKey ?: "", queries, entities).orEmpty().map { e ->
-            DrawnPage((resolveRef(template.value, e) ?: template.value).trim(), template.content, e)
-        }
-    }
-    val all = node.before.map { DrawnPage(it.value, it.content, null) } + itemPages +
-        node.after.map { DrawnPage(it.value, it.content, null) }
-    var adHoc by remember { mutableStateOf<String?>(null) }
-    val request = controller?.dockRequest?.collectAsState()?.value
-    LaunchedEffect(request) {
-        if (request != null && form != null) {
-            if (all.none { it.value == request }) adHoc = request
-            form[node.field] = request
-            memory?.save(node.field, request)
-            // Closed from the view's own scope: clearing the request restarts this effect, which would cancel it.
-            scope.launch { drawerState.close() }
-            controller.dockRequestHandled()
-        }
-    }
-    val wanted = form?.get(node.field).orEmpty()
-    val untabbed = node.item?.takeIf { wanted.isNotEmpty() && wanted == adHoc }
-        ?.let { DrawnPage(wanted, it.content, buildJsonObject { put("id", wanted); put("title", wanted) }) }
-    val selected = all.firstOrNull { it.value == wanted } ?: untabbed ?: all.firstOrNull()
-    // The panel reads the page shown as `$form.<field>` (to mark it) even before anything is picked; it gets its own
-    // form with that value, so a default never sticks while the app list is still loading.
-    val panelForm = remember { mutableStateMapOf<String, String>() }
-    SideEffect { selected?.value?.let { panelForm[node.field] = it } }
-    PlatformBackHandler(enabled = drawerState.isOpen) { scope.launch { drawerState.close() } }
-    val screenOpen = controller?.navigation?.top != null
-    val badge = node.badge?.let { interpolate(it, entities, null) }.orEmpty()
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        gesturesEnabled = drawerState.isOpen,
-        modifier = modifier.fillMaxSize().testTag("drawer"),
-        drawerContent = {
-            ModalDrawerSheet(Modifier.width(304.dp)) {
-                // The panel's actions read its own form (what is typed there, and the page shown).
-                val panelDispatch: (ActionIntent) -> Unit = { intent ->
-                    if (controller != null) controller.dispatchWithForm(intent, panelForm) else onDispatch(intent)
-                    scope.launch { drawerState.close() }
-                }
-                CompositionLocalProvider(LocalForm provides panelForm) {
-                    Column(Modifier.fillMaxSize().testTag("drawer-panel")) {
-                        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
-                            RenderUiNode(node.drawer, entities, panelDispatch, Modifier.fillMaxWidth())
-                        }
-                        node.footer?.let { RenderUiNode(it, entities, panelDispatch, Modifier.fillMaxWidth()) }
-                    }
-                }
-            }
-        },
-    ) {
-        Box(Modifier.fillMaxSize()) {
-            if (selected != null) {
-                key(selected.value) {
-                    CompositionLocalProvider(
-                        LocalWorkspaceTitleInset provides MENU_BUTTON_INSET,
-                        LocalWorkspaceTitleEndInset provides 0.dp,
-                    ) {
-                        val c = selected.content
-                        if (c is UiNode.AppFrame) {
-                            RenderUiNode(c, entities, onDispatch, Modifier.fillMaxSize(), selected.item)
-                        } else {
-                            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                                RenderUiNode(c, entities, onDispatch, Modifier.fillMaxWidth(), selected.item)
-                            }
-                        }
-                    }
-                }
-            }
-            if (!screenOpen) {
-                MenuButton(
-                    badge = badge.toIntOrNull()?.let { it > 0 } ?: isTruthy(badge, null),
-                    onClick = {
-                        controller?.onDockSelected()
-                        scope.launch { drawerState.open() }
-                    },
-                    modifier = Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 8.dp),
-                )
-            }
-        }
-    }
-}

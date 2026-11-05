@@ -19,7 +19,7 @@ class NotificationTapActivity : Activity() {
         val open = Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             .putExtra(EXTRA_NOTIFICATION_NONCE, NotificationTaps.nonce)
-        for (key in listOf(EXTRA_NOTIFICATION_APP, EXTRA_NOTIFICATION_ID, EXTRA_NOTIFICATION_TARGET, EXTRA_NOTIFICATION_SERVER)) {
+        for (key in listOf(EXTRA_NOTIFICATION_APP, EXTRA_NOTIFICATION_ID, EXTRA_NOTIFICATION_TARGET, EXTRA_NOTIFICATION_LAYOUT, EXTRA_NOTIFICATION_SERVER)) {
             tap?.getStringExtra(key)?.let { open.putExtra(key, it) }
         }
         startActivity(open)

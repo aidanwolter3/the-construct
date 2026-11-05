@@ -1782,6 +1782,7 @@ mod tests {
             body: String::new(),
             image_url: None,
             target_uri: None,
+            layout: None,
             group_key: None,
             created_at: 1,
             read: false,

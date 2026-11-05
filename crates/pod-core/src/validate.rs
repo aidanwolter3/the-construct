@@ -102,10 +102,25 @@ pub fn validate_structure(expected_id: &str, doc: &Value) -> Result<UiNode, Stri
                 endpoint
             }
             ActionIntent::LoadData { path } => path,
+            ActionIntent::Navigate {
+                target_uri, layout, ..
+            } => {
+                if let Some(l) = layout {
+                    check_layout_ref(l)?;
+                } else if target_uri.trim().is_empty() {
+                    return Err("action.navigation.open needs a target_uri or a layout".into());
+                }
+                continue;
+            }
             ActionIntent::Device {
                 command, app, id, ..
             } => {
                 let c = command.as_str();
+                // Retired (decision `layouts-not-apps`): old versions still
+                // hold them; a new write is refused for the removed feature.
+                if protocol::intent::RETIRED_DEVICE_COMMANDS.contains(&c) {
+                    continue;
+                }
                 if !protocol::DEVICE_COMMANDS.contains(&c) {
                     return Err(format!(
                         "unknown device command '{command}' (known: {})",
@@ -164,6 +179,25 @@ fn check_aspect(what: &str, a: f32) -> Result<(), String> {
             "{what} {a} outside {}..={}",
             ASPECT_RATIO_RANGE.start(),
             ASPECT_RATIO_RANGE.end()
+        ))
+    }
+}
+
+/// Tallest a `core://Layout` region may be.
+const MAX_LAYOUT_HEIGHT_DP: u16 = 2000;
+
+/// A layout named by `core://Layout` or `action.navigation.open`: a layout
+/// id (`home`, `c-...`, a blueprint) or a binding to one (`$item.id`).
+fn check_layout_ref(layout: &str) -> Result<(), String> {
+    let l = layout.trim();
+    if l.starts_with('$') {
+        return Ok(());
+    }
+    if crate::layouts::is_valid_workspace_id(l) {
+        Ok(())
+    } else {
+        Err(format!(
+            "'{layout}' is not a layout id (home, c-..., a blueprint id) or a binding such as $item.id"
         ))
     }
 }
@@ -255,6 +289,21 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             }
             if before.is_empty() && after.is_empty() && item.is_none() {
                 return Err("a drawer needs at least one page".into());
+            }
+            Ok(())
+        }
+        UiNode::Layout {
+            layout,
+            show_when,
+            height_dp,
+            ..
+        } => {
+            check_layout_ref(layout)?;
+            if show_when.as_deref().is_some_and(|w| w.trim().is_empty()) {
+                return Err("a layout's show_when is a binding such as $form.menu".into());
+            }
+            if let Some(h) = height_dp {
+                check_dp("height_dp", *h, MAX_LAYOUT_HEIGHT_DP)?;
             }
             Ok(())
         }
@@ -710,9 +759,28 @@ pub fn custom_layout(
                 "dismiss",
                 "; to close the screen after a create, put it in an action.sequence followed by action.navigation.back",
             ),
+            "dock" | "drawer" | "app_frame" => (
+                "type",
+                "; show other layouts with core://Layout, or open them with action.navigation.open {\"layout\": <id>, \"presentation\": \"Push\"}",
+            ),
+            "device_open_app" => (
+                "command",
+                "; open a layout with action.navigation.open {\"layout\": <id>, \"presentation\": \"Push\"}",
+            ),
             _ => ("", ""),
         };
-        let at = find_pointer(doc, "", &|k, _| k == key).unwrap_or_default();
+        // The node or command that uses it (any key, for a removed field).
+        let values: &[&str] = match f {
+            "dock" => &["core://Dock"],
+            "drawer" => &["core://Drawer"],
+            "app_frame" => &["core://AppFrame"],
+            "device_open_app" => &protocol::intent::RETIRED_DEVICE_COMMANDS,
+            _ => &[],
+        };
+        let at = find_pointer(doc, "", &|k, v| {
+            k == key && (values.is_empty() || v.as_str().is_some_and(|v| values.contains(&v)))
+        })
+        .unwrap_or_default();
         return Err(LayoutError::new(
             &at,
             format!("'{f}' was removed from the layout vocabulary{hint}"),

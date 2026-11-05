@@ -112,9 +112,22 @@ fun RenderUiNode(
 ) {
     val dispatch: (ActionIntent) -> Unit = { onDispatch(bindIntent(it, item)) }
     when (node) {
-        is UiNode.Workspace -> if (fillsScreen(node)) {
-            // A dock fills the screen itself (decision `blueprints-and-home`): no title bar, no page scroll.
-            RenderUiNode(node.slots[0].content, entities, onDispatch, modifier.fillMaxSize(), item)
+        is UiNode.Workspace -> if (LocalInlineWorkspace.current) {
+            // Inline in another layout's page (`core://Layout`, decision `layouts-not-apps`): its slots only, at their
+            // own height; the page around them scrolls.
+            Column(modifier) {
+                CompositionLocalProvider(LocalInlineWorkspace provides false) {
+                    node.slots.forEach { slot ->
+                        key(slot.slotId) { RenderUiNode(slot.content, entities, onDispatch, Modifier, item) }
+                    }
+                }
+            }
+        } else if (fillsScreen(node)) {
+            // One slot that fills the screen itself (decisions `blueprints-and-home`, `layouts-not-apps`): no title
+            // bar, no page scroll.
+            CompositionLocalProvider(LocalFillLayout provides true) {
+                RenderUiNode(node.slots[0].content, entities, onDispatch, modifier.fillMaxSize(), item)
+            }
         } else {
             val scroll = rememberScrollState()
             val title: @Composable () -> Unit = {
@@ -292,11 +305,9 @@ fun RenderUiNode(
             )
         }
 
-        is UiNode.Dock -> DockView(node, entities, onDispatch, modifier)
 
-        is UiNode.Drawer -> DrawerView(node, entities, onDispatch, modifier)
 
-        is UiNode.AppFrame -> AppFrameView(node, item, modifier)
+        is UiNode.Layout -> LayoutNodeView(node, entities, item, modifier)
 
         is UiNode.Switch -> androidx.compose.material3.Switch(
             checked = isTruthy(node.checked, item),

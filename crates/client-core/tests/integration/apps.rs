@@ -426,3 +426,70 @@ fn custom_apps_are_listed_hidden_and_deleted_and_the_engine_leaves_a_deleted_one
         parse(&late.snapshot().layout_json)["gone"] == json!(true)
     });
 }
+
+/// Decision `layouts-not-apps`: one engine on home shows another layout,
+/// with its data in the shared store, and hears it change and go.
+#[test]
+fn one_engine_on_home_opens_other_layouts_and_follows_them() {
+    let p = pod(server::state_in_memory());
+    p.state
+        .store()
+        .create_pinned_session(&server::session::session_hash("pod-token"))
+        .unwrap();
+    let layout = |title: &str| {
+        json!({"type": "core://Workspace", "id": "x", "title": title,
+            "slots": [{"slot_id": "r", "provider_uri": "core://custom",
+              "content": {"type": "core://List", "query_key": "recipes:all",
+                "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}}]})
+    };
+    let http = reqwest::blocking::Client::new();
+    let created: Value = http
+        .post(format!("{}/v1/custom-apps", p.base))
+        .bearer_auth("pod-token")
+        .json(&json!({"title": "Mine", "feeds": [["recipes", "all"]], "layout": layout("Mine")}))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let id = created["id"].as_str().unwrap().to_owned();
+
+    let e = engine_with_token(&p.base, "home", "pod-token");
+    wait_until("home", || {
+        e.snapshot().workspace_json.contains("core://Workspace")
+    });
+    e.open_layout(&id);
+    wait_until("the other layout", || {
+        let s = e.snapshot();
+        parse(&s.layouts_json)[&id]["workspace"]["title"] == "Mine"
+            && parse(&s.queries_json).get("recipes:all").is_some()
+    });
+    let s = e.snapshot();
+    assert_eq!(
+        parse(&s.loads_json)[format!("layout:{id}")]["state"],
+        "ready"
+    );
+    assert!(parse(&s.layouts_json)[&id]["version"].as_u64().is_some());
+    // Home's stream carries the other layout's new version and its deletion.
+    thread::sleep(Duration::from_millis(500));
+    let resp = http
+        .put(format!("{}/v1/custom-apps/{id}/layout", p.base))
+        .bearer_auth("pod-token")
+        .json(&json!({"layout": layout("Mine, again")}))
+        .send()
+        .unwrap();
+    assert!(resp.status().is_success(), "{}", resp.text().unwrap());
+    wait_until("the new version", || {
+        parse(&e.snapshot().layouts_json)[&id]["workspace"]["title"] == "Mine, again"
+    });
+    e.delete_custom_app(&id).unwrap();
+    wait_until("gone", || {
+        parse(&e.snapshot().layouts_json)[&id]["gone"] == json!(true)
+    });
+    // Home itself is still there.
+    assert_ne!(parse(&e.snapshot().layout_json)["gone"], json!(true));
+    // A missing layout says so.
+    e.open_layout("c-aaaaaaaaaa");
+    wait_until("not found", || {
+        parse(&e.snapshot().layouts_json)["c-aaaaaaaaaa"]["gone"] == json!(true)
+    });
+}

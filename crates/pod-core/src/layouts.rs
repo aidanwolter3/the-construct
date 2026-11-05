@@ -1188,6 +1188,8 @@ async fn events(
         shutdown: tokio::sync::watch::Receiver<bool>,
         state: Arc<AppState>,
         id: String,
+        /// Home's stream: the version last announced of each other layout.
+        others: std::collections::HashMap<String, i64>,
     }
     let recheck = session_hash.as_ref().map(|_| {
         let every = state.sse_keepalive();
@@ -1212,6 +1214,7 @@ async fn events(
             shutdown: state.shutdown_signal(),
             state: state.clone(),
             id,
+            others: Default::default(),
         },
         |mut s| async move {
             let event = |s: &S| {
@@ -1283,6 +1286,34 @@ async fn events(
                         continue;
                     }
                 };
+                // Home's stream carries every layout's changes (decision
+                // `layouts-not-apps`): one engine shows them all.
+                if s.id == crate::HOME_APP
+                    && let Ok(ev) = &received
+                    && ev.workspace_id != s.id
+                {
+                    if ev.version == DELETED_VERSION {
+                        s.others.remove(&ev.workspace_id);
+                        let e = Event::default()
+                            .event("deleted")
+                            .data(json!({ "workspace_id": ev.workspace_id }).to_string());
+                        return Some((Ok(e), s));
+                    }
+                    let other = ev.workspace_id.clone();
+                    let Ok(Some(v)) = announced_async(&s.state, &other, s.client.clone()).await
+                    else {
+                        continue;
+                    };
+                    if s.others.get(&other) == Some(&v) {
+                        continue;
+                    }
+                    s.others.insert(other.clone(), v);
+                    let e = layout_event(&LayoutEvent {
+                        workspace_id: other,
+                        version: v,
+                    });
+                    return Some((Ok(e), s));
+                }
                 let lagged = match received {
                     Ok(ev) if ev.workspace_id == s.id && ev.version == DELETED_VERSION => {
                         s.done = true;

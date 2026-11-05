@@ -11,11 +11,12 @@
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
-use crate::intent::ActionIntent;
+use crate::intent::{ActionIntent, Animation};
 
 /// Node types this build knows (an other type is [`UiNode::Unknown`]).
-pub const NODE_TYPES: [&str; 26] = [
+pub const NODE_TYPES: [&str; 27] = [
     "core://Workspace",
     "core://Container",
     "core://Text",
@@ -42,6 +43,7 @@ pub const NODE_TYPES: [&str; 26] = [
     "core://AppFrame",
     "core://Switch",
     "core://Drawer",
+    "core://Layout",
 ];
 
 /// Icon names clients draw (`core://IconButton`, `core://Chip`).
@@ -502,6 +504,31 @@ pub enum UiNode {
         content_description: Option<String>,
     },
 
+    // Feature `layout_embed` (crates/protocol/features/layout_embed.md)
+    /// Another layout of the pod drawn here (decision `layouts-not-apps`).
+    /// `Inline` (the default) draws it in place, `height_dp` tall when set;
+    /// `Sheet` and `Panel` present it over the screen. With `show_when` (a
+    /// binding such as `$form.menu` or `${local://inbox#unread}`) it shows
+    /// only while that is truthy, or equals `equals`; dismissing a presented
+    /// one clears the `$form` field `show_when` names. `params` bind as
+    /// `$route.<name>` in the embedded layout.
+    #[serde(rename = "core://Layout")]
+    Layout {
+        layout: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        show_when: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        equals: Option<String>,
+        #[serde(default, skip_serializing_if = "EmbedPresentation::is_inline")]
+        presentation: EmbedPresentation,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        animation: Option<Animation>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        params: BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height_dp: Option<u16>,
+    },
+
     /// A node of a type this build does not know: its JSON, kept as is.
     #[serde(skip)]
     Unknown(Value),
@@ -605,6 +632,7 @@ impl UiNode {
                 .collect(),
             UiNode::Text { .. }
             | UiNode::AppFrame { .. }
+            | UiNode::Layout { .. }
             | UiNode::Switch { .. }
             | UiNode::Button { .. }
             | UiNode::Image { .. }
@@ -928,5 +956,23 @@ impl From<&str> for ListBinding {
 impl From<String> for ListBinding {
     fn from(s: String) -> Self {
         ListBinding::Expr(s)
+    }
+}
+
+/// How a `core://Layout` shows its layout (decision `layouts-not-apps`).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EmbedPresentation {
+    /// In place, in the space the parent gives it.
+    #[default]
+    Inline,
+    /// A bottom sheet over the screen.
+    Sheet,
+    /// A side panel over the screen, from the start edge.
+    Panel,
+}
+
+impl EmbedPresentation {
+    fn is_inline(&self) -> bool {
+        *self == EmbedPresentation::Inline
     }
 }

@@ -11,9 +11,20 @@ use std::collections::BTreeMap;
 #[serde(tag = "intent")]
 pub enum ActionIntent {
     #[serde(rename = "action.navigation.open")]
+    /// Opens the screen whose route matches `target_uri`, or (feature
+    /// `navigate_layout`, decision `layouts-not-apps`) presents `layout`
+    /// on the back stack with `params` as its `$route.<name>` values, then
+    /// opens its screen matching `target_uri`, if any.
     Navigate {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         target_uri: String,
         presentation: PresentationMode,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        layout: Option<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        params: BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        animation: Option<Animation>,
     },
     #[serde(rename = "action.navigation.back")]
     NavigateBack,
@@ -127,13 +138,13 @@ pub enum ActionIntent {
     OpenLink { url: String },
 
     /// Feature `device_action`: something the device does itself, named by
-    /// `command` ([`DEVICE_COMMANDS`]): `open_settings`, `open_inbox`,
-    /// `refresh`, `leave_pod` (forget the pod on this device), `open_app`
-    /// (`app`), `open_notification` (`id`), `mark_all_read`,
-    /// `toggle_channel` (`app`, `id`: a notification channel), `sign_in`
-    /// (`id`: a sign-in provider; `value`: another server), `sign_out`, `set_server` (`id`: a server
-    /// option), `show` (`id`: a `core://Drawer` or `core://Dock` page),
-    /// `show_versions` (`app`: load its versions as device data),
+    /// `command` ([`DEVICE_COMMANDS`]): `open_settings` and `open_inbox`
+    /// (present the `settings` and `inbox` layouts), `refresh`, `leave_pod`
+    /// (forget the pod on this device), `open_notification` (`id`),
+    /// `mark_all_read`, `toggle_channel` (`app`, `id`: a notification
+    /// channel), `sign_in` (`id`: a sign-in provider; `value`: another
+    /// server), `sign_out`, `set_server` (`id`: a server option),
+    /// `show_versions` (`app`, a layout: load its versions as device data),
     /// `pin_version` (`id`: a version of that app, shown on this device),
     /// `follow_latest` (that app follows its newest version again).
     /// Nothing is sent to the pod unless the command itself talks to
@@ -141,7 +152,8 @@ pub enum ActionIntent {
     #[serde(rename = "action.device")]
     Device {
         command: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// The layout a command names (`layout` on the wire is accepted too).
+        #[serde(default, alias = "layout", skip_serializing_if = "Option::is_none")]
         app: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
@@ -162,6 +174,17 @@ pub enum ActionIntent {
 }
 
 impl ActionIntent {
+    /// `action.navigation.open` of the screen matching `target_uri`.
+    pub fn open(target_uri: impl Into<String>, presentation: PresentationMode) -> Self {
+        ActionIntent::Navigate {
+            target_uri: target_uri.into(),
+            presentation,
+            layout: None,
+            params: BTreeMap::new(),
+            animation: None,
+        }
+    }
+
     /// This intent and, for a sequence, every step inside it (depth first).
     pub fn flatten(&self) -> Vec<&ActionIntent> {
         let mut out = vec![self];
@@ -173,19 +196,17 @@ impl ActionIntent {
 }
 
 /// The `action.device` commands this build knows.
-pub const DEVICE_COMMANDS: [&str; 15] = [
+pub const DEVICE_COMMANDS: [&str; 13] = [
     "open_settings",
     "open_inbox",
     "refresh",
     "leave_pod",
-    "open_app",
     "open_notification",
     "mark_all_read",
     "toggle_channel",
     "sign_in",
     "sign_out",
     "set_server",
-    "show",
     "show_versions",
     "pin_version",
     "follow_latest",
@@ -193,15 +214,18 @@ pub const DEVICE_COMMANDS: [&str; 15] = [
 
 /// The `action.device` commands that need an `app`, and those that need an
 /// `id`.
-pub const DEVICE_COMMANDS_WITH_APP: [&str; 3] = ["open_app", "toggle_channel", "show_versions"];
-pub const DEVICE_COMMANDS_WITH_ID: [&str; 6] = [
+pub const DEVICE_COMMANDS_WITH_APP: [&str; 2] = ["toggle_channel", "show_versions"];
+pub const DEVICE_COMMANDS_WITH_ID: [&str; 5] = [
     "open_notification",
     "toggle_channel",
     "sign_in",
     "set_server",
-    "show",
     "pin_version",
 ];
+
+/// Commands retired by decision `layouts-not-apps` (feature
+/// `device_open_app`, removed): old layouts still parse, they do nothing.
+pub const RETIRED_DEVICE_COMMANDS: [&str; 2] = ["open_app", "show"];
 
 /// One extra field update carried by `ActionIntent::OptimisticMutate.also`
 /// (and `ActionIntent::LocalSet.also`).
@@ -217,6 +241,21 @@ pub enum PresentationMode {
     Push,
     Modal,
     Replace,
+    /// A layout as a bottom sheet (feature `navigate_layout`).
+    Sheet,
+    /// A layout as a side panel from the start edge (feature `navigate_layout`).
+    Panel,
+}
+
+/// How a presented layout comes in and goes out (decision
+/// `layouts-not-apps`): named only; the platform picks durations.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Animation {
+    None,
+    Fade,
+    Slide,
+    SheetUp,
 }
 
 /// Where `action.mutation.create` puts its new entity in the list (schema 9).

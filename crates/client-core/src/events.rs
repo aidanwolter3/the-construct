@@ -407,7 +407,23 @@ impl Inner {
             let ws = serde_json::from_str::<Value>(&ev.data)
                 .ok()
                 .and_then(|v| v.get("workspace_id")?.as_str().map(str::to_owned));
-            if ws.as_deref() != Some(self.workspace_id.as_str()) {
+            if let Some(other) = ws.as_deref().filter(|w| *w != self.workspace_id) {
+                // Another layout (home's stream carries every layout's,
+                // decision `layouts-not-apps`).
+                let snap = {
+                    let mut st = lock(&self.state);
+                    let Some(l) = st.layouts.get_mut(other) else {
+                        return;
+                    };
+                    l.gone = true;
+                    st.seq += 1;
+                    st.snapshot()
+                };
+                println!("[ConstructEngine] events: layout {other} was deleted");
+                self.notify(snap);
+                return;
+            }
+            if ws.is_none() {
                 return;
             }
             println!("[ConstructEngine] events: this app was deleted");
@@ -444,7 +460,21 @@ impl Inner {
             }
             return;
         };
-        if ws.as_deref().is_some_and(|w| w != self.workspace_id) {
+        if let Some(other) = ws.as_deref().filter(|w| *w != self.workspace_id) {
+            // Another layout this engine shows: fetch it again when newer.
+            let newer = lock(&self.state)
+                .layouts
+                .get(other)
+                .is_some_and(|l| l.version.is_none_or(|v| version > v));
+            if newer && !self.signal.is_shut_down() {
+                println!(
+                    "[ConstructEngine] events: layout {other} v{version} pushed; refetching it"
+                );
+                let path = format!("{}{other}", crate::LAYOUT_LOAD_PREFIX);
+                if self.begin_load(&path) {
+                    self.load_data(&path);
+                }
+            }
             return;
         }
         let current = lock(&self.state).layout_version;

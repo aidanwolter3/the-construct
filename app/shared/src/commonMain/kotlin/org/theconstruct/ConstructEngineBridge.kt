@@ -29,6 +29,8 @@ data class EngineSnapshot(
     val loadsJson: String = "{}",
     /** Unread notifications (D52): `{"unread_total":N,"unread_by_app":{"app":n}}`. Parse with [NotificationsJson.parseUnread]. */
     val notificationsJson: String = "{\"unread_total\":0,\"unread_by_app\":{}}",
+    /** Other layouts (decision `layouts-not-apps`): `{id: {"workspace","version","gone"}}`. Parse with [LayoutSnapshot.parseAll]. */
+    val layoutsJson: String = "{}",
 )
 
 /**
@@ -55,11 +57,17 @@ interface ConstructEngineBridge {
     /** Forgets the session on this device only (Settings' "Leave pod", D46). No-op for fakes without sign-in. */
     fun forgetSession() {}
 
-    /**
-     * Releases the engine (called by [ConstructController.openApp] on the bridge it replaces, and by the platform when
-     * the UI goes away for good). Default: nothing to release.
-     */
+    /** Releases the engine (called when the UI goes away for good). Default: nothing to release. */
     fun close() {}
+
+    /**
+     * Loads another layout into this engine (decision `layouts-not-apps`): its cached version at once, then fetched in
+     * the background; it appears in [EngineSnapshot.layoutsJson]. Never blocks. Default: nothing (fakes with one layout).
+     */
+    fun openLayout(id: String) {}
+
+    /** Fetches the root layout again (BLOCKING). Default: nothing. */
+    fun refresh() {}
 
     // Apps and their version history (the hamburger menu's Apps section and version picker). All BLOCKING network
     // calls: call them off the UI thread (e.g. on Dispatchers.IO). Each returns the pod's JSON body unchanged or throws
