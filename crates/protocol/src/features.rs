@@ -245,6 +245,7 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
         UiNode::Progress { .. } => add(feature::PROGRESS),
         UiNode::Dock { .. } => add(feature::DOCK),
         UiNode::AppFrame { .. } => add(feature::APP_FRAME),
+        UiNode::Switch { .. } => add(feature::SWITCH),
         // A node type this build does not know (the removed `pixelfed://`
         // widgets): no client draws it any more.
         UiNode::Unknown(_) => add(feature::LEGACY_NODES),
@@ -608,6 +609,8 @@ mod tests {
                 "core://Dock" => json!({"type": t, "field": "tab", "after": [
                     {"value": "a", "label": "A", "content": {"type": "core://Divider"}}]}),
                 "core://AppFrame" => json!({"type": t, "app": "home"}),
+                "core://Switch" => json!({"type": t, "checked": "$item.on",
+                    "on_click": {"intent": "action.navigation.back"}}),
                 other => panic!("no sample for {other}"),
             };
             let n: UiNode = serde_json::from_value(v).unwrap_or_else(|e| panic!("{t}: {e}"));

@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::intent::ActionIntent;
 
 /// Node types this build knows (an other type is [`UiNode::Unknown`]).
-pub const NODE_TYPES: [&str; 24] = [
+pub const NODE_TYPES: [&str; 25] = [
     "core://Workspace",
     "core://Container",
     "core://Text",
@@ -40,6 +40,7 @@ pub const NODE_TYPES: [&str; 24] = [
     "core://Progress",
     "core://Dock",
     "core://AppFrame",
+    "core://Switch",
 ];
 
 /// Icon names clients draw (`core://IconButton`, `core://Chip`).
@@ -445,6 +446,18 @@ pub enum UiNode {
     #[serde(rename = "core://AppFrame")]
     AppFrame { app: String },
 
+    // Feature `switch` (crates/protocol/features/switch.md)
+    /// An on/off switch: on while `checked` (a binding such as
+    /// `$item.enabled`) is truthy; a tap dispatches `on_click`, which changes
+    /// what `checked` reads (e.g. `action.device` `toggle_channel`).
+    #[serde(rename = "core://Switch")]
+    Switch {
+        checked: String,
+        on_click: ActionIntent,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_description: Option<String>,
+    },
+
     /// A node of a type this build does not know: its JSON, kept as is.
     #[serde(skip)]
     Unknown(Value),
@@ -533,6 +546,7 @@ impl UiNode {
                 .collect(),
             UiNode::Text { .. }
             | UiNode::AppFrame { .. }
+            | UiNode::Switch { .. }
             | UiNode::Button { .. }
             | UiNode::Image { .. }
             | UiNode::TextField { .. }
@@ -553,7 +567,8 @@ impl UiNode {
         let direct: Vec<&ActionIntent> = match self {
             UiNode::Button { on_click, .. }
             | UiNode::IconButton { on_click, .. }
-            | UiNode::Tappable { on_click, .. } => vec![on_click],
+            | UiNode::Tappable { on_click, .. }
+            | UiNode::Switch { on_click, .. } => vec![on_click],
             UiNode::TextField { on_submit, .. } => on_submit.iter().collect(),
             _ => Vec::new(),
         };

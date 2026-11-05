@@ -299,7 +299,9 @@ class ConstructController internal constructor(
         val now = _state.value
         if (now.engine == engine && now.seq == snapshot.seq) {
             if (shellMode) captureShell(now)
-            _unread.value = NotificationsJson.parseUnread(snapshot.notificationsJson)
+            val unread = NotificationsJson.parseUnread(snapshot.notificationsJson)
+            if (shellMode && unread.total != _unread.value.total) reloadShellData()
+            _unread.value = unread
             applyPendingTarget()
             if (now.activeLayout.gone) appGone(engine)
         }
@@ -423,8 +425,48 @@ class ConstructController internal constructor(
                 if (app.isEmpty()) return
                 if (shellMode) _dockRequest.value = app else openApp(app)
             }
+            "open_notification" -> {
+                val n = inbox.items.firstOrNull { it.id == intent.id } ?: return
+                if (shellMode) _dockRequest.value = n.appId
+                inbox.tap(n)
+                reloadShellData()
+            }
+            "mark_all_read" -> {
+                inbox.markAllRead()
+                reloadShellData()
+            }
+            "toggle_channel" -> {
+                val c = (inbox.channels as? Load.Ready)?.value
+                    ?.firstOrNull { it.appId == intent.app && it.id == intent.id } ?: return
+                inbox.setChannelEnabled(c, !c.enabled, background)
+            }
+            "sign_in" -> menu.providers.firstOrNull { it.id == intent.id }?.let(menu::startSignIn)
+            "sign_out" -> {
+                logout()
+                reloadShellData()
+            }
+            "set_server" -> {
+                val choice = serverChoice ?: return
+                choice.options.firstOrNull { it.key == intent.id }?.let { choice.onSelect(it.url) }
+            }
             else -> println("[Construct] action.device: unknown command '${intent.command}'; ignored")
         }
+    }
+
+    /** The platform's servers, for `local:servers` and `set_server` (set by [ConstructApp]; null: none to pick). */
+    @Volatile
+    internal var serverChoice: ServerChoice? = null
+
+    private val _shellDataToken = MutableStateFlow(0)
+
+    /**
+     * Bumped when the shell's pod data (notifications, channels, sign-ins) should be loaded again: on a tab change,
+     * when the unread count changes, and after a device action that changes it. [ShellRoot] loads on each value.
+     */
+    val shellDataToken: StateFlow<Int> = _shellDataToken.asStateFlow()
+
+    internal fun reloadShellData() {
+        _shellDataToken.update { it + 1 }
     }
 
     /**
@@ -473,8 +515,11 @@ class ConstructController internal constructor(
         }
     }
 
-    /** The dock selected a tab: the app list may have changed meanwhile. */
-    internal fun onDockSelected() = refreshDeviceApps()
+    /** The dock selected a tab: the app list (and the inbox, channels and sign-ins) may have changed meanwhile. */
+    internal fun onDockSelected() {
+        refreshDeviceApps()
+        reloadShellData()
+    }
 
     /** Starts the frame's app again on a fresh engine (Try again on a frame that failed, or on the rescue screen). */
     fun refreshFrame(id: String) {
@@ -758,8 +803,18 @@ fun ConstructApp(
                 LocalAttachments provides controller.attachments,
             ) {
                 val deviceApps by controller.deviceApps.collectAsState()
-                val device = remember(state.isOnline, state.pendingActions, state.auth, unread, deviceApps) {
-                    deviceData(state, unread, deviceApps, controller.platform)
+                controller.serverChoice = server
+                val inbox = controller.inbox
+                val sources = DeviceSources(
+                    notifications = inbox.items,
+                    channels = (inbox.channels as? Load.Ready)?.value.orEmpty(),
+                    signIns = (controller.menu.signIns as? Load.Ready)?.value.orEmpty(),
+                    providers = controller.menu.providers,
+                    server = server,
+                    nowSeconds = remember(inbox.items) { nowEpochSeconds() },
+                )
+                val device = remember(state.isOnline, state.pendingActions, state.auth, unread, deviceApps, sources) {
+                    deviceData(state, unread, deviceApps, controller.platform, sources)
                 }
                 MenuDrawer(controller, state, pin, server, notificationSettingsExtra) {
                   CompositionLocalProvider(LocalDeviceData provides device) {

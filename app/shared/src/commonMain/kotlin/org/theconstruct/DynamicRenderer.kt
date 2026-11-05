@@ -296,6 +296,14 @@ fun RenderUiNode(
 
         is UiNode.AppFrame -> AppFrameView(node, item, modifier)
 
+        is UiNode.Switch -> androidx.compose.material3.Switch(
+            checked = isTruthy(node.checked, item),
+            onCheckedChange = { dispatch(node.onClick) },
+            modifier = modifier.semantics {
+                node.contentDescription?.let { contentDescription = interpolate(it, entities, item) }
+            },
+        )
+
         is UiNode.Unknown -> Text(
             "Unsupported component: ${node.type.ifEmpty { "<missing type>" }}",
             style = MaterialTheme.typography.labelSmall,

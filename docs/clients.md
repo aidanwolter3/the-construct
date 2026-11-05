@@ -67,13 +67,15 @@ Opened on `home` (the default), the client runs the layout-first shell (decision
 
 - **Before a pod is open** it draws a bundled sign-in layout: a pod code, or **Try a temporary pod**. It needs no
   server to draw, and shows the sign-in error under the button.
-- **With a pod** it draws the pod's `home` layout. The default (the `shell` blueprint) is a dock of the pod's apps
-  along the bottom (a rail on wide windows) and a **More** tab: every app, **Inbox** and **Settings** with the
-  connection status. A new pod has no apps: More says to ask the agent for one. The app list is reloaded every
+- **With a pod** it draws the pod's `home` layout. The default (the `shell` blueprint) is a dock along the bottom (a
+  rail on wide windows): up to two apps, then **Apps** (every app; on a new pod, a note to ask the agent for one),
+  **Notifications** (the inbox, by day, with Mark all read) and **Settings** (connection, server, Leave pod,
+  sign-ins, notification switches). All three are layout, so the agent can change them like any app. The app list is reloaded every
   15 seconds and on every tab change, so an app the agent builds shows up on its own.
 - **Each tab frames an app** (`core://AppFrame`): its layout, screens and Back stay inside the frame. The client's
   one engine follows the framed app; the home layout is kept on the device while it does.
-- **Settings and the inbox** are the native ones below, opened by the layout (`action.device`).
+- **The native menu and inbox** below are still in the app, opened only by a layout that asks for them
+  (`action.device` `open_settings`, `open_inbox`); the version picker is there.
 - **If the pod has no home this build can draw**, a bundled screen offers Try again and Leave pod. Ask the agent to
   repair the home layout (`restore_version`); clearing the app's data also starts over.
 

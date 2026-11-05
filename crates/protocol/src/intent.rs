@@ -128,15 +128,19 @@ pub enum ActionIntent {
 
     /// Feature `device_action`: something the device does itself, named by
     /// `command` ([`DEVICE_COMMANDS`]): `open_settings`, `open_inbox`,
-    /// `refresh`, `leave_pod` (forget the pod on this device), or `open_app`
-    /// with `app` (open that app of the pod). Nothing is sent to the pod
-    /// unless the command itself talks to it. Any layout may use any
-    /// command (decision `blueprints-and-home`).
+    /// `refresh`, `leave_pod` (forget the pod on this device), `open_app`
+    /// (`app`), `open_notification` (`id`), `mark_all_read`,
+    /// `toggle_channel` (`app`, `id`: a notification channel), `sign_in`
+    /// (`id`: a sign-in provider), `sign_out`, `set_server` (`id`: a server
+    /// option). Nothing is sent to the pod unless the command itself talks to
+    /// it. Any layout may use any command (decision `blueprints-and-home`).
     #[serde(rename = "action.device")]
     Device {
         command: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         app: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
     },
 
     /// Any intent tag this build does not know, e.g. the removed
@@ -161,12 +165,28 @@ impl ActionIntent {
 }
 
 /// The `action.device` commands this build knows.
-pub const DEVICE_COMMANDS: [&str; 5] = [
+pub const DEVICE_COMMANDS: [&str; 11] = [
     "open_settings",
     "open_inbox",
     "refresh",
     "leave_pod",
     "open_app",
+    "open_notification",
+    "mark_all_read",
+    "toggle_channel",
+    "sign_in",
+    "sign_out",
+    "set_server",
+];
+
+/// The `action.device` commands that need an `app`, and those that need an
+/// `id`.
+pub const DEVICE_COMMANDS_WITH_APP: [&str; 2] = ["open_app", "toggle_channel"];
+pub const DEVICE_COMMANDS_WITH_ID: [&str; 4] = [
+    "open_notification",
+    "toggle_channel",
+    "sign_in",
+    "set_server",
 ];
 
 /// One extra field update carried by `ActionIntent::OptimisticMutate.also`

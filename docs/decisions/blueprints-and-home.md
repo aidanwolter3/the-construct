@@ -38,8 +38,12 @@ Decision:
   request: `local://connection`, `local://inbox`, `local://apps` and the `local:apps` query, `local://device`,
   `local://session`. Custom layouts may bind them without a feed. A `core://Conditional` value may now be a
   `${uri#field}` binding.
-- **The `shell` blueprint** docks `local:apps` (at most 4) with an `AppFrame` each, then a More tab: a welcome with
-  example requests while there are no apps, every app, Inbox and Settings.
+- **The `shell` blueprint** docks `local:apps` (at most 2) with an `AppFrame` each, then three tabs drawn from layout:
+  **Apps** (every app; a welcome with example requests while there are none), **Notifications** (`local:notifications`
+  by day, Mark all read) and **Settings** (connection, `local:servers`, Leave pod, `local:sign_ins` and
+  `local:providers`, `local:channels` with a `core://Switch` each). Device commands for those: `open_notification`,
+  `mark_all_read`, `toggle_channel`, `sign_in`, `sign_out`, `set_server` (`action.device` gains `id`). An app asked
+  for that has no tab (a notification's blueprint app) is shown in the dock's frame, untabbed. Feature `switch`.
 - **Shell mode** (clients open `home` by default): the controller keeps the last home layout it drew and draws it
   over the device data, while its one engine follows the app of the visible frame (switching as today). The native
   menu button and bell are left out; Settings and the inbox open from `action.device`. Before a pod is open the
@@ -48,7 +52,9 @@ Decision:
 - Collections: the filler and alert keys (`filler_title`, `alert_names`, ...) may be bound before the collection has a
   filler or an alert, so the Events blueprint can be referenced on a new pod.
 
-Not done yet: Settings, sign-ins and the inbox are still native screens (reached from the shell); the home layout
+Not done yet: the version picker and app hiding/deleting are still only in the native menu (no layout opens it by
+default); Android's notification permission row isn't offered to layouts; sign-in to a typed-in server needs the
+native panel; notifications load the newest page only; the home layout
 updates only when it is drawn on its own engine or the apps list shows a newer version (no live event while a frame
 has the engine); notifications and links open the blueprint by id rather than the user's app built on it; a frame
 inside a framed app shows a message; old clients can't draw `home` and need an update.

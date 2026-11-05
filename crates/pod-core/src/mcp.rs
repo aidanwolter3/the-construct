@@ -1032,6 +1032,11 @@ pub const NODE_DOCS: &[(&str, &str, &str)] = &[
         "app",
         "Another app of the pod drawn whole (its layout, screens and Back) in the space it is given, e.g. a dock tab's content. app is an id or a binding ($item.id).",
     ),
+    (
+        "core://Switch",
+        "checked, on_click, content_description?",
+        "An on/off switch, on while checked (a binding, e.g. $item.enabled) is truthy; a tap dispatches on_click (e.g. action.device toggle_channel).",
+    ),
 ];
 
 /// The pod-only node of a custom layout (never sent to clients).
@@ -1060,8 +1065,8 @@ fn vocabulary() -> Value {
               "doc": "Set fields of a loaded entity on this device only (no request), e.g. view state like added/expanded shown with core://Conditional. The next load of the entity from the pod replaces it." },
             { "intent": "action.link.open", "fields": "url",
               "doc": "Open an http(s) link in the device's browser (e.g. a Get tickets button with url $item.tickets_url). Nothing is sent to the pod." },
-            { "intent": "action.device", "fields": "command: open_settings|open_inbox|refresh|leave_pod|open_app, app? (open_app)",
-              "doc": "Something the device does itself: open Settings or the inbox, refresh, forget the pod on this device, or open one of the pod's apps. Any layout may use any command." },
+            { "intent": "action.device", "fields": "command, app?, id?",
+              "doc": "Something the device does itself. Commands: open_app (app), open_notification (id), mark_all_read, toggle_channel (app, id of a notification channel), sign_in (id of a provider), sign_out, set_server (id of a server option), leave_pod (forget the pod on this device), refresh, open_settings and open_inbox (the native panels). Any layout may use any command." },
         ],
         "local_data": {
             "doc": "Data the device provides, with no feed: bind ${local://<entity>#<field>} anywhere and list local:apps in a core://List or core://Dock.",
@@ -1069,7 +1074,13 @@ fn vocabulary() -> Value {
             "local://inbox": "unread (count), label (\"3 unread\")",
             "local://apps": "count (the pod's apps, home excluded)",
             "local:apps": "query of the pod's apps but home: local://apps/<id> with id, title, icon, kind, detail, unread",
+            "local:notifications": "query of the newest notifications: id, app_id, app_title, title, body, when (\"5 min\"), day (\"Today\"), unread",
+            "local:channels": "query of the notification channels: app_id, app_title, id, title, description, enabled",
+            "local:sign_ins": "query of the pod's sign-ins: id, title, detail (\"@dana · photos.example\")",
+            "local:providers": "query of the sign-ins the pod offers that aren't signed in: id, title",
+            "local:servers": "query of the servers this device can use: id, title, url, selected",
             "local://device": "platform (android|desktop|simulator)",
+            "local://session": "open, server, error, message: the pod sign-in",
         },
         "bindings": {
             "$item.<field>": "a field of the list or carousel item",

@@ -102,15 +102,20 @@ pub fn validate_structure(expected_id: &str, doc: &Value) -> Result<UiNode, Stri
                 endpoint
             }
             ActionIntent::LoadData { path } => path,
-            ActionIntent::Device { command, app } => {
-                if !protocol::DEVICE_COMMANDS.contains(&command.as_str()) {
+            ActionIntent::Device { command, app, id } => {
+                let c = command.as_str();
+                if !protocol::DEVICE_COMMANDS.contains(&c) {
                     return Err(format!(
                         "unknown device command '{command}' (known: {})",
                         protocol::DEVICE_COMMANDS.join(", ")
                     ));
                 }
-                if command == "open_app" && app.as_deref().is_none_or(|a| a.trim().is_empty()) {
-                    return Err("action.device open_app needs an app".to_owned());
+                let blank = |v: &Option<String>| v.as_deref().is_none_or(|a| a.trim().is_empty());
+                if protocol::DEVICE_COMMANDS_WITH_APP.contains(&c) && blank(app) {
+                    return Err(format!("action.device {command} needs an app"));
+                }
+                if protocol::DEVICE_COMMANDS_WITH_ID.contains(&c) && blank(id) {
+                    return Err(format!("action.device {command} needs an id"));
                 }
                 continue;
             }

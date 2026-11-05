@@ -29,6 +29,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -69,12 +71,32 @@ data class DeviceData(
 )
 
 /**
+ * What the device knows beyond the engine's state, for [deviceData]: the inbox's newest notifications, the
+ * notification channels, the pod's sign-ins and the providers not signed in, and the platform's servers.
+ */
+data class DeviceSources(
+    val notifications: List<AppNotification> = emptyList(),
+    val channels: List<NotificationChannelInfo> = emptyList(),
+    val signIns: List<SignInSummary> = emptyList(),
+    val providers: List<SignInProvider> = emptyList(),
+    val server: ServerChoice? = null,
+    val nowSeconds: Long = 0,
+)
+
+/**
  * The device data for the current state: `local://connection` (online, pending, label, attention), `local://inbox`
  * (unread, label), `local://apps` (count) and the `local:apps` query of the pod's apps but home (`local://apps/<id>`:
- * id, title, icon, kind, detail, unread), `local://device` (platform) and `local://session` (open, error, message:
- * the pod sign-in's state).
+ * id, title, icon, kind, detail, unread), `local://device` (platform), `local://session` (open, server, error,
+ * message), and from [sources] the `local:notifications`, `local:channels`, `local:sign_ins`, `local:providers` and
+ * `local:servers` queries.
  */
-fun deviceData(state: ConstructState, unread: UnreadCounts, apps: List<AppSummary>, platform: String): DeviceData {
+fun deviceData(
+    state: ConstructState,
+    unread: UnreadCounts,
+    apps: List<AppSummary>,
+    platform: String,
+    sources: DeviceSources = DeviceSources(),
+): DeviceData {
     val entities = LinkedHashMap<String, JsonObject>()
     val pending = state.pendingActions
     val connection = when (state.isOnline) {
@@ -109,10 +131,60 @@ fun deviceData(state: ConstructState, unread: UnreadCounts, apps: List<AppSummar
     entities["local://device"] = buildJsonObject { put("platform", platform) }
     entities["local://session"] = buildJsonObject {
         put("open", state.auth.session)
+        put("server", sources.server?.currentUrl.orEmpty())
         put("error", state.auth.error.orEmpty())
         put("message", state.auth.message.orEmpty())
     }
-    return DeviceData(entities, mapOf("local:apps" to uris))
+    val titles = apps.associate { it.id to it.title }
+    val queries = LinkedHashMap<String, List<String>>()
+    queries["local:apps"] = uris
+    fun add(query: String, uri: String, entity: JsonObject): String {
+        entities[uri] = entity
+        return uri
+    }
+    queries["local:notifications"] = sources.notifications.map { n ->
+        add("local:notifications", "local://notifications/${n.id}", buildJsonObject {
+            put("id", n.id)
+            put("app_id", n.appId)
+            put("app_title", titles[n.appId] ?: n.appId)
+            put("title", n.title)
+            put("body", n.body)
+            put("when", notificationTimeLabel(n.createdAt, sources.nowSeconds))
+            put("day", notificationDayLabel(n.createdAt, sources.nowSeconds))
+            put("unread", !n.read)
+        })
+    }
+    queries["local:channels"] = sources.channels.map { c ->
+        add("local:channels", "local://channels/${c.appId}/${c.id}", buildJsonObject {
+            put("app_id", c.appId)
+            put("app_title", titles[c.appId] ?: c.appId)
+            put("id", c.id)
+            put("title", c.title)
+            put("description", c.description)
+            put("enabled", c.enabled)
+        })
+    }
+    queries["local:sign_ins"] = sources.signIns.map { s ->
+        add("local:sign_ins", "local://sign_ins/${s.id}", buildJsonObject {
+            put("id", s.id)
+            put("title", s.title)
+            put("detail", listOfNotNull(s.username?.let { "@$it" }, s.serverHost).joinToString(" · "))
+        })
+    }
+    val listedSignIns = sources.signIns.map { it.id }.toSet()
+    queries["local:providers"] = sources.providers
+        .filter { !it.signedIn && it.intent != null && it.id !in listedSignIns }
+        .map { p -> add("local:providers", "local://providers/${p.id}", buildJsonObject { put("id", p.id); put("title", p.title) }) }
+    val server = sources.server
+    queries["local:servers"] = server?.options.orEmpty().map { o ->
+        add("local:servers", "local://servers/${o.key}", buildJsonObject {
+            put("id", o.key)
+            put("title", o.label)
+            put("url", o.url)
+            put("selected", o.url.trimEnd('/') == server?.currentUrl?.trimEnd('/'))
+        })
+    }
+    return DeviceData(entities, queries)
 }
 
 /** The device data, for every layout on screen (provided by [ConstructApp]). */
@@ -186,6 +258,16 @@ internal fun shellView(state: ConstructState, shell: ShellSnapshot?, onHome: Boo
 internal fun ShellRoot(controller: ConstructController, state: ConstructState, modifier: Modifier = Modifier) {
     val shell by controller.shell.collectAsState()
     val appId by controller.appId.collectAsState()
+    val dataToken by controller.shellDataToken.collectAsState()
+    // The pod data the device data shows (notifications, channels, sign-ins): loaded with the home, and again
+    // whenever [ConstructController.reloadShellData] asks.
+    LaunchedEffect(dataToken, shell != null, state.auth.session) {
+        if (shell != null && state.auth.session) {
+            controller.inbox.load()
+            controller.inbox.loadChannels()
+            controller.menu.loadSignIns()
+        }
+    }
     val device = LocalDeviceData.current
     val view = shellView(state, shell, onHome = (appId ?: state.activeLayout.appId) == HOME_APP)
     val content: Pair<UiNode, ShellSnapshot?>? = when (view) {
@@ -238,7 +320,7 @@ private fun DockTab.drawn(entities: Map<String, JsonObject>, item: JsonObject?):
 
 /** A tab's icon: an app icon name, or one of the shell's own (`more`, `home`, `settings`, `inbox`). */
 internal fun dockIcon(name: String): ImageVector = when (name) {
-    "more", "menu" -> ConstructIcons.Menu
+    "more", "menu", "apps" -> ConstructIcons.Menu
     "settings" -> ConstructIcons.Settings
     "inbox", "notifications" -> ConstructIcons.Notifications
     else -> appIcon(name)
@@ -268,16 +350,22 @@ internal fun DockView(
     val before = node.before.map { it.drawn(entities, null) }
     val after = node.after.map { it.drawn(entities, null) }
     val shown = before + itemTabs.take(node.maxItems ?: itemTabs.size) + after
+    val all = before + itemTabs + after
+    // An app asked for that has no tab (e.g. a notification's blueprint app): shown in the item's frame, untabbed.
+    var adHoc by remember { mutableStateOf<String?>(null) }
     val request = controller?.dockRequest?.collectAsState()?.value
     LaunchedEffect(request) {
         if (request != null && form != null) {
+            if (all.none { it.value == request }) adHoc = request
             form[node.field] = request
             memory?.save(node.field, request)
             controller.dockRequestHandled()
         }
     }
     val wanted = form?.get(node.field).orEmpty()
-    val selected = (before + itemTabs + after).firstOrNull { it.value == wanted } ?: shown.firstOrNull()
+    val untabbed = node.item?.takeIf { wanted.isNotEmpty() && wanted == adHoc }
+        ?.drawn(entities, buildJsonObject { put("id", wanted); put("title", wanted) })
+    val selected = all.firstOrNull { it.value == wanted } ?: untabbed ?: shown.firstOrNull()
     val select: (DrawnTab) -> Unit = { tab ->
         form?.set(node.field, tab.value)
         memory?.save(node.field, tab.value)

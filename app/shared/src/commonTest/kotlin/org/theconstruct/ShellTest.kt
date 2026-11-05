@@ -73,6 +73,11 @@ class ShellTest {
         // `open_app` binds `$item.id` like any intent.
         val bound = bindIntent(ActionIntent.Device("open_app", "${'$'}item.id"), buildJsonObject { put("id", "c-x") })
         assertEquals(ActionIntent.Device("open_app", "c-x"), bound)
+        val toggle = bindIntent(
+            ActionIntent.Device("toggle_channel", "${'$'}item.app_id", "${'$'}item.id"),
+            buildJsonObject { put("app_id", "c-x"); put("id", "likes") },
+        )
+        assertEquals(ActionIntent.Device("toggle_channel", "c-x", "likes"), toggle)
     }
 
     @Test
@@ -97,6 +102,34 @@ class ShellTest {
         // A Conditional can read it: the "No apps yet" welcome shows only with none.
         assertFalse(conditionShows("\${local://apps#count}", "0", null, null, d.entities))
         assertTrue(conditionShows("\${local://apps#count}", null, null, null, d.entities))
+    }
+
+    @Test
+    fun deviceDataListsNotificationsChannelsSignInsAndServers() {
+        val now = 1_800_000_000L
+        val sources = DeviceSources(
+            notifications = listOf(AppNotification("n1", "c-a", "likes", "Dana liked your post", createdAt = now - 120)),
+            channels = listOf(NotificationChannelInfo("c-a", "likes", "Likes", enabled = false)),
+            signIns = listOf(SignInSummary("pixelfed", "Pixelfed", "https://pixelfed.example", "dana")),
+            providers = listOf(
+                SignInProvider("pixelfed", "Pixelfed", intent = null),
+                SignInProvider("other", "Other", intent = ActionIntent.AuthLogin("https://x.example", "/a", "/t")),
+            ),
+            server = ServerChoice("http://127.0.0.1:8080", listOf(ServerOption("local", "Local", "http://127.0.0.1:8080/"))) {},
+            nowSeconds = now,
+        )
+        val apps = listOf(AppSummary("c-a", "Photos", custom = true))
+        val d = deviceData(ConstructState(), UnreadCounts(), apps, "desktop", sources)
+        val n = d.entities[d.queries["local:notifications"]!!.single()]!!
+        assertEquals(JsonPrimitive("Photos"), n["app_title"])
+        assertEquals(JsonPrimitive("2 min"), n["when"])
+        assertEquals(JsonPrimitive("Today"), n["day"])
+        assertEquals(JsonPrimitive(true), n["unread"])
+        assertEquals(JsonPrimitive(false), d.entities["local://channels/c-a/likes"]!!["enabled"])
+        assertEquals(JsonPrimitive("@dana · pixelfed.example"), d.entities["local://sign_ins/pixelfed"]!!["detail"])
+        assertEquals(listOf("local://providers/other"), d.queries["local:providers"], "signed in or no intent: not offered")
+        assertEquals(JsonPrimitive(true), d.entities["local://servers/local"]!!["selected"])
+        assertEquals(JsonPrimitive("http://127.0.0.1:8080"), d.entities["local://session"]!!["server"])
     }
 
     @Test

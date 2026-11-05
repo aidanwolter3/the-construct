@@ -419,6 +419,14 @@ sealed class UiNode {
     @Serializable
     data class AppFrame(val app: String) : UiNode()
 
+    /** `core://Switch` (feature `switch`): on while [checked] (a binding) is truthy; a tap dispatches [onClick]. */
+    @Serializable
+    data class Switch(
+        val checked: String,
+        @SerialName("on_click") val onClick: ActionIntent,
+        @SerialName("content_description") val contentDescription: String? = null,
+    ) : UiNode()
+
     /** A node whose `type` this client does not know. [raw] is the full original object. */
     data class Unknown(val type: String, val raw: JsonObject) : UiNode()
 }
@@ -535,12 +543,12 @@ sealed class ActionIntent {
     data class OpenLink(val url: String) : ActionIntent()
 
     /**
-     * `action.device` (feature `device_action`): something the device does itself ([command]: `open_settings`,
-     * `open_inbox`, `refresh`, `leave_pod`, `open_app` with [app]). Handled by [ConstructController], never sent to the
-     * engine.
+     * `action.device` (feature `device_action`): something the device does itself ([command] with its [app] or [id]:
+     * `open_app`, `open_notification`, `mark_all_read`, `toggle_channel`, `sign_in`, `sign_out`, `set_server`,
+     * `leave_pod`, `refresh`, `open_settings`, `open_inbox`). Handled by [ConstructController], never sent to the engine.
      */
     @Serializable
-    data class Device(val command: String, val app: String? = null) : ActionIntent()
+    data class Device(val command: String, val app: String? = null, val id: String? = null) : ActionIntent()
 
     /**
      * An intent whose `intent` tag this client does not know (e.g. the removed `action.agent.prompt`). [raw] is the full
@@ -660,6 +668,7 @@ object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode
         Variant("core://Progress", UiNode.Progress::class, UiNode.Progress.serializer()),
         Variant("core://Dock", UiNode.Dock::class, UiNode.Dock.serializer()),
         Variant("core://AppFrame", UiNode.AppFrame::class, UiNode.AppFrame.serializer()),
+        Variant("core://Switch", UiNode.Switch::class, UiNode.Switch.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): UiNode = UiNode.Unknown(tag, raw)
