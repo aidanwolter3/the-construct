@@ -226,11 +226,16 @@ mod tests {
     #[test]
     fn a_gesture_around_a_filling_node_fills_the_screen() {
         let slot = |content: Value| vec![json!({"slot_id": "s", "content": content})];
-        let filling = json!({"type": "core://Box", "fill": true, "content": {"type": "core://Divider"}});
+        let filling =
+            json!({"type": "core://Box", "fill": true, "content": {"type": "core://Divider"}});
         assert!(fills_screen(&slot(filling.clone())));
-        let gesture = |content: Value| json!({"type": "core://Gesture", "content": content,
-            "on_swipe_down": {"intent": "action.navigation.back"}});
+        let gesture = |content: Value| {
+            json!({"type": "core://Gesture", "content": content,
+            "on_swipe_down": {"intent": "action.navigation.back"}})
+        };
         assert!(fills_screen(&slot(gesture(filling))));
-        assert!(!fills_screen(&slot(gesture(json!({"type": "core://Divider"})))));
+        assert!(!fills_screen(&slot(gesture(
+            json!({"type": "core://Divider"})
+        ))));
     }
 }
