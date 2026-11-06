@@ -40,6 +40,12 @@ pub const MAX_DEPTH: usize = 8;
 /// Largest expansion served (a write is held to
 /// [`crate::validate::MAX_LAYOUT_BYTES`]).
 pub const MAX_EXPANDED_BYTES: usize = 1024 * 1024;
+/// The most an expansion may build along the way, in approximate JSON
+/// bytes: every value it visits or copies (a component's children, an
+/// argument) counts. Checked as it goes, so a component that repeats its
+/// children or arguments can't multiply a use into gigabytes before
+/// [`MAX_EXPANDED_BYTES`] is checked at the end.
+pub const MAX_EXPANSION_WORK: usize = 4 * MAX_EXPANDED_BYTES;
 
 /// One built-in version's parts by name.
 #[derive(Debug, Clone, Default)]
@@ -241,6 +247,7 @@ struct Expander<'a> {
     pending: &'a Pending,
     cache: HashMap<(String, Option<i64>), Option<Parts>>,
     defs: HashMap<(String, Option<i64>), Option<Value>>,
+    work: Work,
 }
 
 fn err(at: &str, message: String) -> LayoutError {
@@ -270,17 +277,55 @@ fn as_text(v: &Value) -> String {
     }
 }
 
+/// The approximate JSON size of `v`, without serializing it.
+fn weight(v: &Value) -> usize {
+    match v {
+        Value::String(s) => s.len() + 2,
+        Value::Array(a) => a.iter().map(weight).sum::<usize>() + 2,
+        Value::Object(m) => {
+            m.iter()
+                .map(|(k, c)| k.len() + 3 + weight(c))
+                .sum::<usize>()
+                + 2
+        }
+        _ => 4,
+    }
+}
+
+/// The work an expansion has done so far ([`MAX_EXPANSION_WORK`]).
+#[derive(Default)]
+struct Work(usize);
+
+impl Work {
+    fn charge(&mut self, n: usize) -> Result<(), LayoutError> {
+        self.0 = self.0.saturating_add(n);
+        if self.0 > MAX_EXPANSION_WORK {
+            return Err(err(
+                "",
+                format!(
+                    "the expansion is too large (over {MAX_EXPANSION_WORK} bytes of work; \
+                     a component repeats its children or arguments too often)"
+                ),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// `s` with each `$arg.<name>` replaced; a string that is only `$arg.<name>`
 /// becomes the argument itself (its own JSON type).
-fn subst(s: &str, args: &Map<String, Value>) -> Value {
+fn subst(s: &str, args: &Map<String, Value>, work: &mut Work) -> Result<Value, LayoutError> {
     if let Some(name) = s.strip_prefix("$arg.")
         && !name.is_empty()
         && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
     {
-        return args.get(name).cloned().unwrap_or(Value::Null);
+        let arg = args.get(name);
+        work.charge(arg.map_or(4, weight))?;
+        return Ok(arg.cloned().unwrap_or(Value::Null));
     }
+    work.charge(s.len() + 2)?;
     if !s.contains("$arg.") {
-        return Value::String(s.to_owned());
+        return Ok(Value::String(s.to_owned()));
     }
     let mut out = String::new();
     let mut rest = s;
@@ -290,24 +335,41 @@ fn subst(s: &str, args: &Map<String, Value>) -> Value {
         let end = after
             .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
             .unwrap_or(after.len());
-        out.push_str(&as_text(args.get(&after[..end]).unwrap_or(&Value::Null)));
+        let piece = as_text(args.get(&after[..end]).unwrap_or(&Value::Null));
+        work.charge(piece.len())?;
+        out.push_str(&piece);
         rest = &after[end..];
     }
     out.push_str(rest);
-    Value::String(out)
+    Ok(Value::String(out))
 }
 
-fn subst_value(v: &Value, args: &Map<String, Value>) -> Value {
-    match v {
-        Value::String(s) => subst(s, args),
-        Value::Array(a) => Value::Array(a.iter().map(|c| subst_value(c, args)).collect()),
-        Value::Object(m) => Value::Object(
-            m.iter()
-                .map(|(k, c)| (as_text(&subst(k, args)), subst_value(c, args)))
-                .collect(),
+fn subst_value(
+    v: &Value,
+    args: &Map<String, Value>,
+    work: &mut Work,
+) -> Result<Value, LayoutError> {
+    Ok(match v {
+        Value::String(s) => subst(s, args, work)?,
+        Value::Array(a) => Value::Array(
+            a.iter()
+                .map(|c| subst_value(c, args, work))
+                .collect::<Result<_, _>>()?,
         ),
-        other => other.clone(),
-    }
+        Value::Object(m) => {
+            work.charge(2)?;
+            let mut out = Map::new();
+            for (k, c) in m {
+                let key = as_text(&subst(k, args, work)?);
+                out.insert(key, subst_value(c, args, work)?);
+            }
+            Value::Object(out)
+        }
+        other => {
+            work.charge(4)?;
+            other.clone()
+        }
+    })
 }
 
 impl Expander<'_> {
@@ -384,18 +446,32 @@ impl Expander<'_> {
         depth: usize,
         scope: Option<&Scope>,
     ) -> Result<Out, LayoutError> {
+        // Every visit costs something, so uses that expand to nothing still
+        // add up.
+        self.work.charge(match v {
+            Value::Object(m) => m.keys().map(|k| k.len() + 3).sum::<usize>() + 2,
+            Value::String(s) => s.len() + 2,
+            _ => 4,
+        })?;
         let ty = v.get("type").and_then(Value::as_str);
         // Template-only nodes.
         if let Some(sc) = scope {
             match ty {
                 Some(CHILDREN_TYPE) => {
+                    // A copy of the children: a template that names them
+                    // twice doubles them.
                     return Ok(match v.get("at").and_then(Value::as_u64) {
-                        Some(i) => sc
-                            .children
-                            .get(i as usize)
-                            .cloned()
-                            .map_or(Out::Drop, Out::One),
-                        None => Out::Many(sc.children.clone()),
+                        Some(i) => match sc.children.get(i as usize) {
+                            Some(c) => {
+                                self.work.charge(weight(c))?;
+                                Out::One(c.clone())
+                            }
+                            None => Out::Drop,
+                        },
+                        None => {
+                            self.work.charge(sc.children.iter().map(weight).sum())?;
+                            Out::Many(sc.children.clone())
+                        }
                     });
                 }
                 Some(FRAGMENT_TYPE) => {
@@ -449,7 +525,9 @@ impl Expander<'_> {
                     let screens = k == "screens" && c.is_array();
                     // A template may name a key by an argument too.
                     let key = match scope {
-                        Some(sc) if k.contains("$arg.") => as_text(&subst(k, &sc.args)),
+                        Some(sc) if k.contains("$arg.") => {
+                            as_text(&subst(k, &sc.args, &mut self.work)?)
+                        }
                         _ => k.clone(),
                     };
                     if let Some(x) = self.one(c, &here, screens, depth, scope)? {
@@ -470,7 +548,7 @@ impl Expander<'_> {
                 Value::Array(out)
             }
             Value::String(s) => match scope {
-                Some(sc) => subst(s, &sc.args),
+                Some(sc) => subst(s, &sc.args, &mut self.work)?,
                 None => v.clone(),
             },
             other => other.clone(),
@@ -507,7 +585,7 @@ impl Expander<'_> {
                 if let Some(o) = r.as_object_mut() {
                     for (k, x) in o.iter_mut() {
                         if k != "children" {
-                            *x = subst_value(x, &sc.args);
+                            *x = subst_value(x, &sc.args, &mut self.work)?;
                         }
                     }
                 }
@@ -735,6 +813,7 @@ fn expand_in(
         pending,
         cache: HashMap::new(),
         defs: HashMap::new(),
+        work: Work::default(),
     };
     let out = e.one(doc, "", false, 0, None)?.unwrap_or(Value::Null);
     let size = serde_json::to_vec(&out).map_or(usize::MAX, |b| b.len());

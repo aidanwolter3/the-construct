@@ -475,7 +475,7 @@ fn hints(def: &Definition) -> Value {
                 "refresh_workspace": true } },
         "delete": { "type": "core://IconButton", "icon": "delete", "content_description": "Delete",
             "on_click": { "intent": "action.mutation.optimistic", "entity_uri": "$item.uri",
-                "field": "deleted", "value_expr": "true", "rollback_value": false,
+                "field": "deleted", "value_expr": "true",
                 "endpoint": format!("/v1/collections/{n}/delete"), "payload": { "id": "$item.id" } } },
         "notes": "Give every create's entity \"deleted\": false and an \"id\" of \"pending-$nonce\" (so the List's where shows it and a tick before the pod answers still reaches it). Fields left out of a create get their default. Dates are YYYY-MM-DD text.",
     });
@@ -485,7 +485,6 @@ fn hints(def: &Definition) -> Value {
             "content_description": b.name,
             "on_click": { "intent": "action.mutation.optimistic", "entity_uri": "$item.uri",
                 "field": b.name, "value_expr": format!("!entity.{}", b.name),
-                "rollback_value": false,
                 "endpoint": format!("/v1/collections/{n}/update"),
                 "payload": { "id": "$item.id", b.name.as_str(): "$value" } } });
     }

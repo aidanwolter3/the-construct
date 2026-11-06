@@ -395,6 +395,18 @@ class ModelTest {
     }
 
     @Test
+    fun mutateRollbackValueIsOptional() {
+        // The pod writes a left-out rollback_value as null (decision `optional-rollback-value`), which
+        // the app, which requires the field, reads as JsonNull.
+        val served = """{"intent":"action.mutation.optimistic","entity_uri":"e","field":"deleted",""" +
+            """"value_expr":"true","rollback_value":null,"endpoint":"/x","payload":{}}"""
+        val intent = assertIs<ActionIntent.OptimisticMutate>(ConstructJson.decodeIntent(served))
+        assertEquals(JsonNull, intent.rollbackValue)
+        // Re-encoded for the engine with the field kept.
+        assertTrue(ConstructJson.encodeIntent(intent).contains(""""rollback_value":null"""))
+    }
+
+    @Test
     fun bundleQueriesDecodeInOrderAndAreOmittedWhenEmpty() {
         val spec = ConstructJson.decodeBundle(COUNTER_BUNDLE_JSON)
         assertEquals(emptyMap(), spec.queries)
