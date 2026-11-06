@@ -66,6 +66,15 @@ impl From<StateSnapshot> for FfiStateSnapshot {
 
 /// An app catalog call failed (docs/DECISIONS.md D27, D32). `reason` is a
 /// short sentence for the UI (e.g. "That version doesn't exist.").
+/// A layout version pinned on this device.
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
+pub struct PinnedVersionRecord {
+    pub layout_id: String,
+    pub version: i64,
+    /// That version's layout JSON, as it was fetched.
+    pub spec_json: String,
+}
+
 #[derive(uniffi::Error, Debug, Clone, PartialEq, Eq)]
 pub enum LayoutApiError {
     /// The pod could not be reached.
@@ -324,6 +333,36 @@ impl EngineHandle {
     pub fn remember_form_value(&self, scope: String, field: String, value: Option<String>) {
         self.inner
             .remember_form_value(&scope, &field, value.as_deref());
+    }
+
+    /// The layout versions pinned on this device for this app, restored at
+    /// start (`action.device` `pin_version`). Local SQLite read.
+    pub fn pinned_versions(&self) -> Vec<PinnedVersionRecord> {
+        self.inner
+            .pinned_versions()
+            .into_iter()
+            .map(|p| PinnedVersionRecord {
+                layout_id: p.layout_id,
+                version: p.version,
+                spec_json: p.spec,
+            })
+            .collect()
+    }
+
+    /// Pin `version` of `layout_id` on this device (`spec_json`: that
+    /// version's layout), or with `None` follow its latest again. Local
+    /// SQLite write.
+    pub fn set_pinned_version(
+        &self,
+        layout_id: String,
+        version: Option<i64>,
+        spec_json: Option<String>,
+    ) {
+        let pin = match (version, spec_json.as_deref()) {
+            (Some(v), Some(spec)) => Some((v, spec)),
+            _ => None,
+        };
+        self.inner.set_pinned_version(&layout_id, pin);
     }
 
     // App catalog (D27, D32). All blocking (call off the UI thread) and

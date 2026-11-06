@@ -1,5 +1,8 @@
 # There are no apps at runtime: one home layout embeds and presents other layouts, on one engine
 
+Superseded in part by [device-layout-and-inbox-commands](device-layout-and-inbox-commands.md): layouts can hide,
+show and delete layouts, hidden ones are listed in `local:all_layouts`, and pins survive a restart.
+
 Date: 2026-11-05. Supersedes the navigation parts of [blueprints-and-home](blueprints-and-home.md) (Dock, Drawer,
 AppFrame, shell mode). Related: D34, D52, [custom-apps-and-data-sources](custom-apps-and-data-sources.md),
 [layout-parts](layout-parts.md), [named-vocabulary](named-vocabulary.md), [named-migrations](named-migrations.md).

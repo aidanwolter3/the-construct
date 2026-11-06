@@ -1444,6 +1444,11 @@ fn snippets() -> Value {
                         {"type": "core://Text", "style": "Body", "value_expr": "$item.title"},
                         {"type": "core://Text", "style": "Caption", "value_expr": "$item.app_title · $item.when"}]}}}
         },
+        "load_older_notifications": {
+            "doc": "under a local:notifications list: a button that loads the next page, shown only while there is more",
+            "node": {"type": "core://Conditional", "value": "${local://inbox#has_older}", "content": {"type": "core://Button",
+                "label": "Load older", "on_click": {"intent": "action.device", "command": "load_older_notifications"}}}
+        },
         "channel_switch": {
             "doc": "a switch per notification channel",
             "node": {"type": "core://List", "query_key": "local:channels", "item_template": {"type": "core://Row",
@@ -1515,14 +1520,15 @@ fn vocabulary_with(components: Vec<Value>) -> Value {
             { "intent": "action.confirm", "fields": "title, message?, confirm_label, then: intent",
               "doc": "Ask \"Are you sure?\" in the app's own dialog and run then only if the user confirms (Cancel does nothing). Wrap every step that can't be undone in it: action.device leave_pod and sign_out, and anything that deletes. In an action.sequence the later steps wait for the answer too." },
             { "intent": "action.device", "fields": "command, app?, id?, value?",
-              "doc": "Something the device does itself. Commands: open_notification (id: presents its layout), mark_all_read, toggle_channel (app, id of a notification channel), sign_in (id of a provider; value: another server, e.g. $form?.server from a core://TextField, for a provider whose local:providers row says custom_server), sign_out, set_server (id of a server option), show_versions (app: a layout; loads its versions into local:versions), pin_version (id: a version of that layout, shown on this device only), follow_latest, leave_pod (forget the pod on this device), refresh, open_settings and open_inbox (present the settings and inbox layouts). Any layout may use any command." },
+              "doc": "Something the device does itself. Commands: open_notification (id: presents its layout), mark_all_read, toggle_channel (app, id of a notification channel), sign_in (id of a provider; value: another server, e.g. $form?.server from a core://TextField, for a provider whose local:providers row says custom_server), sign_out, set_server (id of a server option), show_versions (app: a layout; loads its versions into local:versions), pin_version (id: a version of that layout, shown on this device only; remembered across restarts), follow_latest, load_older_notifications (appends the next page to local:notifications), mark_read (id: one notification), hide_layout and unhide_layout (app: a layout; hidden from every device's local:layouts, listed in local:all_layouts), delete_layout (app: a layout; always inside an action.confirm's then), leave_pod (forget the pod on this device), refresh, open_settings and open_inbox (present the settings and inbox layouts). Any layout may use any command." },
         ],
         "local_data": {
             "doc": "Data the device provides, with no feed: bind ${local://<entity>#<field>} anywhere and list local:layouts in a core://List.",
             "local://connection": "online (bool), pending (count of unsent changes), label (\"Online\", \"Offline · 2 pending\"), attention (true while offline or changes wait)",
-            "local://inbox": "unread (count), label (\"3 unread\")",
+            "local://inbox": "unread (count), label (\"3 unread\"), has_older (more notifications than local:notifications holds: show a Load older button sending load_older_notifications), loading (a page is loading)",
             "local://layouts": "count (the pod's layouts, home excluded)",
-            "local:layouts": "query of the pod's layouts but home (hidden ones left out): local://layouts/<id> with id, title, icon, kind, detail, unread, version (\"v12 · latest\" or \"v10 · pinned\")",
+            "local:layouts": "query of the pod's layouts but home (hidden ones left out): local://layouts/<id> with id, title, icon, kind, detail, unread, version (\"v12 · latest\" or \"v10 · pinned\"), hidden (always false here)",
+            "local:all_layouts": "the same rows as local:layouts plus the hidden layouts (hidden: true), for a \"show hidden\" list with unhide_layout buttons",
             "local:notifications": "query of the newest notifications: id, app_id, app_title, title, body, when (\"5 min\"), day (\"Today\"), unread",
             "local:channels": "query of the notification channels: app_id, app_title, id, title, description, enabled",
             "local:sign_ins": "query of the pod's sign-ins: id, title, detail (\"@dana · photos.example\")",

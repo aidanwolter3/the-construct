@@ -171,7 +171,7 @@ A node type the client doesn't know is skipped, and its JSON kept, so old versio
 | `action.confirm` | `title`, `message`, `confirm_label`, `then` | Asks first: the app's own dialog with the layout's wording, a `confirm_label` button and Cancel; runs `then` only on confirm (in a sequence, the later steps wait too). Wrap `leave_pod`, `sign_out` and deletes in it (decision `confirm-intent`). |
 | `action.auth.login` | `instance_url`, `app_path`, `token_path` | Starts an OAuth2 PKCE sign-in to an upstream. |
 | `action.auth.session` | `path`, `payload` | Opens a pod session (the pod code screen). |
-| `action.device` | `command`, `app` (or `layout`), `id`, `value` | Something the device does: `open_notification` (`id`: presents its layout and target), `mark_all_read`, `toggle_channel` (`app`, `id`), `sign_in` (`id` of a provider; `value`: another server, e.g. `$form?.server`), `sign_out`, `set_server` (`id` of a server option), `show_versions` (`app`: a layout; loads its versions into `local:versions`), `pin_version` (`id`: show that version on this device), `follow_latest`, `leave_pod` (forget the pod on this device), `refresh`, `open_settings` and `open_inbox` (present the `settings` layout as a panel and the `inbox` layout as a sheet). Any layout may use any command. `open_app` and `show` were retired with the dock and drawer. |
+| `action.device` | `command`, `app` (or `layout`), `id`, `value` | Something the device does: `open_notification` (`id`: presents its layout and target), `mark_all_read`, `toggle_channel` (`app`, `id`), `sign_in` (`id` of a provider; `value`: another server, e.g. `$form?.server`), `sign_out`, `set_server` (`id` of a server option), `show_versions` (`app`: a layout; loads its versions into `local:versions`), `pin_version` (`id`: show that version on this device; kept across restarts until `follow_latest` or leaving the pod), `follow_latest`, `load_older_notifications` (the next page into `local:notifications`, feature `device_inbox_paging`), `mark_read` (`id`: one notification), `hide_layout` and `unhide_layout` (`app`: a layout, hidden from every device's `local:layouts`; feature `device_layout_controls`), `delete_layout` (`app`: deletes the layout on the pod; only inside `action.confirm`), `leave_pod` (forget the pod on this device), `refresh`, `open_settings` and `open_inbox` (present the `settings` layout as a panel and the `inbox` layout as a sheet). Any layout may use any command. `open_app` and `show` were retired with the dock and drawer. |
 
 ## Features and compatibility
 
@@ -196,10 +196,11 @@ request. Any layout may bind them; a custom app needs no feed for them.
 | Entity or query | Fields |
 |---|---|
 | `local://connection` | `online`, `pending` (unsent changes), `label` ("Offline · 2 pending"), `attention` (offline or changes waiting) |
-| `local://inbox` | `unread`, `label` ("3 unread") |
+| `local://inbox` | `unread`, `label` ("3 unread"), `has_older` (the inbox has more than `local:notifications` holds), `loading` (an older page is loading) |
 | `local://layouts` | `count`: the pod's layouts but `home` |
-| `local:layouts` (query) | `local://layouts/<id>`: `id`, `title`, `icon`, `kind`, `detail`, `unread`, `version` ("v12 · latest", "v10 · pinned"); hidden ones left out. `local:apps` (`local://apps/<id>`) is its old name. |
-| `local:notifications` (query) | `id`, `app_id`, `app_title`, `title`, `body`, `when` ("5 min"), `day` ("Today"), `unread` |
+| `local:layouts` (query) | `local://layouts/<id>`: `id`, `title`, `icon`, `kind`, `detail`, `unread`, `version` ("v12 · latest", "v10 · pinned"), `hidden`; hidden ones left out. `local:apps` (`local://apps/<id>`) is its old name. |
+| `local:all_layouts` (query) | The same rows with the hidden layouts too (`hidden: true`), e.g. for a "Hidden" list with `unhide_layout` buttons (feature `device_layout_controls`). |
+| `local:notifications` (query) | The newest page, then the older pages `load_older_notifications` loaded: `id`, `app_id`, `app_title`, `title`, `body`, `when` ("5 min"), `day` ("Today"), `unread` |
 | `local:channels` (query) | `app_id`, `app_title`, `id`, `title`, `description`, `enabled` |
 | `local:sign_ins` (query) | `id`, `title`, `detail` ("@dana · pixelfed.example") |
 | `local:providers` (query) | `id`, `title`, `custom_server` (another server may be typed), `server_placeholder`: sign-ins the pod offers that aren't signed in |

@@ -360,8 +360,15 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
         ActionIntent::OpenLink { .. } => add(feature::OPEN_LINK),
         ActionIntent::Device { command, .. } => {
             add(feature::DEVICE_ACTION);
-            if crate::intent::RETIRED_DEVICE_COMMANDS.contains(&command.as_str()) {
+            let c = command.as_str();
+            if crate::intent::RETIRED_DEVICE_COMMANDS.contains(&c) {
                 add(feature::DEVICE_OPEN_APP);
+            }
+            if crate::intent::INBOX_PAGING_COMMANDS.contains(&c) {
+                add(feature::DEVICE_INBOX_PAGING);
+            }
+            if crate::intent::LAYOUT_CONTROL_COMMANDS.contains(&c) {
+                add(feature::DEVICE_LAYOUT_CONTROLS);
             }
         }
         ActionIntent::Unknown => {}
@@ -730,6 +737,38 @@ mod tests {
             4,
             "the dock's tab contents are its children"
         );
+    }
+
+    #[test]
+    fn inbox_paging_and_layout_controls_need_their_features() {
+        let features = |command: &str| {
+            let i: ActionIntent = serde_json::from_value(
+                json!({"intent": "action.device", "command": command, "app": "c-a", "id": "n1"}),
+            )
+            .unwrap();
+            let mut out = BTreeSet::new();
+            intent_features(&i, &mut out);
+            out.into_iter().collect::<Vec<_>>()
+        };
+        for c in ["load_older_notifications", "mark_read"] {
+            assert_eq!(
+                features(c),
+                [feature::DEVICE_ACTION, feature::DEVICE_INBOX_PAGING]
+            );
+        }
+        for c in ["hide_layout", "unhide_layout", "delete_layout"] {
+            assert_eq!(
+                features(c),
+                [feature::DEVICE_ACTION, feature::DEVICE_LAYOUT_CONTROLS]
+            );
+        }
+        assert_eq!(features("mark_all_read"), [feature::DEVICE_ACTION]);
+        for c in crate::intent::INBOX_PAGING_COMMANDS
+            .iter()
+            .chain(&crate::intent::LAYOUT_CONTROL_COMMANDS)
+        {
+            assert!(crate::DEVICE_COMMANDS.contains(c), "{c}");
+        }
     }
 
     #[test]

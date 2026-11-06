@@ -83,12 +83,16 @@ data class DeviceSources(
     /** The app `show_versions` named, and its history as loaded. */
     val versionsApp: String? = null,
     val versions: VersionHistory? = null,
+    /** Whether the inbox has older notifications than [notifications] holds, and whether a page of them is loading. */
+    val hasOlderNotifications: Boolean = false,
+    val loadingNotifications: Boolean = false,
 )
 
 /**
  * The device data for the current state: `local://connection` (online, pending, label, attention), `local://inbox`
- * (unread, label), `local://apps` (count) and the `local:apps` query of the pod's apps but home (`local://apps/<id>`:
- * id, title, icon, kind, detail, unread), `local://device` (platform), `local://session` (open, server, error,
+ * (unread, label, has_older, loading), `local://apps` (count) and the `local:apps` query of the pod's apps but home
+ * (`local://apps/<id>`: id, title, icon, kind, detail, unread, hidden), `local:layouts` (the same, hidden ones left out)
+ * and `local:all_layouts` (hidden ones too), `local://device` (platform), `local://session` (open, server, error,
  * message), and from [sources] the `local:notifications`, `local:channels`, `local:sign_ins`, `local:providers` and
  * `local:servers` queries.
  */
@@ -120,8 +124,11 @@ fun deviceData(
     entities["local://inbox"] = buildJsonObject {
         put("unread", unread.total)
         put("label", if (unread.total == 0) "All read" else "${unread.total} unread")
+        put("has_older", sources.hasOlderNotifications)
+        put("loading", sources.loadingNotifications)
     }
-    val listed = apps.filter { it.id != HOME_APP && !it.hidden }
+    val all = apps.filter { it.id != HOME_APP }
+    val listed = all.filter { !it.hidden }
     fun row(app: AppSummary) = buildJsonObject {
             put("id", app.id)
             put("title", app.title)
@@ -131,9 +138,12 @@ fun deviceData(
             put("unread", unread.byApp[app.id] ?: 0)
             val pinned = sources.pins[app.id]
             put("version", if (pinned != null) "v$pinned · pinned" else app.latestVersion?.let { "v$it · latest" } ?: "")
+            put("hidden", app.hidden)
         }
     // `local:layouts` (decision `layouts-not-apps`); `local:apps`, its old name, for layouts written before.
-    val layoutUris = listed.map { app -> "local://layouts/${app.id}".also { entities[it] = row(app) } }
+    // `local:all_layouts` (feature `device_layout_controls`): the hidden ones too, for a "show hidden" list.
+    val allLayoutUris = all.map { app -> "local://layouts/${app.id}".also { entities[it] = row(app) } }
+    val layoutUris = listed.map { "local://layouts/${it.id}" }
     val uris = listed.map { app -> "local://apps/${app.id}".also { entities[it] = row(app) } }
     entities["local://layouts"] = buildJsonObject { put("count", listed.size) }
     entities["local://apps"] = buildJsonObject { put("count", listed.size) }
@@ -156,6 +166,7 @@ fun deviceData(
     val titles = apps.associate { it.id to it.title }
     val queries = LinkedHashMap<String, List<String>>()
     queries["local:layouts"] = layoutUris
+    queries["local:all_layouts"] = allLayoutUris
     queries["local:apps"] = uris
     fun add(query: String, uri: String, entity: JsonObject): String {
         entities[uri] = entity

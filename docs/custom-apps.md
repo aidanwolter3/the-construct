@@ -71,8 +71,10 @@ curl -fsS -H "Authorization: Bearer $token" -H 'content-type: application/json' 
   `set_theme` changes them.
 - **Device data.** `${local://connection#label}`, `${local://inbox#unread}`, the `local:layouts` query and the other
   [device data](layouts.md#device-data) need no feed.
-- **Hiding and deleting.** Any layout can be hidden from `local:layouts` on every device; the pod's layouts can be
-  deleted (purged after 30 days), except `home`. A deleted layout says so where it was shown.
+- **Hiding and deleting.** Any layout can be hidden from `local:layouts` on every device (`local:all_layouts` still
+  lists it, with `hidden: true`); the pod's layouts can be deleted (purged after 30 days), except `home`. Both work
+  from the agent (`set_hidden`, `delete_layout`) and from a layout (`action.device` `hide_layout`, `unhide_layout`,
+  `delete_layout`). A deleted layout says so where it was shown.
 
 ## Building apps with Claude
 
