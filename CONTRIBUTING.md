@@ -32,6 +32,8 @@ Run these before pushing; CI runs the same and keeps `main` green:
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 scripts/check_decisions.sh && scripts/check_test_data.sh
 cd app && ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test
+# Needs an Android SDK (cloud_setup.sh installs one); compiles the Android Kotlin without the engine build
+./gradlew -PskipRustBuild :shared:compileAndroidMain :androidApp:compileDebugKotlin
 ```
 
 UI changes are checked with the [headless simulator](docs/simulator.md): there are no emulator or on-device tests.
