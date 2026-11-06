@@ -25,6 +25,10 @@
 //! - `collections_reminders_sent`: which row a reminder (decision
 //!   `collection-reminders`) already notified about, for which date, so
 //!   each fires once even after the core's notification retention.
+//! - `collections_deleted`: deleted collections (decision
+//!   `collections`, issue #107). Their definitions, rows and fill state
+//!   stay, hidden from everything that reads live definitions, until
+//!   restored or purged after [`crate::KEEP_SECS`].
 
 use std::cmp::Ordering;
 
@@ -52,7 +56,19 @@ pub static MIGRATIONS: &[Step] = &[
     // 6: items a fill left out as past (`upcoming`), so a page listing only
     // past events doesn't read as a broken recipe (issue #131).
     Step::sql("fill_past", FILL_PAST),
+    // 7: deleted collections, restorable for 30 days (issue #107).
+    Step::sql("deleted_collections", DELETED),
 ];
+
+const DELETED: &str = "
+CREATE TABLE collections_deleted (
+    name       TEXT PRIMARY KEY NOT NULL,
+    deleted_at INTEGER NOT NULL
+);
+";
+
+/// Leaves out deleted collections (`collections_deleted`).
+const LIVE: &str = "NOT IN (SELECT name FROM collections_deleted)";
 
 const FILL_PAST: &str = "ALTER TABLE collections_fills ADD COLUMN last_past INTEGER;";
 
@@ -188,8 +204,17 @@ fn parse_def(json: &str) -> rusqlite::Result<Definition> {
     })
 }
 
-/// The live definition of `name` and its version.
+/// The live definition of `name` and its version (`None` when it doesn't
+/// exist or is deleted).
 pub fn latest_def(conn: &Connection, name: &str) -> rusqlite::Result<Option<(i64, Definition)>> {
+    if deleted_at(conn, name)?.is_some() {
+        return Ok(None);
+    }
+    newest_def(conn, name)
+}
+
+/// The newest definition of `name`, deleted or not.
+fn newest_def(conn: &Connection, name: &str) -> rusqlite::Result<Option<(i64, Definition)>> {
     let row: Option<(i64, String)> = conn
         .query_row(
             "SELECT version, def_json FROM collections_defs WHERE name = ?1
@@ -214,6 +239,7 @@ pub fn all_defs(conn: &Connection) -> rusqlite::Result<Vec<(i64, Definition)>> {
     let mut stmt = conn.prepare_cached(
         "SELECT d.version, d.def_json FROM collections_defs d
          WHERE d.version = (SELECT MAX(version) FROM collections_defs WHERE name = d.name)
+           AND d.name NOT IN (SELECT name FROM collections_deleted)
          ORDER BY d.name",
     )?;
     let rows: Vec<(i64, String)> = stmt
@@ -222,6 +248,83 @@ pub fn all_defs(conn: &Connection) -> rusqlite::Result<Vec<(i64, Definition)>> {
     rows.into_iter()
         .map(|(v, j)| Ok((v, parse_def(&j)?)))
         .collect()
+}
+
+// ---------- deleted collections ----------
+
+/// When `name` was deleted, if it is.
+pub fn deleted_at(conn: &Connection, name: &str) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT deleted_at FROM collections_deleted WHERE name = ?1",
+        [name],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+/// A deleted collection: when it was deleted and its last definition.
+pub fn deleted_def(
+    conn: &Connection,
+    name: &str,
+) -> rusqlite::Result<Option<(i64, i64, Definition)>> {
+    let Some(at) = deleted_at(conn, name)? else {
+        return Ok(None);
+    };
+    Ok(newest_def(conn, name)?.map(|(v, d)| (at, v, d)))
+}
+
+/// Every deleted collection, newest first: `(deleted_at, version, def)`.
+pub fn deleted_defs(conn: &Connection) -> rusqlite::Result<Vec<(i64, i64, Definition)>> {
+    let names: Vec<String> = conn
+        .prepare_cached("SELECT name FROM collections_deleted ORDER BY deleted_at DESC, name")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut out = Vec::new();
+    for n in names {
+        out.extend(deleted_def(conn, &n)?);
+    }
+    Ok(out)
+}
+
+/// Delete collection `name` (restorable with [`undelete`]).
+pub fn mark_deleted(tx: &Connection, name: &str, now: i64) -> rusqlite::Result<()> {
+    tx.execute(
+        "INSERT OR REPLACE INTO collections_deleted (name, deleted_at) VALUES (?1, ?2)",
+        params![name, now],
+    )?;
+    Ok(())
+}
+
+/// Bring deleted collection `name` back as it was.
+pub fn undelete(tx: &Connection, name: &str) -> rusqlite::Result<()> {
+    tx.execute("DELETE FROM collections_deleted WHERE name = ?1", [name])?;
+    Ok(())
+}
+
+/// Remove everything of collection `name`; its name is free again.
+fn drop_collection(tx: &Connection, name: &str) -> rusqlite::Result<()> {
+    tx.execute(
+        "DELETE FROM collections_edit_rows WHERE edit_id IN
+         (SELECT id FROM collections_edits WHERE collection = ?1)",
+        [name],
+    )?;
+    for table in [
+        "collections_rows",
+        "collections_aside",
+        "collections_edits",
+        "collections_computed",
+        "collections_fills",
+        "collections_alerts_sent",
+        "collections_reminders_sent",
+    ] {
+        tx.execute(
+            &format!("DELETE FROM {table} WHERE collection = ?1"),
+            [name],
+        )?;
+    }
+    tx.execute("DELETE FROM collections_defs WHERE name = ?1", [name])?;
+    tx.execute("DELETE FROM collections_deleted WHERE name = ?1", [name])?;
+    Ok(())
 }
 
 /// Version `version` of `name`'s definition.
@@ -652,8 +755,10 @@ pub fn row_bundle(
 /// Live rows and their values' bytes across the pod's collections.
 pub fn usage(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
     conn.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(LENGTH(values_json)), 0) FROM collections_rows
-         WHERE deleted_at IS NULL",
+        &format!(
+            "SELECT COUNT(*), COALESCE(SUM(LENGTH(values_json)), 0) FROM collections_rows
+             WHERE deleted_at IS NULL AND collection {LIVE}"
+        ),
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )
@@ -1000,14 +1105,24 @@ pub struct Purged {
     pub fields: usize,
     pub aside: usize,
     pub edits: usize,
+    pub collections: usize,
 }
 
 /// Remove what has been gone longer than `window` seconds before `now`:
 /// deleted rows, the data of removed fields (which then can't come back),
-/// values kept aside and the undo records of edits. Blocking.
+/// values kept aside, the undo records of edits and deleted collections.
+/// Blocking.
 pub fn purge(tx: &Transaction<'_>, now: i64, window: i64) -> rusqlite::Result<Purged> {
     let cutoff = now - window;
+    let expired: Vec<String> = tx
+        .prepare_cached("SELECT name FROM collections_deleted WHERE deleted_at <= ?1")?
+        .query_map([cutoff], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    for name in &expired {
+        drop_collection(tx, name)?;
+    }
     let mut out = Purged {
+        collections: expired.len(),
         rows: tx.execute(
             "DELETE FROM collections_rows WHERE deleted_at IS NOT NULL AND deleted_at <= ?1",
             [cutoff],
