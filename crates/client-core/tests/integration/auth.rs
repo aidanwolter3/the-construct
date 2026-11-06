@@ -285,6 +285,18 @@ fn stored_token(env: &Env, store: &MemoryStore) -> String {
     v["token"].as_str().unwrap().to_owned()
 }
 
+/// Wait until the engine's events stream is open with its session. A test
+/// that revokes the session on the pod must wait for this first: after a
+/// sign-in the stream reconnects with the new session on its own thread, and
+/// if that reconnect lands after the revocation, the stream's 401 signs out
+/// (and purges the feed) before whatever the test does next.
+fn wait_stream_signed_in(env: &Env, engine: &ConstructEngine) {
+    let device = engine.device_id();
+    wait_until("the events stream open with the session", || {
+        env.pod_state.device_is_live(&device)
+    });
+}
+
 fn like_intent(id: &str) -> String {
     json!({
         "intent": "action.mutation.optimistic",
@@ -586,13 +598,7 @@ fn outbox_401_keeps_the_like_pending_until_the_next_sign_in() {
     engine.dispatch(&env.login_intent());
     wait_signed_in(&engine);
     let (id, count) = unliked_post(&engine.snapshot());
-    // Revoke only once the events stream runs with the session: a stream
-    // that connects after the revocation would sign out first (its own
-    // 401), before the like this test is about is queued.
-    let device = engine.device_id();
-    wait_until("the events stream open with the session", || {
-        env.pod_state.device_is_live(&device)
-    });
+    wait_stream_signed_in(&env, &engine);
 
     // The pod forgets the session (e.g. revoked elsewhere).
     let token = stored_token(&env, &store);
@@ -912,6 +918,7 @@ fn sign_out_purges_the_private_feed_from_the_cache() {
     // 401 sign-out (session revoked elsewhere) with a like queued: the liked
     // post stays (its row resumes after the next sign-in), the rest goes.
     let (id, _) = unliked_post(&engine.snapshot());
+    wait_stream_signed_in(&env, &engine);
     let token = stored_token(&env, &store);
     reqwest::blocking::Client::new()
         .post(format!("{}/v1/auth/logout", env.pod))

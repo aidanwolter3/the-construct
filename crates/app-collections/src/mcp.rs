@@ -24,7 +24,8 @@ sending the app layout changes that go with it in the same call: nothing applies
 break. add_row adds one row the user just asked for (\"log that I had the oil changed\") at once. \
 edit_rows changes rows directly (imports, backfills): it first answers a preview, which you \
 must show the user (the count and the sample) before calling again with its confirm token; every edit \
-can be undone with undo_edit. Any field may be computed from the row's other fields \
+can be undone with undo_edit. delete_collection deletes a collection the user no longer wants once no layout \
+shows it (restore_collection brings it back for 30 days). Any field may be computed from the row's other fields \
 whenever they change: compute: {kind: \"expr\", expr} evaluates a small expression at once (entity.<field>, \
 literals, + joins text or adds numbers, -, !, c ? a : b, parentheses); compute: {kind: \"lookup\", from, \
 collection, key, value, match: exact|contains|regex, learn?} takes the value of the best matching row of \
@@ -98,7 +99,7 @@ pub fn tools() -> Vec<Value> {
     vec![
         tool(
             "list_collections",
-            "The pod's collections: fields, row counts, versions and the custom apps that use each.",
+            "The pod's collections: fields, row counts, versions and the layouts that use each; deleted lists the deleted ones restore_collection can bring back.",
             json!({}),
             &[],
         ),
@@ -132,6 +133,18 @@ pub fn tools() -> Vec<Value> {
             "Make an older definition current again (appends a copy): removed fields come back with their data, fields added since are soft-removed, types convert back (values kept aside return). Pass the app layouts that change with it, as for apply_change.",
             json!({ "collection": collection, "version": { "type": "integer" }, "apps": apps, "note": note }),
             &["collection", "version"],
+        ),
+        tool(
+            "delete_collection",
+            "Delete a collection: its definition, rows, fillers, alerts and reminders. Only when the user asked for it. Refused while a layout binds it or another collection's lookup reads it (the error names them: change those first). Drops it from home's feeds. Restorable with restore_collection for 30 days, then purged.",
+            json!({ "collection": collection, "base_version": { "type": "integer", "description": "The definition version you read" } }),
+            &["collection"],
+        ),
+        tool(
+            "restore_collection",
+            "Bring back a collection delete_collection deleted in the last 30 days, with its rows, fillers, alerts and reminders (list_collections lists deleted ones). Its feed isn't added back to home: a layout that shows it adds it.",
+            json!({ "collection": collection }),
+            &["collection"],
         ),
         tool(
             "edit_rows",
@@ -208,6 +221,8 @@ pub fn call<'a>(
         "collections_refresh" => Box::pin(refresh(pod, args)),
         "collections_set_secret" => Box::pin(set_secret(pod, args)),
         "restore_collection_version" => Box::pin(restore_version(pod, caps, args)),
+        "delete_collection" => Box::pin(delete(pod, args)),
+        "restore_collection" => Box::pin(restore(pod, caps, args)),
         "edit_rows" => Box::pin(edit_rows(pod, caps, args)),
         "add_row" => Box::pin(add_row(pod, caps, args)),
         "undo_edit" => Box::pin(undo_edit(pod, args)),
@@ -269,12 +284,12 @@ fn users(apps: &[(custom::CustomApp, i64, Value)], name: &str) -> Vec<Value> {
 
 async fn list(pod: &Pod) -> Result<Value, Value> {
     let p = pod.clone();
-    let out = pod
+    let (out, deleted) = pod
         .blocking(move |s| {
             let apps = custom::apps_using(s, p.catalog(), NAME)?;
             s.with_conn(|c| {
                 let others = db::defs_by_name(c)?;
-                db::all_defs(c)?
+                let live = db::all_defs(c)?
                     .into_iter()
                     .map(|(version, def)| {
                         let rows = db::all_rows(c, &def.name, false)?.len();
@@ -284,12 +299,27 @@ async fn list(pod: &Pod) -> Result<Value, Value> {
                             "used_by": users(&apps, &def.name),
                         }))
                     })
-                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let deleted = db::deleted_defs(c)?
+                    .into_iter()
+                    .map(|(at, version, def)| {
+                        let rows = db::all_rows(c, &def.name, false)?.len();
+                        Ok(json!({
+                            "name": def.name, "title": def.title, "version": version, "rows": rows,
+                            "deleted_at": at, "purged_after": at + KEEP_SECS,
+                        }))
+                    })
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok((live, deleted))
             })
         })
         .await
         .map_err(db_err)?;
-    Ok(json!({ "collections": out }))
+    let mut body = json!({ "collections": out });
+    if !deleted.is_empty() {
+        body["deleted"] = json!(deleted);
+    }
+    Ok(body)
 }
 
 async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result<Value, Value> {
@@ -373,6 +403,12 @@ async fn define(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Result
     let note = note_arg(args, "Created");
     let stored = def.clone();
     let version = refusable(pod, move |tx| {
+        if db::deleted_at(tx, &stored.name)?.is_some() {
+            return Ok(Err(
+                json!({ "error": "collection_deleted", "collection": stored.name, "status": 409,
+                "detail": "a deleted collection has this name: restore_collection brings it back, or pick another name" }),
+            ));
+        }
         if db::latest_def(tx, &stored.name)?.is_some() {
             return Ok(Err(
                 json!({ "error": "collection_exists", "collection": stored.name, "status": 409,
@@ -1161,6 +1197,153 @@ async fn restore_version(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<V
         .map_err(|e| json!({ "error": "invalid_change", "detail": e, "status": 400 }))?;
     let note = note_arg(args, &format!("Restored version {n}"));
     commit(pod, caps, &name, version, planned, args, note).await
+}
+
+// ---------- deleting a collection ----------
+
+/// Delete collection `{collection}` (issue #107): refused while a layout
+/// binds it or another collection's lookup reads it; its feed leaves
+/// home's; the data stays, hidden, for [`KEEP_SECS`].
+async fn delete(pod: &Pod, args: &Value) -> Result<Value, Value> {
+    let name = str_arg(args, "collection")?.to_owned();
+    let (version, def) = current(pod, &name).await?;
+    if let Some(b) = args["base_version"].as_i64()
+        && b != version
+    {
+        return Err(
+            json!({ "error": "stale_version", "collection": name, "latest_version": version,
+            "status": 409, "detail": "the collection changed since you read it: describe_collection" }),
+        );
+    }
+    if let Some(sys) = &def.system {
+        return Err(fail(
+            StatusCode::CONFLICT,
+            "system_collection",
+            format!(
+                "the {} app's collection can't be deleted (change its fillers and alerts instead)",
+                sys.app
+            ),
+        ));
+    }
+    let p = pod.clone();
+    let (apps, others, home) = pod
+        .blocking(move |s| {
+            let apps = custom::apps_using(s, p.catalog(), NAME)?;
+            let (others, home) = s.with_conn(|c| -> rusqlite::Result<_> {
+                Ok((db::defs_by_name(c)?, custom::home_feeds_on(c)?))
+            })?;
+            Ok((apps, others, home))
+        })
+        .await
+        .map_err(db_err)?;
+    let used_by = users(&apps, &name);
+    if !used_by.is_empty() {
+        let titles: Vec<String> = used_by
+            .iter()
+            .map(|u| {
+                format!(
+                    "'{}' ({})",
+                    u["title"].as_str().unwrap_or(""),
+                    u["app"].as_str().unwrap_or("")
+                )
+            })
+            .collect();
+        return Err(
+            json!({ "error": "collection_in_use", "collection": name, "used_by": used_by,
+            "status": 409,
+            "detail": format!("layouts still show it: {}; remove it from them with update_layout first", titles.join(", ")) }),
+        );
+    }
+    let lookups: Vec<Value> = others
+        .values()
+        .filter(|d| d.name != name)
+        .flat_map(|d| {
+            d.live_fields()
+                .filter(|f| {
+                    f.compute.iter().any(
+                        |c| matches!(c, model::Compute::Lookup { collection, .. } if *collection == name),
+                    )
+                })
+                .map(|f| json!({ "collection": d.name, "field": f.name }))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    if !lookups.is_empty() {
+        return Err(
+            json!({ "error": "collection_in_use", "collection": name, "lookups": lookups,
+            "status": 409,
+            "detail": "another collection's computed field looks rows up in it: change that field's compute with apply_change first" }),
+        );
+    }
+    // Home's feed goes first: a layout naming a collection that doesn't
+    // exist fails validation, so a stale feed would block home's saves.
+    let feed = (NAME.to_owned(), name.clone());
+    let mut dropped_feed = false;
+    if let Some(feeds) = home.filter(|f| f.contains(&feed)) {
+        let rest: Vec<_> = feeds.into_iter().filter(|f| *f != feed).collect();
+        custom::patch(pod, pod_core::HOME_APP, &json!({ "feeds": rest }))
+            .await
+            .map_err(|(s, mut b)| {
+                b["status"] = json!(s.as_u16());
+                b
+            })?;
+        dropped_feed = true;
+    }
+    let target = name.clone();
+    let now = pod_core::util::now_secs();
+    refusable(pod, move |tx| {
+        if db::latest_def(tx, &target)?.map(|(v, _)| v) != Some(version) {
+            return Ok(Err(
+                json!({ "error": "stale_version", "collection": target, "status": 409,
+                "detail": "the collection changed meanwhile: try again" }),
+            ));
+        }
+        db::mark_deleted(tx, &target, now)?;
+        Ok(Ok(()))
+    })
+    .await?;
+    pod.publish_data_all(NAME);
+    Ok(
+        json!({ "ok": true, "collection": name, "deleted_at": now, "purged_after": now + KEEP_SECS,
+        "dropped_from_home_feeds": dropped_feed,
+        "detail": "restore_collection brings it back with its rows for 30 days" }),
+    )
+}
+
+/// Bring back deleted collection `{collection}`.
+async fn restore(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<Value, Value> {
+    let name = str_arg(args, "collection")?.to_owned();
+    let target = name.clone();
+    let (version, fillers) = refusable(pod, move |tx| {
+        let Some((_, version, def)) = db::deleted_def(tx, &target)? else {
+            return Ok(Err(json!({ "error": "collection_not_found", "collection": target, "status": 404,
+                "detail": "no deleted collection has this name (list_collections lists deleted ones)" })));
+        };
+        if db::all_defs(tx)?.len() >= caps.collections {
+            return Ok(Err(fail(
+                StatusCode::CONFLICT,
+                "too_many_collections",
+                format!("a pod has at most {} collections", caps.collections),
+            )));
+        }
+        let rows = db::all_rows(tx, &target, false)?;
+        let bytes: i64 = rows
+            .iter()
+            .map(|r| serde_json::to_string(&r.values).map_or(0, |s| s.len() as i64))
+            .sum();
+        if let Err(e) = crate::check_usage(tx, caps, rows.len() as i64, bytes)? {
+            return Ok(Err(e));
+        }
+        db::undelete(tx, &target)?;
+        Ok(Ok((version, !def.fillers.is_empty())))
+    })
+    .await?;
+    if fillers {
+        crate::fill::spawn(pod, &name, None, true);
+    }
+    pod.publish_data_all(NAME);
+    Ok(json!({ "ok": true, "collection": name, "version": version,
+        "next": format!("To show it, add [\"collections\", \"{name}\"] to a layout's feeds (create_layout, or rename_layout with feeds).") }))
 }
 
 // ---------- row edits ----------

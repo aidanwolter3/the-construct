@@ -814,3 +814,121 @@ async fn caps_hold() {
     .await;
     assert!(err && e["error"] == "too_many_edits", "{e}");
 }
+
+/// Issue #107: a collection is deleted once nothing shows it (its stale
+/// feed leaves home's), restored within the window, purged after it.
+#[tokio::test]
+async fn a_collection_is_deleted_restored_and_purged() {
+    let pod = pod();
+    define_todos(&pod).await;
+    let app = create_app(&pod, "Todos", todo_layout("")).await;
+    add(&pod, json!({"title": "Milk"})).await;
+
+    // Refused while a layout shows it, naming the layout.
+    let (err, e) = tool(&pod, "delete_collection", json!({"collection": "todos"})).await;
+    assert!(err, "{e}");
+    assert_eq!(e["error"], "collection_in_use");
+    assert_eq!(e["used_by"][0]["app"], app.as_str());
+    assert!(e["detail"].as_str().unwrap().contains("'Todos'"), "{e}");
+
+    // Refused while another collection's lookup reads it.
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "notes", "fields": [
+            {"name": "text", "type": "text"},
+            {"name": "status", "type": "text", "optional": true,
+             "compute": {"kind": "lookup", "from": "text", "collection": "todos",
+                         "key": "title", "value": "title"}}]}),
+    )
+    .await;
+    ok(&pod, "delete_layout", json!({"id": app})).await;
+    let (err, e) = tool(&pod, "delete_collection", json!({"collection": "todos"})).await;
+    assert!(err, "{e}");
+    assert_eq!(
+        e["lookups"][0],
+        json!({"collection": "notes", "field": "status"})
+    );
+    ok(&pod, "delete_collection", json!({"collection": "notes"})).await;
+
+    // A stale base version is refused.
+    let (err, e) = tool(
+        &pod,
+        "delete_collection",
+        json!({"collection": "todos", "base_version": 99}),
+    )
+    .await;
+    assert!(err && e["error"] == "stale_version", "{e}");
+
+    let home_feeds = |pod: Pod| async move {
+        pod.store()
+            .with_conn(pod_core::custom::home_feeds_on)
+            .unwrap()
+    };
+    let had_feed = home_feeds(pod.clone())
+        .await
+        .is_some_and(|f| f.contains(&("collections".into(), "todos".into())));
+    let d = ok(
+        &pod,
+        "delete_collection",
+        json!({"collection": "todos", "base_version": 1}),
+    )
+    .await;
+    assert_eq!(d["dropped_from_home_feeds"], had_feed);
+    if let Some(f) = home_feeds(pod.clone()).await {
+        assert!(
+            !f.contains(&("collections".into(), "todos".into())),
+            "{f:?}"
+        );
+    }
+    let l = ok(&pod, "list_collections", json!({})).await;
+    assert_eq!(l["collections"], json!([]));
+    let gone = l["deleted"].as_array().unwrap();
+    let todos_gone = gone.iter().find(|c| c["name"] == "todos").expect("listed");
+    assert_eq!(todos_gone["rows"], 1);
+    assert_eq!(
+        todos_gone["purged_after"],
+        todos_gone["deleted_at"].as_i64().unwrap() + KEEP_SECS
+    );
+    let (s, _) = add(&pod, json!({"title": "Eggs"})).await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "its routes are gone");
+    let (err, e) = tool(&pod, "describe_collection", json!({"collection": "todos"})).await;
+    assert!(err && e["error"] == "collection_not_found", "{e}");
+    let (err, e) = tool(
+        &pod,
+        "define_collection",
+        json!({"name": "todos", "fields": [{"name": "title", "type": "text"}]}),
+    )
+    .await;
+    assert!(err && e["error"] == "collection_deleted", "{e}");
+
+    // Restored with its rows.
+    ok(&pod, "restore_collection", json!({"collection": "todos"})).await;
+    let l = ok(&pod, "list_collections", json!({})).await;
+    assert_eq!(l["collections"][0]["name"], "todos");
+    assert_eq!(l["collections"][0]["rows"], 1);
+    assert!(
+        l.get("deleted")
+            .is_none_or(|d| d.as_array().unwrap().iter().all(|c| c["name"] != "todos")),
+        "{l}"
+    );
+    let (err, _) = tool(&pod, "restore_collection", json!({"collection": "todos"})).await;
+    assert!(err, "not deleted any more");
+
+    // Deleted again and past the window: purged, and the name is free.
+    ok(&pod, "delete_collection", json!({"collection": "todos"})).await;
+    let later = pod_core::util::now_secs() + KEEP_SECS + 1;
+    let purged = pod
+        .store()
+        .transaction(|tx| app_collections::db::purge(tx, later, KEEP_SECS))
+        .unwrap();
+    assert_eq!(purged.collections, 2, "todos and notes");
+    let l = ok(&pod, "list_collections", json!({})).await;
+    assert!(l.get("deleted").is_none(), "{l}");
+    let (err, _) = tool(&pod, "restore_collection", json!({"collection": "todos"})).await;
+    assert!(err);
+    define_todos(&pod).await;
+    let l = ok(&pod, "list_collections", json!({})).await;
+    assert_eq!(l["collections"][0]["rows"], 0);
+    assert_eq!(l["collections"][0]["version"], 1);
+}

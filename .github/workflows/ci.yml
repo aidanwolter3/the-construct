@@ -1,6 +1,7 @@
 name: CI
 
-# Every PR and push: Rust checks, JVM/shared-UI tests and headless simulator screenshots (artifact).
+# Every PR and push: Rust checks, JVM/shared-UI tests, headless simulator screenshots (artifact) and an
+#   Android compile (Kotlin only, no Rust .so files).
 # Push to main (or a manual run on main): if Rust checks pass, deploy the pod to Fly.io staging,
 #   https://the-construct-pod.fly.dev   (deploy/fly/pod.toml)
 # The fake Pixelfed it talks to deploys from its own workflow (fake-pixelfed.yml).
@@ -101,6 +102,26 @@ jobs:
             app/**/build/reports/tests
           if-no-files-found: ignore
           retention-days: 14
+
+  android:
+    name: Android compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Compiles the Android Kotlin (:shared's android target and :androidApp), which the JVM job never builds.
+    # Compile-only: -PskipRustBuild skips the cargo-ndk engine build (the UniFFI bindings are checked in). The
+    # runner image ships an Android SDK (ANDROID_HOME); AGP fetches a missing platform itself.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # no job pushes; keep GITHUB_TOKEN out of .git/config
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      - name: Compile shared (android) + androidApp
+        working-directory: app
+        run: ./gradlew -PskipRustBuild :shared:compileAndroidMain :androidApp:compileDebugKotlin
 
   deploy:
     name: Deploy to Fly.io staging
