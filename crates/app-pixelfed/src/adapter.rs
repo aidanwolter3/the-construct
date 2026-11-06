@@ -251,6 +251,10 @@ impl AppAdapter for PixelfedAdapter {
         apps::PIXELFED_FILES
     }
 
+    fn component_files(&self) -> &'static [pod_core::components::ComponentSource] {
+        apps::COMPONENT_FILES
+    }
+
     fn router(&self) -> Router<Pod> {
         crate::routes::router()
     }

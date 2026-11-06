@@ -225,7 +225,9 @@ sees one and changing one needs no app build. Use one anywhere a node goes:
 ```
 
 - **`core:` components** ship with the server: `crates/pod-core/components/<name>/NNNN.json`, `{"note", "component"}`,
-  append-only like layout files. Every blueprint is one too: `core:<blueprint>` is its whole layout (only as a
+  append-only like layout files. An adapter ships its own the same way, in `crates/app-*/components/<name>/` (its
+  build script embeds them; `AppAdapter::component_files`); names are unique across crates (decision
+  `adapter-components`). Every blueprint is one too: `core:<blueprint>` is its whole layout (only as a
   layout's root; the layout keeps its own id) and `core:<blueprint>/<part>` a part (`screen:<id>` in `screens`,
   `slot:<id>`, or a name from the file's `"parts"`). `{"type": "core://Ref", "app", "part"}` is the older spelling.
 - **`pod:` components** are the pod's own, defined by an agent (MCP `define_component`, `copy_component`), versioned
@@ -259,6 +261,7 @@ The server components:
 | `core:author_header` | `avatar`, `name`, `handle`, `size`, paddings | A round avatar beside the name and handle. |
 | `core:toggle_action` | `field`, `icon`, `active_icon`, `label`, `active_label`, `endpoint`, `payload_field`, `tint`, `count_field`, `tag` | An icon button that flips a boolean field at once and tells an endpoint, optionally moving a count with it. |
 | `core:stat` | `value`, `label` | A number with a label under it. |
+| `core:pixelfed_sign_in` | `server`, `instance_url`, `other_servers`, `placeholder` | Pixelfed's signed-out screen: a sentence, "Sign in with Pixelfed", and a box for another server (shipped by `app-pixelfed`). |
 | `core:message_page` | `title`, `body`, `background`; children: actions | A whole page with a message in the middle and actions under it. |
 
 Their definitions are the files; `get_component` reads them with examples. See decision

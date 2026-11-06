@@ -87,7 +87,7 @@ rooted at a `core://Page` (any node, no chrome from the app) or a `core://Worksp
 - **Plumbing and porcelain** (decision `plumbing-and-porcelain`). Plumbing is what the app draws: the nodes, intents
   and device data, each a named feature. Porcelain is **components** defined as data in terms of plumbing and
   expanded by the pod (`pod_core::parts`, `pod_core::components`) before serving: the server's (`core:`, files in
-  `crates/pod-core/components/`, and every blueprint and its parts) and the pod's own (`pod:`, made by an agent). A
+  `crates/pod-core/components/` or an adapter's `crates/app-*/components/`, and every blueprint and its parts) and the pod's own (`pod:`, made by an agent). A
   `core://Workspace` is porcelain too: an app that draws the plumbing gets it as a `core://Page`
   (`core:workspace`, `core:screen`; `pod_core::porcelain`), older apps the workspace.
 

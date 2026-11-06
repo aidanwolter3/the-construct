@@ -8,8 +8,10 @@
 //! Two sources, one namespace each:
 //!
 //! - `core:<name>`: server components, files `crates/pod-core/components/
-//!   <name>/NNNN.json` (`{"note", "component"}`) embedded in the binary and
-//!   recorded in each pod's `components` table at start. A deployed file
+//!   <name>/NNNN.json` (`{"note", "component"}`), or an adapter's own
+//!   `crates/app-*/components/<name>/NNNN.json` (`AppAdapter::
+//!   component_files`), embedded in the binary and recorded in each pod's
+//!   `components` table at start. A deployed file
 //!   never changes (the pod refuses to start, as for layout files) and is
 //!   never removed. Blueprints are components too: `core:<blueprint>` is a
 //!   whole layout and `core:<blueprint>/<part>` one of its parts
@@ -34,6 +36,8 @@ use crate::util::now_secs;
 /// One embedded server component file.
 #[derive(Debug, Clone, Copy)]
 pub struct ComponentSource {
+    /// The crate's folder, `crates/<crate>/components`, for messages.
+    pub dir: &'static str,
     pub name: &'static str,
     /// `NNNN`.
     pub file: &'static str,
@@ -512,7 +516,7 @@ pub struct CoreFile {
 pub fn core_files(sources: &[ComponentSource]) -> Result<Vec<CoreFile>, String> {
     let mut out: Vec<CoreFile> = Vec::new();
     for s in sources {
-        let path = format!("crates/pod-core/components/{}/{}.json", s.name, s.file);
+        let path = format!("{}/{}/{}.json", s.dir, s.name, s.file);
         let fail = |e: String| format!("{path}: {e}");
         if !valid_bare_name(s.name) {
             return Err(fail("component folders are named [a-z][a-z0-9_]*".into()));
