@@ -339,6 +339,11 @@ fn snapshot_layout_json_follows_the_pods_version() {
 
 /// An engine on app `ws` holding the pod session `token`.
 fn engine_with_token(base: &str, ws: &str, token: &str) -> ConstructEngine {
+    engine_in(base, ws, token, "")
+}
+
+/// [`engine_with_token`] with its cache in `dir` ("": none).
+fn engine_in(base: &str, ws: &str, token: &str, dir: &str) -> ConstructEngine {
     let store = Arc::new(client_core::MemoryStore::default());
     client_core::SecureStore::set(
         store.as_ref(),
@@ -346,7 +351,7 @@ fn engine_with_token(base: &str, ws: &str, token: &str) -> ConstructEngine {
         &json!({ "token": token }).to_string(),
     );
     ConstructEngine::init_with_options(
-        "",
+        dir,
         base,
         ws,
         client_core::EngineOptions {
@@ -493,4 +498,52 @@ fn one_engine_on_home_opens_other_layouts_and_follows_them() {
     wait_until("not found", || {
         parse(&e.snapshot().layouts_json)["c-aaaaaaaaaa"]["gone"] == json!(true)
     });
+}
+
+/// Leaving the pod forgets the other layouts the engine opened, on screen
+/// and in the cache, as it forgets home: they are the pod's.
+#[test]
+fn leaving_the_pod_forgets_the_other_layouts_it_opened() {
+    use client_core::store::{Store, StoreOps};
+    let p = pod(server::state_in_memory());
+    p.state
+        .store()
+        .create_pinned_session(&server::session::session_hash("pod-token"))
+        .unwrap();
+    let layout = json!({"type": "core://Workspace", "id": "x", "title": "Private notes",
+        "slots": [{"slot_id": "r", "provider_uri": "core://custom",
+          "content": {"type": "core://List", "query_key": "recipes:all",
+            "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}}]});
+    let created: Value = reqwest::blocking::Client::new()
+        .post(format!("{}/v1/custom-apps", p.base))
+        .bearer_auth("pod-token")
+        .json(&json!({"title": "Notes", "feeds": [["recipes", "all"]], "layout": layout}))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let id = created["id"].as_str().unwrap().to_owned();
+    let dir = tempfile::tempdir().unwrap();
+    let cached = |id: &str| {
+        Store::open(&dir.path().join("cache.db"))
+            .unwrap()
+            .load_workspace(id)
+            .unwrap()
+            .is_some()
+    };
+
+    let e = engine_in(&p.base, "home", "pod-token", dir.path().to_str().unwrap());
+    wait_until("home", || {
+        e.snapshot().workspace_json.contains("core://Page")
+    });
+    e.open_layout(&id);
+    wait_until("the other layout", || {
+        parse(&e.snapshot().layouts_json)[&id]["workspace"]["title"] == "Private notes"
+    });
+    wait_until("the other layout cached", || cached(&id));
+
+    e.forget_session();
+    assert_eq!(parse(&e.snapshot().layouts_json), json!({}));
+    assert!(!cached(&id), "its cached copy is gone");
+    assert!(!cached("home"));
 }
