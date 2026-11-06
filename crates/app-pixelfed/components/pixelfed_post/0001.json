@@ -1,0 +1,273 @@
+{
+  "note": "First version: the Pixelfed blueprint's post screen content, shared by its post, comments and comment_thread screens (issue #128)",
+  "component": {
+    "doc": "A Pixelfed post on its own screen: the post (author, photos, caption, like and boost) and its comments, in a screen whose route has the post's id ($route.id). With focus, that comment is scrolled to and highlighted. Goes in a screen's content, with core:pixelfed_comment_box as its footer.",
+    "params": [
+      {
+        "name": "focus",
+        "type": "text",
+        "doc": "The comment to scroll to and highlight, e.g. pixelfed://comments/$route.comment; empty for none.",
+        "default": ""
+      }
+    ],
+    "template": {
+      "type": "core://Column",
+      "children": [
+        {
+          "type": "core://List",
+          "query_key": "post:$route.id",
+          "empty_text": "Post not found",
+          "item_template": {
+            "type": "core://Column",
+            "children": [
+              {
+                "type": "core://Conditional",
+                "value": "$item.reblogged_by_name",
+                "content": {
+                  "type": "core://Badge",
+                  "text": "$item.reblogged_by_name boosted",
+                  "icon": "repeat"
+                }
+              },
+              {
+                "type": "core://Use",
+                "component": "core:author_header",
+                "args": {
+                  "avatar": "$item.author_avatar_url",
+                  "name": "$item.author_name",
+                  "handle": "$item.author_handle"
+                }
+              },
+              {
+                "type": "core://Carousel",
+                "items": "$item.media_uris",
+                "aspect_ratio": 1.0,
+                "aspect_field": "aspect_ratio",
+                "tag": "carousel:$item.uri",
+                "item_template": {
+                  "type": "core://Image",
+                  "url": "$item.url",
+                  "content_description": "$item.alt_text",
+                  "blurhash": "$item.blurhash"
+                }
+              },
+              {
+                "type": "core://Row",
+                "padding_h_dp": 4,
+                "children": [
+                  {
+                    "type": "core://Use",
+                    "component": "core:toggle_action",
+                    "args": {
+                      "field": "is_liked",
+                      "icon": "favorite_border",
+                      "active_icon": "favorite",
+                      "label": "Like",
+                      "active_label": "Unlike",
+                      "endpoint": "/v1/pixelfed/posts/like",
+                      "payload_field": "liked",
+                      "tint": "#ED4956",
+                      "count_field": "like_count",
+                      "tag": "like:$item.uri"
+                    }
+                  },
+                  {
+                    "type": "core://Text",
+                    "value_expr": "$item.like_count",
+                    "style": "Label"
+                  },
+                  {
+                    "type": "core://Spacer"
+                  },
+                  {
+                    "type": "core://Use",
+                    "component": "core:toggle_action",
+                    "args": {
+                      "field": "is_bookmarked",
+                      "icon": "bookmark_border",
+                      "active_icon": "bookmark",
+                      "label": "Bookmark",
+                      "active_label": "Remove bookmark",
+                      "endpoint": "/v1/pixelfed/posts/bookmark",
+                      "payload_field": "bookmarked",
+                      "tag": "bookmark:$item.uri"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "core://Conditional",
+                "value": "$item.content_warning",
+                "content": {
+                  "type": "core://Column",
+                  "padding_h_dp": 14,
+                  "padding_v_dp": 4,
+                  "children": [
+                    {
+                      "type": "core://Use",
+                      "component": "core:warning_chip",
+                      "args": {
+                        "text": "$item.content_warning_label"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "core://Conditional",
+                "value": "$item.caption",
+                "content": {
+                  "type": "core://Column",
+                  "padding_h_dp": 14,
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.caption",
+                      "style": "Body"
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "core://Spacer",
+                "size_dp": 12
+              },
+              {
+                "type": "core://Divider"
+              },
+              {
+                "type": "core://Row",
+                "padding_h_dp": 14,
+                "padding_v_dp": 8,
+                "children": [
+                  {
+                    "type": "core://Text",
+                    "value_expr": "Comments",
+                    "style": "Label"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "type": "core://List",
+          "query_key": "comments:$route.id",
+          "empty_text": "No comments yet. Be the first!",
+          "indent": {
+            "field": "depth",
+            "step_dp": 20,
+            "max": 4
+          },
+          "item_template": {
+            "type": "core://Column",
+            "padding_h_dp": 12,
+            "padding_v_dp": 4,
+            "spacing_dp": 0,
+            "children": [
+              {
+                "type": "core://Row",
+                "spacing_dp": 8,
+                "children": [
+                  {
+                    "type": "core://Image",
+                    "url": "$item.avatar_url",
+                    "shape": "Circle",
+                    "size_dp": 24,
+                    "content_description": "$item.author_name"
+                  },
+                  {
+                    "type": "core://Text",
+                    "value_expr": "$item.author_name",
+                    "style": "Label"
+                  }
+                ]
+              },
+              {
+                "type": "core://Text",
+                "value_expr": "$item.text",
+                "style": "Body"
+              },
+              {
+                "type": "core://Row",
+                "spacing_dp": 0,
+                "children": [
+                  {
+                    "type": "core://Text",
+                    "value_expr": "$item.meta",
+                    "style": "Secondary"
+                  },
+                  {
+                    "type": "core://Spacer"
+                  },
+                  {
+                    "type": "core://Conditional",
+                    "value": "$item.like_count",
+                    "content": {
+                      "type": "core://Text",
+                      "value_expr": "$item.like_count",
+                      "style": "Secondary"
+                    }
+                  },
+                  {
+                    "type": "core://Conditional",
+                    "value": "$item.id",
+                    "content": {
+                      "type": "core://IconButton",
+                      "icon": "favorite_border",
+                      "active_icon": "favorite",
+                      "active": "$item.is_liked",
+                      "active_tint": "#ED4956",
+                      "content_description": "Like comment by $item.author_name",
+                      "active_content_description": "Unlike comment by $item.author_name",
+                      "size_dp": 18,
+                      "tag": "like:$item.uri",
+                      "on_click": {
+                        "intent": "action.mutation.optimistic",
+                        "entity_uri": "$item.uri",
+                        "field": "is_liked",
+                        "value_expr": "!entity.is_liked",
+                        "rollback_value": false,
+                        "endpoint": "/v1/pixelfed/posts/like",
+                        "payload": {
+                          "id": "$item.id",
+                          "liked": "$value"
+                        },
+                        "also": [
+                          {
+                            "field": "like_count",
+                            "value_expr": "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "focus": {
+            "type": "core://IfArg",
+            "arg": "focus",
+            "then": {
+              "uri": "$arg.focus",
+              "background": "#FFF3CF"
+            }
+          }
+        }
+      ]
+    },
+    "examples": [
+      {
+        "args": {},
+        "note": "A post and its comments"
+      },
+      {
+        "args": {
+          "focus": "pixelfed://comments/$route.comment"
+        },
+        "note": "Opened on one comment of the thread"
+      }
+    ]
+  }
+}

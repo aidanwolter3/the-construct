@@ -13,6 +13,7 @@ const REWRITTEN: &[(&str, u32)] = &[
     ("shell", 6),
     ("recipes", 6),
     ("pixelfed", 12),
+    ("pixelfed", 13),
 ];
 
 #[test]
