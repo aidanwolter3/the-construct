@@ -395,6 +395,18 @@ class ModelTest {
     }
 
     @Test
+    fun mutateRollbackValueIsOptional() {
+        // The pod writes a left-out rollback_value as null (decision `optional-rollback-value`):
+        // this build and older ones, which require the field, both read that.
+        val served = """{"intent":"action.mutation.optimistic","entity_uri":"e","field":"deleted",""" +
+            """"value_expr":"true","rollback_value":null,"endpoint":"/x","payload":{}}"""
+        assertEquals(JsonNull, assertIs<ActionIntent.OptimisticMutate>(ConstructJson.decodeIntent(served)).rollbackValue)
+        val leftOut = served.replace(""""rollback_value":null,""", "")
+        val intent = assertIs<ActionIntent.OptimisticMutate>(ConstructJson.decodeIntent(leftOut))
+        assertEquals(JsonNull, intent.rollbackValue)
+    }
+
+    @Test
     fun bundleQueriesDecodeInOrderAndAreOmittedWhenEmpty() {
         val spec = ConstructJson.decodeBundle(COUNTER_BUNDLE_JSON)
         assertEquals(emptyMap(), spec.queries)
