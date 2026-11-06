@@ -452,7 +452,7 @@ mod tests {
             list(
                 json!({"type": "core://IconButton", "icon": "check", "content_description": "Done",
                 "on_click": {"intent": "action.mutation.optimistic", "entity_uri": "$item.uri",
-                    "field": field, "value_expr": format!("!entity.{field}"), "rollback_value": false,
+                    "field": field, "value_expr": format!("!entity.{field}"),
                     "endpoint": "/v1/collections/todos/update", "payload": payload}}),
             )
         };

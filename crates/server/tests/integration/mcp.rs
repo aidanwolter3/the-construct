@@ -911,6 +911,86 @@ async fn a_preregistered_client_connects_with_its_secret() {
     assert_eq!(status, StatusCode::OK, "{body}");
 }
 
+/// A component that repeats its children or an argument can't multiply a
+/// use past the expansion's work budget: the expansion stops as it grows,
+/// with an error, instead of building gigabytes before the size check.
+#[tokio::test]
+async fn components_that_multiply_stop_at_the_work_budget() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+
+    // Children named twice: each nested use doubles what it is given.
+    let dup = json!({"doc": "Twice.", "params": [], "children": true,
+        "template": {"type": "core://Column", "children": [{"type": "core://Children"}, {"type": "core://Children"}]},
+        "examples": [{"args": {}, "children": [{"type": "core://Text", "style": "Body", "value_expr": "x"}]}]});
+    let (err, d) = env
+        .tool(
+            &access,
+            "define_component",
+            json!({"name": "dup", "component": dup}),
+        )
+        .await;
+    assert!(!err, "{d}");
+    // 2^24 copies of the text if nothing stopped it.
+    let mut node = json!({"type": "core://Text", "style": "Body", "value_expr": "x"});
+    for _ in 0..24 {
+        node = json!({"type": "core://Use", "component": "pod:dup", "children": [node]});
+    }
+    let (err, x) = env.tool(&access, "expand", json!({"node": node})).await;
+    assert!(err, "{x}");
+    assert!(x.to_string().contains("too large"), "{x}");
+
+    // An argument used many times, passed down a chain of components.
+    let wide = |inner: &str| {
+        let uses: Vec<Value> = (0..16)
+            .map(|_| match inner {
+                "" => json!({"type": "core://Text", "style": "Body", "value_expr": "$arg.t"}),
+                c => json!({"type": "core://Use", "component": c, "args": {"t": "$arg.t$arg.t"}}),
+            })
+            .collect();
+        json!({"doc": "Wide.", "params": [{"name": "t", "type": "text", "required": true, "doc": "Text"}],
+               "template": {"type": "core://Column", "children": uses},
+               "examples": [{"args": {"t": "a"}}]})
+    };
+    let mut inner = String::new();
+    for i in 0..5 {
+        let (err, d) = env
+            .tool(
+                &access,
+                "define_component",
+                json!({"name": format!("wide{i}"), "component": wide(&inner)}),
+            )
+            .await;
+        if err {
+            // The definition's own example may already be over the budget.
+            assert!(d.to_string().contains("too large"), "{d}");
+            break;
+        }
+        inner = format!("pod:wide{i}");
+    }
+    let (err, x) = env
+        .tool(
+            &access,
+            "expand",
+            json!({"component": inner, "args": {"t": "y".repeat(1000)}}),
+        )
+        .await;
+    assert!(err, "{x}");
+    assert!(x.to_string().contains("too large"), "{x}");
+
+    // Ordinary components still expand.
+    let (err, x) = env
+        .tool(
+            &access,
+            "expand",
+            json!({"component": "pod:dup", "children": [{"type": "core://Text", "style": "Body", "value_expr": "x"}]}),
+        )
+        .await;
+    assert!(!err, "{x}");
+    assert_eq!(x["expanded"]["children"].as_array().unwrap().len(), 2);
+}
+
 /// Components through the tools (decision `plumbing-and-porcelain`): listed,
 /// read, expanded, defined, used by a layout (which follows its updates),
 /// refused deletion while used, copied, restored; and the pod theme.

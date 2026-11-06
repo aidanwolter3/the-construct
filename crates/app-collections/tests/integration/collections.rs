@@ -131,7 +131,7 @@ fn todo_layout(extra: &str) -> Value {
                 {"type": "core://Text", "style": "Body", "value_expr": format!("$item.title {extra}")},
                 {"type": "core://IconButton", "icon": "delete", "content_description": "Delete",
                  "on_click": {"intent": "action.mutation.optimistic", "entity_uri": "$item.uri",
-                    "field": "deleted", "value_expr": "true", "rollback_value": false,
+                    "field": "deleted", "value_expr": "true",
                     "endpoint": "/v1/collections/todos/delete", "payload": {"id": "$item.id"}}}]}}}]})
 }
 
@@ -177,6 +177,21 @@ async fn a_todo_app_adds_ticks_and_removes_todos() {
     define_todos(&pod).await;
     let app = create_app(&pod, "Todos", todo_layout("")).await;
     assert!(todos(&pod, &app).await.is_empty());
+    // The delete leaves rollback_value out; it is served as null, so builds
+    // that require the field still read the layout (decision
+    // `optional-rollback-value`).
+    let (_, ws) = call(&pod, "GET", &format!("/v1/workspaces/{app}"), "phone", None).await;
+    let served = ws.to_string();
+    assert_eq!(
+        served.matches(r#""rollback_value":false"#).count(),
+        1,
+        "{served}"
+    );
+    assert_eq!(
+        served.matches(r#""rollback_value":null"#).count(),
+        1,
+        "{served}"
+    );
 
     let (s, milk) = add(&pod, json!({"title": "Milk", "client_id": "n1"})).await;
     assert_eq!(s, StatusCode::OK, "{milk}");

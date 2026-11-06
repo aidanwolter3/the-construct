@@ -43,6 +43,12 @@ pub enum ActionIntent {
         field: String,
         /// CEL expression, e.g. `"!entity.is_liked"`.
         value_expr: String,
+        /// What a refusal restores `field` to when the entity had no value
+        /// for it before the change (otherwise the value before is
+        /// restored). Optional (decision `optional-rollback-value`): left
+        /// out, it is `null`. Always written, so builds that require it
+        /// read layouts that leave it out.
+        #[serde(default)]
         rollback_value: Value,
         endpoint: String,
         payload: Value,
