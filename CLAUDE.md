@@ -129,7 +129,8 @@ connector); a new session started after that sees the new tools.
   branch `screenshots/<pr-branch>` (never merged) and embed them with
   `https://raw.githubusercontent.com/aidanwolter3/the-construct/screenshots/<pr-branch>/<file>.png`.
 - **One feature, one PR**, even a large one: don't split a feature into phases or a series of PRs, and don't
-  ticket parts of it for later. Split only when the developer asks.
+  ticket parts of it for later. Its decision file and doc updates go in that same PR, not a design PR before it
+  or a docs PR after it. Split only when the developer asks.
 - Keep sessions to one task: file unrelated follow-up work as a GitHub issue with the `/ticket` skill
   (`.claude/skills/ticket`).
 
