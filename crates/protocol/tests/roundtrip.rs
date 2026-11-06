@@ -593,6 +593,34 @@ fn empty_also_is_omitted_and_defaults() {
 }
 
 #[test]
+fn rollback_value_is_optional_and_always_written() {
+    // Left out (decision `optional-rollback-value`), it is null, and it is
+    // written as null so builds that require the field read the layout.
+    let wire = r#"{"intent":"action.mutation.optimistic","entity_uri":"e","field":"deleted","value_expr":"true","endpoint":"/x","payload":{}}"#;
+    let parsed: ActionIntent = serde_json::from_str(wire).unwrap();
+    let ActionIntent::OptimisticMutate { rollback_value, .. } = &parsed else {
+        panic!("not a mutate");
+    };
+    assert!(rollback_value.is_null());
+    let written = serde_json::to_value(&parsed).unwrap();
+    assert_eq!(written["rollback_value"], serde_json::Value::Null);
+    assert!(written.as_object().unwrap().contains_key("rollback_value"));
+    // Inside a node too: the pod serves layouts through these types.
+    let node: UiNode = serde_json::from_value(json!({
+        "type": "core://IconButton", "icon": "delete", "content_description": "Delete",
+        "on_click": serde_json::from_str::<serde_json::Value>(wire).unwrap()
+    }))
+    .unwrap();
+    let served = serde_json::to_value(&node).unwrap();
+    assert!(
+        served["on_click"]
+            .as_object()
+            .unwrap()
+            .contains_key("rollback_value")
+    );
+}
+
+#[test]
 fn bundle_queries_round_trip() {
     // Without queries: field defaults to empty and is not serialized.
     let without = r#"{"version":"1.0.0","workspace":{"type":"core://Text","value_expr":"hi","style":"Body"},"entities":{}}"#;
