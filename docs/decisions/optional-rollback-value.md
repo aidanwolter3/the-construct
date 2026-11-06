@@ -16,7 +16,8 @@ Decision: `rollback_value` is optional and defaults to `null`.
   (as `null`). The pod parses every stored and served layout through these types, so a layout written without it
   is stored and served with `"rollback_value": null`, and released builds, which require the field, read it as
   before. No new feature, no client build, no layout file changes.
-- The Kotlin model defaults it to `JsonNull` too, so a build from now on also reads a layout that lacks it.
+- The app's Kotlin model still requires the field: the pod always fills it in, and the app re-encodes intents for
+  the engine with it (a Kotlin default would drop it on encode).
 - The vocabulary (`describe_vocabulary`), the Collections layout hints and `docs/layouts.md` list it as optional and
   drop it from their snippets, so new layouts are a field shorter per mutation.
 

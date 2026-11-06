@@ -12,7 +12,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -572,8 +571,7 @@ sealed class ActionIntent {
         @SerialName("entity_uri") val entityUri: String,
         val field: String,
         @SerialName("value_expr") val valueExpr: String,
-        /** What a refusal restores [field] to when it had no value before; optional (null when left out). */
-        @SerialName("rollback_value") val rollbackValue: JsonElement = JsonNull,
+        @SerialName("rollback_value") val rollbackValue: JsonElement,
         val endpoint: String,
         val payload: JsonElement,
         /**
