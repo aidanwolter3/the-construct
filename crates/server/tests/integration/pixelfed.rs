@@ -2492,3 +2492,64 @@ async fn refused_posts_can_be_retried_or_discarded() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+/// Issue #135: the signed-out screen is the server component
+/// `core:pixelfed_sign_in` (shipped by the Pixelfed adapter), expanded by the
+/// pod into exactly the tree the adapter used to build in code, for every
+/// client (one that draws plumbing too: the workspace stays a workspace).
+#[tokio::test]
+async fn signed_out_screen_is_the_sign_in_component_expanded() {
+    let fake = spawn_fake().await;
+    let pod = spawn_pod(server::state_in_memory().with_pixelfed(PixelfedConfig {
+        any_instance: true,
+        ..PixelfedConfig::new(&fake.url, Some("http://pixelfed.example:8081"))
+    }))
+    .await;
+    let (status, body) = get_home(&pod.url, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let login = |instance: &str| {
+        json!({
+            "intent": "action.auth.login",
+            "instance_url": instance,
+            "app_path": "/v1/auth/pixelfed/app",
+            "token_path": "/v1/auth/pixelfed/token",
+        })
+    };
+    let content = json!({
+        "type": "core://Container",
+        "orientation": "Vertical",
+        "padding_dp": 16,
+        "children": [
+            {"type": "core://Text", "style": "Body", "value_expr":
+                "Sign in to pixelfed.example:8081 to see your home feed. Your Pixelfed token stays on your pod."},
+            {"type": "core://Button", "label": "Sign in with Pixelfed",
+             "on_click": login(fake.url.trim_end_matches('/'))},
+            {"type": "core://Text", "style": "Body",
+             "value_expr": "Or sign in to another Pixelfed server:"},
+            {"type": "core://TextField", "field": "instance",
+             "placeholder": "Server, e.g. pixelfed.social", "max_length": 253},
+            {"type": "core://Button", "label": "Sign in to this server",
+             "on_click": login("$form.instance")},
+        ],
+    });
+    assert_eq!(
+        body["workspace"],
+        json!({
+            "type": "core://Workspace",
+            "id": "pixelfed",
+            "title": "Pixelfed",
+            "slots": [{"slot_id": "auth", "provider_uri": "pixelfed://auth", "content": content}],
+        })
+    );
+
+    let resp = client()
+        .get(format!("{}/v1/workspaces/pixelfed", pod.url))
+        .header(protocol::FEATURES_HEADER, protocol::features_header())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["workspace"]["type"], "core://Workspace");
+    assert_eq!(body["workspace"]["slots"][0]["content"], content);
+}
