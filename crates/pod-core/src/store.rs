@@ -1180,6 +1180,12 @@ fn migrate(conn: &mut Connection, upto: usize) -> rusqlite::Result<()> {
     migrations::run(conn, "core", MIGRATIONS, Counter::UserVersion, upto)
 }
 
+/// The store hit its size limit ([`Store::set_max_bytes`]) or the disk is
+/// full.
+pub fn is_full(e: &rusqlite::Error) -> bool {
+    matches!(e, rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::DiskFull)
+}
+
 pub struct Store {
     conn: Mutex<Connection>,
     /// Seals adapters' upstream credentials at rest ([`crate::secrets`]).
@@ -1248,6 +1254,21 @@ impl Store {
             conn: Mutex::new(conn),
             secrets: crate::secrets::Secrets::process(),
         })
+    }
+
+    /// Hold the database file to `max_bytes` (SQLite's `max_page_count`,
+    /// decision `pod-storage-limits`): everything the pod stores, uploads
+    /// included. A write that would grow it further fails with
+    /// `SQLITE_FULL` ([`is_full`]), which [`crate::blocking`] answers with
+    /// 507 `pod_storage_full`; deletes free pages for later writes. A file
+    /// already larger keeps its size as the limit. Per connection, so set
+    /// on each open.
+    pub fn set_max_bytes(&self, max_bytes: u64) -> rusqlite::Result<()> {
+        let conn = self.conn();
+        let page: i64 = conn.query_row("PRAGMA page_size", [], |r| r.get(0))?;
+        let pages = max_bytes.div_ceil(page.max(512) as u64).max(1);
+        conn.query_row(&format!("PRAGMA max_page_count = {pages}"), [], |_| Ok(()))?;
+        Ok(())
     }
 
     /// Seal secrets with `secrets` instead of the process-wide keys (tests,

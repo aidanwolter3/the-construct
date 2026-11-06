@@ -45,11 +45,15 @@ primary_region = "dfw"
   # the defaults, spelled out). Each temporary pod's uploads stay under 25 MiB
   # and an admin pod's under 500 MiB; whatever the total, uploads and new
   # temporary pods stop while less than 100 MiB is free, so SQLite writes
-  # (sessions, sign-ins) keep working. 50 temporary pods at most.
+  # (sessions, sign-ins) keep working. Each pod's whole database (uploads,
+  # layouts, components, collections) stays under 16 MiB for a temporary pod
+  # and 768 MiB for an admin pod. 50 temporary pods at most.
   CONSTRUCT_TEMP_POD_MAX = "50"
   CONSTRUCT_UPLOAD_MAX_BYTES = "20971520"
   CONSTRUCT_TEMP_POD_UPLOAD_QUOTA_BYTES = "26214400"
   CONSTRUCT_POD_UPLOAD_QUOTA_BYTES = "524288000"
+  CONSTRUCT_TEMP_POD_STORAGE_QUOTA_BYTES = "16777216"
+  CONSTRUCT_POD_STORAGE_QUOTA_BYTES = "805306368"
   CONSTRUCT_MIN_FREE_DISK_BYTES = "104857600"
   # GET /metrics (Prometheus) on a port of its own, outside [http_service], so
   # only Fly's private network reaches it; Fly scrapes it into its Grafana
