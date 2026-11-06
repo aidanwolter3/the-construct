@@ -398,6 +398,16 @@ class ConstructController internal constructor(
                 device.markAllRead()
                 reloadDeviceData()
             }
+            "mark_read" -> {
+                val id = intent.id?.trim()?.takeIf { it.isNotEmpty() } ?: return
+                device.markRead(id)
+            }
+            "load_older_notifications" -> background.launch { device.loadOlderNotifications() }
+            "hide_layout", "unhide_layout" -> {
+                val layout = layoutOf(intent) ?: return
+                setLayoutHidden(layout, intent.command == "hide_layout")
+            }
+            "delete_layout" -> deleteLayout(layoutOf(intent) ?: return)
             "toggle_channel" -> {
                 val c = (device.channels as? Load.Ready)?.value
                     ?.firstOrNull { it.appId == intent.app && it.id == intent.id } ?: return
@@ -435,6 +445,50 @@ class ConstructController internal constructor(
             }
             "open_app", "show" -> println("[Construct] action.device ${intent.command} was retired (decision `layouts-not-apps`); ignored")
             else -> println("[Construct] action.device: unknown command '${intent.command}'; ignored")
+        }
+    }
+
+    /** The layout an `action.device` command names: `app` (or `layout`), else `id`; null when blank. */
+    private fun layoutOf(intent: ActionIntent.Device): String? =
+        (intent.app?.trim()?.takeIf { it.isNotEmpty() } ?: intent.id?.trim())?.takeIf { it.isNotEmpty() }
+
+    /**
+     * `hide_layout` / `unhide_layout`: hides [layoutId] from every device's `local:layouts` (it stays in
+     * `local:all_layouts`), or shows it again. Shown at once; put back when the pod refuses.
+     */
+    private fun setLayoutHidden(layoutId: String, hidden: Boolean) {
+        if (closed || layoutId == HOME_APP) return
+        fun set(on: Boolean) = _deviceApps.update { list -> list.map { if (it.id == layoutId) it.copy(hidden = on) else it } }
+        set(hidden)
+        background.launch {
+            try {
+                apps.setAppHidden(layoutId, hidden)
+            } catch (e: LayoutApiException) {
+                set(!hidden)
+                _notice.value = e.message
+            }
+            refreshDeviceApps()
+        }
+    }
+
+    /**
+     * `delete_layout`: deletes [layoutId] on the pod (every device; layouts put it behind `action.confirm`). It leaves
+     * the stack and its pin is forgotten; a refusal (home, a blueprint) is shown as a notice.
+     */
+    private fun deleteLayout(layoutId: String) {
+        if (closed || layoutId == HOME_APP || layoutId == rootId) return
+        background.launch {
+            try {
+                apps.deleteCustomApp(layoutId)
+            } catch (e: LayoutApiException) {
+                _notice.value = e.message
+                return@launch
+            }
+            navigation.stack.filterIsInstance<LayoutEntry>().filter { it.layoutId == layoutId }
+                .forEach { navigation.dismiss(it) }
+            if (_pins.value.containsKey(layoutId)) followLatest(layoutId)
+            _deviceApps.update { list -> list.filter { it.id != layoutId } }
+            refreshDeviceApps()
         }
     }
 
@@ -603,12 +657,42 @@ class ConstructController internal constructor(
         if (closed) return false
         if (layoutId == rootId) navigation.restoreRoot(layout)
         _pins.update { it + (layoutId to PinnedVersion(layoutId, version, layout)) }
+        try {
+            bridge.setPinnedVersion(layoutId, version, ConstructJson.encodeNode(layout))
+        } catch (t: Throwable) {
+            println("[Construct] keeping the pin of $layoutId: $t")
+        }
         return true
+    }
+
+    /** The pins kept on this device (a previous run's `pin_version`), drawn again at start. */
+    private fun restorePins() {
+        val stored = try {
+            bridge.pinnedVersions()
+        } catch (t: Throwable) {
+            println("[Construct] pinned versions: $t")
+            return
+        }
+        for (p in stored) {
+            val layout = try {
+                ConstructJson.decodeNode(p.specJson)
+            } catch (t: Throwable) {
+                println("[Construct] pinned v${p.version} of ${p.layoutId} unreadable; following the latest: $t")
+                continue
+            }
+            if (p.layoutId == rootId) navigation.restoreRoot(layout)
+            _pins.update { it + (p.layoutId to PinnedVersion(p.layoutId, p.version, layout)) }
+        }
     }
 
     /** Layout [layoutId] (the root by default) follows its latest version again. */
     fun followLatest(layoutId: String = rootId) {
         _pins.update { it - layoutId }
+        try {
+            bridge.setPinnedVersion(layoutId, null, null)
+        } catch (t: Throwable) {
+            println("[Construct] forgetting the pin of $layoutId: $t")
+        }
         if (layoutId == rootId) navigation.restoreRoot(_state.value.workspace)
     }
 
@@ -636,6 +720,7 @@ class ConstructController internal constructor(
         } catch (t: Throwable) {
             println("[Construct] notification setup failed: $t")
         }
+        restorePins()
         bridge.subscribe { onSnapshot(it) }
         // The pod's layouts change when the agent builds or removes one; look again now and then.
         background.launch {
@@ -698,6 +783,8 @@ fun ConstructApp(
                     pins = pins.mapValues { it.value.version },
                     versionsApp = versionsApp,
                     versions = versionsApp?.let { d.history[it] },
+                    hasOlderNotifications = d.olderBefore != null,
+                    loadingNotifications = d.loadingOlder,
                 )
                 // The app's own mode picks the theme's light or dark colours (`local://theme`).
                 val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f

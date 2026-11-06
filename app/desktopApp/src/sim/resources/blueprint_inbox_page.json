@@ -146,6 +146,25 @@
             },
             {
               "content": {
+                "children": [
+                  {
+                    "label": "Load older",
+                    "on_click": {
+                      "command": "load_older_notifications",
+                      "intent": "action.device"
+                    },
+                    "type": "core://Button"
+                  }
+                ],
+                "padding_h_dp": 16,
+                "padding_v_dp": 8,
+                "type": "core://Column"
+              },
+              "type": "core://Conditional",
+              "value": "${local://inbox#has_older}"
+            },
+            {
+              "content": {
                 "size_dp": 16,
                 "type": "core://Spacer"
               },

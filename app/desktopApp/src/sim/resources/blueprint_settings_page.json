@@ -132,6 +132,55 @@
                   },
                   "query_key": "local:layouts",
                   "type": "core://List"
+                },
+                {
+                  "group_by": {
+                    "field": "hidden",
+                    "header": {
+                      "children": [
+                        {
+                          "style": "Secondary",
+                          "type": "core://Text",
+                          "value_expr": "Hidden"
+                        }
+                      ],
+                      "padding_h_dp": 16,
+                      "padding_v_dp": 4,
+                      "type": "core://Column"
+                    }
+                  },
+                  "item_template": {
+                    "align": "Center",
+                    "children": [
+                      {
+                        "style": "Body",
+                        "type": "core://Text",
+                        "value_expr": "$item.title"
+                      },
+                      {
+                        "type": "core://Spacer"
+                      },
+                      {
+                        "label": "Show",
+                        "on_click": {
+                          "app": "$item.id",
+                          "command": "unhide_layout",
+                          "intent": "action.device"
+                        },
+                        "type": "core://Button"
+                      }
+                    ],
+                    "padding_h_dp": 16,
+                    "padding_v_dp": 4,
+                    "spacing_dp": 8,
+                    "type": "core://Row"
+                  },
+                  "query_key": "local:all_layouts",
+                  "type": "core://List",
+                  "where": {
+                    "equals": "true",
+                    "field": "hidden"
+                  }
                 }
               ],
               "type": "core://Column"
@@ -403,6 +452,34 @@
           {
             "content": {
               "children": [
+                {
+                  "children": [
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "label": "Hide from the list",
+                      "on_click": {
+                        "intent": "action.sequence",
+                        "steps": [
+                          {
+                            "app": "$route.id",
+                            "command": "hide_layout",
+                            "intent": "action.device"
+                          },
+                          {
+                            "intent": "action.navigation.back"
+                          }
+                        ]
+                      },
+                      "type": "core://Button"
+                    }
+                  ],
+                  "padding_h_dp": 16,
+                  "padding_v_dp": 8,
+                  "spacing_dp": 8,
+                  "type": "core://Row"
+                },
                 {
                   "content": {
                     "children": [

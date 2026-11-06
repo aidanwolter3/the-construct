@@ -152,6 +152,21 @@ CREATE TABLE IF NOT EXISTS form_values (
 );
 ";
 
+/// Layout versions pinned on this device (`action.device` `pin_version`),
+/// per app and layout, with the pinned layout as fetched (`spec`, JSON), so
+/// a pin is drawn at start with no request. Forgotten when the device
+/// leaves the pod.
+const MIGRATION_PINNED_VERSIONS: &str = "
+CREATE TABLE IF NOT EXISTS pinned_versions (
+    app_id TEXT NOT NULL,
+    layout_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    spec TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (app_id, layout_id)
+);
+";
+
 /// The store's steps, `(name, sql)`, run in order, each once, in its own
 /// transaction; `schema_migrations` records the names that ran. Add a step at
 /// the end with a new name; never rename, edit or remove one that shipped:
@@ -164,6 +179,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("attachments", MIGRATION_V5),
     ("notifications", MIGRATION_V6),
     ("remembered_values", MIGRATION_V7),
+    ("pinned_versions", MIGRATION_PINNED_VERSIONS),
 ];
 
 /// Notifications kept in the cache (the newest ids).
@@ -814,6 +830,54 @@ pub trait StoreOps {
                 )?
                 .execute(params![app_id, scope, field])?,
         };
+        Ok(())
+    }
+
+    // ---- pinned_versions ----
+
+    /// The versions pinned for one app: `(layout_id, version, spec)`.
+    fn pinned_versions(&self, app_id: &str) -> StoreResult<Vec<(String, i64, String)>> {
+        self.conn()
+            .prepare_cached(
+                "SELECT layout_id, version, spec FROM pinned_versions WHERE app_id = ?1
+                 ORDER BY layout_id",
+            )?
+            .query_map([app_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect()
+    }
+
+    /// Pin `version` of `layout_id` (its layout JSON `spec`), or (`None`)
+    /// unpin it.
+    fn set_pinned_version(
+        &self,
+        app_id: &str,
+        layout_id: &str,
+        pin: Option<(i64, &str)>,
+        updated_at: i64,
+    ) -> StoreResult<()> {
+        match pin {
+            Some((version, spec)) => self
+                .conn()
+                .prepare_cached(
+                    "INSERT INTO pinned_versions (app_id, layout_id, version, spec, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(app_id, layout_id) DO UPDATE SET version = excluded.version,
+                         spec = excluded.spec, updated_at = excluded.updated_at",
+                )?
+                .execute(params![app_id, layout_id, version, spec, updated_at])?,
+            None => self
+                .conn()
+                .prepare_cached("DELETE FROM pinned_versions WHERE app_id = ?1 AND layout_id = ?2")?
+                .execute(params![app_id, layout_id])?,
+        };
+        Ok(())
+    }
+
+    /// Forget every pin of one app (the device left the pod).
+    fn clear_pinned_versions(&self, app_id: &str) -> StoreResult<()> {
+        self.conn()
+            .prepare_cached("DELETE FROM pinned_versions WHERE app_id = ?1")?
+            .execute([app_id])?;
         Ok(())
     }
 
@@ -1809,6 +1873,33 @@ mod tests {
         assert_eq!(s.form_values("a", "").unwrap().len(), 1);
         // Forgetting what was never stored is fine.
         s.set_form_value("c", "", "x", None, 3).unwrap();
+    }
+
+    #[test]
+    fn pinned_versions_are_kept_per_app_and_cleared() {
+        let s = Store::open_in_memory().unwrap();
+        assert!(s.pinned_versions("home").unwrap().is_empty());
+        s.set_pinned_version("home", "events", Some((3, "{\"a\":1}")), 1)
+            .unwrap();
+        s.set_pinned_version("home", "events", Some((4, "{\"a\":2}")), 2)
+            .unwrap();
+        s.set_pinned_version("home", "home", Some((7, "{}")), 2)
+            .unwrap();
+        s.set_pinned_version("other", "events", Some((1, "{}")), 2)
+            .unwrap();
+        let pins = s.pinned_versions("home").unwrap();
+        assert_eq!(
+            pins,
+            vec![
+                ("events".to_owned(), 4, "{\"a\":2}".to_owned()),
+                ("home".to_owned(), 7, "{}".to_owned())
+            ]
+        );
+        s.set_pinned_version("home", "home", None, 3).unwrap();
+        assert_eq!(s.pinned_versions("home").unwrap().len(), 1);
+        s.clear_pinned_versions("home").unwrap();
+        assert!(s.pinned_versions("home").unwrap().is_empty());
+        assert_eq!(s.pinned_versions("other").unwrap().len(), 1);
     }
 
     #[test]

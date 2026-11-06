@@ -462,6 +462,34 @@ async fn layouts_may_only_use_their_sources() {
     )
     .await;
     assert_eq!((status, &b["ok"]), (StatusCode::OK, &json!(true)), "{b}");
+    // The inbox and layout commands need what they name.
+    for (bad, needs) in [
+        (json!({"intent": "action.device", "command": "mark_read"}), "needs an id"),
+        (json!({"intent": "action.device", "command": "hide_layout"}), "needs an app"),
+        (json!({"intent": "action.device", "command": "unhide_layout", "app": " "}), "needs an app"),
+    ] {
+        let mut l = kitchen_a();
+        l["slots"][0]["content"]["item_template"]["on_click"] = bad;
+        let b = refused(l, json!([["a", "all"]])).await;
+        assert!(b["detail"].as_str().unwrap().contains(needs), "{b}");
+    }
+    for good in [
+        json!({"intent": "action.device", "command": "load_older_notifications"}),
+        json!({"intent": "action.device", "command": "mark_read", "id": "$item.id"}),
+        json!({"intent": "action.device", "command": "unhide_layout", "layout": "$item.id"}),
+    ] {
+        let mut l = kitchen_a();
+        l["slots"][0]["content"]["item_template"]["on_click"] = good;
+        let (status, b) = call(
+            &env.pod,
+            "POST",
+            "/v1/custom-apps/validate",
+            Some("pod"),
+            Some(json!({"feeds": [["a", "all"]], "layout": l})),
+        )
+        .await;
+        assert_eq!((status, &b["ok"]), (StatusCode::OK, &json!(true)), "{b}");
+    }
     // A pod path anywhere else (an image URL).
     let mut l = kitchen_a();
     l["slots"][0]["content"]["item_template"] =

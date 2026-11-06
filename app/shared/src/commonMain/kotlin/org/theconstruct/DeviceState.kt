@@ -45,10 +45,18 @@ class DeviceState internal constructor(private val controller: ConstructControll
     var selectError by mutableStateOf<String?>(null)
         private set
 
-    /** The newest notifications, newest first (`local:notifications`). */
+    /** The notifications loaded so far, newest first (`local:notifications`): the newest page, and older ones asked for. */
     var notifications by mutableStateOf<List<AppNotification>>(emptyList())
         private set
     var notificationsError by mutableStateOf<String?>(null)
+        private set
+
+    /** Where the next older page starts (`before`), or null when everything is loaded (`local://inbox#has_older`). */
+    var olderBefore by mutableStateOf<String?>(null)
+        private set
+
+    /** Whether an older page is loading (`local://inbox#loading`). */
+    var loadingOlder by mutableStateOf(false)
         private set
 
     /** The notification channels with this device's choices (`local:channels`). */
@@ -100,20 +108,61 @@ class DeviceState internal constructor(private val controller: ConstructControll
         }
     }
 
-    /** (Re)loads the newest notifications, keeping what is shown meanwhile. */
+    /**
+     * (Re)loads the newest notifications, keeping what is shown meanwhile. Older pages loaded before stay under the
+     * newest page when it reaches them; otherwise the list starts again from the newest page.
+     */
     internal suspend fun loadNotifications() {
         notificationsError = null
         try {
             val page = controller.apps.notifications {
                 NotificationsJson.parsePage(it.listNotifications(null, NOTIFICATIONS_PAGE, null))
             }
-            notifications = page.notifications
+            val merged = withNewestPage(notifications, page)
+            if (merged == null) {
+                notifications = page.notifications
+                olderBefore = page.nextBefore
+            } else {
+                notifications = merged
+            }
         } catch (e: LayoutApiException) {
             notificationsError = when (e.kind) {
                 LayoutApiException.Kind.Unauthorized -> SIGNED_OUT
                 else -> e.message
             }
         }
+    }
+
+    /**
+     * Appends the next older page (`load_older_notifications`). Does nothing while one loads or when everything is
+     * loaded; a failure keeps the list and is kept in [notificationsError].
+     */
+    internal suspend fun loadOlderNotifications() {
+        val before = olderBefore ?: return
+        if (loadingOlder) return
+        loadingOlder = true
+        try {
+            val page = controller.apps.notifications {
+                NotificationsJson.parsePage(it.listNotifications(before, NOTIFICATIONS_PAGE, null))
+            }
+            // A refresh meanwhile may have started the list again: then this page doesn't follow it.
+            if (olderBefore == before) {
+                val known = notifications.map { it.id }.toSet()
+                notifications = notifications + page.notifications.filter { it.id !in known }
+                olderBefore = page.nextBefore
+            }
+        } catch (e: LayoutApiException) {
+            notificationsError = e.message
+        } finally {
+            loadingOlder = false
+        }
+    }
+
+    /** Marks one notification read (`mark_read`), shown at once; the engine lowers the unread count. */
+    fun markRead(id: String) {
+        val n = notifications.firstOrNull { it.id == id }
+        if (n != null && !n.read) notifications = notifications.map { if (it.id == id) it.copy(read = true) else it }
+        controller.markNotificationsRead(listOf(id))
     }
 
     /** Marks everything read (at once here; the engine is optimistic too). */
@@ -156,6 +205,19 @@ class DeviceState internal constructor(private val controller: ConstructControll
 
     companion object {
         const val NOTIFICATIONS_PAGE = 30
+
+        /**
+         * [shown] (newest page plus older pages) with its newest part replaced by [page], when [page] reaches into what
+         * is shown (its oldest notification is in [shown] and older pages were loaded); else null.
+         */
+        internal fun withNewestPage(shown: List<AppNotification>, page: NotificationPage): List<AppNotification>? {
+            val oldest = page.notifications.lastOrNull() ?: return null
+            val at = shown.indexOfFirst { it.id == oldest.id }
+            if (at < 0 || at == shown.lastIndex) return null
+            val ids = page.notifications.map { it.id }.toSet()
+            return page.notifications + shown.drop(at + 1).filter { it.id !in ids }
+        }
+
         const val SIGNED_OUT = "Sign in to your pod to see notifications."
     }
 }

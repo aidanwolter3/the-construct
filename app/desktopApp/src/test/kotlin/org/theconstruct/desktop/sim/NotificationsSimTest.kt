@@ -74,6 +74,19 @@ class NotificationsSimTest {
     }
 
     @Test
+    fun loadOlderGrowsTheInboxByAPageUntilTheEnd() {
+        repeat(40) { notifications.inject("pixelfed", "likes", "Old like ${it + 1}") }
+        val (controller, _) = controller("pixelfed")
+        val r = runner(controller)
+        r.ok("open-inbox; wait-text 5000 Old like 40; scroll-to Load older")
+        assertEquals(30, controller.device.notifications.size, "the newest page")
+        r.ok("click Load older; idle")
+        assertEquals(46, controller.device.notifications.size, "the fixture's 6 and the 40 injected")
+        r.ok("assert-no-text Load older")
+        assertEquals(null, controller.device.olderBefore)
+    }
+
+    @Test
     fun clickingANotificationOpensItsTargetScreenAndMarksItRead() {
         val (controller, _) = controller("pixelfed")
         runner(controller).ok("open-inbox; click @bob commented on your post; assert-text Comments; assert-text Which lens?")

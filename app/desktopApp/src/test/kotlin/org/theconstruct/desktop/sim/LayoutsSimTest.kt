@@ -10,6 +10,7 @@ import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -80,6 +81,20 @@ class LayoutsSimTest {
         assertEquals(INBOX_LAYOUT, assertIs<LayoutEntry>(controller.navigation.top).layoutId, "a short pull springs back")
         runner.ok("drag-down 300 tag:sheet:inbox; idle")
         assertNull(controller.navigation.top, "a long pull closes it")
+    }
+
+    @Test
+    fun settingsHidesALayoutAndShowsItAgain() {
+        val (controller, _) = controller()
+        val runner = SimRunner(controller, outDir, ScreenSpec.parse("phone"))
+        controller.refreshDeviceApps()
+        runner.ok("open-settings; wait-text 5000 Versions of; assert-no-text Hidden")
+        val first = controller.deviceApps.value.first { it.title == "Kitchen" }
+        runner.ok("click Versions of ${first.title}; click Hide from the list; idle; wait-text 5000 Hidden")
+        assertTrue(controller.deviceApps.value.first { it.id == first.id }.hidden)
+        runner.ok("assert-no-text Versions of ${first.title}; click Show; idle; wait-text 5000 Versions of ${first.title}")
+        runner.ok("assert-no-text Hidden")
+        assertFalse(controller.deviceApps.value.first { it.id == first.id }.hidden)
     }
 
     @Test

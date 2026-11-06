@@ -1836,7 +1836,34 @@ impl ConstructEngine {
     pub fn remember_form_value(&self, scope: &str, field: &str, value: Option<&str>) {
         self.inner.remember_form_value(scope, field, value);
     }
+
+    /// The layout versions pinned on this device for this engine's app
+    /// (`action.device` `pin_version`), restored at start: one per layout,
+    /// with the pinned layout JSON as it was fetched. Empty on any error.
+    pub fn pinned_versions(&self) -> Vec<PinnedVersion> {
+        self.inner.pinned_versions()
+    }
+
+    /// Pin `version` of `layout_id` on this device (`spec`: that version's
+    /// layout JSON), or (`None`) follow its latest again. Forgotten when the
+    /// device leaves the pod ([`ConstructEngine::forget_session`]).
+    pub fn set_pinned_version(&self, layout_id: &str, pin: Option<(i64, &str)>) {
+        self.inner.set_pinned_version(layout_id, pin);
+    }
 }
+
+/// A layout version pinned on this device ([`ConstructEngine::pinned_versions`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinnedVersion {
+    pub layout_id: String,
+    pub version: i64,
+    /// The pinned version's layout JSON, as fetched.
+    pub spec: String,
+}
+
+/// Longest pinned layout JSON the engine keeps (a pin of a bigger one lasts
+/// until the app closes).
+const MAX_PINNED_SPEC: usize = 4 * 1024 * 1024;
 
 /// Longest form scope or field name the engine remembers.
 const MAX_FORM_NAME: usize = 128;
@@ -1873,6 +1900,44 @@ impl Inner {
             .map(|s| s.set_form_value(&self.workspace_id, scope, field, value, unix_now()))
         {
             eprintln!("[ConstructEngine] remembering form value '{field}': {e}");
+        }
+    }
+
+    fn pinned_versions(&self) -> Vec<PinnedVersion> {
+        let st = lock(&self.state);
+        let Some(store) = st.store.as_ref() else {
+            return Vec::new();
+        };
+        match store.pinned_versions(&self.workspace_id) {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|(layout_id, version, spec)| PinnedVersion {
+                    layout_id,
+                    version,
+                    spec,
+                })
+                .collect(),
+            Err(e) => {
+                eprintln!("[ConstructEngine] pinned versions: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    fn set_pinned_version(&self, layout_id: &str, pin: Option<(i64, &str)>) {
+        if layout_id.is_empty()
+            || layout_id.len() > MAX_FORM_NAME
+            || pin.is_some_and(|(_, spec)| spec.len() > MAX_PINNED_SPEC)
+        {
+            return;
+        }
+        let st = lock(&self.state);
+        if let Some(Err(e)) = st
+            .store
+            .as_ref()
+            .map(|s| s.set_pinned_version(&self.workspace_id, layout_id, pin, unix_now()))
+        {
+            eprintln!("[ConstructEngine] pinning '{layout_id}': {e}");
         }
     }
 
@@ -3174,6 +3239,14 @@ impl Inner {
             st.auth_json = SIGNED_OUT_AUTH_JSON.to_string();
             st.auth_blocked = false;
             st.purge_private(&self.workspace_id, true);
+            // Pins name versions of this pod's layouts; another pod has others.
+            if let Some(Err(e)) = st
+                .store
+                .as_ref()
+                .map(|s| s.clear_pinned_versions(&self.workspace_id))
+            {
+                eprintln!("[ConstructEngine] forgetting pinned versions: {e}");
+            }
             st.seq += 1;
             (st.snapshot(), token)
         };

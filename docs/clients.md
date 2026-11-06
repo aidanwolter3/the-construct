@@ -83,12 +83,14 @@ The client opens the pod's `home` layout (the default) and draws everything from
   a scrim tap or dragging a sheet down closes the frame with whatever is open in it. Screens of pushed layouts and of
   home cover the whole screen, as before.
 - **Settings and the inbox are layouts** (the `settings` and `inbox` blueprints), presented as a side panel and a
-  sheet. Settings shows the connection, the pod's layouts (a tap lists a layout's versions; picking one shows it on
-  this device only), sign-ins, notifications (one row per layout that sends them; a tap opens that layout's
+  sheet. Settings shows the connection, the pod's layouts (a tap lists a layout's versions and offers Hide; picking one
+  shows it on this device only, and the pin is kept across restarts until Show latest or leaving the pod), the
+  hidden layouts with a Show button, sign-ins, notifications (one row per layout that sends them; a tap opens that layout's
   switches inside the panel), and **Leave pod**. On Android the notification permission row sits above it. The
   blueprint no longer lists servers: the platform still offers them in `local:servers` (Staging, Local, or its
   others; each server has its own cache and outbox), so a layout can add a picker with `set_server`; desktop and
   the simulator also take `CONSTRUCT_BASE_URL` / `-PbaseUrl`.
+- **The inbox** lists the newest page of notifications and a **Load older** button while there are more.
 - **If the pod has no home this build can draw**, a bundled screen offers Try again and Leave pod. Ask the agent to
   repair the home layout (`restore_version`); clearing the app's data also starts over.
 

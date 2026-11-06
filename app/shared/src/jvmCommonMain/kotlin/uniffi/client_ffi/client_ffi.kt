@@ -880,6 +880,10 @@ internal open class UniffiVTableCallbackInterfaceUrlOpener(
 
 
 
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -929,6 +933,8 @@ fun uniffi_client_ffi_checksum_method_enginehandle_notification_channels(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_open_layout(
 ): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_pinned_versions(
+): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_push_public_key(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_refresh(
@@ -946,6 +952,8 @@ fun uniffi_client_ffi_checksum_method_enginehandle_set_channel_enabled(
 fun uniffi_client_ffi_checksum_method_enginehandle_set_device_info(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_set_notification_listener(
+): Short
+fun uniffi_client_ffi_checksum_method_enginehandle_set_pinned_version(
 ): Short
 fun uniffi_client_ffi_checksum_method_enginehandle_sign_ins(
 ): Short
@@ -1072,6 +1080,8 @@ fun uniffi_client_ffi_fn_method_enginehandle_notification_channels(`ptr`: Pointe
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_open_layout(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_client_ffi_fn_method_enginehandle_pinned_versions(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_push_public_key(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_client_ffi_fn_method_enginehandle_refresh(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -1089,6 +1099,8 @@ fun uniffi_client_ffi_fn_method_enginehandle_set_channel_enabled(`ptr`: Pointer,
 fun uniffi_client_ffi_fn_method_enginehandle_set_device_info(`ptr`: Pointer,`platform`: RustBuffer.ByValue,`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_set_notification_listener(`ptr`: Pointer,`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_client_ffi_fn_method_enginehandle_set_pinned_version(`ptr`: Pointer,`layoutId`: RustBuffer.ByValue,`version`: RustBuffer.ByValue,`specJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_client_ffi_fn_method_enginehandle_sign_ins(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1285,6 +1297,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_open_layout() != 57911.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_pinned_versions() != 60603.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_push_public_key() != 54271.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1310,6 +1325,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_set_notification_listener() != 51107.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_client_ffi_checksum_method_enginehandle_set_pinned_version() != 57162.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_client_ffi_checksum_method_enginehandle_sign_ins() != 11211.toShort()) {
@@ -1903,6 +1921,12 @@ public interface EngineHandleInterface {
     fun `openLayout`(`id`: kotlin.String)
     
     /**
+     * The layout versions pinned on this device for this app, restored at
+     * start (`action.device` `pin_version`). Local SQLite read.
+     */
+    fun `pinnedVersions`(): List<PinnedVersionRecord>
+    
+    /**
      * The server's VAPID public key (base64url) for a Web Push
      * subscription; `NotFound` when the server sends no push.
      */
@@ -1952,6 +1976,13 @@ public interface EngineHandleInterface {
      * Set (replace) the listener for notifications that arrive live.
      */
     fun `setNotificationListener`(`listener`: NotificationListener)
+    
+    /**
+     * Pin `version` of `layout_id` on this device (`spec_json`: that
+     * version's layout), or with `None` follow its latest again. Local
+     * SQLite write.
+     */
+    fun `setPinnedVersion`(`layoutId`: kotlin.String, `version`: kotlin.Long?, `specJson`: kotlin.String?)
     
     /**
      * The sign-ins on this device's pod session (`GET /v1/auth/sign-ins`);
@@ -2352,6 +2383,22 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
 
     
     /**
+     * The layout versions pinned on this device for this app, restored at
+     * start (`action.device` `pin_version`). Local SQLite read.
+     */override fun `pinnedVersions`(): List<PinnedVersionRecord> {
+            return FfiConverterSequenceTypePinnedVersionRecord.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_pinned_versions(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * The server's VAPID public key (base64url) for a Web Push
      * subscription; `NotFound` when the server sends no push.
      */
@@ -2483,6 +2530,22 @@ open class EngineHandle: Disposable, AutoCloseable, EngineHandleInterface
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_set_notification_listener(
         it, FfiConverterTypeNotificationListener.lower(`listener`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Pin `version` of `layout_id` on this device (`spec_json`: that
+     * version's layout), or with `None` follow its latest again. Local
+     * SQLite write.
+     */override fun `setPinnedVersion`(`layoutId`: kotlin.String, `version`: kotlin.Long?, `specJson`: kotlin.String?)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_client_ffi_fn_method_enginehandle_set_pinned_version(
+        it, FfiConverterString.lower(`layoutId`),FfiConverterOptionalLong.lower(`version`),FfiConverterOptionalString.lower(`specJson`),_status)
 }
     }
     
@@ -2727,6 +2790,50 @@ public object FfiConverterTypeFfiStateSnapshot: FfiConverterRustBuffer<FfiStateS
 
 
 
+/**
+ * An app catalog call failed (docs/DECISIONS.md D27, D32). `reason` is a
+ * short sentence for the UI (e.g. "That version doesn't exist.").
+ * A layout version pinned on this device.
+ */
+data class PinnedVersionRecord (
+    var `layoutId`: kotlin.String, 
+    var `version`: kotlin.Long, 
+    /**
+     * That version's layout JSON, as it was fetched.
+     */
+    var `specJson`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePinnedVersionRecord: FfiConverterRustBuffer<PinnedVersionRecord> {
+    override fun read(buf: ByteBuffer): PinnedVersionRecord {
+        return PinnedVersionRecord(
+            FfiConverterString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: PinnedVersionRecord) = (
+            FfiConverterString.allocationSize(value.`layoutId`) +
+            FfiConverterLong.allocationSize(value.`version`) +
+            FfiConverterString.allocationSize(value.`specJson`)
+    )
+
+    override fun write(value: PinnedVersionRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`layoutId`, buf)
+            FfiConverterLong.write(value.`version`, buf)
+            FfiConverterString.write(value.`specJson`, buf)
+    }
+}
+
+
+
 
 
 /**
@@ -2791,10 +2898,6 @@ public object FfiConverterTypeAttachmentError : FfiConverterRustBuffer<Attachmen
 
 
 
-/**
- * An app catalog call failed (docs/DECISIONS.md D27, D32). `reason` is a
- * short sentence for the UI (e.g. "That version doesn't exist.").
- */
 sealed class LayoutApiException: kotlin.Exception() {
     
     /**
@@ -3411,6 +3514,34 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypePinnedVersionRecord: FfiConverterRustBuffer<List<PinnedVersionRecord>> {
+    override fun read(buf: ByteBuffer): List<PinnedVersionRecord> {
+        val len = buf.getInt()
+        return List<PinnedVersionRecord>(len) {
+            FfiConverterTypePinnedVersionRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<PinnedVersionRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypePinnedVersionRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<PinnedVersionRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypePinnedVersionRecord.write(it, buf)
         }
     }
 }
