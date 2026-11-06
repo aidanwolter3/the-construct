@@ -18,6 +18,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.background
@@ -107,11 +108,13 @@ class MainActivity : ComponentActivity() {
     @Volatile
     private var pushReadyFor: ConstructController? = null
 
-    private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        Log.i(TAG, "notification permission ${if (granted) "granted" else "denied"}")
-        notificationPermission.refresh()
-        setUpNotifications(vm.session)
-    }
+    // Typed explicitly: it and [notificationPermission] refer to each other, which Kotlin can't infer.
+    private val askNotifications: ActivityResultLauncher<String> =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            Log.i(TAG, "notification permission ${if (granted) "granted" else "denied"}")
+            notificationPermission.refresh()
+            setUpNotifications(vm.session)
+        }
 
     /**
      * The notification permission for layouts (`local://device#notification_permission`, `action.device`
