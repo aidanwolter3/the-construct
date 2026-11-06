@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use crate::changes::{self, Planned};
 use crate::db::{self, Row};
 use crate::model::{self, Definition, Write};
-use crate::{CollectionsAdapter, KEEP_SECS, NAME, fail, refusable};
+use crate::{Caps, CollectionsAdapter, KEEP_SECS, NAME, fail, refusable};
 
 pub const INSTRUCTIONS: &str = "Data a custom app keeps itself (a todo list, a reading log) lives in \
 Collections: define_collection declares typed fields, and any custom app can then list the collection \
@@ -221,7 +221,7 @@ pub fn call<'a>(
         "collections_refresh" => Box::pin(refresh(pod, args)),
         "collections_set_secret" => Box::pin(set_secret(pod, args)),
         "restore_collection_version" => Box::pin(restore_version(pod, caps, args)),
-        "delete_collection" => Box::pin(delete(pod, args)),
+        "delete_collection" => Box::pin(delete(pod, caps, args)),
         "restore_collection" => Box::pin(restore(pod, caps, args)),
         "edit_rows" => Box::pin(edit_rows(pod, caps, args)),
         "add_row" => Box::pin(add_row(pod, caps, args)),
@@ -1203,7 +1203,7 @@ async fn restore_version(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<V
 /// Delete collection `{collection}` (issue #107): refused while a layout
 /// binds it or another collection's lookup reads it; its feed leaves
 /// home's; the data stays, hidden, for [`KEEP_SECS`].
-async fn delete(pod: &Pod, args: &Value) -> Result<Value, Value> {
+async fn delete(pod: &Pod, caps: Caps, args: &Value) -> Result<Value, Value> {
     let name = str_arg(args, "collection")?.to_owned();
     let (version, def) = current(pod, &name).await?;
     if let Some(b) = args["base_version"].as_i64()
@@ -1298,6 +1298,7 @@ async fn delete(pod: &Pod, args: &Value) -> Result<Value, Value> {
             ));
         }
         db::mark_deleted(tx, &target, now)?;
+        db::trim_retained(tx, crate::retained_cap(caps))?;
         Ok(Ok(()))
     })
     .await?;

@@ -145,7 +145,8 @@ default), and the pod stores, validates and serves the rows.
 
 - **Deleting.** `delete_collection` removes a collection once no layout binds it and no other collection's lookup
   reads it (the refusal names them); home's feed for it is dropped too. It is restorable with `restore_collection`
-  for 30 days, then purged (decision [`collection-delete`](decisions/collection-delete.md)). A stale feed alone is
+  for 30 days, then purged (decision [`collection-delete`](decisions/collection-delete.md)); sooner when what the
+  pod keeps for undoing passes twice its bytes cap (the oldest goes first). A stale feed alone is
   dropped with `rename_layout` on home, passing home's whole feed list without it.
 
 MCP tools: `list_collections`, `define_collection`, `describe_collection`, `apply_change`,

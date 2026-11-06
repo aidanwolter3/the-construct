@@ -1108,6 +1108,88 @@ pub struct Purged {
     pub collections: usize,
 }
 
+/// Bytes counted for each kept item on top of its values (its keys and
+/// timestamps), so many empty items add up too.
+const ITEM_OVERHEAD: i64 = 64;
+
+/// What deleted collections, deleted rows, values kept aside and the undo
+/// records of edits take: `(kind, key, at, bytes)` per item, oldest first
+/// (by time, then by when it was written).
+/// `kind` is `c` (a deleted collection, `key` its name, with all its data),
+/// `r` (a deleted row's rowid), `a` (an aside value's rowid) or `e` (an
+/// edit's id).
+fn retained(conn: &Connection) -> rusqlite::Result<Vec<(String, String, i64, i64)>> {
+    let o = ITEM_OVERHEAD;
+    let sql = format!(
+        "SELECT kind, key, at, bytes FROM (
+           SELECT 'c' AS kind, d.name AS key, d.deleted_at AS at, d.rowid AS seq, {o}
+             + (SELECT COALESCE(SUM(LENGTH(values_json) + {o}), 0) FROM collections_rows
+                WHERE collection = d.name)
+             + (SELECT COALESCE(SUM(LENGTH(value_json) + {o}), 0) FROM collections_aside
+                WHERE collection = d.name)
+             + (SELECT COALESCE(SUM(COALESCE(LENGTH(er.before_json), 0) + LENGTH(er.after_json) + {o}), 0)
+                FROM collections_edit_rows er JOIN collections_edits e ON e.id = er.edit_id
+                WHERE e.collection = d.name) AS bytes
+           FROM collections_deleted d
+           UNION ALL
+           SELECT 'r', CAST(rowid AS TEXT), deleted_at, rowid, LENGTH(values_json) + {o}
+           FROM collections_rows WHERE deleted_at IS NOT NULL AND collection {LIVE}
+           UNION ALL
+           SELECT 'a', CAST(rowid AS TEXT), created_at, rowid, LENGTH(value_json) + {o}
+           FROM collections_aside WHERE collection {LIVE}
+           UNION ALL
+           SELECT 'e', e.id, e.created_at, e.rowid, {o}
+             + (SELECT COALESCE(SUM(COALESCE(LENGTH(before_json), 0) + LENGTH(after_json) + {o}), 0)
+                FROM collections_edit_rows WHERE edit_id = e.id)
+           FROM collections_edits e WHERE e.collection {LIVE}
+         ) ORDER BY at, seq"
+    );
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Keep what [`retained`] lists under `max_bytes`, removing the oldest
+/// first, ahead of [`purge`]'s window: deleted collections and rows, values
+/// kept aside and undo records are for undoing, and must not grow a pod's
+/// storage past its caps (a pod that deletes and re-adds rows or
+/// collections, or edits them over and over). Returns how many items went.
+/// Blocking.
+pub fn trim_retained(conn: &Connection, max_bytes: i64) -> rusqlite::Result<usize> {
+    let items = retained(conn)?;
+    let mut total: i64 = items.iter().map(|i| i.3).sum();
+    let mut removed = 0;
+    for (kind, key, _, bytes) in items {
+        if total <= max_bytes {
+            break;
+        }
+        match kind.as_str() {
+            "c" => drop_collection(conn, &key)?,
+            "r" => {
+                conn.execute("DELETE FROM collections_rows WHERE rowid = ?1", [&key])?;
+            }
+            "a" => {
+                conn.execute("DELETE FROM collections_aside WHERE rowid = ?1", [&key])?;
+            }
+            _ => {
+                conn.execute(
+                    "DELETE FROM collections_edit_rows WHERE edit_id = ?1",
+                    [&key],
+                )?;
+                conn.execute("DELETE FROM collections_edits WHERE id = ?1", [&key])?;
+            }
+        }
+        total -= bytes;
+        removed += 1;
+    }
+    if removed > 0 {
+        tracing::info!(removed, "kept collection data trimmed to the pod's cap");
+    }
+    Ok(removed)
+}
+
 /// Remove what has been gone longer than `window` seconds before `now`:
 /// deleted rows, the data of removed fields (which then can't come back),
 /// values kept aside, the undo records of edits and deleted collections.

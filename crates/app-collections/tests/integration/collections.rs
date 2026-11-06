@@ -830,6 +830,91 @@ async fn caps_hold() {
     assert!(err && e["error"] == "too_many_edits", "{e}");
 }
 
+/// What is kept for undoing (deleted collections and rows, undo records)
+/// stays under twice the live cap (trimmed before each write, so plus that
+/// write's own undo record): deleting and re-adding, or editing over and
+/// over, can't grow a pod's storage past its caps.
+#[tokio::test]
+async fn kept_data_stays_under_the_caps() {
+    let caps = Caps {
+        collections: 1,
+        rows: 4,
+        bytes: 2_000,
+        ..Caps::default()
+    };
+    let pod = pod_with(caps);
+    let stored = |pod: &Pod| {
+        pod.store()
+            .with_conn(|c| {
+                c.query_row(
+                    "SELECT (SELECT COALESCE(SUM(LENGTH(values_json)), 0) FROM collections_rows)
+                          + (SELECT COALESCE(SUM(COALESCE(LENGTH(before_json), 0) + LENGTH(after_json)), 0)
+                             FROM collections_edit_rows)",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+            })
+            .unwrap()
+    };
+    // edit_rows previews, then applies with the preview's token.
+    let edit = |pod: Pod, name: String, edits: Vec<Value>| async move {
+        let p = ok(
+            &pod,
+            "edit_rows",
+            json!({"collection": name, "edits": edits}),
+        )
+        .await;
+        ok(
+            &pod,
+            "edit_rows",
+            json!({"collection": name, "edits": edits, "confirm": p["confirm"]}),
+        )
+        .await;
+    };
+    let rows = |n: usize, c: char| -> Vec<Value> {
+        (0..n)
+            .map(|_| json!({"op": "create", "values": {"t": c.to_string().repeat(400)}}))
+            .collect()
+    };
+    // Fill a collection to the cap, delete it, and again under a new name.
+    for i in 0..12 {
+        let name = format!("c{i}");
+        ok(
+            &pod,
+            "define_collection",
+            json!({"name": name, "fields": [{"name": "t", "type": "text"}]}),
+        )
+        .await;
+        edit(pod.clone(), name.clone(), rows(4, 'x')).await;
+        ok(&pod, "delete_collection", json!({"collection": name})).await;
+    }
+    let l = ok(&pod, "list_collections", json!({})).await;
+    let deleted = l["deleted"].as_array().map_or(0, Vec::len);
+    assert!((1..12).contains(&deleted), "{l}");
+    assert!(stored(&pod) <= 5 * caps.bytes as i64, "{}", stored(&pod));
+    // The newest deleted collection can still be restored.
+    ok(&pod, "restore_collection", json!({"collection": "c11"})).await;
+
+    // Editing every row over and over keeps only so many undo records.
+    let ids: Vec<String> = pod
+        .store()
+        .with_conn(|c| {
+            c.prepare("SELECT id FROM collections_rows WHERE collection = 'c11'")?
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<Vec<String>>>()
+        })
+        .unwrap();
+    for i in 0..30 {
+        let c = if i % 2 == 0 { 'y' } else { 'z' };
+        let edits: Vec<Value> = ids
+            .iter()
+            .map(|id| json!({"op": "update", "id": id, "values": {"t": c.to_string().repeat(400)}}))
+            .collect();
+        edit(pod.clone(), "c11".into(), edits).await;
+    }
+    assert!(stored(&pod) <= 5 * caps.bytes as i64, "{}", stored(&pod));
+}
+
 /// Issue #107: a collection is deleted once nothing shows it (its stale
 /// feed leaves home's), restored within the window, purged after it.
 #[tokio::test]

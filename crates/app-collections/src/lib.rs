@@ -577,14 +577,23 @@ pub(crate) async fn refusable<T: Send + 'static>(
 
 // ---------- rows ----------
 
+/// The most bytes a pod keeps of deleted collections and rows, values kept
+/// aside and undo records ([`db::trim_retained`]): twice the live cap, so
+/// one edit of every row (its before and after) still fits.
+pub(crate) fn retained_cap(caps: Caps) -> i64 {
+    2 * caps.bytes as i64
+}
+
 /// Check the caps on live rows and bytes for adding `rows` rows and
-/// `bytes` bytes.
+/// `bytes` bytes, after trimming what is kept for undoing to
+/// [`retained_cap`].
 pub(crate) fn check_usage(
     tx: &rusqlite::Connection,
     caps: Caps,
     rows: i64,
     bytes: i64,
 ) -> rusqlite::Result<Result<(), Value>> {
+    db::trim_retained(tx, retained_cap(caps))?;
     let (n, b) = db::usage(tx)?;
     if rows > 0 && n + rows > caps.rows as i64 {
         return Ok(Err(fail(

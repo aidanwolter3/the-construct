@@ -28,6 +28,9 @@ Decision:
   restarts its fillers; its feed isn't added back to home (a layout that shows it again adds it). The hourly purge
   drops it after 30 days, every table of it; its name is then free. Until then `define_collection` refuses the name
   (`collection_deleted`).
+- **Held to the caps.** Deleted collections' data counts toward what a pod may keep for undoing (twice the bytes
+  cap, with deleted rows, kept-aside values and undo records): over it, the oldest goes before the 30 days are up, so
+  deleting and defining collections under new names can't fill the volume (security audit).
 
 Pod-only: no client build. The two new MCP tools need "Refresh tools list" in the connector settings.
 
