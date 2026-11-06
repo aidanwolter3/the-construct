@@ -27,7 +27,9 @@
 #   maven.pkg.jetbrains.space, packages.jetbrains.team, download.jetbrains.com         (Gradle/Kotlin/Compose)
 #   github.com, api.github.com, objects.githubusercontent.com                          (git, gh)
 #   the-construct-pod.fly.dev, the-construct-fake-pixelfed.fly.dev                     (staging checks)
-# Not needed in the cloud: Android SDK/emulator, macOS tools (device QA happens on the developer's Mac).
+# Android: a compile-only SDK (platform + build-tools, ~0.5 GB, no NDK or emulator) goes to ~/android-sdk, and
+# app/local.properties (gitignored) points at it, so sessions can run CI's Android compile. Not needed in the
+# cloud: the NDK, an emulator, macOS tools (device QA happens on the developer's Mac).
 
 set -euo pipefail
 
@@ -41,6 +43,7 @@ if command -v apt-get >/dev/null; then
   command -v java >/dev/null && java -version 2>&1 | grep -q '"21' || need+=(openjdk-21-jdk-headless)
   command -v cc >/dev/null || need+=(build-essential)
   command -v jq >/dev/null || need+=(jq)
+  command -v unzip >/dev/null || need+=(unzip)  # the Android command-line tools
   command -v sqlite3 >/dev/null || need+=(sqlite3)
   dpkg -s fonts-dejavu-core >/dev/null 2>&1 || need+=(fonts-dejavu-core fontconfig)  # simulator text rendering
   dpkg -s pkg-config >/dev/null 2>&1 || need+=(pkg-config)
@@ -85,6 +88,28 @@ with_backoff() {
 WARM_LOG="$HOME/.construct-cloud-warmup.log"
 WARM_STATUS="$HOME/.construct-cloud-warmup.status"
 NEXTEST_VERSION=0.9.145
+ANDROID_SDK="$HOME/android-sdk"
+
+# The compile-only Android SDK, then app/local.properties' sdk.dir (unless one is already set).
+install_android_sdk() {
+  local sdkmanager="$ANDROID_SDK/cmdline-tools/latest/bin/sdkmanager" zip
+  if [[ ! -x "$sdkmanager" ]]; then
+    zip="$(mktemp --suffix=.zip)"
+    curl -fsSLo "$zip" https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip || return 1
+    rm -rf "$ANDROID_SDK/cmdline-tools" && mkdir -p "$ANDROID_SDK/cmdline-tools"
+    unzip -q "$zip" -d "$ANDROID_SDK/cmdline-tools" && mv "$ANDROID_SDK/cmdline-tools/cmdline-tools" \
+      "$ANDROID_SDK/cmdline-tools/latest"
+    local ok=$?
+    rm -f "$zip"
+    ((ok == 0)) || return 1
+  fi
+  # The platform matches compileSdk in app/androidApp/build.gradle.kts. `yes` accepts the licences (and dies of
+  # SIGPIPE when sdkmanager is done, hence the `|| true` under pipefail).
+  { yes 2>/dev/null || true; } | JAVA_HOME="$JAVA_HOME_GUESS" "$sdkmanager" --sdk_root="$ANDROID_SDK" \
+    "platforms;android-36" "build-tools;36.0.0" >/dev/null || return 1
+  local props="$REPO_ROOT/app/local.properties"
+  grep -qs '^sdk.dir=' "$props" || echo "sdk.dir=$ANDROID_SDK" >>"$props"
+}
 
 warm_caches() {
   local failed=()
@@ -92,10 +117,17 @@ warm_caches() {
   # Anything that ends the warm-up early (a signal, a crash) must not leave "running" behind.
   trap 'grep -q "^running" "$WARM_STATUS" 2>/dev/null && echo "failed interrupted" >"$WARM_STATUS"' EXIT
   (cd "$REPO_ROOT" && with_backoff cargo build -p client-ffi --release) || failed+=(client-ffi)
+  local android=()
+  if [[ -n "${ANDROID_HOME:-}" ]] || with_backoff install_android_sdk; then
+    android=(:shared:compileAndroidMain :androidApp:compileDebugKotlin)
+  else
+    failed+=(android-sdk)
+  fi
   # Compiling main + test sources resolves everything :shared:allTests, :desktopApp:test and :desktopApp:simulate
-  # use. --no-daemon so no Gradle daemon outlives the warm-up.
+  # use, plus CI's Android compile when the SDK is there. --no-daemon so no Gradle daemon outlives the warm-up.
   (cd "$REPO_ROOT/app" && JAVA_HOME="$JAVA_HOME_GUESS" with_backoff ./gradlew -PskipRustBuild \
-    --no-daemon --quiet :shared:compileTestKotlinDesktop :desktopApp:compileTestKotlin) || failed+=(gradle)
+    --no-daemon --quiet :shared:compileTestKotlinDesktop :desktopApp:compileTestKotlin "${android[@]}") \
+    || failed+=(gradle)
   # The test runner CI uses (same version as .github/workflows/ci.yml), built from crates.io.
   if ! cargo nextest --version 2>/dev/null | grep -q "$NEXTEST_VERSION"; then
     with_backoff cargo install --locked --quiet cargo-nextest --version "$NEXTEST_VERSION" || failed+=(nextest)
@@ -113,8 +145,8 @@ case "$warm_mode" in
   foreground) warm_caches 2>&1 | tee "$WARM_LOG" ;;
   background)
     # setsid + nohup: detached from the setup script, so it keeps running after the script returns.
-    export -f warm_caches with_backoff
-    export REPO_ROOT JAVA_HOME_GUESS WARM_STATUS NEXTEST_VERSION PATH
+    export -f warm_caches with_backoff install_android_sdk
+    export REPO_ROOT JAVA_HOME_GUESS WARM_STATUS NEXTEST_VERSION ANDROID_SDK PATH
     setsid nohup bash -c warm_caches >"$WARM_LOG" 2>&1 </dev/null &
     # The child writes its own pid too; writing it here closes the gap before it starts.
     echo "running $!" >"$WARM_STATUS"
