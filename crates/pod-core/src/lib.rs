@@ -638,6 +638,14 @@ pub async fn blocking<T: Send + 'static>(
     let state = state.clone();
     match tokio::task::spawn_blocking(move || f(&state.store)).await {
         Ok(Ok(v)) => Ok(v),
+        Ok(Err(e)) if store::is_full(&e) => {
+            tracing::warn!("write refused: the pod's storage is full");
+            Err(api_error(
+                StatusCode::INSUFFICIENT_STORAGE,
+                json!({ "error": "pod_storage_full",
+                        "detail": "this pod's storage is full: delete something (uploads, layouts, collection rows) first" }),
+            ))
+        }
         Ok(Err(e)) => {
             // The detail stays in the log: database errors can name tables,
             // paths and values.

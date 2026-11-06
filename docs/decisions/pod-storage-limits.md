@@ -29,5 +29,20 @@ Decision:
   nothing against guessing and would let one client behind a shared address (CGNAT) lock its neighbours out of
   their pods. The limit only keeps the code screen from being used to hammer `host.db`.
 
-Not done here: the SSE stream cap per token (separate change), quotas for anything other than uploads (the other
-per-pod tables are small and bounded by their routes), and an IPv4 /24 level (too many people share one).
+Not done here: the SSE stream cap per token (separate change), and an IPv4 /24 level (too many people share one).
+
+**Update (2026-11-06, issue #158): a storage quota per pod.** The other per-pod tables turned out not to be small:
+layout versions (50 layouts × 500 versions × 256 KiB, deleted layouts not counted), component versions (200 × 100 × 64
+KiB) and collections' undo data could each hold gigabytes, bounded only by the write rate. Rather than a quota per
+table, each pod's whole database is held to a size: 768 MiB for an admin pod (`CONSTRUCT_POD_STORAGE_QUOTA_BYTES`), 16
+MiB for a temporary pod (`CONSTRUCT_TEMP_POD_STORAGE_QUOTA_BYTES`). It is SQLite's own `max_page_count`, set by the host
+on each pod it opens (`Store::set_max_bytes`), so every table counts, uploads included (they are rows), and deletes free
+pages for later writes. A write past it fails with `SQLITE_FULL`, which `pod_core::blocking` answers with 507
+`pod_storage_full` (clients' outboxes retry 507s with backoff, as for the upload quota). The upload quotas stay as a
+sub-limit, so photos can't crowd out an admin pod's layouts and data entirely. Numbers: an admin pod's 500 MiB of
+uploads plus room for everything else, under the 1 GB volume; a temporary pod is for trying things, and 16 MiB is far
+more than a tried layout and a few collections use (it is below the 25 MiB temporary upload quota, which now rarely
+binds). A pod whose database is already larger keeps its size as the limit (SQLite won't shrink it), and its writes that
+need new pages are refused until something is deleted. The low-disk guard still covers only uploads and new temporary
+pods; with every pod capped, the 50 temporary pods together hold at most 800 MiB, which the 1 GB volume holds next to a
+few admin pods' everyday data.

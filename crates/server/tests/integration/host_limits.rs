@@ -107,6 +107,7 @@ async fn temporary_pods_get_the_smaller_upload_quota() {
         pod_upload_quota_bytes: 1024 * KIB as u64,
         temporary_upload_quota_bytes: 300 * KIB as u64,
         min_free_disk_bytes: 0,
+        ..StorageLimits::default()
     })
     .await;
     let (status, body) = env.temporary().await;
@@ -122,6 +123,45 @@ async fn temporary_pods_get_the_smaller_upload_quota() {
     // The admin pod has its own, larger quota.
     for key in ["1", "2", "3"] {
         assert_eq!(env.upload(&admin, key, 200 * KIB).await.0, StatusCode::OK);
+    }
+}
+
+/// Each pod's whole database is held to its kind's storage quota (#158):
+/// past it, writes get 507 `pod_storage_full`.
+#[tokio::test]
+async fn each_pod_is_held_to_its_storage_quota() {
+    let env = env(StorageLimits {
+        pod_upload_quota_bytes: 64 * 1024 * KIB as u64,
+        temporary_upload_quota_bytes: 64 * 1024 * KIB as u64,
+        min_free_disk_bytes: 0,
+        pod_storage_quota_bytes: 16 * 1024 * KIB as u64,
+        temporary_storage_quota_bytes: 2 * 1024 * KIB as u64,
+    })
+    .await;
+    let (status, body) = env.temporary().await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let temp = body["session_token"].as_str().unwrap().to_owned();
+    let admin = env.admin("me").await;
+
+    // A temporary pod fills its 2 MiB with a few uploads, under its upload
+    // quota.
+    let mut stored = 0;
+    let refusal = loop {
+        let (status, body) = env.upload(&temp, &stored.to_string(), 256 * KIB).await;
+        if status != StatusCode::OK {
+            break (status, body);
+        }
+        stored += 1;
+        assert!(stored < 16, "never refused");
+    };
+    assert!(stored >= 1, "the first upload fits");
+    assert_eq!(refusal.0, StatusCode::INSUFFICIENT_STORAGE, "{}", refusal.1);
+    assert_eq!(refusal.1["error"], "pod_storage_full");
+
+    // An admin pod has its own, larger quota.
+    for key in 0..(stored + 2) {
+        let (status, body) = env.upload(&admin, &key.to_string(), 256 * KIB).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
     }
 }
 

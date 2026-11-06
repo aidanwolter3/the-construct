@@ -101,6 +101,13 @@ pub struct StorageLimits {
     /// Uploads and new temporary pods are refused when the data volume has
     /// less free (`CONSTRUCT_MIN_FREE_DISK_BYTES`, default 100 MiB).
     pub min_free_disk_bytes: u64,
+    /// Most bytes an admin pod's database holds, everything included
+    /// (uploads, layouts and their versions, components, collections):
+    /// `CONSTRUCT_POD_STORAGE_QUOTA_BYTES`, default 768 MiB.
+    pub pod_storage_quota_bytes: u64,
+    /// The same for a temporary pod (`CONSTRUCT_TEMP_POD_STORAGE_QUOTA_BYTES`,
+    /// default 16 MiB; its upload quota then rarely binds).
+    pub temporary_storage_quota_bytes: u64,
 }
 
 impl Default for StorageLimits {
@@ -110,6 +117,8 @@ impl Default for StorageLimits {
             pod_upload_quota_bytes: 500 * MIB,
             temporary_upload_quota_bytes: 25 * MIB,
             min_free_disk_bytes: pod_core::disk::DEFAULT_MIN_FREE_BYTES,
+            pod_storage_quota_bytes: 768 * MIB,
+            temporary_storage_quota_bytes: 16 * MIB,
         }
     }
 }
@@ -134,6 +143,14 @@ impl StorageLimits {
                 d.temporary_upload_quota_bytes,
             ),
             min_free_disk_bytes: bytes("CONSTRUCT_MIN_FREE_DISK_BYTES", d.min_free_disk_bytes),
+            pod_storage_quota_bytes: bytes(
+                "CONSTRUCT_POD_STORAGE_QUOTA_BYTES",
+                d.pod_storage_quota_bytes,
+            ),
+            temporary_storage_quota_bytes: bytes(
+                "CONSTRUCT_TEMP_POD_STORAGE_QUOTA_BYTES",
+                d.temporary_storage_quota_bytes,
+            ),
         }
     }
 }
@@ -930,12 +947,19 @@ impl Host {
                 .map_err(|e| e.to_string())?
                 .map_or(PodKind::Temporary, |p| p.kind);
             let storage = host.config.storage;
-            let quota = match kind {
-                PodKind::Admin => storage.pod_upload_quota_bytes,
-                PodKind::Temporary => storage.temporary_upload_quota_bytes,
+            let (quota, max_bytes) = match kind {
+                PodKind::Admin => (
+                    storage.pod_upload_quota_bytes,
+                    storage.pod_storage_quota_bytes,
+                ),
+                PodKind::Temporary => (
+                    storage.temporary_upload_quota_bytes,
+                    storage.temporary_storage_quota_bytes,
+                ),
             };
             let guard = pod_core::disk::DiskGuard::new(&host.dir, storage.min_free_disk_bytes);
             let store = Store::open(&path).map_err(|e| e.to_string())?;
+            store.set_max_bytes(max_bytes).map_err(|e| e.to_string())?;
             Ok((host.factory)(store)?
                 .with_upload_quota_bytes(Some(quota))
                 .with_disk_guard(Some(guard)))
