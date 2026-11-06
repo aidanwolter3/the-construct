@@ -9,6 +9,7 @@ reference to them. Separate files named by topic don't touch each other, and the
 
 ## Rules
 
+- **Same PR:** a decision lands in the PR that implements it, not in a design PR before it or a docs PR after.
 - **Name:** lowercase words joined by hyphens, specific to the decision, e.g. `pixelfed-notification-polling.md`,
   not `notifications.md`. If git reports that the file already exists (an add/add conflict), rename yours.
 - **Refer to it** by name: "decision `pixelfed-notification-polling`", or link the file. Don't give it a number.

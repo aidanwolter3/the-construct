@@ -27,7 +27,8 @@ a step below says to.
 1. Fill in `.github/pull_request_template.md`. **New or removed feature** and **Client update needed** are
    never left as "no" by default: decide them from the diff. A new node type, intent, field, or engine store
    change means a client update.
-2. Link the issue: `Fixes #N` when this PR finishes it, `Part of #N` when the issue plans more PRs.
+2. Link the issue with `Fixes #N`: one PR finishes a feature, however large. `Part of #N` only when the
+   developer asked to split it.
 3. Screenshots: push the PNGs to the side branch `screenshots/<branch>` (never merged) from a separate
    worktree, and embed them by raw URL:
    ```bash

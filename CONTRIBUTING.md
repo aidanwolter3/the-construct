@@ -54,7 +54,8 @@ device; say so in the PR when a change needs that. More in [docs/testing.md](doc
    pods: staging upgrades in place.
 5. **Keep Compose keys stable** in `app/shared`, so UI state survives layout updates.
 6. **Record decisions.** An architecture decision gets a new file, `docs/decisions/<topic>.md`, following
-   [docs/decisions/README.md](docs/decisions/README.md). Don't rewrite old decisions; mark them superseded. Renaming
+   [docs/decisions/README.md](docs/decisions/README.md), in the same PR as the change it records (not a design PR
+   before it or a docs PR after it). Don't rewrite old decisions; mark them superseded. Renaming
    something they mention (an app id, a folder) is the one exception: update the name in them too, so a search finds
    it, and list the rename in [docs/decisions/README.md](docs/decisions/README.md).
    `docs/DECISIONS.md` is closed at D52.
@@ -78,7 +79,9 @@ directories `~/.construct*`; OAuth redirect `construct://oauth`.
     server and layout files alone.
 - Pull requests that change the interface (layouts, shared UI, node types) include simulator screenshots of the
   changed screens, before and after where it helps.
-- Keep a pull request to one change; file follow-up work as an issue.
+- One feature is one pull request, however large: build, test and ship it together rather than as a series of
+  smaller PRs or phases. Split it only when the developer asks. File unrelated work found along the way as an
+  issue.
 
 ## Staging
 
