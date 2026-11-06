@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -37,6 +38,7 @@ import org.theconstruct.AuthRedirects
 import org.theconstruct.ConstructApp
 import org.theconstruct.ConstructController
 import org.theconstruct.ConstructEngineBridge
+import org.theconstruct.NotificationPermissionPlatform
 import org.theconstruct.ServerChoice
 import org.theconstruct.ServerOption
 import org.theconstruct.ServerUrls
@@ -46,6 +48,7 @@ import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.flow.MutableStateFlow
 
 private const val TAG = "ConstructEngine"
 
@@ -106,7 +109,46 @@ class MainActivity : ComponentActivity() {
 
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         Log.i(TAG, "notification permission ${if (granted) "granted" else "denied"}")
+        notificationPermission.refresh()
         setUpNotifications(vm.session)
+    }
+
+    /**
+     * The notification permission for layouts (`local://device#notification_permission`, `action.device`
+     * `request_notification_permission`): `granted` when notifications can show (Android 13+'s POST_NOTIFICATIONS
+     * and the app's own switch in the system settings), else `denied`. Read again on resume, since the user may have
+     * changed it in the system settings.
+     */
+    private val notificationPermission = object : NotificationPermissionPlatform {
+        override val state = MutableStateFlow("")
+
+        fun refresh() {
+            val on = AppNotifications.permitted(this@MainActivity) &&
+                getSystemService(android.app.NotificationManager::class.java)?.areNotificationsEnabled() != false
+            state.value = if (on) "granted" else "denied"
+        }
+
+        /**
+         * The system prompt while Android will still show it (never asked, or denied once); after that, or when only
+         * the app's switch is off, the app's notification settings.
+         */
+        override fun request() {
+            val prefs = getSharedPreferences("notifications", MODE_PRIVATE)
+            if (Build.VERSION.SDK_INT >= 33 && !AppNotifications.permitted(this@MainActivity) &&
+                (!prefs.getBoolean("asked", false) || shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS))
+            ) {
+                prefs.edit().putBoolean("asked", true).apply()
+                askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                return
+            }
+            try {
+                startActivity(
+                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName),
+                )
+            } catch (e: ActivityNotFoundException) {
+                Log.w(TAG, "no notification settings screen: $e")
+            }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -151,7 +193,9 @@ class MainActivity : ComponentActivity() {
             val picker = rememberAndroidMediaPicker()
             // The shared UI's menu button sits at the top-left of this padded box, clear of the system bars.
             Box(Modifier.fillMaxSize().background(Color.White).safeDrawingPadding()) {
-                key(session) { ConstructApp(session.controller, server = server, mediaPicker = picker) }
+                key(session) {
+                    ConstructApp(session.controller, server = server, mediaPicker = picker, notificationPermission = notificationPermission)
+                }
             }
             LaunchedEffect(session) { setUpNotifications(session) }
         }
@@ -185,6 +229,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        notificationPermission.refresh()
         // The pod session may have appeared since (pod code entered, signed in): try again.
         if (pushReadyFor !== vm.controller) setUpNotifications(vm.session)
     }

@@ -474,6 +474,7 @@ class ConstructController internal constructor(
                 val choice = serverChoice ?: return
                 choice.options.firstOrNull { it.key == intent.id }?.let { choice.onSelect(it.url) }
             }
+            "request_notification_permission" -> notificationPermission.request()
             "open_app", "show" -> println("[Construct] action.device ${intent.command} was retired (decision `layouts-not-apps`); ignored")
             else -> println("[Construct] action.device: unknown command '${intent.command}'; ignored")
         }
@@ -526,6 +527,10 @@ class ConstructController internal constructor(
     /** The platform's servers, for `local:servers` and `set_server` (set by [ConstructApp]; null: none to pick). */
     @Volatile
     internal var serverChoice: ServerChoice? = null
+
+    /** The OS notification permission, for `request_notification_permission` (set by [ConstructApp]). */
+    @Volatile
+    internal var notificationPermission: NotificationPermissionPlatform = NoNotificationPermission
 
     private val _deviceDataToken = MutableStateFlow(0)
 
@@ -766,8 +771,9 @@ class ConstructController internal constructor(
 /**
  * The shared root UI: the root layout (or, for the pod's home, the bundled sign-in and rescue layouts) under the back
  * stack of presented layouts and screens. [server] is the platform's server picker (null = none); [mediaPicker] the
- * platform's photo picker for `core://MediaPicker`; [notificationSettingsExtra] is drawn above the Settings layout
- * (e.g. Android's notification permission row).
+ * platform's photo picker for `core://MediaPicker`; [notificationPermission] the OS notification permission
+ * (`local://device#notification_permission`, `request_notification_permission`); [notificationSettingsExtra] is drawn
+ * above the Settings layout.
  */
 @Composable
 fun ConstructApp(
@@ -777,6 +783,7 @@ fun ConstructApp(
     mediaPicker: MediaPickerPlatform? = null,
     notificationSettingsExtra: (@Composable () -> Unit)? = null,
     openLink: ((String) -> Unit)? = null,
+    notificationPermission: NotificationPermissionPlatform = NoNotificationPermission,
 ) {
     // `action.link.open` (feature `open_link`): the platform browser, unless the host opens links itself (simulator).
     val uriHandler = LocalUriHandler.current
@@ -797,6 +804,8 @@ fun ConstructApp(
                 val versionsApp by controller.versionsApp.collectAsState()
                 val dataToken by controller.deviceDataToken.collectAsState()
                 controller.serverChoice = server
+                controller.notificationPermission = notificationPermission
+                val permission by notificationPermission.state.collectAsState()
                 val d = controller.device
                 // The pod data the device data shows: loaded with the session, and whenever asked.
                 LaunchedEffect(dataToken, state.auth.session, state.auth.state) {
@@ -820,8 +829,8 @@ fun ConstructApp(
                 // The app's own mode picks the theme's light or dark colours (`local://theme`).
                 val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
                 val themeSet = state.entities["core://theme"]
-                val device = remember(state.isOnline, state.pendingActions, state.auth, unread, deviceApps, sources, dark, themeSet) {
-                    deviceData(state, unread, deviceApps, controller.platform, sources, dark)
+                val device = remember(state.isOnline, state.pendingActions, state.auth, unread, deviceApps, sources, dark, themeSet, permission) {
+                    deviceData(state, unread, deviceApps, controller.platform, sources, dark, permission)
                 }
                 CompositionLocalProvider(LocalDeviceData provides device) {
                     Box(Modifier.fillMaxSize()) {

@@ -370,6 +370,9 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
             if crate::intent::LAYOUT_CONTROL_COMMANDS.contains(&c) {
                 add(feature::DEVICE_LAYOUT_CONTROLS);
             }
+            if c == crate::intent::NOTIFICATION_PERMISSION_COMMAND {
+                add(feature::DEVICE_NOTIFICATION_PERMISSION);
+            }
         }
         ActionIntent::Unknown => {}
     }
@@ -762,10 +765,18 @@ mod tests {
                 [feature::DEVICE_ACTION, feature::DEVICE_LAYOUT_CONTROLS]
             );
         }
+        assert_eq!(
+            features("request_notification_permission"),
+            [
+                feature::DEVICE_ACTION,
+                feature::DEVICE_NOTIFICATION_PERMISSION
+            ]
+        );
         assert_eq!(features("mark_all_read"), [feature::DEVICE_ACTION]);
         for c in crate::intent::INBOX_PAGING_COMMANDS
             .iter()
             .chain(&crate::intent::LAYOUT_CONTROL_COMMANDS)
+            .chain(&[crate::intent::NOTIFICATION_PERMISSION_COMMAND])
         {
             assert!(crate::DEVICE_COMMANDS.contains(c), "{c}");
         }

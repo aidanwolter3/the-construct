@@ -57,7 +57,10 @@ in a row. Limits per pod: 20 devices, 60 deliveries a minute. The routes are in 
 - **Layouts:** the `inbox` blueprint lists every notification (`local:notifications`), grouped by day; tapping one
   presents its layout and target and marks it read. The `settings` blueprint lists the channels with switches (stored
   per device on the pod). Any layout can open them, or bind `${local://inbox#unread}` for a badge.
-- **Android:** asks for `POST_NOTIFICATIONS` once; creates OS channels `<app_id>.<channel>` grouped per app; shows
+- **Android:** asks for `POST_NOTIFICATIONS` once; layouts read whether notifications can show from
+  `local://device#notification_permission` (`granted`, `denied`; `""` on desktop) and ask again with the
+  `action.device` command `request_notification_permission`, which shows the system prompt, or the app's notification
+  settings once Android won't show the prompt again ([layouts.md](layouts.md)); creates OS channels `<app_id>.<channel>` grouped per app; shows
   live arrivals while in the background; and receives closed-app push through
   [UnifiedPush](https://unifiedpush.org): a distributor app such as ntfy if installed, otherwise the embedded FCM
   distributor via Play services and the UnifiedPush project's public gateway. No Firebase project or Google

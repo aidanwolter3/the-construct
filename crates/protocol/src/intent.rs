@@ -150,7 +150,11 @@ pub enum ActionIntent {
     /// feature `device_inbox_paging`: `load_older_notifications` (the next
     /// page into `local:notifications`), `mark_read` (`id`: a notification);
     /// feature `device_layout_controls`: `hide_layout`, `unhide_layout` and
-    /// `delete_layout` (`app`: a layout).
+    /// `delete_layout` (`app`: a layout);
+    /// feature `device_notification_permission`:
+    /// `request_notification_permission` (the OS prompt for notifications,
+    /// or the app's notification settings once the prompt can't show; does
+    /// nothing where there is no such permission).
     /// Nothing is sent to the pod unless the command itself talks to
     /// it. Any layout may use any command (decision `blueprints-and-home`).
     #[serde(rename = "action.device")]
@@ -218,7 +222,7 @@ impl ActionIntent {
 }
 
 /// The `action.device` commands this build knows.
-pub const DEVICE_COMMANDS: [&str; 18] = [
+pub const DEVICE_COMMANDS: [&str; 19] = [
     "open_settings",
     "open_inbox",
     "refresh",
@@ -237,6 +241,7 @@ pub const DEVICE_COMMANDS: [&str; 18] = [
     "hide_layout",
     "unhide_layout",
     "delete_layout",
+    "request_notification_permission",
 ];
 
 /// The `action.device` commands that need an `app`, and those that need an
@@ -257,10 +262,13 @@ pub const DEVICE_COMMANDS_WITH_ID: [&str; 6] = [
     "mark_read",
 ];
 
-/// The commands of feature `device_inbox_paging` and of feature
-/// `device_layout_controls`: a client without the feature would ignore them.
+/// The commands of feature `device_inbox_paging`, of feature
+/// `device_layout_controls` and of feature `device_notification_permission`:
+/// a client without the feature would ignore them.
 pub const INBOX_PAGING_COMMANDS: [&str; 2] = ["load_older_notifications", "mark_read"];
 pub const LAYOUT_CONTROL_COMMANDS: [&str; 3] = ["hide_layout", "unhide_layout", "delete_layout"];
+/// The command of feature `device_notification_permission`.
+pub const NOTIFICATION_PERMISSION_COMMAND: &str = "request_notification_permission";
 
 /// Commands retired by decision `layouts-not-apps` (feature
 /// `device_open_app`, removed): old layouts still parse, they do nothing.

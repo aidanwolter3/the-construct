@@ -92,7 +92,8 @@ data class DeviceSources(
  * The device data for the current state: `local://connection` (online, pending, label, attention), `local://inbox`
  * (unread, label, has_older, loading), `local://apps` (count) and the `local:apps` query of the pod's apps but home
  * (`local://apps/<id>`: id, title, icon, kind, detail, unread, hidden), `local:layouts` (the same, hidden ones left out)
- * and `local:all_layouts` (hidden ones too), `local://device` (platform), `local://session` (open, server, error,
+ * and `local:all_layouts` (hidden ones too), `local://device` (platform;
+ * notification_permission: [notificationPermission], `granted`, `denied` or `""` where it doesn't apply), `local://session` (open, server, error,
  * message), and from [sources] the `local:notifications`, `local:channels`, `local:sign_ins`, `local:providers` and
  * `local:servers` queries.
  */
@@ -103,6 +104,7 @@ fun deviceData(
     platform: String,
     sources: DeviceSources = DeviceSources(),
     dark: Boolean = false,
+    notificationPermission: String = "",
 ): DeviceData {
     val entities = LinkedHashMap<String, JsonObject>()
     // The pod's theme for the app's mode (feature `theme`, decision `plumbing-and-porcelain`).
@@ -147,7 +149,10 @@ fun deviceData(
     val uris = listed.map { app -> "local://apps/${app.id}".also { entities[it] = row(app) } }
     entities["local://layouts"] = buildJsonObject { put("count", listed.size) }
     entities["local://apps"] = buildJsonObject { put("count", listed.size) }
-    entities["local://device"] = buildJsonObject { put("platform", platform) }
+    entities["local://device"] = buildJsonObject {
+        put("platform", platform)
+        put("notification_permission", notificationPermission)
+    }
     entities["local://session"] = buildJsonObject {
         put("open", state.auth.session)
         put("server", sources.server?.currentUrl.orEmpty())
