@@ -8,8 +8,8 @@ Start with [architecture.md](architecture.md), then the guide for what you're do
 | [layouts.md](layouts.md) | Publishing a layout version; bindings, nodes, intents and features |
 | [server.md](server.md) | Running and configuring the server, pods and their admin CLI, monitoring, deploying |
 | [api.md](api.md) | The pod's core HTTP API and event stream |
-| [custom-apps.md](custom-apps.md) | Custom apps, building them with Claude (MCP), Collections, fillers and alerts, the Events app |
-| [clients.md](clients.md) | Building and running the desktop and Android apps; the app menu; sign-in |
+| [custom-apps.md](custom-apps.md) | Blueprints and home, the pod's layouts, building them with Claude (MCP), Collections, fillers and alerts, the Events app |
+| [clients.md](clients.md) | Building and running the desktop and Android apps; home and the layouts it shows; sign-in |
 | [simulator.md](simulator.md) | The headless simulator: flags, script commands, test tags |
 | [testing.md](testing.md) | Test suites, the end-to-end suite, the fake Pixelfed, a local real Pixelfed |
 | [pixelfed.md](pixelfed.md) | The Pixelfed app: sign-in, instances, its endpoints |
