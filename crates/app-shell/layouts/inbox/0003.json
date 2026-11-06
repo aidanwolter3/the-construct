@@ -1,0 +1,137 @@
+{
+  "note": "Load older (feature device_inbox_paging): a button under the list while the inbox has more",
+  "layout": {
+    "type": "core://Workspace",
+    "id": "inbox",
+    "title": "Notifications",
+    "slots": [
+      {
+        "slot_id": "header",
+        "provider_uri": "local://inbox",
+        "content": {
+          "type": "core://Row",
+          "spacing_dp": 8,
+          "padding_h_dp": 16,
+          "padding_v_dp": 4,
+          "children": [
+            {
+              "type": "core://Text",
+              "style": "Secondary",
+              "value_expr": "${local://inbox#label}"
+            },
+            {
+              "type": "core://Spacer"
+            },
+            {
+              "type": "core://Button",
+              "label": "Mark all read",
+              "on_click": {
+                "intent": "action.device",
+                "command": "mark_all_read"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "slot_id": "notifications",
+        "provider_uri": "local://notifications",
+        "content": {
+          "type": "core://List",
+          "query_key": "local:notifications",
+          "empty_text": "No notifications yet.",
+          "group_by": {
+            "field": "day",
+            "header": {
+              "type": "core://Use",
+              "component": "core:section_header",
+              "args": {
+                "text": "$item.day"
+              }
+            }
+          },
+          "item_template": {
+            "type": "core://Tappable",
+            "content_description": "$item.title",
+            "on_click": {
+              "intent": "action.device",
+              "command": "open_notification",
+              "id": "$item.id"
+            },
+            "content": {
+              "type": "core://Row",
+              "spacing_dp": 12,
+              "padding_h_dp": 16,
+              "padding_v_dp": 8,
+              "children": [
+                {
+                  "type": "core://Container",
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "style": "Secondary",
+                      "value_expr": "$item.app_title · $item.when"
+                    },
+                    {
+                      "type": "core://Text",
+                      "style": "Body",
+                      "value_expr": "$item.title"
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.body",
+                      "content": {
+                        "type": "core://Text",
+                        "style": "Secondary",
+                        "value_expr": "$item.body"
+                      }
+                    }
+                  ],
+                  "orientation": "Vertical",
+                  "padding_dp": 0
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "type": "core://Conditional",
+                  "value": "$item.unread",
+                  "content": {
+                    "type": "core://Use",
+                    "component": "core:dot",
+                    "args": {
+                      "color": "#1E66D0"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "slot_id": "older",
+        "provider_uri": "local://inbox",
+        "content": {
+          "type": "core://Conditional",
+          "value": "${local://inbox#has_older}",
+          "content": {
+            "type": "core://Column",
+            "padding_h_dp": 16,
+            "padding_v_dp": 8,
+            "children": [
+              {
+                "type": "core://Button",
+                "label": "Load older",
+                "on_click": {
+                  "intent": "action.device",
+                  "command": "load_older_notifications"
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

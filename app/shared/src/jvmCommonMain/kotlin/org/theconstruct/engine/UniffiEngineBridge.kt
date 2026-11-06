@@ -5,6 +5,7 @@ import org.theconstruct.AttachmentInfo
 import org.theconstruct.ConstructEngineBridge
 import org.theconstruct.EngineSnapshot
 import org.theconstruct.LayoutApiException
+import org.theconstruct.StoredPin
 import uniffi.client_ffi.EngineHandle
 import uniffi.client_ffi.FfiStateSnapshot
 import uniffi.client_ffi.NotificationListener
@@ -205,6 +206,22 @@ class UniffiEngineBridge(val handle: EngineHandle) : ConstructEngineBridge {
         if (closed) return
         try {
             handle.rememberFormValue(scope, field, value)
+        } catch (e: IllegalStateException) {
+            if (!closed) throw e
+        }
+    }
+
+    override fun pinnedVersions(): List<StoredPin> = try {
+        if (closed) emptyList() else handle.pinnedVersions().map { StoredPin(it.layoutId, it.version, it.specJson) }
+    } catch (e: IllegalStateException) {
+        if (!closed) throw e
+        emptyList()
+    }
+
+    override fun setPinnedVersion(layoutId: String, version: Long?, specJson: String?) {
+        if (closed) return
+        try {
+            handle.setPinnedVersion(layoutId, version, specJson)
         } catch (e: IllegalStateException) {
             if (!closed) throw e
         }

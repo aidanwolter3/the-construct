@@ -180,7 +180,19 @@ interface ConstructEngineBridge {
 
     /** Remembers one value of form [scope] (null forgets it). Default: not kept. */
     fun rememberFormValue(scope: String, field: String, value: String?) {}
+
+    // Pinned versions (`action.device` `pin_version`): kept on this device per app (the engine's) and layout, so a pin
+    // survives a restart; the engine forgets them when the device leaves the pod. Local storage only.
+
+    /** The versions pinned on this device: one per layout, with the pinned layout's JSON. Default: none. */
+    fun pinnedVersions(): List<StoredPin> = emptyList()
+
+    /** Keeps [version] of [layoutId] pinned ([specJson]: its layout), or with null version forgets the pin. */
+    fun setPinnedVersion(layoutId: String, version: Long?, specJson: String?) {}
 }
+
+/** A pinned version as the engine keeps it ([ConstructEngineBridge.pinnedVersions]). */
+data class StoredPin(val layoutId: String, val version: Long, val specJson: String)
 
 private fun appsUnavailable() = LayoutApiException("Apps aren't available here.")
 

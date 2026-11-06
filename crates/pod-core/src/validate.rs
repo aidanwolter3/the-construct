@@ -113,6 +113,9 @@ fn finish_structure(node: UiNode) -> Result<UiNode, String> {
     }
     check_screens(&node)?;
     check_sticky(&node, None)?;
+    for n in node.walk() {
+        check_deletes_ask_first(n)?;
+    }
     for intent in intents(&node) {
         let path = match intent {
             ActionIntent::OptimisticMutate { endpoint, .. }
@@ -1086,6 +1089,34 @@ impl<'a> Caps<'a> {
 }
 
 /// Every action intent in the tree (screens included).
+/// `action.device` `delete_layout` runs only inside an `action.confirm`'s
+/// `then`: deleting a layout from a tap must ask first.
+fn check_deletes_ask_first(node: &UiNode) -> Result<(), String> {
+    let is_delete = |i: &&&ActionIntent| matches!(i, ActionIntent::Device { command, .. } if command == "delete_layout");
+    let own = node.own_intents();
+    let deletes = own.iter().filter(is_delete).count();
+    if deletes == 0 {
+        return Ok(());
+    }
+    let confirmed: usize = own
+        .iter()
+        .filter_map(|i| match i {
+            ActionIntent::Confirm { then, .. } => {
+                Some(then.flatten().iter().filter(is_delete).count())
+            }
+            _ => None,
+        })
+        .sum();
+    if confirmed < deletes {
+        return Err(
+            "action.device delete_layout must be inside an action.confirm's then, \
+             so the user is asked first"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 pub fn intents(node: &UiNode) -> Vec<&ActionIntent> {
     node.walk()
         .into_iter()
@@ -1105,6 +1136,35 @@ mod tests {
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
         serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn deleting_a_layout_asks_first() {
+        let button = |on_click: Value| -> UiNode {
+            serde_json::from_value(
+                json!({"type": "core://Button", "label": "Delete", "on_click": on_click}),
+            )
+            .unwrap()
+        };
+        let delete = json!({"intent": "action.device", "command": "delete_layout", "app": "c-a"});
+        let plain = button(delete.clone());
+        assert!(
+            check_deletes_ask_first(&plain)
+                .unwrap_err()
+                .contains("action.confirm")
+        );
+        let in_sequence = button(json!({"intent": "action.sequence", "steps": [delete.clone()]}));
+        assert!(check_deletes_ask_first(&in_sequence).is_err());
+        let asked = button(
+            json!({"intent": "action.confirm", "title": "Delete?", "confirm_label": "Delete",
+            "then": {"intent": "action.sequence", "steps": [delete.clone(), {"intent": "action.navigation.back"}]}}),
+        );
+        assert_eq!(check_deletes_ask_first(&asked), Ok(()));
+        let one_of_two = button(
+            json!({"intent": "action.sequence", "steps": [delete.clone(),
+            {"intent": "action.confirm", "title": "Delete?", "confirm_label": "Delete", "then": delete}]}),
+        );
+        assert!(check_deletes_ask_first(&one_of_two).is_err());
     }
 
     #[test]
