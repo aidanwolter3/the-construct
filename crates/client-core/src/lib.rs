@@ -880,6 +880,9 @@ impl State {
     /// layout stays until the refetch replaces it.
     fn purge_private(&mut self, workspace_id: &str, drop_session_rows: bool) {
         let mut keep: std::collections::HashSet<String> = Default::default();
+        // The other layouts this engine opened are the pod's too
+        // (`open_layout`): cached under their own ids.
+        let others: Vec<String> = self.layouts.keys().cloned().collect();
         if let Some(store) = self.store.as_mut() {
             let result = store.transaction(|tx| {
                 let dropped = if drop_session_rows {
@@ -890,6 +893,9 @@ impl State {
                 let entities = tx.delete_unreferenced_entities()?;
                 tx.delete_all_data_loads()?;
                 tx.delete_workspace(workspace_id)?;
+                for id in &others {
+                    tx.delete_workspace(id)?;
+                }
                 Ok((dropped, entities))
             });
             match result {
@@ -948,6 +954,7 @@ impl State {
         self.data.clear();
         self.loads.clear();
         self.settling.clear();
+        self.layouts.clear();
         self.sync_pending_count();
     }
 

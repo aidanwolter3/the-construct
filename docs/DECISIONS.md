@@ -534,7 +534,9 @@ Android redirect superseded by [android-app-link-sign-in-redirect](decisions/and
   401 meanwhile) is discarded rather than applied, so an in-flight fetch cannot re-cache the private feed.
   The client DB runs with `PRAGMA secure_delete=ON` (freed cells/pages zeroed; cheap at this size) and the purge
   ends with `PRAGMA wal_checkpoint(TRUNCATE)`, so the purged rows survive neither in free pages of `cache.db` nor
-  as old WAL frames (tested on the raw bytes). Fragments of rows overwritten before this change in an existing
+  as old WAL frames (tested on the raw bytes). Since decision `layouts-not-apps`, the other layouts the engine
+  opened (`open_layout`) are the pod's too: the purge deletes their `active_workspace` rows and drops them from
+  memory (security audit), so leaving a pod doesn't leave its layouts on the device. Fragments of rows overwritten before this change in an existing
   file are not scrubbed (no VACUUM).
 
 ## D20: Local real Pixelfed for end-to-end tests (`dev/pixelfed`, `scripts/pixelfed_dev.sh`)
