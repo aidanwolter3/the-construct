@@ -24,7 +24,7 @@ pub use features::{
 };
 pub use intent::{
     ActionIntent, Animation, DEVICE_COMMANDS, DEVICE_COMMANDS_WITH_APP, DEVICE_COMMANDS_WITH_ID,
-    FieldUpdate, Position, PresentationMode,
+    Edge, FieldUpdate, Position, PresentationMode,
 };
 pub use notify::{
     DEVICE_HEADER, Importance, Notification, NotificationChannel, NotificationEvent,

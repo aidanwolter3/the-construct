@@ -267,7 +267,13 @@ fn node_features(node: &UiNode, out: &mut BTreeSet<&'static str>) {
         UiNode::AppFrame { .. } => add(feature::APP_FRAME),
         UiNode::Switch { .. } => add(feature::SWITCH),
         UiNode::Drawer { .. } => add(feature::DRAWER),
-        UiNode::Layout { .. } => add(feature::LAYOUT_EMBED),
+        UiNode::Layout { presentation, .. } => {
+            add(feature::LAYOUT_EMBED);
+            if *presentation == crate::EmbedPresentation::Overlay {
+                add(feature::OVERLAY_EDGE);
+            }
+        }
+        UiNode::Gesture { .. } => add(feature::GESTURE),
         // A node type this build does not know (the removed `pixelfed://`
         // widgets): no client draws it any more.
         UiNode::Unknown(_) => add(feature::LEGACY_NODES),
@@ -326,10 +332,13 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
             if layout.is_some()
                 || matches!(
                     presentation,
-                    PresentationMode::Sheet | PresentationMode::Panel
+                    PresentationMode::Sheet | PresentationMode::Panel | PresentationMode::Overlay
                 )
             {
                 add(feature::NAVIGATE_LAYOUT);
+            }
+            if *presentation == PresentationMode::Overlay {
+                add(feature::OVERLAY_EDGE);
             }
         }
         ActionIntent::NavigateBack => add(feature::NAVIGATE_BACK),
@@ -708,6 +717,8 @@ mod tests {
                     "on_click": {"intent": "action.navigation.back"}}),
                 "core://Layout" => json!({"type": t, "layout": "inbox", "presentation": "Sheet",
                     "show_when": "$form.inbox", "animation": "sheet_up", "params": {"id": "1"}}),
+                "core://Gesture" => json!({"type": t, "content": {"type": "core://Divider"},
+                    "on_swipe_down": {"intent": "action.navigation.back"}}),
                 other => panic!("no sample for {other}"),
             };
             let n: UiNode = serde_json::from_value(v).unwrap_or_else(|e| panic!("{t}: {e}"));
@@ -779,6 +790,37 @@ mod tests {
             .chain(&[crate::intent::NOTIFICATION_PERMISSION_COMMAND])
         {
             assert!(crate::DEVICE_COMMANDS.contains(c), "{c}");
+        }
+    }
+
+    #[test]
+    fn edge_overlays_and_gestures_need_their_features() {
+        let ws: UiNode = serde_json::from_value(json!({"type": "core://Workspace", "id": "home",
+            "title": "Home", "slots": [{"slot_id": "s", "provider_uri": "local://home", "content": {
+              "type": "core://Gesture",
+              "on_swipe_down": {"intent": "action.navigation.open", "layout": "inbox",
+                "presentation": "Overlay", "edge": "top"},
+              "content": {"type": "core://Column", "children": [
+                {"type": "core://Layout", "layout": "c-abc", "presentation": "Overlay",
+                 "edge": "end", "size_dp": 300, "show_when": "$form.open"}]}}}]}))
+        .unwrap();
+        let f = required_features(&ws);
+        for want in [
+            feature::GESTURE,
+            feature::OVERLAY_EDGE,
+            feature::NAVIGATE_LAYOUT,
+            feature::LAYOUT_EMBED,
+        ] {
+            assert!(f.contains(&want), "{want}: {f:?}");
+        }
+        assert_eq!(ws.walk().len(), 4, "a gesture's content is its child");
+        // A sheet or a panel needs neither: older clients still draw them.
+        for p in ["Sheet", "Panel"] {
+            let n: UiNode = serde_json::from_value(json!({"type": "core://Button", "label": "x",
+                "on_click": {"intent": "action.navigation.open", "layout": "inbox", "presentation": p}}))
+            .unwrap();
+            let f = required_features(&n);
+            assert!(!f.contains(&feature::OVERLAY_EDGE), "{p}: {f:?}");
         }
     }
 

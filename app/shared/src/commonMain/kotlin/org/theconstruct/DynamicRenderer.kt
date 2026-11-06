@@ -278,6 +278,8 @@ fun RenderUiNode(
             RenderUiNode(node.content, entities, onDispatch, mod, item)
         }
 
+        is UiNode.Gesture -> GestureNodeView(node, entities, onDispatch, item, modifier)
+
         is UiNode.Box -> NodeBox(node, entities, onDispatch, item, modifier)
 
         is UiNode.ChoiceChips -> NodeChoiceChips(node, modifier)

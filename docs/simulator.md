@@ -73,6 +73,7 @@ Commands are separated by `;` or newlines; entries starting with `#` are comment
 | `pick <path> [<path>…]` | Queues files for the next photo picker. |
 | `swipe-left <target>` / `swipe-right <target>` | Swipes a node, e.g. a carousel. |
 | `swipe-down <target>` | A quick downward flick from the node's center (a fling), e.g. `swipe-down tag:sheet-handle` closes a sheet. |
+| `swipe-up <target>` | A quick upward flick from the node's center, e.g. `swipe-up tag:sheet-handle` closes a sheet from the top. |
 | `drag-down <dp> <target>` | Drags slowly down by `dp` from the node's center and lets go without a fling, e.g. `drag-down 300 tag:sheet-handle` (a sheet's handle) or `tag:sheet:<layout>` (its content). |
 | `scroll-to <target>` | Scrolls until the node is visible. |
 | `back` | A system Back press. |

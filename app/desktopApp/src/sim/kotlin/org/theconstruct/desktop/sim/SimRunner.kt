@@ -261,6 +261,13 @@ class SimRunner(
                 waitForIdle()
                 return how to null
             }
+            is SimStep.FlickUp -> {
+                waitForIdle()
+                val (node, how) = findTarget(step.target)
+                node.performTouchInput { swipe(center, center - Offset(0f, FLICK_DP * density), durationMillis = 60L) }
+                waitForIdle()
+                return how to null
+            }
             is SimStep.ScrollTo -> {
                 waitForIdle()
                 val (node, how) = findTarget(step.target)

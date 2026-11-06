@@ -125,8 +125,18 @@ fn finish_structure(node: UiNode) -> Result<UiNode, String> {
             }
             ActionIntent::LoadData { path } => path,
             ActionIntent::Navigate {
-                target_uri, layout, ..
+                target_uri,
+                layout,
+                presentation,
+                edge,
+                size_dp,
+                ..
             } => {
+                check_overlay(
+                    *presentation == protocol::PresentationMode::Overlay,
+                    edge.is_some(),
+                    *size_dp,
+                )?;
                 if let Some(l) = layout {
                     check_layout_ref(l)?;
                 } else if target_uri.trim().is_empty() {
@@ -218,6 +228,18 @@ fn check_aspect(what: &str, a: f32) -> Result<(), String> {
 
 /// Tallest a `core://Layout` region may be.
 const MAX_LAYOUT_HEIGHT_DP: u16 = 2000;
+
+/// `edge` and `size_dp` go with presentation `Overlay` (feature
+/// `overlay_edge`).
+fn check_overlay(overlay: bool, edge: bool, size_dp: Option<u16>) -> Result<(), String> {
+    if !overlay && (edge || size_dp.is_some()) {
+        return Err("edge and size_dp go with presentation Overlay".into());
+    }
+    if let Some(s) = size_dp {
+        check_dp("size_dp", s, MAX_LAYOUT_HEIGHT_DP)?;
+    }
+    Ok(())
+}
 
 /// A layout named by `core://Layout` or `action.navigation.open`: a layout
 /// id (`home`, `c-...`, a blueprint) or a binding to one (`$item.id`).
@@ -329,6 +351,9 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             layout,
             show_when,
             height_dp,
+            presentation,
+            edge,
+            size_dp,
             ..
         } => {
             check_layout_ref(layout)?;
@@ -337,6 +362,20 @@ fn check_values(node: &UiNode) -> Result<(), String> {
             }
             if let Some(h) = height_dp {
                 check_dp("height_dp", *h, MAX_LAYOUT_HEIGHT_DP)?;
+            }
+            check_overlay(
+                *presentation == protocol::EmbedPresentation::Overlay,
+                edge.is_some(),
+                *size_dp,
+            )
+        }
+        UiNode::Gesture { .. } => {
+            if node.gesture_handlers().iter().all(Option::is_none) {
+                return Err(
+                    "a gesture needs at least one of on_tap, on_long_press, on_swipe_up, \
+                     on_swipe_down, on_swipe_left, on_swipe_right"
+                        .into(),
+                );
             }
             Ok(())
         }
@@ -1241,6 +1280,64 @@ mod tests {
         let dated = json!({"type": "core://Text", "style": "Body", "value_expr": "Due $item.due",
             "format": {"date": "Relative", "past": "Overdue"}});
         assert_eq!(check_values(&node(dated)), Ok(()));
+    }
+
+    #[test]
+    fn gestures_need_a_handler_and_edges_need_an_overlay() {
+        let gesture = |extra: Value| {
+            let mut v = json!({"type": "core://Gesture", "content": {"type": "core://Divider"}});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            node(v)
+        };
+        let back = json!({"intent": "action.navigation.back"});
+        assert_eq!(
+            check_values(&gesture(json!({"on_swipe_down": back}))),
+            Ok(())
+        );
+        assert_eq!(
+            check_values(&gesture(json!({"on_long_press": back}))),
+            Ok(())
+        );
+        assert!(check_values(&gesture(json!({}))).is_err(), "no handler");
+
+        let layout = |extra: Value| {
+            let mut v =
+                json!({"type": "core://Layout", "layout": "inbox", "show_when": "$form.inbox"});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            node(v)
+        };
+        for ok in [
+            json!({"presentation": "Overlay", "edge": "top"}),
+            json!({"presentation": "Overlay"}),
+            json!({"presentation": "Overlay", "edge": "end", "size_dp": 320}),
+            json!({"presentation": "Sheet"}),
+        ] {
+            assert_eq!(check_values(&layout(ok.clone())), Ok(()), "{ok}");
+        }
+        for bad in [
+            json!({"presentation": "Sheet", "edge": "top"}),
+            json!({"edge": "top"}),
+            json!({"presentation": "Panel", "size_dp": 300}),
+            json!({"presentation": "Overlay", "size_dp": 9999}),
+        ] {
+            assert!(check_values(&layout(bad.clone())).is_err(), "{bad}");
+        }
+
+        let open = |extra: Value| {
+            let mut v = json!({"intent": "action.navigation.open", "layout": "inbox"});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            gesture(json!({"on_swipe_down": v}))
+        };
+        let top = open(json!({"presentation": "Overlay", "edge": "top"}));
+        assert!(finish_structure(top).is_ok());
+        let sheet_edge = open(json!({"presentation": "Sheet", "edge": "top"}));
+        assert!(finish_structure(sheet_edge).is_err());
     }
 
     #[test]

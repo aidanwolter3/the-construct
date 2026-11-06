@@ -314,11 +314,13 @@ internal fun shellView(state: ConstructState): ShellView = when {
 }
 
 /**
- * Whether a workspace is drawn whole by its one slot (a filling `core://Box`, or an inline `core://Layout`), with no
- * title bar or page scroll.
+ * Whether a workspace is drawn whole by its one slot (a filling `core://Box`, or an inline `core://Layout`, or a
+ * `core://Gesture` around one), with no title bar or page scroll.
  */
 internal fun fillsScreen(workspace: UiNode.Workspace): Boolean =
-    workspace.slots.size == 1 &&
-        workspace.slots[0].content.let {
-            (it is UiNode.Box && it.fill) || (it is UiNode.Layout && it.presentation == EmbedPresentation.Inline && it.showWhen == null)
-        }
+    workspace.slots.size == 1 && fillsSlot(workspace.slots[0].content)
+
+private fun fillsSlot(node: UiNode): Boolean =
+    (node is UiNode.Box && node.fill) ||
+        (node is UiNode.Layout && node.presentation == EmbedPresentation.Inline && node.showWhen == null) ||
+        (node is UiNode.Gesture && fillsSlot(node.content))

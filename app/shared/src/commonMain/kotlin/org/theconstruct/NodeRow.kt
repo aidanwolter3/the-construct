@@ -27,7 +27,7 @@ import kotlin.math.sign
  *
  * - [Fixed]: controls and anything else (Switch, Chip, Button, IconButton, sized Image, Box, sized Spacer) keep their
  *   natural width; they are measured first.
- * - [Flexible]: text-like children (Text, Container, Column, or a Conditional or Tappable around one) take what the
+ * - [Flexible]: text-like children (Text, Container, Column, or a Conditional, Tappable or Gesture around one) take what the
  *   fixed children leave, so long text wraps instead of pushing the controls after it off screen.
  * - [Fill]: a Spacer without a size shares out the width left over at the end.
  */
@@ -38,6 +38,7 @@ internal fun rowPart(node: UiNode): RowPart = when (node) {
     is UiNode.Text, is UiNode.Container, is UiNode.Column -> RowPart.Flexible
     is UiNode.Conditional -> if (rowPart(node.content) == RowPart.Flexible) RowPart.Flexible else RowPart.Fixed
     is UiNode.Tappable -> if (rowPart(node.content) == RowPart.Flexible) RowPart.Flexible else RowPart.Fixed
+    is UiNode.Gesture -> if (rowPart(node.content) == RowPart.Flexible) RowPart.Flexible else RowPart.Fixed
     else -> RowPart.Fixed
 }
 

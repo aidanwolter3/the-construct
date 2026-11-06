@@ -1,6 +1,7 @@
 package org.theconstruct.desktop.sim
 
 import org.theconstruct.ConstructController
+import org.theconstruct.Edge
 import org.theconstruct.INBOX_LAYOUT
 import org.theconstruct.LayoutEntry
 import org.theconstruct.PresentationMode
@@ -76,6 +77,45 @@ class LayoutsSimTest {
         assertEquals(INBOX_LAYOUT, assertIs<LayoutEntry>(controller.navigation.top).layoutId, "a short drag springs back")
         runner.ok("drag-down 300 tag:sheet-handle; idle")
         assertNull(controller.navigation.top, "past a quarter closes it")
+    }
+
+    /** A home whose content opens the inbox from the top on a swipe down (issue #123, `swipe_home_bundle.json`). */
+    private fun swipeHome(): ConstructController {
+        val bridge = FakeEngineBridge(
+            fixture("swipe_home_bundle.json"), appId = "swipe_home",
+            layoutBundles = { id -> layoutBundle(id, File("").absoluteFile) },
+        )
+        return ConstructController(bridge, "swipe_home")
+    }
+
+    @Test
+    fun aSwipeDownOnHomeSlidesTheInboxDownFromTheTopAndASwipeUpClosesIt() {
+        val controller = swipeHome()
+        val runner = SimRunner(controller, outDir, ScreenSpec.parse("phone"))
+        runner.ok("assert-text Pull down for notifications; swipe-down Pull down for notifications; idle")
+        val top = assertIs<LayoutEntry>(controller.navigation.top)
+        assertEquals(INBOX_LAYOUT, top.layoutId)
+        assertEquals(PresentationMode.Overlay, top.presentation)
+        assertEquals(Edge.Top, top.overlayEdge)
+        runner.ok("assert-text Notifications; swipe-down tag:sheet-handle; idle")
+        assertNotNull(controller.navigation.top, "dragging a top sheet down doesn't close it")
+        runner.ok("swipe-up tag:sheet-handle; idle")
+        assertNull(controller.navigation.top, "flicked up toward its edge, it closes")
+    }
+
+    @Test
+    fun aSwipeLeftOpensAPanelFromTheEndAndALongPressASheet() {
+        val controller = swipeHome()
+        val runner = SimRunner(controller, outDir, ScreenSpec.parse("phone"))
+        runner.ok("swipe-left Swipe left for Settings; idle; assert-text Leave pod on this device")
+        val panel = assertIs<LayoutEntry>(controller.navigation.top)
+        assertEquals(SETTINGS_LAYOUT, panel.layoutId)
+        assertEquals(Edge.End, panel.overlayEdge)
+        runner.ok("back; idle")
+        assertNull(controller.navigation.top)
+        // A short swipe is no swipe, and no tap either (there is no on_tap).
+        runner.ok("click Pull down for notifications; idle")
+        assertNull(controller.navigation.top, "a tap runs nothing")
     }
 
     @Test

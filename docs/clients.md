@@ -72,11 +72,17 @@ The client opens the pod's `home` layout (the default) and draws everything from
   only as much as the user asks for.
 - **Other layouts** show inside home (`core://Layout`: in place, in a card-sized region, or as a sheet or side panel
   while a condition holds), or are presented on the back stack (`action.navigation.open {layout}`: pushed over the
-  whole screen, or as a sheet or panel). One engine serves them all and shares their data.
+  whole screen, or as a sheet or panel). An overlay can come from any edge: a sheet from the top or bottom, a panel
+  from the start or end (decision `edge-overlays-and-gestures`). One engine serves them all and shares their data.
 - **Back:** every presented layout and screen is one entry of the back stack. System Back (and the Back arrow of a
   pushed layout or screen, or a tap on a sheet's or panel's scrim) pops the top one; with nothing left, the platform's
-  own Back runs. A sheet also closes when dragged down: by its handle, or from its content while that is scrolled to
-  the top. Released past a quarter of its height, or flung down, it closes; otherwise it springs back.
+  own Back runs. An overlay also closes when dragged back toward its edge: a sheet by its handle (on its inner side),
+  or from its content once that can't scroll further that way (a bottom sheet's at its top); a panel anywhere.
+  Released past a quarter of its size, or flung that way, it closes; otherwise it springs back.
+- **Gestures:** `core://Gesture` runs an intent on a tap, long press or swipe (up, down, left, right). A pull the
+  content can't scroll for counts as a swipe, so a home that opens the inbox from the top on a swipe down still
+  scrolls. The swipe feel and Android's own edge gestures (Back from the sides, the notification shade from the top)
+  are checked on a phone.
 - **Screens inside a sheet or panel** (decision `screens-inside-frames`): a screen of the sheet's or panel's own layout
   opens inside that frame, not over the whole screen. The frame's content slides left as the screen slides in from the
   end, with a Back arrow and the screen's title at its top; Back (the arrow or system Back) slides it out again, and

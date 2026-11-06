@@ -201,8 +201,9 @@ class ScreenEntry internal constructor(
 ) : StackEntry(key)
 
 /**
- * A presented layout: [presentation] Push (the whole screen), Sheet or Panel; [params] are its `$route.<name>` values.
- * [nodeKey] is set when a `core://Layout` presents it while its `show_when` holds; [onDismiss] then clears that.
+ * A presented layout: [presentation] Push (the whole screen), Sheet, Panel or Overlay (from [edge], [sizeDp] tall or
+ * wide); [params] are its `$route.<name>` values. [nodeKey] is set when a `core://Layout` presents it while its
+ * `show_when` holds; [onDismiss] then clears that.
  */
 @Stable
 class LayoutEntry internal constructor(
@@ -213,7 +214,23 @@ class LayoutEntry internal constructor(
     val animation: Animation?,
     internal val nodeKey: String? = null,
     internal val onDismiss: (() -> Unit)? = null,
-) : StackEntry(key)
+    val edge: Edge? = null,
+    val sizeDp: Int? = null,
+) : StackEntry(key) {
+    /**
+     * The edge it is drawn over the screen from (decision `edge-overlays-and-gestures`): a Sheet's is the bottom, a
+     * Panel's the start, an Overlay's its [edge] (the bottom when unset). Null for a pushed layout.
+     */
+    val overlayEdge: Edge? get() = overlayEdgeOf(presentation, edge)
+}
+
+/** The edge [presentation] draws a layout over the screen from, or null when it covers the whole screen. */
+internal fun overlayEdgeOf(presentation: PresentationMode, edge: Edge?): Edge? = when (presentation) {
+    PresentationMode.Sheet -> Edge.Bottom
+    PresentationMode.Panel -> Edge.Start
+    PresentationMode.Overlay -> edge ?: Edge.Bottom
+    else -> null
+}
 
 /** The form values of the root layout and of each stack entry (Compose state). */
 val LocalForm: ProvidableCompositionLocal<SnapshotStateMap<String, String>?> = staticCompositionLocalOf { null }
@@ -279,7 +296,7 @@ class Navigation internal constructor(private val controller: ConstructControlle
      * top. A screen opened now opens inside it. Null when the top is the root, a pushed layout or a full screen.
      */
     val topFrame: LayoutEntry? get() = when (val t = top) {
-        is LayoutEntry -> t.takeIf { it.presentation == PresentationMode.Sheet || it.presentation == PresentationMode.Panel }
+        is LayoutEntry -> t.takeIf { it.overlayEdge != null }
         is ScreenEntry -> t.frame
         null -> null
     }
@@ -311,7 +328,7 @@ class Navigation internal constructor(private val controller: ConstructControlle
     fun open(intent: ActionIntent.Navigate, from: String? = null): Boolean {
         val layout = intent.layout?.trim()?.takeIf { it.isNotEmpty() }
         if (layout != null) {
-            present(layout, intent.params, intent.presentation, intent.animation)
+            present(layout, intent.params, intent.presentation, intent.animation, intent.edge, intent.sizeDp)
             if (intent.targetUri.isNotBlank()) controller.openWhenLoaded(layout, intent.targetUri.trim())
             return true
         }
@@ -347,16 +364,19 @@ class Navigation internal constructor(private val controller: ConstructControlle
 
     /**
      * Presents layout [layoutId] on the stack: Push (Modal too) the whole screen, Sheet a bottom sheet, Panel a side
-     * panel. Replace swaps the top presented layout. The engine loads the layout if it hasn't yet.
+     * panel, Overlay one from [edge]. Replace swaps the top presented layout. The engine loads the layout if it hasn't
+     * yet.
      */
     fun present(
         layoutId: String,
         params: Map<String, String> = emptyMap(),
         presentation: PresentationMode = PresentationMode.Push,
         animation: Animation? = null,
+        edge: Edge? = null,
+        sizeDp: Int? = null,
     ): LayoutEntry {
         val shown = if (presentation == PresentationMode.Modal) PresentationMode.Push else presentation
-        val entry = LayoutEntry(nextKey++, layoutId, params, shown, animation)
+        val entry = LayoutEntry(nextKey++, layoutId, params, shown, animation, edge = edge, sizeDp = sizeDp)
         if (presentation == PresentationMode.Replace && stack.lastOrNull() is LayoutEntry) {
             release(stack.removeAt(stack.lastIndex))
             stack.add(LayoutEntry(entry.key, layoutId, params, PresentationMode.Push, animation))
@@ -367,17 +387,22 @@ class Navigation internal constructor(private val controller: ConstructControlle
         return stack.last() as LayoutEntry
     }
 
-    /** A `core://Layout`'s Sheet or Panel ([nodeKey]) is shown while its `show_when` holds; [onDismiss] clears it. */
+    /**
+     * A `core://Layout`'s Sheet, Panel or Overlay ([nodeKey]) is shown while its `show_when` holds; [onDismiss] clears
+     * it.
+     */
     internal fun presentFromNode(
         nodeKey: String,
         layoutId: String,
         params: Map<String, String>,
         presentation: PresentationMode,
         animation: Animation?,
+        edge: Edge? = null,
+        sizeDp: Int? = null,
         onDismiss: () -> Unit,
     ) {
         if (stack.any { (it as? LayoutEntry)?.nodeKey == nodeKey }) return
-        stack.add(LayoutEntry(nextKey++, layoutId, params, presentation, animation, nodeKey, onDismiss))
+        stack.add(LayoutEntry(nextKey++, layoutId, params, presentation, animation, nodeKey, onDismiss, edge, sizeDp))
         controller.openLayout(layoutId)
     }
 

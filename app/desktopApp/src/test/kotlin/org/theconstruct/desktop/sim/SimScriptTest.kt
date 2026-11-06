@@ -133,7 +133,7 @@ class SimScriptTest {
         assertFailsWith<ScriptParseException> { parseScript("wait-images soon") }
         assertFailsWith<ScriptParseException> { parseScript("swipe-left") }
         assertFailsWith<ScriptParseException> { parseScript("scroll-to") }
-        assertFailsWith<ScriptParseException> { parseScript("swipe-up x") }
+        assertFailsWith<ScriptParseException> { parseScript("swipe-sideways x") }
     }
 
     @Test
@@ -148,6 +148,8 @@ class SimScriptTest {
         assertFailsWith<ScriptParseException> { parseScript("drag-down 300") }
         assertFailsWith<ScriptParseException> { parseScript("drag-down 0 x") }
         assertFailsWith<ScriptParseException> { parseScript("swipe-down") }
+        assertEquals("tag:sheet:inbox", assertIs<SimStep.FlickUp>(parseScript("swipe-up tag:sheet:inbox")[0]).target)
+        assertFailsWith<ScriptParseException> { parseScript("swipe-up") }
     }
 
     @Test
