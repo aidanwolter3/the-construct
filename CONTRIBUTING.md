@@ -78,7 +78,9 @@ directories `~/.construct*`; OAuth redirect `construct://oauth`.
     server and layout files alone.
 - Pull requests that change the interface (layouts, shared UI, node types) include simulator screenshots of the
   changed screens, before and after where it helps.
-- Keep a pull request to one change; file follow-up work as an issue.
+- One feature is one pull request, however large: build, test and ship it together rather than as a series of
+  smaller PRs or phases. Split it only when the developer asks. File unrelated work found along the way as an
+  issue.
 
 ## Staging
 
