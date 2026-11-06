@@ -424,6 +424,8 @@ async fn claude_connects_with_oauth_and_the_pod_code() {
         "list_parts",
         "rebase_context",
         "dismiss_update",
+        "delete_collection",
+        "restore_collection",
     ] {
         assert!(names.contains(&want), "{want}: {names:?}");
     }
@@ -1159,4 +1161,111 @@ async fn components_are_defined_used_and_expanded() {
         body["entities"]["core://theme"]["card_border_dark"],
         "#101010"
     );
+}
+
+/// Issue #107: a collection a layout no longer shows is deleted, whether
+/// home's stale feed is dropped first (rename_layout) or by the delete;
+/// one a layout still shows is refused, naming it.
+#[tokio::test]
+async fn collections_are_deleted_once_no_layout_shows_them() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+    let ok = |name: &'static str, args: Value| {
+        let (env, access) = (&env, &access);
+        async move {
+            let (err, v) = env.tool(access, name, args).await;
+            assert!(!err, "{name}: {v}");
+            v
+        }
+    };
+    let feed = |c: &str| json!(["collections", c]);
+    let home_feeds = || async {
+        ok("get_layout", json!({"id": "home"})).await["feeds"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+    for c in ["daily_poem", "quotes"] {
+        ok(
+            "define_collection",
+            json!({"name": c, "fields": [{"name": "text", "type": "text"}]}),
+        )
+        .await;
+    }
+    let shows = |c: &str| {
+        json!({"type": "core://Workspace", "id": c, "title": c, "slots": [
+            {"slot_id": "list", "provider_uri": "core://custom", "content": {
+                "type": "core://List", "query_key": format!("collection:{c}"),
+                "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.text"}}}]})
+    };
+    let poem = ok(
+        "create_layout",
+        json!({"title": "Poem", "feeds": [feed("daily_poem")], "layout": shows("daily_poem")}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        "create_layout",
+        json!({"title": "Quotes", "feeds": [feed("quotes")], "layout": shows("quotes")}),
+    )
+    .await;
+    assert!(home_feeds().await.contains(&feed("daily_poem")));
+
+    // Still shown: refused, naming the layout.
+    let (err, e) = env
+        .tool(
+            &access,
+            "delete_collection",
+            json!({"collection": "daily_poem"}),
+        )
+        .await;
+    assert!(err && e["error"] == "collection_in_use", "{e}");
+    assert_eq!(e["used_by"][0]["app"], poem.as_str());
+    assert!(e["detail"].as_str().unwrap().contains("'Poem'"), "{e}");
+
+    // The layout goes; home's feed is stale. Dropping it is an edit of
+    // home's feeds, then the delete succeeds.
+    ok("delete_layout", json!({"id": poem})).await;
+    let rest: Vec<Value> = home_feeds()
+        .await
+        .into_iter()
+        .filter(|f| *f != feed("daily_poem"))
+        .collect();
+    ok("rename_layout", json!({"id": "home", "feeds": rest})).await;
+    assert!(!home_feeds().await.contains(&feed("daily_poem")));
+    let d = ok("delete_collection", json!({"collection": "daily_poem"})).await;
+    assert_eq!(d["dropped_from_home_feeds"], false);
+    let list = ok("list_collections", json!({})).await;
+    let live: Vec<&str> = list["collections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["name"].as_str())
+        .collect();
+    assert!(!live.contains(&"daily_poem"), "{list}");
+    assert_eq!(list["deleted"][0]["name"], "daily_poem");
+
+    // A stale feed is dropped by the delete itself; home still saves.
+    let (_, quotes) = env.tool(&access, "list_layouts", json!({})).await;
+    let quotes = quotes["layouts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["title"] == "Quotes")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok("delete_layout", json!({"id": quotes})).await;
+    let d = ok("delete_collection", json!({"collection": "quotes"})).await;
+    assert_eq!(d["dropped_from_home_feeds"], true);
+    assert!(!home_feeds().await.contains(&feed("quotes")));
+    ok(
+        "rename_layout",
+        json!({"id": "home", "feeds": home_feeds().await}),
+    )
+    .await;
 }
