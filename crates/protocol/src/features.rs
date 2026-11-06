@@ -19,6 +19,19 @@ use crate::{ActionIntent, Align, Position, PresentationMode, TextStyle, UiNode, 
 
 include!(concat!(env!("OUT_DIR"), "/features.rs"));
 
+/// Removed features a pod still accepts in a layout and serves expanded:
+/// `core://Workspace` is porcelain (`core:workspace`, decision
+/// `plumbing-and-porcelain`), so clients built since issue #126 don't draw
+/// it, but layouts may still be written with it.
+pub const EXPANDED_FEATURES: [&str; 3] =
+    [feature::WORKSPACE, feature::SCREENS, feature::TITLE_SCROLLS];
+
+/// Whether `f` is removed vocabulary that a new write may not use
+/// ([`REMOVED_FEATURES`] but not [`EXPANDED_FEATURES`]).
+pub fn is_retired(f: &str) -> bool {
+    REMOVED_FEATURES.contains(&f) && !EXPANDED_FEATURES.contains(&f)
+}
+
 /// Request header carrying the features the client draws, comma-separated
 /// ([`FEATURES`]). Absent means none.
 pub const FEATURES_HEADER: &str = "x-construct-features";

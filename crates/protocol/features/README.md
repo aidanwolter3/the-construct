@@ -19,3 +19,8 @@ drawing it. Clients built after that don't list it; the pod marks only the versi
 them, and keeps serving those versions to older clients that still draw it. Keep the removed field in the Rust
 types so old versions still parse. `removed/legacy_nodes.md` stands for node types this build doesn't know (the
 `pixelfed://` widgets of the first layouts, D37) and stored layouts it can't read.
+
+`protocol::EXPANDED_FEATURES` lists removed features a pod still accepts in new writes, because it serves them
+expanded: `workspace`, `screens` and `title_scrolls` (a `core://Workspace` is porcelain, served as the `core://Page`
+it expands to; decision `workspace-drawn-by-the-pod`). Its versions are not retired for a build that draws the
+plumbing; the pod checks the expansion instead.

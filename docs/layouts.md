@@ -70,8 +70,10 @@ is going ([Device data](#device-data)).
 
 ## Structure of a workspace
 
-`core://Workspace` is porcelain the app still draws for older builds: a build that draws `page`, `scroll` and
-`nav_data` gets it expanded through `core:workspace` and `core:screen` instead.
+`core://Workspace` is porcelain: the pod serves it to a build that draws `page`, `scroll` and `nav_data` expanded
+through `core:workspace` and `core:screen`, and builds since issue #126 draw no workspace of their own (features
+`workspace`, `screens` and `title_scrolls` are in `features/removed/`, decision `workspace-drawn-by-the-pod`). Layouts
+may still be written with it; prefer a `core://Page` for a new one.
 
 ```json
 {
@@ -265,6 +267,8 @@ The server components:
 | `core:toggle_action` | `field`, `icon`, `active_icon`, `label`, `active_label`, `endpoint`, `payload_field`, `tint`, `count_field`, `tag` | An icon button that flips a boolean field at once and tells an endpoint, optionally moving a count with it. |
 | `core:stat` | `value`, `label` | A number with a label under it. |
 | `core:pixelfed_sign_in` | `server`, `instance_url`, `other_servers`, `placeholder` | Pixelfed's signed-out screen: a sentence, "Sign in with Pixelfed", and a box for another server (shipped by `app-pixelfed`). |
+| `core:pixelfed_post` | `focus` | A Pixelfed post and its comments on a post screen (route `$route.id`), optionally scrolled to and highlighting one comment; the content of the blueprint's `post`, `comments` and `comment_thread` screens (shipped by `app-pixelfed`). |
+| `core:pixelfed_comment_box` | | The box that comments on the screen's post; those screens' footer (shipped by `app-pixelfed`). |
 | `core:message_page` | `title`, `body`, `background`; children: actions | A whole page with a message in the middle and actions under it. |
 
 Their definitions are the files; `get_component` reads them with examples. See decision

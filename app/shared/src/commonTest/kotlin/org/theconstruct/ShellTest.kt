@@ -69,7 +69,6 @@ class ShellTest {
     @Test
     fun layoutNodesAndLayoutNavigationRoundTrip() {
         val ws = assertIs<UiNode.Workspace>(ConstructJson.decodeNode(homeJson))
-        assertFalse(fillsScreen(ws))
         val card = assertIs<UiNode.Layout>(ws.slots[0].content)
         assertEquals(EmbedPresentation.Inline, card.presentation)
         assertEquals(120, card.heightDp)
@@ -79,8 +78,6 @@ class ShellTest {
         assertEquals(mapOf("tab" to "all"), sheet.params)
         // Re-encodes to what the pod sent.
         assertEquals(ws, ConstructJson.decodeNode(ConstructJson.json.encodeToString(UiNode.serializer(), ws)))
-        // A layout node as the one slot fills the screen.
-        assertTrue(fillsScreen(ws.copy(slots = listOf(ws.slots[0]))))
         // `layout` and `params` bind `$item` like any intent field.
         val list = assertIs<UiNode.ItemList>(ws.slots[2].content)
         val open = assertIs<UiNode.Tappable>(list.itemTemplate).onClick

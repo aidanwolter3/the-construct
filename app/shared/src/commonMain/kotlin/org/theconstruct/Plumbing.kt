@@ -82,12 +82,8 @@ fun themeEntity(pod: JsonObject?, dark: Boolean): JsonObject = buildJsonObject {
     }
 }
 
-/** The screens a layout opens by route: a workspace's or a page's. */
-fun screensOf(node: UiNode?): List<Screen> = when (node) {
-    is UiNode.Workspace -> node.screens
-    is UiNode.Page -> node.screens
-    else -> emptyList()
-}
+/** The screens a layout opens by route: a page's. */
+fun screensOf(node: UiNode?): List<Screen> = (node as? UiNode.Page)?.screens.orEmpty()
 
 /** Whether [node] takes the rest of a bounded column's height (a scroll, a filling box, an inline layout, a gesture around one). */
 internal fun fillsHeight(node: UiNode): Boolean = when (node) {
@@ -120,7 +116,7 @@ internal fun PlumbingRoot(
         onDispatch(it)
     }
     CompositionLocalProvider(
-        LocalInlineWorkspace provides false,
+        LocalInlineLayout provides false,
         LocalBoundedHeight provides !inline,
         LocalFillLayout provides !inline,
         LocalPageActions provides actions,
@@ -138,7 +134,7 @@ internal fun NodePage(
     modifier: Modifier,
     item: JsonObject?,
 ) {
-    PlumbingRoot(node.root, entities, onDispatch, modifier, item, inline = LocalInlineWorkspace.current)
+    PlumbingRoot(node.root, entities, onDispatch, modifier, item, inline = LocalInlineLayout.current)
 }
 
 /**

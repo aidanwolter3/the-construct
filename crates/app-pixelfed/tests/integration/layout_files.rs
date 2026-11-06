@@ -386,11 +386,15 @@ fn sync_appends_new_files_once_and_refuses_changes() {
     .unwrap()
     .unwrap();
     assert_eq!(served.version, pixelfed_files);
-    // A build from before `title_scrolls` has no version it can draw on a new
-    // pod: the older files are retired (decision `retired-layout-files`).
+    // This build doesn't draw `core://Workspace` (issue #126): it got the
+    // newest file above as its expansion. A build from before
+    // `title_scrolls` (and `page`) has no version it can draw on a new pod:
+    // the older files are retired (decision `retired-layout-files`).
+    assert!(!protocol::FEATURES.contains(&protocol::feature::WORKSPACE));
     let before: String = protocol::FEATURES
         .iter()
-        .filter(|f| **f != protocol::feature::TITLE_SCROLLS)
+        .filter(|f| **f != protocol::feature::PAGE)
+        .chain(&[protocol::feature::WORKSPACE, protocol::feature::SCREENS])
         .copied()
         .collect::<Vec<_>>()
         .join(",");

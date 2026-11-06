@@ -81,9 +81,6 @@ val LocalConstructQueries: ProvidableCompositionLocal<Map<String, List<String>>>
  */
 val LocalToday: ProvidableCompositionLocal<Long?> = staticCompositionLocalOf { null }
 
-/** Extra start padding for the workspace title, beside the Back a pushed workspace gets ([PushFrame]). */
-val LocalWorkspaceTitleInset: ProvidableCompositionLocal<Dp> = staticCompositionLocalOf { 0.dp }
-
 /**
  * Renders one [UiNode]. [item] is the current item context inside a list or carousel template (the entity's
  * fields plus a synthetic `uri` field holding its entity key). Intents
@@ -100,64 +97,14 @@ fun RenderUiNode(
 ) {
     val dispatch: (ActionIntent) -> Unit = { onDispatch(bindIntent(it, item)) }
     when (node) {
-        is UiNode.Workspace -> if (LocalInlineWorkspace.current) {
-            // Inline in another layout's page (`core://Layout`, decision `layouts-not-apps`): its slots only, at their
-            // own height; the page around them scrolls.
-            Column(modifier) {
-                CompositionLocalProvider(LocalInlineWorkspace provides false) {
-                    node.slots.forEach { slot ->
-                        key(slot.slotId) { RenderUiNode(slot.content, entities, onDispatch, Modifier, item) }
-                    }
-                }
-            }
-        } else if (fillsScreen(node)) {
-            // One slot that fills the screen itself (decisions `blueprints-and-home`, `layouts-not-apps`): no title
-            // bar, no page scroll.
-            CompositionLocalProvider(LocalFillLayout provides true) {
-                RenderUiNode(node.slots[0].content, entities, onDispatch, modifier.fillMaxSize(), item)
-            }
-        } else {
-            val scroll = rememberScrollState()
-            val title: @Composable () -> Unit = {
-                Text(
-                    node.title,
-                    style = MaterialTheme.typography.headlineMedium,
-                    modifier = Modifier
-                        .padding(start = 16.dp + LocalWorkspaceTitleInset.current, end = 16.dp, top = 12.dp, bottom = 12.dp)
-                        .testTag("workspace-title"),
-                )
-            }
-            val slots: @Composable (StickyScroll) -> Unit = { sticky ->
-                CompositionLocalProvider(LocalStickyScroll provides sticky) {
-                    node.slots.forEach { slot ->
-                        // Keyed by slot id: a layout change that inserts a slot above (e.g. a new version adding a
-                        // banner at the top) keeps the state of the slots below (feed pager positions).
-                        key(slot.slotId) {
-                            RenderUiNode(slot.content, entities, onDispatch, Modifier, item)
-                        }
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
-            }
-            if (node.titleScrolls) {
-                // Feature `title_scrolls`: the title is the first thing in the scrolling view.
-                val sticky = remember(scroll) { StickyScroll(scroll) }
-                Column(modifier.fillMaxSize().verticalScroll(scroll).stickyContent(sticky)) {
-                    title()
-                    slots(sticky)
-                }
-            } else {
-                // The title is pinned in a bar (decision `pinned-app-title`); only the slots scroll, so
-                // `core://Sticky` content pins right under the title.
-                val sticky = remember(scroll) { StickyScroll(scroll) }
-                Column(modifier.fillMaxSize()) {
-                    title()
-                    Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(scroll).stickyContent(sticky)) {
-                        slots(sticky)
-                    }
-                }
-            }
-        }
+        // Porcelain (decision `plumbing-and-porcelain`, issue #126): a pod serves a workspace to this build as the
+        // `core://Page` it expands to, so one reaches here only from a pod that can't expand it.
+        is UiNode.Workspace -> Text(
+            "This page needs a newer pod.",
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.Gray,
+            modifier = modifier.padding(16.dp).testTag("workspace-unsupported"),
+        )
 
         // Plumbing (decision `plumbing-and-porcelain`): no chrome from the app.
         is UiNode.Page -> NodePage(node, entities, onDispatch, modifier, item)

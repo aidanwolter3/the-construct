@@ -694,7 +694,7 @@ pub fn convert_to_layouts(store: &Store, catalog: &Catalog) -> rusqlite::Result<
             serde_json::from_value::<protocol::UiNode>(doc).is_ok_and(|n| {
                 protocol::required_features(&n)
                     .iter()
-                    .any(|f| protocol::REMOVED_FEATURES.contains(f))
+                    .any(|f| protocol::is_retired(f))
             })
         });
     let list = home_list_layout();

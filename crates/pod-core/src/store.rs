@@ -846,9 +846,30 @@ pub struct AppVersion {
 }
 
 impl AppVersion {
-    /// Whether `client` can draw this version, and why not.
+    /// Whether `client` can draw this version, and why not. A client that
+    /// draws the plumbing gets a workspace as its expansion, so the
+    /// workspace's own features ([`crate::porcelain::WORKSPACE_FEATURES`])
+    /// don't count for it; the caller checks the expansion
+    /// ([`crate::layouts::active_for`]).
     pub fn compatibility(&self, client: &protocol::ClientCaps) -> protocol::Compatibility {
+        if crate::porcelain::draws_plumbing(client) {
+            let features: Vec<&str> = self
+                .features
+                .iter()
+                .map(String::as_str)
+                .filter(|f| !crate::porcelain::WORKSPACE_FEATURES.contains(f))
+                .collect();
+            return client.can_draw(&features);
+        }
         client.can_draw(&self.features)
+    }
+
+    /// Whether the version is a `core://Workspace`, served as its expansion
+    /// to a client that draws the plumbing.
+    pub fn is_workspace(&self) -> bool {
+        self.features
+            .iter()
+            .any(|f| f == protocol::feature::WORKSPACE)
     }
 }
 

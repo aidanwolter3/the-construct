@@ -1,0 +1,37 @@
+{
+  "note": "First version: the Pixelfed blueprint's comment box, the footer of its post screens (issue #128)",
+  "component": {
+    "doc": "A box that comments on the post of the screen's route ($route.id): the comment shows at once as Sending… and the screen reloads.",
+    "params": [],
+    "template": {
+      "type": "core://TextField",
+      "field": "comment",
+      "placeholder": "Add a comment…",
+      "max_length": 500,
+      "on_submit": {
+        "intent": "action.mutation.create",
+        "query_key": "comments:$route.id",
+        "entity_uri": "pixelfed://comments/pending-$nonce",
+        "entity": {
+          "author_name": "You",
+          "text": "$form.comment",
+          "meta": "Sending…",
+          "depth": 0
+        },
+        "endpoint": "/v1/pixelfed/posts/comment",
+        "payload": {
+          "id": "$route.id",
+          "text": "$form.comment",
+          "client_id": "$nonce"
+        },
+        "refresh_workspace": true
+      }
+    },
+    "examples": [
+      {
+        "args": {},
+        "note": "The footer of a post screen"
+      }
+    ]
+  }
+}

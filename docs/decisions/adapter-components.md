@@ -21,6 +21,12 @@ Pixelfed's signed-out screen is now a workspace whose slot is a use of `core:pix
 same `action.auth.login` intents, so every client draws it as before and no version negotiation is needed; a test
 checks it node for node.
 
+The Pixelfed blueprint's three post screens (`post`, `comments`, `comment_thread`, file 0013) share
+`core:pixelfed_post` as their content (`focus`: the comment to scroll to and highlight, which only `comment_thread`
+passes) and `core:pixelfed_comment_box` as their footer (issue #128). Screens stay part of the blueprint, so the parts
+`screen:post`, `screen:comments` and `screen:comment_thread` are unchanged; the golden test checks 0013 expands to
+0012.
+
 Not done yet: the component's buttons carry the pod's Pixelfed auth routes (`action.auth.login`), not
 `action.device sign_in` with a provider from `local:providers`. A layout using it must pass `instance_url`; moving to
 the device command (which needs the device's provider list loaded) would make it argument-free but changes what old

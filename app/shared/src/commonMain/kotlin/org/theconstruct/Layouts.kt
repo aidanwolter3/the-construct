@@ -130,8 +130,8 @@ internal val LocalLayoutChain: ProvidableCompositionLocal<List<String>> = static
 /** A `core://Layout` inline here fills the space given (a workspace's one slot) rather than its content's height. */
 internal val LocalFillLayout: ProvidableCompositionLocal<Boolean> = staticCompositionLocalOf { false }
 
-/** The workspace being drawn is inline in another layout's page: its slots only, no title, no scroll of its own. */
-internal val LocalInlineWorkspace: ProvidableCompositionLocal<Boolean> = staticCompositionLocalOf { false }
+/** The page being drawn is inline in another layout's page: its content's height, no scroll of its own. */
+internal val LocalInlineLayout: ProvidableCompositionLocal<Boolean> = staticCompositionLocalOf { false }
 
 /** The notice for a layout that was deleted. */
 const val LAYOUT_DELETED = "This was deleted."
@@ -189,7 +189,7 @@ internal fun LayoutBody(
                 },
                 LocalLayoutChain provides chain + layoutId,
                 LocalFillLayout provides false,
-                LocalInlineWorkspace provides inline,
+                LocalInlineLayout provides inline,
             ) {
                 RenderUiNode(
                     workspace,
@@ -441,11 +441,7 @@ private fun StackEntryView(
                         edge != null -> OverlayFrame(entry, edge, drag, onDismiss = { nav.dismiss(entry) }) {
                             FrameContent(controller, state, device, entry) { PresentedBody(controller, entry, settingsExtra) }
                         }
-                        else -> {
-                            // A plumbing page draws its own Back (decision `plumbing-and-porcelain`).
-                            val page = controller.workspaceOf(entry.layoutId, state) is UiNode.Page
-                            PushFrame(controller, entry, chrome = !page) { PresentedBody(controller, entry, settingsExtra) }
-                        }
+                        else -> PushFrame(entry) { PresentedBody(controller, entry, settingsExtra) }
                     }
                 }
             }
@@ -529,31 +525,11 @@ private fun PresentedBody(controller: ConstructController, entry: LayoutEntry, s
     }
 }
 
-/**
- * A pushed layout: the whole screen, with Back at the top start beside its title. Without [chrome] (a plumbing page),
- * the layout draws its own Back.
- */
+/** A pushed layout: the whole screen. Its page draws its own Back (decision `plumbing-and-porcelain`). */
 @Composable
-private fun PushFrame(
-    controller: ConstructController,
-    entry: LayoutEntry,
-    chrome: Boolean = true,
-    content: @Composable () -> Unit,
-) {
+private fun PushFrame(entry: LayoutEntry, content: @Composable () -> Unit) {
     Surface(Modifier.fillMaxSize().testTag("layout:${entry.layoutId}"), color = MaterialTheme.colorScheme.background) {
-        if (!chrome) {
-            content()
-            return@Surface
-        }
-        Box(Modifier.fillMaxSize()) {
-            CompositionLocalProvider(LocalWorkspaceTitleInset provides PUSH_BACK_INSET) { content() }
-            IconButton(
-                onClick = { controller.navigation.dismiss(entry) },
-                modifier = Modifier.align(Alignment.TopStart).padding(start = 4.dp, top = 4.dp).testTag("layout-back"),
-            ) {
-                Icon(ConstructIcons.ArrowBack, contentDescription = "Back")
-            }
-        }
+        content()
     }
 }
 
@@ -765,6 +741,3 @@ private const val FRAME_SLIDE_MS = 280
 
 /** The widest a side panel gets. */
 private val PANEL_MAX_WIDTH = 340.dp
-
-/** Start padding of a pushed layout's title, beside its Back button (4 dp + 48 dp button + 4 dp). */
-private val PUSH_BACK_INSET = 44.dp
