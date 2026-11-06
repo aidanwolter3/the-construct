@@ -27,17 +27,17 @@ private fun chips(field: String, remember: Boolean, vararg values: String) =
     """{"type":"core://ChoiceChips","field":"$field","remember":$remember,
         "options":[${values.joinToString(",") { """{"label":"L$it","value":"$it"}""" }}]}"""
 
-private fun workspace(slot: String, screen: String = """{"type":"core://Divider"}""") = """
-{"type":"core://Workspace","id":"app","title":"App",
- "slots":[{"slot_id":"s","provider_uri":"p","content":{"type":"core://Column","children":[$slot]}}],
- "screens":[{"id":"post","route":"x://posts/{id}","title":"Post","content":$screen}]}
+private fun page(slot: String, screen: String = """{"type":"core://Divider"}""") = """
+{"type":"core://Page","id":"app","title":"App",
+ "root":{"type":"core://Column","children":[$slot]},
+ "screens":[{"id":"post","route":"x://posts/{id}","title":"Post","root":$screen}]}
 """
 
 class RememberedFormTest {
     @Test
     fun rememberedChoicesFindsMarkedChipsAnywhere() {
         val node = ConstructJson.decodeNode(
-            workspace(
+            page(
                 """{"type":"core://Conditional","value":"x","content":{"type":"core://Box","content":${chips("view", true, "", "cards")}}},
                    ${chips("cat", false, "", "a")}""",
             ),
@@ -65,12 +65,12 @@ class RememberedFormTest {
     fun theRootFormIsFilledBeforeTheLayoutShowsAndChoicesAreSaved() {
         val bridge = RememberingBridge(mutableMapOf(ROOT_FORM_SCOPE to mutableMapOf("view" to "cards")))
         val controller = ConstructController(bridge)
-        bridge.listener!!(EngineSnapshot(workspace(chips("view", true, "", "cards")), "{}", true, 1, 0))
+        bridge.listener!!(EngineSnapshot(page(chips("view", true, "", "cards")), "{}", true, 1, 0))
         assertEquals("cards", controller.navigation.rootForm["view"])
         assertEquals(1, bridge.reads)
         // Later snapshots of the same layout don't read again or undo the user's choice.
         controller.navigation.rootForm.remove("view")
-        bridge.listener!!(EngineSnapshot(workspace(chips("view", true, "", "cards")), "{}", true, 2, 0))
+        bridge.listener!!(EngineSnapshot(page(chips("view", true, "", "cards")), "{}", true, 2, 0))
         assertNull(controller.navigation.rootForm["view"])
         assertEquals(1, bridge.reads)
         controller.navigation.remember(ROOT_FORM_SCOPE, "view", null)
@@ -78,7 +78,7 @@ class RememberedFormTest {
         // A layout without remembered fields never reads the device.
         val other = RememberingBridge()
         ConstructController(other)
-        other.listener!!(EngineSnapshot(workspace(chips("view", false, "", "cards")), "{}", true, 1, 0))
+        other.listener!!(EngineSnapshot(page(chips("view", false, "", "cards")), "{}", true, 1, 0))
         assertEquals(0, other.reads)
     }
 
@@ -88,7 +88,7 @@ class RememberedFormTest {
             mutableMapOf("post" to mutableMapOf("size" to "big"), ROOT_FORM_SCOPE to mutableMapOf("size" to "small")),
         )
         val controller = ConstructController(bridge)
-        bridge.listener!!(EngineSnapshot(workspace("""{"type":"core://Divider"}""", chips("size", true, "", "big", "small")), "{}", true, 1, 0))
+        bridge.listener!!(EngineSnapshot(page("""{"type":"core://Divider"}""", chips("size", true, "", "big", "small")), "{}", true, 1, 0))
         assertNull(controller.navigation.rootForm["size"])
         controller.dispatch(ActionIntent.Navigate("x://posts/1", PresentationMode.Push))
         assertEquals("big", controller.navigation.top!!.form["size"])

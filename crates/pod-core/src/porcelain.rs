@@ -23,6 +23,11 @@ pub const PLUMBING: [&str; 3] = [
     protocol::feature::NAV_DATA,
 ];
 
+/// The features of a `core://Workspace` itself, which a client that draws
+/// [`PLUMBING`] never sees: the pod serves it the expansion instead. New
+/// builds don't draw them (`features/removed/`, issue #126).
+pub const WORKSPACE_FEATURES: [&str; 3] = protocol::EXPANDED_FEATURES;
+
 /// The component a workspace's page is.
 pub const WORKSPACE_COMPONENT: &str = "core:workspace";
 /// The component each workspace screen is.

@@ -51,7 +51,7 @@ and approves the consent page. Against staging, start with `click Try a temporar
 | `-Pscript` | `shot initial` | The script. |
 | `-PscriptFile` | | The script, from a file (instead of `-Pscript`). |
 | `-Pmode` | `fixture` | `fixture` or `live`; `-PbaseUrl` selects live. |
-| `-Pfixture` | per workspace | The bundle in fixture mode: `pixelfed_sample_no_login` uses `crates/app-pixelfed/sample/bundle.json`, `pixelfed` uses `app/desktopApp/src/sim/resources/pixelfed_feed_bundle.json`; other apps need this flag. |
+| `-Pfixture` | per workspace | The bundle in fixture mode: `pixelfed_sample_no_login` uses `app/desktopApp/src/sim/resources/pixelfed_sample_bundle.json`, `pixelfed` uses `app/desktopApp/src/sim/resources/pixelfed_feed_bundle.json`; other apps need this flag. |
 | `-PbaseUrl` | staging | The server in live mode. |
 | `-PtimeoutMs` | `10000` | Live mode: how long to wait for the first load. |
 | `-Pout` | `app/desktopApp/build/sim/<timestamp>` | Output directory. |
@@ -93,8 +93,10 @@ Commands are separated by `;` or newlines; entries starting with `#` are comment
 
 `back` pops the top of the back stack (a presented layout or a screen). In fixture mode the fake pod serves the
 `app-shell` blueprints (`settings`, `inbox`) as a pod serves them to this build, as plumbing
-(`app/desktopApp/src/sim/resources/blueprint_<id>_page.json`; `blueprint_<id>.json` is the workspace older builds
-get, written by the same `fixtures::` test), and the fixtures' layouts to `open-layout`.
+(`app/desktopApp/src/sim/resources/blueprint_<id>_page.json`, written by the same `fixtures::` test), and the
+fixtures' layouts to `open-layout`. Every fixture bundle's layout is what a pod serves this build: a workspace as the
+`core://Page` it expands to. The `fixtures::` test writes them from the pod (and the hand-written ones from their
+workspace sources in `crates/server/tests/data/simulator/`); edit the source and rerun it.
 
 An `action.confirm` dialog's buttons are `tag:confirm:ok` and `tag:confirm:cancel`.
 
@@ -116,7 +118,7 @@ Examples:
 
 ## Test tags
 
-- **Layout nodes:** `screen:<id>`, `screen-back`, `screen-loading`, `screen-error`, `screen-retry`,
+- **Layout nodes:** `screen:<id>`, `screen-back` and `layout-back` (from `core:screen` / `core:workspace`),
   `textfield:<field>`, `textfield-send:<field>`, `list-empty`; a node's own `tag` (e.g. `carousel:<post uri>`,
   `like:<post uri>`, `bookmark:<post uri>`, `comment:<post uri>`).
 - **Menu:** `menu-button`, `menu-badge`, `menu-drawer`, `menu-close`, `menu-back`, `app-<id>`, `app-history-<id>`,

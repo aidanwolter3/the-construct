@@ -143,25 +143,26 @@ class PostingSimTest {
 
     companion object {
         private val BUNDLE = """
-{"version":"1","workspace":{"type":"core://Workspace","id":"posting_test","title":"Feed","slots":[
-  {"slot_id":"top","provider_uri":"p","content":{"type":"core://IconButton","icon":"add_photo","content_description":"New post",
-    "tag":"new-post","on_click":{"intent":"action.navigation.open","target_uri":"pixelfed://compose","presentation":"Modal"}}},
-  {"slot_id":"feed","provider_uri":"p","content":{"type":"core://List","query_key":"timeline:home","empty_text":"No posts",
+{"version":"1","workspace":{"type":"core://Page","id":"posting_test","title":"Feed","root":{"type":"core://Scroll",
+  "content":{"type":"core://Column","children":[
+  {"type":"core://IconButton","icon":"add_photo","content_description":"New post",
+    "tag":"new-post","on_click":{"intent":"action.navigation.open","target_uri":"pixelfed://compose","presentation":"Modal"}},
+  {"type":"core://List","query_key":"timeline:home","empty_text":"No posts",
     "item_template":{"type":"core://Column","spacing_dp":4,"children":[
       {"type":"core://Text","value_expr":"${'$'}item.caption","style":"Body"},
       {"type":"core://Conditional","value":"${'$'}item.pending_label","content":{"type":"core://Text","value_expr":"${'$'}item.pending_label","style":"Secondary"}},
       {"type":"core://Conditional","value":"${'$'}item.id","content":{"type":"core://Text","value_expr":"${'$'}item.like_count likes","style":"Secondary"}},
-      {"type":"core://Carousel","items":"${'$'}item.media_uris","item_template":{"type":"core://Image","url":"${'$'}item.url"}}]}}}],
+      {"type":"core://Carousel","items":"${'$'}item.media_uris","item_template":{"type":"core://Image","url":"${'$'}item.url"}}]}}]}},
  "screens":[{"id":"compose","route":"pixelfed://compose","title":"New post",
-   "content":{"type":"core://Column","spacing_dp":12,"padding_h_dp":16,"padding_v_dp":12,"children":[
+   "root":{"type":"core://Column","children":[{"type":"core://Scroll","content":{"type":"core://Column","spacing_dp":12,"padding_h_dp":16,"padding_v_dp":12,"children":[
      {"type":"core://MediaPicker","field":"photos","max_items":4,"label":"Add photos"},
-     {"type":"core://TextField","field":"caption","placeholder":"Write a caption…","max_length":2000,"lines":4}]},
-   "footer":{"type":"core://Button","label":"Share","on_click":{"intent":"action.sequence","steps":[{"intent":"action.mutation.create","query_key":"timeline:home",
+     {"type":"core://TextField","field":"caption","placeholder":"Write a caption…","max_length":2000,"lines":4}]}},
+   {"type":"core://Button","label":"Share","on_click":{"intent":"action.sequence","steps":[{"intent":"action.mutation.create","query_key":"timeline:home",
      "position":"start","entity_uri":"pixelfed://posts/pending-${'$'}nonce",
      "entity":{"author_name":"You","caption":"${'$'}form?.caption","media_uris":"${'$'}attachments.photos","pending_label":"Posting…"},
      "attachments":{"photos":"${'$'}form.photos"},"endpoint":"/v1/pixelfed/posts/create",
      "payload":{"caption":"${'$'}form?.caption","media":"${'$'}attachments.photos","client_id":"${'$'}nonce"},
-     "refresh_workspace":true},{"intent":"action.navigation.back"}]}}}]},
+     "refresh_workspace":true},{"intent":"action.navigation.back"}]}}]}}]},
  "entities":{"x://posts/old":{"id":"1","caption":"An older post","like_count":3,"media_uris":[]}},
  "queries":{"timeline:home":["x://posts/old"]}}
 """

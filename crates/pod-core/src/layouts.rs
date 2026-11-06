@@ -566,7 +566,7 @@ pub fn active_for(
                 continue;
             };
             let served = crate::parts::serve(store, catalog, &json, Some(client));
-            if crate::parts::may_hold_refs(&json)
+            if (crate::parts::may_hold_refs(&json) || v.is_workspace())
                 && let Ok(node) = serde_json::from_str::<UiNode>(&served)
                 && client.can_draw(&protocol::required_features(&node))
                     != protocol::Compatibility::Compatible

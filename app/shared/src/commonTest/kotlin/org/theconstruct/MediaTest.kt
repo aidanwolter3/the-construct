@@ -24,36 +24,45 @@ private class Recorder : ConstructEngineBridge {
     }
 }
 
-/** The compose screen of the newest layouts/pixelfed file, reached from the feed: Share is [create, back]. */
+/**
+ * The compose screen of the newest layouts/pixelfed file, reached from the feed, as a page (a pod serves this build the
+ * workspace's expansion): its root is the scrolling content, then the footer. Share is [create, back].
+ */
 private val COMPOSE_WORKSPACE = """
-{"type":"core://Workspace","id":"pixelfed","title":"Home","slots":[
-  {"slot_id":"s","provider_uri":"p","content":{"type":"core://IconButton","icon":"add_photo","content_description":"New post",
-    "tag":"new-post","on_click":{"intent":"action.navigation.open","target_uri":"pixelfed://compose","presentation":"Modal"}}}],
+{"type":"core://Page","id":"pixelfed","title":"Home","root":{"type":"core://IconButton","icon":"add_photo",
+    "content_description":"New post",
+    "tag":"new-post","on_click":{"intent":"action.navigation.open","target_uri":"pixelfed://compose","presentation":"Modal"}},
  "screens":[{"id":"compose","route":"pixelfed://compose","title":"New post",
-   "content":{"type":"core://Column","spacing_dp":12,"padding_h_dp":16,"padding_v_dp":12,"children":[
+   "root":{"type":"core://Column","children":[{"type":"core://Scroll","content":{"type":"core://Column","spacing_dp":12,"padding_h_dp":16,"padding_v_dp":12,"children":[
      {"type":"core://MediaPicker","field":"photos","max_items":4,"label":"Add photos"},
-     {"type":"core://TextField","field":"caption","placeholder":"Write a caption…","max_length":2000,"lines":4}]},
-   "footer":{"type":"core://Button","label":"Share","on_click":{"intent":"action.sequence","steps":[{"intent":"action.mutation.create","query_key":"timeline:home",
+     {"type":"core://TextField","field":"caption","placeholder":"Write a caption…","max_length":2000,"lines":4}]}},
+   {"type":"core://Button","label":"Share","on_click":{"intent":"action.sequence","steps":[{"intent":"action.mutation.create","query_key":"timeline:home",
      "position":"start","entity_uri":"pixelfed://posts/pending-$'$'nonce",
      "entity":{"author_name":"You","caption":"$'$'form?.caption","media_uris":"$'$'attachments.photos","pending_label":"Posting…"},
      "attachments":{"photos":"$'$'form.photos"},"endpoint":"/v1/pixelfed/posts/create",
      "payload":{"caption":"$'$'form?.caption","media":"$'$'attachments.photos","client_id":"$'$'nonce"},
-     "refresh_workspace":true},{"intent":"action.navigation.back"}]}}}]}
+     "refresh_workspace":true},{"intent":"action.navigation.back"}]}}]}}]}
 """.replace("$'$'", "$")
 
 class MediaTest {
     private fun composeScreen(): Screen =
-        assertIs<UiNode.Workspace>(ConstructJson.decodeNode(COMPOSE_WORKSPACE)).screens.single()
+        assertIs<UiNode.Page>(ConstructJson.decodeNode(COMPOSE_WORKSPACE)).screens.single()
+
+    /** The compose screen's scrolling content and its footer (Share). */
+    private fun parts(screen: Screen): Pair<UiNode, UiNode> {
+        val col = assertIs<UiNode.Column>(screen.root)
+        return assertIs<UiNode.Scroll>(col.children[0]).content to col.children[1]
+    }
 
     private fun share(): ActionIntent.Create {
-        val onClick = assertIs<ActionIntent.Sequence>(assertIs<UiNode.Button>(composeScreen().footer).onClick)
+        val onClick = assertIs<ActionIntent.Sequence>(assertIs<UiNode.Button>(parts(composeScreen()).second).onClick)
         assertEquals(ActionIntent.NavigateBack, onClick.steps[1])
         return assertIs<ActionIntent.Create>(onClick.steps[0])
     }
 
     @Test
     fun schema8NodesAndCreateFieldsParseAndRoundTrip() {
-        val column = assertIs<UiNode.Column>(composeScreen().content)
+        val column = assertIs<UiNode.Column>(parts(composeScreen()).first)
         assertEquals(UiNode.MediaPicker("photos", 4, "Add photos"), column.children[0])
         val caption = assertIs<UiNode.TextField>(column.children[1])
         assertEquals(4, caption.lines)
@@ -151,7 +160,7 @@ class MediaTest {
         controller.dispatch(ActionIntent.Navigate("pixelfed://compose", PresentationMode.Modal))
         val entry = controller.navigation.topScreen!!
         assertEquals("compose", entry.screen.id)
-        val share = assertIs<UiNode.Button>(entry.screen.footer).onClick
+        val share = assertIs<UiNode.Button>(parts(entry.screen).second).onClick
         controller.dispatch(share) // no photos: nothing sent, the screen stays
         assertTrue(bridge.sent.isEmpty(), bridge.sent.toString())
         assertEquals(entry, controller.navigation.top)

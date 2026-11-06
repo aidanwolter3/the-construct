@@ -530,11 +530,20 @@ async fn claude_builds_and_edits_a_custom_app_with_the_tools() {
     let (err, vocab) = env.tool(&access, "describe_vocabulary", json!({})).await;
     assert!(!err);
     // Every client node type but the three retired ones (decision
-    // `layouts-not-apps`) is plumbing; core://Use, core://Ref and the
-    // template nodes are porcelain (decision `plumbing-and-porcelain`).
+    // `layouts-not-apps`) and core://Workspace is plumbing; the workspace
+    // (issue #126), core://Use, core://Ref and the template nodes are
+    // porcelain (decision `plumbing-and-porcelain`).
     assert_eq!(
         vocab["plumbing"]["nodes"].as_array().unwrap().len(),
-        protocol::NODE_TYPES.len() - 3
+        protocol::NODE_TYPES.len() - 4
+    );
+    assert!(
+        vocab["porcelain"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["type"] == "core://Workspace"),
+        "{vocab}"
     );
     assert!(
         vocab["porcelain"]["components"]

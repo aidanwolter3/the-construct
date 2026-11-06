@@ -249,11 +249,7 @@ class Navigation internal constructor(private val controller: ConstructControlle
      * remembered field appears.
      */
     internal fun restoreRoot(workspace: UiNode?) {
-        val nodes = when (workspace) {
-            is UiNode.Workspace -> workspace.slots.map { it.content }
-            is UiNode.Page -> listOf(workspace.root)
-            else -> return
-        }
+        val nodes = (workspace as? UiNode.Page)?.let { listOf(it.root) } ?: return
         val choices = rememberedChoices(nodes)
         if (choices.isEmpty()) return
         synchronized(rootRestored) {
@@ -331,7 +327,7 @@ class Navigation internal constructor(private val controller: ConstructControlle
             val params = matchRoute(screen.route, targetUri) ?: continue
             val frame = topFrame?.takeIf { it.layoutId == layoutId }
             val entry = ScreenEntry(nextKey++, bindRoute(screen, params), params, layoutId, frame)
-            val choices = rememberedChoices(listOfNotNull(entry.screen.content, entry.screen.footer, entry.screen.root))
+            val choices = rememberedChoices(listOfNotNull(entry.screen.root))
             if (choices.isNotEmpty()) applyRemembered(entry.form, choices, controller.rememberedFormValues(screen.id))
             if (presentation == PresentationMode.Replace && stack.lastOrNull() is ScreenEntry) {
                 controller.attachments.release(stack[stack.lastIndex].form)
@@ -425,89 +421,16 @@ class Navigation internal constructor(private val controller: ConstructControlle
 }
 
 /**
- * An open screen over its layout (in-tree: headless captures see it): a bar with Back, the title and a spinner while
- * the data loads, the load's error (with Try again), the content (scrolling) and the footer. Tags: `screen:<id>`,
- * `screen-back`, `screen-loading`, `screen-error`, `screen-retry`.
+ * An open screen over its layout (in-tree: headless captures see it): a `core://Page` screen's root. A workspace's
+ * screen (no root) is never served to this build (issue #126) and draws nothing.
  */
 @Composable
 internal fun ScreenView(controller: ConstructController, state: ConstructState, entry: ScreenEntry, device: DeviceData) {
-    val nav = controller.navigation
     val entities = remember(state.entities, device) { state.entities + device.entities }
     val queries = remember(state.queries, device) { state.queries + device.queries }
     val dispatch: (ActionIntent) -> Unit = { controller.dispatchIn(entry.layoutId, entry.form, it) }
-    val root = entry.screen.root
-    if (root != null) {
-        PageScreenView(entry, root, state, entities, queries, dispatch)
-        return
-    }
-    val content = entry.screen.content ?: return
-    // Inside a sheet or panel it takes the frame's colour.
-    val color = if (entry.frame != null) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.background
-    Surface(Modifier.fillMaxSize().testTag("screen:${entry.screen.id}"), color = color) {
-        val scope = entry.screen.id
-        CompositionLocalProvider(
-            LocalForm provides entry.form,
-            LocalFormMemory provides remember(scope) { FormMemory { f, v -> nav.remember(scope, f, v) } },
-            LocalConstructQueries provides queries,
-        ) {
-            Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-                Column(Modifier.fillMaxSize().widthIn(max = FEED_MAX_WIDTH)) {
-                    val load = entry.screen.data?.let { state.loads[it] }
-                    Row(
-                        Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp, top = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        IconButton(onClick = { nav.dismiss(entry) }, modifier = Modifier.testTag("screen-back")) {
-                            Icon(ConstructIcons.ArrowBack, contentDescription = "Back")
-                        }
-                        Text(
-                            interpolate(entry.screen.title, entities),
-                            style = MaterialTheme.typography.titleLarge,
-                            modifier = Modifier.weight(1f).semantics { heading() },
-                        )
-                        // Progress sits in the bar (its height is fixed by the Back button), so the content
-                        // below doesn't jump when the load finishes.
-                        if (load?.state == "loading") {
-                            CircularProgressIndicator(
-                                Modifier.size(16.dp).testTag("screen-loading").semantics { contentDescription = "Loading" },
-                                strokeWidth = 2.dp,
-                            )
-                        }
-                    }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                    LoadErrorRow(load, onRetry = nav::retry)
-                    val scroll = rememberScrollState()
-                    // After a submit from the footer (e.g. a new item at the end of a list), follow the content
-                    // to its end once it grows.
-                    var followEnd by remember { mutableStateOf(false) }
-                    LaunchedEffect(scroll.maxValue, followEnd) {
-                        if (followEnd && scroll.maxValue > 0) {
-                            scroll.animateScrollTo(scroll.maxValue)
-                            followEnd = false
-                        }
-                    }
-                    // The bar above does not scroll, so `core://Sticky` content pins right at the top.
-                    val sticky = remember(scroll) { StickyScroll(scroll) }
-                    Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll).stickyContent(sticky)) {
-                        CompositionLocalProvider(LocalStickyScroll provides sticky) {
-                            RenderUiNode(content, entities, dispatch, Modifier.fillMaxWidth())
-                        }
-                    }
-                    entry.screen.footer?.let { footer ->
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                        RenderUiNode(
-                            footer, entities,
-                            { intent ->
-                                dispatch(intent)
-                                followEnd = true
-                            },
-                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                        )
-                    }
-                }
-            }
-        }
-    }
+    val root = entry.screen.root ?: return
+    PageScreenView(entry, root, state, entities, queries, dispatch)
 }
 
 /**
@@ -540,24 +463,5 @@ private fun PageScreenView(
         ) {
             PlumbingRoot(root, withScreen, dispatch, Modifier.fillMaxSize(), item)
         }
-    }
-}
-
-@Composable
-private fun LoadErrorRow(load: LoadState?, onRetry: () -> Unit) {
-    when (load?.state) {
-        "error" -> Row(
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp).testTag("screen-error"),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                load.error ?: "Couldn't load this.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = onRetry, modifier = Modifier.testTag("screen-retry")) { Text("Try again") }
-        }
-        else -> {}
     }
 }

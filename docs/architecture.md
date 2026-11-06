@@ -89,7 +89,8 @@ rooted at a `core://Page` (any node, no chrome from the app) or a `core://Worksp
   expanded by the pod (`pod_core::parts`, `pod_core::components`) before serving: the server's (`core:`, files in
   `crates/pod-core/components/` or an adapter's `crates/app-*/components/`, and every blueprint and its parts) and the pod's own (`pod:`, made by an agent). A
   `core://Workspace` is porcelain too: an app that draws the plumbing gets it as a `core://Page`
-  (`core:workspace`, `core:screen`; `pod_core::porcelain`), older apps the workspace.
+  (`core:workspace`, `core:screen`; `pod_core::porcelain`), older apps the workspace. The app has no workspace
+  drawing of its own (decision `workspace-drawn-by-the-pod`).
 
 - **Layouts are code.** Built-in apps' layouts are files, `crates/<adapter>/layouts/<app>/NNNN.json`, embedded in the binary and
   appended to each app's history at startup. Files are append-only: the pod refuses to start if a deployed one

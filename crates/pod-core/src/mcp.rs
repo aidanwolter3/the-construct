@@ -1375,7 +1375,7 @@ fn feature_doc(name: &str) -> &'static str {
 fn plumbing_nodes() -> Vec<Value> {
     protocol::NODE_TYPES
         .iter()
-        .filter(|t| !RETIRED_NODES.contains(t))
+        .filter(|t| !RETIRED_NODES.contains(t) && **t != "core://Workspace")
         .map(|t| {
             let f = node_feature(t);
             json!({ "type": t, "feature": f, "doc": feature_doc(&f) })
@@ -1388,6 +1388,8 @@ fn porcelain_nodes() -> Value {
     json!([
         { "type": crate::components::USE_TYPE, "fields": "component, args?, children?, version?",
           "doc": "A component (list_components): core:<name> ships with the server, pod:<name> is the user's own, core:<blueprint> is a whole blueprint layout (only as a layout's root; the layout keeps its own id) and core:<blueprint>/<part> a part of one (a screen:<id> part in screens). Without version it follows the component: the layout gets a new version when the component changes." },
+        { "type": "core://Workspace", "fields": "id, title, slots: [{slot_id, content}], screens?: [{id, route, title, data?, content, footer?}], title_scrolls?",
+          "doc": "A page the older way: its slots stacked under a title, and screens with a bar (Back, title, a spinner while data loads) over their scrolling content and footer. Served as a core://Page through core:workspace and core:screen; prefer a core://Page for a new layout." },
         { "type": crate::parts::REF_TYPE, "fields": "app, part, version?",
           "doc": "The older name of {core://Use, component: core:<app>/<part>} (part \"layout\": core:<app>)." },
         { "type": crate::components::CHILDREN_TYPE, "fields": "at?",

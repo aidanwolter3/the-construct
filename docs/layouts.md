@@ -69,8 +69,10 @@ is going ([Device data](#device-data)).
 
 ## Structure of a workspace
 
-`core://Workspace` is porcelain the app still draws for older builds: a build that draws `page`, `scroll` and
-`nav_data` gets it expanded through `core:workspace` and `core:screen` instead.
+`core://Workspace` is porcelain: the pod serves it to a build that draws `page`, `scroll` and `nav_data` expanded
+through `core:workspace` and `core:screen`, and builds since issue #126 draw no workspace of their own (features
+`workspace`, `screens` and `title_scrolls` are in `features/removed/`, decision `workspace-drawn-by-the-pod`). Layouts
+may still be written with it; prefer a `core://Page` for a new one.
 
 ```json
 {

@@ -36,6 +36,20 @@ private val WORKSPACE_WITH_SCREEN = """
        "endpoint":"/v1/x/reply","payload":{"id":"$'$'route.id","text":"$'$'form.reply","key":"$'$'nonce"}}}}]}
 """.replace("$'$'", "$")
 
+/** [WORKSPACE_WITH_SCREEN] as a pod serves it to this build: a page whose screen is a column of the list and the footer. */
+private val PAGE_WITH_SCREEN = """
+{"type":"core://Page","id":"app","title":"App","root":{"type":"core://Text","value_expr":"Home","style":"Body"},
+ "screens":[{"id":"thread","route":"x://posts/{id}/thread","title":"Thread $'$'route.id",
+   "data":"/v1/x/thread?id=$'$'route.id",
+   "root":{"type":"core://Column","children":[
+     {"type":"core://Scroll","content":{"type":"core://List","query_key":"thread:$'$'route.id","empty_text":"Nothing yet",
+       "item_template":{"type":"core://Text","value_expr":"$'$'item.text","style":"Body"}}},
+     {"type":"core://TextField","field":"reply","placeholder":"Reply","max_length":10,
+      "on_submit":{"intent":"action.mutation.create","query_key":"thread:$'$'route.id",
+        "entity_uri":"x://items/pending-$'$'nonce","entity":{"text":"$'$'form.reply"},
+        "endpoint":"/v1/x/reply","payload":{"id":"$'$'route.id","text":"$'$'form.reply","key":"$'$'nonce"}}}]}}]}
+""".replace("$'$'", "$")
+
 class ScreensTest {
     @Test
     fun openLinkOpensHttpLinksAndNeverReachesTheEngine() {
@@ -171,7 +185,7 @@ class ScreensTest {
     fun navigationOpensMatchingScreensAndLoadsTheirData() {
         val bridge = RecordingBridge()
         val controller = ConstructController(bridge)
-        bridge.listener!!(EngineSnapshot(WORKSPACE_WITH_SCREEN, "{}", true, 1, 0))
+        bridge.listener!!(EngineSnapshot(PAGE_WITH_SCREEN, "{}", true, 1, 0))
         controller.dispatch(ActionIntent.Navigate("x://posts/42/thread", PresentationMode.Push))
         val top = controller.navigation.topScreen!!
         assertEquals("thread", top.screen.id)
@@ -199,10 +213,10 @@ class ScreensTest {
     fun aScreenOpenedFromASheetOrPanelOpensInsideIt() {
         val bridge = RecordingBridge()
         val controller = ConstructController(bridge)
-        val panel = WORKSPACE_WITH_SCREEN.replace("\"id\":\"app\"", "\"id\":\"c-panel\"")
+        val panel = PAGE_WITH_SCREEN.replace("\"id\":\"app\"", "\"id\":\"c-panel\"")
         bridge.listener!!(
             EngineSnapshot(
-                WORKSPACE_WITH_SCREEN, "{}", true, 1, 0,
+                PAGE_WITH_SCREEN, "{}", true, 1, 0,
                 layoutsJson = """{"c-panel":{"workspace":$panel,"version":1,"gone":false}}""",
             ),
         )
@@ -235,10 +249,10 @@ class ScreensTest {
     fun submittingBindsTheVisibleScreensForm() {
         val bridge = RecordingBridge()
         val controller = ConstructController(bridge)
-        bridge.listener!!(EngineSnapshot(WORKSPACE_WITH_SCREEN, "{}", true, 1, 0))
+        bridge.listener!!(EngineSnapshot(PAGE_WITH_SCREEN, "{}", true, 1, 0))
         controller.dispatch(ActionIntent.Navigate("x://posts/42/thread", PresentationMode.Push))
         val entry = controller.navigation.topScreen!!
-        val submit = assertIs<UiNode.TextField>(entry.screen.footer).onSubmit!!
+        val submit = assertIs<UiNode.TextField>(assertIs<UiNode.Column>(entry.screen.root).children[1]).onSubmit!!
         controller.dispatch(submit) // blank: nothing sent
         assertEquals(1, bridge.sent.size)
         entry.form["reply"] = "Nice"

@@ -8,7 +8,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import org.theconstruct.ConstructJson
 import org.theconstruct.LayoutApiException
 import org.theconstruct.Orientation
-import org.theconstruct.SlotSpec
 import org.theconstruct.TextStyle
 import org.theconstruct.UiNode
 import java.io.File
@@ -187,7 +186,7 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
     @Synchronized
     fun publish(id: String, note: String): Long {
         val a = app(id)
-        val layout = withBanner(a.versions.last().layout, "What's new: $note")
+        val layout = withBanner(a.versions.last().layout, "$BANNER_PREFIX$note")
         a.versions += Version(layout, note, clock())
         return a.versions.size.toLong()
     }
@@ -199,7 +198,8 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
         const val KITCHEN = "c-kitchen2dm"
         private const val HOUR = 3_600L
         private const val DAY = 86_400L
-        const val BANNER_SLOT = "whats_new"
+        /** The start of a published version's banner text ([withBanner]). */
+        const val BANNER_PREFIX = "What's new: "
 
         private fun obj(vararg pairs: Pair<String, JsonElement>) = JsonObject(linkedMapOf(*pairs))
 
@@ -207,7 +207,7 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
 
         /** The app a bundle belongs to when not given: its root id, or `pixelfed_sample_no_login` for the one-post sample bundle. */
         fun appIdFor(workspace: UiNode, pixelfed: Boolean): String {
-            val id = (workspace as? UiNode.Workspace)?.id ?: "home"
+            val id = (workspace as? UiNode.Page)?.id ?: "home"
             return when {
                 id in KNOWN -> id
                 pixelfed -> "pixelfed_sample_no_login"
@@ -233,7 +233,7 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
             }
             if (!catalog.has(appId)) {
                 catalog.add(
-                    appId, (base as? UiNode.Workspace)?.title ?: appId, "",
+                    appId, (base as? UiNode.Page)?.title?.ifEmpty { null } ?: appId, "",
                     Version(base, "First version", catalog.clock() - 2 * DAY),
                 )
             }
@@ -271,7 +271,8 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
 
         /** Every list item template in [node] that is a [UiNode.Column] (a post card) transformed by [f]. */
         private fun mapCards(node: UiNode, f: (UiNode.Column) -> UiNode.Column): UiNode = when (node) {
-            is UiNode.Workspace -> node.copy(slots = node.slots.map { it.copy(content = mapCards(it.content, f)) })
+            is UiNode.Page -> node.copy(root = mapCards(node.root, f))
+            is UiNode.Scroll -> node.copy(content = mapCards(node.content, f))
             is UiNode.Container -> node.copy(children = node.children.map { mapCards(it, f) })
             is UiNode.Column -> node.copy(children = node.children.map { mapCards(it, f) })
             is UiNode.Conditional -> node.copy(content = mapCards(node.content, f))
@@ -297,14 +298,27 @@ class FakeAppCatalog(private val clock: () -> Long = { System.currentTimeMillis(
             c.copy(children = kids)
         }
 
-        /** [base] with a [text] title in a first slot ([BANNER_SLOT], replaced if present). */
+        /**
+         * [base] with a [text] title first in its page's scrolling content (the slots of a workspace's expansion,
+         * `core:workspace`), replacing an earlier one.
+         */
         fun withBanner(base: UiNode, text: String): UiNode {
-            val ws = base as? UiNode.Workspace ?: return base
-            val banner = SlotSpec(
-                BANNER_SLOT, "core://text",
-                UiNode.Container(Orientation.Vertical, 16, listOf(UiNode.Text(text, TextStyle.Title))),
-            )
-            return ws.copy(slots = listOf(banner) + ws.slots.filter { it.slotId != BANNER_SLOT })
+            val page = base as? UiNode.Page ?: return base
+            val banner = UiNode.Container(Orientation.Vertical, 16, listOf(UiNode.Text(text, TextStyle.Title)))
+            fun isBanner(n: UiNode) = n is UiNode.Container && (n.children.singleOrNull() as? UiNode.Text)?.valueExpr?.startsWith(BANNER_PREFIX) == true
+            var done = false
+            fun walk(n: UiNode): UiNode = when {
+                done -> n
+                n is UiNode.Scroll && n.content is UiNode.Column -> {
+                    done = true
+                    val col = n.content as UiNode.Column
+                    n.copy(content = col.copy(children = listOf(banner) + col.children.filterNot(::isBanner)))
+                }
+                n is UiNode.Column -> n.copy(children = n.children.map(::walk))
+                n is UiNode.Conditional -> n.copy(content = walk(n.content))
+                else -> n
+            }
+            return page.copy(root = walk(page.root))
         }
     }
 }

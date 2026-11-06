@@ -75,7 +75,7 @@ class ScreensSimTest {
         run(
             fake(screenData = false),
             "click tag:comment:$CAROUSEL; wait-text 3000 This isn't available anymore.; assert-text Try again; " +
-                "click tag:screen-retry; assert-text This isn't available anymore.",
+                "click Try again; assert-text This isn't available anymore.",
         )
     }
 
