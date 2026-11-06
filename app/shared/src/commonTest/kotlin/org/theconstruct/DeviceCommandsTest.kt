@@ -141,6 +141,20 @@ class DeviceCommandsTest {
     }
 
     @Test
+    fun aRefreshAfterNewArrivalsOffersOlderOnes() = runBlocking {
+        val bridge = PodBridge(count = 6)
+        val c = ConstructController(bridge, HOME_APP, Dispatchers.Unconfined)
+        c.device.loadNotifications()
+        assertNull(c.device.olderBefore, "everything fits one page")
+        repeat(30) { i ->
+            bridge.items.add(0, AppNotification(id = "n%03d".format(100 + i), appId = "c-a", channel = "c", title = "New $i", createdAt = 100L + i))
+        }
+        c.device.loadNotifications()
+        assertEquals(30, c.device.notifications.size)
+        assertEquals("n100", c.device.olderBefore, "the six older ones can be loaded")
+    }
+
+    @Test
     fun markReadClearsOneNotificationAndLowersTheUnreadCount() = runBlocking {
         val bridge = PodBridge(count = 3)
         val c = ConstructController(bridge, HOME_APP, Dispatchers.Unconfined)

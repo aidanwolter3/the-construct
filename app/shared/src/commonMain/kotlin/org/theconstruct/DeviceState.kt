@@ -55,6 +55,9 @@ class DeviceState internal constructor(private val controller: ConstructControll
     var olderBefore by mutableStateOf<String?>(null)
         private set
 
+    /** Whether older pages were added since the list last started from the newest page. */
+    private var loadedOlder = false
+
     /** Whether an older page is loading (`local://inbox#loading`). */
     var loadingOlder by mutableStateOf(false)
         private set
@@ -118,8 +121,9 @@ class DeviceState internal constructor(private val controller: ConstructControll
             val page = controller.apps.notifications {
                 NotificationsJson.parsePage(it.listNotifications(null, NOTIFICATIONS_PAGE, null))
             }
-            val merged = withNewestPage(notifications, page)
+            val merged = if (loadedOlder) withNewestPage(notifications, page) else null
             if (merged == null) {
+                loadedOlder = false
                 notifications = page.notifications
                 olderBefore = page.nextBefore
             } else {
@@ -150,6 +154,7 @@ class DeviceState internal constructor(private val controller: ConstructControll
                 val known = notifications.map { it.id }.toSet()
                 notifications = notifications + page.notifications.filter { it.id !in known }
                 olderBefore = page.nextBefore
+                loadedOlder = true
             }
         } catch (e: LayoutApiException) {
             notificationsError = e.message
@@ -208,7 +213,8 @@ class DeviceState internal constructor(private val controller: ConstructControll
 
         /**
          * [shown] (newest page plus older pages) with its newest part replaced by [page], when [page] reaches into what
-         * is shown (its oldest notification is in [shown] and older pages were loaded); else null.
+         * is shown (its oldest notification is in [shown] with more after it); else null. Only for a list with older
+         * pages loaded.
          */
         internal fun withNewestPage(shown: List<AppNotification>, page: NotificationPage): List<AppNotification>? {
             val oldest = page.notifications.lastOrNull() ?: return null

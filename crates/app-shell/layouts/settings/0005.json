@@ -1,5 +1,5 @@
 {
-  "note": "Layouts: a Hidden list with Show buttons, and Hide on a layout's versions screen (feature device_layout_controls)",
+  "note": "Sign out and Leave pod ask first (action.confirm)",
   "layout": {
     "type": "core://Workspace",
     "id": "settings",
@@ -84,52 +84,6 @@
                   }
                 }
               }
-            },
-            {
-              "type": "core://List",
-              "query_key": "local:all_layouts",
-              "where": {
-                "field": "hidden",
-                "equals": "true"
-              },
-              "group_by": {
-                "field": "hidden",
-                "header": {
-                  "type": "core://Use",
-                  "component": "core:section_header",
-                  "args": {
-                    "text": "Hidden",
-                    "style": "Secondary",
-                    "padding_v": 4
-                  }
-                }
-              },
-              "item_template": {
-                "type": "core://Row",
-                "spacing_dp": 8,
-                "padding_h_dp": 16,
-                "padding_v_dp": 4,
-                "align": "Center",
-                "children": [
-                  {
-                    "type": "core://Text",
-                    "style": "Body",
-                    "value_expr": "$item.title"
-                  },
-                  {
-                    "type": "core://Spacer"
-                  },
-                  {
-                    "type": "core://Button",
-                    "label": "Show",
-                    "on_click": {
-                      "intent": "action.device",
-                      "command": "unhide_layout",
-                      "app": "$item.id"
-                    }
-                  }
-                ]
-              }
             }
           ]
         }
@@ -194,8 +148,14 @@
                     "type": "core://Button",
                     "label": "Sign out",
                     "on_click": {
-                      "intent": "action.device",
-                      "command": "sign_out"
+                      "intent": "action.confirm",
+                      "title": "Sign out of $item.title?",
+                      "message": "You can sign in again here in Settings.",
+                      "confirm_label": "Sign out",
+                      "then": {
+                        "intent": "action.device",
+                        "command": "sign_out"
+                      }
                     }
                   }
                 ]
@@ -321,8 +281,14 @@
                 {
                   "label": "Leave pod on this device",
                   "on_click": {
-                    "command": "leave_pod",
-                    "intent": "action.device"
+                    "intent": "action.confirm",
+                    "title": "Leave this pod?",
+                    "message": "This device forgets the pod. Your data stays on the pod; you need its code to come back.",
+                    "confirm_label": "Leave",
+                    "then": {
+                      "command": "leave_pod",
+                      "intent": "action.device"
+                    }
                   },
                   "type": "core://Button"
                 }
@@ -344,34 +310,6 @@
         "content": {
           "type": "core://Column",
           "children": [
-            {
-              "type": "core://Row",
-              "spacing_dp": 8,
-              "padding_h_dp": 16,
-              "padding_v_dp": 8,
-              "children": [
-                {
-                  "type": "core://Spacer"
-                },
-                {
-                  "type": "core://Button",
-                  "label": "Hide from the list",
-                  "on_click": {
-                    "intent": "action.sequence",
-                    "steps": [
-                      {
-                        "intent": "action.device",
-                        "command": "hide_layout",
-                        "app": "$route.id"
-                      },
-                      {
-                        "intent": "action.navigation.back"
-                      }
-                    ]
-                  }
-                }
-              ]
-            },
             {
               "type": "core://Conditional",
               "value": "${local://versions#pinned}",

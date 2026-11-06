@@ -25,6 +25,29 @@
                   ]
                 },
                 "type": "core://Button"
+              },
+              {
+                "label": "Delete",
+                "on_click": {
+                  "confirm_label": "Delete",
+                  "intent": "action.confirm",
+                  "message": "It goes from every device.",
+                  "then": {
+                    "intent": "action.sequence",
+                    "steps": [
+                      {
+                        "app": "$route.id",
+                        "command": "delete_layout",
+                        "intent": "action.device"
+                      },
+                      {
+                        "intent": "action.navigation.back"
+                      }
+                    ]
+                  },
+                  "title": "Delete this layout?"
+                },
+                "type": "core://Button"
               }
             ],
             "padding_h_dp": 16,
@@ -425,8 +448,14 @@
                 {
                   "label": "Sign out",
                   "on_click": {
-                    "command": "sign_out",
-                    "intent": "action.device"
+                    "confirm_label": "Sign out",
+                    "intent": "action.confirm",
+                    "message": "You can sign in again here in Settings.",
+                    "then": {
+                      "command": "sign_out",
+                      "intent": "action.device"
+                    },
+                    "title": "Sign out of $item.title?"
                   },
                   "type": "core://Button"
                 }
@@ -567,8 +596,14 @@
               {
                 "label": "Leave pod on this device",
                 "on_click": {
-                  "command": "leave_pod",
-                  "intent": "action.device"
+                  "confirm_label": "Leave",
+                  "intent": "action.confirm",
+                  "message": "This device forgets the pod. Your data stays on the pod; you need its code to come back.",
+                  "then": {
+                    "command": "leave_pod",
+                    "intent": "action.device"
+                  },
+                  "title": "Leave this pod?"
                 },
                 "type": "core://Button"
               }

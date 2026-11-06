@@ -55,6 +55,19 @@ class LayoutsSimTest {
     }
 
     @Test
+    fun leavePodAsksFirstCancelStaysAndConfirmLeaves() {
+        val (controller, _) = controller()
+        val runner = SimRunner(controller, outDir, ScreenSpec.parse("phone"))
+        runner.ok("open-settings; click Leave pod on this device; assert-text Leave this pod?; shot leave-confirm")
+        assertNotNull(controller.pendingConfirm.value)
+        runner.ok("click tag:confirm:cancel; assert-no-text Leave this pod?; assert-text Leave pod on this device")
+        assertNull(controller.pendingConfirm.value)
+        assertNotNull(controller.navigation.top, "Cancel leaves Settings open")
+        runner.ok("click Leave pod on this device; click tag:confirm:ok; assert-no-text Leave this pod?")
+        assertNull(controller.navigation.top, "leaving the pod closes everything")
+    }
+
+    @Test
     fun aSheetDraggedPastAQuarterOfItsHeightCloses() {
         val (controller, _) = controller()
         val runner = SimRunner(controller, outDir, ScreenSpec.parse("phone"))
@@ -95,6 +108,18 @@ class LayoutsSimTest {
         runner.ok("assert-no-text Versions of ${first.title}; click Show; idle; wait-text 5000 Versions of ${first.title}")
         runner.ok("assert-no-text Hidden")
         assertFalse(controller.deviceApps.value.first { it.id == first.id }.hidden)
+    }
+
+    @Test
+    fun settingsDeletesALayoutOnlyAfterAsking() {
+        val (controller, _) = controller()
+        val runner = SimRunner(controller, outDir, ScreenSpec.parse("phone"))
+        controller.refreshDeviceApps()
+        runner.ok("open-settings; wait-text 5000 Versions of Kitchen; click Versions of Kitchen; click Delete; assert-text Delete this layout?")
+        runner.ok("click tag:confirm:cancel; idle; assert-no-text Delete this layout?")
+        assertTrue(controller.deviceApps.value.any { it.title == "Kitchen" }, "Cancel deletes nothing")
+        runner.ok("click Delete; click tag:confirm:ok; idle; wait-text 5000 Leave pod on this device; assert-no-text Kitchen")
+        assertFalse(controller.deviceApps.value.any { it.title == "Kitchen" })
     }
 
     @Test

@@ -212,6 +212,12 @@ fun bindIntent(intent: ActionIntent, item: JsonObject?): ActionIntent {
             id = intent.id?.let { bindItemTokens(it, item) },
             value = intent.value?.let { bindItemTokens(it, item) },
         )
+        is ActionIntent.Confirm -> intent.copy(
+            title = bindItemTokens(intent.title, item),
+            message = intent.message?.let { bindItemTokens(it, item) },
+            confirmLabel = bindItemTokens(intent.confirmLabel, item),
+            then = bindIntent(intent.then, item),
+        )
         ActionIntent.NavigateBack -> intent
         is ActionIntent.Unknown -> intent.copy(
             raw = JsonObject(intent.raw.mapValues { (k, v) -> if (k == "intent") v else bindJson(v, item) })

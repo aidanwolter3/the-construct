@@ -309,8 +309,10 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
     };
     // `$form?.<field>` anywhere in the intent (a sequence's steps are
     // intents of their own).
-    if !matches!(intent, ActionIntent::Sequence { .. })
-        && serde_json::to_string(intent).is_ok_and(|j| j.contains("$form?."))
+    if !matches!(
+        intent,
+        ActionIntent::Sequence { .. } | ActionIntent::Confirm { .. }
+    ) && serde_json::to_string(intent).is_ok_and(|j| j.contains("$form?."))
     {
         add(feature::FORM_OPTIONAL);
     }
@@ -353,6 +355,7 @@ fn intent_features(intent: &ActionIntent, out: &mut BTreeSet<&'static str>) {
             }
         }
         ActionIntent::Sequence { .. } => add(feature::ACTION_SEQUENCE),
+        ActionIntent::Confirm { .. } => add(feature::ACTION_CONFIRM),
         ActionIntent::LocalSet { .. } => add(feature::LOCAL_SET),
         ActionIntent::OpenLink { .. } => add(feature::OPEN_LINK),
         ActionIntent::Device { command, .. } => {

@@ -464,9 +464,18 @@ async fn layouts_may_only_use_their_sources() {
     assert_eq!((status, &b["ok"]), (StatusCode::OK, &json!(true)), "{b}");
     // The inbox and layout commands need what they name.
     for (bad, needs) in [
-        (json!({"intent": "action.device", "command": "mark_read"}), "needs an id"),
-        (json!({"intent": "action.device", "command": "hide_layout"}), "needs an app"),
-        (json!({"intent": "action.device", "command": "unhide_layout", "app": " "}), "needs an app"),
+        (
+            json!({"intent": "action.device", "command": "mark_read"}),
+            "needs an id",
+        ),
+        (
+            json!({"intent": "action.device", "command": "hide_layout"}),
+            "needs an app",
+        ),
+        (
+            json!({"intent": "action.device", "command": "unhide_layout", "app": " "}),
+            "needs an app",
+        ),
     ] {
         let mut l = kitchen_a();
         l["slots"][0]["content"]["item_template"]["on_click"] = bad;

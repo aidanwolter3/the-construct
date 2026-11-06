@@ -178,7 +178,8 @@ over repeating nodes, and define a pod: component (define_component, or copy_com
 piece repeats across layouts. expand shows what any layout or component becomes. A layout whose root is a \
 core://Page gets no chrome from the app: it draws its own header (a title with actions on one line) and Back \
 (core:back_button); core://Workspace is drawn as core:workspace. Use ${local://theme#<token>} for colours \
-(set_theme).";
+(set_theme). A button whose step can't be undone (action.device leave_pod or sign_out, a delete) asks first: wrap \
+its intent in action.confirm.";
 
 // ---------- tools ----------
 
@@ -1516,6 +1517,8 @@ fn vocabulary_with(components: Vec<Value>) -> Value {
               "doc": "Set fields of a loaded entity on this device only (no request), e.g. view state like added/expanded shown with core://Conditional. The next load of the entity from the pod replaces it." },
             { "intent": "action.link.open", "fields": "url",
               "doc": "Open an http(s) link in the device's browser (e.g. a Get tickets button with url $item.tickets_url). Nothing is sent to the pod." },
+            { "intent": "action.confirm", "fields": "title, message?, confirm_label, then: intent",
+              "doc": "Ask \"Are you sure?\" in the app's own dialog and run then only if the user confirms (Cancel does nothing). Wrap every step that can't be undone in it: action.device leave_pod and sign_out, and anything that deletes. In an action.sequence the later steps wait for the answer too." },
             { "intent": "action.device", "fields": "command, app?, id?, value?",
               "doc": "Something the device does itself. Commands: open_notification (id: presents its layout), mark_all_read, toggle_channel (app, id of a notification channel), sign_in (id of a provider; value: another server, e.g. $form?.server from a core://TextField, for a provider whose local:providers row says custom_server), sign_out, set_server (id of a server option), show_versions (app: a layout; loads its versions into local:versions), pin_version (id: a version of that layout, shown on this device only; remembered across restarts), follow_latest, load_older_notifications (appends the next page to local:notifications), mark_read (id: one notification), hide_layout and unhide_layout (app: a layout; hidden from every device's local:layouts, listed in local:all_layouts), delete_layout (app: a layout; always inside an action.confirm's then), leave_pod (forget the pod on this device), refresh, open_settings and open_inbox (present the settings and inbox layouts). Any layout may use any command." },
         ],

@@ -78,7 +78,10 @@ class PixelfedFeedTest {
         run(
             fake,
             "assert-no-text @constructdemo; open-settings; assert-text @constructdemo · 127.0.0.1:8081; " +
-                "click Sign out; assert-no-text @constructdemo; assert-no-text Sign out",
+                // Sign out asks first (action.confirm): Cancel keeps the sign-in, confirming signs out.
+                "click Sign out; assert-text Sign out of Pixelfed?; click tag:confirm:cancel; " +
+                "assert-no-text Sign out of Pixelfed?; assert-text @constructdemo; " +
+                "click Sign out; click tag:confirm:ok; assert-no-text @constructdemo; assert-no-text Sign out",
         )
     }
 
