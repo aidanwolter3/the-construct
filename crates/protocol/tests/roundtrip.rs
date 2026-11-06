@@ -681,6 +681,34 @@ fn sequences_and_local_sets_round_trip_and_need_their_features() {
 }
 
 #[test]
+fn confirm_round_trips_and_its_then_counts_as_an_intent() {
+    let wire = r#"{"intent":"action.confirm","title":"Leave this pod?","confirm_label":"Leave","then":{"intent":"action.device","command":"leave_pod"}}"#;
+    let parsed: ActionIntent = serde_json::from_str(wire).unwrap();
+    assert_eq!(serde_json::to_string(&parsed).unwrap(), wire);
+    let ActionIntent::Confirm { message, then, .. } = &parsed else {
+        panic!("not a confirm");
+    };
+    assert_eq!(*message, None);
+    assert!(matches!(**then, ActionIntent::Device { .. }));
+    // A message is optional and kept when set.
+    let with_message: ActionIntent = serde_json::from_value(json!({
+        "intent": "action.confirm", "title": "Delete?", "message": "It can't be undone.",
+        "confirm_label": "Delete", "then": {"intent": "action.navigation.back"}}))
+    .unwrap();
+    assert!(
+        matches!(with_message, ActionIntent::Confirm { message: Some(ref m), .. } if m == "It can't be undone.")
+    );
+    // `then` counts as the node's intent (validation and features see it).
+    let button: UiNode = serde_json::from_value(json!({
+        "type": "core://Button", "label": "Leave pod", "on_click": parsed}))
+    .unwrap();
+    assert_eq!(button.own_intents().len(), 2);
+    let features = protocol::required_features(&button);
+    assert!(features.contains(&"action_confirm"), "{features:?}");
+    assert!(features.contains(&"device_action"), "{features:?}");
+}
+
+#[test]
 fn progress_round_trips_and_needs_its_feature() {
     let wire = r#"{"type":"core://Progress","size_dp":20}"#;
     let parsed: UiNode = serde_json::from_str(wire).unwrap();
