@@ -85,12 +85,13 @@ fun themeEntity(pod: JsonObject?, dark: Boolean): JsonObject = buildJsonObject {
 /** The screens a layout opens by route: a page's. */
 fun screensOf(node: UiNode?): List<Screen> = (node as? UiNode.Page)?.screens.orEmpty()
 
-/** Whether [node] takes the rest of a bounded column's height (a scroll, a filling box, an inline layout). */
+/** Whether [node] takes the rest of a bounded column's height (a scroll, a filling box, an inline layout, a gesture around one). */
 internal fun fillsHeight(node: UiNode): Boolean = when (node) {
     is UiNode.Scroll -> true
     is UiNode.Box -> node.fill
     is UiNode.Layout -> node.presentation == EmbedPresentation.Inline && node.heightDp == null && node.showWhen == null
     is UiNode.Column -> node.children.any(::fillsHeight)
+    is UiNode.Gesture -> fillsHeight(node.content)
     else -> false
 }
 

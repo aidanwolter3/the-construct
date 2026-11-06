@@ -64,14 +64,27 @@ enum class Tone { Neutral, Warning }
 
 /**
  * How `action.navigation.open` presents: a screen as Push, Modal or Replace; another layout (decision
- * `layouts-not-apps`) as Push (the whole screen), Sheet (a bottom sheet) or Panel (a side panel from the start edge).
+ * `layouts-not-apps`) as Push (the whole screen), Sheet (a bottom sheet), Panel (a side panel from the start edge) or
+ * Overlay (from its [Edge], feature `overlay_edge`).
  */
 @Serializable
-enum class PresentationMode { Push, Modal, Replace, Sheet, Panel }
+enum class PresentationMode { Push, Modal, Replace, Sheet, Panel, Overlay }
 
-/** How a `core://Layout` shows its layout: in place, or over the screen as a sheet or a side panel. */
+/** How a `core://Layout` shows its layout: in place, or over the screen as a sheet, a side panel or an overlay. */
 @Serializable
-enum class EmbedPresentation { Inline, Sheet, Panel }
+enum class EmbedPresentation { Inline, Sheet, Panel, Overlay }
+
+/**
+ * The edge an overlay comes in from (feature `overlay_edge`, decision `edge-overlays-and-gestures`); dragging it back
+ * toward that edge dismisses it. A Sheet is an overlay from the bottom, a Panel one from the start.
+ */
+@Serializable
+enum class Edge {
+    @SerialName("top") Top,
+    @SerialName("bottom") Bottom,
+    @SerialName("start") Start,
+    @SerialName("end") End,
+}
 
 /** How a presented layout comes in and goes out (named only; the platform picks durations). */
 @Serializable
@@ -495,6 +508,26 @@ sealed class UiNode {
         val animation: Animation? = null,
         val params: Map<String, String> = emptyMap(),
         @SerialName("height_dp") val heightDp: Int? = null,
+        /** With [EmbedPresentation.Overlay]: the edge it comes in from (bottom when null). */
+        val edge: Edge? = null,
+        /** With [EmbedPresentation.Overlay]: its height (top, bottom) or width (start, end). */
+        @SerialName("size_dp") val sizeDp: Int? = null,
+    ) : UiNode()
+
+    /**
+     * `core://Gesture` (feature `gesture`, decision `edge-overlays-and-gestures`): [content] with gesture handlers, each
+     * an intent ([GestureNodeView]). A swipe is a drag mostly one way; a pull the content can't scroll for counts.
+     */
+    @Serializable
+    data class Gesture(
+        val content: UiNode,
+        @SerialName("on_tap") val onTap: ActionIntent? = null,
+        @SerialName("on_long_press") val onLongPress: ActionIntent? = null,
+        @SerialName("on_swipe_up") val onSwipeUp: ActionIntent? = null,
+        @SerialName("on_swipe_down") val onSwipeDown: ActionIntent? = null,
+        @SerialName("on_swipe_left") val onSwipeLeft: ActionIntent? = null,
+        @SerialName("on_swipe_right") val onSwipeRight: ActionIntent? = null,
+        @SerialName("content_description") val contentDescription: String? = null,
     ) : UiNode()
 
     /** `core://Switch` (feature `switch`): on while [checked] (a binding) is truthy; a tap dispatches [onClick]. */
@@ -524,6 +557,10 @@ sealed class ActionIntent {
         /** `$route.<name>` values of the presented [layout]. */
         val params: Map<String, String> = emptyMap(),
         val animation: Animation? = null,
+        /** With [PresentationMode.Overlay]: the edge it comes in from (bottom when null). */
+        val edge: Edge? = null,
+        /** With [PresentationMode.Overlay]: its height (top, bottom) or width (start, end). */
+        @SerialName("size_dp") val sizeDp: Int? = null,
     ) : ActionIntent()
 
     @Serializable
@@ -763,6 +800,7 @@ object UiNodeSerializer : TaggedUnionSerializer<UiNode>("org.theconstruct.UiNode
         Variant("core://Progress", UiNode.Progress::class, UiNode.Progress.serializer()),
         Variant("core://Switch", UiNode.Switch::class, UiNode.Switch.serializer()),
         Variant("core://Layout", UiNode.Layout::class, UiNode.Layout.serializer()),
+        Variant("core://Gesture", UiNode.Gesture::class, UiNode.Gesture.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): UiNode = UiNode.Unknown(tag, raw)

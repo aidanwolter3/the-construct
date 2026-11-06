@@ -25,6 +25,14 @@ pub enum ActionIntent {
         params: BTreeMap<String, String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         animation: Option<Animation>,
+        /// With presentation `Overlay` (feature `overlay_edge`): the edge it
+        /// slides in from (bottom when unset).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        edge: Option<Edge>,
+        /// With presentation `Overlay`: its height (top, bottom) or width
+        /// (start, end); the platform's default when unset.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size_dp: Option<u16>,
     },
     #[serde(rename = "action.navigation.back")]
     NavigateBack,
@@ -203,6 +211,8 @@ impl ActionIntent {
             layout: None,
             params: BTreeMap::new(),
             animation: None,
+            edge: None,
+            size_dp: None,
         }
     }
 
@@ -292,6 +302,22 @@ pub enum PresentationMode {
     Sheet,
     /// A layout as a side panel from the start edge (feature `navigate_layout`).
     Panel,
+    /// A layout over the screen from an `edge` (feature `overlay_edge`):
+    /// `Sheet` is an overlay from the bottom, `Panel` one from the start.
+    Overlay,
+}
+
+/// The edge an overlay comes in from (feature `overlay_edge`, decision
+/// `edge-overlays-and-gestures`). Dragging it back toward that edge
+/// dismisses it.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Edge {
+    Top,
+    #[default]
+    Bottom,
+    Start,
+    End,
 }
 
 /// How a presented layout comes in and goes out (decision

@@ -41,15 +41,20 @@ pub fn draws_plumbing(client: &ClientCaps) -> bool {
 }
 
 /// Whether a workspace's one slot draws the whole page itself (a filling
-/// `core://Box`, or an inline `core://Layout` shown always): no title.
+/// `core://Box`, an inline `core://Layout` shown always, or a
+/// `core://Gesture` around one): no title.
 fn fills_screen(slots: &[Value]) -> bool {
     let [slot] = slots else { return false };
-    let c = &slot["content"];
+    fills(&slot["content"])
+}
+
+fn fills(c: &Value) -> bool {
     match c["type"].as_str() {
         Some("core://Box") => c["fill"].as_bool() == Some(true),
         Some("core://Layout") => {
             c["presentation"].as_str().is_none_or(|p| p == "Inline") && c["show_when"].is_null()
         }
+        Some("core://Gesture") => fills(&c["content"]),
         _ => false,
     }
 }
@@ -212,4 +217,25 @@ pub fn set_theme(store: &Store, changes: &Value) -> Result<serde_json::Map<Strin
         .set_pod_setting(THEME_SETTING, &Value::Object(current.clone()).to_string())
         .map_err(|e| e.to_string())?;
     Ok(current)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_gesture_around_a_filling_node_fills_the_screen() {
+        let slot = |content: Value| vec![json!({"slot_id": "s", "content": content})];
+        let filling =
+            json!({"type": "core://Box", "fill": true, "content": {"type": "core://Divider"}});
+        assert!(fills_screen(&slot(filling.clone())));
+        let gesture = |content: Value| {
+            json!({"type": "core://Gesture", "content": content,
+            "on_swipe_down": {"intent": "action.navigation.back"}})
+        };
+        assert!(fills_screen(&slot(gesture(filling))));
+        assert!(!fills_screen(&slot(gesture(
+            json!({"type": "core://Divider"})
+        ))));
+    }
 }

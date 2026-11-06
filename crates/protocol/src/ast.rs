@@ -13,10 +13,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-use crate::intent::{ActionIntent, Animation};
+use crate::intent::{ActionIntent, Animation, Edge};
 
 /// Node types this build knows (an other type is [`UiNode::Unknown`]).
-pub const NODE_TYPES: [&str; 29] = [
+pub const NODE_TYPES: [&str; 30] = [
     "core://Workspace",
     "core://Page",
     "core://Scroll",
@@ -46,6 +46,7 @@ pub const NODE_TYPES: [&str; 29] = [
     "core://Switch",
     "core://Drawer",
     "core://Layout",
+    "core://Gesture",
 ];
 
 /// Icon names clients draw (`core://IconButton`, `core://Chip`).
@@ -536,7 +537,8 @@ pub enum UiNode {
     // Feature `layout_embed` (crates/protocol/features/layout_embed.md)
     /// Another layout of the pod drawn here (decision `layouts-not-apps`).
     /// `Inline` (the default) draws it in place, `height_dp` tall when set;
-    /// `Sheet` and `Panel` present it over the screen. With `show_when` (a
+    /// `Sheet` and `Panel` present it over the screen, and so does `Overlay`
+    /// from its `edge` (feature `overlay_edge`). With `show_when` (a
     /// binding such as `$form.menu` or `${local://inbox#unread}`) it shows
     /// only while that is truthy, or equals `equals`; dismissing a presented
     /// one clears the `$form` field `show_when` names. `params` bind as
@@ -556,6 +558,39 @@ pub enum UiNode {
         params: BTreeMap<String, String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         height_dp: Option<u16>,
+        /// With presentation `Overlay`: the edge it comes in from (bottom
+        /// when unset).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        edge: Option<Edge>,
+        /// With presentation `Overlay`: its height (top, bottom) or width
+        /// (start, end).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size_dp: Option<u16>,
+    },
+
+    // Feature `gesture` (crates/protocol/features/gesture.md)
+    /// `content` with gesture handlers (decision
+    /// `edge-overlays-and-gestures`), each an ordinary intent; at least one
+    /// is set. A swipe is a drag mostly in one direction; a pull the content
+    /// can't scroll for counts, so a page inside still scrolls and pulling
+    /// it down at its top is a swipe down. `core://Tappable` is the tap case.
+    #[serde(rename = "core://Gesture")]
+    Gesture {
+        content: Box<UiNode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_tap: Option<ActionIntent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_long_press: Option<ActionIntent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_swipe_up: Option<ActionIntent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_swipe_down: Option<ActionIntent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_swipe_left: Option<ActionIntent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on_swipe_right: Option<ActionIntent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_description: Option<String>,
     },
 
     /// A node of a type this build does not know: its JSON, kept as is.
@@ -632,6 +667,7 @@ impl UiNode {
             UiNode::Carousel { item_template, .. } => vec![item_template],
             UiNode::Conditional { content, .. }
             | UiNode::Tappable { content, .. }
+            | UiNode::Gesture { content, .. }
             | UiNode::Box { content, .. }
             | UiNode::Sticky { content }
             | UiNode::Scroll { content, .. } => {
@@ -690,11 +726,39 @@ impl UiNode {
             | UiNode::Tappable { on_click, .. }
             | UiNode::Switch { on_click, .. } => vec![on_click],
             UiNode::TextField { on_submit, .. } => on_submit.iter().collect(),
+            UiNode::Gesture { .. } => self.gesture_handlers().into_iter().flatten().collect(),
             _ => Vec::new(),
         };
         // The steps of an `action.sequence` count as the node's intents too,
         // so features, schema checks and the pod's validation see them.
         direct.into_iter().flat_map(ActionIntent::flatten).collect()
+    }
+
+    /// A `core://Gesture`'s handlers: tap, long press, swipe up, down, left,
+    /// right (empty for any other node).
+    pub fn gesture_handlers(&self) -> Vec<Option<&ActionIntent>> {
+        match self {
+            UiNode::Gesture {
+                on_tap,
+                on_long_press,
+                on_swipe_up,
+                on_swipe_down,
+                on_swipe_left,
+                on_swipe_right,
+                ..
+            } => [
+                on_tap,
+                on_long_press,
+                on_swipe_up,
+                on_swipe_down,
+                on_swipe_left,
+                on_swipe_right,
+            ]
+            .into_iter()
+            .map(Option::as_ref)
+            .collect(),
+            _ => Vec::new(),
+        }
     }
 
     /// Every node of the tree, depth first (this one first).
@@ -1028,6 +1092,8 @@ pub enum EmbedPresentation {
     Sheet,
     /// A side panel over the screen, from the start edge.
     Panel,
+    /// Over the screen from its `edge` (feature `overlay_edge`).
+    Overlay,
 }
 
 impl EmbedPresentation {

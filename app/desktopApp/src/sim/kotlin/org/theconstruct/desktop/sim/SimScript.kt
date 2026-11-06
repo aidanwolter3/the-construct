@@ -23,6 +23,8 @@ sealed class SimStep(val command: String, val arg: String = "") {
     class DragDown(val dp: Int, val target: String) : SimStep("drag-down", "$dp $target")
     /** A quick downward flick from the center of the node [target] selects (a fling, e.g. to close a sheet). */
     class FlickDown(val target: String) : SimStep("swipe-down", target)
+    /** A quick upward flick from the center of the node [target] selects (e.g. to close a sheet from the top). */
+    class FlickUp(val target: String) : SimStep("swipe-up", target)
     class ScrollTo(val target: String) : SimStep("scroll-to", target)
     /** Replaces the text of the text field [target] selects with [text]. */
     class Type(val target: String, val text: String) : SimStep("type", "$target $text")
@@ -127,6 +129,7 @@ fun parseScript(script: String): List<SimStep> {
             )
             "swipe-left", "swipe-right" -> SimStep.Swipe(command.removePrefix("swipe-"), requireArg("a target (text, content description or tag:<testTag>)"))
             "swipe-down" -> SimStep.FlickDown(requireArg("a target (text, content description or tag:<testTag>)"))
+            "swipe-up" -> SimStep.FlickUp(requireArg("a target (text, content description or tag:<testTag>)"))
             "drag-down" -> {
                 val a = requireArg("a distance in dp and a target")
                 val dp = a.substringBefore(' ').toIntOrNull()?.takeIf { it in 1..MAX_DRAG_DP }
@@ -197,7 +200,7 @@ fun parseScript(script: String): List<SimStep> {
             )
             else -> throw ScriptParseException(
                 "${where()}: unknown command '$command' (expected one of: " +
-                    "shot, click, wait, idle, assert-text, assert-no-text, wait-text, wait-images, swipe-left, swipe-right, swipe-down, drag-down, " +
+                    "shot, click, wait, idle, assert-text, assert-no-text, wait-text, wait-images, swipe-left, swipe-right, swipe-down, swipe-up, drag-down, " +
                     "scroll-to, type, back, pick, open-layout, open-settings, open-inbox, pin-version, " +
                     "publish-version, notify, toggle-channel, offline, online, screen)",
             )

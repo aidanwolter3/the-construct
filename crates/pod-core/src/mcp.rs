@@ -163,7 +163,8 @@ feed\" is one layout (create_layout referencing the blueprint that fits: {\"type
 <blueprint>, \"part\": \"layout\"}, with its feeds) and a home that shows it (update_layout on home: a core://Layout \
 of that layout as the one slot). With more than one layout, home lists them and each row pushes its layout \
 (action.navigation.open {\"layout\": <id>, \"presentation\": \"Push\"}); system Back comes back. A core://Layout \
-can also show a layout in part of the screen, or as a Sheet or Panel while a condition holds. Home owns every \
+can also show a layout in part of the screen, or as a Sheet, Panel or Overlay (from any edge) while a condition \
+holds; core://Gesture runs an intent on a tap, long press or swipe. Home owns every \
 feed: feeds you name when creating a layout are added to home's, and every layout may bind any of home's feeds. \
 The inbox and Settings are the layouts inbox and settings (open them with presentation Sheet and Panel); \
 describe_vocabulary has small snippets. home can't be deleted. Blueprints are the built-in layouts \
@@ -1423,6 +1424,12 @@ fn snippets() -> Value {
                 {"type": "core://IconButton", "icon": "settings", "content_description": "Settings",
                  "on_click": {"intent": "action.navigation.open", "layout": "settings", "presentation": "Panel"}}]}
         },
+        "inbox_from_the_top_on_swipe_down": {
+            "doc": "home's content wrapped so pulling it down (at its top) slides the inbox down from the top",
+            "node": {"type": "core://Gesture",
+                "on_swipe_down": {"intent": "action.navigation.open", "layout": "inbox", "presentation": "Overlay", "edge": "top"},
+                "content": {"type": "core://Layout", "layout": "<layout id>"}}
+        },
         "card_of_layout": {
             "doc": "another layout in a card-sized region of the page",
             "node": {"type": "core://Box", "corner_dp": 12, "border_color": "#DDDDDD",
@@ -1505,8 +1512,8 @@ fn vocabulary_with(components: Vec<Value>) -> Value {
         },
         "icons": protocol::ICONS,
         "intents": [
-            { "intent": "action.navigation.open", "fields": "target_uri?, layout?, params?: {name: value}, presentation: Push|Modal|Replace|Sheet|Panel, animation?: none|fade|slide|sheet_up",
-              "doc": "With layout: present that layout on the back stack (Push: whole screen; Sheet; Panel), params bound as $route.<name> in it, then its screen matching target_uri if any. Without: open the screen of the layout on top whose route matches target_uri. System Back pops either." },
+            { "intent": "action.navigation.open", "fields": "target_uri?, layout?, params?: {name: value}, presentation: Push|Modal|Replace|Sheet|Panel|Overlay, animation?: none|fade|slide|sheet_up, edge?: top|bottom|start|end, size_dp?",
+              "doc": "With layout: present that layout on the back stack (Push: whole screen; Sheet: from the bottom; Panel: from the start; Overlay: from edge, bottom when unset, size_dp tall or wide; drag it back toward its edge to dismiss), params bound as $route.<name> in it, then its screen matching target_uri if any. Without: open the screen of the layout on top whose route matches target_uri. System Back pops either." },
             { "intent": "action.navigation.back", "fields": "", "doc": "Close the screen." },
             { "intent": "action.mutation.optimistic", "fields": "entity_uri, field, value_expr, rollback_value, endpoint, payload, also?: [{field, value_expr}]",
               "doc": "Change a field at once and POST payload to an action endpoint ($value is the new value); rolled back on failure." },

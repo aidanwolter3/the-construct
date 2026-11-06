@@ -1,0 +1,59 @@
+{
+  "version": "1.0.0",
+  "workspace": {
+    "type": "core://Page",
+    "id": "swipe_home",
+    "title": "Home",
+    "root": {
+      "type": "core://Gesture",
+      "content_description": "Home",
+      "on_swipe_down": {
+        "intent": "action.navigation.open",
+        "layout": "inbox",
+        "presentation": "Overlay",
+        "edge": "top"
+      },
+      "on_swipe_left": {
+        "intent": "action.navigation.open",
+        "layout": "settings",
+        "presentation": "Overlay",
+        "edge": "end"
+      },
+      "on_long_press": {
+        "intent": "action.navigation.open",
+        "layout": "inbox",
+        "presentation": "Sheet"
+      },
+      "content": {
+        "type": "core://Box",
+        "fill": true,
+        "align": "Center",
+        "background": "#F7F5F0",
+        "content": {
+          "type": "core://Column",
+          "align": "Center",
+          "spacing_dp": 8,
+          "children": [
+            {
+              "type": "core://Text",
+              "style": "Display",
+              "value_expr": "Home"
+            },
+            {
+              "type": "core://Text",
+              "style": "Secondary",
+              "value_expr": "Pull down for notifications"
+            },
+            {
+              "type": "core://Text",
+              "style": "Secondary",
+              "value_expr": "Swipe left for Settings"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "entities": {},
+  "queries": {}
+}

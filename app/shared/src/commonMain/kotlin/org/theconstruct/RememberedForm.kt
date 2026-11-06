@@ -28,6 +28,7 @@ fun rememberedChoices(nodes: Iterable<UiNode>): Map<String, Set<String>> {
             is UiNode.Column -> node.children.forEach(::walk)
             is UiNode.Conditional -> walk(node.content)
             is UiNode.Tappable -> walk(node.content)
+            is UiNode.Gesture -> walk(node.content)
             is UiNode.Box -> walk(node.content)
             is UiNode.ItemList -> {
                 walk(node.itemTemplate)
