@@ -709,20 +709,14 @@ pub fn expand_with(
 /// A layout file's `core://Use`s of server components expanded (strict),
 /// from the components embedded in this build: what the pod records.
 pub fn expand_file(catalog: &Catalog, doc: &Value) -> Result<Value, LayoutError> {
-    expand_in(None, catalog, doc, None, Mode::Strict, core_pending())
-}
-
-/// Every server component file of this build, as [`Pending`] definitions
-/// (files that don't parse are left out: the pod refuses to start on them).
-pub fn core_pending() -> &'static Pending {
-    static P: std::sync::OnceLock<Pending> = std::sync::OnceLock::new();
-    P.get_or_init(|| Pending {
-        defs: crate::components::core_files(crate::components::CORE_COMPONENT_FILES)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|f| (f.name, f.number, f.def))
-            .collect(),
-    })
+    expand_in(
+        None,
+        catalog,
+        doc,
+        None,
+        Mode::Strict,
+        catalog.component_defs(),
+    )
 }
 
 fn expand_in(

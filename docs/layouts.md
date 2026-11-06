@@ -168,6 +168,7 @@ A node type the client doesn't know is skipped, and its JSON kept, so old versio
 | `action.data.load` | `path` | Loads and caches a data path. |
 | `action.sequence` | `steps` | Runs intents in order as one tap, e.g. a create then `action.navigation.back`. |
 | `action.link.open` | `url` | Opens an `http(s)://` URL in the browser. |
+| `action.confirm` | `title`, `message`, `confirm_label`, `then` | Asks first: the app's own dialog with the layout's wording, a `confirm_label` button and Cancel; runs `then` only on confirm (in a sequence, the later steps wait too). Wrap `leave_pod`, `sign_out` and deletes in it (decision `confirm-intent`). |
 | `action.auth.login` | `instance_url`, `app_path`, `token_path` | Starts an OAuth2 PKCE sign-in to an upstream. |
 | `action.auth.session` | `path`, `payload` | Opens a pod session (the pod code screen). |
 | `action.device` | `command`, `app` (or `layout`), `id`, `value` | Something the device does: `open_notification` (`id`: presents its layout and target), `mark_all_read`, `toggle_channel` (`app`, `id`), `sign_in` (`id` of a provider; `value`: another server, e.g. `$form?.server`), `sign_out`, `set_server` (`id` of a server option), `show_versions` (`app`: a layout; loads its versions into `local:versions`), `pin_version` (`id`: show that version on this device), `follow_latest`, `leave_pod` (forget the pod on this device), `refresh`, `open_settings` and `open_inbox` (present the `settings` layout as a panel and the `inbox` layout as a sheet), `request_notification_permission` (Android's prompt to allow notifications, or the app's notification settings once the prompt can't show again; nothing on desktop). Any layout may use any command. `open_app` and `show` were retired with the dock and drawer. |
@@ -224,7 +225,9 @@ sees one and changing one needs no app build. Use one anywhere a node goes:
 ```
 
 - **`core:` components** ship with the server: `crates/pod-core/components/<name>/NNNN.json`, `{"note", "component"}`,
-  append-only like layout files. Every blueprint is one too: `core:<blueprint>` is its whole layout (only as a
+  append-only like layout files. An adapter ships its own the same way, in `crates/app-*/components/<name>/` (its
+  build script embeds them; `AppAdapter::component_files`); names are unique across crates (decision
+  `adapter-components`). Every blueprint is one too: `core:<blueprint>` is its whole layout (only as a
   layout's root; the layout keeps its own id) and `core:<blueprint>/<part>` a part (`screen:<id>` in `screens`,
   `slot:<id>`, or a name from the file's `"parts"`). `{"type": "core://Ref", "app", "part"}` is the older spelling.
 - **`pod:` components** are the pod's own, defined by an agent (MCP `define_component`, `copy_component`), versioned
@@ -258,6 +261,7 @@ The server components:
 | `core:author_header` | `avatar`, `name`, `handle`, `size`, paddings | A round avatar beside the name and handle. |
 | `core:toggle_action` | `field`, `icon`, `active_icon`, `label`, `active_label`, `endpoint`, `payload_field`, `tint`, `count_field`, `tag` | An icon button that flips a boolean field at once and tells an endpoint, optionally moving a count with it. |
 | `core:stat` | `value`, `label` | A number with a label under it. |
+| `core:pixelfed_sign_in` | `server`, `instance_url`, `other_servers`, `placeholder` | Pixelfed's signed-out screen: a sentence, "Sign in with Pixelfed", and a box for another server (shipped by `app-pixelfed`). |
 | `core:message_page` | `title`, `body`, `background`; children: actions | A whole page with a message in the middle and actions under it. |
 
 Their definitions are the files; `get_component` reads them with examples. See decision

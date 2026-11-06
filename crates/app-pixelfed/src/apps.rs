@@ -16,6 +16,11 @@ use serde_json::json;
 // `layouts/pixelfed_sample_no_login/*.json`, in number order (`build.rs`).
 include!(concat!(env!("OUT_DIR"), "/layout_files.rs"));
 
+// `COMPONENT_FILES`: every `components/<name>/NNNN.json` (`build.rs`), the
+// server components this adapter ships (decision `plumbing-and-porcelain`).
+use pod_core::components::ComponentSource;
+include!(concat!(env!("OUT_DIR"), "/component_files.rs"));
+
 /// Every layout file of the Pixelfed apps (a test checks it matches the
 /// crate's `layouts/`).
 pub fn files() -> Vec<LayoutSource> {

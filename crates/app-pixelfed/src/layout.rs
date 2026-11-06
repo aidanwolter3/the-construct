@@ -1,13 +1,12 @@
 //! The `pixelfed` data. The signed-in feed's layout comes from
 //! `layouts/pixelfed/NNNN.json` (generic nodes, docs/DECISIONS.md D36;
 //! the core merges it in, D40); this module builds the entities/queries part
-//! and the signed-out screen.
+//! and the signed-out screen's use of its server component.
 
 use std::collections::BTreeMap;
 
-use protocol::{
-    ActionIntent, DataBundle, EntityRecord, Orientation, SlotSpec, TextStyle, UiNode, WorkspaceSpec,
-};
+use protocol::{ActionIntent, DataBundle, EntityRecord, SlotSpec, UiNode, WorkspaceSpec};
+use serde_json::json;
 
 use super::HOME_QUERY;
 use crate::config::PixelfedConfig;
@@ -27,9 +26,6 @@ pub fn home_feed(entities: BTreeMap<String, EntityRecord>, order: Vec<String>) -
         queries: BTreeMap::from([(HOME_QUERY.to_owned(), order)]),
     }
 }
-
-/// The form field the signed-out screen's server box edits.
-pub const INSTANCE_FIELD: &str = "instance";
 
 /// The host (and port) of a base URL, for labels.
 fn host_label(url: &str) -> String {
@@ -69,50 +65,24 @@ fn example_server(config: &PixelfedConfig) -> String {
     }
 }
 
-/// Signed-out screen of app `app_id` (titled `title`): a "Sign in with
-/// Pixelfed" button for the default instance, and when users may pick
-/// another instance (D45) a server box (`$form.instance`) with its own
-/// button. The box needs no new client vocabulary: the client binds the
+/// The server component of the signed-out screen,
+/// `components/pixelfed_sign_in/` in this crate (decision
+/// `plumbing-and-porcelain`): agents read, copy and reuse it.
+pub const SIGN_IN_COMPONENT: &str = "core:pixelfed_sign_in";
+
+/// Signed-out screen of app `app_id` (titled `title`): a use of
+/// [`SIGN_IN_COMPONENT`], which the core expands before serving. It shows a
+/// "Sign in with Pixelfed" button for the default instance, and when users
+/// may pick another instance (D45) a server box (`$form.instance`) with its
+/// own button. The box needs no new client vocabulary: the client binds the
 /// typed value into the intent and sends nothing while it is blank.
 pub fn signed_out(config: &PixelfedConfig, app_id: &str, title: &str) -> WorkspaceSpec {
-    let default = host_label(&config.public_url);
-    let mut children = vec![
-        // No title Text: the workspace title already says "Pixelfed".
-        UiNode::Text {
-            value_expr: format!(
-                "Sign in to {default} to see your home feed. Your Pixelfed token stays on your pod."
-            ),
-            style: TextStyle::Body,
-            format: None,
-            count: None,
-        },
-        UiNode::Button {
-            label: "Sign in with Pixelfed".into(),
-            on_click: sign_in_intent(&config.instance_url),
-        },
-    ];
-    if config.other_instances() {
-        let example = example_server(config);
-        children.extend([
-            UiNode::Text {
-                value_expr: "Or sign in to another Pixelfed server:".into(),
-                style: TextStyle::Body,
-                format: None,
-                count: None,
-            },
-            UiNode::TextField {
-                field: INSTANCE_FIELD.into(),
-                placeholder: format!("Server, e.g. {example}"),
-                max_length: Some(253),
-                on_submit: None,
-                lines: None,
-            },
-            UiNode::Button {
-                label: "Sign in to this server".into(),
-                on_click: sign_in_intent(&format!("$form.{INSTANCE_FIELD}")),
-            },
-        ]);
-    }
+    let args = json!({
+        "server": host_label(&config.public_url),
+        "instance_url": config.instance_url,
+        "other_servers": config.other_instances(),
+        "placeholder": format!("Server, e.g. {}", example_server(config)),
+    });
     WorkspaceSpec {
         version: pod_core::BUNDLE_VERSION.into(),
         workspace: UiNode::Workspace {
@@ -123,11 +93,13 @@ pub fn signed_out(config: &PixelfedConfig, app_id: &str, title: &str) -> Workspa
             slots: vec![SlotSpec {
                 slot_id: "auth".into(),
                 provider_uri: "pixelfed://auth".into(),
-                content: UiNode::Container {
-                    orientation: Orientation::Vertical,
-                    padding_dp: 16,
-                    children,
-                },
+                // No title Text: the workspace title already says "Pixelfed".
+                content: UiNode::Unknown(pod_core::parts::use_node(
+                    SIGN_IN_COMPONENT,
+                    None,
+                    &args,
+                    &json!([]),
+                )),
             }],
         },
         entities: BTreeMap::new(),

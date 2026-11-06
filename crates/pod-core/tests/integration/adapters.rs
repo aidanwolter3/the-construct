@@ -10,6 +10,7 @@ use axum::{
     routing::get,
 };
 use http_body_util::BodyExt;
+use pod_core::components::ComponentSource;
 use pod_core::layouts::LayoutSource;
 use pod_core::session::session_hash;
 use pod_core::store::{Step, open_session_on};
@@ -381,4 +382,75 @@ fn the_core_names_no_app() {
             }
         }
     }
+}
+
+/// An adapter that ships server components and nothing else.
+struct Shipping(&'static [ComponentSource]);
+
+impl AppAdapter for Shipping {
+    fn name(&self) -> &'static str {
+        "shipping"
+    }
+    fn apps(&self) -> Vec<AppInfo> {
+        Vec::new()
+    }
+    fn layout_files(&self) -> &'static [LayoutSource] {
+        &[]
+    }
+    fn component_files(&self) -> &'static [ComponentSource] {
+        self.0
+    }
+    fn manifest(&self) -> SourceManifest {
+        SourceManifest::new("T")
+    }
+    fn feed<'a>(
+        &'a self,
+        _pod: &'a Pod,
+        feed: &'a str,
+        _req: &'a RequestCtx,
+    ) -> BoxFuture<'a, Hydration> {
+        Box::pin(async move { pod_core::unknown_feed("shipping", feed) })
+    }
+}
+
+/// A component file of `crates/app-test/components`.
+macro_rules! component {
+    ($name:literal, $text:literal) => {
+        ComponentSource {
+            dir: "crates/app-test/components",
+            name: $name,
+            file: "0001",
+            text: concat!(
+                r#"{"note": "First", "component": {"doc": "A greeting.", "params": [],
+                  "template": {"type": "core://Text", "style": "Body", "value_expr": ""#,
+                $text,
+                r#""}, "examples": [{"args": {}, "note": "It."}]}}"#
+            ),
+        }
+    };
+}
+
+static GREETING: &[ComponentSource] = &[component!("test_greeting", "hi")];
+static TAKEN: &[ComponentSource] = &[component!("card", "not the core's")];
+
+/// Issue #135: an adapter's server components are recorded with the core's
+/// as `core:<name>`; a name another crate ships stops the start.
+#[test]
+fn adapters_ship_server_components() {
+    let state = AppState::try_new(
+        pod_core::store::Store::open_in_memory().unwrap(),
+        vec![Arc::new(Shipping(GREETING))],
+    )
+    .unwrap();
+    let (version, def) = pod_core::components::latest(state.store(), "core:test_greeting")
+        .unwrap()
+        .expect("recorded");
+    assert_eq!(version, 1);
+    assert_eq!(def["template"]["value_expr"], "hi");
+    let err = Catalog::new(vec![Arc::new(Shipping(TAKEN))]).err().unwrap();
+    assert_eq!(
+        err,
+        "component 'card' is in both crates/pod-core/components and crates/app-test/components; \
+         component names are unique"
+    );
 }

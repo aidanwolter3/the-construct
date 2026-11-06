@@ -75,6 +75,16 @@ pub trait AppAdapter: Any + Send + Sync {
     /// Every app in `apps` needs at least one file.
     fn layout_files(&self) -> &'static [LayoutSource];
 
+    /// This adapter's server components (decision
+    /// `plumbing-and-porcelain`), files `components/<name>/NNNN.json` in its
+    /// crate, embedded by its build script (`generate_component_files` in
+    /// `pod-core/build_support`). They are `core:<name>` like the core's
+    /// own, append-only, and their names are unique across crates. Empty by
+    /// default.
+    fn component_files(&self) -> &'static [crate::components::ComponentSource] {
+        &[]
+    }
+
     /// This adapter's own HTTP routes: actions, screen data, sign-in, media.
     ///
     /// Called once at startup. The core merges this router into its own,
@@ -114,8 +124,10 @@ pub trait AppAdapter: Any + Send + Sync {
     /// [`Self::sign_ins`]) and opens `app`, which requires it: usually a
     /// sentence and a button whose `AuthLogin` intent names this adapter's
     /// auth routes. Its root must be a `core://Workspace` whose id is
-    /// `app.id`. Served as is, with no layout version; with a stale bearer
-    /// the core sends it as the body of a 401.
+    /// `app.id`. It may use server components (`core://Use`, such as one of
+    /// [`Self::component_files`]), which the core expands; the workspace is
+    /// otherwise served as is, with no layout version. With
+    /// a stale bearer the core sends it as the body of a 401.
     fn signed_out(&self, sign_in: &str, app: &AppInfo, req: &RequestCtx) -> WorkspaceSpec {
         let _ = req;
         default_signed_out(sign_in, app)
@@ -454,6 +466,10 @@ pub struct Catalog {
     files: Vec<LayoutSource>,
     /// `(sign-in id, index into adapters)`.
     sign_ins: Vec<(SignInProvider, usize)>,
+    /// Every server component file: the core's, then each adapter's.
+    components: Vec<crate::components::ComponentSource>,
+    /// [`Self::components`] as definitions, for expanding layout files.
+    pending: std::sync::OnceLock<crate::parts::Pending>,
 }
 
 impl Catalog {
@@ -497,6 +513,21 @@ impl Catalog {
                 sign_ins.push((p, i));
             }
             files.extend_from_slice(a.layout_files());
+        }
+        let mut components = crate::components::CORE_COMPONENT_FILES.to_vec();
+        for a in &adapters {
+            for c in a.component_files() {
+                if let Some(o) = components
+                    .iter()
+                    .find(|o| o.name == c.name && o.dir != c.dir)
+                {
+                    return Err(format!(
+                        "component '{}' is in both {} and {}; component names are unique",
+                        c.name, o.dir, c.dir
+                    ));
+                }
+                components.push(*c);
+            }
         }
         for (app, _) in &apps {
             if let AuthPolicy::SignIn(id) = app.auth
@@ -568,6 +599,27 @@ impl Catalog {
             apps,
             files,
             sign_ins,
+            components,
+            pending: std::sync::OnceLock::new(),
+        })
+    }
+
+    /// Every server component file of this build: the core's and the
+    /// adapters' (checked at start by `components::core_files`).
+    pub fn component_files(&self) -> &[crate::components::ComponentSource] {
+        &self.components
+    }
+
+    /// [`Self::component_files`] as [`crate::parts::Pending`] definitions
+    /// (files that don't parse are left out: the pod refuses to start on
+    /// them).
+    pub fn component_defs(&self) -> &crate::parts::Pending {
+        self.pending.get_or_init(|| crate::parts::Pending {
+            defs: crate::components::core_files(&self.components)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|f| (f.name, f.number, f.def))
+                .collect(),
         })
     }
 

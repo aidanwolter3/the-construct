@@ -96,6 +96,8 @@ Commands are separated by `;` or newlines; entries starting with `#` are comment
 (`app/desktopApp/src/sim/resources/blueprint_<id>_page.json`; `blueprint_<id>.json` is the workspace older builds
 get, written by the same `fixtures::` test), and the fixtures' layouts to `open-layout`.
 
+An `action.confirm` dialog's buttons are `tag:confirm:ok` and `tag:confirm:cancel`.
+
 A `<target>` is `tag:<testTag>` (exact, else the first tag containing it), a single word, or `"quoted text"`: exact
 text, then exact content description (clickable nodes first), then substrings.
 

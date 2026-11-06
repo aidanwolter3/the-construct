@@ -36,6 +36,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -312,7 +313,21 @@ class ConstructController internal constructor(
     /** Carries out a bound intent from layout [from]; the steps of an `action.sequence` one after another. */
     private fun run(bound: ActionIntent, from: String) {
         if (bound is ActionIntent.Sequence) {
-            bound.steps.forEach { run(it, from) }
+            bound.steps.forEachIndexed { i, step ->
+                if (step is ActionIntent.Confirm) {
+                    // The steps after an `action.confirm` wait for its answer too.
+                    val rest = bound.steps.drop(i + 1)
+                    run(if (rest.isEmpty()) step else step.copy(then = ActionIntent.Sequence(listOf(step.then) + rest)), from)
+                    return
+                }
+                run(step, from)
+            }
+            return
+        }
+        if (bound is ActionIntent.Confirm) {
+            if (!_pendingConfirm.compareAndSet(null, PendingConfirm(bound, from))) {
+                println("[Construct] action.confirm: another one is open; ignored")
+            }
             return
         }
         if (bound is ActionIntent.OpenLink) {
@@ -331,6 +346,22 @@ class ConstructController internal constructor(
         if (bound is ActionIntent.Create) {
             attachments.consume(attachmentIds(bound.attachments))
         }
+    }
+
+    private val _pendingConfirm = MutableStateFlow<PendingConfirm?>(null)
+
+    /** The `action.confirm` whose dialog is open (feature `action_confirm`), if any. */
+    val pendingConfirm: StateFlow<PendingConfirm?> = _pendingConfirm.asStateFlow()
+
+    /** The open `action.confirm` was confirmed: close it and run its `then`. */
+    fun confirm() {
+        val p = _pendingConfirm.getAndUpdate { null } ?: return
+        run(p.intent.then, p.from)
+    }
+
+    /** The open `action.confirm` was cancelled: close it, nothing runs. */
+    fun cancelConfirm() {
+        _pendingConfirm.value = null
     }
 
     private val _openedLinks = MutableStateFlow<List<String>>(emptyList())
@@ -718,6 +749,7 @@ fun ConstructApp(
                     Box(Modifier.fillMaxSize()) {
                         RootView(controller, state, device, Modifier.fillMaxSize())
                         StackHost(controller, state, device, notificationSettingsExtra)
+                        ConfirmDialog(controller)
                         notice?.let {
                             NoticeBar(it, onDismiss = controller::dismissNotice, modifier = Modifier.align(Alignment.BottomCenter))
                         }

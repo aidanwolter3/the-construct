@@ -1158,3 +1158,29 @@ async fn home_stream_starts_with_every_layouts_version() {
     assert!(resp.status().is_success());
     assert_eq!(sse.next_event().await, layout_msg(&kept, 3));
 }
+
+/// Settings asks before Sign out and Leave pod (`action.confirm`, issue
+/// #132); a client that doesn't draw `action_confirm` keeps the version
+/// before it.
+#[tokio::test]
+async fn settings_without_action_confirm_is_the_version_before() {
+    let pod = pod().await;
+    let current = crate::workspace_features();
+    let (status, version, body) = get_as(&pod, "/v1/workspaces/settings", Some(&current)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        version.as_deref(),
+        Some(files("settings").to_string().as_str())
+    );
+    assert!(body.to_string().contains("action.confirm"), "{body}");
+    let old: Vec<&str> = current
+        .split(',')
+        .filter(|f| *f != "action_confirm")
+        .collect();
+    let (status, version, body) =
+        get_as(&pod, "/v1/workspaces/settings", Some(&old.join(","))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(version.as_deref(), Some("4"));
+    assert!(!body.to_string().contains("action.confirm"), "{body}");
+    assert!(body.to_string().contains("leave_pod"), "{body}");
+}

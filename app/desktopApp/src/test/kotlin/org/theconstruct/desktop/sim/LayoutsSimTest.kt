@@ -54,6 +54,19 @@ class LayoutsSimTest {
     }
 
     @Test
+    fun leavePodAsksFirstCancelStaysAndConfirmLeaves() {
+        val (controller, _) = controller()
+        val runner = SimRunner(controller, outDir, ScreenSpec.parse("phone"))
+        runner.ok("open-settings; click Leave pod on this device; assert-text Leave this pod?; shot leave-confirm")
+        assertNotNull(controller.pendingConfirm.value)
+        runner.ok("click tag:confirm:cancel; assert-no-text Leave this pod?; assert-text Leave pod on this device")
+        assertNull(controller.pendingConfirm.value)
+        assertNotNull(controller.navigation.top, "Cancel leaves Settings open")
+        runner.ok("click Leave pod on this device; click tag:confirm:ok; assert-no-text Leave this pod?")
+        assertNull(controller.navigation.top, "leaving the pod closes everything")
+    }
+
+    @Test
     fun aSheetDraggedPastAQuarterOfItsHeightCloses() {
         val (controller, _) = controller()
         val runner = SimRunner(controller, outDir, ScreenSpec.parse("phone"))

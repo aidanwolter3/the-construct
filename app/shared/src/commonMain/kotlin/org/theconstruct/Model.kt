@@ -631,6 +631,19 @@ sealed class ActionIntent {
     ) : ActionIntent()
 
     /**
+     * `action.confirm` (feature `action_confirm`): ask before a step that can't be undone. [ConstructController] shows
+     * its own dialog ([title], [message], a [confirmLabel] button and Cancel) and runs [then] only on confirm; in a
+     * sequence, the steps after it wait for the answer too. Never sent to the engine.
+     */
+    @Serializable
+    data class Confirm(
+        val title: String,
+        val message: String? = null,
+        @SerialName("confirm_label") val confirmLabel: String,
+        val then: ActionIntent,
+    ) : ActionIntent()
+
+    /**
      * An intent whose `intent` tag this client does not know (e.g. the removed `action.agent.prompt`). [raw] is the full
      * original object; dispatching it forwards [raw] unchanged.
      */
@@ -769,6 +782,7 @@ object ActionIntentSerializer : TaggedUnionSerializer<ActionIntent>("org.thecons
         Variant("action.local.set", ActionIntent.LocalSet::class, ActionIntent.LocalSet.serializer()),
         Variant("action.link.open", ActionIntent.OpenLink::class, ActionIntent.OpenLink.serializer()),
         Variant("action.device", ActionIntent.Device::class, ActionIntent.Device.serializer()),
+        Variant("action.confirm", ActionIntent.Confirm::class, ActionIntent.Confirm.serializer()),
     )
 
     override fun unknown(tag: String, raw: JsonObject): ActionIntent = ActionIntent.Unknown(tag, raw)
