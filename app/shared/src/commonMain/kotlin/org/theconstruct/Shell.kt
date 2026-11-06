@@ -312,13 +312,3 @@ internal fun shellView(state: ConstructState): ShellView = when {
     state.error != null -> ShellView.Rescue
     else -> ShellView.Loading
 }
-
-/**
- * Whether a workspace is drawn whole by its one slot (a filling `core://Box`, or an inline `core://Layout`), with no
- * title bar or page scroll.
- */
-internal fun fillsScreen(workspace: UiNode.Workspace): Boolean =
-    workspace.slots.size == 1 &&
-        workspace.slots[0].content.let {
-            (it is UiNode.Box && it.fill) || (it is UiNode.Layout && it.presentation == EmbedPresentation.Inline && it.showWhen == null)
-        }

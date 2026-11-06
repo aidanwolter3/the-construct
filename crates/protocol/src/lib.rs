@@ -19,8 +19,8 @@ pub use ast::{
 };
 pub use bundle::{DataBundle, EntityRecord, WorkspaceSpec};
 pub use features::{
-    ClientCaps, Compatibility, FEATURE_DOCS, FEATURES, FEATURES_HEADER, REMOVED_FEATURES, feature,
-    features_header, parse_features, required_features,
+    ClientCaps, Compatibility, EXPANDED_FEATURES, FEATURE_DOCS, FEATURES, FEATURES_HEADER,
+    REMOVED_FEATURES, feature, features_header, is_retired, parse_features, required_features,
 };
 pub use intent::{
     ActionIntent, Animation, DEVICE_COMMANDS, DEVICE_COMMANDS_WITH_APP, DEVICE_COMMANDS_WITH_ID,

@@ -253,14 +253,11 @@ fun defaultFixture(workspace: String, from: File): File {
 const val SIM_FIXTURES = "app/desktopApp/src/sim/resources"
 
 /**
- * Where fixture [name] lives, relative to the repo root: in [SIM_FIXTURES], except two that belong to other code
- * and are shared from there: the sample app's data (shipped in the pod) and the protocol tests' counter bundle.
+ * Where fixture [name] lives, relative to the repo root: in [SIM_FIXTURES]. Each bundle's layout is what a pod serves
+ * this build (plumbing, decision `plumbing-and-porcelain`), written by
+ * `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::` from the pod and its sources.
  */
-fun fixturePath(name: String): String = when (name) {
-    "pixelfed_sample_bundle.json" -> "crates/app-pixelfed/sample/bundle.json"
-    "counter_home_bundle.json" -> "crates/protocol/tests/data/counter_home_bundle.json"
-    else -> "$SIM_FIXTURES/$name"
-}
+fun fixturePath(name: String): String = "$SIM_FIXTURES/$name"
 
 /**
  * The fake pod's bundle for layout [id] (fixture mode, decision `layouts-not-apps`): a blueprint of `app-shell` as a pod

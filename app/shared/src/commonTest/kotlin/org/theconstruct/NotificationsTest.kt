@@ -72,16 +72,14 @@ private class NotifyingBridge(val appId: String) : ConstructEngineBridge {
 }
 
 private const val WORKSPACE = """
-{"type":"core://Workspace","id":"app","title":"App","slots":[
-  {"slot_id":"s","provider_uri":"p","content":{"type":"core://Text","value_expr":"Home","style":"Body"}}],
+{"type":"core://Page","id":"app","title":"App","root":{"type":"core://Text","value_expr":"Home","style":"Body"},
  "screens":[{"id":"comments","route":"x://posts/{id}/comments","title":"Comments",
-   "content":{"type":"core://Text","value_expr":"Comments","style":"Body"}}]}
+   "root":{"type":"core://Text","value_expr":"Comments","style":"Body"}}]}
 """
 
 /** A screen without screens (e.g. a signed-out screen). */
 private const val PLAIN_WORKSPACE = """
-{"type":"core://Workspace","id":"app","title":"Sign in","slots":[
-  {"slot_id":"s","provider_uri":"p","content":{"type":"core://Text","value_expr":"Sign in","style":"Body"}}]}
+{"type":"core://Page","id":"app","title":"Sign in","root":{"type":"core://Text","value_expr":"Sign in","style":"Body"}}
 """
 
 private const val NOTIFICATION = """{"id":"n1","app_id":"a","channel":"likes","title":"@bob liked your post",

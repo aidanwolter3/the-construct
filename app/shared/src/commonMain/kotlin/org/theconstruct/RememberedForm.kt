@@ -20,7 +20,6 @@ fun rememberedChoices(nodes: Iterable<UiNode>): Map<String, Set<String>> {
             is UiNode.ChoiceChips -> if (node.remember) {
                 out.getOrPut(node.field) { LinkedHashSet() }.addAll(node.options.map { it.value })
             }
-            is UiNode.Workspace -> node.slots.forEach { walk(it.content) }
             is UiNode.Page -> walk(node.root)
             is UiNode.Scroll -> walk(node.content)
             is UiNode.Sticky -> walk(node.content)

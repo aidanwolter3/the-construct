@@ -798,7 +798,7 @@ pub fn custom_layout(
     // `named-vocabulary`) is never written again.
     if let Some(f) = protocol::required_features(&node)
         .into_iter()
-        .find(|f| protocol::REMOVED_FEATURES.contains(f))
+        .find(|f| protocol::is_retired(f))
     {
         let (key, hint) = match f {
             "create_dismiss" => (

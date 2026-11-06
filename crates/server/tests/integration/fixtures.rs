@@ -8,7 +8,13 @@
 //!   every fixture post with the post itself (`{path: DataBundle}`), made by the pod's own
 //!   normalization from the fake upstream at a fixed "now", with avatar URLs
 //!   pointing at the fake's `/storage/` (which the simulator serves), and the
-//!   post screen data of every fixture post (D48).
+//!   post screen data of every fixture post (D48);
+//! - every simulator bundle holds its layout as this build's app gets it:
+//!   a `core://Workspace` as the `core://Page` it expands to (decision
+//!   `plumbing-and-porcelain`, issue #126), the shell blueprints as
+//!   `blueprint_<id>_page.json`, and the hand-written bundles from their
+//!   workspace sources in `crates/server/tests/data/simulator/` (and the
+//!   protocol tests' counter bundle, the shipped sample bundle).
 //!
 //! `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::` rewrites them.
 
@@ -134,7 +140,7 @@ async fn feed_fixture_is_the_pods_feed() {
     };
     let mut v = serde_json::to_value(&spec).unwrap();
     // Through text, so f32 fields are not widened (see layouts::node_value).
-    v["workspace"] = server::layouts::node_value(&spec.workspace);
+    v["workspace"] = plumbing(&spec.workspace);
     check_or_write(
         "pixelfed_feed_bundle.json",
         &(serde_json::to_string_pretty(&v).unwrap() + "\n"),
@@ -218,32 +224,64 @@ async fn screen_data_fixture_is_the_pods_comments_data() {
     );
 }
 
+/// A layout as this build's app gets it: a `core://Workspace` as the
+/// `core://Page` it expands to (decision `plumbing-and-porcelain`), anything
+/// else as it is.
+fn plumbing(layout: &UiNode) -> Value {
+    let state = server::state_in_memory();
+    let v = server::layouts::node_value(layout);
+    let page = server::porcelain::to_plumbing(state.store(), state.catalog(), &v).unwrap();
+    assert!(!page.to_string().contains("core://Use"), "{page}");
+    page
+}
+
 /// The shell's blueprints (home, Settings, the inbox) for the simulator's
-/// fixture mode, as a pod serves them (decision `plumbing-and-porcelain`):
-/// `blueprint_<id>.json` the workspace (server components expanded, as an
-/// older app gets it) and `blueprint_<id>_page.json` the plumbing this
-/// build's app gets. The golden screenshot test draws both.
+/// fixture mode, as a pod serves them to this build:
+/// `blueprint_<id>_page.json`.
 #[test]
 fn shell_blueprints() {
-    let state = server::state_in_memory();
     for id in ["shell", "settings", "inbox"] {
         let file = server::layouts::parse_files(&server::catalog(), &server::layout_files())
             .unwrap()
             .into_iter()
             .rfind(|f| f.app_id == id)
             .unwrap();
-        let workspace = server::layouts::node_value(&file.layout);
-        let page =
-            server::porcelain::to_plumbing(state.store(), state.catalog(), &workspace).unwrap();
+        let page = plumbing(&file.layout);
         assert_eq!(page["type"], "core://Page");
-        assert!(!page.to_string().contains("core://Use"), "{page}");
-        for (name, layout) in [
-            (format!("blueprint_{id}.json"), workspace),
-            (format!("blueprint_{id}_page.json"), page),
-        ] {
-            let mut text = serde_json::to_string_pretty(&layout).unwrap();
-            text.push('\n');
-            check_or_write(&name, &text);
-        }
+        let mut text = serde_json::to_string_pretty(&page).unwrap();
+        text.push('\n');
+        check_or_write(&format!("blueprint_{id}_page.json"), &text);
+    }
+}
+
+/// The simulator's other bundles, each with its layout as this build gets it
+/// ([`plumbing`]), from a bundle whose layout is a workspace.
+#[test]
+fn simulator_bundles() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for (source, name) in [
+        (
+            "crates/server/tests/data/simulator/custom_kitchen_bundle.json",
+            "custom_kitchen_bundle.json",
+        ),
+        (
+            "crates/server/tests/data/simulator/row_long_text_bundle.json",
+            "row_long_text_bundle.json",
+        ),
+        (
+            "crates/protocol/tests/data/counter_home_bundle.json",
+            "counter_home_bundle.json",
+        ),
+        (
+            "crates/app-pixelfed/sample/bundle.json",
+            "pixelfed_sample_bundle.json",
+        ),
+    ] {
+        let text = std::fs::read_to_string(root.join(source)).unwrap();
+        let mut v: Value = serde_json::from_str(&text).unwrap();
+        let layout: UiNode = serde_json::from_value(v["workspace"].clone()).unwrap();
+        v["workspace"] = plumbing(&layout);
+        assert_eq!(v["workspace"]["type"], "core://Page", "{source}");
+        check_or_write(name, &(serde_json::to_string_pretty(&v).unwrap() + "\n"));
     }
 }

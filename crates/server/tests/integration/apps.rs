@@ -54,7 +54,8 @@ async fn get(pod: &Pod, path: &str) -> (StatusCode, Option<String>, Value) {
 fn before_title_scrolls() -> String {
     protocol::FEATURES
         .iter()
-        .filter(|f| **f != protocol::feature::TITLE_SCROLLS && **f != protocol::feature::PAGE)
+        .filter(|f| **f != protocol::feature::PAGE)
+        .chain(&[protocol::feature::WORKSPACE, protocol::feature::SCREENS])
         .copied()
         .collect::<Vec<_>>()
         .join(",")
@@ -959,7 +960,6 @@ async fn versions_say_whether_the_client_can_draw_them() {
     };
     feed_history(&pod);
     let retired = Some("retired".to_owned());
-    let update = Some("update_required".to_owned());
     // Version 3 holds a removed node type (D37): retired for every client.
     let current = page(Some(crate::workspace_features())).await;
     assert_eq!(
@@ -972,15 +972,16 @@ async fn versions_say_whether_the_client_can_draw_them() {
         v4.as_array().unwrap().contains(&json!("title_scrolls")),
         "{v4}"
     );
-    // A build from before `title_scrolls`: only the plain version 2.
+    // A build from before `title_scrolls`: only the plain version 2. The
+    // feature is removed since (issue #126), so the others are retired.
     let before = page(Some(before_title_scrolls())).await;
     assert_eq!(
         rows(&before),
         [
-            (4, update.clone()),
+            (4, retired.clone()),
             (3, retired.clone()),
             (2, None),
-            (1, update)
+            (1, retired.clone())
         ]
     );
     assert_eq!(before["latest_compatible_version"], json!(2));
@@ -1019,6 +1020,8 @@ async fn apps_say_the_newest_version_the_client_can_draw() {
     };
     for (features, want) in [
         (Some(crate::workspace_features()), json!(4)),
+        // This build draws no workspace: it gets version 4 as its expansion.
+        (Some(protocol::features_header()), json!(4)),
         (Some(before_title_scrolls()), json!(2)),
         (Some(String::new()), Value::Null),
         (None, json!(4)),
@@ -1044,7 +1047,7 @@ fn newest_layouts_use_no_removed_vocabulary() {
     for app in apps {
         let removed: Vec<&str> = protocol::required_features(&newest_file(app))
             .into_iter()
-            .filter(|f| !protocol::FEATURES.contains(f))
+            .filter(|f| protocol::is_retired(f))
             .collect();
         assert!(removed.is_empty(), "{app}: {removed:?}");
     }

@@ -794,7 +794,7 @@ pub fn check_definition(
         }
         if let Some(f) = protocol::required_features(&parsed)
             .into_iter()
-            .find(|f| protocol::REMOVED_FEATURES.contains(f))
+            .find(|f| protocol::is_retired(f))
         {
             return Err(fail(format!(
                 "uses '{f}', which was removed from the vocabulary"
