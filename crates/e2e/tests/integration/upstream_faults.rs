@@ -123,20 +123,44 @@ fn expired_upstream_token_is_refreshed_transparently() {
     let fake = h.upstream.fake();
     assert_eq!(fake.refresh_token_grants(), 0);
 
-    // Every access token expires: the pod's like gets a 401 upstream, refreshes, retries.
+    // Every access token expires: the next upstream request gets a 401, the pod
+    // refreshes once and retries it. That is usually the like, but the engine's own
+    // timeline refetch after sign-in can still be in flight and meet the expired token
+    // first; then the like goes through on the refreshed token. Either way the client
+    // sees one 200 and exactly one refresh happens.
+    let before = fake.requests().len();
     fake.add_faults([FaultRule::expire_tokens()]);
     engine.dispatch(&like_intent(&id));
     wait_flushed(&engine, TIMEOUT);
     wait_upstream(&h.upstream, &id, (true, false));
     assert_eq!(h.posts_to(LIKE_ENDPOINT), [200]);
     assert_eq!(fake.refresh_token_grants(), 1);
-    assert_eq!(
-        upstream_favourites(&h, &id)
-            .iter()
-            .map(|(s, _)| *s)
-            .collect::<Vec<_>>(),
-        [401, 200]
+    let after: Vec<_> = fake.requests()[before..]
+        .iter()
+        .map(|r| (r.method.clone(), r.path.clone(), r.status))
+        .collect();
+    let expired = after
+        .iter()
+        .position(|(_, _, s)| *s == 401)
+        .unwrap_or_else(|| panic!("no request met the expired token: {after:?}"));
+    let (method, path, _) = &after[expired];
+    assert!(
+        after[expired + 1..]
+            .first()
+            .is_some_and(|(m, p, _)| m == "POST" && p == "/oauth/token"),
+        "the 401 is followed by a refresh: {after:?}"
     );
+    assert!(
+        after[expired + 2..]
+            .iter()
+            .any(|(m, p, s)| m == method && p == path && *s == 200),
+        "the request that met the expired token is retried: {after:?}"
+    );
+    let likes: Vec<u16> = upstream_favourites(&h, &id)
+        .iter()
+        .map(|(s, _)| *s)
+        .collect();
+    assert!(likes == [401, 200] || likes == [200], "{likes:?}");
     assert_never_rolled_back(&seen);
 
     // A one-off 401 on the feed (token looks expired): refresh again, the client never
