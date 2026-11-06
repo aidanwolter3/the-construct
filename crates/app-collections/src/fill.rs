@@ -786,6 +786,7 @@ pub fn store(
             }
         }
     }
+    db::trim_retained(tx, crate::retained_cap(caps))?;
     let (n, b) = db::usage(tx)?;
     if n > caps.rows as i64 {
         return Ok(Err(format!(

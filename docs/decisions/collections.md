@@ -84,7 +84,10 @@ touches only Collections' tables; Pixelfed, Recipes and every other source stay 
 Per pod, temporary pods too (`app_collections::Caps`): 20 collections, 40 live fields each, 5,000 live rows and 4 MiB
 of values across collections, 500 rows per edit, 4,000 characters per text value. Definition history: 500 versions
 per collection. Change sets that edit apps count against the custom-app write rate. Purge window: 30 days (deleted
-rows, removed fields' data, kept-aside values, undo records), swept hourly.
+rows, removed fields' data, kept-aside values, undo records), swept hourly. What is kept for undoing (deleted
+collections and rows, kept-aside values, undo records) is also held to twice the bytes cap (8 MiB, counting 64 bytes
+per item): before each write the oldest of it goes first, so deleting and re-adding or editing over and over can't
+grow a pod's storage (security audit, `app_collections::db::trim_retained`).
 
 ## The four open questions of #54
 
