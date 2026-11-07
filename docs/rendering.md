@@ -122,7 +122,7 @@ opens the keyboard, and Back pops the stack. The layout stays inside the window 
 (`getRootWindowInsets`: system bars, camera cutout and keyboard), logged as they change. Its theme draws light system
 bars with dark icons.
 
-### The Android bridge (prototype)
+### The Android bridge
 
 A NativeActivity gets none of the Android callbacks that arrive through Java: a link opening the app, an activity
 result, a broadcast while the app is closed. `android/java` holds a small bridge that passes them to Rust and holds no
@@ -130,7 +130,8 @@ app logic: `ConstructActivity` (NativeActivity plus `onNewIntent` and `onActivit
 `askPermission` that Rust calls), `ConstructReceiver` (a message, also while the app is closed) and `Native` (the
 native methods, `Java_org_theconstruct_android_Native_*` in `src/bridge.rs`). The script compiles them with `javac`
 and `d8` into the APK's `classes.dex`. Events queue in `bridge.rs`, wake the window and reach it through
-`Platform::events`; for now each shows as a notice. Try it with the app installed:
+`Platform::events`; for now each shows as a notice. Decision:
+[`android-native-bridge`](decisions/android-native-bridge.md). Try it with the app installed:
 
 ```bash
 adb shell am start -a android.intent.action.VIEW -d "construct://bridge/hello"     # a link opens the app

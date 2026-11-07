@@ -48,6 +48,9 @@ pod they opened (`pods`): without a session they show the pod's own sign-in scre
 A NativeActivity gets key events, not Android's text input, so the engine edits text fields itself, as Android's
 own fields behave (cursor, selection handles, Cut / Copy / Paste / Select all, the system clipboard).
 
+Android callbacks that only arrive through Java (links, activity results, broadcasts) reach Rust through a thin
+bridge: [android-native-bridge](android-native-bridge.md).
+
 Not yet: a pinned version is not shown, dates are not formatted, and the keyboard's suggestions, autocorrect and
 own paste button don't reach text fields. The native window and
 APK talk to no engine (`client-core`): no cache, outbox (a write made offline is lost), event stream or upstream
