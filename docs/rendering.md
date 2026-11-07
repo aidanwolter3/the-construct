@@ -64,6 +64,10 @@ Click, scroll, type into a focused field, Escape for Back; each interaction's ef
 Metal on macOS and Vulkan (or GL) on Linux; on a headless Linux box, `Xvfb` plus Mesa's `mesa-vulkan-drivers`
 (lavapipe) is enough.
 
+Any workspace bundle (what `GET /v1/workspaces/<id>` answers) can be drawn to PNGs without a window:
+`cargo run --release -p construct-render --no-default-features --example render_bundle -- a.json b.json --out dir`
+(390 × 844 at 3×, the simulator's phone, so the two can be compared side by side with `-Pfixture`).
+
 ## Android
 
 `scripts/android_native.sh` cross-compiles `libconstruct_render.so` (cargo-ndk, arm64-v8a), packages a

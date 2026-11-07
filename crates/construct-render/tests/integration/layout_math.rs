@@ -47,20 +47,20 @@ fn flexbox_expansion() {
         right.bounds
     );
 
-    // Two columns in a row share its width equally.
+    // Columns in a row are text-like (as Compose's `NodeRow`): a short one
+    // keeps its width, a long one takes what is left and wraps.
     let col = |t: &str| json!({ "type": "core://Column", "children": [{ "type": "core://Text", "value_expr": t, "style": "Body" }] });
+    let long = "Much longer text that cannot possibly fit on one line of this row, so it has to wrap onto a second one";
     let spec = json!({ "type": "core://Row", "spacing_dp": 10, "children": [
         { "type": "core://Tappable", "tag": "a", "on_click": { "intent": "action.navigation.back" }, "content": col("A") },
-        { "type": "core://Tappable", "tag": "b", "on_click": { "intent": "action.navigation.back" }, "content": col("Much longer text") } ] });
+        { "type": "core://Tappable", "tag": "b", "on_click": { "intent": "action.navigation.back" }, "content": col(long) } ] });
     let scene = SceneBuilder::build_from_spec(&spec, 410.0, 300.0, 1.0).unwrap();
     let (a, b) = (scene.find_node("a").unwrap(), scene.find_node("b").unwrap());
-    assert!(
-        close(a.bounds[2], 200.0) && close(b.bounds[2], 200.0),
-        "{:?} {:?}",
-        a.bounds,
-        b.bounds
-    );
-    assert!(close(b.bounds[0], 210.0));
+    assert!(a.bounds[2] < 20.0, "{:?}", a.bounds);
+    assert!(close(b.bounds[0], a.bounds[2] + 10.0));
+    assert!(b.bounds[0] + b.bounds[2] <= 410.0 + 0.01, "{:?}", b.bounds);
+    let t = scene.find_text(long).unwrap().bounds;
+    assert!(t[3] >= 40.0, "wraps: {t:?} in {:?}", b.bounds);
 }
 
 #[test]

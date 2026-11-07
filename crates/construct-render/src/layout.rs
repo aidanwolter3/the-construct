@@ -374,6 +374,17 @@ fn fills_height(n: &UiNode) -> bool {
     }
 }
 
+/// A row child that shrinks and wraps (Compose `RowPart.Flexible`).
+fn row_flexible(n: &UiNode) -> bool {
+    match n {
+        UiNode::Text { .. } | UiNode::Container { .. } | UiNode::Column { .. } => true,
+        UiNode::Conditional { content, .. }
+        | UiNode::Tappable { content, .. }
+        | UiNode::Gesture { content, .. } => row_flexible(content),
+        _ => false,
+    }
+}
+
 /// `style` adjusted for where the node sits: its parent's axis.
 fn placed(mut style: Style, n: &UiNode, axis: Axis) -> Style {
     let wide = fills_width(n);
@@ -392,13 +403,18 @@ fn placed(mut style: Style, n: &UiNode, axis: Axis) -> Style {
             }
         }
         Axis::Row => {
-            if wide {
+            // As the Compose row (`NodeRow`): text-like children shrink and
+            // wrap to what the controls leave; controls keep their width; an
+            // unsized Spacer (set where it is built) takes the leftover; a
+            // field fills the row.
+            style.flex_grow = style.flex_grow.max(0.0);
+            if row_flexible(n) {
+                style.flex_shrink = 1.0;
+                style.min_size.width = length(0.0);
+            } else if wide && !matches!(n, UiNode::Column { .. } | UiNode::Container { .. }) {
                 style.flex_grow = 1.0;
                 style.flex_shrink = 1.0;
                 style.flex_basis = length(0.0);
-                style.min_size.width = length(0.0);
-            } else if matches!(n, UiNode::Text { .. }) {
-                style.flex_shrink = 1.0;
                 style.min_size.width = length(0.0);
             } else {
                 style.flex_shrink = 0.0;
