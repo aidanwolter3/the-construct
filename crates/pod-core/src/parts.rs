@@ -19,6 +19,7 @@
 //! does, which stays as an alias), with `args` and `children`.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 
@@ -237,6 +238,9 @@ enum Out {
     Drop,
 }
 
+/// A definition as parsed (`Err`: why it is invalid).
+type Parsed = Result<Arc<Def>, String>;
+
 struct Expander<'a> {
     /// `None`: layout files, which use only server components (from the
     /// embedded files) and no parts.
@@ -246,7 +250,9 @@ struct Expander<'a> {
     mode: Mode,
     pending: &'a Pending,
     cache: HashMap<(String, Option<i64>), Option<Parts>>,
-    defs: HashMap<(String, Option<i64>), Option<Value>>,
+    /// Each definition read and parsed once per expansion: a use costs no
+    /// copy of its definition, which the work budget wouldn't see.
+    defs: HashMap<(String, Option<i64>), Option<Parsed>>,
     work: Work,
 }
 
@@ -390,7 +396,8 @@ impl Expander<'_> {
             .and_then(|p| p.parts.get(&r.part).cloned()))
     }
 
-    fn def(&mut self, name: &str, version: Option<i64>) -> rusqlite::Result<Option<Value>> {
+    /// A component's definition, parsed (`Err`: why it is invalid).
+    fn def(&mut self, name: &str, version: Option<i64>) -> rusqlite::Result<Option<Parsed>> {
         let key = (name.to_owned(), version);
         if !self.defs.contains_key(&key) {
             let found = match (self.pending.get(name, version), self.store) {
@@ -401,7 +408,8 @@ impl Expander<'_> {
                     None => crate::components::latest(store, name)?.map(|(_, d)| d),
                 },
             };
-            self.defs.insert(key.clone(), found);
+            let parsed = found.map(|raw| Def::parse(&raw).map(Arc::new));
+            self.defs.insert(key.clone(), parsed);
         }
         Ok(self.defs[&key].clone())
     }
@@ -638,14 +646,14 @@ impl Expander<'_> {
         let found = self
             .def(name, version)
             .map_err(|e| err(at, format!("reading the component: {e}")))?;
-        let Some(raw) = found else {
+        let Some(parsed) = found else {
             let why = match version {
                 Some(n) => format!("no version {n} (list_components lists them)"),
                 None => "no such component (list_components lists them)".to_owned(),
             };
             return self.unresolved(at, &label, &why, in_screens);
         };
-        let def = match Def::parse(&raw) {
+        let def = match parsed {
             Ok(d) => d,
             Err(e) => {
                 return self.unresolved(
@@ -696,8 +704,7 @@ impl Expander<'_> {
             args,
             children,
         };
-        let template = def.template.clone();
-        let out = self.walk(&template, at, false, depth + 1, Some(&inner));
+        let out = self.walk(&def.template, at, false, depth + 1, Some(&inner));
         out.map_err(|mut e| {
             if !e.message.contains(&inner.name) {
                 e.message = format!("in {}: {}", inner.name, e.message);
