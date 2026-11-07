@@ -249,21 +249,22 @@ impl Android {
 /// runs it again.
 fn set_up_push(app: &AndroidApp, home: &crate::pods::PodHome) {
     let (Some(files), Some(state)) = (app.internal_data_path(), home.read()) else {
+        log("push: no open pod yet (pod.json): set up after sign-in");
         return;
     };
     let engine = home.engine(&state.url);
     let app = app.clone();
     std::thread::spawn(move || {
         let store = crate::push::android::store(&files);
-        let Some(instance) = crate::push::set_up(&store, &engine, log) else {
+        let Some((instance, vapid)) = crate::push::set_up(&store, &engine, log) else {
             return;
         };
         match with_activity(&app, |env, activity| {
-            crate::push::android::register(env, activity, &instance)
+            crate::push::android::register(env, activity, &instance, &vapid)
         }) {
             Ok(true) => log(&format!("push: asked the distributor for {instance}")),
             Ok(false) => log(
-                "push: no UnifiedPush distributor (ntfy, ...) installed: notifications only while the app runs",
+                "push: no UnifiedPush distributor (an app such as ntfy, or the embedded FCM one): notifications only while the app runs",
             ),
             Err(e) => log(&format!("push: registering: {e}")),
         }
@@ -733,7 +734,7 @@ fn session_key<'l>(env: &mut jni::Env<'l>) -> jni::errors::Result<jni::objects::
     env.call_method(
         &ks,
         jni_str!("load"),
-        jni_sig!("(Ljava/security/KeyStore$LoadParameter;)V"),
+        jni_sig!("(Ljava/security/KeyStore$LoadStoreParameter;)V"),
         &[JValue::Object(&JObject::null())],
     )?;
     let alias = env.new_string(KEY_ALIAS)?;
@@ -997,7 +998,7 @@ fn keystore_decrypt(app: &AndroidApp, iv_b64: &str, ct_b64: &str) -> Result<Stri
                 env.call_method(
                     &ks,
                     jni_str!("load"),
-                    jni_sig!("(Ljava/security/KeyStore$LoadParameter;)V"),
+                    jni_sig!("(Ljava/security/KeyStore$LoadStoreParameter;)V"),
                     &[JValue::Object(&JObject::null())],
                 )?;
                 let alias = env.new_string("construct_session_key")?;
