@@ -843,6 +843,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "construct-sim"
+version = "0.1.0"
+dependencies = [
+ "construct-render",
+ "image",
+ "protocol",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

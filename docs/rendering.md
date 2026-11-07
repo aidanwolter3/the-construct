@@ -92,7 +92,7 @@ Metal on macOS and Vulkan (or GL) on Linux; on a headless Linux box, `Xvfb` plus
 
 Any workspace bundle (what `GET /v1/workspaces/<id>` answers) can be drawn to PNGs without a window:
 `cargo run --release -p construct-render --no-default-features --example render_bundle -- a.json b.json --out dir`
-(390 × 844 at 3×, the simulator's phone, so the two can be compared side by side with `-Pfixture`).
+(390 × 844 at 3×, the simulator's phone).
 
 ## Android
 
@@ -158,8 +158,8 @@ Cut / Copy / Paste / Select all bar over it (dragging on from a long press moves
 cursor shows its handle and the bar (Paste, Select all). Typing and pasting replace the selection and are cut to the
 field's `max_length`. With a hardware keyboard: arrows, Home and End (Shift selects), Delete and Ctrl or Command+A, C,
 X and V. On Android the clipboard is `ClipboardManager` through the SDK.
-`pod_shots` (feature `remote`) drives a live session from a script and writes PNGs, to compare with the simulator's
-live mode.
+The headless simulator, `construct-sim` ([simulator.md](simulator.md)), drives a session from a script on fixture
+bundles or a live pod and writes PNGs drawn on the CPU.
 
 ## Agent previews (MCP)
 

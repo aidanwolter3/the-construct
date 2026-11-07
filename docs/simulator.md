@@ -1,136 +1,145 @@
 # The headless simulator
 
-`:desktopApp:simulate` renders the real shared UI (`ConstructApp`) to an offscreen screen, runs a small script
-against it and writes PNG screenshots. There is no window and a run takes a few seconds, so it works in CI and cloud
-sessions. It is the project's UI check: there are no emulator or on-device tests.
-
-Run it from `app` with a JDK 21 (see [CONTRIBUTING.md](../CONTRIBUTING.md#setup)):
+`construct-sim` (`crates/construct-sim`) runs a small script against a session of the Rust engine
+(`construct-render`, [rendering.md](rendering.md)), draws each `shot` on the CPU and writes PNGs. There is no window,
+no GPU and no JVM, and a run takes a second or two, so it works in CI and cloud sessions. It is the project's UI check:
+there are no emulator or on-device tests. Decision: [`rust-simulator`](decisions/rust-simulator.md).
 
 ```bash
-./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_sample_no_login -Pscreen=phone -Pout=/tmp/sim \
-  -Pscript="shot feed; click Like; assert-text Unlike; shot liked; offline; shot offline"
+cargo run -p construct-sim -- --workspace pixelfed_sample_no_login --screen phone --out /tmp/sim \
+  --script "shot feed; click Like; assert-text Unlike; shot liked; offline; shot offline"
+scripts/sim_scenarios.sh /tmp/sim       # the scenarios CI screenshots, one folder each
 ```
 
-The output directory holds the PNGs, `steps.log` and `steps.json` (one entry per step: `index`, `command`, `arg`,
-`status`, `message`, `file`, `elapsed_ms`). The run stops at the first failing step and saves the screen as
-`<NN>-FAILED.png`.
+The output directory holds `<NN>-<name>.png` (`NN` the step's number), `steps.log` and `steps.json` (one entry per
+step: `index`, `command`, `arg`, `status`, `message`, `file`, `elapsed_ms`). The run stops at the first failing step
+and saves the screen as `<NN>-FAILED.png`; a failed text check lists the texts on screen.
+
+CI runs `scripts/sim_scenarios.sh` in the Rust job and uploads the PNGs as the `simulator` artifact; those are the
+screenshots PRs embed. The same scenarios, with stronger checks, are `crates/construct-sim/tests/integration/scenarios.rs`.
 
 ## Modes
 
-**Fixture mode** (the default) needs no server and, with `-PskipRustBuild`, no Rust build. A fake engine
-(`FakeEngineBridge`) loads a bundle from `app/desktopApp/src/sim/resources/`, applies taps with the same expression subset as the engine,
-models the outbox (`offline` queues, `online` flushes), and serves a fake app catalog (Pixelfed v1..v3, Pixelfed sample
-v1..v2) and notifications (`app/desktopApp/src/sim/resources/notifications.json`). Images whose path ends in `/storage/<file>` or
-`/v1/pixelfed/media/<file>` come from `fake-pixelfed/fixtures/media/`; every other URL fails at once, so shots are
-deterministic. Screen data comes from `app/desktopApp/src/sim/resources/pixelfed_screen_data.json`, generated from the
-pod with `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::` (the test fails when it is stale).
+**Fixture mode** (the default) needs no server. A fake pod (`fixture::FixturePod`) serves bundles from
+`crates/construct-sim/data/`: the start layout's bundle, the shell's Settings and inbox as a pod serves them to this
+build (`blueprint_<id>_page.json`), the other bundles to `open-layout`, screen data paths from
+`pixelfed_screen_data.json` and `events_screen_data.json`, and notifications and their channels from
+`notifications.json` (each created `age_seconds` before the run). Writes are accepted and kept by nobody: the device
+keeps its optimistic change, but a created entity (a posted comment) doesn't come back from the pod. `offline` makes
+the fake pod unreachable: `local://connection` says Offline, loads fail, and a write is refused and undone (the Rust
+clients have no outbox). Images whose path ends in `/storage/<file>` or `/v1/pixelfed/media/<file>` come from
+`fake-pixelfed/fixtures/media/`; every other URL fails at once, so shots are the same on every run.
 
-**Live mode** (`-PbaseUrl=<server>`) runs the real Rust engine against a server, with a fresh temporary storage
-directory unless `-Pstorage` is given. Images load over HTTP. `offline`, `online`, `publish-version` and `notify` are
-fixture-only.
+Default bundles: `pixelfed_sample_no_login` (`pixelfed_sample_bundle.json`), `pixelfed` (`pixelfed_feed_bundle.json`,
+the default workspace), `events` (`events_bundle.json`) and `c-kitchen2dm` (`custom_kitchen_bundle.json`); any other
+bundle with `--fixture`. Every bundle's layout is what a pod serves this build: a workspace as the `core://Page` it
+expands to. `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::` writes the Pixelfed ones and the
+blueprints from the pod (and the hand-written ones from their sources in `crates/server/tests/data/simulator/`; the
+test fails when one is stale); edit the source and rerun it.
 
-<a id="live-mode"></a>**Sign-in in live mode:** the engine gets an in-memory session store and a "browser" that
-follows the authorize URL with `auto=1`, which the fake Pixelfed approves at once:
+**Live mode** (`--base-url <pod>`) runs a live session (`remote::PodClient`) on a pod, starting on `home`. The session
+token or pod code comes from `CONSTRUCT_POD_TOKEN` (never a flag or a file); unset, the pod answers its sign-in
+screen. Signing in (`action.auth.session`, e.g. `click Try a temporary pod` on staging) and Leave pod reopen the
+session as a client does:
 
 ```bash
-./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed -PbaseUrl=http://127.0.0.1:8080 \
-  -Pscript="click Sign in with Pixelfed; open-settings; wait-text 20000 @constructdemo; back; wait-text 20000 Alice Lumen; wait-images 20000; shot feed"
+cargo run -p construct-sim -- --base-url https://the-construct-pod.fly.dev --out /tmp/sim \
+  --script "click Try a temporary pod; wait-text 20000 Notifications; shot home; open-settings; shot settings"
 ```
 
-For a real Pixelfed, pass `-PpixelfedLogin=<login>:<password>`: the browser then logs in through Pixelfed's web form
-and approves the consent page. Against staging, start with `click Try a temporary pod`.
+`offline`, `online` and `notify` are fixture-only.
 
 ## Flags
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `-Pworkspace` | `pixelfed` | The app at start; in fixture mode it picks the default fixture. |
-| `-Pscreen` | `phone` | `phone` (390x844 dp), `tablet` (820x1180), `desktop` (1280x800), or `WxH` in dp. |
-| `-Pdensity` | per screen | Pixels per dp: phone 3, tablet 2, desktop 2, `WxH` 2. |
-| `-Ptoday` | the real date | `YYYY-MM-DD` that date formatting draws against, for repeatable shots. |
-| `-Pscript` | `shot initial` | The script. |
-| `-PscriptFile` | | The script, from a file (instead of `-Pscript`). |
-| `-Pmode` | `fixture` | `fixture` or `live`; `-PbaseUrl` selects live. |
-| `-Pfixture` | per workspace | The bundle in fixture mode: `pixelfed_sample_no_login` uses `app/desktopApp/src/sim/resources/pixelfed_sample_bundle.json`, `pixelfed` uses `app/desktopApp/src/sim/resources/pixelfed_feed_bundle.json`; other apps need this flag. |
-| `-PbaseUrl` | staging | The server in live mode. |
-| `-PtimeoutMs` | `10000` | Live mode: how long to wait for the first load. |
-| `-Pout` | `app/desktopApp/build/sim/<timestamp>` | Output directory. |
-| `-PpixelfedLogin` | | Live mode: `<login>:<password>` for a real Pixelfed. |
-| `-Pstorage` | a fresh temp dir | Live mode: the engine's storage, kept after the run (to test restarts). |
+| `--workspace` | `pixelfed`; live: `home` | The layout at start; in fixture mode it picks the default bundle. |
+| `--screen` | `phone` | `phone` (390 × 844 points), `tablet` (820 × 1180), `desktop` (1280 × 800), or `WxH` in points. |
+| `--density` | per screen | Pixels per point: phone 3, tablet 2, desktop 2, `WxH` 2. |
+| `--script` | `shot initial` | The script. |
+| `--script-file` | | The script, from a file (instead of `--script`). |
+| `--fixture` | per workspace | Fixture mode: the start layout's bundle (`{workspace, entities, queries}`). |
+| `--base-url` | | Live mode against this pod. |
+| `--timeout-ms` | `10000` | Live mode: how long to wait for the first load. |
+| `--out` | `target/sim/<timestamp>` | Output directory. |
 
-Relative paths resolve against the repository root. Exit codes: 0 success, 1 a failed step, 2 bad flags or script.
-An unknown `-P` property is ignored with a warning.
+Flags take `--flag value` or `--flag=value`. Relative paths resolve against the working directory, else the
+repository root. Exit codes: 0 every step passed, 1 a step failed, 2 bad flags or script.
 
 ## Script commands
 
-Commands are separated by `;` or newlines; entries starting with `#` are comments (up to the next `;`).
+Commands are separated by `;` or newlines; entries starting with `#` are comments (up to the next `;`). The first
+word is the command and the rest of the entry, as written, its argument: `click Count: 2` clicks "Count: 2", and
+`click "Sign in"` looks for the quote marks too (only `type` and `pick` read quotes).
 
 | Command | Effect |
 |---|---|
 | `shot <name>` | Writes `<NN>-<name>.png` (waits up to 5 s for on-screen images first). |
-| `click <target>` | Clicks the node, scrolling it into view first. |
-| `type <target> <text>` | Replaces a text field's text. |
-| `pick <path> [<path>…]` | Queues files for the next photo picker. |
-| `swipe-left <target>` / `swipe-right <target>` | Swipes a node, e.g. a carousel. |
-| `swipe-down <target>` | A quick downward flick from the node's center (a fling), e.g. `swipe-down tag:sheet-handle` closes a sheet. |
-| `swipe-up <target>` | A quick upward flick from the node's center, e.g. `swipe-up tag:sheet-handle` closes a sheet from the top. |
-| `drag-down <dp> <target>` | Drags slowly down by `dp` from the node's center and lets go without a fling, e.g. `drag-down 300 tag:sheet-handle` (a sheet's handle) or `tag:sheet:<layout>` (its content). |
-| `scroll-to <target>` | Scrolls until the node is visible. |
+| `click <target>` | Taps the node's centre, scrolling it into view first. |
+| `type <target> <text>` | Replaces a text field's text (`field:<name>`, `tag:textfield:<name>`, its placeholder, or the field's name). |
+| `swipe-left <target>` / `swipe-right <target>` | Pages a carousel, else runs the `core://Gesture`'s `on_swipe_left` / `on_swipe_right` there. |
+| `swipe-down <target>` / `swipe-up <target>` | A flick: closes a sheet from its handle (`tag:sheet-handle`), else runs the gesture's `on_swipe_down` / `on_swipe_up`. |
+| `drag-down <points> <target>` | Drags a sheet's handle down and lets go without a fling (it closes past a quarter of its height), else scrolls the view there up by that much. |
+| `scroll-to <target>` | Scrolls until the node is on screen. |
 | `back` | A system Back press. |
-| `wait <ms>` / `idle` | Sleeps and advances the UI clock / waits for idle. |
+| `wait <ms>` / `idle` | Keeps drawing for that long / waits until no load or write is out. |
 | `assert-text <text>` / `assert-no-text <text>` | Some node's text or content description contains (or doesn't contain) the text; retries 2 s. |
 | `wait-text <ms> <text>` | `assert-text` with a longer timeout. |
 | `assert-link <text>` | An `action.link.open` opened a link containing the text. |
-| `wait-images [ms]` | Waits until no image is loading. |
-| `screen <WxH or preset>` | Restarts the renderer at a new size; engine state carries over. |
-| `offline` / `online` | Fixture mode: flips connectivity. |
-| `publish-version <note>` | Fixture mode: publishes a new version of the root layout. |
-| `open-layout <id> [push\|sheet\|panel]` | Presents a layout (`action.navigation.open {layout}`) and waits until it is drawn. |
+| `wait-images [ms]` | Waits until no on-screen image is loading (default 10 s). |
+| `screen <WxH or preset>` | A new screen size; the session carries over. |
+| `offline` / `online` | Fixture mode: the fake pod becomes unreachable / reachable. |
+| `open-layout <id> [push\|sheet\|panel]` | Presents a layout (`action.navigation.open {layout}`) and waits for its data. |
 | `open-settings` | Presents the Settings layout as a side panel. |
 | `open-inbox` | Presents the inbox layout as a sheet. |
-| `pin-version <layout> <n or latest>` | Shows a version of a layout on this device (`pin_version`), or the latest again. |
-| `notify <app_id> <channel> <title>` | Fixture mode: a live notification arrives. |
-| `toggle-channel <app>.<channel>` | Flips a channel switch (`toggle_channel`). |
+| `pin-version <layout> <n or latest>` | `pin_version` / `follow_latest` (live mode; the engine still shows the latest version). |
+| `notify <app_id> <channel> <title>` | Fixture mode: a notification arrives (the inbox and its count update). |
+| `toggle-channel <app>.<channel>` | Flips a notification channel (`toggle_channel`; fixture mode). |
+| `pick <path> [<path>…]` / `publish-version <note>` | Parsed, but fail: the engine opens no media picker and always shows a layout's latest version. The Compose simulator below still runs them. |
 
-`back` pops the top of the back stack (a presented layout or a screen). In fixture mode the fake pod serves the
-`app-shell` blueprints (`settings`, `inbox`) as a pod serves them to this build, as plumbing
-(`app/desktopApp/src/sim/resources/blueprint_<id>_page.json`, written by the same `fixtures::` test), and the
-fixtures' layouts to `open-layout`. Every fixture bundle's layout is what a pod serves this build: a workspace as the
-`core://Page` it expands to. The `fixtures::` test writes them from the pod (and the hand-written ones from their
-workspace sources in `crates/server/tests/data/simulator/`); edit the source and rerun it.
+A step whose tap or intent fails (a load the pod refuses, an intent nothing in this mode runs) fails.
 
-An `action.confirm` dialog's buttons are `tag:confirm:ok` and `tag:confirm:cancel`.
+A `<target>` is `tag:<id>`, a single word, or `"quoted text"`. `tag:<id>` is a semantic id
+([rendering.md](rendering.md#semantic-ids)): exact, else the first id containing it; the Compose tags
+`textfield:<f>` and `textfield-send:<f>` stand for `field:<f>` and `send:<f>`. Text is matched exactly (tappable
+nodes first), then as a substring, against texts and content descriptions. The engine leaves what is off screen out
+of the semantic tree, so a target not on screen is searched for by scrolling the screen's largest scrolling view.
 
-A `<target>` is `tag:<testTag>` (exact, else the first tag containing it), a single word, or `"quoted text"`: exact
-text, then exact content description (clickable nodes first), then substrings.
+Common ids: a node's own `tag` (`like:<post uri>`, `comment:<post uri>`, `carousel:<post uri>`), `field:<name>`,
+`send:<name>`, `<field>=<value>` for a chip or dock tab, `list:<query key>`, `layout:<id>`, `page:<carousel>`, and
+`confirm:ok` / `confirm:cancel` for an `action.confirm` dialog's buttons.
 
 Examples:
 
 ```bash
 # Layouts over the root: pushed, a side panel, a sheet; Back pops each
--Pscript="open-layout events; shot events; back; open-settings; shot settings; back; open-inbox; shot inbox; back"
-# Comments: open, write, send
--Pscript='click tag:comment:pixelfed://posts/781254316723458049; wait-text 3000 Which lens?; type tag:textfield:comment Golden light!; click tag:textfield-send:comment; wait-text 3000 just now; shot sent'
+--script "open-layout events; shot events; back; open-settings; shot settings; back; open-inbox; shot inbox; back"
+# A post's comments, then typing one
+--script 'click tag:comment:pixelfed://posts/781254316723458049; scroll-to Which lens?; type tag:textfield:comment Golden light!; shot typed'
 # Notifications
--Pscript='notify pixelfed_sample_no_login likes Bob liked your post; open-inbox; shot inbox; click @bob commented on your post; shot comments'
-# Posting a photo
--Pscript='click tag:new-post; pick fake-pixelfed/fixtures/media/carousel-1.png; click tag:media-picker-add:photos; click Share; shot posting'
+--script 'notify pixelfed likes Bob liked your post; open-inbox; shot inbox; click @bob commented on your post; shot thread'
 ```
 
-## Test tags
+## The Compose simulator (until #166)
 
-- **Layout nodes:** `screen:<id>`, `screen-back` and `layout-back` (from `core:screen` / `core:workspace`),
-  `textfield:<field>`, `textfield-send:<field>`, `list-empty`; a node's own `tag` (e.g. `carousel:<post uri>`,
-  `like:<post uri>`, `bookmark:<post uri>`, `comment:<post uri>`).
-- **Menu:** `menu-button`, `menu-badge`, `menu-drawer`, `menu-close`, `menu-back`, `app-<id>`, `app-history-<id>`,
-  `app-more-<id>`, `app-hide-<id>`, `app-delete-<id>`, `app-custom-<id>`, `apps-show-hidden`, `apps-error`,
-  `app-error`, `app-action-error`, `app-gone`, `app-updates-<id>`, `app-updates-dismiss-<id>`, `delete-app-dialog`,
-  `delete-app-confirm`, `delete-app-cancel`, `notice`, `notice-dismiss`, `menu-newer`, `menu-newer-latest`.
-- **Version picker:** `version-picker`, `version-latest`, `version-pinned`, `version-<n>`, `versions-more`,
-  `versions-error`, `version-error`.
-- **Settings:** `menu-settings`, `settings`, `menu-connection`, `menu-account`, `sign-in-<id>`, `sign-in-detail`,
-  `sign-ins-error`, `menu-sign-in`, `menu-sign-out`, `menu-leave-pod`, `menu-notifications`, `menu-server`,
-  `server-<key>`, `server-custom`, `server-custom-url`, `server-custom-hint`, `server-custom-use`, `provider-<id>`,
-  `provider-server-<id>`, `provider-server-go-<id>`.
-- **Notifications:** `inbox-button`, `inbox-badge`, `inbox`, `notification-row:<id>`, `inbox-mark-all`,
-  `inbox-close`, `notification-settings`, `channel:<app>.<channel>`, `channel-switch:<app>.<channel>`.
+`:desktopApp:simulate` draws the Compose app (`ConstructApp`) offscreen with the same script language, for as long
+as Compose is the product; issue #166 deletes it. It reads the same fixtures from `crates/construct-sim/data/`.
+
+```bash
+cd app && ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_sample_no_login -Pscreen=phone \
+  -Pout=/tmp/sim -Pscript="shot feed; click Like; assert-text Unlike; shot liked; offline; shot offline"
+```
+
+Its flags are `-P` properties: `-Pworkspace`, `-Pscreen`, `-Pdensity`, `-Pscript`, `-PscriptFile`, `-Pfixture`,
+`-Pout` as above (relative paths resolve against the repository root), plus `-Ptoday=YYYY-MM-DD` (the date
+formatting draws against), `-PbaseUrl` (live mode, the real Rust engine through JNA, with a fresh temporary
+storage unless `-Pstorage`), `-PtimeoutMs`, and `-PpixelfedLogin=<login>:<password>` (live sign-in through a real
+Pixelfed's web form; against the fake Pixelfed the scripted browser approves at once). Its fake engine
+(`FakeEngineBridge`) models the outbox (`offline` queues writes, `online` flushes them), keeps created posts and
+comments, serves a fake app catalog (Pixelfed v1..v3, Pixelfed sample v1..v2) for `publish-version` and
+`pin-version`, and runs `pick`.
+
+Its targets are Compose test tags: layout nodes' `tag`s as above, `screen:<id>`, `screen-back`, `layout-back`,
+`textfield:<field>`, `textfield-send:<field>`, `list-empty`, `sheet-handle`, `sheet:<layout>`, the inbox's
+`notification-row:<id>`, `inbox-mark-all`, `channel:<app>.<channel>`, `channel-switch:<app>.<channel>`, and the
+version picker's `version-picker`, `version-latest`, `version-pinned`, `version-<n>`.

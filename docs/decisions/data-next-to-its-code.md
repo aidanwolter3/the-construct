@@ -18,7 +18,7 @@ Decision: each data file lives with the code that reads it, so its place says wh
 | Real Pixelfed responses (D20) | `crates/app-pixelfed/tests/data/recorded/` | no |
 | The minimal counter bundle (engine, protocol and Kotlin engine tests) | `crates/protocol/tests/data/` | no |
 | Made-up recipes for tests | `crates/app-recipes/tests/data/test-seed.json` | no |
-| Simulator content: feed and events bundles, screen data, the Kitchen app, notifications | `app/desktopApp/src/sim/resources/` | no |
+| Simulator content: feed and events bundles, screen data, the Kitchen app, notifications | `crates/construct-sim/data/` | no |
 | Seed images for `scripts/pixelfed_dev.sh` | `scripts/pixelfed_dev/images/` | no |
 
 - Test and dev data sit under a `tests/` folder, the simulator's `sim` source set (which is already off the
@@ -27,7 +27,7 @@ Decision: each data file lives with the code that reads it, so its place says wh
   bundle is a protocol sample, and the simulator reads the demo bundle from the adapter crate. The simulator's
   `fixturePath` (`Simulator.kt`) is the one place that maps fixture names to paths.
 - Generated simulator files are still written by Rust tests (`UPDATE_FIXTURES=1`), now into
-  `app/desktopApp/src/sim/resources/`.
+  `crates/construct-sim/data/`.
 - Test-only code that other crates' tests call is behind a feature that only dev-dependencies enable
   (`app-recipes`'s `test-seed`, which gates `db::seed_test_recipes`), so the pod binary doesn't hold the data.
 - `scripts/check_test_data.sh` (CI) fails when Rust code under a crate's `src/` embeds a file from a `tests/`
