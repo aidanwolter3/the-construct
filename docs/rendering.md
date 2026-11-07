@@ -203,7 +203,8 @@ asks for the permission. Decisions: [`android-native-push-unifiedpush`](decision
 [`android-native-push-embedded-fcm`](decisions/android-native-push-embedded-fcm.md). On a phone without a distributor
 app or Play services, notifications show only while the app runs. To try it: install ntfy,
 open the app signed in to a pod (logcat: `push: asked the distributor`, then `push: new endpoint`), swipe it away,
-and make the pod notify (a matched event); the notification opens the event.
+and make the pod notify (a matched event); the notification opens the event. Without ntfy, on a phone with Play services, the embedded FCM
+distributor takes over (logcat `push: distributor org.theconstruct.android`, tag `UP-FCMD`).
 
 The platform interface (`platform.rs`: `Platform`, `PlatformEvent`, `Reopen`) is what each platform implements
 (Android, the desktop viewer; a web build later).
