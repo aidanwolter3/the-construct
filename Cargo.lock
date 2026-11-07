@@ -830,6 +830,7 @@ dependencies = [
  "cosmic-text",
  "glyphon",
  "image",
+ "jni",
  "pollster",
  "protocol",
  "reqwest",

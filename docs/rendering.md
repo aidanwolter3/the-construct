@@ -88,7 +88,8 @@ code (or reads `CONSTRUCT_POD_CODE`), checks it with `POST /v1/pods/open`, and w
 answers (on today's server, the pod code itself) to `pod.json` in the app's private storage with `run-as` (the APK is
 debuggable). It is stored unencrypted, unlike the main app's keystore. `--no-pod` deletes it and goes back to the
 demo. The app targets SDK 34, so the system keeps its window below the status bar and camera cutout and resizes it
-for the keyboard; a tapped text field opens the keyboard, and Back pops the stack.
+for the keyboard; a tapped text field opens the keyboard, and Back pops the stack. The layout stays inside the
+window insets Android reports (`getRootWindowInsets`: system bars, camera cutout and keyboard), logged as they change.
 
 ## Live sessions (`remote`)
 
