@@ -59,6 +59,8 @@ jobs:
       - run: cargo nextest run --workspace --profile ci
         env:
           CONSTRUCT_REQUIRE_GPU: "1"
+      # The Rust clients' live sessions on the engine (feature `remote`, off in the workspace build).
+      - run: cargo nextest run -p construct-render --features remote --profile ci -E 'test(/^engine::/)'
       - run: cargo test --workspace --doc
       # The headless simulator (docs/simulator.md), CPU-drawn: the scenarios' PNGs are what PRs embed.
       - name: Simulator screenshots (construct-sim, fixture mode)

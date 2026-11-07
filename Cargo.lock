@@ -904,6 +904,7 @@ dependencies = [
  "accesskit",
  "accesskit_winit",
  "bytemuck",
+ "client-core",
  "cosmic-text",
  "glyphon",
  "image",

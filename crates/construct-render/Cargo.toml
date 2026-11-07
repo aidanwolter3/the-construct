@@ -17,9 +17,9 @@ gpu = ["dep:wgpu", "dep:glyphon", "dep:pollster", "dep:bytemuck"]
 # A native window (winit): the desktop viewer and the Android activity.
 # On the desktop it also serves screen readers (AccessKit).
 window = ["gpu", "dep:winit", "dep:jni", "dep:accesskit_winit"]
-# A live, read-only session over a pod (`remote`): layouts, data and images
-# over HTTP.
-remote = ["dep:reqwest", "image/jpeg"]
+# A live session over a pod (`remote`): run by the engine (`client-core`:
+# its cache, outbox and event stream), images over HTTP.
+remote = ["dep:reqwest", "dep:client-core", "image/jpeg"]
 # The `construct-viewer` binary (`--pod` runs it on a pod).
 viewer = ["window", "remote"]
 
@@ -39,8 +39,9 @@ bytemuck = { version = "1", features = ["derive"], optional = true }
 winit = { version = "0.30", optional = true }
 # The semantic tree as an accessibility tree (`accessibility`): plain data.
 accesskit = "0.25"
-# `remote`: the pod's HTTP API.
+# `remote`: the pod's HTTP API, and the engine the Compose clients run.
 reqwest = { workspace = true, optional = true }
+client-core = { workspace = true, optional = true }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 # Screen readers on the desktop: VoiceOver (macOS) and Narrator (Windows).

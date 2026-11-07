@@ -2,7 +2,7 @@
 //! dragging sheets and paging carousels.
 
 use construct_render::Viewport;
-use construct_render::interact::{Done, Effect, Loader, Session, Target, Write, Written};
+use construct_render::interact::{Changes, Done, Effect, Loader, Session, Target, Write, Written};
 use protocol::{DataBundle, UiNode};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
@@ -461,4 +461,93 @@ fn text_fields_edit_like_android() {
     s.tap(&Target::Text("Enter your pod code".into())).unwrap();
     assert!(s.focused.is_none());
     assert!(s.scene().unwrap().find_node("edit:paste").is_none());
+}
+
+/// A loader with an outbox of its own: it takes writes, and hands the
+/// session what it hears of.
+struct Outbox {
+    taken: Arc<Mutex<Vec<Value>>>,
+    news: Arc<Mutex<Option<Changes>>>,
+    garden: UiNode,
+}
+
+impl Loader for Outbox {
+    fn layout(&self, id: &str) -> Result<(UiNode, DataBundle), String> {
+        match id {
+            "garden" => Ok((self.garden.clone(), DataBundle::default())),
+            _ => Err(format!("no layout {id}")),
+        }
+    }
+    fn data(&self, _path: &str) -> Result<DataBundle, String> {
+        Ok(DataBundle::default())
+    }
+    fn take(&self, intent: &Value) -> bool {
+        self.taken.lock().unwrap().push(intent.clone());
+        true
+    }
+    fn changes(&self) -> Option<Changes> {
+        self.news.lock().unwrap().take()
+    }
+}
+
+fn texts(s: &mut Session) -> Vec<String> {
+    s.scene()
+        .unwrap()
+        .semantics
+        .iter()
+        .filter_map(|n| n.text_content.clone())
+        .collect()
+}
+
+#[test]
+fn a_loader_with_an_outbox_takes_writes_and_brings_changes() {
+    let garden = |title: &str| {
+        node(json!({ "type": "core://Column", "children": [
+            { "type": "core://Text", "style": "Title", "value_expr": title },
+            { "type": "core://Text", "style": "Body", "value_expr": "${x://g/a#name}" }
+        ] }))
+    };
+    let taken = Arc::new(Mutex::new(Vec::new()));
+    let news = Arc::new(Mutex::new(None));
+    let mut s = Session::new(
+        "home",
+        node(groceries()),
+        data(grocery_data()),
+        Viewport::PHONE,
+    );
+    s.loader = Some(Box::new(Outbox {
+        taken: taken.clone(),
+        news: news.clone(),
+        garden: garden("Garden"),
+    }));
+    // The write goes to the loader as the layout wrote it; the change shows
+    // here at once and nothing waits on an answer.
+    let out = s.tap(&Target::Id("check_a".into())).unwrap();
+    assert!(
+        out.effects.iter().any(|e| matches!(e, Effect::Sent { .. })),
+        "{:?}",
+        out.effects
+    );
+    assert_eq!(
+        taken.lock().unwrap()[0]["intent"],
+        "action.mutation.optimistic"
+    );
+    assert_eq!(s.data.entities["x://g/a"].get("done"), Some(&json!(true)));
+    assert!(!s.busy());
+
+    // A layout opened on the stack changes elsewhere, and so does the data.
+    s.dispatch(
+        &json!({ "intent": "action.navigation.open", "layout": "garden", "presentation": "Push" }),
+    )
+    .unwrap();
+    assert!(texts(&mut s).contains(&"Garden".to_owned()));
+    *news.lock().unwrap() = Some(Changes {
+        data: data(
+            json!({ "entities": { "x://g/a": { "id": "a", "name": "Duck eggs", "done": true } } }),
+        ),
+        layouts: vec![("garden".into(), garden("Garden, edited"))],
+    });
+    let shown = texts(&mut s);
+    assert!(shown.contains(&"Garden, edited".to_owned()), "{shown:?}");
+    assert!(shown.contains(&"Duck eggs".to_owned()), "{shown:?}");
 }
