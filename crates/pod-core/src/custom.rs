@@ -938,6 +938,13 @@ pub fn check_layout(
     Ok((node, json))
 }
 
+/// Checks only for layout content being written now (create, edit,
+/// validate), not for stored layouts re-checked when feeds change or a
+/// version is restored, so an older layout never blocks those.
+fn check_written(layout: &Value) -> Result<(), Refusal> {
+    crate::validate::screen_data_args(layout).map_err(|e| invalid_layout(&e))
+}
+
 /// [`check_layout`], with or without the sources' own checks (`hooks`; a
 /// source checking a layout against data it is about to change runs its
 /// own), also answering the layout as validated (parts expanded).
@@ -1211,6 +1218,7 @@ pub async fn create(pod: &Pod, body: &Value, by: Writer) -> Result<Written, Refu
         Some(h) => grow(h, &extra)?,
         None => (extra.clone(), false),
     };
+    check_written(&body["layout"])?;
     let (layout, json) = check_layout(pod, &id, &scope, &body["layout"])?;
     let features = recorded_features(&layout);
     let caps = pod.custom.caps;
@@ -1289,6 +1297,7 @@ pub async fn update_layout(
                 invalid("invalid_request", "\"base_version\" is a version number")
             })?),
         };
+    check_written(&body["layout"])?;
     let (layout, json) = check_layout(pod, id, &app.feeds, &body["layout"])?;
     let features = recorded_features(&layout);
     let meta = check_copied_from(pod, body)?;
@@ -1507,6 +1516,7 @@ pub fn validate(pod: &Pod, body: &Value) -> Result<Value, Refusal> {
         .as_str()
         .filter(|i| is_custom_id(i))
         .unwrap_or("c-aaaaaaaaaa");
+    check_written(&body["layout"])?;
     let (node, _, expanded) = check_layout_with(pod, id, &feeds, &body["layout"], true)?;
     let mut out = json!({ "ok": true, "features": protocol::required_features(&node) });
     // What it expands to (components and parts), when it uses any.
@@ -1575,6 +1585,7 @@ pub fn stage_layout(
                 invalid("invalid_request", "\"base_version\" is a version number")
             })?),
         };
+    check_written(&body["layout"])?;
     let (node, json, expanded) =
         check_layout_with(pod, &app.id, &app.feeds, &body["layout"], false)?;
     let meta = check_copied_from(pod, body)?;
