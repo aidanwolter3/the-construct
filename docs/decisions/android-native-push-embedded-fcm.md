@@ -28,10 +28,12 @@ APK 10,352,744 B, 12,285 dex method references):
 
 Decision:
 
-- **UnifiedPush stays; FCM is the fallback.** Registration (`push::android::register`) uses the distributor saved
-  before while it is still installed, else the first distributor app installed, else the embedded FCM distributor
-  (this app itself, listed because the manifest declares its receivers); on a phone without Play services that
-  registration fails and notifications show only while the app runs, as before.
+- **UnifiedPush stays; FCM is the fallback.** Registration (`push::android::register`) uses the distributor app
+  saved before while it is still installed, else the first distributor app installed, else the embedded FCM
+  distributor (this app itself, listed because the manifest declares its receivers). So a distributor app installed
+  after the fallback was chosen takes over at the app's next start, as the issue asks ("phones with ntfy still use
+  ntfy"); the Compose app keeps the fallback instead. On a phone without Play services the fallback's registration
+  fails and notifications show only while the app runs, as before.
 - **Connector 3.3.5**, with the embedded FCM distributor 3.1.0, kotlin-stdlib 2.3.0 and kotlinx-coroutines-core-jvm
   1.10.2 added by the script (Maven Central, pinned by hash). Their manifest entries are copied into ours by hand
   (the script doesn't merge library manifests): the distributor's `FirebaseReceiver` and `UnifiedPushReceiver`, the
@@ -46,5 +48,5 @@ Decision:
   always preferred.
 
 Not yet: checked on a phone (with Play services and no ntfy; with ntfy); moving an existing install's connector
-2.5.0 registrations (3.x migrates its own store, Rust's keys are kept); offering to switch to a distributor installed
-after the fallback was chosen.
+2.5.0 registrations (3.x migrates its own store, Rust's keys are kept); unregistering the FCM fallback when a
+distributor app takes over (the pod only keeps the newest endpoint, so nothing is sent there).

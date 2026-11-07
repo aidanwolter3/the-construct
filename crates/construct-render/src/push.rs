@@ -674,9 +674,10 @@ pub mod android {
     /// Asks the distributor for an endpoint for `instance` (the connector's
     /// `UnifiedPush.register`, with the pod's `vapid` key and `PushKeys`, so
     /// the keys stay here); the endpoint comes to the receiver. The
-    /// distributor saved before while it is installed, else the first
+    /// distributor app saved before while it is installed, else the first
     /// distributor app, else the embedded FCM distributor (this app itself;
-    /// it fails later without Play services). False when there is none.
+    /// it fails later without Play services), so an app installed later
+    /// takes over from the fallback. False when there is none.
     pub fn register(
         env: &mut jni::Env,
         context: &JObject,
@@ -729,11 +730,12 @@ pub mod android {
                 .l()?;
             names.push(text(env, &env.cast_local::<JString>(d)?)?);
         }
-        // The saved one while it is still installed, else a distributor app
-        // (the user installed it to be used), else the embedded one.
+        // A distributor app over the embedded one (the user installed it to
+        // be used, also after the fallback was chosen): the saved app while
+        // it is still installed, else the first app, else the embedded one.
         let Some(pick) = names
             .iter()
-            .find(|d| **d == saved)
+            .find(|d| **d == saved && **d != own)
             .or_else(|| names.iter().find(|d| **d != own))
             .or_else(|| names.iter().find(|d| **d == own))
         else {
