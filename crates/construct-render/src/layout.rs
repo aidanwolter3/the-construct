@@ -1709,7 +1709,11 @@ impl<'i> Build<'_, 'i> {
                     false,
                 )
             }
-            UiNode::MediaPicker { field, label, .. } => {
+            UiNode::MediaPicker {
+                field,
+                label,
+                max_items,
+            } => {
                 let plus = self.icon("add_photo", theme.muted_text, 24.0);
                 let mut tile = column(0, pad(0, 0), AlignItems::CENTER);
                 tile.justify_content = JustifyContent::CENTER;
@@ -1721,8 +1725,9 @@ impl<'i> Build<'_, 'i> {
                     b,
                     n,
                     label.as_deref().map(|l| ctx.text(l)),
-                    Some(Tap::Focus {
-                        field: field.clone(),
+                    // The platform's photo picker (`Effect::PickMedia`).
+                    Some(Tap::Intent {
+                        intent: json!({ "intent": "media.pick", "field": field, "max": max_items }),
                     }),
                 );
                 sem.id = format!("media:{field}");

@@ -94,6 +94,12 @@ pub enum Effect {
     Copy {
         text: String,
     },
+    /// A media picker was tapped: the platform opens its photo picker for
+    /// up to `max` photos for this field.
+    PickMedia {
+        field: String,
+        max: u32,
+    },
     /// Would go to the pod or the platform; a preview doesn't send it.
     NotSent {
         intent: Value,
@@ -2113,6 +2119,10 @@ impl Session {
                 }
             }
             "edit.select_all" => self.select_all(),
+            "media.pick" => out.push(Effect::PickMedia {
+                field: intent["field"].as_str().unwrap_or("").to_owned(),
+                max: intent["max"].as_u64().unwrap_or(1) as u32,
+            }),
             "form.clear" => {
                 // The session's own step after a field's Send.
                 if let Some(f) = intent["field"].as_str() {
@@ -2471,6 +2481,33 @@ impl Session {
         out.push(Effect::Opened {
             layout: "confirm".into(),
         });
+    }
+
+    /// A message from the app itself (not a layout), in its own dialog with
+    /// an OK button: what the platform reports (a link that opened the app,
+    /// photos picked, a message received).
+    pub fn notice(&mut self, title: &str, message: &str) {
+        let root = json!({ "type": "core://Box", "fill": true, "align": "Center", "padding_h_dp": 32,
+            "content": { "type": "core://Box", "background": "${local://theme#page}", "corner_dp": 28,
+                "padding_h_dp": 24, "padding_v_dp": 24,
+                "content": { "type": "core://Column", "spacing_dp": 16, "children": [
+                    { "type": "core://Text", "style": "Title", "value_expr": title },
+                    { "type": "core://Text", "style": "Body", "value_expr": message },
+                    { "type": "core://Row", "children": [
+                        { "type": "core://Spacer" },
+                        { "type": "core://Tappable", "tag": "notice:ok", "content_description": "OK",
+                          "on_click": { "intent": "action.navigation.back" },
+                          "content": { "type": "core://Box", "padding_h_dp": 12, "padding_v_dp": 10,
+                              "content_color": "${local://theme#accent}",
+                              "content": { "type": "core://Text", "style": "Label", "value_expr": "OK" } } } ] } ] } } });
+        let Ok(root) = serde_json::from_value::<UiNode>(root) else {
+            return;
+        };
+        let mut e = Entry::layout("notice", root, BTreeMap::new());
+        e.frame = Frame::Dialog;
+        self.stack.push(e);
+        self.focused = None;
+        self.invalidate();
     }
 
     /// `action.auth.session`: POSTs the form-bound payload to the pod path

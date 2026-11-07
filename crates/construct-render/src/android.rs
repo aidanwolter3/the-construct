@@ -130,6 +130,18 @@ impl crate::window::Platform for Android {
         activity_gone(&self.0)
     }
 
+    fn pick_images(&self, max: u32) -> bool {
+        with_activity(&self.0, |env, activity| {
+            crate::bridge::pick_images(env, activity, max)
+        })
+        .map_err(|e| log(&format!("photo picker: {e}")))
+        .is_ok()
+    }
+
+    fn events(&self) -> Vec<crate::window::PlatformEvent> {
+        crate::bridge::take_events()
+    }
+
     fn clipboard(&self) -> Option<String> {
         clipboard_text(&self.0)
     }
@@ -297,6 +309,24 @@ fn set_clipboard_text(app: &AndroidApp, text: &str) -> Result<(), String> {
             Ok(())
         };
         Ok(run(env).map_err(|e| java_error(env, e)))
+    })
+    .map_err(|e| e.to_string())?
+}
+
+/// Runs `f` with a JNI env and the activity; a Java exception is cleared and
+/// described in the error.
+fn with_activity(
+    app: &AndroidApp,
+    f: impl FnOnce(&mut jni::Env, &jni::objects::JObject) -> jni::errors::Result<()>,
+) -> Result<(), String> {
+    use jni::objects::JObject;
+    // SAFETY: the VM pointer is valid for the life of the process.
+    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    let activity = app.activity_as_ptr() as jni::sys::jobject;
+    vm.attach_current_thread(|env| -> jni::errors::Result<Result<(), String>> {
+        // SAFETY: android-activity keeps its own reference to the activity.
+        let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
+        Ok(f(env, &activity).map_err(|e| java_error(env, e)))
     })
     .map_err(|e| e.to_string())?
 }
@@ -695,6 +725,16 @@ fn android_main(app: AndroidApp) {
             std::process::exit(0);
         }
     };
+    // The bridge's callbacks (links, picked photos, messages) wake the window.
+    let proxy = std::sync::Mutex::new(event_loop.create_proxy());
+    crate::bridge::set_waker(move || {
+        if let Ok(p) = proxy.lock() {
+            let _ = p.send_event(());
+        }
+    });
+    if let Err(e) = with_activity(&app, crate::bridge::ask_notifications) {
+        log(&format!("notification permission: {e}"));
+    }
     let window = crate::window::App::new(Controller::new(session), "The Construct")
         .with_platform(Box::new(Android(app, Default::default())));
     if let Err(e) = crate::window::run_app(event_loop, window) {
