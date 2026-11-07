@@ -8,6 +8,7 @@
 
 use protocol::{DataBundle, EntityRecord, UiNode, WorkspaceSpec};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -22,10 +23,10 @@ pub struct PodClient {
     token: String,
     http: reqwest::blocking::Client,
     /// Layout titles by id (from `/v1/apps`), for device data rows.
-    titles: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    titles: Arc<Mutex<HashMap<String, String>>>,
     /// Versions picked on this device (`pin_version`), by layout. Drawn in
     /// the version list; the layout itself still shows its latest version.
-    pins: Arc<Mutex<std::collections::HashMap<String, i64>>>,
+    pins: Arc<Mutex<HashMap<String, i64>>>,
 }
 
 fn client() -> reqwest::blocking::Client {
@@ -135,67 +136,8 @@ impl PodClient {
     /// `local:apps`, and an entity for each.
     pub fn layouts(&self) -> Result<DataBundle, String> {
         let v = self.get("/v1/apps?all=1")?;
-        let mut out = DataBundle::default();
-        let (mut listed, mut all) = (Vec::new(), Vec::new());
-        for a in v["apps"].as_array().into_iter().flatten() {
-            let Some(id) = a["id"].as_str() else {
-                continue;
-            };
-            if let Ok(mut t) = self.titles.lock() {
-                t.insert(id.to_owned(), a["title"].as_str().unwrap_or(id).to_owned());
-            }
-            if id == "home" {
-                continue;
-            }
-            let hidden = a["hidden"].as_bool().unwrap_or(false);
-            let mut e = EntityRecord::new();
-            e.set("id", id);
-            e.set("title", a["title"].as_str().unwrap_or(id));
-            e.set("icon", a["icon"].as_str().unwrap_or(""));
-            e.set(
-                "kind",
-                if a["kind"] == "custom" {
-                    "custom"
-                } else {
-                    "blueprint"
-                },
-            );
-            let latest = a["latest_version"].as_i64();
-            e.set(
-                "detail",
-                latest.map(|v| format!("v{v}")).unwrap_or_default(),
-            );
-            e.set(
-                "version",
-                latest.map(|v| format!("v{v} · latest")).unwrap_or_default(),
-            );
-            e.set("unread", 0);
-            e.set("hidden", hidden);
-            for prefix in ["local://layouts/", "local://apps/"] {
-                out.entities.insert(format!("{prefix}{id}"), e.clone());
-            }
-            all.push(format!("local://layouts/{id}"));
-            if !hidden {
-                listed.push(id.to_owned());
-            }
-        }
-        let mut count = EntityRecord::new();
-        count.set("count", listed.len());
-        out.entities.insert("local://layouts".into(), count.clone());
-        out.entities.insert("local://apps".into(), count);
-        out.queries.insert(
-            "local:layouts".into(),
-            listed
-                .iter()
-                .map(|i| format!("local://layouts/{i}"))
-                .collect(),
-        );
-        out.queries.insert(
-            "local:apps".into(),
-            listed.iter().map(|i| format!("local://apps/{i}")).collect(),
-        );
-        out.queries.insert("local:all_layouts".into(), all);
-        Ok(out)
+        let mut titles = self.titles.lock().unwrap_or_else(|p| p.into_inner());
+        Ok(layouts_bundle(&v, &mut titles))
     }
 
     /// The rest of the device data the shared UI gives layouts
@@ -203,132 +145,31 @@ impl PodClient {
     /// when `needs` (a layout's JSON) binds them, the notifications, their
     /// channels and the sign-ins.
     pub fn device(&self, needs: &str) -> DataBundle {
-        let mut out = DataBundle::default();
-        let mut set = |uri: &str, v: Value| {
-            if let Ok(e) = serde_json::from_value(v) {
-                out.entities.insert(uri.to_owned(), e);
-            }
-        };
-        set(
-            "local://connection",
+        let mut out = base_device(
+            &self.base,
             json!({ "online": true, "pending": 0, "label": "Online", "attention": false, "color": "#2E7D32" }),
-        );
-        set(
-            "local://session",
             json!({ "open": true, "server": self.base, "error": "", "message": "", "status": "" }),
         );
-        set(
-            "local://device",
-            json!({ "platform": if cfg!(target_os = "android") { "android" } else { "desktop" },
-                    "notification_permission": "" }),
-        );
-        set(
-            "local://servers/current",
-            json!({ "id": "current", "title": self.base, "url": self.base, "selected": true }),
-        );
-        out.queries.insert(
-            "local:servers".into(),
-            vec!["local://servers/current".into()],
-        );
-        let now = now_secs();
-        let mut unread_total = 0;
-        if (needs.contains("local:notifications") || needs.contains("local://inbox"))
+        let titles = self.titles.lock().map(|t| t.clone()).unwrap_or_default();
+        let mut inbox = false;
+        if needs_notifications(needs)
             && let Ok(v) = self.get("/v1/notifications?limit=50")
         {
-            unread_total = v["unread_total"].as_i64().unwrap_or(0);
-            let mut list = Vec::new();
-            for n in v["notifications"].as_array().into_iter().flatten() {
-                let id = n["id"].as_str().unwrap_or_default();
-                let at = n["created_at"].as_i64().unwrap_or(now);
-                let uri = format!("local://notifications/{id}");
-                let app = n["app_id"].as_str().unwrap_or_default();
-                let mut e = n.clone();
-                e["app_title"] = json!(self.app_title(app));
-                e["when"] = json!(time_label(at, now));
-                e["day"] = json!(day_label(at, now));
-                e["unread"] = json!(!n["read"].as_bool().unwrap_or(true));
-                if let Ok(rec) = serde_json::from_value(e) {
-                    out.entities.insert(uri.clone(), rec);
-                }
-                list.push(uri);
-            }
-            out.queries.insert("local:notifications".into(), list);
+            merge_into(&mut out, notifications_bundle(&v, &titles, now_secs()));
+            inbox = true;
         }
-        if let Ok(e) = serde_json::from_value(json!({
-            "unread": unread_total,
-            "label": if unread_total == 0 { "All read".to_owned() } else { format!("{unread_total} unread") },
-            "has_older": false, "loading": false }))
-        {
-            out.entities.insert("local://inbox".into(), e);
+        if !inbox {
+            out.entities.insert("local://inbox".into(), inbox_entity(0));
         }
-        if needs.contains("local:channels")
+        if needs_channels(needs)
             && let Ok(v) = self.get("/v1/notifications/channels")
         {
-            let mut list = Vec::new();
-            for c in v["channels"].as_array().into_iter().flatten() {
-                let (app, id) = (
-                    c["app_id"].as_str().unwrap_or_default(),
-                    c["id"].as_str().unwrap_or_default(),
-                );
-                let uri = format!("local://channels/{app}/{id}");
-                let mut e = c.clone();
-                e["app_title"] = json!(self.app_title(app));
-                if let Ok(rec) = serde_json::from_value(e) {
-                    out.entities.insert(uri.clone(), rec);
-                }
-                list.push(uri);
-            }
-            out.queries.insert("local:channels".into(), list);
+            merge_into(&mut out, channels_bundle(&v, &titles));
         }
-        if (needs.contains("local:sign_ins") || needs.contains("local:providers"))
+        if needs_sign_ins(needs)
             && let Ok(v) = self.get("/v1/auth/sign-ins")
         {
-            let mut ins = Vec::new();
-            let mut signed: Vec<String> = Vec::new();
-            for si in v["sign_ins"].as_array().into_iter().flatten() {
-                let id = si["id"].as_str().unwrap_or_default();
-                let host = si["server"].as_str().map(|s| {
-                    s.split("://")
-                        .last()
-                        .unwrap_or(s)
-                        .trim_end_matches('/')
-                        .to_owned()
-                });
-                let detail: Vec<String> = si["username"]
-                    .as_str()
-                    .map(|u| format!("@{u}"))
-                    .into_iter()
-                    .chain(host)
-                    .collect();
-                let uri = format!("local://sign_ins/{id}");
-                if let Ok(rec) = serde_json::from_value(json!({ "id": id,
-                    "title": si["title"], "detail": detail.join(" · ") }))
-                {
-                    out.entities.insert(uri.clone(), rec);
-                }
-                ins.push(uri);
-                signed.push(id.to_owned());
-            }
-            let mut providers = Vec::new();
-            for p in v["providers"].as_array().into_iter().flatten() {
-                let id = p["id"].as_str().unwrap_or_default();
-                if p["signed_in"].as_bool().unwrap_or(false)
-                    || p["intent"].is_null()
-                    || signed.iter().any(|s| s == id)
-                {
-                    continue;
-                }
-                let uri = format!("local://providers/{id}");
-                if let Ok(rec) = serde_json::from_value(json!({ "id": id, "title": p["title"],
-                    "custom_server": !p["server_placeholder"].is_null(),
-                    "server_placeholder": p["server_placeholder"].as_str().unwrap_or("") }))
-                {
-                    out.entities.insert(uri.clone(), rec);
-                }
-                providers.push(uri);
-            }
-            out.queries.insert("local:sign_ins".into(), ins);
-            out.queries.insert("local:providers".into(), providers);
+            merge_into(&mut out, sign_ins_bundle(&v));
         }
         out
     }
@@ -338,60 +179,13 @@ impl PodClient {
     pub fn versions(&self, app: &str) -> Result<DataBundle, String> {
         let v = self.get(&format!("/v1/apps/{app}/versions?limit=100"))?;
         let pinned = self.pins.lock().ok().and_then(|p| p.get(app).copied());
-        let list = v["versions"].as_array().cloned().unwrap_or_default();
-        let newest = list
-            .iter()
-            .find(|x| x["compatible"].as_bool().unwrap_or(true))
-            .and_then(|x| x["version"].as_i64());
-        let now = now_secs();
-        let mut out = DataBundle::default();
-        let mut uris = Vec::new();
-        for x in &list {
-            let n = x["version"].as_i64().unwrap_or(0);
-            let detail = match (x["incompatible"].as_str(), x["note"].as_str()) {
-                (Some(i), note) => {
-                    let why = match i {
-                        "update_required" => "Needs a newer version of the app",
-                        "retired" => "Made for an older version of the app",
-                        _ => "This version of the app can't show it",
-                    };
-                    note.map_or(why.to_owned(), |n| format!("{why} · {n}"))
-                }
-                (None, Some(note)) => note.to_owned(),
-                (None, None) => match x["source"].as_str().unwrap_or("") {
-                    "file" => "Published",
-                    "seed" => "Built-in",
-                    "agent" => "AI edit",
-                    "rollback" => "Rollback",
-                    "restore" => "Restore",
-                    "manual" => "Manual edit",
-                    "switch" => "Layout switch",
-                    _ => "Edit",
-                }
-                .to_owned(),
-            };
-            let uri = format!("local://versions/{app}/{n}");
-            if let Ok(e) = serde_json::from_value(json!({
-                "app_id": app, "version": n, "label": format!("v{n}"), "detail": detail,
-                "when": version_time_label(
-                    x["created_at"].as_i64().or_else(|| x["created_at"].as_str().and_then(parse_rfc3339)).unwrap_or(0),
-                    now,
-                ),
-                "compatible": x["compatible"].as_bool().unwrap_or(true),
-                "showing": match pinned { Some(p) => p == n, None => Some(n) == newest },
-            })) {
-                out.entities.insert(uri.clone(), e);
-            }
-            uris.push(uri);
-        }
-        out.queries.insert("local:versions".into(), uris);
-        if let Ok(e) = serde_json::from_value(json!({
-            "app_id": app, "app_title": self.app_title(app),
-            "pinned": pinned.map(|p| p.to_string()).unwrap_or_default(), "loading": false,
-        })) {
-            out.entities.insert("local://versions".into(), e);
-        }
-        Ok(out)
+        Ok(versions_bundle(
+            app,
+            &v,
+            pinned,
+            &self.app_title(app),
+            now_secs(),
+        ))
     }
 
     /// An app's title for device data rows (its id when unknown).
@@ -515,7 +309,300 @@ impl Loader for PodClient {
     }
 }
 
-fn now_secs() -> i64 {
+fn merge_into(into: &mut DataBundle, from: DataBundle) {
+    into.entities.extend(from.entities);
+    into.queries.extend(from.queries);
+}
+
+fn insert(out: &mut DataBundle, uri: &str, v: Value) {
+    if let Ok(e) = serde_json::from_value(v) {
+        out.entities.insert(uri.to_owned(), e);
+    }
+}
+
+/// Whether a layout (its JSON) binds the notifications.
+pub fn needs_notifications(needs: &str) -> bool {
+    needs.contains("local:notifications") || needs.contains("local://inbox")
+}
+
+/// Whether a layout binds the notification channels.
+pub fn needs_channels(needs: &str) -> bool {
+    needs.contains("local:channels")
+}
+
+/// Whether a layout binds the sign-ins or the providers to sign in with.
+pub fn needs_sign_ins(needs: &str) -> bool {
+    needs.contains("local:sign_ins") || needs.contains("local:providers")
+}
+
+/// The device data of the pod's layouts (`GET /v1/apps?all=1`'s answer),
+/// as the shared UI builds it: `local:layouts` (hidden ones left out),
+/// `local:all_layouts`, `local:apps`, and an entity for each. Every
+/// layout's title goes into `titles`.
+pub fn layouts_bundle(v: &Value, titles: &mut HashMap<String, String>) -> DataBundle {
+    let mut out = DataBundle::default();
+    let (mut listed, mut all) = (Vec::new(), Vec::new());
+    for a in v["apps"].as_array().into_iter().flatten() {
+        let Some(id) = a["id"].as_str() else {
+            continue;
+        };
+        titles.insert(id.to_owned(), a["title"].as_str().unwrap_or(id).to_owned());
+        if id == "home" {
+            continue;
+        }
+        let hidden = a["hidden"].as_bool().unwrap_or(false);
+        let mut e = EntityRecord::new();
+        e.set("id", id);
+        e.set("title", a["title"].as_str().unwrap_or(id));
+        e.set("icon", a["icon"].as_str().unwrap_or(""));
+        e.set(
+            "kind",
+            if a["kind"] == "custom" {
+                "custom"
+            } else {
+                "blueprint"
+            },
+        );
+        let latest = a["latest_version"].as_i64();
+        e.set(
+            "detail",
+            latest.map(|v| format!("v{v}")).unwrap_or_default(),
+        );
+        e.set(
+            "version",
+            latest.map(|v| format!("v{v} · latest")).unwrap_or_default(),
+        );
+        e.set("unread", 0);
+        e.set("hidden", hidden);
+        for prefix in ["local://layouts/", "local://apps/"] {
+            out.entities.insert(format!("{prefix}{id}"), e.clone());
+        }
+        all.push(format!("local://layouts/{id}"));
+        if !hidden {
+            listed.push(id.to_owned());
+        }
+    }
+    let mut count = EntityRecord::new();
+    count.set("count", listed.len());
+    out.entities.insert("local://layouts".into(), count.clone());
+    out.entities.insert("local://apps".into(), count);
+    out.queries.insert(
+        "local:layouts".into(),
+        listed
+            .iter()
+            .map(|i| format!("local://layouts/{i}"))
+            .collect(),
+    );
+    out.queries.insert(
+        "local:apps".into(),
+        listed.iter().map(|i| format!("local://apps/{i}")).collect(),
+    );
+    out.queries.insert("local:all_layouts".into(), all);
+    out
+}
+
+/// The device data every layout gets: `local://connection` and
+/// `local://session` as given, the device and the server.
+pub fn base_device(base: &str, connection: Value, session: Value) -> DataBundle {
+    let mut out = DataBundle::default();
+    insert(&mut out, "local://connection", connection);
+    insert(&mut out, "local://session", session);
+    insert(
+        &mut out,
+        "local://device",
+        json!({ "platform": if cfg!(target_os = "android") { "android" } else { "desktop" },
+                "notification_permission": "" }),
+    );
+    insert(
+        &mut out,
+        "local://servers/current",
+        json!({ "id": "current", "title": base, "url": base, "selected": true }),
+    );
+    out.queries.insert(
+        "local:servers".into(),
+        vec!["local://servers/current".into()],
+    );
+    out
+}
+
+/// `local://inbox` with this many unread.
+pub fn inbox_entity(unread: i64) -> EntityRecord {
+    serde_json::from_value(json!({
+        "unread": unread,
+        "label": if unread == 0 { "All read".to_owned() } else { format!("{unread} unread") },
+        "has_older": false, "loading": false }))
+    .unwrap_or_default()
+}
+
+/// `local:notifications` and `local://inbox` of a `GET /v1/notifications`
+/// answer, with `when` and `day` labels (UTC) as of `now`.
+pub fn notifications_bundle(v: &Value, titles: &HashMap<String, String>, now: i64) -> DataBundle {
+    let mut out = DataBundle::default();
+    let mut list = Vec::new();
+    for n in v["notifications"].as_array().into_iter().flatten() {
+        let id = n["id"].as_str().unwrap_or_default();
+        let at = n["created_at"].as_i64().unwrap_or(now);
+        let uri = format!("local://notifications/{id}");
+        let app = n["app_id"].as_str().unwrap_or_default();
+        let mut e = n.clone();
+        e["app_title"] = json!(titles.get(app).map_or(app, String::as_str));
+        e["when"] = json!(time_label(at, now));
+        e["day"] = json!(day_label(at, now));
+        e["unread"] = json!(!n["read"].as_bool().unwrap_or(true));
+        insert(&mut out, &uri, e);
+        list.push(uri);
+    }
+    out.queries.insert("local:notifications".into(), list);
+    out.entities.insert(
+        "local://inbox".into(),
+        inbox_entity(v["unread_total"].as_i64().unwrap_or(0)),
+    );
+    out
+}
+
+/// `local:channels` of a `GET /v1/notifications/channels` answer.
+pub fn channels_bundle(v: &Value, titles: &HashMap<String, String>) -> DataBundle {
+    let mut out = DataBundle::default();
+    let mut list = Vec::new();
+    for c in v["channels"].as_array().into_iter().flatten() {
+        let (app, id) = (
+            c["app_id"].as_str().unwrap_or_default(),
+            c["id"].as_str().unwrap_or_default(),
+        );
+        let uri = format!("local://channels/{app}/{id}");
+        let mut e = c.clone();
+        e["app_title"] = json!(titles.get(app).map_or(app, String::as_str));
+        insert(&mut out, &uri, e);
+        list.push(uri);
+    }
+    out.queries.insert("local:channels".into(), list);
+    out
+}
+
+/// `local:sign_ins` and `local:providers` of a `GET /v1/auth/sign-ins`
+/// answer.
+pub fn sign_ins_bundle(v: &Value) -> DataBundle {
+    let mut out = DataBundle::default();
+    let mut ins = Vec::new();
+    let mut signed: Vec<String> = Vec::new();
+    for si in v["sign_ins"].as_array().into_iter().flatten() {
+        let id = si["id"].as_str().unwrap_or_default();
+        let host = si["server"].as_str().map(|s| {
+            s.split("://")
+                .last()
+                .unwrap_or(s)
+                .trim_end_matches('/')
+                .to_owned()
+        });
+        let detail: Vec<String> = si["username"]
+            .as_str()
+            .map(|u| format!("@{u}"))
+            .into_iter()
+            .chain(host)
+            .collect();
+        let uri = format!("local://sign_ins/{id}");
+        insert(
+            &mut out,
+            &uri,
+            json!({ "id": id, "title": si["title"], "detail": detail.join(" · ") }),
+        );
+        ins.push(uri);
+        signed.push(id.to_owned());
+    }
+    let mut providers = Vec::new();
+    for p in v["providers"].as_array().into_iter().flatten() {
+        let id = p["id"].as_str().unwrap_or_default();
+        if p["signed_in"].as_bool().unwrap_or(false)
+            || p["intent"].is_null()
+            || signed.iter().any(|s| s == id)
+        {
+            continue;
+        }
+        let uri = format!("local://providers/{id}");
+        insert(
+            &mut out,
+            &uri,
+            json!({ "id": id, "title": p["title"],
+                "custom_server": !p["server_placeholder"].is_null(),
+                "server_placeholder": p["server_placeholder"].as_str().unwrap_or("") }),
+        );
+        providers.push(uri);
+    }
+    out.queries.insert("local:sign_ins".into(), ins);
+    out.queries.insert("local:providers".into(), providers);
+    out
+}
+
+/// `local://versions` and `local:versions` for a layout of a
+/// `GET /v1/apps/<id>/versions` answer, newest first; `pinned`: the version
+/// picked on this device.
+pub fn versions_bundle(
+    app: &str,
+    v: &Value,
+    pinned: Option<i64>,
+    title: &str,
+    now: i64,
+) -> DataBundle {
+    let list = v["versions"].as_array().cloned().unwrap_or_default();
+    let newest = list
+        .iter()
+        .find(|x| x["compatible"].as_bool().unwrap_or(true))
+        .and_then(|x| x["version"].as_i64());
+    let mut out = DataBundle::default();
+    let mut uris = Vec::new();
+    for x in &list {
+        let n = x["version"].as_i64().unwrap_or(0);
+        let detail = match (x["incompatible"].as_str(), x["note"].as_str()) {
+            (Some(i), note) => {
+                let why = match i {
+                    "update_required" => "Needs a newer version of the app",
+                    "retired" => "Made for an older version of the app",
+                    _ => "This version of the app can't show it",
+                };
+                note.map_or(why.to_owned(), |n| format!("{why} · {n}"))
+            }
+            (None, Some(note)) => note.to_owned(),
+            (None, None) => match x["source"].as_str().unwrap_or("") {
+                "file" => "Published",
+                "seed" => "Built-in",
+                "agent" => "AI edit",
+                "rollback" => "Rollback",
+                "restore" => "Restore",
+                "manual" => "Manual edit",
+                "switch" => "Layout switch",
+                _ => "Edit",
+            }
+            .to_owned(),
+        };
+        let uri = format!("local://versions/{app}/{n}");
+        insert(
+            &mut out,
+            &uri,
+            json!({
+                "app_id": app, "version": n, "label": format!("v{n}"), "detail": detail,
+                "when": version_time_label(
+                    x["created_at"].as_i64().or_else(|| x["created_at"].as_str().and_then(parse_rfc3339)).unwrap_or(0),
+                    now,
+                ),
+                "compatible": x["compatible"].as_bool().unwrap_or(true),
+                "showing": match pinned { Some(p) => p == n, None => Some(n) == newest },
+            }),
+        );
+        uris.push(uri);
+    }
+    out.queries.insert("local:versions".into(), uris);
+    insert(
+        &mut out,
+        "local://versions",
+        json!({
+            "app_id": app, "app_title": title,
+            "pinned": pinned.map(|p| p.to_string()).unwrap_or_default(), "loading": false,
+        }),
+    );
+    out
+}
+
+pub fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)

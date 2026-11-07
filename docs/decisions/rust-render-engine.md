@@ -1,5 +1,7 @@
 # A Rust rendering engine next to the Compose UI, starting with agent previews
 
+Superseded in part (the Rust clients' live sessions) by [rust-clients-on-the-engine](rust-clients-on-the-engine.md).
+
 Date: 2026-11-07. Related: [plumbing-and-porcelain](plumbing-and-porcelain.md), [mcp-connector](mcp-connector.md),
 [layouts-not-apps](layouts-not-apps.md).
 
@@ -47,6 +49,9 @@ read its saved session (`scripts/android_native.sh`), so trying the engine keeps
 pod they opened (`pods`): without a session they show the pod's own sign-in screen, and Leave pod goes back to it.
 A NativeActivity gets key events, not Android's text input, so the engine edits text fields itself, as Android's
 own fields behave (cursor, selection handles, Cut / Copy / Paste / Select all, the system clipboard).
+
+Android callbacks that only arrive through Java (links, activity results, broadcasts) reach Rust through a thin
+bridge: [android-native-bridge](android-native-bridge.md).
 
 Not yet: a pinned version is not shown, dates are not formatted, and the keyboard's suggestions, autocorrect and
 own paste button don't reach text fields. The native window and

@@ -2,14 +2,16 @@
 //! with Vulkan (or GL), no JVM UI in between. Build and run it with
 //! `scripts/android_native.sh`.
 //!
-//! It is installed as the main app's package, so it opens a pod's home live
-//! (`crate::remote`) with `pod.json` (`{"url", "token"}`, a session token)
-//! from its internal files directory, which the script saves, or else the
-//! main app's own saved sign-in. Without either, it opens `layout.json` from
-//! its external files directory (`{"layout", "data"}`, pushed with adb) or
-//! the bundled demo. With `frame-request` there too, it first draws that
-//! layout offscreen at 390 × 844 @2x on the device's GPU and saves
-//! `frame.png` next to it (`frame_diff` compares it with the goldens).
+//! It is installed as the main app's package, so it opens the pod live with
+//! the engine (`crate::engine`, its cache in the internal files directory):
+//! the pod in `pod.json` there (`{"url", "last_code"}`), else the main app's
+//! server. Sessions are kept as the main app keeps them
+//! (`KeystoreSecureStore`'s format, through JNI: [`KeystoreStore`]), so its
+//! sign-in carries over. A `layout.json` in the external files directory
+//! (`{"layout", "data"}`, pushed with adb) is opened instead. With
+//! `frame-request` there too, it first draws that layout offscreen at
+//! 390 × 844 @2x on the device's GPU and saves `frame.png` next to it
+//! (`frame_diff` compares it with the goldens).
 
 use std::ffi::CString;
 use std::path::PathBuf;
@@ -89,8 +91,8 @@ fn frame_for_comparison(dir: &std::path::Path, session: &mut Session) {
     }
 }
 
-/// The soft keyboard and the system bars, for the window.
-struct Android(AndroidApp, std::sync::Mutex<[f32; 4]>);
+/// The soft keyboard and the system bars, for the window; and the pod.
+struct Android(AndroidApp, std::sync::Mutex<[f32; 4]>, crate::pods::PodHome);
 
 impl crate::window::Platform for Android {
     fn show_keyboard(&self, show: bool) {
@@ -130,6 +132,18 @@ impl crate::window::Platform for Android {
         activity_gone(&self.0)
     }
 
+    fn pick_images(&self, max: u32) -> bool {
+        with_activity(&self.0, |env, activity| {
+            crate::bridge::pick_images(env, activity, max)
+        })
+        .map_err(|e| log(&format!("photo picker: {e}")))
+        .is_ok()
+    }
+
+    fn events(&self) -> Vec<crate::window::PlatformEvent> {
+        crate::bridge::take_events()
+    }
+
     fn clipboard(&self) -> Option<String> {
         clipboard_text(&self.0)
     }
@@ -141,7 +155,7 @@ impl crate::window::Platform for Android {
     }
 
     fn reopen(&self, how: crate::window::Reopen) -> Option<Session> {
-        Some(pod_home(&self.0).reopen(how))
+        Some(self.2.reopen(how))
     }
 
     fn open_link(&self, url: &str) {
@@ -498,59 +512,295 @@ fn java_error(env: &mut jni::Env, e: jni::errors::Error) -> String {
     text.unwrap_or_else(|_| e.to_string())
 }
 
-/// The session the main app (installed as the same package, see
-/// `scripts/android_native.sh`) saved: its server (`server.xml`,
-/// else staging) and its pod session, AES-GCM encrypted with the key
-/// `construct_session_key` in the Android keystore (`KeystoreSecureStore`).
-/// `Ok(None)`: this isn't the main app's package; `Err`: why its session
-/// can't be used.
-fn main_app_session(app: &AndroidApp) -> Result<Option<(String, String)>, String> {
-    let files = app.internal_data_path().ok_or("no data directory")?;
-    if !files.to_string_lossy().contains("org.theconstruct.android") {
-        return Ok(None);
+/// The engine's secure store, as the main app's `KeystoreSecureStore`
+/// keeps it: each value AES/GCM-encrypted with the key
+/// `construct_session_key` in the Android keystore (made on first use, never
+/// exported), base64 IV and ciphertext in the private SharedPreferences file
+/// `construct_secure`. Through JNI; a value that doesn't decrypt reads as
+/// absent.
+struct KeystoreStore(AndroidApp, std::sync::Mutex<()>);
+
+/// `KeystoreSecureStore`'s names.
+const PREFS_NAME: &str = "construct_secure";
+const KEY_ALIAS: &str = "construct_session_key";
+
+/// Runs `f` with the JNI environment and the activity (as its `Context`);
+/// a Java exception comes back described.
+fn with_activity<T>(
+    app: &AndroidApp,
+    f: impl FnOnce(&mut jni::Env, &jni::objects::JObject) -> jni::errors::Result<T>,
+) -> Result<T, String> {
+    use jni::objects::JObject;
+    // SAFETY: the VM pointer is valid for the life of the process.
+    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    let activity = app.activity_as_ptr() as jni::sys::jobject;
+    vm.attach_current_thread(|env| -> jni::errors::Result<Result<T, String>> {
+        let run = |env: &mut jni::Env| -> jni::errors::Result<T> {
+            // SAFETY: android-activity keeps its own reference to the activity.
+            let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
+            f(env, &activity)
+        };
+        Ok(run(env).map_err(|e| java_error(env, e)))
+    })
+    .map_err(|e| e.to_string())?
+}
+
+/// The private SharedPreferences file `construct_secure`.
+fn secure_prefs<'l>(
+    env: &mut jni::Env<'l>,
+    activity: &jni::objects::JObject,
+) -> jni::errors::Result<jni::objects::JObject<'l>> {
+    use jni::objects::JValue;
+    use jni::{jni_sig, jni_str};
+    let name = env.new_string(PREFS_NAME)?;
+    env.call_method(
+        activity,
+        jni_str!("getSharedPreferences"),
+        jni_sig!("(Ljava/lang/String;I)Landroid/content/SharedPreferences;"),
+        &[JValue::Object(&name), JValue::Int(0)],
+    )?
+    .l()
+}
+
+/// The keystore's AES key for sessions, made the way the main app makes it
+/// when there is none.
+fn session_key<'l>(env: &mut jni::Env<'l>) -> jni::errors::Result<jni::objects::JObject<'l>> {
+    use jni::objects::{JObject, JValue};
+    use jni::{jni_sig, jni_str};
+    let kind = env.new_string("AndroidKeyStore")?;
+    let ks = env
+        .call_static_method(
+            jni_str!("java/security/KeyStore"),
+            jni_str!("getInstance"),
+            jni_sig!("(Ljava/lang/String;)Ljava/security/KeyStore;"),
+            &[JValue::Object(&kind)],
+        )?
+        .l()?;
+    env.call_method(
+        &ks,
+        jni_str!("load"),
+        jni_sig!("(Ljava/security/KeyStore$LoadParameter;)V"),
+        &[JValue::Object(&JObject::null())],
+    )?;
+    let alias = env.new_string(KEY_ALIAS)?;
+    let key = env
+        .call_method(
+            &ks,
+            jni_str!("getKey"),
+            jni_sig!("(Ljava/lang/String;[C)Ljava/security/Key;"),
+            &[JValue::Object(&alias), JValue::Object(&JObject::null())],
+        )?
+        .l()?;
+    if !key.is_null() {
+        return Ok(key);
     }
-    let prefs = files
-        .parent()
-        .ok_or("no data directory")?
-        .join("shared_prefs");
-    let server = std::fs::read_to_string(prefs.join("server.xml"))
-        .ok()
-        .and_then(|x| pref(&x, "baseUrl"))
-        .unwrap_or_else(|| DEFAULT_SERVER.to_owned());
-    let server = server.trim_end_matches('/').to_owned();
-    log(&format!("the main app's server: {server}"));
-    let secure = std::fs::read_to_string(prefs.join("construct_secure.xml")).map_err(|e| {
-        format!(
-            "The Construct has no saved sign-in on this phone ({}: {e}). Showing the pod's sign-in screen.",
-            prefs.join("construct_secure.xml").display()
-        )
-    })?;
-    let key = format!("pod_session:{server}");
-    let Some(stored) = pref(&secure, &key) else {
-        // Names only (never values), to see which servers have a session.
-        let names: Vec<&str> = secure
-            .split("<string name=\"")
-            .skip(1)
-            .filter_map(|r| r.split('"').next())
-            .collect();
-        return Err(format!(
-            "No saved session for {server} (saved: {names:?}). Showing the pod's sign-in \
-             screen."
-        ));
-    };
-    let (iv, ct) = stored
-        .split_once(':')
-        .ok_or("the saved session isn't in the expected form")?;
-    let raw = keystore_decrypt(app, iv, ct)
-        .map_err(|e| format!("The saved session doesn't decrypt: {e}"))?;
-    let v: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|e| format!("the saved session: {e}"))?;
-    let token = v["token"]
-        .as_str()
-        .ok_or("the saved session has no token")?
-        .to_owned();
-    log(&format!("using the main app's session for {server}"));
-    Ok(Some((server, token)))
+    let aes = env.new_string("AES")?;
+    let generator = env
+        .call_static_method(
+            jni_str!("javax/crypto/KeyGenerator"),
+            jni_str!("getInstance"),
+            jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/KeyGenerator;"),
+            &[JValue::Object(&aes), JValue::Object(&kind)],
+        )?
+        .l()?;
+    // PURPOSE_ENCRYPT | PURPOSE_DECRYPT.
+    let builder = env.new_object(
+        jni_str!("android/security/keystore/KeyGenParameterSpec$Builder"),
+        jni_sig!("(Ljava/lang/String;I)V"),
+        &[JValue::Object(&alias), JValue::Int(3)],
+    )?;
+    for (method, value) in [
+        (jni_str!("setBlockModes"), "GCM"),
+        (jni_str!("setEncryptionPaddings"), "NoPadding"),
+    ] {
+        let s = env.new_string(value)?;
+        let array = env.new_object_array(1, jni_str!("java/lang/String"), &s)?;
+        env.call_method(
+            &builder,
+            method,
+            jni_sig!(
+                "([Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;"
+            ),
+            &[JValue::Object(&array)],
+        )?;
+    }
+    env.call_method(
+        &builder,
+        jni_str!("setKeySize"),
+        jni_sig!("(I)Landroid/security/keystore/KeyGenParameterSpec$Builder;"),
+        &[JValue::Int(256)],
+    )?;
+    let spec = env
+        .call_method(
+            &builder,
+            jni_str!("build"),
+            jni_sig!("()Landroid/security/keystore/KeyGenParameterSpec;"),
+            &[],
+        )?
+        .l()?;
+    env.call_method(
+        &generator,
+        jni_str!("init"),
+        jni_sig!("(Ljava/security/spec/AlgorithmParameterSpec;)V"),
+        &[JValue::Object(&spec)],
+    )?;
+    env.call_method(
+        &generator,
+        jni_str!("generateKey"),
+        jni_sig!("()Ljavax/crypto/SecretKey;"),
+        &[],
+    )?
+    .l()
+}
+
+/// A value of `construct_secure` as stored (`iv:ciphertext`), or `None`.
+fn prefs_get(app: &AndroidApp, key: &str) -> Result<Option<String>, String> {
+    use jni::objects::{JObject, JString, JValue};
+    use jni::{jni_sig, jni_str};
+    with_activity(app, |env, activity| {
+        let prefs = secure_prefs(env, activity)?;
+        let k = env.new_string(key)?;
+        let v = env
+            .call_method(
+                &prefs,
+                jni_str!("getString"),
+                jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
+                &[JValue::Object(&k), JValue::Object(&JObject::null())],
+            )?
+            .l()?;
+        if v.is_null() {
+            return Ok(None);
+        }
+        let s = env.cast_local::<JString>(v)?;
+        Ok(Some(s.try_to_string(env)?))
+    })
+}
+
+/// Encrypts `value` and keeps it under `key` (`None`: removes the key).
+fn prefs_put(app: &AndroidApp, key: &str, value: Option<&str>) -> Result<(), String> {
+    use jni::objects::JValue;
+    use jni::{jni_sig, jni_str};
+    with_activity(app, |env, activity| {
+        let stored = match value {
+            Some(value) => {
+                let secret = session_key(env)?;
+                let transform = env.new_string("AES/GCM/NoPadding")?;
+                let cipher = env
+                    .call_static_method(
+                        jni_str!("javax/crypto/Cipher"),
+                        jni_str!("getInstance"),
+                        jni_sig!("(Ljava/lang/String;)Ljavax/crypto/Cipher;"),
+                        &[JValue::Object(&transform)],
+                    )?
+                    .l()?;
+                // ENCRYPT_MODE; the keystore picks a fresh random IV.
+                env.call_method(
+                    &cipher,
+                    jni_str!("init"),
+                    jni_sig!("(ILjava/security/Key;)V"),
+                    &[JValue::Int(1), JValue::Object(&secret)],
+                )?;
+                let iv = env
+                    .call_method(&cipher, jni_str!("getIV"), jni_sig!("()[B"), &[])?
+                    .l()?;
+                let input = env.byte_array_from_slice(value.as_bytes())?;
+                let ct = env
+                    .call_method(
+                        &cipher,
+                        jni_str!("doFinal"),
+                        jni_sig!("([B)[B"),
+                        &[JValue::Object(&input)],
+                    )?
+                    .l()?;
+                let mut parts = Vec::new();
+                for bytes in [&iv, &ct] {
+                    // Base64.NO_WRAP.
+                    let s = env
+                        .call_static_method(
+                            jni_str!("android/util/Base64"),
+                            jni_str!("encodeToString"),
+                            jni_sig!("([BI)Ljava/lang/String;"),
+                            &[JValue::Object(bytes), JValue::Int(2)],
+                        )?
+                        .l()?;
+                    let s = env.cast_local::<jni::objects::JString>(s)?;
+                    parts.push(s.try_to_string(env)?);
+                }
+                Some(parts.join(":"))
+            }
+            None => None,
+        };
+        let prefs = secure_prefs(env, activity)?;
+        let editor = env
+            .call_method(
+                &prefs,
+                jni_str!("edit"),
+                jni_sig!("()Landroid/content/SharedPreferences$Editor;"),
+                &[],
+            )?
+            .l()?;
+        let k = env.new_string(key)?;
+        match stored {
+            Some(v) => {
+                let v = env.new_string(&v)?;
+                env.call_method(
+                    &editor,
+                    jni_str!("putString"),
+                    jni_sig!(
+                        "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;"
+                    ),
+                    &[JValue::Object(&k), JValue::Object(&v)],
+                )?;
+            }
+            None => {
+                env.call_method(
+                    &editor,
+                    jni_str!("remove"),
+                    jni_sig!("(Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;"),
+                    &[JValue::Object(&k)],
+                )?;
+            }
+        }
+        env.call_method(&editor, jni_str!("commit"), jni_sig!("()Z"), &[])?;
+        Ok(())
+    })
+}
+
+impl client_core::SecureStore for KeystoreStore {
+    fn get(&self, key: &str) -> Option<String> {
+        let _g = self.1.lock().unwrap_or_else(|p| p.into_inner());
+        let stored = match prefs_get(&self.0, key) {
+            Ok(s) => s?,
+            Err(e) => {
+                log(&format!("secure store: reading {key}: {e}"));
+                return None;
+            }
+        };
+        let (iv, ct) = stored.split_once(':')?;
+        match keystore_decrypt(&self.0, iv, ct) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                log(&format!(
+                    "secure store: {key} doesn't decrypt ({e}); treating it as absent"
+                ));
+                None
+            }
+        }
+    }
+
+    fn set(&self, key: &str, value: &str) {
+        let _g = self.1.lock().unwrap_or_else(|p| p.into_inner());
+        if let Err(e) = prefs_put(&self.0, key, Some(value)) {
+            log(&format!("secure store: saving {key}: {e}"));
+        }
+    }
+
+    fn delete(&self, key: &str) {
+        let _g = self.1.lock().unwrap_or_else(|p| p.into_inner());
+        if let Err(e) = prefs_put(&self.0, key, None) {
+            log(&format!("secure store: deleting {key}: {e}"));
+        }
+    }
 }
 
 /// `KeystoreSecureStore.get`'s decryption, through the Android SDK: base64
@@ -649,23 +899,17 @@ fn keystore_decrypt(app: &AndroidApp, iv_b64: &str, ct_b64: &str) -> Result<Stri
 }
 
 /// This app's pod: kept in its private files (`pod.json`), else the main
-/// app's own sign-in, else the sign-in screen of the main app's server.
+/// app's server; the engine's cache there too (`engine/`), and sessions in
+/// the main app's secure store.
 fn pod_home(app: &AndroidApp) -> crate::pods::PodHome {
-    crate::pods::PodHome {
-        file: app.internal_data_path().map(|d| d.join("pod.json")),
-        server: main_app_server(app),
+    let files = app.internal_data_path();
+    crate::pods::PodHome::new(
+        files.as_ref().map(|d| d.join("pod.json")),
+        files.as_ref().map(|d| d.join("engine")),
+        main_app_server(app),
+        std::sync::Arc::new(KeystoreStore(app.clone(), Default::default())),
         log,
-    }
-}
-
-fn pod_session(app: &AndroidApp) -> Session {
-    pod_home(app).start(|| match main_app_session(app) {
-        Ok(found) => found,
-        Err(e) => {
-            log(&e);
-            None
-        }
-    })
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -674,6 +918,7 @@ fn android_main(app: AndroidApp) {
     // A layout pushed to the external files dir (development) wins; else
     // the pod.
     let dir = app.external_data_path();
+    let home = pod_home(&app);
     let session = if dir.as_ref().is_some_and(|d| d.join("layout.json").exists()) {
         let (id, root, data) = load(dir.as_ref());
         let mut session = Session::new(&id, root, data, Viewport::PHONE);
@@ -682,7 +927,7 @@ fn android_main(app: AndroidApp) {
         }
         session
     } else {
-        pod_session(&app)
+        home.start(|| None)
     };
     // winit makes one event loop per process, but Android keeps the process
     // when the activity goes (Back, a swipe from recents) and calls
@@ -695,8 +940,18 @@ fn android_main(app: AndroidApp) {
             std::process::exit(0);
         }
     };
+    // The bridge's callbacks (links, picked photos, messages) wake the window.
+    let proxy = std::sync::Mutex::new(event_loop.create_proxy());
+    crate::bridge::set_waker(move || {
+        if let Ok(p) = proxy.lock() {
+            let _ = p.send_event(());
+        }
+    });
+    if let Err(e) = with_activity(&app, crate::bridge::ask_notifications) {
+        log(&format!("notification permission: {e}"));
+    }
     let window = crate::window::App::new(Controller::new(session), "The Construct")
-        .with_platform(Box::new(Android(app, Default::default())));
+        .with_platform(Box::new(Android(app, Default::default(), home)));
     if let Err(e) = crate::window::run_app(event_loop, window) {
         log(&format!("window: {e}"));
     }

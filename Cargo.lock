@@ -924,6 +924,7 @@ dependencies = [
  "accesskit",
  "accesskit_winit",
  "bytemuck",
+ "client-core",
  "cosmic-text",
  "glyphon",
  "image",
@@ -937,6 +938,17 @@ dependencies = [
  "wgpu",
  "winit",
  "zeno",
+]
+
+[[package]]
+name = "construct-sim"
+version = "0.1.0"
+dependencies = [
+ "construct-render",
+ "image",
+ "protocol",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

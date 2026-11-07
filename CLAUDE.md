@@ -25,7 +25,8 @@ issues. `docs/history/` is archived; don't treat it as current.
   `app/shared/src/jvmCommonMain`); `app/shared/src/commonMain` the shared UI.
 - `crates/construct-render` the Rust rendering engine (taffy, wgpu, a CPU rasterizer): the pod's MCP layout
   previews, `construct-viewer` (desktop) and the NativeActivity prototype, which `scripts/android_native.sh` installs
-  as The Construct itself ([docs/rendering.md](docs/rendering.md)).
+  as The Construct itself ([docs/rendering.md](docs/rendering.md)); `crates/construct-sim` the headless simulator
+  over it ([docs/simulator.md](docs/simulator.md)).
 - `fake-pixelfed/` the fake upstream (primary test target); `crates/e2e` the end-to-end suite.
 - `crates/app-*/layouts/<app>/NNNN.json` layout versions; `crates/protocol/features/` the named vocabulary (plumbing);
   `crates/pod-core/components/<name>/NNNN.json` the server components (porcelain, decision `plumbing-and-porcelain`);
@@ -33,7 +34,7 @@ issues. `docs/history/` is archived; don't treat it as current.
 - Each crate's integration tests are one binary, `tests/integration/main.rs`: add a test file as a `mod` there
   ([docs/testing.md](docs/testing.md)).
 - Data files live next to the code that reads them (decision `data-next-to-its-code`): test data in
-  `crates/*/tests/data/`, simulator data in `app/desktopApp/src/sim/resources/`; anything else ships.
+  `crates/*/tests/data/`, simulator data in `crates/construct-sim/data/`; anything else ships.
   Test data is made up: invented people and places and `.example` domains, never real personal data.
 
 ## Commands
@@ -47,13 +48,15 @@ scripts/e2e.sh                           # e2e suite against the fake binary
 # JVM (from app; any JDK 21 in JAVA_HOME or on PATH). The engine library first: cargo build -p client-ffi --release
 ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test
 
-# Headless simulator: the real shared UI to PNGs. Read the PNGs to check UI changes.
-./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_sample_no_login \
-  -Pscreen=phone -Pout=/tmp/sim -Pscript="shot start; click Like; assert-text Unlike; shot after"
+# Headless simulator: the Rust engine to PNGs (CPU, no JVM). Read the PNGs to check UI changes.
+cargo run -p construct-sim -- --workspace pixelfed_sample_no_login --screen phone --out /tmp/sim \
+  --script "shot start; click Like; assert-text Unlike; shot after"
+scripts/sim_scenarios.sh /tmp/sim        # the scenarios CI screenshots
 ```
 
-Script commands and flags: [docs/simulator.md](docs/simulator.md). `-PbaseUrl=http://127.0.0.1:8080` runs live
-against a local pod. Easy to get wrong: `wait-text <ms> <text>` takes the timeout first, and a command's argument
+Script commands and flags: [docs/simulator.md](docs/simulator.md). `--base-url http://127.0.0.1:8080` runs live
+against a local pod (token in `CONSTRUCT_POD_TOKEN`). The Compose app's simulator (`:desktopApp:simulate`, same
+scripts as `-P` properties) stays until issue #166. Easy to get wrong: `wait-text <ms> <text>` takes the timeout first, and a command's argument
 is the rest of the entry as written, so `click "Sign in"` looks for the quote marks too (only `type` and `pick`
 read quotes).
 
@@ -79,7 +82,7 @@ tmp=$(mktemp -d) && git clone --depth 1 https://github.com/aidanwolter3/the-cons
 ```
 
 The warm-up (~3-5 min) runs in the background; builds started meanwhile wait on Gradle's cache lock. Before the
-JVM tests or the simulator, run `scripts/await_warmup.sh`: it waits for the warm-up, restarts it if its process
+JVM tests or the Compose simulator, run `scripts/await_warmup.sh`: it waits for the warm-up, restarts it if its process
 died (the status file can say `running` long after), and fails with the log's location if it failed. If there is
 no setup script, run `CONSTRUCT_SETUP_WARM=foreground bash scripts/cloud_setup.sh` once.
 

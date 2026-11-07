@@ -155,15 +155,16 @@ inbox are layouts too. Platform code is thin:
 - **Desktop** (`:desktopApp`, JVM): loads the engine through JNA; the loopback OAuth redirect; tray notifications.
 - **Android** (`:androidApp`): the engine cross-compiled to `libclient_ffi.so`; App Link sign-in redirect; Android
   notification channels and closed-app push through UnifiedPush.
-- **Simulator** (`:desktopApp:simulate`): the same UI rendered headlessly to PNGs from a script, against fixtures or a
-  live pod. It is how UI changes are checked; see [simulator.md](simulator.md).
+- **Simulator** (`construct-sim`): the Rust engine's session drawn headlessly on the CPU to PNGs from a script,
+  against fixtures or a live pod. It is how UI changes are checked; see [simulator.md](simulator.md). The Compose
+  app's own simulator (`:desktopApp:simulate`) stays until the clients cut over (issue #166).
 
 More on running them: [clients.md](clients.md).
 
 **The Rust rendering engine** (`crates/construct-render`, decision `rust-render-engine`) draws the same plumbing
 without the JVM: taffy layout, a scene of SDF quads and text, a CPU rasterizer and a wgpu pipeline. The pod uses it
-for agents' layout previews over MCP; a desktop window and an Android NativeActivity are prototypes. See
-[rendering.md](rendering.md).
+for agents' layout previews over MCP; a desktop window and an Android NativeActivity are prototypes, run by the
+same engine as the Compose clients (decision `rust-clients-on-the-engine`). See [rendering.md](rendering.md).
 
 ## Background work on the server
 

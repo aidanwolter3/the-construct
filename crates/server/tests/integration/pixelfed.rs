@@ -82,9 +82,15 @@ async fn spawn_pod(state: AppState) -> Server {
 }
 
 /// A URL nothing listens on.
-async fn dead_url() -> String {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    format!("http://{}", listener.local_addr().unwrap())
+/// An address nothing answers: a port bound but not listening, so a
+/// connection is refused. Keep the socket for the test's length: a port
+/// that was only bound and released can be taken by another test's server,
+/// which would then answer.
+async fn dead_url() -> (String, tokio::net::TcpSocket) {
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let url = format!("http://{}", socket.local_addr().unwrap());
+    (url, socket)
 }
 
 fn client() -> reqwest::Client {
@@ -666,7 +672,7 @@ fn seeded_state(instance: &str, upstream_token: &str) -> AppState {
 
 #[tokio::test]
 async fn upstream_down_is_502() {
-    let dead = dead_url().await;
+    let (dead, _held) = dead_url().await;
     let pod = spawn_pod(seeded_state(&dead, SEED)).await;
     let (status, body) = get_home(&pod.url, Some("tok")).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
@@ -1496,7 +1502,7 @@ async fn stale_cached_app_is_re_registered() {
 
 #[tokio::test]
 async fn cached_app_is_kept_when_validation_is_inconclusive() {
-    let dead = dead_url().await;
+    let (dead, _held) = dead_url().await;
     let state = seeded_state(&dead, SEED);
     let app = server::pixelfed::db::PixelfedApp {
         client_id: "cached-1".into(),
@@ -2048,7 +2054,7 @@ async fn posting_a_comment_reaches_the_upstream() {
 
 #[tokio::test]
 async fn comments_with_the_upstream_down_are_502() {
-    let dead = dead_url().await;
+    let (dead, _held) = dead_url().await;
     let pod = spawn_pod(seeded_state(&dead, SEED)).await;
     let (status, _) = get_comments_screen(&pod.url, Some("tok"), CAROUSEL).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);

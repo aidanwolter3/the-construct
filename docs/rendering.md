@@ -33,9 +33,12 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 | `images` | Images by URL, cut to their box (on a background thread for the GPU) |
 | `viewer` | `Controller`: platform events (resize, tap, long press, wheel, text, editing keys, Back) applied to a session; what windows feed |
 | `window` | winit + wgpu surface (feature `window`): touch (drags, flings, swipes, long presses, handles), the clipboard, the `Platform` a window runs on; used by `construct-viewer` and Android |
-| `remote` | `PodClient`: a live session over a pod (feature `remote`) |
-| `pods` | A device's own pod: its saved session, the pod's sign-in screen, leaving and reloading (features `remote` and `window`); shared by Android and the desktop viewer |
+| `engine` | `PodEngine`: a live session over a pod run by the engine (`client-core`: cache, outbox, event stream), the session's `Loader` (feature `remote`); `FileStore`, a desktop's secure store without a keychain |
+| `remote` | `PodClient`: a session fetched straight from the pod (`construct-sim`'s live mode), and the device data builders both use (feature `remote`) |
+| `pods` | A device's own pod: the pod it opened last, its engine, the pod's sign-in screen, leaving and reloading (features `remote` and `window`); shared by Android and the desktop viewer |
+| `platform` | `Platform`: what the app needs from the system it runs on (keyboard, insets, browser, clipboard, photo picker, events, the pod's saved session), implemented per platform |
 | `android` | `android_main` for the NativeActivity (Android builds with `window`) |
+| `bridge` | The Rust side of the Android bridge (`android/java`): links, the photo picker's result, messages |
 
 The pod builds the crate with `default-features = false`: no wgpu, CPU only.
 
@@ -101,17 +104,18 @@ cargo run --release -p construct-render --features viewer --bin construct-viewer
 cargo run --release -p construct-render --features viewer --bin construct-viewer -- --demo       # the demo
 ```
 
-With no file it opens your pod as the phone app does (`pods`, shared with Android): the pod opened last, its
-session kept in `pod.json` (`~/Library/Application Support/The Construct` on macOS, else
-`$XDG_CONFIG_HOME/the-construct` or `~/.config/the-construct`); without one, the pod's sign-in screen (staging, or
-`CONSTRUCT_POD_URL`). Click, scroll, type, Escape for Back; each interaction's effects are logged. Copy and paste use
+With no file it opens your pod as the phone app does (`pods`, shared with Android): the pod opened last
+(`pod.json`, in `~/Library/Application Support/The Construct` on macOS, else `$XDG_CONFIG_HOME/the-construct` or
+`~/.config/the-construct`), with the engine's cache next to it (`engine/<server>/`) and its session in the login
+Keychain on macOS, else in `secure.json` there (readable by you only); without a session, the pod's sign-in screen
+(staging, or `CONSTRUCT_POD_URL`). Click, scroll, type, Escape for Back; each interaction's effects are logged. Copy and paste use
 the system clipboard through `pbcopy`/`pbpaste` on macOS and `wl-copy`, `xclip` or `xsel` on Linux. It draws with
 Metal on macOS and Vulkan (or GL) on Linux; on a headless Linux box, `Xvfb` plus Mesa's `mesa-vulkan-drivers`
 (lavapipe) is enough.
 
 Any workspace bundle (what `GET /v1/workspaces/<id>` answers) can be drawn to PNGs without a window:
 `cargo run --release -p construct-render --no-default-features --example render_bundle -- a.json b.json --out dir`
-(390 × 844 at 3×, the simulator's phone, so the two can be compared side by side with `-Pfixture`).
+(390 × 844 at 3×, the simulator's phone).
 
 ## Android
 
@@ -122,15 +126,16 @@ machine's debug key, so the app's data stays. An install over a build signed wit
 says so rather than uninstall (which would sign you out). `cd app && ./gradlew :androidApp:installDebug` goes back to
 the Compose app with the same data.
 
-The app opens a pod live (below). It keeps its pod in its private files (`pod.json`: the server, the session token
-and the last pod code used; unencrypted, unlike the main app's keystore) and opens, in order: that pod; the main
-app's own sign-in, which it reads (`shared_prefs/server.xml` for the server, else staging;
-`shared_prefs/construct_secure.xml` for the session, decrypted with the main app's Android keystore key through the
-SDK); else the pod's sign-in screen, which the pod answers without a session (a pod code box, Open pod and Try a
-temporary pod), with the last code used filled in. Signing in (`action.auth.session`) saves the session; Leave pod
-(`leave_pod`, after its `action.confirm` dialog) forgets it and shows the sign-in screen again, as does a session the
-pod no longer knows. A pod that can't be reached shows what went wrong with Try again (`refresh`) and Sign in with
-another code. A `layout.json` pushed to the external files directory (`{"layout", "data"}`) is drawn instead.
+The app opens a pod live (below), with the engine's cache in its private files (`engine/<server>/`). It keeps its
+pod there too (`pod.json`: the server and the last pod code used), else uses the main app's server
+(`shared_prefs/server.xml`, else staging). Sessions are kept as the main app keeps them (`KeystoreStore`, through
+JNI: AES/GCM with the Android keystore key `construct_session_key`, in the private SharedPreferences file
+`construct_secure`), so the main app's sign-in carries over, and a session token an older build kept in `pod.json`
+moves there on the first start. Without a session the pod answers its sign-in screen (a pod code box, Open pod and
+Try a temporary pod), with the last code used filled in. Signing in (`action.auth.session`) keeps the session;
+Leave pod (`leave_pod`, after its `action.confirm` dialog) forgets it and shows the sign-in screen again, as does a
+session the pod no longer knows. A `layout.json` pushed to the external files directory (`{"layout", "data"}`) is
+drawn instead.
 
 winit makes one event loop per process while Android keeps the process after the activity goes, so the process ends
 with its activity (when it is finishing or destroyed) and every launch starts afresh. The app targets SDK 34, so the
@@ -139,34 +144,65 @@ opens the keyboard, and Back pops the stack. The layout stays inside the window 
 (`getRootWindowInsets`: system bars, camera cutout and keyboard), logged as they change. Its theme draws light system
 bars with dark icons.
 
+### The Android bridge
+
+A NativeActivity gets none of the Android callbacks that arrive through Java: a link opening the app, an activity
+result, a broadcast while the app is closed. `android/java` holds a small bridge that passes them to Rust and holds no
+app logic: `ConstructActivity` (NativeActivity plus `onNewIntent` and `onActivityResult`, and `pickImages` and
+`askPermission` that Rust calls), `ConstructReceiver` (a message, also while the app is closed) and `Native` (the
+native methods, `Java_org_theconstruct_android_Native_*` in `src/bridge.rs`). The script compiles them with `javac`
+and `d8` into the APK's `classes.dex`. Events queue in `bridge.rs`, wake the window and reach it through
+`Platform::events`; for now each shows as a notice. Decision:
+[`android-native-bridge`](decisions/android-native-bridge.md). Try it with the app installed:
+
+```bash
+adb shell am start -a android.intent.action.VIEW -d "construct://bridge/hello"     # a link opens the app
+# Pixelfed → New post → the Add photos tile: Android's photo picker; the count and size come back to Rust
+# Swipe the app away, then (only adb and the system may send this):
+adb shell am broadcast -n org.theconstruct.android/.ConstructReceiver --es message "Hello"   # a notification
+```
+
+The platform interface (`platform.rs`: `Platform`, `PlatformEvent`, `Reopen`) is what each platform implements
+(Android, the desktop viewer; a web build later).
+
 ## Live sessions (`remote`)
 
-Feature `remote` (on in the viewer and the APK) runs a session over a pod: `PodClient` fetches home as a
-client does (`GET /v1/workspaces/home`), builds the device's list of layouts (`local:layouts`, `local:apps`) from
-`GET /v1/apps?all=1`, and is the session's `Loader`: a layout a tap opens is fetched then, a page screen whose route
-matches a tap's `target_uri` opens with its `$route` bound and its `item`, and slides in at once while its `data`
-path loads in the background (`local://screen#loading`). `local://nav` and
+Feature `remote` (on in the viewer and the APK) runs a session over a pod with the engine the Compose clients run
+(`client-core`, decision `rust-clients-on-the-engine`): `PodEngine` is the session's `Loader`. Home shows as the
+engine has it, from its cache at once (offline too; "Opening your pod…" with the connection's state on a first
+start, until the pod answers), and the device's list of layouts (`local:layouts`, `local:apps`) comes from
+`GET /v1/apps?all=1`, kept in `apps.json` next to the cache for offline starts. A layout a tap opens is the engine's
+cached copy at once, fetched again behind it (`open_layout`; a layout it never had waits for the pod), and a page
+screen whose route matches a tap's `target_uri` opens with its `$route` bound and its `item`, and slides in at once
+while its `data` path loads through the engine (`action.data.load`, cached; `local://screen#loading`). Every
+snapshot the engine sends reaches the session on its next frame (`Loader::changes`; the window is woken): data,
+`local://connection` (online, offline or connecting, and how many writes wait), and the new root of every layout
+the event stream announced, so a layout edited over MCP, or a change from another device, shows without opening it
+again. The simulator's live mode (`construct-sim --base-url`) still fetches straight from the pod (`PodClient`). `local://nav` and
 `local://screen` are set as the shared UI sets them. Images (`core://Image`) download on four background threads, newest request first,
 without the session (the pod serves media from public paths), are cut to their box (cropped to fill, corners
 rounded) and drawn over their placeholder once they arrive; the window redraws then.
 
-Writes go to the pod as the shared UI sends them, without an outbox: `$form.<f>`, `$form?.<f>` and one `$nonce`
-per tap are bound when the tap runs (a blank `$form.<f>` sends nothing). `action.mutation.optimistic` changes the
-entity at once (every `value_expr` against the entity as it was), POSTs its payload with `$value` as the new value
-on a background thread, and puts the fields back if the pod refuses. `action.mutation.create` adds its entity to its
-list at once, POSTs, then loads the layouts on the stack again (a refusal takes it out). `action.device`
+Writes go to the engine's outbox, as the shared UI sends them (`Loader::take`): `$form.<f>`, `$form?.<f>` and one
+`$nonce` per tap are bound when the tap runs (a blank `$form.<f>` sends nothing). `action.mutation.optimistic`
+changes the entity at once (every `value_expr` against the entity as it was) and the engine keeps the write until
+the pod has it, offline or through a failed POST, with `$value` as the new value; a refusal puts the fields back.
+`action.mutation.create` adds its entity to its list at once, and the engine loads its list again once the pod has
+it (a refusal takes it out). A loader without an outbox (`PodClient`) POSTs on a background thread instead
+(`Loader::send`) and the session undoes a refusal itself. `action.device`
 `open_notification` marks it read (`POST /v1/notifications/read`), closes the inbox's sheet or panel and opens the
 notification's layout and `target_uri` screen; `mark_read` and `mark_all_read` mark them here and on the pod.
 `action.link.open` opens an `http(s)` address in the browser (an `ACTION_VIEW` intent on Android, `open` or
 `xdg-open` on desktops). `action.confirm` shows the app's own dialog (title, message, Cancel and the confirm label,
 tagged `confirm:cancel` and `confirm:ok`) and runs `then`, with the steps of a sequence after it, only on confirm;
-Cancel, Back or a tap outside do nothing. `action.auth.session` POSTs its payload and hands the session token to the
-platform, which saves it and opens the pod; `leave_pod` and `refresh` go to the platform too. There is no cache or event stream: what other devices change shows on the next load. The
-device data the
-shared UI builds (`DeviceData`) is built from the pod the same way: `local://connection`, `local://session`,
-`local://inbox`, the layouts with their versions, and, for a layout that binds them, `local:notifications`
-(`/v1/notifications`, with `when` and `day` labels in UTC), `local:channels` and `local:sign_ins` /
-`local:providers`.
+Cancel, Back or a tap outside do nothing. `action.auth.session` goes to the engine, which opens the session and
+keeps it in its secure store; the platform then remembers the code and shows the pod. `leave_pod` (the engine
+forgets the session) and `refresh` (home fetched again) go to the platform too. The device data the shared UI builds
+(`DeviceData`) is built the same way: `local://connection`, `local://session` (from the engine's sign-in state),
+`local://inbox` (the engine's unread count), the layouts with their versions, and, for a layout that binds them,
+`local:notifications` (the engine's list, cached; `when` and `day` labels in UTC; loaded again when the count
+changes), `local:channels` and `local:sign_ins` / `local:providers`. Marking notifications read goes through the
+engine, which sends it again when the pod is back.
 
 Windows place a laid-out frame again on scroll without laying it out (`Laid::emit`), so dragging is cheap. A drag
 that scrolls flings on release and slows down each frame; one that scrolls nothing, past 48 points, is a swipe that
@@ -177,8 +213,8 @@ Cut / Copy / Paste / Select all bar over it (dragging on from a long press moves
 cursor shows its handle and the bar (Paste, Select all). Typing and pasting replace the selection and are cut to the
 field's `max_length`. With a hardware keyboard: arrows, Home and End (Shift selects), Delete and Ctrl or Command+A, C,
 X and V. On Android the clipboard is `ClipboardManager` through the SDK.
-`pod_shots` (feature `remote`) drives a live session from a script and writes PNGs, to compare with the simulator's
-live mode.
+The headless simulator, `construct-sim` ([simulator.md](simulator.md)), drives a session from a script on fixture
+bundles or a live pod and writes PNGs drawn on the CPU.
 
 ## Agent previews (MCP)
 

@@ -6,9 +6,12 @@
 //! `action.local.set` changes the local copy of an entity, opening a layout
 //! pushes it. Writes (`action.mutation.optimistic` and `.create`, marking
 //! notifications read) change the local copy at once and go to the pod
-//! through the [`Loader`] in the background, undone if the pod refuses them;
-//! without a loader that sends (the pod's previews) they are reported as not
-//! sent. Sign-in is never sent.
+//! through the [`Loader`]: kept in its outbox until the pod has them where
+//! the loader has one (the engine, [`Loader::take`]), else sent in the
+//! background and undone if the pod refuses them; without a loader that
+//! sends (the pod's previews) they are reported as not sent. What the loader
+//! hears of later (another device, an agent) comes in through
+//! [`Loader::changes`] on the next frame.
 
 use image::RgbaImage;
 use protocol::{DataBundle, PageScreen, UiNode};
@@ -93,6 +96,12 @@ pub enum Effect {
     /// Copy or Cut was chosen: the platform puts this on its clipboard.
     Copy {
         text: String,
+    },
+    /// A media picker was tapped: the platform opens its photo picker for
+    /// up to `max` photos for this field.
+    PickMedia {
+        field: String,
+        max: u32,
     },
     /// Would go to the pod or the platform; a preview doesn't send it.
     NotSent {
@@ -250,6 +259,14 @@ pub type Done = Box<dyn FnOnce(Written) + Send>;
 /// Called once with a data path's answer, on any thread.
 pub type Loaded = Box<dyn FnOnce(Result<DataBundle, String>) + Send>;
 
+/// What a loader heard of since it was last asked ([`Loader::changes`]):
+/// data that replaces the device's, and layouts' new roots.
+#[derive(Debug, Default, Clone)]
+pub struct Changes {
+    pub data: DataBundle,
+    pub layouts: Vec<(String, UiNode)>,
+}
+
 /// Something the pod answered in the background.
 enum Answer {
     Write(Undo, Written),
@@ -300,6 +317,21 @@ pub trait Loader: Send {
     /// POSTs a sign-in (`action.auth.session`) and answers the session
     /// token; `None` when this loader can't.
     fn open_session(&self, _path: &str, _payload: &Value) -> Option<Result<String, String>> {
+        None
+    }
+    /// Carries out a write itself, where the loader keeps writes until the
+    /// pod has them (the engine's outbox): `action.mutation.optimistic`,
+    /// `action.mutation.create`, or `action.device` `mark_read` and
+    /// `mark_all_read`. True when taken: the session's own change stands
+    /// until [`Loader::changes`] brings the loader's data. False: the session
+    /// sends it with [`Loader::send`].
+    fn take(&self, _intent: &Value) -> bool {
+        false
+    }
+    /// What changed since the last call (another device, an agent, a write
+    /// the pod answered); `None` when nothing did, or the loader doesn't
+    /// hear of changes. Called every frame: it must not block.
+    fn changes(&self) -> Option<Changes> {
         None
     }
 }
@@ -1125,15 +1157,21 @@ impl Session {
         }
     }
 
-    /// Applies the answers of writes that came back: the pod's fresh data,
-    /// or the local change undone. True when anything changed.
+    /// Applies what the loader heard of ([`Loader::changes`]) and the
+    /// answers of writes that came back: the pod's fresh data, or the local
+    /// change undone. True when anything changed.
     pub fn poll(&mut self) -> bool {
+        let changes = self.loader.as_ref().and_then(|l| l.changes());
+        let changed = changes.is_some();
+        if let Some(c) = changes {
+            self.apply_changes(c);
+        }
         let done: Vec<Answer> = match self.answered.lock() {
             Ok(mut g) => std::mem::take(&mut *g),
             Err(p) => std::mem::take(&mut *p.into_inner()),
         };
         if done.is_empty() {
-            return false;
+            return changed;
         }
         for answer in done {
             let (undo, w) = match answer {
@@ -1184,6 +1222,25 @@ impl Session {
         true
     }
 
+    /// The loader's news: its data replaces the device's, and a layout with
+    /// a new root shows it where it is open (the base of the stack, and every
+    /// entry still showing its old root; its screens stay as they are).
+    fn apply_changes(&mut self, c: Changes) {
+        merge(&mut self.data, c.data);
+        for (id, root) in c.layouts {
+            let old = self.layouts.insert(id.clone(), root.clone());
+            for (i, e) in self.stack.iter_mut().enumerate() {
+                let showing = i == 0 || old.as_ref() == Some(&e.root);
+                if e.id == id && showing && e.root != root {
+                    let fresh = Entry::layout(&id, root.clone(), BTreeMap::new());
+                    e.root = fresh.root;
+                    e.screens = fresh.screens;
+                }
+            }
+        }
+        self.invalidate();
+    }
+
     /// Whether writes or loads are still out (a script waits for them).
     pub fn busy(&self) -> bool {
         self.pending > 0 || self.stack.iter().any(|e| e.loading.is_some())
@@ -1227,6 +1284,20 @@ impl Session {
                 intent: json!({ "path": path, "body": body }),
             });
         }
+    }
+
+    /// Hands a write to a loader that keeps it until the pod has it
+    /// ([`Loader::take`]); true when it took it.
+    fn taken(&mut self, intent: &Value, out: &mut Vec<Effect>) -> bool {
+        if !self.loader.as_ref().is_some_and(|l| l.take(intent)) {
+            return false;
+        }
+        let path = intent["endpoint"]
+            .as_str()
+            .unwrap_or("/v1/notifications/read")
+            .to_owned();
+        out.push(Effect::Sent { path });
+        true
     }
 
     /// The ids of the layouts on the stack (each once), to load again after
@@ -2116,6 +2187,10 @@ impl Session {
                 }
             }
             "edit.select_all" => self.select_all(),
+            "media.pick" => out.push(Effect::PickMedia {
+                field: intent["field"].as_str().unwrap_or("").to_owned(),
+                max: intent["max"].as_u64().unwrap_or(1) as u32,
+            }),
             "form.clear" => {
                 // The session's own step after a field's Send.
                 if let Some(f) = intent["field"].as_str() {
@@ -2306,6 +2381,9 @@ impl Session {
             entity_uri: uri.clone(),
             fields,
         });
+        if self.taken(intent, out) {
+            return;
+        }
         let mut body = intent["payload"].clone();
         substitute_value(&mut body, &value);
         let write = Write {
@@ -2336,6 +2414,9 @@ impl Session {
             entity_uri: uri.clone(),
             fields: BTreeMap::new(),
         });
+        if self.taken(intent, out) {
+            return;
+        }
         let write = Write {
             path: intent["endpoint"].as_str().unwrap_or("").to_owned(),
             body: intent["payload"].clone(),
@@ -2375,6 +2456,13 @@ impl Session {
                     format!("{left} unread")
                 },
             );
+        }
+        let intent = match id {
+            Some(id) => json!({ "intent": "action.device", "command": "mark_read", "id": id }),
+            None => json!({ "intent": "action.device", "command": "mark_all_read" }),
+        };
+        if self.taken(&intent, out) {
+            return;
         }
         let body = match id {
             Some(id) => json!({ "ids": [id] }),
@@ -2474,6 +2562,33 @@ impl Session {
         out.push(Effect::Opened {
             layout: "confirm".into(),
         });
+    }
+
+    /// A message from the app itself (not a layout), in its own dialog with
+    /// an OK button: what the platform reports (a link that opened the app,
+    /// photos picked, a message received).
+    pub fn notice(&mut self, title: &str, message: &str) {
+        let root = json!({ "type": "core://Box", "fill": true, "align": "Center", "padding_h_dp": 32,
+            "content": { "type": "core://Box", "background": "${local://theme#page}", "corner_dp": 28,
+                "padding_h_dp": 24, "padding_v_dp": 24,
+                "content": { "type": "core://Column", "spacing_dp": 16, "children": [
+                    { "type": "core://Text", "style": "Title", "value_expr": title },
+                    { "type": "core://Text", "style": "Body", "value_expr": message },
+                    { "type": "core://Row", "children": [
+                        { "type": "core://Spacer" },
+                        { "type": "core://Tappable", "tag": "notice:ok", "content_description": "OK",
+                          "on_click": { "intent": "action.navigation.back" },
+                          "content": { "type": "core://Box", "padding_h_dp": 12, "padding_v_dp": 10,
+                              "content_color": "${local://theme#accent}",
+                              "content": { "type": "core://Text", "style": "Label", "value_expr": "OK" } } } ] } ] } } });
+        let Ok(root) = serde_json::from_value::<UiNode>(root) else {
+            return;
+        };
+        let mut e = Entry::layout("notice", root, BTreeMap::new());
+        e.frame = Frame::Dialog;
+        self.stack.push(e);
+        self.focused = None;
+        self.invalidate();
     }
 
     /// `action.auth.session`: POSTs the form-bound payload to the pod path
