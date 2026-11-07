@@ -1,0 +1,212 @@
+{
+  "version": "1.0.0",
+  "workspace": {
+    "type": "core://Page",
+    "id": "theme_log",
+    "title": "Log",
+    "root": {
+      "type": "core://Box",
+      "content": {
+        "type": "core://Scroll",
+        "content": {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://Row",
+              "children": [
+                {
+                  "type": "core://Text",
+                  "value_expr": "Log",
+                  "style": "Headline"
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "type": "core://IconButton",
+                  "icon": "add",
+                  "content_description": "Add entry",
+                  "on_click": {
+                    "intent": "action.navigation.back"
+                  }
+                }
+              ],
+              "padding_h_dp": 16,
+              "padding_v_dp": 12,
+              "align": "Center"
+            },
+            {
+              "type": "core://List",
+              "query_key": "log:entries",
+              "spacing_dp": 8,
+              "padding_h_dp": 16,
+              "item_template": {
+                "type": "core://Box",
+                "content": {
+                  "type": "core://Column",
+                  "children": [
+                    {
+                      "type": "core://Row",
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.date",
+                          "style": "Caption"
+                        },
+                        {
+                          "type": "core://Spacer"
+                        },
+                        {
+                          "type": "core://Conditional",
+                          "value": "$item.tone",
+                          "equals": "success",
+                          "content": {
+                            "type": "core://Box",
+                            "content": {
+                              "type": "core://Text",
+                              "value_expr": "$item.category",
+                              "style": "Caption"
+                            },
+                            "background": "${local://theme#success_surface}",
+                            "content_color": "${local://theme#success}",
+                            "corner_dp": 8,
+                            "padding_h_dp": 8,
+                            "padding_v_dp": 3
+                          }
+                        },
+                        {
+                          "type": "core://Conditional",
+                          "value": "$item.tone",
+                          "equals": "accent",
+                          "content": {
+                            "type": "core://Box",
+                            "content": {
+                              "type": "core://Text",
+                              "value_expr": "$item.category",
+                              "style": "Caption"
+                            },
+                            "background": "${local://theme#accent_surface}",
+                            "content_color": "${local://theme#accent}",
+                            "corner_dp": 8,
+                            "padding_h_dp": 8,
+                            "padding_v_dp": 3
+                          }
+                        },
+                        {
+                          "type": "core://Conditional",
+                          "value": "$item.tone",
+                          "equals": "error",
+                          "content": {
+                            "type": "core://Box",
+                            "content": {
+                              "type": "core://Text",
+                              "value_expr": "$item.category",
+                              "style": "Caption"
+                            },
+                            "background": "${local://theme#error_surface}",
+                            "content_color": "${local://theme#error}",
+                            "corner_dp": 8,
+                            "padding_h_dp": 8,
+                            "padding_v_dp": 3
+                          }
+                        },
+                        {
+                          "type": "core://Conditional",
+                          "value": "$item.tone",
+                          "equals": "muted",
+                          "content": {
+                            "type": "core://Box",
+                            "content": {
+                              "type": "core://Text",
+                              "value_expr": "$item.category",
+                              "style": "Caption"
+                            },
+                            "background": "${local://theme#muted_surface}",
+                            "content_color": "${local://theme#muted_text}",
+                            "corner_dp": 8,
+                            "padding_h_dp": 8,
+                            "padding_v_dp": 3
+                          }
+                        }
+                      ],
+                      "align": "Center"
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.title",
+                      "style": "Label"
+                    },
+                    {
+                      "type": "core://Box",
+                      "content": {
+                        "type": "core://Text",
+                        "value_expr": "$item.notes",
+                        "style": "Secondary"
+                      },
+                      "content_color": "${local://theme#muted_text}"
+                    }
+                  ],
+                  "spacing_dp": 4
+                },
+                "background": "${local://theme#card}",
+                "border_color": "${local://theme#card_border}",
+                "corner_dp": 14,
+                "padding_h_dp": 14,
+                "padding_v_dp": 12
+              }
+            }
+          ],
+          "spacing_dp": 8
+        }
+      },
+      "fill": true,
+      "background": "${local://theme#page}"
+    }
+  },
+  "entities": {
+    "log://entries/0": {
+      "date": "2026-11-02",
+      "title": "Oil change",
+      "category": "Car",
+      "tone": "success",
+      "notes": "Done at 48,210 km, Riverside Garage."
+    },
+    "log://entries/1": {
+      "date": "2026-10-28",
+      "title": "Smoke alarm battery",
+      "category": "Home",
+      "tone": "accent",
+      "notes": "Hallway and kitchen."
+    },
+    "log://entries/2": {
+      "date": "2026-10-15",
+      "title": "Blood test: all clear",
+      "category": "Health",
+      "tone": "success",
+      "notes": "Dr. Okafor, Elm Street Clinic."
+    },
+    "log://entries/3": {
+      "date": "2026-10-03",
+      "title": "Car insurance renewal",
+      "category": "Renewal",
+      "tone": "error",
+      "notes": "Due Nov 30: compare quotes first."
+    },
+    "log://entries/4": {
+      "date": "2026-09-21",
+      "title": "Vet visit: Biscuit",
+      "category": "Pets",
+      "tone": "muted",
+      "notes": "Booster shots, weight 4.2 kg."
+    }
+  },
+  "queries": {
+    "log:entries": [
+      "log://entries/0",
+      "log://entries/1",
+      "log://entries/2",
+      "log://entries/3",
+      "log://entries/4"
+    ]
+  }
+}

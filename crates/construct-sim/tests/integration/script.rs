@@ -101,3 +101,13 @@ fn screens_are_the_compose_presets_or_sizes() {
     assert!(Screen::parse("0x5").is_err());
     assert!(Screen::parse("watch").is_err());
 }
+
+#[test]
+fn mode_picks_dark_or_light() {
+    assert_eq!(
+        steps("mode dark; mode Light"),
+        vec![Step::Dark(true), Step::Dark(false)]
+    );
+    assert!(parse("mode dim").is_err());
+    assert!(parse("mode").is_err());
+}

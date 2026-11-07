@@ -9,14 +9,14 @@ fn liking_a_post_and_going_offline() {
     let out = out_dir("like");
     let (runner, results) = run(
         "pixelfed_sample_no_login",
-        "shot feed; click Like; assert-text Unlike; shot liked; offline; shot offline",
+        "shot feed; click Like; assert-text Unlike; assert-text 90; shot liked; offline; shot offline",
         &out,
     );
     assert_ok(&results);
     for f in [
         "01-feed.png",
-        "04-liked.png",
-        "06-offline.png",
+        "05-liked.png",
+        "07-offline.png",
         "steps.log",
         "steps.json",
     ] {
@@ -127,4 +127,33 @@ fn picked_photos_show_and_post() {
         runner.session.data.entities[&post].get("media_uris"),
         Some(&serde_json::json!(["construct://attachments/sim-2"]))
     );
+}
+
+#[test]
+fn dark_mode_draws_the_dark_palette() {
+    let out = out_dir("dark");
+    let (mut runner, results) = run(
+        "pixelfed",
+        "mode dark; shot feed; open-inbox; assert-text @bob commented on your post; shot inbox; \
+         mode light; shot light",
+        &out,
+    );
+    assert_ok(&results);
+    let page = |runner: &mut construct_sim::run::Runner| {
+        runner.session.scene().map(|s| s.background).unwrap()
+    };
+    // Light again: Material's background, as the Compose app draws.
+    assert_eq!(
+        page(&mut runner),
+        construct_render::style::Rgba::rgb(0xFE, 0xFB, 0xFF).0
+    );
+    runner.session.set_dark(true);
+    // Dark: the theme's page token.
+    assert_eq!(
+        page(&mut runner),
+        construct_render::style::Rgba::hex("#1A1A1C").unwrap().0
+    );
+    for f in ["02-feed.png", "05-inbox.png", "07-light.png"] {
+        assert!(out.join(f).is_file(), "{f}");
+    }
 }

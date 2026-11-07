@@ -214,7 +214,7 @@ request. Any layout may bind them; a custom app needs no feed for them.
 | `local://device` | `platform`; `notification_permission`: `granted` or `denied` on Android (whether notifications can show), `""` where it doesn't apply (desktop, simulator) |
 | `local://nav` | Where the layout is drawn (feature `nav_data`): `can_go_back`, `presentation` (`root`, `push`, `sheet`, `panel`, `screen`, `inline`), `pushed`, `inline`, `in_frame` (in a sheet, panel or overlay; an overlay from the top or bottom says `sheet`, from the start or end `panel`) |
 | `local://screen` | In a page screen (feature `nav_data`): `loading`, `error` ("" when none) of its `data` load |
-| `local://theme` | The pod's theme colours for the app's mode (feature `theme`): `card_border`, `accent`, `accent_surface`, `muted_surface`, `page`, `like`, `unread`, `error`; set with MCP `set_theme` |
+| `local://theme` | The pod's theme colours for the app's mode (feature `theme`): `page` (a page's background), `card` (cards and rows on it), `card_border`, `muted_text`, `accent`, `accent_surface`, `muted_surface`, `success`, `success_surface`, `error`, `error_surface`, `highlight`, `like`, `unread`, each with a light and a dark value; set with MCP `set_theme`. Bind these instead of fixed `#RRGGBB` colours, which stay the same in dark mode (decision `dark-palette`; layout writes answer `warnings` for each). |
 | `local://session` | `open`, `server`, `error`, `message`: the pod sign-in; `status`: an upstream sign-in in progress or failed |
 
 A `core://Conditional` `equals` may bind the item (`"equals": "$item.id"`). A `core://Conditional` value may be such a binding: `{"value": "${local://layouts#count}", "equals": "0", ...}`.

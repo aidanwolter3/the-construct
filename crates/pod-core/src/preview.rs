@@ -98,8 +98,23 @@ fn error(v: Value) -> Value {
             "isError": true, "structuredContent": v })
 }
 
+/// Whether `id` has the shape of a layout id (`home`, a `c-…` id, a
+/// blueprint's name): 1 to 64 lowercase letters, digits, `_` or `-`.
+/// Nothing else goes into the internal request path, where a `/`, `?` or
+/// space would reach another route or make no valid request.
+fn is_layout_id(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
 /// A layout's bundle as a client gets it: plumbing, entities, queries.
 async fn fetch(pod: &Pod, headers: &HeaderMap, id: &str) -> Result<WorkspaceSpec, Value> {
+    if !is_layout_id(id) {
+        return Err(json!({ "error": "unknown_layout", "id": id,
+            "detail": "not a layout id: home, a c-... id from list_layouts, or a blueprint" }));
+    }
     let mut forwarded = headers.clone();
     forwarded.remove(header::AUTHORIZATION);
     forwarded.remove(crate::CREDENTIAL_HEADER);
@@ -107,7 +122,7 @@ async fn fetch(pod: &Pod, headers: &HeaderMap, id: &str) -> Result<WorkspaceSpec
         .method(Method::GET)
         .uri(format!("/v1/workspaces/{id}"))
         .body(Body::empty())
-        .expect("a valid request");
+        .map_err(|e| json!({ "error": "unknown_layout", "id": id, "detail": e.to_string() }))?;
     *req.headers_mut() = forwarded;
     req.headers_mut().insert(
         protocol::FEATURES_HEADER,
@@ -490,6 +505,27 @@ pub(crate) async fn dispatch_virtual_interaction(pod: &Pod, args: &Value) -> Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_layout_ids_reach_the_request_path() {
+        for id in ["home", "c-abcdefgh23", "shell", "a_blueprint-2"] {
+            assert!(is_layout_id(id), "{id}");
+        }
+        let long = "a".repeat(65);
+        for id in [
+            "",
+            "home/events",
+            "home?x=1",
+            "home events",
+            "../v1/apps",
+            "Home",
+            "home#x",
+            "%2e%2e",
+            long.as_str(),
+        ] {
+            assert!(!is_layout_id(id), "{id}");
+        }
+    }
 
     #[test]
     fn finds_linked_layouts() {

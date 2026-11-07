@@ -17,7 +17,7 @@
       },
       {
         "align": "Center",
-        "background": "#F7F5F0",
+        "background": "${local://theme#page}",
         "content": {
           "align": "Center",
           "children": [

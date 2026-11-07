@@ -146,6 +146,42 @@ pub const THEME_TOKENS: &[(&str, &str, &str, &str)] = &[
     ("like", "#ED4956", "#FF6B7A", "likes, favourites"),
     ("unread", "#1E66D0", "#7AB0FF", "unread dots"),
     ("error", "#B3261E", "#F2B8B5", "error text"),
+    (
+        "card",
+        "#FFFFFF",
+        "#242428",
+        "cards, rows and boxes on a page; dialogs and sheets",
+    ),
+    (
+        "muted_text",
+        "#6B6B76",
+        "#A3A3AD",
+        "secondary text, chevrons, quiet icons",
+    ),
+    (
+        "success",
+        "#137333",
+        "#81C995",
+        "text of good news (done, online)",
+    ),
+    (
+        "success_surface",
+        "#E6F4EA",
+        "#1E3325",
+        "tags and banners of good news",
+    ),
+    (
+        "error_surface",
+        "#FCE8E6",
+        "#3D2321",
+        "tags and banners of errors",
+    ),
+    (
+        "highlight",
+        "#FFF3CF",
+        "#3B3320",
+        "a focused or found item's tint",
+    ),
 ];
 
 fn is_hex(c: &str) -> bool {
@@ -187,15 +223,31 @@ pub fn theme_entity(store: &Store) -> rusqlite::Result<protocol::EntityRecord> {
     Ok(e)
 }
 
-/// Change tokens (`{token: {light?, dark?}}`); `Err`: what is wrong.
-/// Blocking.
+/// The tokens the pod set itself (`{token: {light?, dark?}}`); the rest
+/// follow the defaults, so a later default reaches the pod. Blocking.
+fn theme_set(store: &Store) -> rusqlite::Result<serde_json::Map<String, Value>> {
+    Ok(store
+        .pod_setting(THEME_SETTING)?
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default())
+}
+
+/// Change tokens: `{token: {light?, dark?}}`, or the flat form the bundle
+/// carries (`{token: "#RRGGBB", token_dark: "#RRGGBB"}`); `Err`: what is
+/// wrong. Blocking.
 pub fn set_theme(store: &Store, changes: &Value) -> Result<serde_json::Map<String, Value>, String> {
     let Some(changes) = changes.as_object() else {
         return Err("\"theme\" is {token: {light?, dark?}}".into());
     };
-    let mut current = theme(store).map_err(|e| e.to_string())?;
-    for (token, v) in changes {
-        let Some(slot) = current.get_mut(token) else {
+    let mut set = theme_set(store).map_err(|e| e.to_string())?;
+    for (key, v) in changes {
+        let (token, flat_mode) = match key.strip_suffix("_dark") {
+            Some(t) if v.is_string() => (t, Some("dark")),
+            _ if v.is_string() => (key.as_str(), Some("light")),
+            _ => (key.as_str(), None),
+        };
+        if !THEME_TOKENS.iter().any(|t| t.0 == token) {
             return Err(format!(
                 "no token '{token}' (tokens: {})",
                 THEME_TOKENS
@@ -204,24 +256,64 @@ pub fn set_theme(store: &Store, changes: &Value) -> Result<serde_json::Map<Strin
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
+        }
+        let slot = set.entry(token.to_owned()).or_insert_with(|| json!({}));
+        if !slot.is_object() {
+            *slot = json!({});
+        }
+        let modes: Vec<(&str, &Value)> = match flat_mode {
+            Some(m) => vec![(m, v)],
+            None => ["light", "dark"]
+                .into_iter()
+                .filter_map(|m| v.get(m).map(|c| (m, c)))
+                .collect(),
         };
-        for mode in ["light", "dark"] {
-            match v.get(mode) {
-                None | Some(Value::Null) => {}
-                Some(Value::String(c)) if is_hex(c) => slot[mode] = json!(c),
-                Some(_) => return Err(format!("{token}.{mode} is #RRGGBB")),
+        if flat_mode.is_none() && !v.is_object() {
+            return Err(format!("{token} is {{light?, dark?}} or #RRGGBB"));
+        }
+        for (mode, c) in modes {
+            match c {
+                Value::Null => {}
+                Value::String(c) if is_hex(c) => slot[mode] = json!(c),
+                _ => return Err(format!("{token}.{mode} is #RRGGBB")),
             }
         }
     }
     store
-        .set_pod_setting(THEME_SETTING, &Value::Object(current.clone()).to_string())
+        .set_pod_setting(THEME_SETTING, &Value::Object(set).to_string())
         .map_err(|e| e.to_string())?;
-    Ok(current)
+    theme(store).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_theme_keeps_only_what_was_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("server.db")).unwrap();
+        // The nested form and the flat form the bundle carries.
+        set_theme(&store, &json!({"accent": {"light": "#112233"}})).unwrap();
+        let t = set_theme(&store, &json!({"card_dark": "#101012", "page": "#FAFAFA"})).unwrap();
+        assert_eq!(t["accent"], json!({"light": "#112233", "dark": "#D9C8FF"}));
+        assert_eq!(t["card"], json!({"light": "#FFFFFF", "dark": "#101012"}));
+        assert_eq!(t["page"]["light"], "#FAFAFA");
+        // Unset tokens aren't stored, so they follow the defaults.
+        let stored = theme_set(&store).unwrap();
+        assert_eq!(stored.len(), 3, "{stored:?}");
+        assert!(stored["accent"].get("dark").is_none());
+        for bad in [
+            json!({"nope": "#101010"}),
+            json!({"card_dark": "white"}),
+            json!({"card": 3}),
+        ] {
+            assert!(set_theme(&store, &bad).is_err(), "{bad}");
+        }
+        let e = theme_entity(&store).unwrap();
+        assert_eq!(e.get_str("card_dark"), Some("#101012"));
+        assert_eq!(e.get_str("highlight"), Some("#FFF3CF"));
+    }
 
     #[test]
     fn a_gesture_around_a_filling_node_fills_the_screen() {

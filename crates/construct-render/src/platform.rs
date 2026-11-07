@@ -85,6 +85,19 @@ pub enum PlatformEvent {
     Notification(serde_json::Value),
 }
 
+impl PlatformEvent {
+    /// The event's name, for logs: never its contents (a link can carry a
+    /// code, a message anything).
+    pub fn name(&self) -> &'static str {
+        match self {
+            PlatformEvent::Link(_) => "link",
+            PlatformEvent::Picked(_) => "picked",
+            PlatformEvent::Message(_) => "message",
+            PlatformEvent::Notification(_) => "notification",
+        }
+    }
+}
+
 /// Why the window wants another session.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Reopen {

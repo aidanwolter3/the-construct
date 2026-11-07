@@ -177,9 +177,12 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ("status_text", "e.g. Connected to runner.example"),
                 (
                     "summary_text",
-                    "e.g. 2 working · 1 needs you, or Nothing running",
+                    "e.g. 2 working · 1 needs you, or Nothing running (idle sessions don't count)",
                 ),
-                ("working_count", "active sessions not waiting for you"),
+                (
+                    "working_count",
+                    "sessions starting or working (not idle ones)",
+                ),
                 ("needs_you_count", "sessions waiting for you"),
                 ("color", "#RRGGBB for the summary"),
                 (
@@ -263,7 +266,10 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ("paused", "true while paused"),
                 ("can_pause", "enabled and not paused"),
                 ("state_text", "Active, Paused or Off"),
-                ("next_run_text", "e.g. in 3 h · Sat 03:00, or Paused"),
+                (
+                    "next_run_text",
+                    "e.g. in 3 h · Sat 03:00 (in the schedule's timezone, else the pod's), or Paused",
+                ),
                 ("ran", "true once it has a last run"),
                 ("last_status", "finished, failed, missed, ..."),
                 ("last_status_text", "e.g. Finished"),

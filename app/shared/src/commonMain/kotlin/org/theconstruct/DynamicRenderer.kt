@@ -208,7 +208,7 @@ fun RenderUiNode(
 
         is UiNode.Carousel -> NodeCarousel(node, entities, onDispatch, item, modifier)
 
-        is UiNode.IconButton -> NodeIconButton(node, item, dispatch, modifier)
+        is UiNode.IconButton -> NodeIconButton(node, entities, item, dispatch, modifier)
 
         is UiNode.Chip -> NodeChip(node, entities, item, modifier)
 
@@ -434,10 +434,11 @@ private fun ItemList(
             key(item["uri"]) {
                 // Phone: full width. Wider screens: a centered, readable column.
                 var mod = Modifier.widthIn(max = FEED_MAX_WIDTH).fillMaxWidth()
-                val fg = if (i == focused) parseHexColor(focus?.contentColor) else null
+                fun focusColor(c: String?) = c?.let { parseHexColor(interpolate(it, entities, item).trim()) }
+                val fg = if (i == focused) focusColor(focus?.contentColor) else null
                 if (i == focused) {
                     mod = mod.bringIntoViewRequester(focusRequester).onSizeChanged { focusHeight = it.height }.testTag("list-focus")
-                    parseHexColor(focus?.background)?.let { mod = mod.background(it) }
+                    focusColor(focus?.background)?.let { mod = mod.background(it) }
                 }
                 mod = mod.padding(horizontal = node.paddingHDp.dp).padding(start = indentDp(node.indent, item).dp)
                 if (fg != null) {

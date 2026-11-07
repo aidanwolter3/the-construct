@@ -794,14 +794,16 @@ pub fn expand_with(
 /// A layout file's `core://Use`s of server components expanded (strict),
 /// from the components embedded in this build: what the pod records.
 pub fn expand_file(catalog: &Catalog, doc: &Value) -> Result<Value, LayoutError> {
-    expand_in(
-        None,
-        catalog,
-        doc,
-        None,
-        Mode::Strict,
-        catalog.component_defs(),
-    )
+    expand_file_with(catalog, doc, catalog.component_defs())
+}
+
+/// [`expand_file`] from these component definitions.
+pub fn expand_file_with(
+    catalog: &Catalog,
+    doc: &Value,
+    defs: &Pending,
+) -> Result<Value, LayoutError> {
+    expand_in(None, catalog, doc, None, Mode::Strict, defs)
 }
 
 fn expand_in(

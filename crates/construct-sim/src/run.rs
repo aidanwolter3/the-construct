@@ -293,6 +293,10 @@ impl Runner {
                 self.session.resize(vp);
                 done("")
             }
+            Step::Dark(dark) => {
+                self.session.set_dark(*dark);
+                done("")
+            }
             Step::Offline | Step::Online => {
                 let pod = fixture_pod.expect("fixture mode");
                 pod.set_online(matches!(step, Step::Online));

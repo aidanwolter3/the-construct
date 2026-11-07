@@ -10,7 +10,8 @@
 //! `~/Library/Application Support/The Construct` on macOS, else
 //! `$XDG_CONFIG_HOME/the-construct` or `~/.config/the-construct`), run by
 //! the engine with its cache there (`engine/`), so it opens offline as last
-//! seen; its session in the Keychain on macOS, else in `secure.json` there.
+//! seen; its session and last pod code in the Keychain on macOS, else in
+//! `secure.json` there (readable by you only).
 //! Without a session, the pod's sign-in screen (a pod code, or a temporary
 //! pod), staging unless `CONSTRUCT_POD_URL` says otherwise. Leave pod in
 //! Settings goes back to it, with the last code filled in. Signing in to

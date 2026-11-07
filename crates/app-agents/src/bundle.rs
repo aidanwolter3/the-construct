@@ -50,7 +50,33 @@ fn needs_you(s: &Session) -> bool {
     )
 }
 
-/// A time in the pod's zone, e.g. `Sat 03:00`.
+/// Whether `s` is doing something right now (starting or working). Idle
+/// sessions are not: a sandbox's Remote Control keeps an idle standby
+/// session open, and a finished run's session stays open idle.
+fn is_working(s: &Session) -> bool {
+    matches!(s.status.as_str(), state::STARTING | state::WORKING)
+}
+
+/// Where `s` sorts in `agents:sessions`: waiting for you, then working,
+/// then idle, then ended.
+fn rank(s: &Session) -> u8 {
+    if needs_you(s) {
+        0
+    } else if is_working(s) {
+        1
+    } else if s.is_active() {
+        2
+    } else {
+        3
+    }
+}
+
+/// The zone a schedule's times read in: its own `timezone`, else the pod's.
+fn schedule_zone(name: &str, pod: &TimeZone) -> TimeZone {
+    pod_core::tz::parse(name).unwrap_or_else(|_| pod.clone())
+}
+
+/// A time in zone `tz`, e.g. `Sat 03:00`.
 fn local(ms: i64, tz: &TimeZone) -> String {
     Timestamp::from_millisecond(ms)
         .map(|t| t.to_zoned(tz.clone()).strftime("%a %H:%M").to_string())
@@ -67,9 +93,8 @@ pub fn status(st: Option<&(State, Health)>, host: &str, now_ms: i64) -> EntityRe
             "updated_text": "",
         }));
     };
-    let active: Vec<&Session> = st.sessions.values().filter(|s| s.is_active()).collect();
-    let needs = active.iter().filter(|s| needs_you(s)).count();
-    let working = active.len() - needs;
+    let needs = st.sessions.values().filter(|s| needs_you(s)).count();
+    let working = st.sessions.values().filter(|s| is_working(s)).count();
     let mut parts = Vec::new();
     if working > 0 {
         parts.push(format!("{working} working"));
@@ -153,8 +178,8 @@ pub fn session(s: &Session, now_ms: i64) -> EntityRecord {
     }))
 }
 
-/// The `sessions` feed: `agents:status` and `agents:sessions` (active
-/// first, the ones that need you before them, then newest first).
+/// The `sessions` feed: `agents:status` and `agents:sessions` (the ones
+/// that need you, then working, idle and ended ones, each newest first).
 pub fn sessions(st: Option<&(State, Health)>, host: &str, now_ms: i64) -> DataBundle {
     let mut b = DataBundle::default();
     b.entities
@@ -164,13 +189,7 @@ pub fn sessions(st: Option<&(State, Health)>, host: &str, now_ms: i64) -> DataBu
     let mut list: Vec<&Session> = st
         .map(|(s, _)| s.sessions.values().collect())
         .unwrap_or_default();
-    list.sort_by_key(|s| {
-        (
-            !s.is_active(),
-            !needs_you(s),
-            -s.updated_at.max(s.started_at),
-        )
-    });
+    list.sort_by_key(|s| (rank(s), -s.updated_at.max(s.started_at)));
     let mut order = Vec::new();
     for s in list {
         let uri = format!("agents://sessions/{}", s.id);
@@ -244,7 +263,8 @@ pub fn checks(st: Option<&(State, Health)>) -> DataBundle {
     b
 }
 
-/// The `schedules` feed: `agents:schedules`, by name.
+/// The `schedules` feed: `agents:schedules`, by name. Times read in each
+/// schedule's own zone, else the pod's `tz`.
 pub fn schedules(st: Option<&(State, Health)>, now_ms: i64, tz: &TimeZone) -> DataBundle {
     let mut b = DataBundle::default();
     let list: Vec<_> = st
@@ -263,7 +283,11 @@ pub fn schedules(st: Option<&(State, Health)>, now_ms: i64, tz: &TimeZone) -> Da
         let next = match sc.next_run {
             _ if !sc.enabled => "Off".to_owned(),
             _ if sc.paused => "Paused".to_owned(),
-            Some(t) => format!("{} · {}", text::until(t, now_ms), local(t, tz)),
+            Some(t) => format!(
+                "{} · {}",
+                text::until(t, now_ms),
+                local(t, &schedule_zone(&sc.timezone, tz))
+            ),
             None => "Not scheduled".to_owned(),
         };
         let last = sc.last_run.clone().unwrap_or_default();
@@ -463,5 +487,87 @@ mod tests {
         assert_eq!(e.get_str("next_run_text"), Some("in 3 h · Fri 11:00"));
         assert_eq!(e.get_str("state_text"), Some("Active"));
         assert_eq!(e.get("can_pause"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn idle_sessions_are_not_working() {
+        let (mut s, h) = st();
+        // A sandbox's idle standby session and a finished run's open one.
+        for (id, at) in [("idle-standby", 9), ("idle-run", 3)] {
+            s.sessions.insert(
+                id.into(),
+                Session {
+                    id: id.into(),
+                    status: state::IDLE.into(),
+                    started_at: at * 1000,
+                    updated_at: at * 1000,
+                    ..Default::default()
+                },
+            );
+        }
+        let b = sessions(Some(&(s.clone(), h.clone())), "runner.example", 120_000);
+        let st_e = &b.entities[STATUS_URI];
+        assert_eq!(st_e.get("working_count"), Some(&json!(1)));
+        assert_eq!(st_e.get("needs_you_count"), Some(&json!(1)));
+        assert_eq!(
+            st_e.get_str("summary_text"),
+            Some("1 working · 1 needs you")
+        );
+        assert_eq!(
+            b.queries[crate::SESSIONS_QUERY],
+            [
+                "agents://sessions/c",
+                "agents://sessions/b",
+                "agents://sessions/idle-standby",
+                "agents://sessions/idle-run",
+                "agents://sessions/a",
+            ]
+        );
+
+        // Only idle and ended sessions: nothing is running.
+        s.sessions
+            .retain(|_, x| !matches!(x.id.as_str(), "b" | "c"));
+        let e = status(Some(&(s, h)), "runner.example", 120_000);
+        assert_eq!(e.get("working_count"), Some(&json!(0)));
+        assert_eq!(e.get("needs_you_count"), Some(&json!(0)));
+        assert_eq!(e.get_str("summary_text"), Some("Nothing running"));
+        assert_eq!(e.get_str("color"), Some(GREEN));
+    }
+
+    #[test]
+    fn schedule_times_read_in_the_schedules_zone() {
+        // 2026-11-08 13:12 UTC, a Sunday: 06:12 in Denver.
+        let next: Timestamp = "2026-11-08T13:12:00Z".parse().unwrap();
+        let next = next.as_millisecond();
+        let now = next - (14 * 3600 + 3 * 60) * 1000;
+        let mut s = State::default();
+        for (name, zone) in [
+            ("denver", "America/Denver"),
+            ("unset", ""),
+            ("bad", "Nowhere/Land"),
+        ] {
+            s.schedules.insert(
+                name.into(),
+                Schedule {
+                    name: name.into(),
+                    cron: "12 6 * * *".into(),
+                    timezone: zone.into(),
+                    enabled: true,
+                    next_run: Some(next),
+                    ..Default::default()
+                },
+            );
+        }
+        let berlin = pod_core::tz::parse("Europe/Berlin").unwrap();
+        let b = schedules(Some(&(s, Health::default())), now, &berlin);
+        let text = |n: &str| {
+            b.entities[&format!("agents://schedules/{n}")]
+                .get_str("next_run_text")
+                .map(str::to_owned)
+        };
+        assert_eq!(text("denver").as_deref(), Some("in 14 h 3 min · Sun 06:12"));
+        // No zone of its own (or an unknown one): the pod's.
+        assert_eq!(text("unset").as_deref(), Some("in 14 h 3 min · Sun 14:12"));
+        assert_eq!(text("bad").as_deref(), Some("in 14 h 3 min · Sun 14:12"));
     }
 }

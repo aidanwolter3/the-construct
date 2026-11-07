@@ -1187,7 +1187,7 @@ async fn components_are_defined_used_and_expanded() {
         .tool(&access, "get_component", json!({"name": "pod:card"}))
         .await;
     assert!(!err);
-    assert_eq!(got["history"][0]["note"], "Copied from core:card v1");
+    assert_eq!(got["history"][0]["note"], "Copied from core:card v2");
     let (err, d) = env
         .tool(&access, "delete_component", json!({"name": "pod:card"}))
         .await;
@@ -1536,6 +1536,32 @@ async fn agents_preview_a_layout_and_tap_it() {
 /// A preview draws only what a saved layout's value checks allow: an icon of
 /// 65535 dp (a 4 GB mask for the server's renderer) is refused, in a draft
 /// and in a saved layout whose component grew it after the layout was saved.
+#[tokio::test]
+async fn previews_refuse_ids_that_are_not_layout_ids() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+    // "home/events" would reach the event stream (and never end), the
+    // others make no valid request; each is refused before it is built.
+    for (key, id) in [
+        ("id", "home/events"),
+        ("id", "home events"),
+        ("id", "home?x=1"),
+        ("data_from", "home/events"),
+    ] {
+        let mut args = json!({ key: id });
+        if key == "data_from" {
+            args["layout"] = json!({"type": "core://Page", "id": "d",
+                "root": {"type": "core://Text", "style": "Body", "value_expr": "Hi"}});
+        }
+        let call = preview_call(&env, &access, "render_layout_preview", args);
+        let (err, _, text) = tokio::time::timeout(std::time::Duration::from_secs(20), call)
+            .await
+            .unwrap_or_else(|_| panic!("{id}: the preview didn't answer"));
+        assert!(err && text.contains("unknown_layout"), "{id}: {text}");
+    }
+}
+
 #[tokio::test]
 async fn previews_refuse_values_past_a_saved_layouts_bounds() {
     let env = env().await;

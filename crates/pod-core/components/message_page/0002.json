@@ -1,0 +1,86 @@
+{
+  "note": "Theme colours: the page token, so it follows dark mode",
+  "component": {
+    "doc": "A whole page with a message in the middle and actions under it (a welcome, an error with Try again).",
+    "params": [
+      {
+        "name": "title",
+        "type": "text",
+        "doc": "A large title (left out when empty).",
+        "default": ""
+      },
+      {
+        "name": "body",
+        "type": "text",
+        "doc": "The message.",
+        "required": true
+      },
+      {
+        "name": "background",
+        "type": "text",
+        "doc": "Page colour.",
+        "default": "${local://theme#page}"
+      }
+    ],
+    "children": true,
+    "template": {
+      "type": "core://Box",
+      "fill": true,
+      "background": "$arg.background",
+      "align": "Center",
+      "padding_h_dp": 24,
+      "content": {
+        "type": "core://Column",
+        "align": "Center",
+        "spacing_dp": 8,
+        "children": [
+          {
+            "type": "core://IfArg",
+            "arg": "title",
+            "then": {
+              "type": "core://Text",
+              "value_expr": "$arg.title",
+              "style": "Display"
+            }
+          },
+          {
+            "type": "core://Text",
+            "value_expr": "$arg.body",
+            "style": "Secondary"
+          },
+          {
+            "type": "core://Row",
+            "align": "Center",
+            "spacing_dp": 8,
+            "children": [
+              {
+                "type": "core://Children"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "title": "The Construct",
+          "body": "Ask your agent to build anything"
+        },
+        "children": [
+          {
+            "type": "core://IconButton",
+            "icon": "settings",
+            "content_description": "Settings",
+            "on_click": {
+              "intent": "action.navigation.open",
+              "layout": "settings",
+              "presentation": "Panel"
+            }
+          }
+        ],
+        "note": "a blank home"
+      }
+    ]
+  }
+}

@@ -107,7 +107,10 @@ speed at release over the average. A drag's scrolling is applied once per frame,
 `/v1/apps/<id>/versions`; `pin_version` draws that version (`/v1/apps/<id>/versions/<n>`'s layout over the
 layout's latest data) wherever the layout shows, home included, until `follow_latest`, and new versions published
 meanwhile don't replace it; the engine keeps pins across restarts (`set_pinned_version`) and forgets them on Leave
-pod. The session follows the platform's light or dark mode (`Session::set_dark`). `core://Sticky` pins at the top of its scrolling view, over the page
+pod. The session follows the platform's light or dark mode (`Session::set_dark`). Dark mode draws the theme's dark palette
+(decision `dark-palette`): the background is the `page` token, dialogs, sheets, panels and the edit bar draw on
+`card`, and each mode takes only its own token values from `core://theme` (`<token>`, `<token>_dark`), any token
+the pod sends included. `core://Sticky` pins at the top of its scrolling view, over the page
 background, until its parent scrolls away; one that rests within 24 points of the view's top (a column's padding)
 pins where it rests, so it never moves (the shared UI moves it up to the top first).
 
@@ -124,11 +127,15 @@ With no file it opens your pod as the phone app does (`pods`, shared with Androi
 `~/.config/the-construct`), with the engine's cache next to it (`engine/<server>/`) and its session in the login
 Keychain on macOS, else in `secure.json` there (readable by you only); without a session, the pod's sign-in screen
 (staging, or `CONSTRUCT_POD_URL`). `local:servers` offers Staging, Local (`http://127.0.0.1:8080`) and
-`CONSTRUCT_POD_URL` when it is another; `set_server` opens that server (its session is in the secure store already,
-and `pod.json` keeps each server's last code). The window follows the system's light or dark mode (winit's theme).
+`CONSTRUCT_POD_URL` when it is another; `set_server` opens that server (its session and last pod code are in the
+secure store already). `pod.json` keeps only the server: a pod code is the login itself, so it lives in the secure store
+and never in `pod.json` or a log. Plain `http://` is refused unless the server is this machine, 10.0.2.2 or a private
+network address (10/8, 172.16/12, 192.168/16, link-local, IPv6 unique local): a refused `CONSTRUCT_POD_URL` or saved
+server falls back to staging, and `set_server` to one stays put. The window follows the system's light or dark mode (winit's theme).
 Signing in to Pixelfed from Settings opens the system browser, and the redirect comes back to a loopback listener
 the engine runs (`http://127.0.0.1:47823/callback`, another port when that one is busy; below).
-Click, scroll, type, Escape for Back; each interaction's effects are logged. Copy and paste use
+Click, scroll, type, Escape for Back; each interaction's effects are logged by name only (never a typed value or a
+token). Copy and paste use
 the system clipboard through `pbcopy`/`pbpaste` on macOS and `wl-copy`, `xclip` or `xsel` on Linux. It draws with
 Metal on macOS and Vulkan (or GL) on Linux; on a headless Linux box, `Xvfb` plus Mesa's `mesa-vulkan-drivers`
 (lavapipe) is enough.
@@ -147,11 +154,11 @@ says so rather than uninstall (which would sign you out). `cd app && ./gradlew :
 the Compose app with the same data.
 
 The app opens a pod live (below), with the engine's cache in its private files (`engine/<server>/`). It keeps its
-pod there too (`pod.json`: the server, the last pod code used and the other servers' last codes), else uses the main app's server
-(`shared_prefs/server.xml`, else staging). Sessions are kept as the main app keeps them (`KeystoreStore`, through
-JNI: AES/GCM with the Android keystore key `construct_session_key`, in the private SharedPreferences file
-`construct_secure`), so the main app's sign-in carries over, and a session token an older build kept in `pod.json`
-moves there on the first start. Without a session the pod answers its sign-in screen (a pod code box, Open pod and
+pod's server there too (`pod.json`), else uses the main app's server (`shared_prefs/server.xml`, else staging).
+Sessions, and the last pod code used with each server, are kept as the main app keeps sessions (`KeystoreStore`,
+through JNI: AES/GCM with the Android keystore key `construct_session_key`, in the private SharedPreferences file
+`construct_secure`), so the main app's sign-in carries over; a session token or pod codes an older build kept in
+`pod.json` move there on the first start. Without a session the pod answers its sign-in screen (a pod code box, Open pod and
 Try a temporary pod), with the last code used filled in. Signing in (`action.auth.session`) keeps the session;
 Leave pod (`leave_pod`, after its `action.confirm` dialog) forgets it and shows the sign-in screen again, as does a
 session the pod no longer knows. A `layout.json` pushed to the external files directory (`{"layout", "data"}`) is
@@ -230,7 +237,8 @@ rounded) and drawn over their placeholder once they arrive; the window redraws t
 
 Writes go to the engine's outbox, as the shared UI sends them (`Loader::take`): `$form.<f>`, `$form?.<f>` and one
 `$nonce` per tap are bound when the tap runs (a blank `$form.<f>` sends nothing). `action.mutation.optimistic`
-changes the entity at once (every `value_expr` against the entity as it was) and the engine keeps the write until
+changes the entity at once (every `value_expr` against the entity as it was, in the expression language client-core
+uses, `protocol::expr`; one that fails changes nothing) and the engine keeps the write until
 the pod has it, offline or through a failed POST, with `$value` as the new value; a refusal puts the fields back.
 `action.mutation.create` adds its entity to its list at once, and the engine loads its list again once the pod has
 it (a refusal takes it out). A loader without an outbox (`PodClient`) POSTs on a background thread instead
@@ -306,7 +314,9 @@ device state and answers the same, with the interaction's effects; a tap that wo
 the value checks a saved layout gets (sizes, icons, tints; `validate::check_node_values`), a draft's and a saved
 layout's alike, since a component updated after a layout was saved isn't checked against it: a preview that fails
 them answers `invalid_layout`, and a linked layout that fails them isn't loaded. The renderer also draws no icon
-mask past 2048 px a side. Code: `pod_core::preview`.
+mask past 2048 px a side. An `id`, `data_from` or linked layout that isn't shaped like a layout id (lowercase
+letters, digits, `_` and `-`, at most 64) answers `unknown_layout` before any request is built. Code:
+`pod_core::preview`.
 
 ## Tests
 

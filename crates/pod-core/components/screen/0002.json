@@ -1,0 +1,170 @@
+{
+  "note": "Theme colours: the error token for a load error, so it follows dark mode",
+  "component": {
+    "doc": "A screen the way a workspace screen looks: a bar with Back, the title and a spinner while its data loads, the load's error with Try again, the content (scrolling, following its end after an action) and an optional footer below a divider. Children: the content, then the footer.",
+    "params": [
+      {
+        "name": "title",
+        "type": "text",
+        "doc": "The screen's title (bindings allowed).",
+        "required": true
+      },
+      {
+        "name": "data",
+        "type": "text",
+        "doc": "The screen's data path (for Try again).",
+        "default": ""
+      },
+      {
+        "name": "has_footer",
+        "type": "bool",
+        "doc": "The second child is a footer.",
+        "default": false
+      }
+    ],
+    "children": true,
+    "template": {
+      "type": "core://Column",
+      "children": [
+        {
+          "type": "core://Row",
+          "padding_v_dp": 4,
+          "spacing_dp": 0,
+          "children": [
+            {
+              "type": "core://IconButton",
+              "icon": "arrow_back",
+              "content_description": "Back",
+              "tag": "screen-back",
+              "on_click": {
+                "intent": "action.navigation.back"
+              }
+            },
+            {
+              "type": "core://Text",
+              "value_expr": "$arg.title",
+              "style": "Title"
+            },
+            {
+              "type": "core://Conditional",
+              "value": "${local://screen#loading}",
+              "content": {
+                "type": "core://Progress",
+                "size_dp": 16
+              }
+            },
+            {
+              "type": "core://Spacer",
+              "size_dp": 12
+            }
+          ]
+        },
+        {
+          "type": "core://Divider"
+        },
+        {
+          "type": "core://IfArg",
+          "arg": "data",
+          "then": {
+            "type": "core://Conditional",
+            "value": "${local://screen#error}",
+            "content": {
+              "type": "core://Row",
+              "padding_h_dp": 16,
+              "padding_v_dp": 4,
+              "spacing_dp": 8,
+              "children": [
+                {
+                  "type": "core://Box",
+                  "content_color": "${local://theme#error}",
+                  "content": {
+                    "type": "core://Text",
+                    "value_expr": "${local://screen#error}",
+                    "style": "Caption"
+                  }
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "type": "core://Button",
+                  "label": "Try again",
+                  "on_click": {
+                    "intent": "action.data.load",
+                    "path": "$arg.data"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "core://Scroll",
+          "follow_end": true,
+          "content": {
+            "type": "core://Children",
+            "at": 0
+          }
+        },
+        {
+          "type": "core://IfArg",
+          "arg": "has_footer",
+          "then": {
+            "type": "core://Fragment",
+            "children": [
+              {
+                "type": "core://Divider"
+              },
+              {
+                "type": "core://Column",
+                "padding_h_dp": 12,
+                "padding_v_dp": 8,
+                "children": [
+                  {
+                    "type": "core://Children",
+                    "at": 1
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "examples": [
+      {
+        "args": {
+          "title": "Post",
+          "data": "/v1/example/post"
+        },
+        "children": [
+          {
+            "type": "core://Text",
+            "value_expr": "A post",
+            "style": "Body"
+          }
+        ],
+        "note": "a screen with data"
+      },
+      {
+        "args": {
+          "title": "Comments",
+          "has_footer": true
+        },
+        "children": [
+          {
+            "type": "core://Text",
+            "value_expr": "Comments",
+            "style": "Body"
+          },
+          {
+            "type": "core://TextField",
+            "field": "c",
+            "placeholder": "Add a comment"
+          }
+        ],
+        "note": "with a footer"
+      }
+    ]
+  }
+}
