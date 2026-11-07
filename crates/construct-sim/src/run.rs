@@ -87,6 +87,8 @@ pub struct Runner {
     opts: Options,
     /// Links `action.link.open` opened (`assert-link`).
     pub links: Vec<String>,
+    /// Files `pick` queued for the next media picker tap.
+    picks: Vec<std::path::PathBuf>,
 }
 
 /// A file name part from a shot's name.
@@ -115,6 +117,7 @@ impl Runner {
             source,
             opts,
             links: Vec::new(),
+            picks: Vec::new(),
         };
         if matches!(r.source, Source::Live { .. }) {
             let timeout = r.opts.timeout;
@@ -224,10 +227,13 @@ impl Runner {
                 let o = self.session.type_text(&field, text);
                 self.effects(o)
             }
-            Step::Pick(_) => Err(
-                "'pick' isn't supported yet: the Rust engine draws a MediaPicker's add tile but opens no picker"
-                    .into(),
-            ),
+            Step::Pick(paths) => {
+                // Relative paths resolve against the repository root.
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let root = crate::fixture::repo_root(&cwd).unwrap_or(cwd);
+                self.picks = paths.iter().map(|p| root.join(p)).collect();
+                done(&format!("{} queued for the next picker", self.picks.len()))
+            }
             Step::Swipe(dir, target) => self.swipe(*dir, target),
             Step::DragDown { points, target } => {
                 let (x, y) = self.drag_point(target)?;
@@ -586,6 +592,18 @@ impl Runner {
                     }
                     self.reopen()?;
                     notes.push("signed in".to_owned());
+                    continue;
+                }
+                Effect::PickMedia { max, .. } => {
+                    // The queued files, at most `max`; none is a cancelled pick.
+                    let mut files = std::mem::take(&mut self.picks);
+                    files.truncate(*max as usize);
+                    let n = files.len();
+                    self.session.picked(files.into_iter().map(Ok).collect());
+                    if n > 0 && self.session.staging == 0 {
+                        return Err("nothing in this mode stages photos".into());
+                    }
+                    notes.push(format!("picked {n}"));
                     continue;
                 }
                 Effect::LeftPod => {
