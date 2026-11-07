@@ -669,8 +669,18 @@ impl<'i> Build<'_, 'i> {
         .map_err(|e| RenderError(format!("layout failed: {e}")))
     }
 
-    /// Builds `n`; `None` when it draws nothing (a hidden conditional).
+    /// Builds `n`, sized for where it sits in its parent ([`placed`]);
+    /// `None` when it draws nothing (a hidden conditional).
     fn node<'c>(&mut self, n: &'c UiNode, b: &B<'c>) -> Option<usize> {
+        let out = self.build_node(n, b)?;
+        let node = self.elems[out].node;
+        let style = self.tree.style(node).cloned().unwrap_or_default();
+        let _ = self.tree.set_style(node, placed(style, n, b.axis));
+        Some(out)
+    }
+
+    /// Builds `n` itself ([`Build::node`] places it).
+    fn build_node<'c>(&mut self, n: &'c UiNode, b: &B<'c>) -> Option<usize> {
         let ctx = b.ctx;
         let theme = self.theme.clone();
         let out = match n {
@@ -1574,25 +1584,35 @@ impl<'i> Build<'_, 'i> {
                         ..b.child(format!("p{i}"), Axis::Column)
                     };
                     if let Some(k) = self.node(item_template, &ib) {
+                        // A page is the box's width, as tall as the track.
                         let mut ps = column(0, pad(0, 0), AlignItems::STRETCH);
-                        ps.size = Size {
-                            width: percent(1.0),
-                            height: percent(1.0),
-                        };
+                        ps.size.width = percent(1.0);
                         ps.flex_shrink = 0.0;
+                        // Its content fills it (the shared UI's `fillMaxSize`),
+                        // whatever its own aspect ratio.
                         let node = self.elems[k].node;
                         let mut st = self.tree.style(node).cloned().unwrap_or_default();
                         st.flex_grow = 1.0;
+                        st.flex_shrink = 1.0;
                         st.align_self = Some(AlignSelf::STRETCH);
+                        st.aspect_ratio = None;
+                        st.size = Size {
+                            width: auto(),
+                            height: auto(),
+                        };
+                        st.min_size.height = length(0.0);
                         let _ = self.tree.set_style(node, st);
                         pages.push(self.push(ps, vec![k], Paint::None, None, false));
                     }
                 }
+                // As tall as the box (its height comes from its width and
+                // aspect ratio), the pages side by side; no percentage
+                // heights, which an aspect-ratio box can leave unresolved.
                 let mut track_style = row(0, pad(0, 0), AlignItems::STRETCH);
-                track_style.size = Size {
-                    width: percent(1.0),
-                    height: percent(1.0),
-                };
+                track_style.flex_grow = 1.0;
+                track_style.flex_shrink = 1.0;
+                track_style.flex_basis = length(0.0);
+                track_style.min_size.height = length(0.0);
                 let track = self.push(track_style, pages, Paint::None, None, false);
                 self.elems[track].pager = Some(id.clone());
                 let mut kids = vec![track];
@@ -1635,11 +1655,17 @@ impl<'i> Build<'_, 'i> {
                 }
                 let mut style = column(0, pad(0, 0), AlignItems::STRETCH);
                 style.aspect_ratio = Some(aspect as f32);
+                // A full width (stretching doesn't apply to a box with an
+                // aspect ratio), its height from the ratio.
+                style.size.width = percent(1.0);
                 let mut sem = self.sem(b, n, None, None);
                 sem.id = id.clone();
                 let frame = self.push(style, kids, Paint::None, Some(sem), true);
+                // In a column that stretches it (an aspect ratio alone, placed
+                // in a parent's column, can leave it no width).
+                let outer = column(0, pad(0, 0), AlignItems::STRETCH);
                 if count <= 1 {
-                    return Some(frame);
+                    return Some(self.push(outer, vec![frame], Paint::None, None, false));
                 }
                 // Dots below the image, as the shared UI draws them.
                 let mut dots = Vec::new();
@@ -1673,7 +1699,6 @@ impl<'i> Build<'_, 'i> {
                     gestures: BTreeMap::new(),
                 };
                 let dots = self.push(ds, dots, Paint::None, Some(sem), false);
-                let outer = column(0, pad(0, 0), AlignItems::STRETCH);
                 self.push(outer, vec![frame, dots], Paint::None, None, false)
             }
             UiNode::Progress { size_dp } => {
@@ -1966,9 +1991,6 @@ impl<'i> Build<'_, 'i> {
                 self.placeholder(t)
             }
         };
-        let node = self.elems[out].node;
-        let style = self.tree.style(node).cloned().unwrap_or_default();
-        let _ = self.tree.set_style(node, placed(style, n, b.axis));
         Some(out)
     }
 

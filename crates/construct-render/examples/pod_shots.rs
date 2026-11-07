@@ -3,7 +3,7 @@
 //! drawn on the CPU at 390 × 844 @3, as the simulator's phone, to compare
 //! with `:desktopApp:simulate -PbaseUrl`. Script steps, `;`-separated:
 //! `open <layout>`, `present <layout> <Sheet|Panel|Overlay> [edge]`, `tap <text or id>`, `type <field> <text>`, `scroll <dy>`,
-//! `back`, `wait <ms>` (images keep loading meanwhile), `shot <name>`.
+//! `back`, `wait <ms>` (images keep loading meanwhile), `shot <name>`, `images` (the frame's images).
 
 use construct_render::Viewport;
 use construct_render::interact::Target;
@@ -53,9 +53,14 @@ fn main() {
                 .dispatch(&json!({ "intent": "action.navigation.back" }))
                 .map(|o| o.effects),
             "wait" => {
-                // Draw once so the frame's images are asked for, then wait.
-                let _ = s.render_cpu();
-                std::thread::sleep(std::time::Duration::from_millis(arg.parse().unwrap_or(1000)));
+                // Draw now and then, as a window does when data or images
+                // arrive, so the frame's images are asked for.
+                let until = std::time::Instant::now()
+                    + std::time::Duration::from_millis(arg.parse().unwrap_or(1000));
+                while std::time::Instant::now() < until {
+                    let _ = s.scene();
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
                 Ok(Vec::new())
             }
             "shot" => {
@@ -64,6 +69,23 @@ fn main() {
                 let path = format!("{out}/{arg}.png");
                 std::fs::write(&path, construct_render::encode::png(&img)).unwrap();
                 println!("{step}: {path}");
+                Ok(Vec::new())
+            }
+            "images" => {
+                // The images the frame draws: url, box, whether loaded.
+                let scene = s.scene().expect("scene").clone();
+                println!("{} draws", scene.draws.len());
+                for d in &scene.draws {
+                    if let construct_render::scene::Draw::Image(i) = d {
+                        println!(
+                            "image {} at {:?} clip {:?} {}",
+                            i.url,
+                            i.rect,
+                            i.clip,
+                            s.images.status(&i.url)
+                        );
+                    }
+                }
                 Ok(Vec::new())
             }
             other => panic!("unknown step {other}"),

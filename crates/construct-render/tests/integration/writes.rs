@@ -291,3 +291,37 @@ fn a_carousel_pages_on_a_swipe() {
     s.release_pager(&id, 0.0);
     assert!(s.scene().unwrap().find_text("3/3").is_some());
 }
+
+#[test]
+fn a_carousel_of_one_fills_its_width() {
+    // As a post screen has it: in a list item's column, in a scroll.
+    let root = json!({ "type": "core://Scroll", "content": { "type": "core://Column", "children": [
+        { "type": "core://List", "query_key": "post", "item_template": { "type": "core://Column", "children": [
+            { "type": "core://Text", "style": "Body", "value_expr": "Aidan" },
+            { "type": "core://Carousel", "tag": "c", "aspect_field": "aspect_ratio", "items": "$item.media_uris",
+              "item_template": { "type": "core://Image", "url": "$item.url", "blurhash": "$item.blurhash" } }
+        ] } }
+    ] } });
+    for media in [vec!["x://m/1"], vec!["x://m/1", "x://m/2"]] {
+        let d = json!({ "entities": {
+            "x://p/1": { "media_uris": media },
+            "x://m/1": { "url": "https://media.example/1.jpg", "aspect_ratio": 1.0 },
+            "x://m/2": { "url": "https://media.example/2.jpg", "aspect_ratio": 1.0 } },
+            "queries": { "post": ["x://p/1"] } });
+        let (mut s, _) = session(root.clone(), d, false);
+        let scene = s.scene().unwrap();
+        let img = scene
+            .draws
+            .iter()
+            .find_map(|d| match d {
+                construct_render::scene::Draw::Image(i) => Some(i.rect),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            (img[2] - Viewport::PHONE.width).abs() < 0.5 && (img[3] - img[2]).abs() < 0.5,
+            "{} pages: {img:?}",
+            media.len()
+        );
+    }
+}

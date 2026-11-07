@@ -8,7 +8,6 @@
 
 use protocol::{DataBundle, EntityRecord, UiNode, WorkspaceSpec};
 use serde_json::{Value, json};
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -614,17 +613,23 @@ const IMAGE_WORKERS: usize = 4;
 /// Images are fetched without the session (the pod serves media from public
 /// paths); one that fails keeps its placeholder.
 pub fn fetch_images(store: &ImageStore) {
-    let (tx, rx) = mpsc::channel::<String>();
-    let rx = Arc::new(Mutex::new(rx));
+    // Newest first: what is on screen now goes before what scrolled past.
+    let queue: Arc<(Mutex<Vec<String>>, std::sync::Condvar)> = Arc::default();
     for _ in 0..IMAGE_WORKERS {
-        let rx = rx.clone();
+        let queue = queue.clone();
         let store = store.clone();
         std::thread::spawn(move || {
             let http = client();
             loop {
-                let url = match rx.lock().map(|r| r.recv()) {
-                    Ok(Ok(u)) => u,
-                    _ => return,
+                let url = {
+                    let (lock, ready) = &*queue;
+                    let mut q = lock.lock().unwrap_or_else(|p| p.into_inner());
+                    loop {
+                        if let Some(u) = q.pop() {
+                            break u;
+                        }
+                        q = ready.wait(q).unwrap_or_else(|p| p.into_inner());
+                    }
                 };
                 let img = http
                     .get(&url)
@@ -645,11 +650,10 @@ pub fn fetch_images(store: &ImageStore) {
             }
         });
     }
-    let tx = Mutex::new(tx);
     store.set_fetcher(move |url| {
-        if let Ok(t) = tx.lock() {
-            let _ = t.send(url);
-        }
+        let (lock, ready) = &*queue;
+        lock.lock().unwrap_or_else(|p| p.into_inner()).push(url);
+        ready.notify_one();
     });
 }
 

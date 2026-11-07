@@ -88,16 +88,45 @@ struct Drag {
 }
 
 impl Drag {
-    /// The release velocity over the last 100 ms, points per second (x, y).
+    /// The release velocity over the last 100 ms, points per second (x, y),
+    /// estimated as Compose's `VelocityTracker` does by default.
     fn velocity(&self) -> (f32, f32) {
-        match (self.samples.front(), self.samples.back()) {
-            (Some(a), Some(b)) if b.0 > a.0 => {
-                let t = b.0.duration_since(a.0).as_secs_f32();
-                ((b.1 - a.1) / t, (b.2 - a.2) / t)
-            }
-            _ => (0.0, 0.0),
+        let Some(&(t0, _, _)) = self.samples.front() else {
+            return (0.0, 0.0);
+        };
+        let t: Vec<f32> = self
+            .samples
+            .iter()
+            .map(|s| s.0.duration_since(t0).as_secs_f32())
+            .collect();
+        let x: Vec<f32> = self.samples.iter().map(|s| s.1).collect();
+        let y: Vec<f32> = self.samples.iter().map(|s| s.2).collect();
+        (impulse_velocity(&t, &x), impulse_velocity(&t, &y))
+    }
+}
+
+/// Android's impulse velocity strategy (`VelocityTracker`'s default, and
+/// Compose's): the kinetic energy each movement adds, oldest to newest, so
+/// the speed at release weighs more than an average over the window.
+/// `t` in seconds, `p` positions, both oldest first.
+fn impulse_velocity(t: &[f32], p: &[f32]) -> f32 {
+    let speed = |work: f32| work.signum() * (2.0 * work.abs()).sqrt();
+    let mut work = 0.0f32;
+    let mut first = true;
+    for k in 1..t.len().min(p.len()) {
+        let dt = t[k] - t[k - 1];
+        if dt <= 0.0 {
+            continue;
+        }
+        let v = (p[k] - p[k - 1]) / dt;
+        let before = speed(work);
+        work += (v - before) * v.abs();
+        if first {
+            work *= 0.5;
+            first = false;
         }
     }
+    speed(work)
 }
 
 /// A scroll still moving after the finger left, along Android's fling
@@ -643,4 +672,24 @@ pub fn run_app(event_loop: EventLoop<()>, mut app: App) -> Result<(), String> {
         let _ = proxy.send_event(());
     });
     event_loop.run_app(&mut app).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::impulse_velocity;
+
+    #[test]
+    fn a_steady_drag_gives_its_speed_and_a_flick_its_last_speed() {
+        let t: Vec<f32> = (0..7).map(|i| i as f32 * 0.016).collect();
+        let steady: Vec<f32> = t.iter().map(|t| t * 1000.0).collect();
+        let v = impulse_velocity(&t, &steady);
+        assert!((v - 1000.0).abs() < 1.0, "{v}");
+        // Speeding up to 3000 points/s: well above the average (about 1700).
+        let mut flick = vec![0.0f32];
+        for k in 1..7 {
+            flick.push(flick[k - 1] + 0.016 * 500.0 * k as f32);
+        }
+        let v = impulse_velocity(&t, &flick);
+        assert!(v > 2200.0, "{v}");
+    }
 }

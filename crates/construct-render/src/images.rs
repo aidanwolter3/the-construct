@@ -106,6 +106,16 @@ impl ImageStore {
         }
     }
 
+    /// `ready`, `loading`, `failed` or `none` (never asked for).
+    pub fn status(&self, url: &str) -> &'static str {
+        match self.lock().slots.get(url) {
+            Some(Slot::Ready(_)) => "ready",
+            Some(Slot::Pending) => "loading",
+            Some(Slot::Failed) => "failed",
+            None => "none",
+        }
+    }
+
     pub fn is_ready(&self, url: &str) -> bool {
         matches!(self.lock().slots.get(url), Some(Slot::Ready(_)))
     }

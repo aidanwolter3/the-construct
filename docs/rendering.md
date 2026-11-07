@@ -61,8 +61,9 @@ Presented layouts are drawn as the shared UI draws them: a sheet (85% of the hei
 tapped; a screen a sheet or panel opens stays inside it. A sheet dragged by its handle strip, or a panel dragged
 sideways toward its edge, follows the finger and closes past a quarter of its size or on a flick faster than
 500 points per second, else settles back. In a window, layouts and screens slide in and out over
-280 ms (`FastOutSlowInEasing`); a fling follows Android's `OverScroller` spline with the release velocity of the
-last 100 ms. A drag's scrolling is applied once per frame, and the GPU renderer keeps shaped text between frames. `action.device` `show_versions` fills `local://versions` and `local:versions` from
+280 ms (`FastOutSlowInEasing`); a fling follows Android's `OverScroller` spline from the release velocity, estimated
+over the last 100 ms with Android's impulse strategy (`VelocityTracker`'s and Compose's default), which weighs the
+speed at release over the average. A drag's scrolling is applied once per frame, and the GPU renderer keeps shaped text between frames. `action.device` `show_versions` fills `local://versions` and `local:versions` from
 `/v1/apps/<id>/versions`; `pin_version` and `follow_latest` mark the choice there, but the layout still shows its
 latest version. `core://Sticky` pins at the top of its scrolling view, over the page
 background, until its parent scrolls away; one that rests within 24 points of the view's top (a column's padding)
@@ -120,7 +121,7 @@ client does (`GET /v1/workspaces/home`), builds the device's list of layouts (`l
 `GET /v1/apps?all=1`, and is the session's `Loader`: a layout a tap opens is fetched then, a page screen whose route
 matches a tap's `target_uri` opens with its `$route` bound and its `item`, and slides in at once while its `data`
 path loads in the background (`local://screen#loading`). `local://nav` and
-`local://screen` are set as the shared UI sets them. Images (`core://Image`) download on four background threads
+`local://screen` are set as the shared UI sets them. Images (`core://Image`) download on four background threads, newest request first,
 without the session (the pod serves media from public paths), are cut to their box (cropped to fill, corners
 rounded) and drawn over their placeholder once they arrive; the window redraws then.
 
