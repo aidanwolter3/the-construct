@@ -623,6 +623,46 @@ async fn secrets_go_only_to_their_host() {
     assert_eq!(p["items"], 1, "{p}");
 }
 
+/// A secret is sent only over https: a recipe can't send it in the clear,
+/// even to its own host (a pod that may fetch private hosts may, for local
+/// development).
+#[tokio::test]
+async fn secrets_go_only_over_https() {
+    let pod: Pod = Arc::new(AppState::in_memory(vec![Arc::new(
+        CollectionsAdapter::with_caps(Caps::default()),
+    )]));
+    pod.store()
+        .create_pinned_session(&session_hash("pod"))
+        .unwrap();
+    ok(
+        &pod,
+        "collections_set_secret",
+        json!({"name": "api_key", "value": "k3y", "host": "api.example"}),
+    )
+    .await;
+    let headers = json!({"X-Api-Key": "{secret:api_key}"});
+    let (err, e) = tool(
+        &pod,
+        "collections_preview",
+        json!({"url": "http://api.example/feed.json", "extract": "json", "items": "data",
+               "map": {"title": "title"}, "headers": headers}),
+    )
+    .await;
+    assert!(err && e.to_string().contains("only sent over https"), "{e}");
+    ok(&pod, "define_collection", json!({"name": "clear", "fields": [{"name": "title", "type": "text", "optional": true}],
+        "fillers": [{"kind": "fetch", "url": "http://api.example/feed.json", "extract": "json", "items": "data",
+                     "map": {"title": "title"}, "headers": headers}]})).await;
+    settle(&pod, "clear").await;
+    let st = ok(&pod, "collections_status", json!({"collection": "clear"})).await;
+    assert_eq!(st["fillers"][0]["state"], "failing", "{st}");
+    assert!(
+        st["fillers"][0]["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("only sent over https")),
+        "{st}"
+    );
+}
+
 #[tokio::test]
 async fn event_sites_fill_one_collection_and_alerts_notify_once() {
     let base = serve(Arc::new(Site::default())).await;

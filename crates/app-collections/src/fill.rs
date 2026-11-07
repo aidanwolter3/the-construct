@@ -277,14 +277,18 @@ pub struct Resolved {
 
 /// `headers` for a request to `url`, with each `{secret:<name>}` replaced
 /// by the secret's value. A secret goes only to the host it was stored
-/// for, so a recipe can't send it anywhere else.
+/// for, so a recipe can't send it anywhere else, and only over `https://`
+/// (`allow_http`: plain HTTP too, for a pod that may fetch private hosts),
+/// so it never crosses the network in the clear.
 fn resolve_headers(
     store: &pod_core::store::Store,
     headers: &std::collections::BTreeMap<String, String>,
     url: &str,
+    allow_http: bool,
 ) -> Result<Resolved, String> {
     let mut out = Resolved::default();
     let to = web_extract::fetch::host_of(url);
+    let https = reqwest::Url::parse(url).is_ok_and(|u| u.scheme() == "https");
     for (k, v) in headers {
         let mut value = v.clone();
         for name in crate::filler::secret_refs(v) {
@@ -318,6 +322,12 @@ fn resolve_headers(
                 }
                 Some(_) => {}
             }
+            if !https && !allow_http {
+                tracing::warn!(secret = %name, "a secret was not sent: the request isn't https");
+                return Err(format!(
+                    "the secret '{name}' is only sent over https://, not in the clear: use https://{to}"
+                ));
+            }
             let plain = store
                 .secrets()
                 .open(&secret_context(&name), &stored)
@@ -337,10 +347,11 @@ fn resolve_headers(
 /// [`resolve_headers`] for a preview.
 pub fn resolve_headers_for(
     pod: &Pod,
+    adapter: &CollectionsAdapter,
     headers: &std::collections::BTreeMap<String, String>,
     url: &str,
 ) -> Result<Resolved, String> {
-    resolve_headers(pod.store(), headers, url)
+    resolve_headers(pod.store(), headers, url, adapter.allow_private_hosts())
 }
 
 /// Up to a few raw items of `body` (no map), for writing paths: what the
@@ -1076,12 +1087,11 @@ async fn run_fetch(
     let zone = filler.zone();
     let get = |u: String, etag: Option<String>, lm: Option<String>| async move {
         // Per URL: a secret goes only to its own host.
-        let resolved = resolve_headers(pod.store(), headers, &u).map_err(|message| {
-            web_extract::fetch::FetchError {
+        let resolved = resolve_headers(pod.store(), headers, &u, adapter.allow_private_hosts())
+            .map_err(|message| web_extract::fetch::FetchError {
                 message,
                 retry_after: None,
-            }
-        })?;
+            })?;
         let client = if resolved.has_secret {
             adapter.secret_fetch_client()
         } else {
