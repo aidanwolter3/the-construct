@@ -29,6 +29,8 @@ pub mod gpu;
 #[cfg(feature = "window")]
 pub mod window;
 
+#[cfg(feature = "remote")]
+pub mod engine;
 #[cfg(all(feature = "remote", feature = "window"))]
 pub mod pods;
 #[cfg(feature = "remote")]

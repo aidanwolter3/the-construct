@@ -159,8 +159,8 @@ More on running them: [clients.md](clients.md).
 
 **The Rust rendering engine** (`crates/construct-render`, decision `rust-render-engine`) draws the same plumbing
 without the JVM: taffy layout, a scene of SDF quads and text, a CPU rasterizer and a wgpu pipeline. The pod uses it
-for agents' layout previews over MCP; a desktop window and an Android NativeActivity are prototypes. See
-[rendering.md](rendering.md).
+for agents' layout previews over MCP; a desktop window and an Android NativeActivity are prototypes, run by the
+same engine as the Compose clients (decision `rust-clients-on-the-engine`). See [rendering.md](rendering.md).
 
 ## Background work on the server
 

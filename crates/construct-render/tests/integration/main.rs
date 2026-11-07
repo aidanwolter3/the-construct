@@ -2,6 +2,8 @@
 
 mod accessibility;
 mod common;
+#[cfg(feature = "remote")]
+mod engine;
 mod golden;
 #[cfg(feature = "gpu")]
 mod gpu;
