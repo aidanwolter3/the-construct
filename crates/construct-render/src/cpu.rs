@@ -149,7 +149,7 @@ impl CpuRenderer {
             .icons
             .entry((i.name.clone(), size))
             .or_insert_with(|| crate::icons::mask(&i.name, size).unwrap_or_default())
-            .get(..(size * size) as usize)
+            .get(..size as usize * size as usize)
         else {
             return;
         };

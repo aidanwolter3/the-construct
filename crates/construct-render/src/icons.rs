@@ -60,12 +60,19 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
     })
 }
 
+/// The largest icon mask drawn, in pixels a side: well past a 512 dp icon
+/// at 3× (1536), and small enough that a mask stays a few MB.
+pub const MAX_MASK_PX: u32 = 2048;
+
 /// The icon's coverage mask, `size` × `size` pixels (alpha, row-major), or
-/// `None` for a name the app doesn't draw.
+/// `None` for a name the app doesn't draw or a size past [`MAX_MASK_PX`].
 pub fn mask(name: &str, size: u32) -> Option<Vec<u8>> {
     let size = size.max(1);
+    if size > MAX_MASK_PX {
+        return None;
+    }
     let s = size as f32 / 24.0;
-    let mut out = vec![0u8; (size * size) as usize];
+    let mut out = vec![0u8; size as usize * size as usize];
     for p in paths(name)? {
         let (data, at) = zeno::Mask::new(*p)
             .transform(Some(zeno::Transform::scale(s, s)))
@@ -107,5 +114,18 @@ mod tests {
             assert!(ink > 48 && ink < 48 * 48, "{name}: {ink} pixels");
             assert_eq!(super::name(super::id(name).unwrap()), Some(name));
         }
+    }
+
+    /// An icon too big for any screen gets no mask, rather than one of
+    /// gigabytes (65535 px a side is 4 GB).
+    #[test]
+    fn no_mask_past_the_largest_size() {
+        let max = super::MAX_MASK_PX;
+        assert_eq!(
+            super::mask("add", max).map(|m| m.len()),
+            Some((max * max) as usize)
+        );
+        assert!(super::mask("add", max + 1).is_none());
+        assert!(super::mask("add", 65535).is_none());
     }
 }
