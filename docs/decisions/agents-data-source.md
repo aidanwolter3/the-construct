@@ -32,9 +32,13 @@ Decision:
   `sessions`, `warnings`) in the layout that shows the source, sent by the follower as events arrive. A security
   check notifies when it turns to warn and again only after it was ok; a session waiting for permission once per
   wait. Schedules: missed and timed-out runs warn.
-- **Schedules** are shown and can be run now, paused and resumed. Their definitions (prompt, cron, workspace) stay in
-  the runner's reviewed configuration: CAP has no command to create or change one, so a leaked pod token can't plant
-  a recurring prompt. Pause asks first.
+- **Counts mean running now:** `agents:status` counts `starting` and `working` sessions as working and waiting ones
+  as needing you; `idle` is neither (Remote Control's standby sessions and finished runs' open sessions are idle),
+  so an idle runner says "Nothing running". `agents:sessions` lists idle sessions after working ones.
+- **Schedules** are shown and can be run now, paused and resumed. Their next run's day and time read in the
+  schedule's own `timezone` (the pod's when it has none or an unknown one). Their definitions (prompt, cron,
+  workspace) stay in the runner's reviewed configuration: CAP has no command to create or change one, so a leaked
+  pod token can't plant a recurring prompt. Pause asks first.
 - **Tasks wiring** is opt-in per collection with the MCP tool `agents_link_tasks`, which adds the status options
   and fields it needs through Collections' `apply_change`. Rows are read with Collections' tables and written with
   `app_collections::update_row` (a layout's update, checks and computed fields included), the one addition to
