@@ -4,10 +4,10 @@
 //!
 //! It is installed as the main app's package, so it opens the pod live with
 //! the engine (`crate::engine`, its cache in the internal files directory):
-//! the pod in `pod.json` there (`{"url", "last_code"}`), else the main app's
-//! server. Sessions are kept as the main app keeps them
-//! (`KeystoreSecureStore`'s format, through JNI: [`KeystoreStore`]), so its
-//! sign-in carries over. A `layout.json` in the external files directory
+//! the pod's server in `pod.json` there (`{"url"}`), else the main app's
+//! server. Sessions, and the last pod code used, are kept as the main app
+//! keeps sessions (`KeystoreSecureStore`'s format, through JNI:
+//! [`KeystoreStore`]), so its sign-in carries over. A `layout.json` in the external files directory
 //! (`{"layout", "data"}`, pushed with adb) is opened instead. With
 //! `frame-request` there too, it first draws that layout offscreen at
 //! 390 × 844 @2x on the device's GPU and saves `frame.png` next to it
@@ -214,7 +214,7 @@ impl crate::window::Platform for Android {
 
     fn open_link(&self, url: &str) {
         if let Err(e) = view_url(&self.0, url) {
-            log(&format!("can't open {url}: {e}"));
+            log(&format!("can't open a link: {e}"));
         }
     }
 }
