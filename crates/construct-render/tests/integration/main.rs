@@ -9,4 +9,5 @@ mod golden;
 mod gpu;
 mod interaction;
 mod layout_math;
+mod media;
 mod writes;

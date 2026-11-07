@@ -747,12 +747,20 @@ pub fn fetch_images(store: &ImageStore) {
                         q = ready.wait(q).unwrap_or_else(|p| p.into_inner());
                     }
                 };
-                let img = http
-                    .get(&url)
-                    .send()
-                    .and_then(|r| r.error_for_status())
-                    .and_then(|r| r.bytes())
-                    .ok()
+                // A staged photo (`construct://attachments/<id>`) is a local file.
+                let bytes = match reqwest::Url::parse(&url) {
+                    Ok(u) if u.scheme() == "file" => {
+                        u.to_file_path().ok().and_then(|p| std::fs::read(p).ok())
+                    }
+                    _ => http
+                        .get(&url)
+                        .send()
+                        .and_then(|r| r.error_for_status())
+                        .and_then(|r| r.bytes())
+                        .ok()
+                        .map(|b| b.to_vec()),
+                };
+                let img = bytes
                     .and_then(|b| image::load_from_memory(&b).ok())
                     .map(|i| {
                         if i.width().max(i.height()) > MAX_IMAGE_SIDE {

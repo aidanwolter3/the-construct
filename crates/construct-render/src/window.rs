@@ -284,8 +284,9 @@ impl App {
         }
     }
 
-    /// What the platform reported: shown as a notice for now (the bridge's
-    /// prototype); sign-in redirects and attachments build on these.
+    /// What the platform reported: picked photos are staged for the media
+    /// picker that asked; the rest shows as a notice for now (the bridge's
+    /// prototype); sign-in redirects build on these.
     fn platform_events(&mut self) {
         let events = self
             .platform
@@ -296,17 +297,13 @@ impl App {
             log(&format!("platform: {e:?}"));
             let (title, message) = match e {
                 PlatformEvent::Link(uri) => ("Opened with a link".to_owned(), uri),
-                PlatformEvent::Picked { count: 0, .. } => (
-                    "No photos picked".to_owned(),
-                    "The picker was closed.".to_owned(),
-                ),
-                PlatformEvent::Picked { count, bytes } => (
-                    format!("{count} photo{} picked", if count == 1 { "" } else { "s" }),
-                    format!(
-                        "{:.1} MB in all, read from Rust.",
-                        bytes as f64 / 1_000_000.0
-                    ),
-                ),
+                PlatformEvent::Picked(files) => {
+                    self.controller.session.picked(files);
+                    if let Some(s) = &self.surface {
+                        s.window.request_redraw();
+                    }
+                    continue;
+                }
                 PlatformEvent::Message(m) => ("Message received".to_owned(), m),
                 PlatformEvent::Notification(n) => {
                     self.open_notification(n);
@@ -666,7 +663,9 @@ impl App {
                     },
                     crate::interact::Effect::Copy { text } => self.set_clipboard(text),
                     crate::interact::Effect::PickMedia { max, .. } => {
-                        if !self.platform.as_ref().is_some_and(|p| p.pick_images(*max)) {
+                        if !self.platform.as_ref().is_some_and(|p| p.pick_images(*max))
+                            && !self.controller.session.pick_here(*max)
+                        {
                             self.controller.session.notice(
                                 "No photo picker",
                                 "Picking photos isn't available here yet.",

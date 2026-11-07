@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use construct_render::images::ImageStore;
-use construct_render::interact::{Done, Loaded, Loader, Write, Written};
+use construct_render::interact::{Done, Loaded, Loader, StageDone, Staged, Write, Written};
 use construct_render::remote::{day_label, time_label};
 use protocol::{DataBundle, UiNode, WorkspaceSpec};
 use serde_json::{Value, json};
@@ -85,6 +85,8 @@ struct State {
     notifications: Vec<Value>,
     channels: Vec<Value>,
     next_id: u32,
+    /// Photos staged so far (`stage`).
+    staged: u32,
 }
 
 /// The fake pod. Cheap to clone (shared state).
@@ -141,6 +143,7 @@ impl FixturePod {
                 notifications,
                 channels,
                 next_id: 1,
+                staged: 0,
             })),
         })
     }
@@ -267,10 +270,12 @@ impl FixturePod {
         let media = self.lock().media.clone();
         let into = store.clone();
         store.set_fetcher(move |url| {
-            let img = media_file(&url)
-                .map(|f| media.join(f))
-                .and_then(|p| image::open(p).ok())
-                .map(|i| i.to_rgba8());
+            // A picked photo (`stage`) is the file itself.
+            let file = match url.strip_prefix("file://") {
+                Some(p) => Some(PathBuf::from(p)),
+                None => media_file(&url).map(|f| media.join(f)),
+            };
+            let img = file.and_then(|p| image::open(p).ok()).map(|i| i.to_rgba8());
             into.insert(&url, img);
         });
     }
@@ -357,6 +362,28 @@ impl Loader for FixturePod {
 
     fn fetch(&self, path: &str, done: Loaded) -> bool {
         done(Loader::data(self, path));
+        true
+    }
+
+    /// A picked photo stays where it is (the engine would re-encode a
+    /// copy); its id is the pod's next.
+    fn stage(&self, file: &Path, done: StageDone) -> bool {
+        let id = {
+            let mut s = self.lock();
+            s.staged += 1;
+            format!("sim-{}", s.staged)
+        };
+        let result = match (image::image_dimensions(file), std::path::absolute(file)) {
+            (Ok((width, height)), Ok(path)) => Ok(Staged {
+                uri: format!("construct://attachments/{id}"),
+                url: format!("file://{}", path.display()),
+                id,
+                width,
+                height,
+            }),
+            _ => Err(format!("can't read the photo {}", file.display())),
+        };
+        done(result);
         true
     }
 }
