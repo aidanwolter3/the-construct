@@ -18,6 +18,7 @@ pub mod icons;
 pub mod images;
 pub mod interact;
 pub mod layout;
+pub mod platform;
 pub mod scene;
 pub mod style;
 pub mod text;
@@ -38,6 +39,8 @@ pub mod remote;
 
 #[cfg(all(target_os = "android", feature = "window"))]
 mod android;
+#[cfg(all(target_os = "android", feature = "window"))]
+mod bridge;
 
 pub use interact::{Effect, Outcome, Session, Target};
 pub use layout::{Input, RenderError, SceneBuilder, Viewport};

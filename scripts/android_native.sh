@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The Rust engine's Android app (decision `rust-render-engine`): cross-compiles libconstruct_render.so with
-# cargo-ndk, packages it as a NativeActivity APK (no Gradle, no JVM UI) and installs it on the adb device as The
+# cargo-ndk, packages it as a NativeActivity APK (no Gradle, no JVM UI; a few bridge classes pass Android's callbacks
+# to Rust) and installs it on the adb device as The
 # Construct itself (org.theconstruct.android), over a debug build of the main app signed with this machine's debug
 # key, so the app's data and sign-in stay:
 #
@@ -12,7 +13,7 @@
 # Leaving the pod in Settings goes back to that screen. `cd app && ./gradlew :androidApp:installDebug` goes back to
 # the Compose app with the same data.
 #
-# Needs: an Android SDK with an NDK and build-tools (ANDROID_HOME, else ~/android-sdk), cargo-ndk, and
+# Needs: an Android SDK with an NDK and build-tools (ANDROID_HOME, else ~/android-sdk), a JDK (javac), cargo-ndk, and
 # `rustup target add aarch64-linux-android`. Output: build/android-native/construct-render.apk.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -59,7 +60,21 @@ rm -rf "$OUT/res" && mkdir -p "$OUT/res"
   crates/construct-render/android/res/values/styles.xml
 "$TOOLS/aapt2" link -o "$OUT/unsigned.apk" --manifest crates/construct-render/android/AndroidManifest.xml \
   -I "$PLATFORM/android.jar" "$OUT"/res/*.flat
-(cd "$OUT/apk" && zip -qr ../unsigned.apk lib)
+# The bridge (crates/construct-render/android/java): a few Java classes that pass Android's callbacks to Rust,
+# compiled with javac and converted to dex with d8.
+JAVAC=""
+for j in "${JAVA_HOME:+$JAVA_HOME/bin/javac}" "$(command -v javac || true)" \
+  "/Applications/Android Studio.app/Contents/jbr/Contents/Home/bin/javac" /opt/android-studio/jbr/bin/javac; do
+  [[ -n $j && -x $j ]] && { JAVAC=$j; break; }
+done
+[[ -n $JAVAC ]] || { echo "no javac (a JDK: JAVA_HOME, PATH, or Android Studio's)" >&2; exit 1; }
+rm -rf "$OUT/classes" && mkdir -p "$OUT/classes" "$OUT/apk/dex"
+"$JAVAC" -nowarn --release 11 -classpath "$PLATFORM/android.jar" -d "$OUT/classes" \
+  $(find crates/construct-render/android/java -name '*.java')
+"$TOOLS/d8" --release --min-api 28 --lib "$PLATFORM/android.jar" --output "$OUT/apk/dex" \
+  $(find "$OUT/classes" -name '*.class')
+cp "$OUT/apk/dex/classes.dex" "$OUT/apk/classes.dex"
+(cd "$OUT/apk" && zip -qr ../unsigned.apk lib classes.dex)
 "$TOOLS/zipalign" -f -p 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
 KEY=$HOME/.android/debug.keystore
 if [[ ! -f $KEY ]]; then
@@ -98,7 +113,7 @@ echo "$INSTALLED"
 "$ADB" shell am force-stop "$PKG"
 
 "$ADB" logcat -c
-"$ADB" shell am start -W -n "$PKG/android.app.NativeActivity" >/dev/null
+"$ADB" shell am start -W -n "$PKG/.ConstructActivity" >/dev/null
 for _ in $(seq 1 60); do
   "$ADB" logcat -d -s construct-render | grep -q "Frame 0 drawn\|couldn't" && break
   sleep 1
