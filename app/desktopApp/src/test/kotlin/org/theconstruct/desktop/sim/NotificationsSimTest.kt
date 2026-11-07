@@ -21,7 +21,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/** The inbox and notification settings as layouts (D52, decision `layouts-not-apps`) over [FakeEngineBridge] and `app/desktopApp/src/sim/resources/notifications.json`. */
+/** The inbox and notification settings as layouts (D52, decision `layouts-not-apps`) over [FakeEngineBridge] and `crates/construct-sim/data/notifications.json`. */
 @OptIn(ExperimentalTestApi::class)
 class NotificationsSimTest {
     private val outDir: File = Files.createTempDirectory("construct-notifications-test").toFile()

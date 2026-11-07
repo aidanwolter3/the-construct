@@ -36,7 +36,8 @@ cd app && ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test
 ./gradlew -PskipRustBuild :shared:compileAndroidMain :androidApp:compileDebugKotlin
 ```
 
-UI changes are checked with the [headless simulator](docs/simulator.md): there are no emulator or on-device tests.
+UI changes are checked with the [headless simulator](docs/simulator.md) (`cargo run -p construct-sim`; CI runs
+`scripts/sim_scenarios.sh`): there are no emulator or on-device tests.
 Some things (the Android permission prompt, push with the app killed, the macOS window) can only be checked on a
 device; say so in the PR when a change needs that. More in [docs/testing.md](docs/testing.md).
 
@@ -62,7 +63,8 @@ device; say so in the PR when a change needs that. More in [docs/testing.md](doc
    it, and list the rename in [docs/decisions/README.md](docs/decisions/README.md).
    `docs/DECISIONS.md` is closed at D52.
 
-After changing a `pixelfed` layout or the fake Pixelfed's comments, regenerate the simulator fixtures:
+After changing a `pixelfed` layout or the fake Pixelfed's comments, regenerate the simulator fixtures
+(`crates/construct-sim/data/`):
 `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::`.
 
 ## Naming

@@ -85,12 +85,11 @@ You need Rust and, for the clients, JDK 21. Details for macOS and Linux are in [
 Without `-Dconstruct.baseUrl`, clients use the public staging server, where **Try a temporary pod** gives you a
 24-hour pod to explore.
 
-To render the shared UI headlessly to PNGs (no window, no device), use the simulator:
+To render layouts headlessly to PNGs (no window, no device), use the simulator:
 
 ```bash
-cargo build -p client-ffi --release
-cd app && ./gradlew -PskipRustBuild :desktopApp:simulate \
-  -Pworkspace=pixelfed_sample_no_login -Pscript="shot feed; click Like; assert-text Unlike; shot liked" -Pout=/tmp/sim
+cargo run -p construct-sim -- --workspace pixelfed_sample_no_login \
+  --script "shot feed; click Like; assert-text Unlike; shot liked" --out /tmp/sim
 ```
 
 ## Documentation
