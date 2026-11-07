@@ -876,6 +876,56 @@ pub fn custom_layout(
     Ok(node)
 }
 
+/// A screen that gives `core:screen` a `data` path (used only by its Try
+/// again) must load that same path itself, in the screen's own `data`: only
+/// the screen's `data` loads when it opens. Without it the screen opens
+/// empty, with no spinner and no error. Checked on the layout as written,
+/// before components are expanded.
+pub fn screen_data_args(doc: &Value) -> Result<(), LayoutError> {
+    let Some(screens) = doc.get("screens").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    for (i, screen) in screens.iter().enumerate() {
+        let id = screen.get("id").and_then(Value::as_str).unwrap_or("");
+        let own = screen.get("data").and_then(Value::as_str);
+        let is_screen_use =
+            |k: &str, v: &Value| k == "component" && v.as_str() == Some("core:screen");
+        let Some(at) = find_pointer(screen, &format!("/screens/{i}"), &is_screen_use) else {
+            continue;
+        };
+        // `at` ends in `/component`; the args sit beside it.
+        let use_at = at.strip_suffix("/component").unwrap_or(&at);
+        let arg = doc
+            .pointer(use_at)
+            .and_then(|u| u.get("args"))
+            .and_then(|a| a.get("data"))
+            .and_then(Value::as_str)
+            .filter(|d| !d.is_empty());
+        let Some(arg) = arg else { continue };
+        match own {
+            None => {
+                return Err(LayoutError::new(
+                    &format!("/screens/{i}"),
+                    format!(
+                        "screen '{id}' gives core:screen data '{arg}' but doesn't load it: \
+                         set the screen's own \"data\" to '{arg}' (core:screen's data is only for Try again)"
+                    ),
+                ));
+            }
+            Some(own) if own != arg => {
+                return Err(LayoutError::new(
+                    &format!("{use_at}/args/data"),
+                    format!(
+                        "screen '{id}' loads '{own}' but core:screen's Try again loads '{arg}': use the same path"
+                    ),
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(())
+}
+
 /// The first pointer under `at` whose `(key, value)` satisfies `pred`.
 fn find_pointer(v: &Value, at: &str, pred: &dyn Fn(&str, &Value) -> bool) -> Option<String> {
     match v {
@@ -1437,5 +1487,36 @@ mod tests {
         ] {
             assert!(check_values(&list(bad.clone())).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_screen_loads_the_data_it_gives_core_screen() {
+        let page = |own: Option<&str>, arg: &str| {
+            let mut screen = json!({"id": "post", "route": "x://posts/{id}", "root": {
+                "type": "core://Use", "component": "core:screen",
+                "args": {"title": "Post", "data": arg},
+                "children": [{"type": "core://Text", "value_expr": "$route.id"}]}});
+            if let Some(own) = own {
+                screen["data"] = json!(own);
+            }
+            json!({"type": "core://Page", "id": "p", "title": "P",
+                   "root": {"type": "core://Spacer"}, "screens": [screen]})
+        };
+        let path = "/v1/x/screens/post?id=$route.id";
+        // The same path in both places, or none for core:screen: fine.
+        assert!(screen_data_args(&page(Some(path), path)).is_ok());
+        assert!(screen_data_args(&page(None, "")).is_ok());
+        assert!(screen_data_args(&page(Some(path), "")).is_ok());
+        // Only core:screen has it: the screen would open empty.
+        let e = screen_data_args(&page(None, path)).unwrap_err();
+        assert_eq!(e.pointer, "/screens/0");
+        assert!(
+            e.message.contains("set the screen's own \"data\""),
+            "{}",
+            e.message
+        );
+        // Try again would load something else.
+        let e = screen_data_args(&page(Some("/v1/x/other"), path)).unwrap_err();
+        assert_eq!(e.pointer, "/screens/0/root/args/data");
     }
 }

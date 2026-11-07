@@ -253,7 +253,7 @@ The server components:
 | Component | Parameters | Draws |
 |---|---|---|
 | `core:workspace` | `title`, `title_scrolls`, `fills_screen`; children: the content | A page as a workspace looks: the headline title (Back when pushed), the content scrolling under it, a little space. |
-| `core:screen` | `title`, `data`, `has_footer`; children: content, footer | A screen as the app drew it: Back, title and spinner, the load's error with Try again, scrolling content, footer. |
+| `core:screen` | `title`, `data`, `has_footer`; children: content, footer | A screen as the app drew it: Back, title and spinner, the load's error with Try again, scrolling content, footer. Its `data` is only for Try again: the screen's own `data` (the same path) is what loads when it opens, and a screen that gives `core:screen` a `data` without loading it is refused. |
 | `core:back_button` | | Back, shown while `local://nav#can_go_back`. |
 | `core:header_bar` | `title`, `style`, paddings; children: actions | A title on the left and icon buttons on the right, on one line. |
 | `core:section_header` | `text`, `style`, `padding_v`, `divider` | A section's padded heading, optionally under a divider. |
