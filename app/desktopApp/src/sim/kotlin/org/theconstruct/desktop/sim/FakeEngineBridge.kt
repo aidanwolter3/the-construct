@@ -780,7 +780,7 @@ class FakeEngineBridge(
         private val BINARY = Regex("""entity\.([A-Za-z0-9_]+)\s*([+-])\s*(\d+)""")
 
         /**
-         * D4 mutation subset, mirroring crates/client-core/src/expr.rs: a JSON literal,
+         * D4 mutation subset, mirroring crates/protocol/src/expr.rs: a JSON literal,
          * `entity.f`, `!entity.f` (bool), `entity.f + N` / `entity.f - N` (integer; missing = 0),
          * and `<cond> ? <expr> : <expr>` with cond `entity.f` / `!entity.f` (a bool field) and
          * non-ternary branches. Throws [IllegalArgumentException] for anything else.

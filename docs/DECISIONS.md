@@ -113,7 +113,7 @@ feedback.
 - **Source set:** the simulator and fake engine live in a separate `sim` source set of `:desktopApp`. It sees
   `main`, and tests see `sim`. The test harness stays off the shipping app's runtime classpath.
 - **Fake engine:** `FakeEngineBridge` implements `ConstructEngineBridge` in memory. It emits D6-shaped snapshots
-  from a bundle and applies `OptimisticMutate` with the D4 subset, mirroring `client-core/src/expr.rs`. That
+  from a bundle and applies `OptimisticMutate` with the D4 subset, mirroring `protocol/src/expr.rs`. That
   lets fixture runs exercise real interactions without Rust or a server. It also models the M5 outbox (D13):
   every mutation is applied locally and queued. While online the queue flushes at once to an in-memory fake
   server, so the pending count stays 0. While offline the rows stay queued. Going online flushes them FIFO. The
