@@ -73,6 +73,9 @@ pub struct Theme {
     pub outline: Rgba,
     pub surface_variant: Rgba,
     pub warning_surface: Rgba,
+    /// A switch that is off: its track and its outline (and thumb).
+    pub switch_track_off: Rgba,
+    pub switch_outline: Rgba,
     pub warning_text: Rgba,
 }
 
@@ -136,6 +139,16 @@ impl Theme {
             },
             outline: tok("card_border"),
             surface_variant: tok("muted_surface"),
+            switch_track_off: if dark {
+                Rgba::rgb(0x36, 0x34, 0x3B)
+            } else {
+                Rgba::rgb(0xE6, 0xE0, 0xE9)
+            },
+            switch_outline: if dark {
+                Rgba::rgb(0x93, 0x8F, 0x99)
+            } else {
+                Rgba::rgb(0x79, 0x74, 0x7E)
+            },
             warning_surface: if dark {
                 Rgba::rgb(0x4A, 0x3A, 0x10)
             } else {

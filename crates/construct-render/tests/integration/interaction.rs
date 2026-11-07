@@ -231,3 +231,132 @@ fn opening_a_layout_pushes_it_and_back_pops() {
         .unwrap();
     assert_eq!(s.current(), "tasks");
 }
+
+/// A pod stand-in: one layout with a screen, and the screen's data path.
+struct FakePod;
+
+impl construct_render::interact::Loader for FakePod {
+    fn layout(&self, id: &str) -> Result<(protocol::UiNode, protocol::DataBundle), String> {
+        if id != "c-tasks" {
+            return Err(format!("no layout {id}"));
+        }
+        let root = serde_json::from_value(json!({
+            "type": "core://Page", "id": "c-tasks", "root": { "type": "core://Column", "children": [
+                { "type": "core://Conditional", "value": "${local://nav#pushed}", "content":
+                    { "type": "core://IconButton", "icon": "arrow_back", "content_description": "Back", "tag": "back",
+                      "on_click": { "intent": "action.navigation.back" } } },
+                { "type": "core://List", "query_key": "tasks", "item_template": {
+                    "type": "core://Tappable", "tag": "open_$item.id",
+                    "on_click": { "intent": "action.navigation.open", "presentation": "Push", "target_uri": "demo://tasks/$item.id" },
+                    "content": { "type": "core://Text", "value_expr": "$item.title", "style": "Body" } } } ] },
+            "screens": [{ "id": "task", "route": "demo://tasks/{id}", "data": "/v1/tasks/row?id=$route.id",
+                "item": "demo://tasks/$route.id",
+                "root": { "type": "core://Column", "children": [
+                    { "type": "core://Text", "value_expr": "$item.title", "style": "Headline" },
+                    { "type": "core://Text", "value_expr": "$item.notes", "style": "Body" },
+                    { "type": "core://Text", "value_expr": "id $route.id", "style": "Secondary" } ] } }]
+        }))
+        .map_err(|e| e.to_string())?;
+        let data = serde_json::from_value(json!({
+            "entities": { "demo://tasks/7": { "id": "7", "title": "Fix the gate" } },
+            "queries": { "tasks": ["demo://tasks/7"] } }))
+        .unwrap();
+        Ok((root, data))
+    }
+
+    fn data(&self, path: &str) -> Result<protocol::DataBundle, String> {
+        assert_eq!(path, "/v1/tasks/row?id=7");
+        Ok(serde_json::from_value(json!({
+            "entities": { "demo://tasks/7": { "id": "7", "title": "Fix the gate", "notes": "The latch sticks." } },
+            "queries": {} }))
+        .unwrap())
+    }
+}
+
+#[test]
+fn a_live_session_opens_layouts_and_screens_with_their_data() {
+    let home: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Page", "id": "home", "root": { "type": "core://Button", "label": "Tasks",
+            "on_click": { "intent": "action.navigation.open", "layout": "c-tasks", "presentation": "Push" } } }))
+    .unwrap();
+    let mut s = Session::new("home", home, Default::default(), Viewport::PHONE);
+    s.loader = Some(Box::new(FakePod));
+    assert!(s.scene().unwrap().find_node("back").is_none());
+    let out = s.tap(&Target::Text("Tasks".into())).unwrap();
+    assert_eq!(
+        out.effects,
+        vec![Effect::Opened {
+            layout: "c-tasks".into()
+        }]
+    );
+    // Pushed: the layout's own Back shows (`local://nav#pushed`).
+    assert!(s.scene().unwrap().find_node("back").is_some());
+    let out = s.tap(&Target::Id("open_7".into())).unwrap();
+    assert_eq!(
+        out.effects,
+        vec![Effect::OpenedScreen {
+            screen: "task".into()
+        }]
+    );
+    let scene = s.scene().unwrap();
+    // `$item` is the screen's entity, filled in by its data path; `$route` bound.
+    assert!(scene.find_text("Fix the gate").is_some());
+    assert!(scene.find_text("The latch sticks.").is_some());
+    assert!(scene.find_text("id 7").is_some());
+    s.dispatch(&json!({ "intent": "action.navigation.back" }))
+        .unwrap();
+    s.dispatch(&json!({ "intent": "action.navigation.back" }))
+        .unwrap();
+    assert_eq!(s.current(), "home");
+    // A layout the pod doesn't have is reported.
+    let out = s
+        .dispatch(&json!({ "intent": "action.navigation.open", "layout": "c-nope", "presentation": "Push" }))
+        .unwrap();
+    assert!(
+        matches!(&out.effects[0], Effect::LoadFailed { .. }),
+        "{:?}",
+        out.effects
+    );
+}
+
+#[test]
+fn images_draw_once_loaded_and_insets_move_the_content() {
+    let page: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Page", "id": "p", "root": { "type": "core://Column", "children": [
+            { "type": "core://Image", "url": "https://img.example/red.png", "size_dp": 40, "shape": "Rounded" } ] } }))
+    .unwrap();
+    let mut s = Session::new(
+        "p",
+        page,
+        Default::default(),
+        Viewport {
+            width: 100.0,
+            height: 100.0,
+            scale: 1.0,
+        },
+    );
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let a = asked.clone();
+    s.images.set_fetcher(move |u| a.lock().unwrap().push(u));
+    let before = s.render_cpu().unwrap();
+    assert_eq!(
+        asked.lock().unwrap().as_slice(),
+        ["https://img.example/red.png"]
+    );
+    assert_ne!(before.get_pixel(20, 20).0[..3], [255, 0, 0]);
+    s.images.insert(
+        "https://img.example/red.png",
+        Some(image::RgbaImage::from_pixel(
+            8,
+            8,
+            image::Rgba([255, 0, 0, 255]),
+        )),
+    );
+    let after = s.render_cpu().unwrap();
+    assert_eq!(after.get_pixel(20, 20).0, [255, 0, 0, 255]);
+    // A status bar of 30 points: the image moves below it.
+    s.set_insets([30.0, 0.0, 0.0, 0.0]);
+    let inset = s.render_cpu().unwrap();
+    assert_ne!(inset.get_pixel(20, 20).0[..3], [255, 0, 0]);
+    assert_eq!(inset.get_pixel(20, 50).0, [255, 0, 0, 255]);
+}

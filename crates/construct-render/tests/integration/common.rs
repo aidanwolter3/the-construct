@@ -34,6 +34,8 @@ pub fn build(
             scroll: &BTreeMap::new(),
             viewport: vp,
             dark: false,
+            item: None,
+            insets: [0.0; 4],
         })
         .unwrap()
 }

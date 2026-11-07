@@ -29,9 +29,19 @@ struct Surface {
     renderer: Renderer,
 }
 
+/// What a platform adds to the window: the soft keyboard, and the space its
+/// own UI covers (status bar, cutout, navigation bar).
+pub trait Platform {
+    /// Shows the keyboard while a text field is focused, hides it otherwise.
+    fn show_keyboard(&self, show: bool);
+    /// Insets in physical pixels: top, right, bottom, left.
+    fn insets_px(&self, window_px: (u32, u32)) -> [f32; 4];
+}
+
 /// The window's state across the event loop.
 pub struct App {
     controller: Controller,
+    platform: Option<Box<dyn Platform>>,
     title: String,
     surface: Option<Surface>,
     cursor: (f32, f32),
@@ -45,10 +55,27 @@ impl App {
             controller,
             title: title.to_owned(),
             surface: None,
+            platform: None,
             cursor: (0.0, 0.0),
             touch_start: None,
             touch_last: (0.0, 0.0),
         }
+    }
+
+    pub fn with_platform(mut self, platform: Box<dyn Platform>) -> App {
+        self.platform = Some(platform);
+        self
+    }
+
+    /// Re-reads the platform's insets (they change on rotation, or arrive
+    /// after the first frame).
+    fn update_insets(&mut self) {
+        let (Some(p), Some(s)) = (&self.platform, &self.surface) else {
+            return;
+        };
+        let scale = s.window.scale_factor() as f32;
+        let px = p.insets_px((s.config.width, s.config.height));
+        self.controller.session.set_insets(px.map(|v| v / scale));
     }
 
     fn scale(&self) -> f32 {
@@ -93,7 +120,8 @@ impl App {
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
         surface.configure(&gpu.device, &config);
-        let renderer = Renderer::new(&gpu, format);
+        let mut renderer = Renderer::new(&gpu, format);
+        renderer.images = Some(self.controller.session.images.clone());
         log(&format!(
             "{} surface initialized successfully: {} {:?}",
             match gpu.adapter.get_info().backend {
@@ -118,10 +146,12 @@ impl App {
             gpu,
             renderer,
         });
+        self.update_insets();
         Ok(())
     }
 
     fn draw(&mut self) {
+        self.update_insets();
         let Some(s) = self.surface.as_mut() else {
             return;
         };
@@ -163,10 +193,14 @@ impl App {
     }
 
     fn apply(&mut self, e: Event) {
+        let tap = matches!(e, Event::Tap { .. });
         if let Some(out) = self.controller.handle(e)
             && let Ok(json) = serde_json::to_string(&out.effects)
         {
             log(&json);
+        }
+        if tap && let Some(p) = &self.platform {
+            p.show_keyboard(self.controller.focused.is_some());
         }
         if let Some(s) = &self.surface {
             s.window.request_redraw();
@@ -175,6 +209,13 @@ impl App {
 }
 
 impl ApplicationHandler for App {
+    /// An image arrived: draw again.
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
+        if let Some(s) = &self.surface {
+            s.window.request_redraw();
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.surface.is_none()
             && let Err(e) = self.create(event_loop)
@@ -253,7 +294,21 @@ impl ApplicationHandler for App {
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 match &event.logical_key {
-                    Key::Named(NamedKey::Escape) => self.apply(Event::Back),
+                    Key::Named(NamedKey::Escape | NamedKey::BrowserBack | NamedKey::GoBack) => {
+                        if self.controller.focused.take().is_some() {
+                            if let Some(p) = &self.platform {
+                                p.show_keyboard(false);
+                            }
+                        } else {
+                            self.apply(Event::Back);
+                        }
+                    }
+                    Key::Named(NamedKey::Enter) => {
+                        if let Some(p) = &self.platform {
+                            p.show_keyboard(false);
+                        }
+                        self.controller.focused = None;
+                    }
                     Key::Named(NamedKey::Backspace) => self.apply(Event::Backspace),
                     _ => {
                         if let Some(t) = event
@@ -273,6 +328,14 @@ impl ApplicationHandler for App {
 
 /// Runs the window until it closes.
 pub fn run(event_loop: EventLoop<()>, controller: Controller, title: &str) -> Result<(), String> {
-    let mut app = App::new(controller, title);
+    run_app(event_loop, App::new(controller, title))
+}
+
+/// Runs a prepared [`App`] (with a [`Platform`]) until it closes.
+pub fn run_app(event_loop: EventLoop<()>, mut app: App) -> Result<(), String> {
+    let proxy = event_loop.create_proxy();
+    app.controller.session.images.set_waker(move || {
+        let _ = proxy.send_event(());
+    });
     event_loop.run_app(&mut app).map_err(|e| e.to_string())
 }

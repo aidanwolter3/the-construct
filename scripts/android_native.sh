@@ -6,11 +6,28 @@
 #
 #   scripts/android_native.sh              # build, then test on the adb device if there is one
 #   scripts/android_native.sh --build-only # build the APK only
+#   scripts/android_native.sh --pod https://the-construct-pod.fly.dev
+#                                          # install and open that pod live (read-only): asks for the pod code
+#                                          # (or reads CONSTRUCT_POD_CODE), checks it with the pod, and puts the
+#                                          # session token the pod answers (on today's server, the pod code
+#                                          # itself) in the app's private storage, unencrypted (the main app
+#                                          # keeps it in the Android keystore)
+#   scripts/android_native.sh --no-pod     # install and go back to the demo
 #
 # Needs: an Android SDK with an NDK and build-tools (ANDROID_HOME, else ~/android-sdk), cargo-ndk, and
 # `rustup target add aarch64-linux-android`. Output: build/android-native/construct-render.apk.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+MODE=test POD_URL=
+case "${1:-}" in
+  --build-only) MODE=build ;;
+  --pod) MODE=pod POD_URL=${2:?--pod needs the pod URL, e.g. https://the-construct-pod.fly.dev} ;;
+  --no-pod) MODE=demo ;;
+  "") ;;
+  *) echo "usage: $0 [--build-only | --pod <url> | --no-pod]" >&2; exit 2 ;;
+esac
+POD_URL=${POD_URL%/}
 
 SDK=${ANDROID_HOME:-$HOME/android-sdk}
 # The newest folder under $1 that holds $2: a real install, not a leftover such as `28.2.13676358.bak`.
@@ -35,7 +52,7 @@ PKG=org.theconstruct.render
 mkdir -p "$OUT"
 
 echo "==> cross-compiling (arm64-v8a)"
-cargo ndk -t arm64-v8a -o "$OUT/jniLibs" build -p construct-render --features window --release
+cargo ndk -t arm64-v8a -o "$OUT/jniLibs" build -p construct-render --features window,remote --release
 
 echo "==> packaging"
 rm -rf "$OUT/apk" && mkdir -p "$OUT/apk/lib"
@@ -53,7 +70,7 @@ fi
 "$TOOLS/apksigner" sign --ks "$KEY" --ks-pass pass:android --out "$OUT/construct-render.apk" "$OUT/aligned.apk"
 echo "built $OUT/construct-render.apk"
 
-[[ ${1:-} == --build-only ]] && exit 0
+[[ $MODE == build ]] && exit 0
 # adb from PATH, else the SDK's own (a shell alias doesn't reach this script).
 ADB=$(command -v adb || true)
 [[ -n $ADB ]] || ADB=$SDK/platform-tools/adb
@@ -67,8 +84,40 @@ if [[ $("$ADB" get-state 2>/dev/null || true) != device ]]; then
 fi
 echo "device: $("$ADB" get-serialno) via $ADB"
 
-echo "==> installing and launching"
+echo "==> installing"
 "$ADB" install -r "$OUT/construct-render.apk"
+
+if [[ $MODE == pod || $MODE == demo ]]; then
+  "$ADB" shell am force-stop "$PKG"
+  if [[ $MODE == pod ]]; then
+    CODE=${CONSTRUCT_POD_CODE:-}
+    if [[ -z $CODE ]]; then
+      read -rsp "Pod code for $POD_URL: " CODE
+      echo
+    fi
+    # The pod checks the code and answers the session token to use.
+    OPENED=$(curl -fsS -X POST "$POD_URL/v1/pods/open" -H 'content-type: application/json' \
+      -d "{\"token\": \"$CODE\"}") || { echo "couldn't open the pod (wrong code?)" >&2; exit 1; }
+    SESSION=$(printf '%s' "$OPENED" | sed -n 's/.*"session_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    [[ -n $SESSION ]] || { echo "the pod answered no session_token" >&2; exit 1; }
+    printf '{"url": "%s", "token": "%s"}' "$POD_URL" "$SESSION" |
+      "$ADB" shell "run-as $PKG sh -c 'mkdir -p files && cat > files/pod.json'"
+    echo "session saved in the app's private storage (--no-pod removes it)"
+  else
+    "$ADB" shell "run-as $PKG rm -f files/pod.json"
+    "$ADB" shell rm -f "/sdcard/Android/data/$PKG/files/layout.json"
+  fi
+  "$ADB" logcat -c
+  "$ADB" shell am start -W -n "$PKG/android.app.NativeActivity" >/dev/null
+  for _ in $(seq 1 60); do
+    "$ADB" logcat -d -s construct-render | grep -q "Frame 0 drawn\|couldn't open" && break
+    sleep 1
+  done
+  "$ADB" logcat -d -s construct-render
+  exit 0
+fi
+
+echo "==> launching the test layout"
 FILES=/sdcard/Android/data/$PKG/files
 "$ADB" shell mkdir -p "$FILES"
 "$ADB" push crates/construct-render/tests/data/task_list.json "$FILES/layout.json" >/dev/null

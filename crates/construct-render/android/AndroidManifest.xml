@@ -4,16 +4,22 @@
     package="org.theconstruct.render"
     android:versionCode="1"
     android:versionName="0.1">
-    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="36" />
+    <!-- Target 34: the system keeps the window below the status bar and camera cutout and resizes it for the
+         keyboard (35+ draws edge to edge). -->
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="34" />
     <uses-feature android:name="android.hardware.vulkan.version" android:required="false" />
+    <!-- A live session (scripts/android_native.sh with pod): layouts, data and images from the pod. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:label="Construct (Rust engine)"
         android:hasCode="false"
+        android:debuggable="true"
         android:extractNativeLibs="true">
         <activity
             android:name="android.app.NativeActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density">
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density"
+            android:windowSoftInputMode="adjustResize">
             <meta-data android:name="android.app.lib_name" android:value="construct_render" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

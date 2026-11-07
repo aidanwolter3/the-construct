@@ -51,8 +51,8 @@ Drawn like the app: Page, Workspace (title and slots), Column, Row, Container, B
 IconButton (`active`), Chip, Badge, Spacer, Divider, Conditional, Tappable, Gesture (tap), Scroll (clipped,
 offsets), List (`where`, `filter`, `group_by`, `columns`, `focus`, `indent`, `empty_text`), ChoiceChips, TextField,
 Switch, Progress, Dock, Layout (inline, from the layouts given), and every named icon (`icons.rs`: the shared UI's
-Material path data, rasterized with zeno; on the GPU they are glyphon custom glyphs). Approximated: Image (a
-placeholder in the blurhash's colour), Carousel (first item and an "n/N" badge), MediaPicker (the add tile),
+Material path data, rasterized with zeno; on the GPU they are glyphon custom glyphs). Images draw once loaded
+(over a placeholder in the blurhash's colour; only live sessions load them). Approximated: Carousel (first item and an "n/N" badge), MediaPicker (the add tile),
 Drawer (the selected page), AppFrame and unknown nodes (a labelled box). Not drawn: presented layouts (Sheet,
 Panel, Overlay), dialogs, `format` dates, sticky pinning.
 
@@ -62,7 +62,7 @@ Panel, Overlay), dialogs, `format` dates, sticky pinning.
 cargo run -p construct-render --features viewer --bin construct-viewer                      # the bundled demo
 cargo run -p construct-render --features viewer --bin construct-viewer -- layout.json       # {"layout", "data"}
 CONSTRUCT_POD_TOKEN=… cargo run -p construct-render --features viewer --bin construct-viewer -- \
-  --pod http://127.0.0.1:8080 --layout home                                                 # one fetch, no engine
+  --pod http://127.0.0.1:8080 --layout home                                                 # live, read-only
 ```
 
 Click, scroll, type into a focused field, Escape for Back; each interaction's effects are logged. It draws with
@@ -81,6 +81,24 @@ installs it, pushes the task-list fixture, launches, checks logcat for `surface 
 `Frame 0 drawn`, takes a screenshot, and compares the frame the device drew offscreen at 390 × 844 @2x with the
 desktop golden (at most 1% of pixels may differ). `--build-only` stops after the APK. The activity opens
 `layout.json` from its external files directory, or the bundled demo.
+
+`scripts/android_native.sh --pod <url>` instead installs it and opens that pod **live** (below): it asks for the pod
+code (or reads `CONSTRUCT_POD_CODE`), checks it with `POST /v1/pods/open`, and writes the session token the pod
+answers (on today's server, the pod code itself) to `pod.json` in the app's private storage with `run-as` (the APK is
+debuggable). It is stored unencrypted, unlike the main app's keystore. `--no-pod` deletes it and goes back to the
+demo. The app targets SDK 34, so the system keeps its window below the status bar and camera cutout and resizes it
+for the keyboard; a tapped text field opens the keyboard, and Back pops the stack.
+
+## Live sessions (`remote`)
+
+Feature `remote` (on in the viewer and the APK) runs a session over a pod, read-only: `PodClient` fetches home as a
+client does (`GET /v1/workspaces/home`), builds the device's list of layouts (`local:layouts`, `local:apps`) from
+`GET /v1/apps?all=1`, and is the session's `Loader`: a layout a tap opens is fetched then, a page screen whose route
+matches a tap's `target_uri` opens with its `$route` bound, its `item` and its `data` path loaded. `local://nav` and
+`local://screen` are set as the shared UI sets them. Images (`core://Image`) download on four background threads
+without the session (the pod serves media from public paths), are cut to their box (cropped to fill, corners
+rounded) and drawn over their placeholder once they arrive; the window redraws then. What a tap would send to the
+pod (likes, adds, edits) is logged as not sent: there is no outbox, cache or event stream.
 
 ## Agent previews (MCP)
 

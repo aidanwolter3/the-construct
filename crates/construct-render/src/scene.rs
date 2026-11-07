@@ -95,12 +95,24 @@ pub struct IconRun {
     pub clip: [f32; 4],
 }
 
+/// An image from a URL, cropped to fill its box (as Compose's
+/// `ContentScale.Crop`), with rounded corners. Drawn once it has loaded
+/// ([`crate::images::ImageStore`]); a placeholder quad is drawn under it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageRun {
+    pub url: String,
+    pub rect: [f32; 4],
+    pub radius: f32,
+    pub clip: [f32; 4],
+}
+
 /// One draw command, in paint order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Draw {
     Quad(QuadInstance),
     Text(TextRun),
     Icon(IconRun),
+    Image(ImageRun),
 }
 
 /// What a tap on a node does.

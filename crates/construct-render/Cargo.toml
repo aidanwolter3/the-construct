@@ -16,8 +16,11 @@ default = ["gpu"]
 gpu = ["dep:wgpu", "dep:glyphon", "dep:pollster", "dep:bytemuck"]
 # A native window (winit): the desktop viewer and the Android activity.
 window = ["gpu", "dep:winit"]
-# The `construct-viewer` binary (its --pod fetches a layout over HTTP).
-viewer = ["window", "dep:reqwest"]
+# A live, read-only session over a pod (`remote`): layouts, data and images
+# over HTTP.
+remote = ["dep:reqwest", "image/jpeg"]
+# The `construct-viewer` binary (`--pod` runs it on a pod).
+viewer = ["window", "remote"]
 
 [dependencies]
 protocol = { workspace = true }
@@ -33,7 +36,7 @@ glyphon = { version = "0.12", optional = true }
 pollster = { version = "0.4", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
 winit = { version = "0.30", optional = true }
-# The viewer's --pod: a layout fetched as a client fetches it.
+# `remote`: the pod's HTTP API.
 reqwest = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]

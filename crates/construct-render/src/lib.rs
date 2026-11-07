@@ -14,6 +14,7 @@ pub mod cpu;
 pub mod demo;
 pub mod encode;
 pub mod icons;
+pub mod images;
 pub mod interact;
 pub mod layout;
 pub mod scene;
@@ -26,6 +27,9 @@ pub mod gpu;
 
 #[cfg(feature = "window")]
 pub mod window;
+
+#[cfg(feature = "remote")]
+pub mod remote;
 
 #[cfg(all(target_os = "android", feature = "window"))]
 mod android;

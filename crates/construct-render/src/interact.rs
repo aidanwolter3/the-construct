@@ -8,7 +8,7 @@
 //! device commands) are reported, never sent.
 
 use image::RgbaImage;
-use protocol::{DataBundle, UiNode};
+use protocol::{DataBundle, PageScreen, UiNode};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -46,6 +46,14 @@ pub enum Effect {
     Opened {
         layout: String,
     },
+    OpenedScreen {
+        screen: String,
+    },
+    /// A layout or a screen's data couldn't be loaded.
+    LoadFailed {
+        what: String,
+        error: String,
+    },
     Back,
     Scrolled {
         id: String,
@@ -68,6 +76,83 @@ struct Entry {
     id: String,
     root: UiNode,
     route: BTreeMap<String, String>,
+    /// A page screen's `item` (an entity URI).
+    item: Option<String>,
+    /// The screens of the layout this entry belongs to.
+    screens: Vec<PageScreen>,
+    /// The last load of this entry's data failed (`local://screen#error`).
+    error: Option<String>,
+}
+
+impl Entry {
+    fn layout(id: &str, root: UiNode, route: BTreeMap<String, String>) -> Entry {
+        let screens = match &root {
+            UiNode::Page { screens, .. } => screens.clone(),
+            _ => Vec::new(),
+        };
+        Entry {
+            id: id.to_owned(),
+            root,
+            route,
+            item: None,
+            screens,
+            error: None,
+        }
+    }
+}
+
+/// Where a live session gets what it opens: another layout of the pod, and a
+/// data path's answer (`crate::remote` on devices). Calls block.
+pub trait Loader: Send {
+    /// A layout's plumbing root and its data (`GET /v1/workspaces/<id>`).
+    fn layout(&self, id: &str) -> Result<(UiNode, DataBundle), String>;
+    /// A data path's answer (a screen's `data`, `action.data.load`).
+    fn data(&self, path: &str) -> Result<DataBundle, String>;
+}
+
+/// `uri` against a route pattern (`collections://tasks/{id}`): the captured
+/// parameters, or `None`.
+pub fn match_route(pattern: &str, uri: &str) -> Option<BTreeMap<String, String>> {
+    let p: Vec<&str> = pattern.split('/').collect();
+    let u: Vec<&str> = uri.split('/').collect();
+    if p.len() != u.len() {
+        return None;
+    }
+    let mut out = BTreeMap::new();
+    for (a, b) in p.iter().zip(&u) {
+        if let Some(name) = a.strip_prefix('{').and_then(|x| x.strip_suffix('}')) {
+            let ok = !b.is_empty()
+                && b.len() <= 64
+                && b.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+            if !ok {
+                return None;
+            }
+            out.insert(name.to_owned(), (*b).to_owned());
+        } else if a != b {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+fn merge(into: &mut DataBundle, from: DataBundle) {
+    into.entities.extend(from.entities);
+    into.queries.extend(from.queries);
+}
+
+/// `$route.<name>` replaced in every string of a node (a screen's tree).
+fn bind_route(v: &mut Value, route: &BTreeMap<String, String>) {
+    match v {
+        Value::String(s) if s.contains("$route.") => {
+            for (k, val) in route {
+                *s = s.replace(&format!("$route.{k}"), val);
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(|x| bind_route(x, route)),
+        Value::Object(m) => m.values_mut().for_each(|x| bind_route(x, route)),
+        _ => {}
+    }
 }
 
 /// A live layout.
@@ -82,16 +167,19 @@ pub struct Session {
     builder: SceneBuilder,
     cpu: CpuRenderer,
     scene: Option<Scene>,
+    /// Loads what taps open (a live session); `None`: only what is given.
+    pub loader: Option<Box<dyn Loader>>,
+    /// The images frames show, loaded by the store's fetcher.
+    pub images: crate::images::ImageStore,
+    /// Space the platform covers (status bar, camera cutout, navigation
+    /// bar), in points: top, right, bottom, left.
+    pub insets: [f32; 4],
 }
 
 impl Session {
     pub fn new(id: &str, root: UiNode, data: DataBundle, viewport: Viewport) -> Session {
         Session {
-            stack: vec![Entry {
-                id: id.to_owned(),
-                root,
-                route: BTreeMap::new(),
-            }],
+            stack: vec![Entry::layout(id, root, BTreeMap::new())],
             data,
             form: BTreeMap::new(),
             scroll: BTreeMap::new(),
@@ -101,6 +189,9 @@ impl Session {
             builder: SceneBuilder::new(),
             cpu: CpuRenderer::new(),
             scene: None,
+            loader: None,
+            images: crate::images::ImageStore::new(),
+            insets: [0.0; 4],
         }
     }
 
@@ -112,7 +203,22 @@ impl Session {
     /// Lays out the current frame (cached until something changes).
     pub fn scene(&mut self) -> Result<&Scene, RenderError> {
         if self.scene.is_none() {
+            self.load_inline_layouts();
+            // Device data a layout reads about where it is drawn (as the
+            // shared UI's `local://nav` and `local://screen`).
+            let depth = self.stack.len();
             let top = self.stack.last().expect("never empty");
+            let mut nav = protocol::EntityRecord::new();
+            nav.set("can_go_back", depth > 1);
+            nav.set("pushed", depth > 1);
+            nav.set("inline", false);
+            nav.set("in_frame", false);
+            nav.set("presentation", if depth > 1 { "push" } else { "root" });
+            self.data.entities.insert("local://nav".into(), nav);
+            let mut screen = protocol::EntityRecord::new();
+            screen.set("loading", false);
+            screen.set("error", top.error.clone().unwrap_or_default());
+            self.data.entities.insert("local://screen".into(), screen);
             let scene = self.builder.build(&Input {
                 root: &top.root,
                 data: &self.data,
@@ -122,7 +228,14 @@ impl Session {
                 scroll: &self.scroll,
                 viewport: self.viewport,
                 dark: self.dark,
+                item: top.item.as_deref(),
+                insets: self.insets,
             })?;
+            for d in &scene.draws {
+                if let crate::scene::Draw::Image(i) = d {
+                    self.images.request(&i.url);
+                }
+            }
             self.scene = Some(scene);
         }
         Ok(self.scene.as_ref().expect("just built"))
@@ -132,6 +245,7 @@ impl Session {
     pub fn render_cpu(&mut self) -> Result<RgbaImage, RenderError> {
         self.scene()?;
         let scene = self.scene.as_ref().expect("built");
+        self.cpu.images = Some(self.images.clone());
         Ok(self.cpu.render(scene, &mut self.builder.text))
     }
 
@@ -146,6 +260,14 @@ impl Session {
     ) -> Result<(&Scene, &mut crate::text::TextEngine), RenderError> {
         self.scene()?;
         Ok((self.scene.as_ref().expect("built"), &mut self.builder.text))
+    }
+
+    /// New platform insets (points): the next frame lays out again.
+    pub fn set_insets(&mut self, insets: [f32; 4]) {
+        if insets != self.insets {
+            self.insets = insets;
+            self.scene = None;
+        }
     }
 
     /// A new viewport (a window resize): the next frame lays out again.
@@ -302,8 +424,10 @@ impl Session {
             }
             "action.navigation.open" => {
                 let layout = intent["layout"].as_str().filter(|l| !l.is_empty());
-                match layout.and_then(|l| self.layouts.get(l).map(|n| (l, n.clone()))) {
-                    Some((id, root)) => {
+                let target = intent["target_uri"].as_str().filter(|t| !t.is_empty());
+                if let Some(id) = layout {
+                    // Sheets, panels and overlays are drawn full screen.
+                    if let Some(root) = self.layout_root(id, out) {
                         let route = intent["params"]
                             .as_object()
                             .map(|m| {
@@ -312,19 +436,29 @@ impl Session {
                                     .collect()
                             })
                             .unwrap_or_default();
-                        self.stack.push(Entry {
-                            id: id.to_owned(),
-                            root,
-                            route,
-                        });
+                        self.stack.push(Entry::layout(id, root, route));
                         out.push(Effect::Opened {
                             layout: id.to_owned(),
                         });
+                        if let Some(t) = target {
+                            self.open_screen(t, out);
+                        }
                     }
-                    None => out.push(Effect::NotSent {
+                } else if let Some(t) = target {
+                    if !self.open_screen(t, out) {
+                        out.push(Effect::NotSent {
+                            intent: intent.clone(),
+                        });
+                    }
+                } else {
+                    out.push(Effect::NotSent {
                         intent: intent.clone(),
-                    }),
+                    });
                 }
+            }
+            "action.data.load" => {
+                let path = intent["path"].as_str().unwrap_or("").to_owned();
+                self.load_data(&path, out);
             }
             "action.navigation.back" => {
                 if self.stack.len() > 1 {
@@ -338,6 +472,127 @@ impl Session {
                 intent: intent.clone(),
             }),
         }
+    }
+
+    /// A layout's root: given, or loaded (its data merged).
+    fn layout_root(&mut self, id: &str, out: &mut Vec<Effect>) -> Option<UiNode> {
+        if let Some(r) = self.layouts.get(id) {
+            return Some(r.clone());
+        }
+        let loaded = self.loader.as_ref()?.layout(id);
+        match loaded {
+            Ok((root, data)) => {
+                merge(&mut self.data, data);
+                self.layouts.insert(id.to_owned(), root.clone());
+                Some(root)
+            }
+            Err(error) => {
+                out.push(Effect::LoadFailed {
+                    what: format!("layout {id}"),
+                    error,
+                });
+                None
+            }
+        }
+    }
+
+    /// Opens the screen of the top layout whose route matches `uri`, loading
+    /// its data; false when no screen matches.
+    fn open_screen(&mut self, uri: &str, out: &mut Vec<Effect>) -> bool {
+        let top = self.stack.last().expect("never empty");
+        let Some((screen, route)) = top
+            .screens
+            .iter()
+            .find_map(|s| match_route(&s.route, uri).map(|r| (s.clone(), r)))
+        else {
+            return false;
+        };
+        let (id, screens) = (top.id.clone(), top.screens.clone());
+        let mut root = serde_json::to_value(&screen.root).unwrap_or(Value::Null);
+        bind_route(&mut root, &route);
+        let Ok(root) = serde_json::from_value::<UiNode>(root) else {
+            return false;
+        };
+        let item = screen.item.as_ref().map(|i| {
+            let mut v = Value::String(i.clone());
+            bind_route(&mut v, &route);
+            crate::bind::render(&v)
+        });
+        self.stack.push(Entry {
+            id,
+            root,
+            route: route.clone(),
+            item,
+            screens,
+            error: None,
+        });
+        out.push(Effect::OpenedScreen {
+            screen: screen.id.clone(),
+        });
+        if let Some(path) = &screen.data {
+            let mut v = Value::String(path.clone());
+            bind_route(&mut v, &route);
+            self.load_data(&crate::bind::render(&v), out);
+        }
+        true
+    }
+
+    fn load_data(&mut self, path: &str, out: &mut Vec<Effect>) {
+        let Some(loader) = self.loader.as_ref() else {
+            out.push(Effect::NotSent {
+                intent: json!({ "intent": "action.data.load", "path": path }),
+            });
+            return;
+        };
+        let result = loader.data(path);
+        let top = self.stack.last_mut().expect("never empty");
+        match result {
+            Ok(d) => {
+                top.error = None;
+                merge(&mut self.data, d);
+            }
+            Err(error) => {
+                top.error = Some(error.clone());
+                out.push(Effect::LoadFailed {
+                    what: path.to_owned(),
+                    error,
+                });
+            }
+        }
+    }
+
+    /// Loads the layouts inline `core://Layout`s of the top entry draw.
+    fn load_inline_layouts(&mut self) {
+        if self.loader.is_none() {
+            return;
+        }
+        let top = self.stack.last().expect("never empty");
+        let wanted: Vec<String> = top
+            .root
+            .walk()
+            .into_iter()
+            .filter_map(|n| match n {
+                UiNode::Layout {
+                    layout,
+                    presentation: protocol::EmbedPresentation::Inline,
+                    ..
+                } if !layout.contains('$') => Some(layout.clone()),
+                _ => None,
+            })
+            .filter(|l| !self.layouts.contains_key(l))
+            .collect();
+        let mut ignored = Vec::new();
+        for id in wanted {
+            self.layout_root(&id, &mut ignored);
+        }
+    }
+
+    /// The field a tap focused, for platforms that show a keyboard.
+    pub fn focused_field(outcome: &Outcome) -> Option<&str> {
+        outcome.effects.iter().find_map(|e| match e {
+            Effect::Focused { field } => Some(field.as_str()),
+            _ => None,
+        })
     }
 
     /// A summary of the state, for agents: the layout shown and the form.

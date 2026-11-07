@@ -13,7 +13,9 @@ use taffy::prelude::*;
 use taffy::{LayoutInput, LayoutOutput, compute_leaf_layout};
 
 use crate::bind::{Ctx, fold, render};
-use crate::scene::{Draw, IconRun, NO_CLIP, QuadInstance, Scene, SemanticNode, Tap, TextRun};
+use crate::scene::{
+    Draw, IconRun, ImageRun, NO_CLIP, QuadInstance, Scene, SemanticNode, Tap, TextRun,
+};
 use crate::style::{CHIP_LABEL, LABEL_LARGE, Rgba, Theme, Type, type_for};
 use crate::text::TextEngine;
 
@@ -59,6 +61,11 @@ pub struct Input<'a> {
     pub scroll: &'a BTreeMap<String, f32>,
     pub viewport: Viewport,
     pub dark: bool,
+    /// The entity `$item` binds throughout (a page screen's `item`).
+    pub item: Option<&'a str>,
+    /// Space the platform covers (top, right, bottom, left, points): the
+    /// background fills it, the layout stays out of it.
+    pub insets: [f32; 4],
 }
 
 /// Why a frame couldn't be built.
@@ -126,6 +133,12 @@ enum Paint {
     },
     Spinner {
         color: Rgba,
+    },
+    /// A placeholder in `placeholder`, the image over it once it has loaded.
+    Image {
+        url: String,
+        placeholder: Rgba,
+        radius: f32,
     },
     Switch {
         on: bool,
@@ -234,6 +247,8 @@ impl SceneBuilder {
                 scale,
             },
             dark: false,
+            item: None,
+            insets: [0.0; 4],
         })
     }
 
@@ -256,6 +271,13 @@ impl SceneBuilder {
             item: None,
             item_uri: None,
         };
+        let ctx = match input
+            .item
+            .and_then(|u| input.data.entities.get_key_value(u))
+        {
+            Some((uri, e)) => ctx.with_item(uri, e),
+            None => ctx,
+        };
         let vp = input.viewport;
         let state = B {
             ctx,
@@ -265,9 +287,16 @@ impl SceneBuilder {
             depth: 0,
         };
         let content = b.node(input.root, &state);
+        let [it, ir, ib, il] = input.insets.map(|v| length(v.max(0.0)));
         let root_style = Style {
             display: Display::Flex,
             flex_direction: FlexDirection::Column,
+            padding: Rect {
+                top: it,
+                right: ir,
+                bottom: ib,
+                left: il,
+            },
             size: Size {
                 width: length(vp.width),
                 height: length(vp.height),
@@ -1019,7 +1048,7 @@ impl<'i> Build<'_, 'i> {
                 )
             }
             UiNode::Image {
-                url: _,
+                url,
                 shape,
                 size_dp,
                 aspect_ratio,
@@ -1050,9 +1079,9 @@ impl<'i> Build<'_, 'i> {
                 self.push(
                     style,
                     Vec::new(),
-                    Paint::Quad {
-                        bg: color,
-                        border: None,
+                    Paint::Image {
+                        url: ctx.text(url),
+                        placeholder: color,
                         radius,
                     },
                     Some(sem),
@@ -1445,7 +1474,7 @@ impl<'i> Build<'_, 'i> {
                 let (track, thumb) = if on {
                     (theme.primary, theme.on_primary)
                 } else {
-                    (theme.surface_variant, theme.muted_text)
+                    (theme.switch_track_off, theme.switch_outline)
                 };
                 let tap = Tap::Intent {
                     intent: bind_intent(on_click, &ctx),
@@ -1926,6 +1955,24 @@ impl<'i> Build<'_, 'i> {
                     }
                 }
             }
+            Paint::Image {
+                url,
+                placeholder,
+                radius,
+            } => {
+                let r = radius.min(w.min(h) / 2.0);
+                let mut q = QuadInstance::fill(rect, *placeholder, r);
+                q.clip = clip;
+                scene.draws.push(Draw::Quad(q));
+                if url.starts_with("http://") || url.starts_with("https://") {
+                    scene.draws.push(Draw::Image(ImageRun {
+                        url: url.clone(),
+                        rect,
+                        radius: r,
+                        clip,
+                    }));
+                }
+            }
             Paint::Spinner { color } => {
                 let bw = (w / 8.0).max(1.5);
                 let mut q = QuadInstance::fill(rect, Rgba::TRANSPARENT, w / 2.0).border(*color, bw);
@@ -1933,7 +1980,12 @@ impl<'i> Build<'_, 'i> {
                 scene.draws.push(Draw::Quad(q));
             }
             Paint::Switch { on, track, thumb } => {
+                // Material 3: off is an outlined track with a small grey
+                // thumb; on is a filled track with a large light thumb.
                 let mut q = QuadInstance::fill(rect, *track, h / 2.0);
+                if !*on {
+                    q = q.border(self.theme.switch_outline, 2.0);
+                }
                 q.clip = clip;
                 scene.draws.push(Draw::Quad(q));
                 let d = if *on { h - 8.0 } else { h - 16.0 };

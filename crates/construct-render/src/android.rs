@@ -2,7 +2,10 @@
 //! with Vulkan (or GL), no JVM UI in between. Build and run it with
 //! `scripts/android_native.sh`.
 //!
-//! The activity opens `layout.json` from its external files directory
+//! With `pod.json` (`{"url", "token"}`, a session token) in its internal
+//! files directory, it opens that pod's home live (`crate::remote`):
+//! `scripts/android_native.sh --pod` puts it there. Otherwise the activity
+//! opens `layout.json` from its external files directory
 //! (`{"layout", "data"}`, pushed with adb) or the bundled demo. With
 //! `frame-request` there too, it first draws that layout offscreen at
 //! 390 × 844 @2x on the device's GPU and saves `frame.png` next to it, which
@@ -86,20 +89,104 @@ fn frame_for_comparison(dir: &std::path::Path, session: &mut Session) {
     }
 }
 
+/// The soft keyboard and the system bars, for the window.
+struct Android(AndroidApp);
+
+impl crate::window::Platform for Android {
+    fn show_keyboard(&self, show: bool) {
+        if show {
+            self.0.show_soft_input(true);
+        } else {
+            self.0.hide_soft_input(false);
+        }
+    }
+
+    fn insets_px(&self, (w, h): (u32, u32)) -> [f32; 4] {
+        // The area the system leaves the app: without the status bar, the
+        // camera cutout above it, the navigation bar and an open keyboard.
+        let r = self.0.content_rect();
+        if r.right <= r.left || r.bottom <= r.top {
+            return [0.0; 4];
+        }
+        [
+            r.top.max(0) as f32,
+            (w as i32 - r.right).max(0) as f32,
+            (h as i32 - r.bottom).max(0) as f32,
+            r.left.max(0) as f32,
+        ]
+    }
+}
+
+/// A page saying what went wrong, in place of the pod's home.
+fn error_page(message: &str) -> Session {
+    let root: protocol::UiNode = serde_json::from_value(serde_json::json!({
+        "type": "core://Page", "id": "error", "root": { "type": "core://Column",
+        "padding_h_dp": 16, "padding_v_dp": 16, "spacing_dp": 8, "children": [
+            { "type": "core://Text", "value_expr": "Couldn't open the pod", "style": "Title" },
+            { "type": "core://Text", "value_expr": message, "style": "Body" },
+            { "type": "core://Text", "value_expr": "Run scripts/android_native.sh --pod again, then reopen the app.", "style": "Secondary" }
+        ] } }))
+    .expect("a valid page");
+    Session::new(
+        "error",
+        root,
+        protocol::DataBundle::default(),
+        Viewport::PHONE,
+    )
+}
+
+/// The pod's home, live, when `pod.json` is in the internal files dir.
+fn pod_session(app: &AndroidApp) -> Option<Session> {
+    let file = app.internal_data_path()?.join("pod.json");
+    let text = std::fs::read_to_string(&file).ok()?;
+    let v: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => return Some(error_page(&format!("pod.json: {e}"))),
+    };
+    let (Some(url), Some(token)) = (v["url"].as_str(), v["token"].as_str()) else {
+        return Some(error_page("pod.json needs url and token"));
+    };
+    log(&format!("opening {url}"));
+    let started = std::time::Instant::now();
+    let session = crate::remote::PodClient::connect(url, token)
+        .and_then(|c| c.session("home", Viewport::PHONE));
+    Some(match session {
+        Ok(s) => {
+            log(&format!(
+                "home loaded in {:.0} ms",
+                started.elapsed().as_secs_f64() * 1000.0
+            ));
+            s
+        }
+        Err(e) => {
+            log(&format!("couldn't open the pod: {e}"));
+            error_page(&e)
+        }
+    })
+}
+
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
     log("construct-render starting");
-    let dir = app.external_data_path();
-    let (id, root, data) = load(dir.as_ref());
-    let mut session = Session::new(&id, root, data, Viewport::PHONE);
-    if let Some(d) = dir.as_ref().filter(|d| d.join("frame-request").exists()) {
-        frame_for_comparison(d, &mut session);
-    }
-    let event_loop = match EventLoop::builder().with_android_app(app).build() {
+    let session = match pod_session(&app) {
+        Some(s) => s,
+        None => {
+            let dir = app.external_data_path();
+            let (id, root, data) = load(dir.as_ref());
+            let mut session = Session::new(&id, root, data, Viewport::PHONE);
+            if let Some(d) = dir.as_ref().filter(|d| d.join("frame-request").exists()) {
+                frame_for_comparison(d, &mut session);
+            }
+            session
+        }
+    };
+    let event_loop = match EventLoop::builder().with_android_app(app.clone()).build() {
         Ok(l) => l,
         Err(e) => return log(&format!("no event loop: {e}")),
     };
-    if let Err(e) = crate::window::run(event_loop, Controller::new(session), "The Construct") {
+    let window = crate::window::App::new(Controller::new(session), "The Construct")
+        .with_platform(Box::new(Android(app)));
+    if let Err(e) = crate::window::run_app(event_loop, window) {
         log(&format!("window: {e}"));
     }
 }

@@ -264,6 +264,8 @@ fn effect_line(e: &Effect) -> String {
             serde_json::to_string(fields).unwrap_or_default()
         ),
         Effect::Opened { layout } => format!("opened layout {layout}"),
+        Effect::OpenedScreen { screen } => format!("opened screen {screen}"),
+        Effect::LoadFailed { what, error } => format!("couldn't load {what}: {error}"),
         Effect::Back => "went back".into(),
         Effect::Scrolled { id, offset } => format!("scrolled {id} to {offset}"),
         Effect::NotSent { intent } => format!(

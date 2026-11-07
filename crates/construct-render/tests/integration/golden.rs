@@ -27,6 +27,8 @@ pub fn cpu_frame(name: &str, form: &BTreeMap<String, String>, dark: bool) -> Rgb
             scroll: &BTreeMap::new(),
             viewport: Viewport::PHONE,
             dark,
+            item: None,
+            insets: [0.0; 4],
         })
         .unwrap();
     CpuRenderer::new().render(&scene, &mut builder.text)
@@ -149,6 +151,8 @@ fn snapshot_latency_and_webp() {
         scroll: &BTreeMap::new(),
         viewport: Viewport::PHONE,
         dark: false,
+        item: None,
+        insets: [0.0; 4],
     };
     // Warm the glyph caches, then time one full snapshot.
     let scene = builder.build(&input).unwrap();

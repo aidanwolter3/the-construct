@@ -14,7 +14,7 @@ use glyphon::{
 use image::RgbaImage;
 use wgpu::util::DeviceExt;
 
-use crate::scene::{Draw, IconRun, QuadInstance, Scene, TextRun};
+use crate::scene::{Draw, QuadInstance, Scene, TextRun};
 use crate::style::Type;
 use crate::text::TextEngine;
 
@@ -125,6 +125,8 @@ pub struct Renderer {
     viewport: glyphon::Viewport,
     texts: Vec<TextRenderer>,
     swash: SwashCache,
+    /// Where images come from; without one, image runs draw nothing.
+    pub images: Option<crate::images::ImageStore>,
 }
 
 /// One layer: a range of quad instances, then text runs.
@@ -139,12 +141,25 @@ fn overlaps(a: [f32; 4], b: [f32; 4]) -> bool {
 
 /// Paint-order layers (see the module doc): (quads per layer, texts per
 /// layer), each draw by index into its kind.
-type Layers = (Vec<Vec<QuadInstance>>, Vec<Vec<TextRun>>, Vec<Vec<IconRun>>);
+/// An icon or a loaded image, drawn as a glyphon custom glyph.
+struct GlyphRun {
+    id: u16,
+    rect: [f32; 4],
+    /// The tint of an icon (a mask); an image keeps its own colours.
+    color: Option<crate::style::Rgba>,
+    clip: [f32; 4],
+}
 
-fn layers(scene: &Scene) -> Layers {
+type Layers = (
+    Vec<Vec<QuadInstance>>,
+    Vec<Vec<TextRun>>,
+    Vec<Vec<GlyphRun>>,
+);
+
+fn layers(scene: &Scene, images: Option<&crate::images::ImageStore>) -> Layers {
     let mut quads: Vec<Vec<QuadInstance>> = vec![Vec::new()];
     let mut texts: Vec<Vec<TextRun>> = vec![Vec::new()];
-    let mut icons: Vec<Vec<IconRun>> = vec![Vec::new()];
+    let mut icons: Vec<Vec<GlyphRun>> = vec![Vec::new()];
     // (extent, layer) of placed quads and texts.
     let mut placed_q: Vec<([f32; 4], usize)> = Vec::new();
     let mut placed_t: Vec<([f32; 4], usize)> = Vec::new();
@@ -189,9 +204,28 @@ fn layers(scene: &Scene) -> Layers {
                 texts[l].push(t.clone());
                 placed_t.push((e, l));
             }
-            // Icons go with text: drawn after the quads of their layer.
-            Draw::Icon(i) => {
-                let e = i.rect;
+            // Icons and images go with text: after the quads of their layer.
+            Draw::Icon(_) | Draw::Image(_) => {
+                let run = match d {
+                    Draw::Icon(i) => GlyphRun {
+                        id: crate::icons::id(&i.name).unwrap_or(0),
+                        rect: i.rect,
+                        color: Some(i.color),
+                        clip: i.clip,
+                    },
+                    Draw::Image(i) => match images.filter(|st| st.is_ready(&i.url)) {
+                        Some(st) => GlyphRun {
+                            id: st.glyph_id(&i.url, i.radius * scene.scale),
+                            rect: i.rect,
+                            color: None,
+                            clip: i.clip,
+                        },
+                        // Not loaded: its placeholder quad stays.
+                        None => continue,
+                    },
+                    _ => unreachable!("matched above"),
+                };
+                let e = run.rect;
                 let l = placed_q
                     .iter()
                     .chain(placed_t.iter())
@@ -204,7 +238,7 @@ fn layers(scene: &Scene) -> Layers {
                     texts.push(Vec::new());
                     icons.push(Vec::new());
                 }
-                icons[l].push(i.clone());
+                icons[l].push(run);
                 placed_t.push((e, l));
             }
         }
@@ -299,6 +333,7 @@ impl Renderer {
             viewport,
             texts: Vec::new(),
             swash: SwashCache::new(),
+            images: None,
         }
     }
 
@@ -327,7 +362,7 @@ impl Renderer {
                 _pad: 0.0,
             }),
         );
-        let (quad_layers, text_layers, icon_layers) = layers(scene);
+        let (quad_layers, text_layers, icon_layers) = layers(scene, self.images.as_ref());
         let mut all: Vec<QuadInstance> = Vec::new();
         let mut plan: Vec<Layer> = Vec::new();
         for (i, qs) in quad_layers.iter().enumerate() {
@@ -407,19 +442,22 @@ impl Renderer {
             let glyphs: Vec<[CustomGlyph; 1]> = icon_layers[li]
                 .iter()
                 .map(|i| {
-                    let c = i.color.to_u8();
                     [CustomGlyph {
-                        id: crate::icons::id(&i.name).unwrap_or(0),
+                        id: i.id,
                         left: (i.rect[0] * s).round(),
                         top: (i.rect[1] * s).round(),
                         width: (i.rect[2] * s).round(),
                         height: (i.rect[3] * s).round(),
-                        color: Some(glyphon::Color::rgba(c[0], c[1], c[2], c[3])),
+                        color: i.color.map(|c| {
+                            let c = c.to_u8();
+                            glyphon::Color::rgba(c[0], c[1], c[2], c[3])
+                        }),
                         snap_to_physical_pixel: true,
                         metadata: 0,
                     }]
                 })
                 .collect();
+            let images = self.images.clone();
             let empty = glyphon::Buffer::new(text.font_system(), glyphon::Metrics::new(1.0, 1.0));
             let icon_areas = icon_layers[li].iter().zip(&glyphs).map(|(i, g)| {
                 let [cx, cy, cw, ch] = i.clip.map(|v| v * s);
@@ -448,6 +486,20 @@ impl Renderer {
                     areas.chain(icon_areas),
                     &mut self.swash,
                     |req| {
+                        if req.id >= crate::images::FIRST_GLYPH_ID {
+                            let store = images.as_ref()?;
+                            let (url, radius) = store.glyph(req.id)?;
+                            let img = store.cut(
+                                &url,
+                                req.width as u32,
+                                req.height as u32,
+                                radius as f32,
+                            )?;
+                            return Some(RasterizedCustomGlyph {
+                                data: img.as_raw().clone(),
+                                content_type: ContentType::Color,
+                            });
+                        }
                         let name = crate::icons::name(req.id)?;
                         let size = req.width.min(req.height) as u32;
                         let mask = crate::icons::mask(name, size)?;

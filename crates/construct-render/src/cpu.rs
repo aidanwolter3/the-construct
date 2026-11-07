@@ -93,6 +93,8 @@ pub struct CpuRenderer {
     swash: SwashCache,
     /// Icon masks by name and pixel size.
     icons: HashMap<(String, u32), Vec<u8>>,
+    /// Where images come from; without one, image runs draw nothing.
+    pub images: Option<crate::images::ImageStore>,
 }
 
 impl Default for CpuRenderer {
@@ -106,6 +108,7 @@ impl CpuRenderer {
         CpuRenderer {
             swash: SwashCache::new(),
             icons: HashMap::new(),
+            images: None,
         }
     }
 
@@ -123,6 +126,7 @@ impl CpuRenderer {
                 Draw::Quad(q) => self.quad(&mut px, w, h, q, s),
                 Draw::Text(t) => self.text(&mut px, w, h, t, s, text),
                 Draw::Icon(i) => self.icon(&mut px, w, h, i, s),
+                Draw::Image(i) => self.image(&mut px, w, h, i, s),
             }
         }
         // Unpremultiplied: opaque pixels (nearly all) are copied as they are.
@@ -170,6 +174,50 @@ impl CpuRenderer {
                         [c[0] * a, c[1] * a, c[2] * a, a],
                     );
                 }
+            }
+        }
+    }
+
+    /// A loaded image, cut to its box (cropped to fill, corners rounded).
+    fn image(
+        &mut self,
+        px: &mut [[u8; 4]],
+        w: usize,
+        h: usize,
+        i: &crate::scene::ImageRun,
+        s: f32,
+    ) {
+        let Some(store) = &self.images else {
+            return;
+        };
+        let (x0, y0) = (
+            (i.rect[0] * s).round() as i32,
+            (i.rect[1] * s).round() as i32,
+        );
+        let (iw, ih) = (
+            (i.rect[2] * s).round().max(1.0) as u32,
+            (i.rect[3] * s).round().max(1.0) as u32,
+        );
+        let Some(img) = store.cut(&i.url, iw, ih, i.radius * s) else {
+            return;
+        };
+        let [cx, cy, cw, ch] = i.clip.map(|v| v * s);
+        for (col, row, p) in img.enumerate_pixels() {
+            let (x, y) = (x0 + col as i32, y0 + row as i32);
+            if x < 0 || y < 0 || x as usize >= w || y as usize >= h {
+                continue;
+            }
+            let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+            if fx < cx || fy < cy || fx > cx + cw || fy > cy + ch {
+                continue;
+            }
+            let a = p.0[3] as f32 / 255.0;
+            if a > 0.0 {
+                let c = p.0.map(|v| v as f32 / 255.0);
+                over(
+                    &mut px[y as usize * w + x as usize],
+                    [c[0] * a, c[1] * a, c[2] * a, a],
+                );
             }
         }
     }
