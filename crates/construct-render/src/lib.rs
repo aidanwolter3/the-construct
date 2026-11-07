@@ -42,6 +42,8 @@ pub mod remote;
 mod android;
 #[cfg(all(target_os = "android", feature = "window"))]
 mod bridge;
+#[cfg(all(target_os = "android", feature = "window"))]
+mod picked;
 
 pub use interact::{Effect, Outcome, Session, Target};
 pub use layout::{Input, RenderError, SceneBuilder, Viewport};
