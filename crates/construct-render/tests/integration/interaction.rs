@@ -452,3 +452,34 @@ fn a_focused_field_draws_a_caret_after_its_text() {
     s.type_text("q", "soup and bread");
     assert!(caret_x(&mut s) > after_soup + 20.0);
 }
+
+#[test]
+fn panels_draw_over_their_layout_and_a_scrim_tap_closes_them() {
+    let home: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Page", "id": "home", "root": { "type": "core://Column", "children": [
+            { "type": "core://Text", "value_expr": "Home underneath", "style": "Title" },
+            { "type": "core://Button", "label": "Settings",
+              "on_click": { "intent": "action.navigation.open", "layout": "c-tasks", "presentation": "Panel" } } ] } }))
+    .unwrap();
+    let mut s = Session::new("home", home, Default::default(), Viewport::PHONE);
+    s.loader = Some(Box::new(FakePod));
+    s.tap(&Target::Text("Settings".into())).unwrap();
+    let scene = s.scene().unwrap();
+    // Home is drawn but can't be tapped; the panel is 86% of 390 wide at most 340.
+    assert!(scene.find_text("Home underneath").is_none());
+    assert!(scene.find_node("scrim").is_some());
+    let row = scene.find_node("open_7").unwrap().bounds;
+    assert!(row[0] >= 0.0 && row[0] + row[2] <= 340.0 + 0.01, "{row:?}");
+    // A screen opens inside the panel, and Back returns to the panel.
+    s.tap(&Target::Id("open_7".into())).unwrap();
+    let title = s.scene().unwrap().find_text("Fix the gate").unwrap().bounds;
+    assert!(title[0] < 340.0);
+    assert!(s.scene().unwrap().find_node("scrim").is_some());
+    s.dispatch(&json!({ "intent": "action.navigation.back" }))
+        .unwrap();
+    assert!(s.scene().unwrap().find_node("open_7").is_some());
+    // Tapping outside the panel closes it.
+    s.tap(&Target::Point(380.0, 400.0)).unwrap();
+    assert_eq!(s.current(), "home");
+    assert!(s.scene().unwrap().find_text("Home underneath").is_some());
+}

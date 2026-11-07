@@ -57,8 +57,14 @@ cargo ndk -t arm64-v8a -o "$OUT/jniLibs" build -p construct-render --features wi
 echo "==> packaging"
 rm -rf "$OUT/apk" && mkdir -p "$OUT/apk/lib"
 cp -r "$OUT/jniLibs/arm64-v8a" "$OUT/apk/lib/"
+# The launcher icon: the main app's (app/androidApp), compiled from its resources.
+RES=app/androidApp/src/main/res
+rm -rf "$OUT/res" && mkdir -p "$OUT/res"
+"$TOOLS/aapt2" compile -o "$OUT/res" \
+  "$RES"/drawable/ic_launcher_{background,foreground,monochrome}.xml \
+  "$RES"/mipmap-anydpi-v26/ic_launcher{,_round}.xml "$RES"/mipmap-*dpi/ic_launcher{,_round}.png
 "$TOOLS/aapt2" link -o "$OUT/unsigned.apk" --manifest crates/construct-render/android/AndroidManifest.xml \
-  -I "$PLATFORM/android.jar"
+  -I "$PLATFORM/android.jar" "$OUT"/res/*.flat
 (cd "$OUT/apk" && zip -qr ../unsigned.apk lib)
 "$TOOLS/zipalign" -f -p 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
 KEY=$HOME/.android/debug.keystore

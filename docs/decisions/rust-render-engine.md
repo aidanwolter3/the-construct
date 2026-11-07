@@ -43,8 +43,7 @@ Icons are the shared UI's own Material path data (`icons.rs`, generated from `Co
 The viewer and the APK can run a pod live but read-only (feature `remote`): layouts, screens, their data and images
 are fetched as they open; nothing is sent back.
 
-Not yet: presented layouts (sheets, panels, overlays) and dialogs are not drawn (a presented layout opens full
-screen), carousels show their first item, and dates are not formatted. The native window and
+Not yet: dialogs are not drawn, a pinned version is not shown, carousels show their first item, and dates are not formatted. The native window and
 APK talk to no engine (`client-core`): no cache, outbox, event stream or upstream sign-in, so taps that change data
 are not sent. Moving the clients onto this engine, the
 web target and a shared golden suite with the simulator are later decisions.

@@ -53,7 +53,9 @@ impl Controller {
         was
     }
 
-    pub fn new(session: Session) -> Controller {
+    pub fn new(mut session: Session) -> Controller {
+        // A window slides layouts in and out.
+        session.animate = true;
         Controller {
             session,
             dirty: true,

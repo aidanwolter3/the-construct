@@ -265,6 +265,7 @@ fn effect_line(e: &Effect) -> String {
         ),
         Effect::Opened { layout } => format!("opened layout {layout}"),
         Effect::OpenedScreen { screen } => format!("opened screen {screen}"),
+        Effect::Device { command } => format!("ran {command} on the device"),
         Effect::LoadFailed { what, error } => format!("couldn't load {what}: {error}"),
         Effect::Back => "went back".into(),
         Effect::Scrolled { id, offset } => format!("scrolled {id} to {offset}"),

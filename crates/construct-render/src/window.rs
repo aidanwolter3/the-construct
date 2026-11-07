@@ -43,29 +43,76 @@ struct Drag {
     start: (f32, f32),
     last: (f32, f32),
     at: Instant,
-    /// Points per second the content moves up (smoothed).
-    velocity: f32,
+    /// Recent positions (time, y), for the release velocity.
+    samples: std::collections::VecDeque<(Instant, f32)>,
     /// Moved far enough to be a drag, not a tap.
     dragging: bool,
     /// Something scrolled during it (so it is not a swipe).
     scrolled: bool,
 }
 
-/// A scroll still moving after the finger left: it slows down each frame.
+/// A scroll still moving after the finger left, along Android's fling
+/// curve (`OverScroller`'s spline, which Compose's default fling uses too).
 struct Fling {
     at: (f32, f32),
-    velocity: f32,
-    last: Instant,
+    start: Instant,
+    /// Up (content moves up) or down.
+    sign: f32,
+    duration: f32,
+    distance: f32,
+    applied: f32,
+}
+
+/// Android's fling constants (`ViewConfiguration.getScrollFriction()`,
+/// `OverScroller`), in points.
+const INFLEXION: f32 = 0.35;
+const SCROLL_FRICTION: f32 = 0.015;
+/// `ln(0.78) / ln(0.9)`.
+const DECELERATION_RATE: f32 = 2.358_201_7;
+/// g × inches per meter × 160 points per inch × 0.84 (`OverScroller`).
+const PHYSICAL_COEFF: f32 = 9.806_65 * 39.37 * 160.0 * 0.84;
+
+impl Fling {
+    /// A fling at `velocity` points per second: how long and how far it goes.
+    fn new(at: (f32, f32), velocity: f32, start: Instant) -> Fling {
+        let v = velocity.abs().min(MAX_FLING);
+        let l = (INFLEXION * v / (SCROLL_FRICTION * PHYSICAL_COEFF)).ln();
+        let duration = (l / (DECELERATION_RATE - 1.0)).exp();
+        let distance = SCROLL_FRICTION
+            * PHYSICAL_COEFF
+            * (DECELERATION_RATE / (DECELERATION_RATE - 1.0) * l).exp();
+        Fling {
+            at,
+            start,
+            sign: velocity.signum(),
+            duration,
+            distance,
+            applied: 0.0,
+        }
+    }
+
+    /// How far along the curve it is at `now` (points), and whether done.
+    fn position(&self, now: Instant) -> (f32, bool) {
+        let u = (now.duration_since(self.start).as_secs_f32() / self.duration).min(1.0);
+        (
+            self.distance * (1.0 - (1.0 - u).powf(DECELERATION_RATE)),
+            u >= 1.0,
+        )
+    }
 }
 
 /// Movement before a touch counts as a drag (points).
 const TOUCH_SLOP: f32 = 8.0;
 /// Movement for a drag that scrolled nothing to count as a swipe (points).
 const SWIPE_DISTANCE: f32 = 48.0;
-/// How fast a fling slows: velocity × e^(−FRICTION·t).
-const FRICTION: f32 = 4.0;
-/// Slowest fling worth animating (points per second).
-const MIN_FLING: f32 = 40.0;
+/// Slowest and fastest flings (points per second, Android's
+/// `ViewConfiguration` minimum and maximum fling velocities).
+const MIN_FLING: f32 = 50.0;
+const MAX_FLING: f32 = 8000.0;
+/// How far back the release velocity looks, and how long a finger held
+/// still before lifting means no fling (Compose's `VelocityTracker`).
+const VELOCITY_HORIZON: f32 = 0.1;
+const STILL_BEFORE_LIFT: f32 = 0.04;
 
 /// The window's state across the event loop.
 pub struct App {
@@ -119,18 +166,15 @@ impl App {
         let Some(f) = self.fling.as_mut() else {
             return false;
         };
-        let now = Instant::now();
-        let dt = now.duration_since(f.last).as_secs_f32().min(0.05);
-        f.last = now;
-        let dy = f.velocity * dt;
-        f.velocity *= (-FRICTION * dt).exp();
+        let (pos, done) = f.position(Instant::now());
+        let dy = f.sign * (pos - f.applied);
+        f.applied = pos;
         let (x, y) = f.at;
-        let still = f.velocity.abs() > MIN_FLING;
-        let moved = self.scroll(x, y, dy);
-        if !moved || !still {
+        let moved = dy == 0.0 || self.scroll(x, y, dy);
+        if !moved || done {
             self.fling = None;
         }
-        moved && still
+        moved && !done
     }
 
     /// Scrolls the view at a point; true if it moved.
@@ -246,7 +290,7 @@ impl App {
             Err(e) => log(&format!("layout failed: {e}")),
         }
         s.gpu.queue.present(frame);
-        if flinging {
+        if flinging || self.controller.session.animating() {
             s.window.request_redraw();
         }
         if self.controller.frames == 0 {
@@ -356,7 +400,7 @@ impl ApplicationHandler for App {
                             start: p,
                             last: p,
                             at: now,
-                            velocity: 0.0,
+                            samples: std::iter::once((now, p.1)).collect(),
                             dragging: false,
                             scrolled: false,
                         });
@@ -371,14 +415,18 @@ impl ApplicationHandler for App {
                         }
                         if d.dragging && ty.abs() >= tx.abs() {
                             let dy = d.last.1 - p.1;
-                            let dt = now.duration_since(d.at).as_secs_f32().max(0.001);
-                            d.velocity = 0.6 * (dy / dt) + 0.4 * d.velocity;
                             if self.scroll(d.start.0, d.start.1, dy) {
                                 d.scrolled = true;
                             }
                         }
                         d.last = p;
                         d.at = now;
+                        d.samples.push_back((now, p.1));
+                        while d.samples.len() > 2
+                            && now.duration_since(d.samples[0].0).as_secs_f32() > VELOCITY_HORIZON
+                        {
+                            d.samples.pop_front();
+                        }
                         self.drag = Some(d);
                         if let Some(s) = &self.surface {
                             s.window.request_redraw();
@@ -389,8 +437,16 @@ impl ApplicationHandler for App {
                             return;
                         };
                         let (tx, ty) = (p.0 - d.start.0, p.1 - d.start.1);
-                        // A finger that stopped before lifting doesn't fling.
-                        let stale = now.duration_since(d.at).as_millis() > 80;
+                        // The release velocity over the last 100 ms (content
+                        // moving up is positive); none if the finger was held
+                        // still before lifting.
+                        let stale = now.duration_since(d.at).as_secs_f32() > STILL_BEFORE_LIFT;
+                        let velocity = match (d.samples.front(), d.samples.back()) {
+                            (Some(a), Some(b)) if b.0 > a.0 => {
+                                (a.1 - b.1) / b.0.duration_since(a.0).as_secs_f32()
+                            }
+                            _ => 0.0,
+                        };
                         if !d.dragging {
                             self.apply(Event::Tap { x: p.0, y: p.1 });
                         } else if !d.scrolled && tx.abs().max(ty.abs()) > SWIPE_DISTANCE {
@@ -410,12 +466,8 @@ impl ApplicationHandler for App {
                                 y: d.start.1,
                                 kind,
                             });
-                        } else if d.scrolled && !stale && d.velocity.abs() > MIN_FLING * 4.0 {
-                            self.fling = Some(Fling {
-                                at: d.start,
-                                velocity: d.velocity,
-                                last: now,
-                            });
+                        } else if d.scrolled && !stale && velocity.abs() > MIN_FLING {
+                            self.fling = Some(Fling::new(d.start, velocity, now));
                             if let Some(s) = &self.surface {
                                 s.window.request_redraw();
                             }

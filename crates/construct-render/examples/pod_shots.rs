@@ -2,7 +2,7 @@
 //! (CONSTRUCT_POD_TOKEN: a pod code or session token), driven by a script and
 //! drawn on the CPU at 390 × 844 @3, as the simulator's phone, to compare
 //! with `:desktopApp:simulate -PbaseUrl`. Script steps, `;`-separated:
-//! `open <layout>`, `tap <text or id>`, `type <field> <text>`, `scroll <dy>`,
+//! `open <layout>`, `present <layout> <Sheet|Panel|Overlay> [edge]`, `tap <text or id>`, `type <field> <text>`, `scroll <dy>`,
 //! `back`, `wait <ms>` (images keep loading meanwhile), `shot <name>`.
 
 use construct_render::Viewport;
@@ -32,6 +32,14 @@ fn main() {
             "open" => s
                 .dispatch(&json!({ "intent": "action.navigation.open", "layout": arg, "presentation": "Push" }))
                 .map(|o| o.effects),
+            "present" => {
+                // `present <layout> <Sheet|Panel|Overlay> [edge]`.
+                let mut it = arg.split(' ');
+                let (layout, how, edge) = (it.next().unwrap_or(""), it.next().unwrap_or("Sheet"), it.next());
+                s.dispatch(&json!({ "intent": "action.navigation.open", "layout": layout,
+                    "presentation": how, "edge": edge }))
+                    .map(|o| o.effects)
+            }
             "tap" => s
                 .tap(&Target::Id(arg.into()))
                 .or_else(|_| s.tap(&Target::Text(arg.into())))

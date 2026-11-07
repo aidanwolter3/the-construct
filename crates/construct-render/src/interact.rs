@@ -12,10 +12,12 @@ use protocol::{DataBundle, PageScreen, UiNode};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 use crate::cpu::CpuRenderer;
-use crate::layout::{Input, RenderError, SceneBuilder, Viewport};
-use crate::scene::{Scene, SemanticNode, Tap};
+use crate::layout::{Input, Laid, RenderError, SceneBuilder, Viewport};
+use crate::scene::{Draw, QuadInstance, Scene, SemanticNode, Tap};
+use crate::style::Rgba;
 
 /// What a tap or scroll aims at.
 #[derive(Debug, Clone, PartialEq)]
@@ -49,6 +51,10 @@ pub enum Effect {
     OpenedScreen {
         screen: String,
     },
+    /// An `action.device` command ran on the device.
+    Device {
+        command: String,
+    },
     /// A layout or a screen's data couldn't be loaded.
     LoadFailed {
         what: String,
@@ -72,6 +78,47 @@ pub struct Outcome {
     pub effects: Vec<Effect>,
 }
 
+/// Where an entry is drawn (decision `edge-overlays-and-gestures`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Frame {
+    /// The whole screen: the root, or a pushed layout.
+    Full,
+    /// A sheet, panel or overlay from this edge, over a scrim.
+    Edge(protocol::Edge),
+}
+
+/// How long a layout or screen takes to slide in or out (the shared UI's
+/// `FRAME_SLIDE_MS`).
+const SLIDE: Duration = Duration::from_millis(280);
+/// A sheet's share of the screen's height, and a panel's of its width (at
+/// most [`PANEL_MAX_WIDTH`]), as in the shared UI.
+const SHEET_HEIGHT_FRACTION: f32 = 0.85;
+const PANEL_WIDTH_FRACTION: f32 = 0.86;
+const PANEL_MAX_WIDTH: f32 = 340.0;
+/// A sheet's handle strip.
+const HANDLE_STRIP: f32 = 16.0;
+
+/// Material's standard easing, `cubic-bezier(0.4, 0, 0.2, 1)`
+/// (`FastOutSlowInEasing`).
+fn fast_out_slow_in(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    let (x1, y1, x2, y2) = (0.4f32, 0.0f32, 0.2f32, 1.0f32);
+    let bez = |a: f32, b: f32, u: f32| {
+        3.0 * a * u * (1.0 - u).powi(2) + 3.0 * b * u * u * (1.0 - u) + u.powi(3)
+    };
+    // Solve x(u) = t by bisection, then y(u).
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    for _ in 0..24 {
+        let mid = (lo + hi) / 2.0;
+        if bez(x1, x2, mid) < t {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    bez(y1, y2, (lo + hi) / 2.0)
+}
+
 struct Entry {
     id: String,
     root: UiNode,
@@ -84,6 +131,15 @@ struct Entry {
     error: Option<String>,
     /// Scroll offsets of this entry's scrolling views (by semantic id).
     scroll: BTreeMap<String, f32>,
+    frame: Frame,
+    /// A sheet's height or a panel's width (`size_dp`).
+    size: Option<f32>,
+    /// A screen opened inside its layout's sheet or panel.
+    in_frame: bool,
+    opened: Instant,
+    closing: Option<Instant>,
+    /// Laid out at this size (points, with these insets).
+    laid: Option<(Laid, [f32; 2])>,
 }
 
 impl Entry {
@@ -100,6 +156,12 @@ impl Entry {
             screens,
             error: None,
             scroll: BTreeMap::new(),
+            frame: Frame::Full,
+            size: None,
+            in_frame: false,
+            opened: Instant::now(),
+            closing: None,
+            laid: None,
         }
     }
 }
@@ -111,6 +173,11 @@ pub trait Loader: Send {
     fn layout(&self, id: &str) -> Result<(UiNode, DataBundle), String>;
     /// A data path's answer (a screen's `data`, `action.data.load`).
     fn data(&self, path: &str) -> Result<DataBundle, String>;
+    /// An `action.device` command the device answers with data (a layout's
+    /// versions); `None` when this loader doesn't run it.
+    fn device(&self, _command: &str, _app: &str, _id: &str) -> Option<Result<DataBundle, String>> {
+        None
+    }
 }
 
 /// `uri` against a route pattern (`collections://tasks/{id}`): the captured
@@ -169,7 +236,9 @@ pub struct Session {
     builder: SceneBuilder,
     cpu: CpuRenderer,
     scene: Option<Scene>,
-    laid: Option<crate::layout::Laid>,
+    /// Slide layouts in and out (a window); off, every frame is settled
+    /// (tests, previews).
+    pub animate: bool,
     /// The text field being typed into (drawn with a caret).
     pub focused: Option<String>,
     /// Loads what taps open (a live session); `None`: only what is given.
@@ -193,7 +262,7 @@ impl Session {
             builder: SceneBuilder::new(),
             cpu: CpuRenderer::new(),
             scene: None,
-            laid: None,
+            animate: false,
             focused: None,
             loader: None,
             images: crate::images::ImageStore::new(),
@@ -203,55 +272,344 @@ impl Session {
 
     /// The id of the layout on top of the stack.
     pub fn current(&self) -> &str {
-        &self.stack.last().expect("never empty").id
+        &self.stack[self.top_index()].id
+    }
+
+    /// The entry taps go to: the last one not closing.
+    fn top_index(&self) -> usize {
+        self.stack
+            .iter()
+            .rposition(|e| e.closing.is_none())
+            .unwrap_or(0)
+    }
+
+    /// The first entry of the sheet or panel `i` is drawn in (`i` itself
+    /// unless it is a screen opened inside one).
+    fn group_start(&self, mut i: usize) -> usize {
+        while i > 0 && self.stack[i].in_frame {
+            i -= 1;
+        }
+        i
+    }
+
+    /// How far entry `i` has slid in (0 to 1), or out when closing.
+    fn progress(&self, i: usize, now: Instant) -> f32 {
+        if !self.animate || i == 0 {
+            return if self.stack[i].closing.is_some() {
+                0.0
+            } else {
+                1.0
+            };
+        }
+        let e = &self.stack[i];
+        let t = |since: Instant| now.duration_since(since).as_secs_f32() / SLIDE.as_secs_f32();
+        match e.closing {
+            Some(c) => 1.0 - fast_out_slow_in(t(c)),
+            None => fast_out_slow_in(t(e.opened)),
+        }
+    }
+
+    /// Whether a slide is still moving (draw again next frame).
+    pub fn animating(&self) -> bool {
+        if !self.animate {
+            return false;
+        }
+        let now = Instant::now();
+        self.stack
+            .iter()
+            .skip(1)
+            .any(|e| now.duration_since(e.closing.unwrap_or(e.opened)) < SLIDE)
+    }
+
+    /// The box a sheet or panel group draws in, and the box and insets its
+    /// layout gets (points, settled: no slide).
+    fn frame_rects(&self, i: usize) -> ([f32; 4], [f32; 4], [f32; 4]) {
+        let g = self.group_start(i);
+        let (w, h) = (self.viewport.width, self.viewport.height);
+        let [it, _, ib, _] = self.insets;
+        let e = &self.stack[g];
+        match e.frame {
+            Frame::Full => ([0.0, 0.0, w, h], [0.0, 0.0, w, h], self.insets),
+            Frame::Edge(edge) => match edge {
+                protocol::Edge::Bottom => {
+                    let sh = e.size.unwrap_or(h * SHEET_HEIGHT_FRACTION).min(h);
+                    let f = [0.0, h - sh, w, sh];
+                    (
+                        f,
+                        [0.0, h - sh + HANDLE_STRIP, w, sh - HANDLE_STRIP],
+                        [0.0, 0.0, ib, 0.0],
+                    )
+                }
+                protocol::Edge::Top => {
+                    let sh = e.size.unwrap_or(h * SHEET_HEIGHT_FRACTION).min(h);
+                    (
+                        [0.0, 0.0, w, sh],
+                        [0.0, 0.0, w, sh - HANDLE_STRIP],
+                        [it, 0.0, 0.0, 0.0],
+                    )
+                }
+                protocol::Edge::Start | protocol::Edge::End => {
+                    let pw = e
+                        .size
+                        .unwrap_or((w * PANEL_WIDTH_FRACTION).min(PANEL_MAX_WIDTH))
+                        .min(w);
+                    let x = if edge == protocol::Edge::Start {
+                        0.0
+                    } else {
+                        w - pw
+                    };
+                    let f = [x, 0.0, pw, h];
+                    (f, f, [it, 0.0, ib, 0.0])
+                }
+            },
+        }
+    }
+
+    /// Lays out entry `i` for its box, with its device data.
+    fn layout_entry(&mut self, i: usize) -> Result<(), RenderError> {
+        let (_, content, insets) = self.frame_rects(i);
+        let size = [content[2], content[3]];
+        if self.stack[i].laid.as_ref().is_some_and(|(_, s)| *s == size) {
+            return Ok(());
+        }
+        let e = &self.stack[i];
+        let group = &self.stack[self.group_start(i)];
+        let presentation = if i == 0 {
+            "root"
+        } else if e.in_frame {
+            "screen"
+        } else {
+            match e.frame {
+                Frame::Full => "push",
+                Frame::Edge(protocol::Edge::Bottom | protocol::Edge::Top) => "sheet",
+                Frame::Edge(_) => "panel",
+            }
+        };
+        let mut nav = protocol::EntityRecord::new();
+        nav.set("can_go_back", i > 0);
+        nav.set(
+            "pushed",
+            presentation == "push" || (presentation == "screen" && group.frame == Frame::Full),
+        );
+        nav.set("inline", false);
+        nav.set("in_frame", group.frame != Frame::Full);
+        nav.set("presentation", presentation);
+        self.data.entities.insert("local://nav".into(), nav);
+        let mut screen = protocol::EntityRecord::new();
+        screen.set("loading", false);
+        screen.set("error", e.error.clone().unwrap_or_default());
+        self.data.entities.insert("local://screen".into(), screen);
+        let vp = Viewport {
+            width: size[0],
+            height: size[1],
+            scale: self.viewport.scale,
+        };
+        let e = &self.stack[i];
+        let laid = self.builder.layout(&Input {
+            root: &e.root,
+            data: &self.data,
+            form: &self.form,
+            route: &e.route,
+            layouts: &self.layouts,
+            scroll: &e.scroll,
+            viewport: vp,
+            dark: self.dark,
+            item: e.item.as_deref(),
+            insets,
+            focused: self.focused.as_deref(),
+        })?;
+        self.stack[i].laid = Some((laid, size));
+        Ok(())
     }
 
     /// Lays out the current frame (cached until something changes; a
-    /// scroll only places the laid-out frame again).
+    /// scroll only places the laid-out frames again). Draws the top
+    /// full-screen layout, and over it any sheets, panels and overlays with
+    /// their scrim; only the top one's nodes can be tapped.
     pub fn scene(&mut self) -> Result<&Scene, RenderError> {
-        if self.laid.is_none() {
-            self.invalidate();
-            self.load_inline_layouts();
-            // Device data a layout reads about where it is drawn (as the
-            // shared UI's `local://nav` and `local://screen`).
-            let depth = self.stack.len();
-            let top = self.stack.last().expect("never empty");
-            let mut nav = protocol::EntityRecord::new();
-            nav.set("can_go_back", depth > 1);
-            nav.set("pushed", depth > 1);
-            nav.set("inline", false);
-            nav.set("in_frame", false);
-            nav.set("presentation", if depth > 1 { "push" } else { "root" });
-            self.data.entities.insert("local://nav".into(), nav);
-            let mut screen = protocol::EntityRecord::new();
-            screen.set("loading", false);
-            screen.set("error", top.error.clone().unwrap_or_default());
-            self.data.entities.insert("local://screen".into(), screen);
-            let laid = self.builder.layout(&Input {
-                root: &top.root,
-                data: &self.data,
-                form: &self.form,
-                route: &top.route,
-                layouts: &self.layouts,
-                scroll: &top.scroll,
-                viewport: self.viewport,
-                dark: self.dark,
-                item: top.item.as_deref(),
-                insets: self.insets,
-                focused: self.focused.as_deref(),
-            })?;
-            self.laid = Some(laid);
+        let now = Instant::now();
+        let animate = self.animate;
+        let before = self.stack.len();
+        let mut k = 0;
+        self.stack.retain(|e| {
+            k += 1;
+            k == 1
+                || e.closing
+                    .is_none_or(|c| animate && now.duration_since(c) < SLIDE)
+        });
+        if self.stack.len() != before || self.animating() {
+            self.scene = None;
         }
-        if self.scene.is_none() {
-            let top = self.stack.last().expect("never empty");
-            let scene = self.laid.as_ref().expect("laid out").emit(&top.scroll);
-            for d in &scene.draws {
-                if let crate::scene::Draw::Image(i) = d {
-                    self.images.request(&i.url);
+        // (`if let` returning the borrow here is refused by today's borrow
+        // checker: the scene is built below on the other path.)
+        #[allow(clippy::unnecessary_unwrap)]
+        if self.scene.is_some() {
+            return Ok(self.scene.as_ref().expect("checked"));
+        }
+        self.load_inline_layouts();
+        // From the top down to the first settled full-screen layout.
+        let mut visible = Vec::new();
+        for i in (0..self.stack.len()).rev() {
+            visible.push(i);
+            let e = &self.stack[i];
+            if i == 0 || (e.frame == Frame::Full && !e.in_frame && self.progress(i, now) >= 1.0) {
+                break;
+            }
+        }
+        visible.reverse();
+        for &i in &visible {
+            self.layout_entry(i)?;
+        }
+        let (w, h) = (self.viewport.width, self.viewport.height);
+        let top = self.top_index();
+        let top_group = self.group_start(top);
+        let theme = self.stack[visible[0]]
+            .laid
+            .as_ref()
+            .expect("laid out")
+            .0
+            .theme()
+            .clone();
+        let mut scene = Scene {
+            width: w,
+            height: h,
+            scale: self.viewport.scale,
+            background: theme.background.0,
+            ..Default::default()
+        };
+        let mut keep_from = 0;
+        for &i in &visible {
+            let p = self.progress(i, now);
+            let (frame, content, _) = self.frame_rects(i);
+            let e = &self.stack[i];
+            if i == top_group {
+                keep_from = scene.semantics.len();
+            }
+            // Where the entry's frame sits now (sliding in or out).
+            let g = self.group_start(i);
+            let gp = self.progress(g, now);
+            let slide = |frame: Frame, size: [f32; 2], p: f32| -> (f32, f32) {
+                let q = 1.0 - p;
+                match frame {
+                    Frame::Full => (q * w, 0.0),
+                    Frame::Edge(protocol::Edge::Bottom) => (0.0, q * size[1]),
+                    Frame::Edge(protocol::Edge::Top) => (0.0, -q * size[1]),
+                    Frame::Edge(protocol::Edge::Start) => (-q * size[0], 0.0),
+                    Frame::Edge(protocol::Edge::End) => (q * size[0], 0.0),
+                }
+            };
+            let group_frame = self.stack[g].frame;
+            let (fx, fy) = if g == 0 {
+                (0.0, 0.0)
+            } else {
+                slide(group_frame, [frame[2], frame[3]], gp)
+            };
+            let frame_now = [frame[0] + fx, frame[1] + fy, frame[2], frame[3]];
+            let (laid, _) = e.laid.as_ref().expect("laid out");
+            if e.in_frame {
+                // A screen inside its layout's box slides in from the side.
+                let dx = (1.0 - p) * frame[2];
+                let r = [
+                    content[0] + fx + dx,
+                    content[1] + fy,
+                    content[2],
+                    content[3],
+                ];
+                let mut q = QuadInstance::fill(r, theme.background, 0.0);
+                q.clip = frame_now;
+                scene.draws.push(Draw::Quad(q));
+                laid.emit_into(&mut scene, &e.scroll, (r[0], r[1]), frame_now);
+                continue;
+            }
+            match e.frame {
+                Frame::Full => {
+                    if i > 0 {
+                        // Covers what is under it as it slides in.
+                        let mut q = QuadInstance::fill(frame_now, theme.background, 0.0).shadow(
+                            Rgba([0.0, 0.0, 0.0, 0.18]),
+                            [0.0, 0.0],
+                            8.0,
+                            0.0,
+                        );
+                        q.clip = [0.0, 0.0, w, h];
+                        scene.draws.push(Draw::Quad(q));
+                    }
+                    laid.emit_into(
+                        &mut scene,
+                        &e.scroll,
+                        (frame_now[0], frame_now[1]),
+                        [0.0, 0.0, w, h],
+                    );
+                }
+                Frame::Edge(edge) => {
+                    let scrim =
+                        QuadInstance::fill([0.0, 0.0, w, h], Rgba([0.0, 0.0, 0.0, 0.32 * p]), 0.0);
+                    scene.draws.push(Draw::Quad(scrim));
+                    if i == top_group {
+                        scene.semantics.push(SemanticNode {
+                            id: "scrim".into(),
+                            node_type: "scrim".into(),
+                            bounds: [0.0, 0.0, w, h],
+                            text_content: None,
+                            interactive: true,
+                            tap: Some(Tap::Intent {
+                                intent: json!({ "intent": "action.navigation.back", "frame": true }),
+                            }),
+                            selected: false,
+                            parent: None,
+                            gestures: BTreeMap::new(),
+                        });
+                    }
+                    let radii = match edge {
+                        protocol::Edge::Bottom => [16.0, 16.0, 0.0, 0.0],
+                        protocol::Edge::Top => [0.0, 0.0, 16.0, 16.0],
+                        protocol::Edge::Start => [0.0, 16.0, 16.0, 0.0],
+                        protocol::Edge::End => [16.0, 0.0, 0.0, 16.0],
+                    };
+                    let mut surface = QuadInstance::fill(frame_now, theme.background, 0.0).shadow(
+                        Rgba([0.0, 0.0, 0.0, 0.25]),
+                        [0.0, 2.0],
+                        8.0,
+                        0.0,
+                    );
+                    surface.radii = radii;
+                    scene.draws.push(Draw::Quad(surface));
+                    if matches!(edge, protocol::Edge::Bottom | protocol::Edge::Top) {
+                        // The handle, on the sheet's inner side.
+                        let hy = if edge == protocol::Edge::Bottom {
+                            frame_now[1] + 8.0
+                        } else {
+                            frame_now[1] + frame_now[3] - 12.0
+                        };
+                        let handle = QuadInstance::fill(
+                            [frame_now[0] + frame_now[2] / 2.0 - 16.0, hy, 32.0, 4.0],
+                            theme.muted_text.with_alpha(0.4),
+                            2.0,
+                        );
+                        scene.draws.push(Draw::Quad(handle));
+                    }
+                    let origin = (content[0] + fx, content[1] + fy);
+                    let mut clip = frame_now;
+                    if matches!(edge, protocol::Edge::Bottom | protocol::Edge::Top) {
+                        clip = [origin.0, origin.1, content[2], content[3]];
+                    }
+                    laid.emit_into(&mut scene, &e.scroll, origin, clip);
                 }
             }
-            self.scene = Some(scene);
         }
+        // Only the top layout (or sheet, with its scrim) answers taps.
+        if keep_from > 0 {
+            scene.semantics.drain(..keep_from);
+            for n in &mut scene.semantics {
+                n.parent = n.parent.and_then(|p| p.checked_sub(keep_from));
+            }
+        }
+        for d in &scene.draws {
+            if let Draw::Image(i) = d {
+                self.images.request(&i.url);
+            }
+        }
+        self.scene = Some(scene);
         Ok(self.scene.as_ref().expect("just built"))
     }
 
@@ -278,7 +636,9 @@ impl Session {
 
     /// Lays the frame out again next time (data, form or size changed).
     pub fn invalidate(&mut self) {
-        self.laid = None;
+        for e in &mut self.stack {
+            e.laid = None;
+        }
         self.scene = None;
     }
 
@@ -406,12 +766,13 @@ impl Session {
         let Some(id) = id else {
             return Err("no scrolling view there".into());
         };
-        let max = self
+        let ti = self.top_index();
+        let top = &mut self.stack[ti];
+        let max = top
             .laid
             .as_ref()
-            .and_then(|l| l.scroll_max.get(&id).copied())
+            .and_then(|(l, _)| l.scroll_max.get(&id).copied())
             .unwrap_or(f32::MAX);
-        let top = self.stack.last_mut().expect("never empty");
         let before = top.scroll.get(&id).copied().unwrap_or(0.0).min(max);
         let offset = (before + dy).clamp(0.0, max);
         if offset == before {
@@ -489,7 +850,6 @@ impl Session {
                 let layout = intent["layout"].as_str().filter(|l| !l.is_empty());
                 let target = intent["target_uri"].as_str().filter(|t| !t.is_empty());
                 if let Some(id) = layout {
-                    // Sheets, panels and overlays are drawn full screen.
                     if let Some(root) = self.layout_root(id, out) {
                         let route = intent["params"]
                             .as_object()
@@ -499,7 +859,17 @@ impl Session {
                                     .collect()
                             })
                             .unwrap_or_default();
-                        self.stack.push(Entry::layout(id, root, route));
+                        let mut entry = Entry::layout(id, root, route);
+                        entry.frame = match intent["presentation"].as_str() {
+                            Some("Sheet") => Frame::Edge(protocol::Edge::Bottom),
+                            Some("Panel") => Frame::Edge(protocol::Edge::Start),
+                            Some("Overlay") => Frame::Edge(
+                                serde_json::from_value(intent["edge"].clone()).unwrap_or_default(),
+                            ),
+                            _ => Frame::Full,
+                        };
+                        entry.size = intent["size_dp"].as_f64().map(|v| v as f32);
+                        self.stack.push(entry);
                         out.push(Effect::Opened {
                             layout: id.to_owned(),
                         });
@@ -519,16 +889,59 @@ impl Session {
                     });
                 }
             }
+            "action.device" => {
+                let command = intent["command"].as_str().unwrap_or("").to_owned();
+                let app = intent["app"]
+                    .as_str()
+                    .or(intent["layout"].as_str())
+                    .unwrap_or("")
+                    .to_owned();
+                let id = intent["id"].as_str().unwrap_or("").to_owned();
+                match self
+                    .loader
+                    .as_ref()
+                    .and_then(|l| l.device(&command, &app, &id))
+                {
+                    Some(Ok(d)) => {
+                        merge(&mut self.data, d);
+                        out.push(Effect::Device { command });
+                    }
+                    Some(Err(error)) => out.push(Effect::LoadFailed {
+                        what: command,
+                        error,
+                    }),
+                    None => out.push(Effect::NotSent {
+                        intent: intent.clone(),
+                    }),
+                }
+            }
             "action.data.load" => {
                 let path = intent["path"].as_str().unwrap_or("").to_owned();
                 self.load_data(&path, out);
             }
             "action.navigation.back" => {
-                if self.stack.len() > 1 {
-                    self.stack.pop();
-                    out.push(Effect::Back);
-                } else {
+                let top = self.top_index();
+                if top == 0 {
                     out.push(Effect::Nothing);
+                } else {
+                    // A scrim tap closes the whole sheet or panel; Back
+                    // closes the top screen.
+                    let from = if intent["frame"] == true {
+                        self.group_start(top)
+                    } else {
+                        top
+                    };
+                    let now = Instant::now();
+                    self.stack.truncate(top + 1);
+                    if self.animate {
+                        for e in &mut self.stack[from..] {
+                            e.closing.get_or_insert(now);
+                        }
+                    } else {
+                        self.stack.truncate(from.max(1));
+                    }
+                    self.focused = None;
+                    out.push(Effect::Back);
                 }
             }
             _ => out.push(Effect::NotSent {
@@ -562,7 +975,7 @@ impl Session {
     /// Opens the screen of the top layout whose route matches `uri`, loading
     /// its data; false when no screen matches.
     fn open_screen(&mut self, uri: &str, out: &mut Vec<Effect>) -> bool {
-        let top = self.stack.last().expect("never empty");
+        let top = &self.stack[self.top_index()];
         let Some((screen, route)) = top
             .screens
             .iter()
@@ -570,7 +983,7 @@ impl Session {
         else {
             return false;
         };
-        let (id, screens) = (top.id.clone(), top.screens.clone());
+        let (id, screens, frame, size) = (top.id.clone(), top.screens.clone(), top.frame, top.size);
         let mut root = serde_json::to_value(&screen.root).unwrap_or(Value::Null);
         bind_route(&mut root, &route);
         let Ok(root) = serde_json::from_value::<UiNode>(root) else {
@@ -589,6 +1002,12 @@ impl Session {
             screens,
             error: None,
             scroll: BTreeMap::new(),
+            in_frame: frame != Frame::Full,
+            frame,
+            size,
+            opened: Instant::now(),
+            closing: None,
+            laid: None,
         });
         out.push(Effect::OpenedScreen {
             screen: screen.id.clone(),
@@ -609,7 +1028,8 @@ impl Session {
             return;
         };
         let result = loader.data(path);
-        let top = self.stack.last_mut().expect("never empty");
+        let ti = self.top_index();
+        let top = &mut self.stack[ti];
         match result {
             Ok(d) => {
                 top.error = None;
@@ -630,7 +1050,7 @@ impl Session {
         if self.loader.is_none() {
             return;
         }
-        let top = self.stack.last().expect("never empty");
+        let top = &self.stack[self.top_index()];
         let wanted: Vec<String> = top
             .root
             .walk()

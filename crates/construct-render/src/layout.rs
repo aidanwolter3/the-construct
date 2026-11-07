@@ -1976,22 +1976,40 @@ impl Laid {
             background: self.theme.background.0,
             ..Default::default()
         };
+        self.emit_into(&mut scene, scroll, (0.0, 0.0), NO_CLIP);
+        scene
+    }
+
+    /// Places the frame into `scene` at `offset`, drawing nothing outside
+    /// `clip` (a sheet or panel over another layout).
+    pub fn emit_into(
+        &self,
+        scene: &mut Scene,
+        scroll: &BTreeMap<String, f32>,
+        offset: (f32, f32),
+        clip: [f32; 4],
+    ) {
+        let vp = self.viewport;
         let at = At {
             scroll_top: None,
-            parent: [0.0, 0.0, vp.width, vp.height],
+            parent: [offset.0, offset.1, vp.width, vp.height],
         };
         let mut pinned = Vec::new();
         self.emit_at(
             self.root,
-            (0.0, 0.0),
-            NO_CLIP,
+            offset,
+            clip,
             None,
             at,
             scroll,
             &mut pinned,
-            &mut scene,
+            scene,
         );
-        scene
+    }
+
+    /// The theme the frame was laid out with.
+    pub fn theme(&self) -> &Theme {
+        &self.theme
     }
 
     fn content_height(&self, e: &Elem) -> f32 {

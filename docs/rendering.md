@@ -53,8 +53,14 @@ offsets), List (`where`, `filter`, `group_by`, `columns`, `focus`, `indent`, `em
 Switch, Progress, Dock, Layout (inline, from the layouts given), and every named icon (`icons.rs`: the shared UI's
 Material path data, rasterized with zeno; on the GPU they are glyphon custom glyphs). Images draw once loaded
 (over a placeholder in the blurhash's colour; only live sessions load them). Approximated: Carousel (first item and an "n/N" badge), MediaPicker (the add tile),
-Drawer (the selected page), AppFrame and unknown nodes (a labelled box). Not drawn: presented layouts (Sheet,
-Panel, Overlay), dialogs, `format` dates. `core://Sticky` pins at the top of its scrolling view, over the page
+Drawer (the selected page), AppFrame and unknown nodes (a labelled box). Not drawn: dialogs, `format` dates.
+Presented layouts are drawn as the shared UI draws them: a sheet (85% of the height, with a handle), a side panel
+(86% of the width, at most 340 points) or an overlay from its edge, over a 32% black scrim that closes it when
+tapped; a screen a sheet or panel opens stays inside it. In a window, layouts and screens slide in and out over
+280 ms (`FastOutSlowInEasing`); a fling follows Android's `OverScroller` spline with the release velocity of the
+last 100 ms. `action.device` `show_versions` fills `local://versions` and `local:versions` from
+`/v1/apps/<id>/versions`; `pin_version` and `follow_latest` mark the choice there, but the layout still shows its
+latest version. `core://Sticky` pins at the top of its scrolling view, over the page
 background, until its parent scrolls away.
 
 ## The desktop viewer
