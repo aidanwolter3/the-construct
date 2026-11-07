@@ -58,7 +58,7 @@ import javax.imageio.ImageIO
  * the engine applying an SSE `layout` event. Offline, every apps call throws [LayoutApiException] (Offline).
  *
  * Screens (DECISIONS D34): [screenData] is the fake pod's answers for data paths (`{path: {entities, queries}}`, e.g.
- * `app/desktopApp/src/sim/resources/pixelfed_screen_data.json`). `action.data.load` answers from it at once (offline: an error, cached data
+ * `crates/construct-sim/data/pixelfed_screen_data.json`). `action.data.load` answers from it at once (offline: an error, cached data
  * kept); an unknown path is "not found". `action.mutation.create` lists its entity at once and queues it; when sent,
  * the fake pod accepts it if some data path lists its query (the entity is added there, with a `meta` field, if it has
  * one, set to "just now") and the client reloads those paths; otherwise it is rejected and removed. A create with
