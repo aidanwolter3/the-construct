@@ -9,8 +9,9 @@ cd app && ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test   # shared
 CI runs `scripts/check_decisions.sh`, `scripts/check_test_data.sh` (no test data in the pod binary, decision
 `data-next-to-its-code`), clippy with warnings denied, the Rust tests (with
 [cargo-nextest](https://nexte.st), which runs tests from different binaries in parallel, plus `cargo test --doc`,
-which nextest skips), a dependency advisory check (`cargo-deny`), the JVM tests, and a simulator run whose
-screenshots are uploaded as an artifact.
+which nextest skips), a dependency advisory check (`cargo-deny`), the simulator's scenarios
+(`scripts/sim_scenarios.sh`, screenshots uploaded as the `simulator` artifact), and the JVM tests with a run of the
+Compose simulator.
 
 A crate's integration tests are one test binary, `tests/integration/main.rs`, with one module per file: add a test
 file as a `mod` there, not as a new `tests/*.rs` (linking one binary per file was most of CI's build time). Pick a

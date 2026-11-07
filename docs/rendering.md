@@ -34,7 +34,7 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 | `viewer` | `Controller`: platform events (resize, tap, long press, wheel, text, editing keys, Back) applied to a session; what windows feed |
 | `window` | winit + wgpu surface (feature `window`): touch (drags, flings, swipes, long presses, handles), the clipboard, the `Platform` a window runs on; used by `construct-viewer` and Android |
 | `engine` | `PodEngine`: a live session over a pod run by the engine (`client-core`: cache, outbox, event stream), the session's `Loader` (feature `remote`); `FileStore`, a desktop's secure store without a keychain |
-| `remote` | `PodClient`: a session fetched straight from the pod (`pod_shots`), and the device data builders both use (feature `remote`) |
+| `remote` | `PodClient`: a session fetched straight from the pod (`construct-sim`'s live mode), and the device data builders both use (feature `remote`) |
 | `pods` | A device's own pod: the pod it opened last, its engine, the pod's sign-in screen, leaving and reloading (features `remote` and `window`); shared by Android and the desktop viewer |
 | `platform` | `Platform`: what the app needs from the system it runs on (keyboard, insets, browser, clipboard, photo picker, events, the pod's saved session), implemented per platform |
 | `android` | `android_main` for the NativeActivity (Android builds with `window`) |
@@ -115,7 +115,7 @@ Metal on macOS and Vulkan (or GL) on Linux; on a headless Linux box, `Xvfb` plus
 
 Any workspace bundle (what `GET /v1/workspaces/<id>` answers) can be drawn to PNGs without a window:
 `cargo run --release -p construct-render --no-default-features --example render_bundle -- a.json b.json --out dir`
-(390 × 844 at 3×, the simulator's phone, so the two can be compared side by side with `-Pfixture`).
+(390 × 844 at 3×, the simulator's phone).
 
 ## Android
 
@@ -178,7 +178,7 @@ while its `data` path loads through the engine (`action.data.load`, cached; `loc
 snapshot the engine sends reaches the session on its next frame (`Loader::changes`; the window is woken): data,
 `local://connection` (online, offline or connecting, and how many writes wait), and the new root of every layout
 the event stream announced, so a layout edited over MCP, or a change from another device, shows without opening it
-again. `pod_shots` still fetches straight from the pod (`PodClient`). `local://nav` and
+again. The simulator's live mode (`construct-sim --base-url`) still fetches straight from the pod (`PodClient`). `local://nav` and
 `local://screen` are set as the shared UI sets them. Images (`core://Image`) download on four background threads, newest request first,
 without the session (the pod serves media from public paths), are cut to their box (cropped to fill, corners
 rounded) and drawn over their placeholder once they arrive; the window redraws then.
@@ -213,8 +213,8 @@ Cut / Copy / Paste / Select all bar over it (dragging on from a long press moves
 cursor shows its handle and the bar (Paste, Select all). Typing and pasting replace the selection and are cut to the
 field's `max_length`. With a hardware keyboard: arrows, Home and End (Shift selects), Delete and Ctrl or Command+A, C,
 X and V. On Android the clipboard is `ClipboardManager` through the SDK.
-`pod_shots` (feature `remote`) drives a live session from a script and writes PNGs, to compare with the simulator's
-live mode.
+The headless simulator, `construct-sim` ([simulator.md](simulator.md)), drives a session from a script on fixture
+bundles or a live pod and writes PNGs drawn on the CPU.
 
 ## Agent previews (MCP)
 
