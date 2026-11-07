@@ -106,8 +106,19 @@ KNOWN=$( { unzip -Z1 "$PLATFORM/android.jar"; for j in "${JARS[@]}"; do unzip -Z
 MISSING=$(grep -ohE '"[^"]*\(L[A-Za-z0-9_/$]+;[^"]*"|"L[A-Za-z0-9_/$]+;"' crates/construct-render/src/*.rs \
   | grep -oE 'L[a-z][A-Za-z0-9_]*(/[A-Za-z0-9_$]+)+;' | sed 's/^L//; s/;$//' | sort -u | comm -23 - <(echo "$KNOWN"))
 [[ -z $MISSING ]] || { echo "JNI signatures name classes that don't exist: $MISSING" >&2; exit 1; }
-"$TOOLS/d8" --release --min-api 28 --lib "$PLATFORM/android.jar" --output "$OUT/apk/dex" \
-  $(find "$OUT/classes" -name '*.class') "${JARS[@]}"
+# d8's output goes to a log: the Kotlin 2.3 libraries' class metadata is newer than d8 before build-tools 36.1
+# reads, and it warns with a stack trace for each such class (thousands of lines). Harmless: only Kotlin reflection
+# reads that metadata, and the app has none. Anything else d8 says is shown.
+D8LOG=$OUT/d8.log
+if ! "$TOOLS/d8" --release --min-api 28 --lib "$PLATFORM/android.jar" --output "$OUT/apk/dex" \
+  $(find "$OUT/classes" -name '*.class') "${JARS[@]}" >"$D8LOG" 2>&1; then
+  cat "$D8LOG" >&2
+  exit 1
+fi
+OTHER=$(grep -vE '^Info: Class .* has malformed kotlin\.Metadata|^Warning: (Unexpected error during rewriting of Kotlin metadata|An error occurred when parsing kotlin metadata)|^com\.android\.tools\.r8\..*: Should never be called|^[[:space:]]+at |^$' "$D8LOG" || true)
+[[ -z $OTHER ]] || echo "$OTHER" >&2
+KOTLIN_METADATA=$(grep -c 'has malformed kotlin.Metadata' "$D8LOG" || true)
+[[ $KOTLIN_METADATA == 0 ]] || echo "d8: skipped newer Kotlin metadata in $KOTLIN_METADATA library classes (harmless; $D8LOG)"
 rm -f "$OUT"/apk/classes*.dex && cp "$OUT"/apk/dex/classes*.dex "$OUT/apk/"
 (cd "$OUT/apk" && zip -qr ../unsigned.apk lib classes*.dex)
 "$TOOLS/zipalign" -f -p 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
