@@ -111,3 +111,20 @@ fn fixture_images_come_from_the_fake_pixelfeds_media() {
     );
     assert_eq!(media_file("https://cdn.example/a.png"), None);
 }
+
+#[test]
+fn picked_photos_show_and_post() {
+    let (runner, results) = run(
+        "pixelfed",
+        "click \"New post\"; pick fake-pixelfed/fixtures/media/carousel-1.png fake-pixelfed/fixtures/media/carousel-2.png; \
+         click Add photos; assert-text Photo 2 of 2; click tag:media-remove:sim-1; assert-no-text Photo 2 of 2; \
+         click Share; idle; assert-text Posting",
+        &out_dir("pick"),
+    );
+    assert_ok(&results);
+    let post = runner.session.data.queries["timeline:home"][0].clone();
+    assert_eq!(
+        runner.session.data.entities[&post].get("media_uris"),
+        Some(&serde_json::json!(["construct://attachments/sim-2"]))
+    );
+}
