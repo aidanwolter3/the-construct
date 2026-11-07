@@ -13,6 +13,17 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Notifications from the bridge's receiver (Android 13+ asks the user). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Push (PushReceiver, the UnifiedPush connector's receiver): it holds a wake lock while a message is handled,
+         and finds the installed distributors (ntfy, ...) by these actions. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <queries>
+        <intent>
+            <action android:name="org.unifiedpush.android.distributor.REGISTER" />
+        </intent>
+        <intent>
+            <action android:name="org.unifiedpush.android.distributor.UNREGISTER" />
+        </intent>
+    </queries>
     <application
         android:label="The Construct"
         android:icon="@mipmap/ic_launcher"
@@ -61,5 +72,19 @@
             android:name=".ConstructReceiver"
             android:exported="true"
             android:permission="android.permission.DUMP" />
+        <!-- What the UnifiedPush distributor sends (an endpoint, a push message, the end of a registration), also
+             while the app is closed; forwarded to Rust (src/push.rs). The connector checks each broadcast's token,
+             and messages are encrypted to this app's own keys. -->
+        <receiver
+            android:name=".PushReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.MESSAGE" />
+                <action android:name="org.unifiedpush.android.connector.UNREGISTERED" />
+                <action android:name="org.unifiedpush.android.connector.NEW_ENDPOINT" />
+                <action android:name="org.unifiedpush.android.connector.REGISTRATION_FAILED" />
+                <action android:name="org.unifiedpush.android.connector.REGISTRATION_REFUSED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

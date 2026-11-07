@@ -363,6 +363,31 @@ impl PodEngine {
         self.reload_device();
     }
 
+    /// The pod's VAPID key (base64url); an error when it sends no push.
+    /// Blocking.
+    pub fn push_public_key(&self) -> Result<String, String> {
+        self.engine.push_public_key().map_err(|e| e.to_string())
+    }
+
+    /// Sends this device's Web Push subscription to the pod (`crate::push`).
+    /// Blocking.
+    pub fn register_push(&self, endpoint: &str, p256dh: &str, auth: &str) -> Result<(), String> {
+        self.engine
+            .register_push(endpoint, p256dh, auth)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Stops Web Push to this device. Blocking.
+    pub fn unregister_push(&self) -> Result<(), String> {
+        self.engine.unregister_push().map_err(|e| e.to_string())
+    }
+
+    /// A decrypted push message: the engine caches the notification and
+    /// takes its unread count (the open session's inbox and bell follow).
+    pub fn handle_push_message(&self, json: &str) {
+        self.engine.handle_push_message(json);
+    }
+
     /// The session token the engine keeps (after a sign-in).
     fn token(&self) -> Option<String> {
         let raw = self

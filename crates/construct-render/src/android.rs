@@ -168,7 +168,29 @@ impl crate::window::Platform for Android {
     }
 
     fn events(&self) -> Vec<crate::window::PlatformEvent> {
+        use crate::window::PlatformEvent;
         crate::bridge::take_events()
+            .into_iter()
+            .filter_map(|e| match e {
+                PlatformEvent::Link(uri) => match crate::push::tap_token(&uri) {
+                    Some(token) => self.tapped(token),
+                    None => Some(PlatformEvent::Link(uri)),
+                },
+                e => Some(e),
+            })
+            .collect()
+    }
+
+    fn ask_notifications(&self) {
+        let Some(files) = self.0.internal_data_path() else {
+            return;
+        };
+        let store = crate::push::android::store(&files);
+        if let Err(e) = with_activity(&self.0, |env, activity| {
+            crate::push::android::ask_permission(env, activity, &store)
+        }) {
+            log(&format!("notification permission: {e}"));
+        }
     }
 
     fn clipboard(&self) -> Option<String> {
@@ -182,7 +204,12 @@ impl crate::window::Platform for Android {
     }
 
     fn reopen(&self, how: crate::window::Reopen) -> Option<Session> {
-        Some(self.2.reopen(how))
+        let signed_in = matches!(how, crate::window::Reopen::SignedIn { .. });
+        let session = self.2.reopen(how);
+        if signed_in {
+            set_up_push(&self.0, &self.2);
+        }
+        Some(session)
     }
 
     fn open_link(&self, url: &str) {
@@ -190,6 +217,55 @@ impl crate::window::Platform for Android {
             log(&format!("can't open {url}: {e}"));
         }
     }
+}
+
+impl Android {
+    /// A notification tap link (`crate::push`): the notification it was
+    /// posted for, when it is the open pod's. Another pod's only brings the
+    /// app up; a token this app didn't give out opens nothing.
+    fn tapped(&self, token: &str) -> Option<crate::window::PlatformEvent> {
+        let store = crate::push::android::store(&self.0.internal_data_path()?);
+        let Some(tap) = store.take_tap(token) else {
+            log("push: a notification link this app didn't post; ignored");
+            return None;
+        };
+        let open = self.2.read().map(|s| crate::push::instance_for(&s.url));
+        if open.as_deref() != Some(tap.instance.as_str()) {
+            log(&format!(
+                "push: the tapped notification is {}'s, not the open pod's",
+                tap.instance
+            ));
+            return None;
+        }
+        Some(crate::window::PlatformEvent::Notification(tap.notification))
+    }
+}
+
+/// Readies push for the open pod (`crate::push`) in the background: its
+/// keys and endpoint to the pod, then asks the UnifiedPush distributor for
+/// an endpoint (it comes to `PushReceiver`). Needs a session; signing in
+/// runs it again.
+fn set_up_push(app: &AndroidApp, home: &crate::pods::PodHome) {
+    let (Some(files), Some(state)) = (app.internal_data_path(), home.read()) else {
+        return;
+    };
+    let engine = home.engine(&state.url);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let store = crate::push::android::store(&files);
+        let Some(instance) = crate::push::set_up(&store, &engine, log) else {
+            return;
+        };
+        match with_activity(&app, |env, activity| {
+            crate::push::android::register(env, activity, &instance)
+        }) {
+            Ok(true) => log(&format!("push: asked the distributor for {instance}")),
+            Ok(false) => log(
+                "push: no UnifiedPush distributor (ntfy, ...) installed: notifications only while the app runs",
+            ),
+            Err(e) => log(&format!("push: registering: {e}")),
+        }
+    });
 }
 
 /// Whether the activity is finishing or destroyed (`isFinishing`,
@@ -1039,6 +1115,7 @@ fn android_main(app: AndroidApp) {
     if let Err(e) = with_activity(&app, crate::bridge::ask_notifications) {
         log(&format!("notification permission: {e}"));
     }
+    set_up_push(&app, &home);
     let window = crate::window::App::new(Controller::new(session), "The Construct")
         .with_platform(Box::new(Android(app, Default::default(), home)));
     if let Err(e) = crate::window::run_app(event_loop, window) {

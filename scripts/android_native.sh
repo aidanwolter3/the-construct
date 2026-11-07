@@ -13,8 +13,9 @@
 # Leaving the pod in Settings goes back to that screen. `cd app && ./gradlew :androidApp:installDebug` goes back to
 # the Compose app with the same data.
 #
-# Needs: an Android SDK with an NDK and build-tools (ANDROID_HOME, else ~/android-sdk), a JDK (javac), cargo-ndk, and
-# `rustup target add aarch64-linux-android`. Output: build/android-native/construct-render.apk.
+# Needs: an Android SDK with an NDK and build-tools (ANDROID_HOME, else ~/android-sdk), a JDK (javac), cargo-ndk,
+# `rustup target add aarch64-linux-android`, and Maven Central the first time (the UnifiedPush connector's classes).
+# Output: build/android-native/construct-render.apk.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -57,6 +58,7 @@ rm -rf "$OUT/res" && mkdir -p "$OUT/res"
 "$TOOLS/aapt2" compile -o "$OUT/res" \
   "$RES"/drawable/ic_launcher_{background,foreground,monochrome}.xml \
   "$RES"/mipmap-anydpi-v26/ic_launcher{,_round}.xml "$RES"/mipmap-*dpi/ic_launcher{,_round}.png \
+  "$RES"/drawable/ic_stat_notification.xml \
   crates/construct-render/android/res/values/styles.xml \
   crates/construct-render/android/res/values-night/styles.xml
 "$TOOLS/aapt2" link -o "$OUT/unsigned.apk" --manifest crates/construct-render/android/AndroidManifest.xml \
@@ -69,13 +71,30 @@ for j in "${JAVA_HOME:+$JAVA_HOME/bin/javac}" "$(command -v javac || true)" \
   [[ -n $j && -x $j ]] && { JAVAC=$j; break; }
 done
 [[ -n $JAVAC ]] || { echo "no javac (a JDK: JAVA_HOME, PATH, or Android Studio's)" >&2; exit 1; }
-rm -rf "$OUT/classes" && mkdir -p "$OUT/classes" "$OUT/apk/dex"
-"$JAVAC" -nowarn --release 11 -classpath "$PLATFORM/android.jar" -d "$OUT/classes" \
+# Prebuilt libraries' classes go in too: the UnifiedPush connector (push while the app is closed: `PushReceiver`
+# extends its receiver) and the Kotlin standard library it needs. Downloaded once from Maven Central into
+# build/android-native/libs, and checked against these hashes.
+LIBS=$OUT/libs
+mkdir -p "$LIBS"
+fetch() { # path on Maven Central, file, sha256
+  if [[ ! -f $LIBS/$2 ]] || ! echo "$3  $LIBS/$2" | shasum -a 256 -c --status - 2>/dev/null; then
+    curl -fsSL --retry 4 -o "$LIBS/$2" "https://repo1.maven.org/maven2/$1/$2"
+    echo "$3  $LIBS/$2" | shasum -a 256 -c --status - || { echo "$2: unexpected contents" >&2; rm -f "$LIBS/$2"; exit 1; }
+  fi
+}
+fetch org/unifiedpush/android/connector/2.5.0 connector-2.5.0.aar \
+  5d37754a3a8c5cc7be7a1b628a2d56d4e894a92ea82de67563aaab0951aa290e
+fetch org/jetbrains/kotlin/kotlin-stdlib/2.0.10 kotlin-stdlib-2.0.10.jar \
+  60f1cefbf1c101676abc9f413f569dad464929d7dc63d5e70e15ae26986e08ac
+unzip -oq "$LIBS/connector-2.5.0.aar" classes.jar -d "$LIBS/connector"
+JARS=("$LIBS/connector/classes.jar" "$LIBS/kotlin-stdlib-2.0.10.jar")
+rm -rf "$OUT/classes" "$OUT/apk/dex" && mkdir -p "$OUT/classes" "$OUT/apk/dex"
+"$JAVAC" -nowarn --release 11 -classpath "$PLATFORM/android.jar:${JARS[0]}" -d "$OUT/classes" \
   $(find crates/construct-render/android/java -name '*.java')
 "$TOOLS/d8" --release --min-api 28 --lib "$PLATFORM/android.jar" --output "$OUT/apk/dex" \
-  $(find "$OUT/classes" -name '*.class')
-cp "$OUT/apk/dex/classes.dex" "$OUT/apk/classes.dex"
-(cd "$OUT/apk" && zip -qr ../unsigned.apk lib classes.dex)
+  $(find "$OUT/classes" -name '*.class') "${JARS[@]}"
+rm -f "$OUT"/apk/classes*.dex && cp "$OUT"/apk/dex/classes*.dex "$OUT/apk/"
+(cd "$OUT/apk" && zip -qr ../unsigned.apk lib classes*.dex)
 "$TOOLS/zipalign" -f -p 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
 KEY=$HOME/.android/debug.keystore
 if [[ ! -f $KEY ]]; then

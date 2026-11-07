@@ -19,7 +19,10 @@ gpu = ["dep:wgpu", "dep:glyphon", "dep:pollster", "dep:bytemuck"]
 window = ["gpu", "dep:winit", "dep:jni", "dep:accesskit_winit"]
 # A live session over a pod (`remote`): run by the engine (`client-core`:
 # its cache, outbox and event stream), images over HTTP.
-remote = ["dep:reqwest", "dep:client-core", "image/jpeg"]
+remote = [
+    "dep:reqwest", "dep:client-core", "image/jpeg",
+    "dep:web-push-native", "dep:base64", "dep:getrandom",
+]
 # The `construct-viewer` binary (`--pod` runs it on a pod).
 viewer = ["window", "remote"]
 
@@ -44,6 +47,11 @@ accesskit = "0.25"
 # `remote`: the pod's HTTP API, and the engine the Compose clients run.
 reqwest = { workspace = true, optional = true }
 client-core = { workspace = true, optional = true }
+# `remote`: push messages (`push`): Web Push decryption (RFC 8291) with
+# this device's own keys, as the pod encrypts them.
+web-push-native = { version = "0.5", default-features = false, optional = true }
+base64 = { version = "0.22", optional = true }
+getrandom = { version = "0.3", optional = true }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 # Screen readers on the desktop: VoiceOver (macOS) and Narrator (Windows).
