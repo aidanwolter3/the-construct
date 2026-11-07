@@ -53,8 +53,8 @@ own fields behave (cursor, selection handles, Cut / Copy / Paste / Select all, t
 Android callbacks that only arrive through Java (links, activity results, broadcasts) reach Rust through a thin
 bridge: [android-native-bridge](android-native-bridge.md).
 
-Not yet: a pinned version is not shown, dates are not formatted, and the keyboard's suggestions, autocorrect and
-own paste button don't reach text fields. The native window and
+Not yet: a pinned version is not shown and dates are not formatted. (The keyboard's suggestions, autocorrect and
+own paste reach text fields through the bridge's input connection, #171.) The native window and
 APK talk to no engine (`client-core`): no cache, outbox (a write made offline is lost), event stream or upstream
 sign-in. Moving the clients onto this engine, the
 web target and a shared golden suite with the simulator are later decisions.

@@ -214,6 +214,13 @@ pub const LABEL_LARGE: Type = Type {
     line_height: 20.0,
 };
 
+/// Material `labelSmall` (what the shared UI names unsupported nodes in).
+pub const LABEL_SMALL: Type = Type {
+    face: Face::Sans,
+    size: 11.0,
+    line_height: 16.0,
+};
+
 /// Chips' labels (Material `labelLarge`, regular weight).
 pub const CHIP_LABEL: Type = Type {
     face: Face::Sans,

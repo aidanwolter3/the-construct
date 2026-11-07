@@ -45,6 +45,22 @@ pub trait Platform {
     /// `request_notification_permission`: the system's prompt to allow
     /// notifications (or its settings for them); nothing where it has none.
     fn ask_notifications(&self) {}
+    /// Whether the system is in dark mode; `None`: as the window says
+    /// (winit's theme).
+    fn dark(&self) -> Option<bool> {
+        None
+    }
+    /// The keyboard's own editing (Android's input connection: suggestions,
+    /// autocorrect, composing), given the focused field as the engine has it
+    /// (`None`: none is focused). Returns what the keyboard did since last
+    /// asked, for the window to apply first; else the keyboard is told of the
+    /// engine's changes. `None` where the keyboard only sends keys.
+    fn text_input(
+        &self,
+        _field: Option<&crate::ime::TextState>,
+    ) -> Option<crate::ime::KeyboardEdit> {
+        None
+    }
     /// The session to show next ([`Reopen`]); `None` when the platform
     /// can't.
     fn reopen(&self, _how: Reopen) -> Option<crate::interact::Session> {
@@ -80,6 +96,9 @@ pub enum Reopen {
     Left,
     /// Load the pod again (`refresh`, Try again).
     Reload,
+    /// Open another server (`set_server`): its saved session, else its
+    /// sign-in screen.
+    Server(String),
 }
 
 /// The desktop's clipboard, through its command-line tools (`pbpaste` on

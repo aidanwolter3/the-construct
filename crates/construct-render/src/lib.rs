@@ -12,10 +12,12 @@
 pub mod accessibility;
 pub mod bind;
 pub mod cpu;
+pub mod dates;
 pub mod demo;
 pub mod encode;
 pub mod icons;
 pub mod images;
+pub mod ime;
 pub mod interact;
 pub mod layout;
 pub mod platform;
