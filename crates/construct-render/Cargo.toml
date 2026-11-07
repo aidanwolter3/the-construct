@@ -25,6 +25,8 @@ serde.workspace = true
 serde_json.workspace = true
 taffy = { version = "0.15", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
 cosmic-text = "0.19"
+# Icon paths (SVG path data) to coverage masks; already under cosmic-text.
+zeno = "0.3"
 image = { version = "0.25", default-features = false, features = ["png", "webp"] }
 wgpu = { version = "30", optional = true }
 glyphon = { version = "0.12", optional = true }

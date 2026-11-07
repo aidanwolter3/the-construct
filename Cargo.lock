@@ -838,6 +838,7 @@ dependencies = [
  "taffy",
  "wgpu",
  "winit",
+ "zeno",
 ]
 
 [[package]]

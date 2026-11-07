@@ -13,7 +13,7 @@ use taffy::prelude::*;
 use taffy::{LayoutInput, LayoutOutput, compute_leaf_layout};
 
 use crate::bind::{Ctx, fold, render};
-use crate::scene::{Draw, NO_CLIP, QuadInstance, Scene, SemanticNode, Tap, TextRun};
+use crate::scene::{Draw, IconRun, NO_CLIP, QuadInstance, Scene, SemanticNode, Tap, TextRun};
 use crate::style::{CHIP_LABEL, LABEL_LARGE, Rgba, Theme, Type, type_for};
 use crate::text::TextEngine;
 
@@ -120,6 +120,7 @@ enum Paint {
         color: Rgba,
     },
     Icon {
+        name: String,
         shape: Icon,
         color: Rgba,
     },
@@ -1729,6 +1730,7 @@ impl<'i> Build<'_, 'i> {
             fixed(size, size),
             Vec::new(),
             Paint::Icon {
+                name: name.to_owned(),
                 shape: icon_shape(name),
                 color,
             },
@@ -1877,7 +1879,16 @@ impl<'i> Build<'_, 'i> {
                     clip,
                 }));
             }
-            Paint::Icon { shape, color } => {
+            Paint::Icon { name, color, .. } if crate::icons::paths(name).is_some() => {
+                let s = w.min(h);
+                scene.draws.push(Draw::Icon(IconRun {
+                    name: name.clone(),
+                    rect: [x + (w - s) / 2.0, y + (h - s) / 2.0, s, s],
+                    color: *color,
+                    clip,
+                }));
+            }
+            Paint::Icon { shape, color, .. } => {
                 let s = w.min(h);
                 let (cx, cy) = (x + w / 2.0, y + h / 2.0);
                 let unit = s / 24.0;

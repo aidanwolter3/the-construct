@@ -6,9 +6,10 @@
 use cosmic_text::{SwashCache, SwashContent};
 use image::RgbaImage;
 
-use crate::scene::{Draw, QuadInstance, Scene, TextRun};
+use crate::scene::{Draw, IconRun, QuadInstance, Scene, TextRun};
 use crate::style::Type;
 use crate::text::TextEngine;
+use std::collections::HashMap;
 
 /// Signed distance from `p` (relative to the box centre) to a rounded box of
 /// half size `b`; radii are top-left, top-right, bottom-right, bottom-left
@@ -90,6 +91,8 @@ fn over(d: &mut [u8; 4], c: [f32; 4]) {
 /// Draws scenes to RGBA images on the CPU.
 pub struct CpuRenderer {
     swash: SwashCache,
+    /// Icon masks by name and pixel size.
+    icons: HashMap<(String, u32), Vec<u8>>,
 }
 
 impl Default for CpuRenderer {
@@ -102,6 +105,7 @@ impl CpuRenderer {
     pub fn new() -> CpuRenderer {
         CpuRenderer {
             swash: SwashCache::new(),
+            icons: HashMap::new(),
         }
     }
 
@@ -118,6 +122,7 @@ impl CpuRenderer {
             match d {
                 Draw::Quad(q) => self.quad(&mut px, w, h, q, s),
                 Draw::Text(t) => self.text(&mut px, w, h, t, s, text),
+                Draw::Icon(i) => self.icon(&mut px, w, h, i, s),
             }
         }
         // Unpremultiplied: opaque pixels (nearly all) are copied as they are.
@@ -131,6 +136,42 @@ impl CpuRenderer {
             }
         }
         RgbaImage::from_raw(w as u32, h as u32, px.concat()).expect("sized to the frame")
+    }
+
+    /// An icon: its mask at the box's pixel size, tinted.
+    fn icon(&mut self, px: &mut [[u8; 4]], w: usize, h: usize, i: &IconRun, s: f32) {
+        let size = (i.rect[2] * s).round().max(1.0) as u32;
+        let Some(mask) = self
+            .icons
+            .entry((i.name.clone(), size))
+            .or_insert_with(|| crate::icons::mask(&i.name, size).unwrap_or_default())
+            .get(..(size * size) as usize)
+        else {
+            return;
+        };
+        let ox = (i.rect[0] * s).round() as i32;
+        let oy = (i.rect[1] * s).round() as i32;
+        let [cx, cy, cw, ch] = i.clip.map(|v| v * s);
+        let c = i.color.0;
+        for row in 0..size as i32 {
+            for col in 0..size as i32 {
+                let (x, y) = (ox + col, oy + row);
+                if x < 0 || y < 0 || x as usize >= w || y as usize >= h {
+                    continue;
+                }
+                let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+                if fx < cx || fy < cy || fx > cx + cw || fy > cy + ch {
+                    continue;
+                }
+                let a = mask[(row as u32 * size + col as u32) as usize] as f32 / 255.0 * c[3];
+                if a > 0.0 {
+                    over(
+                        &mut px[y as usize * w + x as usize],
+                        [c[0] * a, c[1] * a, c[2] * a, a],
+                    );
+                }
+            }
+        }
     }
 
     fn quad(&self, px: &mut [[u8; 4]], w: usize, h: usize, q: &QuadInstance, s: f32) {

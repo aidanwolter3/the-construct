@@ -50,8 +50,9 @@ path from the root (`root/0/2/i3/0`, `i3` being a list's fourth item). Bounds ar
 Drawn like the app: Page, Workspace (title and slots), Column, Row, Container, Box, Text (styles, `count`), Button,
 IconButton (`active`), Chip, Badge, Spacer, Divider, Conditional, Tappable, Gesture (tap), Scroll (clipped,
 offsets), List (`where`, `filter`, `group_by`, `columns`, `focus`, `indent`, `empty_text`), ChoiceChips, TextField,
-Switch, Progress, Dock, Layout (inline, from the layouts given). Approximated: Image (a placeholder in the
-blurhash's colour), icons (simple shapes), Carousel (first item and an "n/N" badge), MediaPicker (the add tile),
+Switch, Progress, Dock, Layout (inline, from the layouts given), and every named icon (`icons.rs`: the shared UI's
+Material path data, rasterized with zeno; on the GPU they are glyphon custom glyphs). Approximated: Image (a
+placeholder in the blurhash's colour), Carousel (first item and an "n/N" badge), MediaPicker (the add tile),
 Drawer (the selected page), AppFrame and unknown nodes (a labelled box). Not drawn: presented layouts (Sheet,
 Panel, Overlay), dialogs, `format` dates, sticky pinning.
 

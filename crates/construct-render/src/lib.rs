@@ -13,6 +13,7 @@ pub mod bind;
 pub mod cpu;
 pub mod demo;
 pub mod encode;
+pub mod icons;
 pub mod interact;
 pub mod layout;
 pub mod scene;

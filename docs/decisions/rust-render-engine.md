@@ -38,8 +38,9 @@ Decision: a Rust rendering engine, crate `construct-render`, drawing the plumbin
 The Compose clients stay the product. Nothing on the wire changes and no client update is needed: the engine
 draws today's plumbing, and new vocabulary still lands in Compose first.
 
-Not yet: images are placeholders (the blurhash's average colour; nothing is downloaded), icons are simple shapes,
-presented layouts (sheets, panels, overlays) and dialogs are not drawn, sticky nodes scroll, carousels show their
+Icons are the shared UI's own Material path data (`icons.rs`, generated from `ConstructIcons.kt`).
+
+Not yet: images are placeholders (the blurhash's average colour; nothing is downloaded), presented layouts (sheets, panels, overlays) and dialogs are not drawn, sticky nodes scroll, carousels show their
 first item, and dates are not formatted. The native window and APK talk to no engine (`client-core`): no sign-in,
 cache or outbox, only a layout file or (the viewer) one fetch from a pod. Moving the clients onto this engine, the
 web target and a shared golden suite with the simulator are later decisions.

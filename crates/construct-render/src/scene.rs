@@ -86,11 +86,21 @@ pub struct TextRun {
     pub clip: [f32; 4],
 }
 
+/// A named icon (`crate::icons`) drawn in a square box, tinted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IconRun {
+    pub name: String,
+    pub rect: [f32; 4],
+    pub color: Rgba,
+    pub clip: [f32; 4],
+}
+
 /// One draw command, in paint order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Draw {
     Quad(QuadInstance),
     Text(TextRun),
+    Icon(IconRun),
 }
 
 /// What a tap on a node does.
@@ -142,14 +152,14 @@ impl Scene {
     pub fn quads(&self) -> impl Iterator<Item = &QuadInstance> {
         self.draws.iter().filter_map(|d| match d {
             Draw::Quad(q) => Some(q),
-            Draw::Text(_) => None,
+            _ => None,
         })
     }
 
     pub fn texts(&self) -> impl Iterator<Item = &TextRun> {
         self.draws.iter().filter_map(|d| match d {
             Draw::Text(t) => Some(t),
-            Draw::Quad(_) => None,
+            _ => None,
         })
     }
 

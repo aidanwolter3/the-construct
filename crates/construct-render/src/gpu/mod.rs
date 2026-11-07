@@ -8,12 +8,13 @@
 //! draw of the other kind.
 
 use glyphon::{
-    Cache, ColorMode, Resolution, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer,
+    Cache, ColorMode, ContentType, CustomGlyph, RasterizedCustomGlyph, Resolution, SwashCache,
+    TextArea, TextAtlas, TextBounds, TextRenderer,
 };
 use image::RgbaImage;
 use wgpu::util::DeviceExt;
 
-use crate::scene::{Draw, QuadInstance, Scene, TextRun};
+use crate::scene::{Draw, IconRun, QuadInstance, Scene, TextRun};
 use crate::style::Type;
 use crate::text::TextEngine;
 
@@ -138,9 +139,12 @@ fn overlaps(a: [f32; 4], b: [f32; 4]) -> bool {
 
 /// Paint-order layers (see the module doc): (quads per layer, texts per
 /// layer), each draw by index into its kind.
-fn layers(scene: &Scene) -> (Vec<Vec<QuadInstance>>, Vec<Vec<TextRun>>) {
+type Layers = (Vec<Vec<QuadInstance>>, Vec<Vec<TextRun>>, Vec<Vec<IconRun>>);
+
+fn layers(scene: &Scene) -> Layers {
     let mut quads: Vec<Vec<QuadInstance>> = vec![Vec::new()];
     let mut texts: Vec<Vec<TextRun>> = vec![Vec::new()];
+    let mut icons: Vec<Vec<IconRun>> = vec![Vec::new()];
     // (extent, layer) of placed quads and texts.
     let mut placed_q: Vec<([f32; 4], usize)> = Vec::new();
     let mut placed_t: Vec<([f32; 4], usize)> = Vec::new();
@@ -163,6 +167,7 @@ fn layers(scene: &Scene) -> (Vec<Vec<QuadInstance>>, Vec<Vec<TextRun>>) {
                 while quads.len() <= l {
                     quads.push(Vec::new());
                     texts.push(Vec::new());
+                    icons.push(Vec::new());
                 }
                 quads[l].push(*q);
                 placed_q.push((e, l));
@@ -179,13 +184,32 @@ fn layers(scene: &Scene) -> (Vec<Vec<QuadInstance>>, Vec<Vec<TextRun>>) {
                 while texts.len() <= l {
                     quads.push(Vec::new());
                     texts.push(Vec::new());
+                    icons.push(Vec::new());
                 }
                 texts[l].push(t.clone());
                 placed_t.push((e, l));
             }
+            // Icons go with text: drawn after the quads of their layer.
+            Draw::Icon(i) => {
+                let e = i.rect;
+                let l = placed_q
+                    .iter()
+                    .chain(placed_t.iter())
+                    .filter(|(r, _)| overlaps(*r, e))
+                    .map(|(_, l)| *l)
+                    .max()
+                    .unwrap_or(0);
+                while icons.len() <= l {
+                    quads.push(Vec::new());
+                    texts.push(Vec::new());
+                    icons.push(Vec::new());
+                }
+                icons[l].push(i.clone());
+                placed_t.push((e, l));
+            }
         }
     }
-    (quads, texts)
+    (quads, texts, icons)
 }
 
 impl Renderer {
@@ -303,7 +327,7 @@ impl Renderer {
                 _pad: 0.0,
             }),
         );
-        let (quad_layers, text_layers) = layers(scene);
+        let (quad_layers, text_layers, icon_layers) = layers(scene);
         let mut all: Vec<QuadInstance> = Vec::new();
         let mut plan: Vec<Layer> = Vec::new();
         for (i, qs) in quad_layers.iter().enumerate() {
@@ -311,7 +335,7 @@ impl Renderer {
             all.extend_from_slice(qs);
             plan.push(Layer {
                 quads: start..all.len() as u32,
-                texts: (0..text_layers[i].len()).collect(),
+                texts: (0..text_layers[i].len() + icon_layers[i].len()).collect(),
             });
         }
         if !all.is_empty() {
@@ -378,15 +402,67 @@ impl Renderer {
                     custom_glyphs: &[],
                 }
             });
+            // Icons are custom glyphs: one area each (each has its own clip),
+            // over an empty buffer, rasterized from their paths on demand.
+            let glyphs: Vec<[CustomGlyph; 1]> = icon_layers[li]
+                .iter()
+                .map(|i| {
+                    let c = i.color.to_u8();
+                    [CustomGlyph {
+                        id: crate::icons::id(&i.name).unwrap_or(0),
+                        left: (i.rect[0] * s).round(),
+                        top: (i.rect[1] * s).round(),
+                        width: (i.rect[2] * s).round(),
+                        height: (i.rect[3] * s).round(),
+                        color: Some(glyphon::Color::rgba(c[0], c[1], c[2], c[3])),
+                        snap_to_physical_pixel: true,
+                        metadata: 0,
+                    }]
+                })
+                .collect();
+            let empty = glyphon::Buffer::new(text.font_system(), glyphon::Metrics::new(1.0, 1.0));
+            let icon_areas = icon_layers[li].iter().zip(&glyphs).map(|(i, g)| {
+                let [cx, cy, cw, ch] = i.clip.map(|v| v * s);
+                TextArea {
+                    buffer: &empty,
+                    left: 0.0,
+                    top: 0.0,
+                    scale: 1.0,
+                    bounds: TextBounds {
+                        left: cx.max(-1.0e6) as i32,
+                        top: cy.max(-1.0e6) as i32,
+                        right: (cx + cw).min(1.0e6) as i32,
+                        bottom: (cy + ch).min(1.0e6) as i32,
+                    },
+                    default_color: glyphon::Color::rgb(0, 0, 0),
+                    custom_glyphs: g,
+                }
+            });
             self.texts[li]
-                .prepare(
+                .prepare_with_custom(
                     device,
                     queue,
                     text.font_system(),
                     &mut self.atlas,
                     &self.viewport,
-                    areas,
+                    areas.chain(icon_areas),
                     &mut self.swash,
+                    |req| {
+                        let name = crate::icons::name(req.id)?;
+                        let size = req.width.min(req.height) as u32;
+                        let mask = crate::icons::mask(name, size)?;
+                        // A square mask in a request that isn't square: pad it.
+                        let (w, h) = (req.width as usize, req.height as usize);
+                        let mut data = vec![0u8; w * h];
+                        for y in 0..size as usize {
+                            data[y * w..y * w + size as usize]
+                                .copy_from_slice(&mask[y * size as usize..(y + 1) * size as usize]);
+                        }
+                        Some(RasterizedCustomGlyph {
+                            data,
+                            content_type: ContentType::Mask,
+                        })
+                    },
                 )
                 .map_err(|e| GpuError(format!("text: {e}")))?;
         }
