@@ -46,7 +46,27 @@ pub trait Platform {
     fn gone(&self) -> bool {
         false
     }
+    /// The session to show next ([`Reopen`]); `None` when the platform
+    /// can't.
+    fn reopen(&self, _how: Reopen) -> Option<crate::interact::Session> {
+        None
+    }
 }
+
+/// Why the window wants another session.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Reopen {
+    /// Signed in: save the session and open the pod; `code` is the one to
+    /// offer next time.
+    SignedIn { token: String, code: String },
+    /// Left the pod: forget the session, show the pod's sign-in screen with
+    /// the last code.
+    Left,
+    /// Load the pod again (`refresh`, Try again).
+    Reload,
+}
+
+type Waker = Arc<dyn Fn() + Send + Sync>;
 
 /// Opens an address with the desktop's opener (`open`, `xdg-open`, `start`).
 pub fn open_link_here(url: &str) {
@@ -201,6 +221,8 @@ pub struct App {
     cursor: (f32, f32),
     drag: Option<Drag>,
     fling: Option<Fling>,
+    /// Wakes the event loop (a session's images and answers arriving).
+    waker: Option<Waker>,
 }
 
 impl App {
@@ -213,6 +235,28 @@ impl App {
             cursor: (0.0, 0.0),
             drag: None,
             fling: None,
+            waker: None,
+        }
+    }
+
+    /// Shows another session (signed in, or left the pod), at the window's
+    /// size and insets.
+    fn replace_session(&mut self, mut session: crate::interact::Session) {
+        if let Some(w) = self.waker.clone() {
+            session.images.set_waker(move || w());
+        }
+        let old = &self.controller.session;
+        session.resize(old.viewport);
+        session.set_insets(old.insets);
+        self.controller = Controller::new(session);
+        self.drag = None;
+        self.fling = None;
+        if let Some(s) = self.surface.as_mut() {
+            s.renderer.images = Some(self.controller.session.images.clone());
+            s.window.request_redraw();
+        }
+        if let Some(p) = &self.platform {
+            p.show_keyboard(false);
         }
     }
 
@@ -397,13 +441,31 @@ impl App {
             if let Ok(json) = serde_json::to_string(&out.effects) {
                 log(&json);
             }
+            let mut reopen = None;
             for e in &out.effects {
-                if let crate::interact::Effect::OpenLink { url } = e {
-                    match &self.platform {
+                match e {
+                    crate::interact::Effect::OpenLink { url } => match &self.platform {
                         Some(p) => p.open_link(url),
                         None => open_link_here(url),
+                    },
+                    crate::interact::Effect::SignedIn { token, code } => {
+                        reopen = Some(Reopen::SignedIn {
+                            token: token.clone(),
+                            code: code.clone(),
+                        })
                     }
+                    crate::interact::Effect::LeftPod => reopen = Some(Reopen::Left),
+                    crate::interact::Effect::Device { command } if command == "refresh" => {
+                        reopen = Some(Reopen::Reload)
+                    }
+                    _ => {}
                 }
+            }
+            if let Some(how) = reopen
+                && let Some(p) = &self.platform
+                && let Some(session) = p.reopen(how)
+            {
+                self.replace_session(session);
             }
         }
         if tap && let Some(p) = &self.platform {
@@ -668,9 +730,12 @@ pub fn run(event_loop: EventLoop<()>, controller: Controller, title: &str) -> Re
 /// Runs a prepared [`App`] (with a [`Platform`]) until it closes.
 pub fn run_app(event_loop: EventLoop<()>, mut app: App) -> Result<(), String> {
     let proxy = event_loop.create_proxy();
-    app.controller.session.images.set_waker(move || {
+    let waker: Waker = Arc::new(move || {
         let _ = proxy.send_event(());
     });
+    let w = waker.clone();
+    app.controller.session.images.set_waker(move || w());
+    app.waker = Some(waker);
     event_loop.run_app(&mut app).map_err(|e| e.to_string())
 }
 

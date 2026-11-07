@@ -1,6 +1,6 @@
 //! `frame_diff <a.png> <b.png> [max_ratio]`: exits 1 when more than
 //! `max_ratio` (default 0.01) of the pixels differ by more than 24 levels.
-//! Used by scripts/android_native.sh to compare a device frame with a golden.
+//! Compares a device frame (`frame.png`, see `android.rs`) with a golden.
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

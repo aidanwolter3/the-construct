@@ -275,6 +275,8 @@ fn effect_line(e: &Effect) -> String {
         ),
         Effect::Sent { path } => format!("sent to {path}"),
         Effect::OpenLink { url } => format!("would open {url} in the browser"),
+        Effect::SignedIn { .. } => "signed in".into(),
+        Effect::LeftPod => "would leave the pod on this device".into(),
         Effect::Nothing => "nothing happened".into(),
     }
 }

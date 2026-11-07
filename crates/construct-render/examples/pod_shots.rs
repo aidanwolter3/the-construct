@@ -1,5 +1,5 @@
 //! `pod_shots <pod url> <out dir> <script>`: a live session on a pod
-//! (CONSTRUCT_POD_TOKEN: a pod code or session token), driven by a script and
+//! (CONSTRUCT_POD_TOKEN: a pod code or session token; unset, the sign-in screen), driven by a script and
 //! drawn on the CPU at 390 × 844 @3, as the simulator's phone, to compare
 //! with `:desktopApp:simulate -PbaseUrl`. Script steps, `;`-separated:
 //! `open <layout>`, `present <layout> <Sheet|Panel|Overlay> [edge]`, `tap <text or id>`, `type <field> <text>`, `scroll <dy>`,
@@ -16,7 +16,8 @@ fn main() {
         eprintln!("usage: pod_shots <pod url> <out dir> <script>");
         std::process::exit(2);
     };
-    let token = std::env::var("CONSTRUCT_POD_TOKEN").expect("CONSTRUCT_POD_TOKEN");
+    // Empty: no session (the pod's sign-in screen).
+    let token = std::env::var("CONSTRUCT_POD_TOKEN").unwrap_or_default();
     let vp = Viewport {
         width: 390.0,
         height: 844.0,

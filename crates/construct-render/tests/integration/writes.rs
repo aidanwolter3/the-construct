@@ -25,6 +25,13 @@ impl Loader for Pod {
     fn data(&self, _path: &str) -> Result<DataBundle, String> {
         Ok(DataBundle::default())
     }
+    fn open_session(&self, path: &str, payload: &Value) -> Option<Result<String, String>> {
+        Some(match (path, payload["token"].as_str()) {
+            ("/v1/pods/open", Some("cpod_good")) => Ok("cpod_good".into()),
+            ("/v1/pods/temporary", _) => Ok("cpod_temp".into()),
+            _ => Err("That pod code didn't open a pod.".into()),
+        })
+    }
     fn send(&self, write: Write, done: Done) -> bool {
         self.writes.lock().unwrap().push(write);
         done(Written {
@@ -324,4 +331,68 @@ fn a_carousel_of_one_fills_its_width() {
             media.len()
         );
     }
+}
+
+#[test]
+fn a_confirm_asks_first_and_cancel_runs_nothing() {
+    let root = json!({ "type": "core://Button", "label": "Leave pod on this device", "on_click": {
+        "intent": "action.confirm", "title": "Leave this pod?", "message": "This device forgets the pod.",
+        "confirm_label": "Leave", "then": { "intent": "action.device", "command": "leave_pod" } } });
+    let (mut s, _) = session(root, json!({}), false);
+    let out = s
+        .tap(&Target::Text("Leave pod on this device".into()))
+        .unwrap();
+    assert!(!out.effects.contains(&Effect::LeftPod), "{:?}", out.effects);
+    assert!(s.scene().unwrap().find_text("Leave this pod?").is_some());
+    // Cancel (or a tap outside, or Back) closes it; nothing ran.
+    let out = s.tap(&Target::Id("confirm:cancel".into())).unwrap();
+    assert_eq!(out.effects, vec![Effect::Back]);
+    assert!(s.scene().unwrap().find_text("Leave this pod?").is_none());
+    // Confirm runs `then`.
+    s.tap(&Target::Text("Leave pod on this device".into()))
+        .unwrap();
+    let out = s.tap(&Target::Id("confirm:ok".into())).unwrap();
+    assert!(out.effects.contains(&Effect::LeftPod), "{:?}", out.effects);
+    assert_eq!(s.current(), "home");
+}
+
+#[test]
+fn signing_in_answers_the_session_and_the_code_to_remember() {
+    let field = |payload: Value, path: &str| {
+        json!({ "type": "core://Button", "label": path,
+        "on_click": { "intent": "action.auth.session", "path": path, "payload": payload } })
+    };
+    let root = json!({ "type": "core://Column", "children": [
+        { "type": "core://TextField", "field": "pod_token", "placeholder": "Pod code" },
+        field(json!({ "token": "$form.pod_token" }), "/v1/pods/open"),
+        field(json!({}), "/v1/pods/temporary") ] });
+    let (mut s, _) = session(root, json!({}), false);
+    // A blank code sends nothing.
+    let out = s.tap(&Target::Text("/v1/pods/open".into())).unwrap();
+    assert_eq!(out.effects, vec![Effect::Nothing]);
+    s.type_text("pod_token", "cpod_bad");
+    let out = s.tap(&Target::Text("/v1/pods/open".into())).unwrap();
+    assert!(
+        matches!(out.effects[0], Effect::LoadFailed { .. }),
+        "{:?}",
+        out.effects
+    );
+    s.type_text("pod_token", "cpod_good");
+    let out = s.tap(&Target::Text("/v1/pods/open".into())).unwrap();
+    assert_eq!(
+        out.effects,
+        vec![Effect::SignedIn {
+            token: "cpod_good".into(),
+            code: "cpod_good".into()
+        }]
+    );
+    // A temporary pod's code is its session.
+    let out = s.tap(&Target::Text("/v1/pods/temporary".into())).unwrap();
+    assert_eq!(
+        out.effects,
+        vec![Effect::SignedIn {
+            token: "cpod_temp".into(),
+            code: "cpod_temp".into()
+        }]
+    );
 }

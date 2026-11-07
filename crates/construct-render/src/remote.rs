@@ -66,6 +66,11 @@ impl PodClient {
         })
     }
 
+    /// The pod's base URL.
+    pub fn base(&self) -> &str {
+        &self.base
+    }
+
     pub fn session_token(&self) -> &str {
         &self.token
     }
@@ -76,13 +81,15 @@ impl PodClient {
         } else {
             format!("{}/{}", self.base, path.trim_start_matches('/'))
         };
-        let resp = self
+        let mut req = self
             .http
             .get(&url)
-            .bearer_auth(&self.token)
-            .header(protocol::FEATURES_HEADER, protocol::features_header())
-            .send()
-            .map_err(|e| format!("{path}: {e}"))?;
+            .header(protocol::FEATURES_HEADER, protocol::features_header());
+        // No session: the pod answers its sign-in screen.
+        if !self.token.is_empty() {
+            req = req.bearer_auth(&self.token);
+        }
+        let resp = req.send().map_err(|e| format!("{path}: {e}"))?;
         let status = resp.status();
         if status.as_u16() == 401 {
             return Err(format!("{path}: signed out (401): sign in again"));
@@ -96,14 +103,15 @@ impl PodClient {
     /// POSTs `body` to a pod path; the answer's JSON (`null` when empty).
     pub fn post(&self, path: &str, body: &Value) -> Result<Value, String> {
         let url = format!("{}/{}", self.base, path.trim_start_matches('/'));
-        let resp = self
+        let mut req = self
             .http
             .post(&url)
-            .bearer_auth(&self.token)
             .header(protocol::FEATURES_HEADER, protocol::features_header())
-            .json(body)
-            .send()
-            .map_err(|e| format!("{path}: {e}"))?;
+            .json(body);
+        if !self.token.is_empty() {
+            req = req.bearer_auth(&self.token);
+        }
+        let resp = req.send().map_err(|e| format!("{path}: {e}"))?;
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().unwrap_or_default();
@@ -458,6 +466,27 @@ impl Loader for PodClient {
 
     fn data(&self, path: &str) -> Result<DataBundle, String> {
         serde_json::from_value(self.get(path)?).map_err(|e| format!("{path}: {e}"))
+    }
+
+    fn open_session(&self, path: &str, payload: &Value) -> Option<Result<String, String>> {
+        let answer = PodClient {
+            token: String::new(),
+            ..self.clone()
+        }
+        .post(path, payload)
+        .map_err(|e| {
+            if e.contains("404") || e.contains("401") {
+                "That pod code didn't open a pod.".to_owned()
+            } else {
+                e
+            }
+        });
+        Some(answer.and_then(|v| {
+            v["session_token"]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "the pod answered no session".to_owned())
+        }))
     }
 
     fn fetch(&self, path: &str, done: Loaded) -> bool {

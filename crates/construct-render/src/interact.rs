@@ -77,6 +77,14 @@ pub enum Effect {
     OpenLink {
         url: String,
     },
+    /// A pod session opened (`action.auth.session`): the platform saves it
+    /// and opens the pod; `code` is the one to offer next time.
+    SignedIn {
+        token: String,
+        code: String,
+    },
+    /// `leave_pod`: the platform forgets the session and shows sign-in.
+    LeftPod,
     /// Would go to the pod or the platform; a preview doesn't send it.
     NotSent {
         intent: Value,
@@ -97,6 +105,8 @@ enum Frame {
     Full,
     /// A sheet, panel or overlay from this edge, over a scrim.
     Edge(protocol::Edge),
+    /// An `action.confirm` dialog, centred over a scrim.
+    Dialog,
 }
 
 /// How long a layout or screen takes to slide in or out (the shared UI's
@@ -268,6 +278,11 @@ pub trait Loader: Send {
     /// can't (the session then loads it in place).
     fn fetch(&self, _path: &str, _done: Loaded) -> bool {
         false
+    }
+    /// POSTs a sign-in (`action.auth.session`) and answers the session
+    /// token; `None` when this loader can't.
+    fn open_session(&self, _path: &str, _payload: &Value) -> Option<Result<String, String>> {
+        None
     }
 }
 
@@ -803,7 +818,7 @@ impl Session {
         let [it, _, ib, _] = self.insets;
         let e = &self.stack[g];
         match e.frame {
-            Frame::Full => ([0.0, 0.0, w, h], [0.0, 0.0, w, h], self.insets),
+            Frame::Full | Frame::Dialog => ([0.0, 0.0, w, h], [0.0, 0.0, w, h], self.insets),
             Frame::Edge(edge) => match edge {
                 protocol::Edge::Bottom => {
                     let sh = e.size.unwrap_or(h * SHEET_HEIGHT_FRACTION).min(h);
@@ -855,6 +870,7 @@ impl Session {
         } else {
             match e.frame {
                 Frame::Full => "push",
+                Frame::Dialog => "dialog",
                 Frame::Edge(protocol::Edge::Bottom | protocol::Edge::Top) => "sheet",
                 Frame::Edge(_) => "panel",
             }
@@ -968,6 +984,7 @@ impl Session {
                 let q = 1.0 - p;
                 match frame {
                     Frame::Full => (q * w, 0.0),
+                    Frame::Dialog => (0.0, 0.0),
                     Frame::Edge(protocol::Edge::Bottom) => (0.0, q * size[1]),
                     Frame::Edge(protocol::Edge::Top) => (0.0, -q * size[1]),
                     Frame::Edge(protocol::Edge::Start) => (-q * size[0], 0.0),
@@ -1030,6 +1047,30 @@ impl Session {
                         (frame_now[0], frame_now[1]),
                         [0.0, 0.0, w, h],
                     );
+                }
+                Frame::Dialog => {
+                    let scrim =
+                        QuadInstance::fill([0.0, 0.0, w, h], Rgba([0.0, 0.0, 0.0, 0.32 * p]), 0.0);
+                    scene.draws.push(Draw::Quad(scrim));
+                    if i == top_group {
+                        // A tap outside cancels, as Back does.
+                        scene.semantics.push(SemanticNode {
+                            id: "scrim".into(),
+                            node_type: "scrim".into(),
+                            bounds: [0.0, 0.0, w, h],
+                            text_content: None,
+                            interactive: true,
+                            tap: Some(Tap::Intent {
+                                intent: json!({ "intent": "action.navigation.back" }),
+                            }),
+                            selected: false,
+                            parent: None,
+                            gestures: BTreeMap::new(),
+                        });
+                    }
+                    if p > 0.5 {
+                        laid.emit_into(&mut scene, &e.scroll, (0.0, 0.0), [0.0, 0.0, w, h]);
+                    }
                 }
                 Frame::Edge(edge) => {
                     let scrim = QuadInstance::fill(
@@ -1319,14 +1360,24 @@ impl Session {
     fn run(&mut self, intent: &Value, out: &mut Vec<Effect>) {
         match intent["intent"].as_str().unwrap_or("") {
             "action.sequence" => {
-                for s in intent["steps"].as_array().into_iter().flatten() {
-                    self.run(s, out);
+                let steps = intent["steps"].as_array().cloned().unwrap_or_default();
+                for (i, step) in steps.iter().enumerate() {
+                    if step["intent"] == "action.confirm" {
+                        // The steps after it wait for the answer too.
+                        let mut c = step.clone();
+                        let rest = &steps[i + 1..];
+                        if !rest.is_empty() {
+                            let mut then = vec![step["then"].clone()];
+                            then.extend(rest.iter().cloned());
+                            c["then"] = json!({ "intent": "action.sequence", "steps": then });
+                        }
+                        self.run(&c, out);
+                        return;
+                    }
+                    self.run(step, out);
                 }
             }
-            "action.confirm" => {
-                // A preview confirms: the dialog is the app's own.
-                self.run(&intent["then"], out);
-            }
+            "action.confirm" => self.confirm(intent, out),
             "action.local.set" => {
                 let uri = intent["entity_uri"].as_str().unwrap_or("").to_owned();
                 let mut fields = BTreeMap::new();
@@ -1355,6 +1406,7 @@ impl Session {
                 }
             }
             "action.mutation.optimistic" => self.optimistic(intent, out),
+            "action.auth.session" => self.open_session(intent, out),
             "action.mutation.create" => self.create(intent, out),
             "action.link.open" => {
                 let url = intent["url"].as_str().unwrap_or("").trim();
@@ -1419,6 +1471,19 @@ impl Session {
                 let id = intent["id"].as_str().unwrap_or("").to_owned();
                 match command.as_str() {
                     "open_notification" => return self.open_notification(&id, out),
+                    "refresh" => {
+                        // The platform loads the pod again.
+                        out.push(Effect::Device { command });
+                        return;
+                    }
+                    "leave_pod" => {
+                        // The platform forgets the session and shows the
+                        // pod's sign-in screen (`Effect::LeftPod`).
+                        self.stack.truncate(1);
+                        self.focused = None;
+                        out.push(Effect::LeftPod);
+                        return;
+                    }
                     "mark_read" => {
                         self.mark_read(Some(&id), out);
                         out.push(Effect::Device { command });
@@ -1650,6 +1715,90 @@ impl Session {
         out.push(Effect::Device {
             command: "open_notification".into(),
         });
+    }
+
+    /// `action.confirm`: the app's own dialog over everything, with the
+    /// intent's title, message, confirm label and Cancel; confirm runs
+    /// `then`, Cancel, Back or a tap outside do nothing.
+    fn confirm(&mut self, intent: &Value, out: &mut Vec<Effect>) {
+        let title = intent["title"].as_str().unwrap_or("Are you sure?");
+        let label = intent["confirm_label"].as_str().unwrap_or("OK");
+        let accept = json!({ "intent": "action.sequence", "steps": [
+            { "intent": "action.navigation.back" }, intent["then"].clone() ] });
+        let button = |text: &str, tag: &str, on: Value| {
+            json!({ "type": "core://Tappable", "tag": tag, "content_description": text, "on_click": on,
+                "content": { "type": "core://Box", "padding_h_dp": 12, "padding_v_dp": 10,
+                    "content_color": "${local://theme#accent}",
+                    "content": { "type": "core://Text", "style": "Label", "value_expr": text } } })
+        };
+        let mut body =
+            vec![json!({ "type": "core://Text", "style": "Title", "value_expr": title })];
+        if let Some(m) = intent["message"].as_str().filter(|m| !m.trim().is_empty()) {
+            body.push(json!({ "type": "core://Text", "style": "Body", "value_expr": m }));
+        }
+        body.push(json!({ "type": "core://Row", "spacing_dp": 8, "children": [
+            { "type": "core://Spacer" },
+            button("Cancel", "confirm:cancel", json!({ "intent": "action.navigation.back" })),
+            button(label, "confirm:ok", accept),
+        ] }));
+        let root = json!({ "type": "core://Box", "fill": true, "align": "Center", "padding_h_dp": 32,
+            "content": { "type": "core://Box", "background": "${local://theme#page}", "corner_dp": 28,
+                "padding_h_dp": 24, "padding_v_dp": 24,
+                "content": { "type": "core://Column", "spacing_dp": 16, "children": body } } });
+        let Ok(root) = serde_json::from_value::<UiNode>(root) else {
+            // Without a dialog, nothing runs.
+            out.push(Effect::Nothing);
+            return;
+        };
+        let mut e = Entry::layout("confirm", root, BTreeMap::new());
+        e.frame = Frame::Dialog;
+        self.stack.push(e);
+        self.focused = None;
+        out.push(Effect::Opened {
+            layout: "confirm".into(),
+        });
+    }
+
+    /// `action.auth.session`: POSTs the form-bound payload to the pod path
+    /// (a pod code to `/v1/pods/open`, or `/v1/pods/temporary`); its session
+    /// token becomes the device's (`Effect::SignedIn`, which the platform
+    /// saves and opens).
+    fn open_session(&mut self, intent: &Value, out: &mut Vec<Effect>) {
+        let path = intent["path"].as_str().unwrap_or("");
+        let payload = intent["payload"].clone();
+        let Some(answer) = self
+            .loader
+            .as_ref()
+            .and_then(|l| l.open_session(path, &payload))
+        else {
+            out.push(Effect::NotSent {
+                intent: intent.clone(),
+            });
+            return;
+        };
+        match answer {
+            Ok(token) => {
+                // The code to remember: the one typed, else the new pod's.
+                let code = payload["token"]
+                    .as_str()
+                    .filter(|c| !c.is_empty())
+                    .unwrap_or(&token)
+                    .to_owned();
+                out.push(Effect::SignedIn { token, code });
+            }
+            Err(error) => {
+                let s = self
+                    .data
+                    .entities
+                    .entry("local://session".into())
+                    .or_default();
+                s.set("error", error.clone());
+                out.push(Effect::LoadFailed {
+                    what: path.to_owned(),
+                    error,
+                });
+            }
+        }
     }
 
     /// A layout's root: given, or loaded (its data merged).

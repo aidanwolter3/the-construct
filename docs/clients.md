@@ -64,8 +64,8 @@ through Rust and is not restricted by Android's network security config.
 ## Rust-native prototype
 
 `crates/construct-render` draws layouts without the JVM: `construct-viewer` is a desktop window (Metal or Vulkan)
-and `scripts/android_native.sh` builds a NativeActivity APK. They draw a layout file, or a pod live (`--pod`, or
-`--as-app` over the main Android app with its sign-in), sending writes straight to the pod, with no engine behind
+and `scripts/android_native.sh` builds a NativeActivity APK. They draw a layout file, or a pod live (the APK installs as
+the main Android app and keeps its sign-in), sending writes straight to the pod, with no engine behind
 them (no cache, outbox or event stream). See [rendering.md](rendering.md).
 
 ## Home and the layouts it shows

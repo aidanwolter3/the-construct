@@ -55,7 +55,7 @@ given), Carousel (pages side by side, an "n/N" badge and dots; a sideways drag p
 every named icon (`icons.rs`: the shared UI's Material path data, rasterized with zeno; on the GPU they are glyphon
 custom glyphs). Images draw once loaded (over a placeholder in the blurhash's colour; only live sessions load them;
 in a window they are cut to their box on a background thread). Approximated: MediaPicker (the add tile),
-Drawer (the selected page), AppFrame and unknown nodes (a labelled box). Not drawn: dialogs, `format` dates.
+Drawer (the selected page), AppFrame and unknown nodes (a labelled box). Not drawn: `format` dates.
 Presented layouts are drawn as the shared UI draws them: a sheet (85% of the height, with a handle), a side panel
 (86% of the width, at most 340 points) or an overlay from its edge, over a 32% black scrim that closes it when
 tapped; a screen a sheet or panel opens stays inside it. A sheet dragged by its handle strip, or a panel dragged
@@ -88,31 +88,29 @@ Any workspace bundle (what `GET /v1/workspaces/<id>` answers) can be drawn to PN
 
 ## Android
 
-`scripts/android_native.sh` cross-compiles `libconstruct_render.so` (cargo-ndk, arm64-v8a), packages a
-NativeActivity APK with aapt2 (no Gradle, no Kotlin) and signs it with the debug key. With an adb device it then
-installs it, pushes the task-list fixture, launches, checks logcat for `surface initialized successfully` and
-`Frame 0 drawn`, takes a screenshot, and compares the frame the device drew offscreen at 390 × 844 @2x with the
-desktop golden (at most 1% of pixels may differ). `--build-only` stops after the APK. The activity opens
-`layout.json` from its external files directory, or the bundled demo.
+`scripts/android_native.sh` (no options) cross-compiles `libconstruct_render.so` (cargo-ndk, arm64-v8a), packages
+a NativeActivity APK with aapt2 (no Gradle, no Kotlin), signs it with the debug key and installs it on the adb device
+**as The Construct itself** (`org.theconstruct.android`), over a debug build of the main app signed with the same
+machine's debug key, so the app's data stays. An install over a build signed with another key fails, and the script
+says so rather than uninstall (which would sign you out). `cd app && ./gradlew :androidApp:installDebug` goes back to
+the Compose app with the same data.
 
-`scripts/android_native.sh --as-app` installs it **as the main app** (`org.theconstruct.android`, named "The
-Construct") over a debug build of it signed with the same machine's debug key, so the main app's data stays: the
-engine reads the server the main app uses (`shared_prefs/server.xml`, else staging) and its saved pod session
-(`shared_prefs/construct_secure.xml`, decrypted with the main app's Android keystore key through the SDK), so you
-stay signed in. `cd app && ./gradlew :androidApp:installDebug` goes back to the Compose app with the same data. An
-install over a build signed with another key fails, and the script says so rather than uninstall (which would sign
-you out). When the saved session can't be used (none for that server, or it doesn't decrypt), the app says why on
-screen and in logcat; `--as-app --pod <url>` asks for the pod code instead, as `--pod` does. Its theme draws light
-system bars with dark icons.
+The app opens a pod live (below). It keeps its pod in its private files (`pod.json`: the server, the session token
+and the last pod code used; unencrypted, unlike the main app's keystore) and opens, in order: that pod; the main
+app's own sign-in, which it reads (`shared_prefs/server.xml` for the server, else staging;
+`shared_prefs/construct_secure.xml` for the session, decrypted with the main app's Android keystore key through the
+SDK); else the pod's sign-in screen, which the pod answers without a session (a pod code box, Open pod and Try a
+temporary pod), with the last code used filled in. Signing in (`action.auth.session`) saves the session; Leave pod
+(`leave_pod`, after its `action.confirm` dialog) forgets it and shows the sign-in screen again, as does a session the
+pod no longer knows. A pod that can't be reached shows what went wrong with Try again (`refresh`) and Sign in with
+another code. A `layout.json` pushed to the external files directory (`{"layout", "data"}`) is drawn instead.
 
-`scripts/android_native.sh --pod <url>` instead installs it and opens that pod **live** (below): it asks for the pod
-code (or reads `CONSTRUCT_POD_CODE`), checks it with `POST /v1/pods/open`, and writes the session token the pod
-answers (on today's server, the pod code itself) to `pod.json` in the app's private storage with `run-as` (the APK is
-debuggable). It is stored unencrypted, unlike the main app's keystore. `--no-pod` deletes it and goes back to the
-demo. winit makes one event loop per process while Android keeps the process after the activity goes, so the
-process ends with its activity (when it is finishing or destroyed) and every launch starts afresh. The app targets SDK 34, so the system keeps its window below the status bar and camera cutout and resizes it
-for the keyboard; a tapped text field opens the keyboard, and Back pops the stack. The layout stays inside the
-window insets Android reports (`getRootWindowInsets`: system bars, camera cutout and keyboard), logged as they change.
+winit makes one event loop per process while Android keeps the process after the activity goes, so the process ends
+with its activity (when it is finishing or destroyed) and every launch starts afresh. The app targets SDK 34, so the
+system keeps its window below the status bar and camera cutout and resizes it for the keyboard; a tapped text field
+opens the keyboard, and Back pops the stack. The layout stays inside the window insets Android reports
+(`getRootWindowInsets`: system bars, camera cutout and keyboard), logged as they change. Its theme draws light system
+bars with dark icons.
 
 ## Live sessions (`remote`)
 
@@ -133,7 +131,10 @@ list at once, POSTs, then loads the layouts on the stack again (a refusal takes 
 `open_notification` marks it read (`POST /v1/notifications/read`), closes the inbox's sheet or panel and opens the
 notification's layout and `target_uri` screen; `mark_read` and `mark_all_read` mark them here and on the pod.
 `action.link.open` opens an `http(s)` address in the browser (an `ACTION_VIEW` intent on Android, `open` or
-`xdg-open` on desktops). There is no cache or event stream: what other devices change shows on the next load. The
+`xdg-open` on desktops). `action.confirm` shows the app's own dialog (title, message, Cancel and the confirm label,
+tagged `confirm:cancel` and `confirm:ok`) and runs `then`, with the steps of a sequence after it, only on confirm;
+Cancel, Back or a tap outside do nothing. `action.auth.session` POSTs its payload and hands the session token to the
+platform, which saves it and opens the pod; `leave_pod` and `refresh` go to the platform too. There is no cache or event stream: what other devices change shows on the next load. The
 device data the
 shared UI builds (`DeviceData`) is built from the pod the same way: `local://connection`, `local://session`,
 `local://inbox`, the layouts with their versions, and, for a layout that binds them, `local:notifications`

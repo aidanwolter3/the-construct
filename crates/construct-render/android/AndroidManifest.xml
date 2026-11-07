@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The engine's own Android app: a NativeActivity drawn by libconstruct_render.so (scripts/android_native.sh). -->
+<!-- The engine's Android app: a NativeActivity drawn by libconstruct_render.so (scripts/android_native.sh), installed as
+     The Construct itself (the main app's package), so it keeps the main app's data and sign-in. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="org.theconstruct.render"
+    package="org.theconstruct.android"
     android:versionCode="1"
     android:versionName="0.1">
     <!-- Target 34: the system keeps the window below the status bar and camera cutout and resizes it for the
@@ -11,7 +12,7 @@
     <!-- A live session (scripts/android_native.sh with pod): layouts, data and images from the pod. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <application
-        android:label="Construct (Rust engine)"
+        android:label="The Construct"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:hasCode="false"

@@ -43,9 +43,9 @@ Icons are the shared UI's own Material path data (`icons.rs`, generated from `Co
 The viewer and the APK can run a pod live (feature `remote`): layouts, screens, their data and images are fetched
 as they open, and taps that write (optimistic changes, creates, marking notifications read) are applied at once and
 POSTed in the background, undone if the pod refuses them. The APK can install as the main Android app's package and
-read its saved session (`scripts/android_native.sh --as-app`), so trying the engine keeps the user signed in.
+read its saved session (`scripts/android_native.sh`), so trying the engine keeps the user signed in.
 
-Not yet: dialogs are not drawn, a pinned version is not shown, carousels show their first item, and dates are not formatted. The native window and
+Not yet: a pinned version is not shown and dates are not formatted. The native window and
 APK talk to no engine (`client-core`): no cache, outbox (a write made offline is lost), event stream or upstream
 sign-in. Moving the clients onto this engine, the
 web target and a shared golden suite with the simulator are later decisions.
