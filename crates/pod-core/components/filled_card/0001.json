@@ -1,0 +1,100 @@
+{
+  "note": "First version",
+  "component": {
+    "doc": "A filled, rounded card holding its children in a column, its text in one colour: an item's heading on its screen, a status at a glance. The filled counterpart of core:card. Wrap it in core://Tappable to open something.",
+    "params": [
+      {
+        "name": "background",
+        "type": "text",
+        "doc": "Fill colour (#RRGGBB or a binding such as ${local://theme#accent_surface}).",
+        "required": true
+      },
+      {
+        "name": "color",
+        "type": "text",
+        "doc": "Colour of the text and icons inside (#RRGGBB or a binding such as ${local://theme#accent}).",
+        "required": true
+      },
+      {
+        "name": "spacing",
+        "type": "number",
+        "doc": "Space between the children.",
+        "default": 0
+      },
+      {
+        "name": "padding_h",
+        "type": "number",
+        "doc": "Side padding.",
+        "default": 16
+      },
+      {
+        "name": "padding_v",
+        "type": "number",
+        "doc": "Top and bottom padding.",
+        "default": 16
+      }
+    ],
+    "children": true,
+    "template": {
+      "type": "core://Box",
+      "background": "$arg.background",
+      "content_color": "$arg.color",
+      "corner_dp": 16,
+      "padding_h_dp": "$arg.padding_h",
+      "padding_v_dp": "$arg.padding_v",
+      "content": {
+        "type": "core://Column",
+        "spacing_dp": "$arg.spacing",
+        "children": [
+          {
+            "type": "core://Children"
+          }
+        ]
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "background": "${local://theme#accent_surface}",
+          "color": "${local://theme#accent}",
+          "spacing": 6
+        },
+        "children": [
+          {
+            "type": "core://Text",
+            "value_expr": "$item.when",
+            "style": "Label"
+          },
+          {
+            "type": "core://Text",
+            "value_expr": "$item.title",
+            "style": "Headline"
+          }
+        ],
+        "note": "an item's heading on its own screen"
+      },
+      {
+        "args": {
+          "background": "#1E8E3E",
+          "color": "#FFFFFF",
+          "spacing": 4,
+          "padding_h": 20,
+          "padding_v": 18
+        },
+        "children": [
+          {
+            "type": "core://Text",
+            "value_expr": "All good",
+            "style": "Display"
+          },
+          {
+            "type": "core://Text",
+            "value_expr": "Up for 3 days",
+            "style": "Body"
+          }
+        ],
+        "note": "a status at a glance"
+      }
+    ]
+  }
+}
