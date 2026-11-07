@@ -40,6 +40,8 @@ pub mod pods;
 pub mod push;
 #[cfg(feature = "remote")]
 pub mod remote;
+#[cfg(feature = "remote")]
+pub mod signin;
 
 #[cfg(all(target_os = "android", feature = "window"))]
 mod android;

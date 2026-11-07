@@ -4,7 +4,8 @@
 //! Android keystore, else a private file), where the engine keeps it. The
 //! engine (`crate::engine`) shows the pod's home, or its sign-in screen
 //! without a session (with the last pod code filled in); signing in,
-//! leaving the pod and loading it again go through it. The Android app and
+//! leaving the pod and loading it again go through it, as does signing in
+//! to an upstream (`crate::signin`). The Android app and
 //! the desktop viewer both start here, so they behave the same.
 
 use std::collections::BTreeMap;
@@ -16,6 +17,7 @@ use client_core::SecureStore;
 use crate::engine::PodEngine;
 use crate::interact::Session;
 use crate::layout::Viewport;
+use crate::signin::SignIn;
 use crate::window::Reopen;
 
 /// The staging pod: the default server, as the main app's.
@@ -67,6 +69,9 @@ pub struct PodHome {
     pub server: String,
     pub secure: Arc<dyn SecureStore>,
     pub log: fn(&str),
+    /// How this platform signs in to upstreams (Pixelfed); none: it
+    /// doesn't.
+    sign_in: Option<SignIn>,
     /// The servers it offers (`local:servers`).
     pub servers: Vec<ServerOption>,
     /// The pod's engine, kept from one session to the next.
@@ -87,9 +92,16 @@ impl PodHome {
             server,
             secure,
             log,
+            sign_in: None,
             servers: Vec::new(),
             engine: Mutex::new(None),
         }
+    }
+
+    /// Signs in to upstreams the platform's way (its browser and redirect).
+    pub fn with_sign_in(mut self, sign_in: SignIn) -> PodHome {
+        self.sign_in = Some(sign_in);
+        self
     }
 
     /// The servers this device offers (`local:servers`, `set_server`).
@@ -214,7 +226,13 @@ impl PodHome {
             return e.clone();
         }
         (self.log)(&format!("opening {url}"));
-        let e = PodEngine::open(url, self.storage.as_deref(), self.secure.clone());
+        let e = PodEngine::open_signing_in(
+            url,
+            self.storage.as_deref(),
+            self.secure.clone(),
+            client_core::EngineConfig::default(),
+            self.sign_in.as_ref(),
+        );
         e.set_servers(self.servers.clone());
         *slot = Some(e.clone());
         e
