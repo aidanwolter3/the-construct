@@ -308,11 +308,39 @@ impl App {
                     ),
                 ),
                 PlatformEvent::Message(m) => ("Message received".to_owned(), m),
+                PlatformEvent::Notification(n) => {
+                    self.open_notification(n);
+                    continue;
+                }
             };
             self.controller.session.notice(&title, &message);
             if let Some(s) = &self.surface {
                 s.window.request_redraw();
             }
+        }
+    }
+
+    /// A tapped notification: opens its layout and screen as the inbox
+    /// does (`open_notification`), from the pod's own record of it when the
+    /// session hasn't listed it.
+    fn open_notification(&mut self, n: serde_json::Value) {
+        let Some(id) = n["id"].as_str().map(str::to_owned) else {
+            return;
+        };
+        let session = &mut self.controller.session;
+        let uri = format!("local://notifications/{id}");
+        if !session.data.entities.contains_key(&uri)
+            && let serde_json::Value::Object(fields) = n
+        {
+            session
+                .data
+                .entities
+                .insert(uri, protocol::EntityRecord(fields));
+        }
+        let intent = serde_json::json!({ "intent": "action.device", "command": "open_notification", "id": id });
+        match session.dispatch(&intent) {
+            Ok(out) => self.after(Some(out), false),
+            Err(e) => log(&format!("opening notification {id}: {e}")),
         }
     }
 
@@ -643,6 +671,13 @@ impl App {
                                 "No photo picker",
                                 "Picking photos isn't available here yet.",
                             );
+                        }
+                    }
+                    crate::interact::Effect::Device { command }
+                        if command == protocol::intent::NOTIFICATION_PERMISSION_COMMAND =>
+                    {
+                        if let Some(p) = &self.platform {
+                            p.ask_notifications();
                         }
                     }
                     crate::interact::Effect::Device { command } if command == "refresh" => {

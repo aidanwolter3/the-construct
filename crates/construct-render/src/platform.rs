@@ -40,6 +40,9 @@ pub trait Platform {
     fn events(&self) -> Vec<PlatformEvent> {
         Vec::new()
     }
+    /// `request_notification_permission`: the system's prompt to allow
+    /// notifications (or its settings for them); nothing where it has none.
+    fn ask_notifications(&self) {}
     /// The session to show next ([`Reopen`]); `None` when the platform
     /// can't.
     fn reopen(&self, _how: Reopen) -> Option<crate::interact::Session> {
@@ -58,6 +61,9 @@ pub enum PlatformEvent {
     Picked { count: usize, bytes: u64 },
     /// A message arrived for the app.
     Message(String),
+    /// A notification the app posted was tapped (`crate::push`): the
+    /// pod's notification, to open.
+    Notification(serde_json::Value),
 }
 
 /// Why the window wants another session.

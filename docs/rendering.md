@@ -39,6 +39,7 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 | `platform` | `Platform`: what the app needs from the system it runs on (keyboard, insets, browser, clipboard, photo picker, events, the pod's saved session), implemented per platform |
 | `android` | `android_main` for the NativeActivity (Android builds with `window`) |
 | `bridge` | The Rust side of the Android bridge (`android/java`): links, the photo picker's result, messages |
+| `push` | Push while the app is closed: Web Push keys and decryption, endpoints and notification taps (feature `remote`); on Android the UnifiedPush receiver's native methods, registration and notifications |
 
 The pod builds the crate with `default-features = false`: no wgpu, CPU only.
 
@@ -149,7 +150,8 @@ bars with dark icons.
 A NativeActivity gets none of the Android callbacks that arrive through Java: a link opening the app, an activity
 result, a broadcast while the app is closed. `android/java` holds a small bridge that passes them to Rust and holds no
 app logic: `ConstructActivity` (NativeActivity plus `onNewIntent` and `onActivityResult`, and `pickImages` and
-`askPermission` that Rust calls), `ConstructReceiver` (a message, also while the app is closed) and `Native` (the
+`askPermission` that Rust calls), `ConstructReceiver` (a message, also while the app is closed), `PushReceiver` and
+`NativePush` (push, below) and `Native` (the
 native methods, `Java_org_theconstruct_android_Native_*` in `src/bridge.rs`). The script compiles them with `javac`
 and `d8` into the APK's `classes.dex`. Events queue in `bridge.rs`, wake the window and reach it through
 `Platform::events`; for now each shows as a notice. Decision:
@@ -161,6 +163,19 @@ adb shell am start -a android.intent.action.VIEW -d "construct://bridge/hello"  
 # Swipe the app away, then (only adb and the system may send this):
 adb shell am broadcast -n org.theconstruct.android/.ConstructReceiver --es message "Hello"   # a notification
 ```
+
+#### Push
+
+The pod's Web Push reaches the app while it is closed through a UnifiedPush distributor (ntfy, ...): `PushReceiver`
+extends the UnifiedPush connector's receiver (2.5.0; the script adds its classes and the Kotlin standard library's
+to the APK, downloaded once from Maven Central and checked by hash) and forwards each callback to `NativePush`
+(`src/push.rs`). Rust keeps a key pair per server (`push.json`), sends the endpoint to the pod, decrypts messages,
+posts them (channel `<app_id>.<channel>`) and opens a tapped one's layout and screen; a tap link only opens a
+notification this app posted. Nothing is posted while the app shows that pod. `request_notification_permission`
+asks for the permission. Decision: [`android-native-push-unifiedpush`](decisions/android-native-push-unifiedpush.md).
+Without a distributor (no FCM fallback yet), notifications show only while the app runs. To try it: install ntfy,
+open the app signed in to a pod (logcat: `push: asked the distributor`, then `push: new endpoint`), swipe it away,
+and make the pod notify (a matched event); the notification opens the event.
 
 The platform interface (`platform.rs`: `Platform`, `PlatformEvent`, `Reopen`) is what each platform implements
 (Android, the desktop viewer; a web build later).

@@ -2263,6 +2263,11 @@ impl Session {
                 let id = intent["id"].as_str().unwrap_or("").to_owned();
                 match command.as_str() {
                     "open_notification" => return self.open_notification(&id, out),
+                    protocol::intent::NOTIFICATION_PERMISSION_COMMAND => {
+                        // The platform's prompt (`Platform::ask_notifications`).
+                        out.push(Effect::Device { command });
+                        return;
+                    }
                     "refresh" => {
                         // The platform loads the pod again.
                         out.push(Effect::Device { command });

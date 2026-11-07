@@ -551,3 +551,24 @@ fn a_loader_with_an_outbox_takes_writes_and_brings_changes() {
     assert!(shown.contains(&"Garden, edited".to_owned()), "{shown:?}");
     assert!(shown.contains(&"Duck eggs".to_owned()), "{shown:?}");
 }
+
+#[test]
+fn the_notification_permission_is_asked_by_the_platform() {
+    let (mut s, writes) = session(
+        json!({ "type": "core://Text", "style": "Body", "value_expr": "x" }),
+        json!({}),
+        false,
+    );
+    let out = s
+        .dispatch(
+            &json!({ "intent": "action.device", "command": "request_notification_permission" }),
+        )
+        .unwrap();
+    assert_eq!(
+        out.effects,
+        vec![Effect::Device {
+            command: "request_notification_permission".into()
+        }]
+    );
+    assert!(writes.lock().unwrap().is_empty());
+}
