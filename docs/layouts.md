@@ -259,6 +259,7 @@ The server components:
 | `core:section_header` | `text`, `style`, `padding_v`, `divider` | A section's padded heading, optionally under a divider. |
 | `core:list_row` | `title`, `trailing`, `padding_v` | A row with a title and a quiet trailing text. |
 | `core:card` | `spacing`, `border`; children | A bordered, rounded card of its children in a column. |
+| `core:filled_card` | `background`, `color`, `spacing`, paddings; children | A filled, rounded card of its children in a column, its text in one colour (an item's heading, a status at a glance). |
 | `core:pill` | `text`, `background`, `color`, `style` | A small tinted tag. |
 | `core:dot` | `color`, `size`, `corner` | A small coloured dot. |
 | `core:warning_chip` | `text` | A warning chip. |
