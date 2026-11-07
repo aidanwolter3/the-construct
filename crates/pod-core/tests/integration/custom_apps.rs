@@ -543,6 +543,33 @@ async fn layouts_may_only_use_their_sources() {
     assert_eq!(apps["apps"].as_array().unwrap().len(), 1, "nothing created");
 }
 
+/// A page screen that gives core:screen its data path but doesn't load it
+/// itself would open empty: refused, pointing at the screen.
+#[tokio::test]
+async fn a_page_screen_must_load_the_data_it_gives_core_screen() {
+    let env = env();
+    let page = |own: bool| {
+        let mut screen = json!({"id": "item", "route": "a://items/{id}", "root": {
+            "type": "core://Use", "component": "core:screen",
+            "args": {"title": "Item", "data": "/v1/a/screen?id=$route.id"},
+            "children": [{"type": "core://List", "query_key": "a:item:$route.id",
+                "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.from"}}]}});
+        if own {
+            screen["data"] = json!("/v1/a/screen?id=$route.id");
+        }
+        json!({"type": "core://Page", "id": "ignored", "title": "Items",
+               "root": {"type": "core://List", "query_key": "a:all",
+                   "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.from"}},
+               "screens": [screen]})
+    };
+    let (status, b) = create(&env, json!([["a", "all"]]), page(false)).await;
+    assert_ne!(status, StatusCode::CREATED, "{b}");
+    assert_eq!(b["error"], "invalid_layout");
+    assert_eq!(b["at"], "/screens/0");
+    let (status, b) = create(&env, json!([["a", "all"]]), page(true)).await;
+    assert_eq!(status, StatusCode::CREATED, "{b}");
+}
+
 #[tokio::test]
 async fn a_progress_spinner_is_accepted_and_needs_its_feature() {
     let env = env();

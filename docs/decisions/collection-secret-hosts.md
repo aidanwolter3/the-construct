@@ -16,3 +16,8 @@ host name, or a URL whose host is taken), stored in `collections_secrets.host` (
 are resolved per request URL: a secret for another host fails the request ("only sent to <host>") and nothing is
 sent. A request that carries a secret uses a client that follows redirects only on the same host. Secrets stored
 before this have no host and are sent nowhere until they are set again with one.
+
+Later (security audit): the host check let a secret go to `http://<its host>/…` in the clear, readable by anyone on
+the network path between the pod and the API. A secret is now sent only over `https://`; a plain-HTTP request that
+names one fails ("only sent over https://") and nothing is sent. A pod that may fetch private hosts
+(`CONSTRUCT_FILL_PRIVATE_HOSTS=1`, local development) may still send one over HTTP.

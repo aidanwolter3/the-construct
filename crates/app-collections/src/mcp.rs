@@ -189,7 +189,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "collections_set_secret",
-            "Store a value a fetch recipe sends in a header (an API key), sealed on the pod: headers name it as \"{secret:<name>}\". It is never shown back, and is sent only to requests for host (the API's host name, e.g. api.example.com; ask the user which site the key is for). value null forgets it. Answers the stored names.",
+            "Store a value a fetch recipe sends in a header (an API key), sealed on the pod: headers name it as \"{secret:<name>}\". It is never shown back, and is sent only to https:// requests for host (the API's host name, e.g. api.example.com; ask the user which site the key is for). value null forgets it. Answers the stored names.",
             json!({ "name": { "type": "string", "description": "[a-z][a-z0-9_]*" },
                     "value": { "type": ["string", "null"] },
                     "host": { "type": "string", "description": "The host name the secret may be sent to (required with a value)" } }),
@@ -859,7 +859,7 @@ async fn preview(pod: &Pod, adapter: &CollectionsAdapter, args: &Value) -> Resul
     for (k, v) in headers {
         sent.insert(k, v);
     }
-    let resolved = crate::fill::resolve_headers_for(pod, &sent, &url).map_err(bad)?;
+    let resolved = crate::fill::resolve_headers_for(pod, adapter, &sent, &url).map_err(bad)?;
     let client = if resolved.has_secret {
         adapter.secret_fetch_client()
     } else {
