@@ -1,0 +1,81 @@
+{
+  "note": "The layout the viewer and the Android activity open without a file or a pod: a made-up checklist.",
+  "layout": {
+    "type": "core://Page",
+    "id": "welcome",
+    "title": "Welcome",
+    "root": {
+      "type": "core://Column",
+      "spacing_dp": 8,
+      "children": [
+        {
+          "type": "core://Column",
+          "padding_h_dp": 16,
+          "padding_v_dp": 16,
+          "spacing_dp": 4,
+          "children": [
+            { "type": "core://Text", "value_expr": "The Construct", "style": "Display" },
+            { "type": "core://Text", "value_expr": "Drawn by the Rust engine: taffy layout, wgpu quads and text.", "style": "Secondary" }
+          ]
+        },
+        {
+          "type": "core://ChoiceChips",
+          "field": "show",
+          "padding_h_dp": 16,
+          "options": [
+            { "label": "All", "value": "" },
+            { "label": "Open", "value": "open" },
+            { "label": "Done", "value": "done" }
+          ]
+        },
+        {
+          "type": "core://Scroll",
+          "content": {
+            "type": "core://List",
+            "query_key": "steps",
+            "spacing_dp": 8,
+            "padding_h_dp": 16,
+            "where": { "field": "state", "equals": "$form.show" },
+            "empty_text": "Nothing here",
+            "item_template": {
+              "type": "core://Box",
+              "background": "${local://theme#muted_surface}",
+              "corner_dp": 12,
+              "padding_h_dp": 16,
+              "padding_v_dp": 12,
+              "content": {
+                "type": "core://Row",
+                "spacing_dp": 12,
+                "children": [
+                  { "type": "core://Text", "value_expr": "$item.title", "style": "Body" },
+                  { "type": "core://Spacer" },
+                  {
+                    "type": "core://Switch",
+                    "checked": "$item.on",
+                    "content_description": "$item.title",
+                    "on_click": { "intent": "action.local.set", "entity_uri": "demo://steps/$item.id", "field": "on", "value_expr": "!entity.on" }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "core://Row",
+          "padding_h_dp": 16,
+          "padding_v_dp": 12,
+          "children": [{ "type": "core://TextField", "field": "note", "placeholder": "Type a note" }]
+        }
+      ]
+    }
+  },
+  "data": {
+    "entities": {
+      "demo://steps/1": { "id": "1", "title": "Lay out with taffy", "state": "done", "on": true },
+      "demo://steps/2": { "id": "2", "title": "Draw SDF quads", "state": "done", "on": true },
+      "demo://steps/3": { "id": "3", "title": "Shape text with cosmic-text", "state": "done", "on": true },
+      "demo://steps/4": { "id": "4", "title": "Tap, scroll and type", "state": "open", "on": false }
+    },
+    "queries": { "steps": ["demo://steps/1", "demo://steps/2", "demo://steps/3", "demo://steps/4"] }
+  }
+}

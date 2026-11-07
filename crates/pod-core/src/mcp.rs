@@ -176,7 +176,9 @@ appears live on the user's devices; restore_version undoes an edit. The vocabula
 and porcelain: components the pod expands, used with {\"type\": \"core://Use\", \"component\": <name>, \"args\", \
 \"children\"} (list_components; core: ones ship with the server, pod: ones are the user's own). Prefer a component \
 over repeating nodes, and define a pod: component (define_component, or copy_component to change a core: one) when a \
-piece repeats across layouts. expand shows what any layout or component becomes. A layout whose root is a \
+piece repeats across layouts. expand shows what any layout or component becomes; render_layout_preview shows \
+what it looks like (an image and every node's bounds, with the user's data), and dispatch_virtual_interaction taps \
+or scrolls that preview, so look at a layout after changing it. A layout whose root is a \
 core://Page gets no chrome from the app: it draws its own header (a title with actions on one line) and Back \
 (core:back_button); core://Workspace is drawn as core:workspace. Use ${local://theme#<token>} for colours \
 (set_theme). A button whose step can't be undone (action.device leave_pod or sign_out, a delete) asks first: wrap \
@@ -210,6 +212,12 @@ fn all_tools(pod: &Pod) -> Vec<Value> {
 }
 
 fn tools() -> Vec<Value> {
+    let mut out = base_tools();
+    out.extend(crate::preview::tools());
+    out
+}
+
+fn base_tools() -> Vec<Value> {
     let feeds = json!({ "type": "array", "description": "Feeds to add to home's (every layout binds home's feeds): [source, feed] pairs (see list_data_sources)",
         "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } });
     let layout = json!({ "type": "object", "description": "A core://Workspace layout (see describe_vocabulary); its id is set by the pod" });
@@ -420,6 +428,16 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
     {
         args["app"] = json!(id);
     }
+    // Previews answer an image as well as text (crate::preview).
+    match name {
+        "render_layout_preview" => {
+            return crate::preview::render_layout_preview(pod, headers, &args).await;
+        }
+        "dispatch_virtual_interaction" => {
+            return crate::preview::dispatch_virtual_interaction(pod, &args).await;
+        }
+        _ => {}
+    }
     let r = match name {
         "list_layouts" | "list_apps" => list_apps(pod).await,
         "list_data_sources" => list_data_sources(pod).await,
@@ -574,7 +592,7 @@ async fn list_apps(pod: &Pod) -> Result<Value, Value> {
 
 /// The owner's session (the pod token's), for what is signed in and for
 /// samples; `None` on a pod without one.
-async fn owner(pod: &Pod) -> Option<crate::Session> {
+pub(crate) async fn owner(pod: &Pod) -> Option<crate::Session> {
     let hash = crate::blocking(pod, |s| s.owner_session()).await.ok()??;
     pod.caller_for_hash(hash).await.ok()?.into_session()
 }

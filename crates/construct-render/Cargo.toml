@@ -1,0 +1,49 @@
+[package]
+name = "construct-render"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The Rust rendering engine (decision `rust-render-engine`): a plumbing
+# UiNode tree and its data laid out with taffy, turned into a scene of SDF
+# quads and text runs, and drawn by the CPU rasterizer (always built) or by
+# wgpu (feature `gpu`): offscreen, in a desktop window (`window`) or on an
+# Android surface. The pod builds it without `gpu`, for MCP previews.
+
+[features]
+default = ["gpu"]
+# The wgpu pipeline: WGSL instanced SDF quads plus glyphon text, offscreen.
+gpu = ["dep:wgpu", "dep:glyphon", "dep:pollster", "dep:bytemuck"]
+# A native window (winit): the desktop viewer and the Android activity.
+window = ["gpu", "dep:winit"]
+# The `construct-viewer` binary (its --pod fetches a layout over HTTP).
+viewer = ["window", "dep:reqwest"]
+
+[dependencies]
+protocol = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+taffy = { version = "0.15", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
+cosmic-text = "0.19"
+image = { version = "0.25", default-features = false, features = ["png", "webp"] }
+wgpu = { version = "30", optional = true }
+glyphon = { version = "0.12", optional = true }
+pollster = { version = "0.4", optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+winit = { version = "0.30", optional = true }
+# The viewer's --pod: a layout fetched as a client fetches it.
+reqwest = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# NativeActivity glue (winit re-exports android-activity).
+winit = { version = "0.30", optional = true, features = ["android-native-activity"] }
+
+[[bin]]
+name = "construct-viewer"
+required-features = ["viewer"]
+
+[lib]
+# cdylib: the Android NativeActivity library (`android_main`).
+crate-type = ["lib", "cdylib"]
+
+[dev-dependencies]

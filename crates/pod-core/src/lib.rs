@@ -25,6 +25,7 @@ pub mod net;
 pub mod notify;
 pub mod parts;
 pub mod porcelain;
+pub mod preview;
 pub mod push;
 pub mod secrets;
 pub mod session;
@@ -149,6 +150,8 @@ pub struct AppState {
     public_prefix: std::sync::OnceLock<String>,
     /// Custom apps: caps and the write-rate window.
     pub(crate) custom: custom::CustomState,
+    /// Layout previews agents are looking at (MCP, `preview`).
+    pub(crate) previews: preview::Previews,
     /// Served by a pod host (D46), which sets [`CREDENTIAL_HEADER`] (and
     /// removes any a client sent): only then is that header trusted.
     hosted: std::sync::atomic::AtomicBool,
@@ -256,6 +259,7 @@ impl AppState {
             push: None,
             public_prefix: std::sync::OnceLock::new(),
             custom: custom::CustomState::default(),
+            previews: preview::Previews::default(),
             hosted: std::sync::atomic::AtomicBool::new(false),
             internal_secret: {
                 let mut buf = [0u8; 32];

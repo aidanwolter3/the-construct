@@ -37,6 +37,9 @@ web-push-native = "0.5"
 # (servers may have none); adapters use it through `pod_core::tz`.
 jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
 
+# Layout previews for agents (`preview`): the Rust engine's CPU path only.
+construct-render = { path = "../construct-render", default-features = false }
+
 [target.'cfg(unix)'.dependencies]
 # Free disk space (`statvfs`) for the low-disk guard on uploads.
 rustix = { version = "1", features = ["fs"] }

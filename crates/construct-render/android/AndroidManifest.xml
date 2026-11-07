@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The engine's own Android app: a NativeActivity drawn by libconstruct_render.so (scripts/android_native.sh). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.theconstruct.render"
+    android:versionCode="1"
+    android:versionName="0.1">
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="36" />
+    <uses-feature android:name="android.hardware.vulkan.version" android:required="false" />
+    <application
+        android:label="Construct (Rust engine)"
+        android:hasCode="false"
+        android:extractNativeLibs="true">
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density">
+            <meta-data android:name="android.app.lib_name" android:value="construct_render" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

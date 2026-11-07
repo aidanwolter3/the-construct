@@ -1349,3 +1349,186 @@ async fn collections_are_deleted_once_no_layout_shows_them() {
     )
     .await;
 }
+
+/// A preview tool's answer: (is_error, the WebP bytes, the text).
+async fn preview_call(env: &Env, bearer: &str, name: &str, args: Value) -> (bool, Vec<u8>, String) {
+    let (status, body) = env
+        .rpc(
+            Some(bearer),
+            "tools/call",
+            json!({"name": name, "arguments": args}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let r = &body["result"];
+    let is_error = r["isError"] == true;
+    if is_error {
+        return (
+            true,
+            Vec::new(),
+            r["content"][0]["text"].as_str().unwrap_or("").to_owned(),
+        );
+    }
+    assert_eq!(r["content"][0]["type"], "image", "{r}");
+    assert_eq!(r["content"][0]["mimeType"], "image/webp");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(r["content"][0]["data"].as_str().unwrap())
+        .unwrap();
+    (
+        false,
+        bytes,
+        r["content"][1]["text"].as_str().unwrap().to_owned(),
+    )
+}
+
+/// The JSON details after a preview's summary lines.
+fn preview_details(text: &str) -> Value {
+    serde_json::from_str(text.lines().last().unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn agents_preview_a_layout_and_tap_it() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+
+    let (status, tools) = env.rpc(Some(&access), "tools/list", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"render_layout_preview") && names.contains(&"dispatch_virtual_interaction")
+    );
+
+    let layout = json!({"type": "core://Workspace", "id": "x", "title": "Recipes",
+        "slots": [{"slot_id": "r", "provider_uri": "core://custom", "content": {"type": "core://Column", "children": [
+            {"type": "core://ChoiceChips", "field": "filter", "options": [
+                {"label": "All", "value": ""}, {"label": "Started", "value": "started"}]},
+            {"type": "core://List", "query_key": "recipes:all",
+             "item_template": {"type": "core://Tappable",
+                "on_click": {"intent": "action.navigation.open", "presentation": "Push", "target_uri": "recipes://recipes/$item.id"},
+                "content": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}}]}}]});
+    let (err, created) = env
+        .tool(
+            &access,
+            "create_layout",
+            json!({"title": "Recipes", "layout": layout, "feeds": [["recipes", "all"]]}),
+        )
+        .await;
+    assert!(!err, "{created}");
+    let id = created["id"].as_str().unwrap().to_owned();
+
+    // 1. The preview: a WebP image and the semantic nodes, with the user's recipes.
+    let (err, first, text) = preview_call(
+        &env,
+        &access,
+        "render_layout_preview",
+        json!({"id": id, "viewport": {"width": 390, "height": 844, "scale": 2.0}}),
+    )
+    .await;
+    assert!(!err, "{text}");
+    assert_eq!(&first[0..4], b"RIFF");
+    assert_eq!(&first[8..12], b"WEBP");
+    let details = preview_details(&text);
+    assert_eq!(details["image"]["width"], 780);
+    let nodes = details["nodes"].as_array().unwrap();
+    assert!(!nodes.is_empty());
+    assert!(
+        nodes
+            .iter()
+            .any(|n| n["id"] == "filter=started" && n["tap"].as_str().is_some()),
+        "{details}"
+    );
+    let recipe = nodes
+        .iter()
+        .find(|n| n["type"] == "Tappable")
+        .expect("a recipe row")
+        .clone();
+    let preview_id = details["preview_id"].as_str().unwrap().to_owned();
+
+    // 2. A tap on the "Started" chip sets the form value and draws it again.
+    let (err, second, text) = preview_call(
+        &env,
+        &access,
+        "dispatch_virtual_interaction",
+        json!({"preview_id": preview_id, "node_id": "filter=started", "action": "tap"}),
+    )
+    .await;
+    assert!(!err, "{text}");
+    assert!(text.contains("filter: started"), "{text}");
+    assert_eq!(&second[0..4], b"RIFF");
+    assert_ne!(first, second, "the selected chip is drawn differently");
+    let details = preview_details(&text);
+    assert!(
+        details["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["id"] == "filter=started" && n["selected"] == true)
+    );
+
+    // 3. A tap on a recipe would open a screen on the pod: reported, not sent.
+    let b = recipe["bounds"].as_array().unwrap();
+    let (x, y) = (b[0].as_f64().unwrap() + 4.0, b[1].as_f64().unwrap() + 4.0);
+    let (err, _, text) = preview_call(
+        &env,
+        &access,
+        "dispatch_virtual_interaction",
+        json!({"preview_id": preview_id, "action": "tap", "x": x, "y": y}),
+    )
+    .await;
+    assert!(!err, "{text}");
+    assert!(text.contains("not sent"), "{text}");
+    assert!(
+        text.contains("recipes://recipes/"),
+        "bound to the item: {text}"
+    );
+
+    // 4. A draft layout, drawn with home's data, needs no saving.
+    let draft = json!({"type": "core://Page", "id": "d", "root": {"type": "core://Column", "children": [
+        {"type": "core://Text", "style": "Title", "value_expr": "Draft"},
+        {"type": "core://List", "query_key": "recipes:all",
+         "item_template": {"type": "core://Text", "style": "Body", "value_expr": "$item.title"}}]}});
+    let (err, _, text) = preview_call(
+        &env,
+        &access,
+        "render_layout_preview",
+        json!({"layout": draft, "dark": true}),
+    )
+    .await;
+    assert!(!err, "{text}");
+    let details = preview_details(&text);
+    assert!(
+        details["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["text"] == "Draft")
+    );
+    assert!(
+        details["nodes"].as_array().unwrap().len() > 2,
+        "home's recipes: {details}"
+    );
+
+    // 5. Unknown previews and layouts are errors the agent can act on.
+    let (err, _, text) = preview_call(
+        &env,
+        &access,
+        "dispatch_virtual_interaction",
+        json!({"preview_id": "p-nope", "action": "tap", "node_id": "x"}),
+    )
+    .await;
+    assert!(err && text.contains("preview_not_found"), "{text}");
+    let (err, _, text) = preview_call(
+        &env,
+        &access,
+        "render_layout_preview",
+        json!({"id": "c-missing"}),
+    )
+    .await;
+    assert!(err && text.contains("layout_not_loaded"), "{text}");
+}

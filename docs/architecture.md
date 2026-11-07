@@ -157,6 +157,11 @@ inbox are layouts too. Platform code is thin:
 
 More on running them: [clients.md](clients.md).
 
+**The Rust rendering engine** (`crates/construct-render`, decision `rust-render-engine`) draws the same plumbing
+without the JVM: taffy layout, a scene of SDF quads and text, a CPU rasterizer and a wgpu pipeline. The pod uses it
+for agents' layout previews over MCP; a desktop window and an Android NativeActivity are prototypes. See
+[rendering.md](rendering.md).
+
 ## Background work on the server
 
 Pods open lazily on their first request. The host's scheduler wakes pods that have work due (`host.db`
