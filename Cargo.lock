@@ -254,6 +254,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "app-agents"
+version = "0.1.0"
+dependencies = [
+ "app-collections",
+ "app-shell",
+ "axum",
+ "futures-util",
+ "http-body-util",
+ "pod-core",
+ "protocol",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "app-collections"
 version = "0.1.0"
 dependencies = [
@@ -4357,6 +4377,7 @@ dependencies = [
 name = "server"
 version = "0.1.0"
 dependencies = [
+ "app-agents",
  "app-collections",
  "app-events",
  "app-monitor",

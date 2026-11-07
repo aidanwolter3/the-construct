@@ -200,3 +200,9 @@ The app replaced an earlier Watcher with its own tables (decisions [`watcher`](d
 [`rename-apps-and-folders`](decisions/rename-apps-and-folders.md).
 
 Try it locally: `CONSTRUCT_FILL_PRIVATE_HOSTS=1 cargo run -p server`, serve an `.ics` file, and ask Claude to watch it.
+
+## Agents
+
+The **Agents** source and blueprint (`agents`, `crates/app-agents`) show Claude Code sessions an external agent runner
+runs, with stop, wake, start and schedule actions, notifications, and an opt-in Tasks collection (MCP tool
+`agents_link_tasks`): see [agents.md](agents.md).

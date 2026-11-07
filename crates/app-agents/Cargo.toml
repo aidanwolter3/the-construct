@@ -1,0 +1,28 @@
+[package]
+name = "app-agents"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The `agents` data source (decision `agents-data-source`): Claude Code
+# sessions run by an external agent runner (CAP v1), shown and controlled
+# from the pod, with notifications and an opt-in Tasks collection.
+
+[dependencies]
+pod-core = { path = "../pod-core" }
+app-collections = { path = "../app-collections" }
+protocol = { workspace = true }
+serde_json.workspace = true
+serde.workspace = true
+rusqlite.workspace = true
+tracing = "0.1"
+axum = { version = "0.8", features = ["http2"] }
+tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[dev-dependencies]
+app-shell = { path = "../app-shell" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net", "sync"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+futures-util = { version = "0.3", default-features = false }

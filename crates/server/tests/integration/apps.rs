@@ -199,11 +199,12 @@ async fn apps_lists_dev_apps_only_when_shown() {
     let apps = body["apps"].as_array().unwrap();
     // The blueprints (Settings and the inbox among them, decision
     // `layouts-not-apps`), then the pod's own home (decision `blueprints-and-home`).
-    assert_eq!(apps.len(), 7, "{body}");
+    assert_eq!(apps.len(), 8, "{body}");
     assert_eq!(apps[3]["id"], "shell");
     assert_eq!(apps[4]["id"], "settings");
     assert_eq!(apps[5]["id"], "inbox");
-    assert_eq!(apps[6]["id"], "home");
+    assert_eq!(apps[6]["id"], "agents");
+    assert_eq!(apps[7]["id"], "home");
     let a = &apps[0];
     assert_eq!(
         (&a["id"], &a["title"], &a["icon"], &a["latest_version"]),
@@ -255,6 +256,7 @@ async fn apps_lists_dev_apps_only_when_shown() {
             ("shell", "Home", "dashboard", files("shell")),
             ("settings", "Settings", "dashboard", files("settings")),
             ("inbox", "Notifications", "dashboard", files("inbox")),
+            ("agents", "Agents", "dashboard", files("agents")),
             ("home", "Home", "dashboard", 1),
         ]
     );
