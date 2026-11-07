@@ -1841,7 +1841,7 @@ impl Session {
                         protocol::Edge::Start => [0.0, 16.0, 16.0, 0.0],
                         protocol::Edge::End => [16.0, 0.0, 0.0, 16.0],
                     };
-                    let mut surface = QuadInstance::fill(frame_now, theme.background, 0.0).shadow(
+                    let mut surface = QuadInstance::fill(frame_now, theme.surface, 0.0).shadow(
                         Rgba([0.0, 0.0, 0.0, 0.25]),
                         [0.0, 2.0],
                         8.0,
@@ -2053,7 +2053,7 @@ impl Session {
         } else {
             oy + b.top + b.height + HANDLE + 8.0
         };
-        let mut bar = QuadInstance::fill([x, y, w, h], theme.background, 8.0).shadow(
+        let mut bar = QuadInstance::fill([x, y, w, h], theme.surface, 8.0).shadow(
             Rgba([0.0, 0.0, 0.0, 0.28]),
             [0.0, 2.0],
             8.0,
@@ -2831,7 +2831,7 @@ impl Session {
             button(label, "confirm:ok", accept),
         ] }));
         let root = json!({ "type": "core://Box", "fill": true, "align": "Center", "padding_h_dp": 32,
-            "content": { "type": "core://Box", "background": "${local://theme#page}", "corner_dp": 28,
+            "content": { "type": "core://Box", "background": "${local://theme#card}", "corner_dp": 28,
                 "padding_h_dp": 24, "padding_v_dp": 24,
                 "content": { "type": "core://Column", "spacing_dp": 16, "children": body } } });
         let Ok(root) = serde_json::from_value::<UiNode>(root) else {
@@ -2859,7 +2859,7 @@ impl Session {
 
     pub fn notice(&mut self, title: &str, message: &str) {
         let root = json!({ "type": "core://Box", "fill": true, "align": "Center", "padding_h_dp": 32,
-            "content": { "type": "core://Box", "background": "${local://theme#page}", "corner_dp": 28,
+            "content": { "type": "core://Box", "background": "${local://theme#card}", "corner_dp": 28,
                 "padding_h_dp": 24, "padding_v_dp": 24,
                 "content": { "type": "core://Column", "spacing_dp": 16, "children": [
                     { "type": "core://Text", "style": "Title", "value_expr": title },

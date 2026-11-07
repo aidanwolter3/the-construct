@@ -1,0 +1,132 @@
+{
+  "version": "1.0.0",
+  "workspace": {
+    "type": "core://Page",
+    "id": "theme_home",
+    "title": "Home",
+    "root": {
+      "type": "core://Box",
+      "content": {
+        "type": "core://Scroll",
+        "content": {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://Box",
+              "content": {
+                "type": "core://Row",
+                "children": [
+                  {
+                    "type": "core://Text",
+                    "value_expr": "Home",
+                    "style": "Headline"
+                  },
+                  {
+                    "type": "core://Spacer"
+                  },
+                  {
+                    "type": "core://IconButton",
+                    "icon": "notifications",
+                    "content_description": "Notifications",
+                    "on_click": {
+                      "intent": "action.navigation.back"
+                    }
+                  },
+                  {
+                    "type": "core://IconButton",
+                    "icon": "settings",
+                    "content_description": "Settings",
+                    "on_click": {
+                      "intent": "action.navigation.back"
+                    }
+                  }
+                ],
+                "align": "Center"
+              },
+              "background": "${local://theme#card}",
+              "padding_h_dp": 16,
+              "padding_v_dp": 8
+            },
+            {
+              "type": "core://List",
+              "query_key": "home:rows",
+              "spacing_dp": 10,
+              "padding_h_dp": 16,
+              "item_template": {
+                "type": "core://Box",
+                "content": {
+                  "type": "core://Row",
+                  "children": [
+                    {
+                      "type": "core://Column",
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.title",
+                          "style": "Label"
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.summary",
+                          "style": "Secondary"
+                        }
+                      ],
+                      "spacing_dp": 2
+                    },
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "type": "core://Box",
+                      "content": {
+                        "type": "core://Text",
+                        "value_expr": "›",
+                        "style": "Title"
+                      },
+                      "content_color": "${local://theme#muted_text}"
+                    }
+                  ],
+                  "align": "Center"
+                },
+                "background": "${local://theme#card}",
+                "border_color": "${local://theme#card_border}",
+                "corner_dp": 14,
+                "padding_h_dp": 16,
+                "padding_v_dp": 14
+              }
+            }
+          ],
+          "spacing_dp": 12
+        }
+      },
+      "fill": true,
+      "background": "${local://theme#page}"
+    }
+  },
+  "entities": {
+    "home://rows/0": {
+      "title": "Groceries",
+      "summary": "12 items · 4 left"
+    },
+    "home://rows/1": {
+      "title": "Log",
+      "summary": "Car, home and health"
+    },
+    "home://rows/2": {
+      "title": "Pixelfed",
+      "summary": "Your photo feed"
+    },
+    "home://rows/3": {
+      "title": "Events",
+      "summary": "2 matches this week"
+    }
+  },
+  "queries": {
+    "home:rows": [
+      "home://rows/0",
+      "home://rows/1",
+      "home://rows/2",
+      "home://rows/3"
+    ]
+  }
+}

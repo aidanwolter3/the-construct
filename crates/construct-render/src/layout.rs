@@ -1473,7 +1473,7 @@ impl<'i> Build<'_, 'i> {
                             bg: f
                                 .background
                                 .as_deref()
-                                .and_then(Rgba::hex)
+                                .and_then(|c| ctx.color(c))
                                 .unwrap_or(theme.surface_variant),
                             border: None,
                             radius: 0.0,

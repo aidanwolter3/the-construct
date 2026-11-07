@@ -107,7 +107,10 @@ speed at release over the average. A drag's scrolling is applied once per frame,
 `/v1/apps/<id>/versions`; `pin_version` draws that version (`/v1/apps/<id>/versions/<n>`'s layout over the
 layout's latest data) wherever the layout shows, home included, until `follow_latest`, and new versions published
 meanwhile don't replace it; the engine keeps pins across restarts (`set_pinned_version`) and forgets them on Leave
-pod. The session follows the platform's light or dark mode (`Session::set_dark`). `core://Sticky` pins at the top of its scrolling view, over the page
+pod. The session follows the platform's light or dark mode (`Session::set_dark`). Dark mode draws the theme's dark palette
+(decision `dark-palette`): the background is the `page` token, dialogs, sheets, panels and the edit bar draw on
+`card`, and each mode takes only its own token values from `core://theme` (`<token>`, `<token>_dark`), any token
+the pod sends included. `core://Sticky` pins at the top of its scrolling view, over the page
 background, until its parent scrolls away; one that rests within 24 points of the view's top (a column's padding)
 pins where it rests, so it never moves (the shared UI moves it up to the top first).
 

@@ -1,0 +1,170 @@
+{
+  "version": "1.0.0",
+  "workspace": {
+    "type": "core://Page",
+    "id": "theme_groceries",
+    "title": "Groceries",
+    "root": {
+      "type": "core://Box",
+      "content": {
+        "type": "core://Scroll",
+        "content": {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://Row",
+              "children": [
+                {
+                  "type": "core://Text",
+                  "value_expr": "Groceries",
+                  "style": "Headline"
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "type": "core://IconButton",
+                  "icon": "add",
+                  "content_description": "Add item",
+                  "on_click": {
+                    "intent": "action.navigation.back"
+                  }
+                }
+              ],
+              "padding_h_dp": 16,
+              "padding_v_dp": 12,
+              "align": "Center"
+            },
+            {
+              "type": "core://Box",
+              "content": {
+                "type": "core://Text",
+                "value_expr": "4 left · 2 in the basket",
+                "style": "Secondary"
+              },
+              "padding_h_dp": 16
+            },
+            {
+              "type": "core://List",
+              "query_key": "groceries:items",
+              "spacing_dp": 8,
+              "padding_h_dp": 16,
+              "item_template": {
+                "type": "core://Box",
+                "content": {
+                  "type": "core://Row",
+                  "children": [
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.done",
+                      "equals": "true",
+                      "content": {
+                        "type": "core://Box",
+                        "content": {
+                          "type": "core://Text",
+                          "value_expr": "✓",
+                          "style": "Label"
+                        },
+                        "content_color": "${local://theme#success}"
+                      }
+                    },
+                    {
+                      "type": "core://Column",
+                      "children": [
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.name",
+                          "style": "Label"
+                        },
+                        {
+                          "type": "core://Text",
+                          "value_expr": "$item.qty",
+                          "style": "Secondary"
+                        }
+                      ],
+                      "spacing_dp": 2
+                    },
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "type": "core://Box",
+                      "content": {
+                        "type": "core://Text",
+                        "value_expr": "$item.aisle",
+                        "style": "Caption"
+                      },
+                      "background": "${local://theme#accent_surface}",
+                      "content_color": "${local://theme#accent}",
+                      "corner_dp": 8,
+                      "padding_h_dp": 8,
+                      "padding_v_dp": 3
+                    }
+                  ],
+                  "spacing_dp": 10,
+                  "align": "Center"
+                },
+                "background": "${local://theme#card}",
+                "border_color": "${local://theme#card_border}",
+                "corner_dp": 14,
+                "padding_h_dp": 14,
+                "padding_v_dp": 12
+              }
+            }
+          ],
+          "spacing_dp": 8
+        }
+      },
+      "fill": true,
+      "background": "${local://theme#page}"
+    }
+  },
+  "entities": {
+    "groceries://items/0": {
+      "name": "Oat milk",
+      "qty": "2 cartons",
+      "aisle": "Dairy",
+      "done": "false"
+    },
+    "groceries://items/1": {
+      "name": "Sourdough loaf",
+      "qty": "1",
+      "aisle": "Bakery",
+      "done": "false"
+    },
+    "groceries://items/2": {
+      "name": "Cherry tomatoes",
+      "qty": "500 g",
+      "aisle": "Produce",
+      "done": "true"
+    },
+    "groceries://items/3": {
+      "name": "Basmati rice",
+      "qty": "1 kg",
+      "aisle": "Pantry",
+      "done": "false"
+    },
+    "groceries://items/4": {
+      "name": "Lemons",
+      "qty": "4",
+      "aisle": "Produce",
+      "done": "true"
+    },
+    "groceries://items/5": {
+      "name": "Dish soap",
+      "qty": "1 bottle",
+      "aisle": "Household",
+      "done": "false"
+    }
+  },
+  "queries": {
+    "groceries:items": [
+      "groceries://items/0",
+      "groceries://items/1",
+      "groceries://items/2",
+      "groceries://items/3",
+      "groceries://items/4",
+      "groceries://items/5"
+    ]
+  }
+}

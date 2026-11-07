@@ -115,7 +115,7 @@
                     },
                     {
                       "content": {
-                        "background": "#1E66D0",
+                        "background": "${local://theme#unread}",
                         "content": {
                           "type": "core://Spacer"
                         },

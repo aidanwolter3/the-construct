@@ -1,0 +1,776 @@
+{
+  "note": "Same layout, with core:card's and core:pill's theme colours (dark mode)",
+  "layout": {
+    "type": "core://Workspace",
+    "id": "agents",
+    "title": "Agents",
+    "slots": [
+      {
+        "slot_id": "agents",
+        "provider_uri": "agents://sessions",
+        "content": {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://Conditional",
+              "value": "${agents://runner/status#signed_in}",
+              "content": {
+                "type": "core://Use",
+                "component": "core:card",
+                "args": {
+                  "spacing": 10
+                },
+                "children": [
+                  {
+                    "type": "core://Text",
+                    "value_expr": "Sign in to your agent runner",
+                    "style": "Label"
+                  },
+                  {
+                    "type": "core://Text",
+                    "value_expr": "The pod connects to the runner with its address and the token it gave you. The token is stored sealed on the pod and never shown again.",
+                    "style": "Secondary"
+                  },
+                  {
+                    "type": "core://TextField",
+                    "field": "runner_url",
+                    "placeholder": "https://runner.example",
+                    "max_length": 500
+                  },
+                  {
+                    "type": "core://TextField",
+                    "field": "runner_token",
+                    "placeholder": "Token",
+                    "max_length": 4096
+                  },
+                  {
+                    "type": "core://Button",
+                    "label": "Sign in",
+                    "on_click": {
+                      "intent": "action.mutation.optimistic",
+                      "entity_uri": "agents://runner/status",
+                      "field": "signed_in",
+                      "value_expr": "true",
+                      "endpoint": "/v1/agents/sign-in",
+                      "payload": {
+                        "url": "$form.runner_url",
+                        "token": "$form.runner_token"
+                      },
+                      "also": [
+                        {
+                          "field": "status_text",
+                          "value_expr": "\"Signing in…\""
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              "equals": "false"
+            },
+            {
+              "type": "core://Conditional",
+              "value": "${agents://runner/status#signed_in}",
+              "content": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://Use",
+                    "component": "core:card",
+                    "args": {
+                      "spacing": 4
+                    },
+                    "children": [
+                      {
+                        "type": "core://Row",
+                        "children": [
+                          {
+                            "type": "core://Use",
+                            "component": "core:dot",
+                            "args": {
+                              "color": "${agents://runner/status#color}",
+                              "size": 10,
+                              "corner": 5
+                            }
+                          },
+                          {
+                            "type": "core://Text",
+                            "value_expr": "${agents://runner/status#summary_text}",
+                            "style": "Title"
+                          }
+                        ],
+                        "spacing_dp": 10
+                      },
+                      {
+                        "type": "core://Text",
+                        "value_expr": "${agents://runner/status#status_text}",
+                        "style": "Secondary"
+                      },
+                      {
+                        "type": "core://Conditional",
+                        "value": "${agents://runner/status#stale}",
+                        "content": {
+                          "type": "core://Use",
+                          "component": "core:warning_chip",
+                          "args": {
+                            "text": "Showing the runner's last update"
+                          }
+                        },
+                        "equals": "true"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "core://ChoiceChips",
+                    "field": "agents_view",
+                    "remember": true,
+                    "padding_h_dp": 0,
+                    "options": [
+                      {
+                        "label": "Sessions",
+                        "value": ""
+                      },
+                      {
+                        "label": "Schedules",
+                        "value": "schedules"
+                      },
+                      {
+                        "label": "Sandboxes",
+                        "value": "sandboxes"
+                      },
+                      {
+                        "label": "Checks",
+                        "value": "checks"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "core://Conditional",
+                    "value": "$form.agents_view",
+                    "content": {
+                      "type": "core://Column",
+                      "children": [
+                        {
+                          "type": "core://List",
+                          "query_key": "agents:sessions",
+                          "item_template": {
+                            "type": "core://Tappable",
+                            "on_click": {
+                              "intent": "action.navigation.open",
+                              "presentation": "Push",
+                              "target_uri": "agents://sessions/$item.id"
+                            },
+                            "content_description": "Open $item.title",
+                            "content": {
+                              "type": "core://Use",
+                              "component": "core:card",
+                              "args": {
+                                "spacing": 6
+                              },
+                              "children": [
+                                {
+                                  "type": "core://Row",
+                                  "children": [
+                                    {
+                                      "type": "core://Use",
+                                      "component": "core:pill",
+                                      "args": {
+                                        "text": "$item.status_text",
+                                        "background": "$item.status_color",
+                                        "color": "#FFFFFF"
+                                      }
+                                    },
+                                    {
+                                      "type": "core://Spacer"
+                                    },
+                                    {
+                                      "type": "core://Text",
+                                      "value_expr": "$item.elapsed_text",
+                                      "style": "Caption"
+                                    }
+                                  ],
+                                  "spacing_dp": 8
+                                },
+                                {
+                                  "type": "core://Text",
+                                  "value_expr": "$item.title",
+                                  "style": "Label"
+                                },
+                                {
+                                  "type": "core://Conditional",
+                                  "value": "$item.current_tool",
+                                  "content": {
+                                    "type": "core://Text",
+                                    "value_expr": "$item.current_tool",
+                                    "style": "Secondary"
+                                  }
+                                },
+                                {
+                                  "type": "core://Conditional",
+                                  "value": "$item.cost_text",
+                                  "content": {
+                                    "type": "core://Text",
+                                    "value_expr": "$item.cost_text · $item.updated_text",
+                                    "style": "Caption"
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          "spacing_dp": 10,
+                          "empty_text": "No sessions yet."
+                        },
+                        {
+                          "type": "core://Use",
+                          "component": "core:card",
+                          "args": {
+                            "spacing": 8
+                          },
+                          "children": [
+                            {
+                              "type": "core://Text",
+                              "value_expr": "Start a session",
+                              "style": "Label"
+                            },
+                            {
+                              "type": "core://TextField",
+                              "field": "task_workspace",
+                              "placeholder": "Workspace",
+                              "max_length": 100
+                            },
+                            {
+                              "type": "core://TextField",
+                              "field": "task_title",
+                              "placeholder": "Title",
+                              "max_length": 200
+                            },
+                            {
+                              "type": "core://TextField",
+                              "field": "task_prompt",
+                              "placeholder": "What should Claude do?",
+                              "lines": 5,
+                              "max_length": 20000
+                            },
+                            {
+                              "type": "core://Button",
+                              "label": "Start",
+                              "on_click": {
+                                "intent": "action.mutation.create",
+                                "query_key": "agents:sessions",
+                                "entity_uri": "agents://sessions/new-$nonce",
+                                "entity": {
+                                  "id": "new-$nonce",
+                                  "title": "$form.task_title",
+                                  "status": "starting",
+                                  "status_text": "Starting",
+                                  "status_color": "#1E66D0",
+                                  "active": true
+                                },
+                                "endpoint": "/v1/agents/tasks/start",
+                                "payload": {
+                                  "workspace": "$form.task_workspace",
+                                  "title": "$form.task_title",
+                                  "prompt": "$form.task_prompt",
+                                  "task_id": "pod/$nonce"
+                                },
+                                "refresh_workspace": true,
+                                "position": "start"
+                              }
+                            }
+                          ]
+                        }
+                      ],
+                      "spacing_dp": 12
+                    },
+                    "equals": ""
+                  },
+                  {
+                    "type": "core://Conditional",
+                    "value": "$form.agents_view",
+                    "content": {
+                      "type": "core://List",
+                      "query_key": "agents:schedules",
+                      "item_template": {
+                        "type": "core://Use",
+                        "component": "core:card",
+                        "args": {
+                          "spacing": 6
+                        },
+                        "children": [
+                          {
+                            "type": "core://Row",
+                            "children": [
+                              {
+                                "type": "core://Text",
+                                "value_expr": "$item.name",
+                                "style": "Label"
+                              },
+                              {
+                                "type": "core://Spacer"
+                              },
+                              {
+                                "type": "core://Use",
+                                "component": "core:pill",
+                                "args": {
+                                  "text": "$item.state_text"
+                                }
+                              }
+                            ],
+                            "spacing_dp": 8
+                          },
+                          {
+                            "type": "core://Text",
+                            "value_expr": "Next: $item.next_run_text",
+                            "style": "Secondary"
+                          },
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.ran",
+                            "content": {
+                              "type": "core://Row",
+                              "children": [
+                                {
+                                  "type": "core://Use",
+                                  "component": "core:pill",
+                                  "args": {
+                                    "text": "$item.last_status_text",
+                                    "background": "$item.last_status_color",
+                                    "color": "#FFFFFF"
+                                  }
+                                },
+                                {
+                                  "type": "core://Text",
+                                  "value_expr": "$item.last_run_text $item.last_cost_text",
+                                  "style": "Caption"
+                                }
+                              ],
+                              "spacing_dp": 8
+                            }
+                          },
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.last_summary",
+                            "content": {
+                              "type": "core://Text",
+                              "value_expr": "$item.last_summary",
+                              "style": "Body"
+                            }
+                          },
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.last_error",
+                            "content": {
+                              "type": "core://Text",
+                              "value_expr": "$item.last_error",
+                              "style": "Secondary"
+                            }
+                          },
+                          {
+                            "type": "core://Row",
+                            "children": [
+                              {
+                                "type": "core://Button",
+                                "label": "Run now",
+                                "on_click": {
+                                  "intent": "action.mutation.optimistic",
+                                  "entity_uri": "agents://schedules/$item.name",
+                                  "field": "last_status_text",
+                                  "value_expr": "\"Starting\"",
+                                  "endpoint": "/v1/agents/schedules/run",
+                                  "payload": {
+                                    "name": "$item.name"
+                                  },
+                                  "also": [
+                                    {
+                                      "field": "ran",
+                                      "value_expr": "true"
+                                    }
+                                  ]
+                                }
+                              },
+                              {
+                                "type": "core://Conditional",
+                                "value": "$item.can_pause",
+                                "content": {
+                                  "type": "core://Button",
+                                  "label": "Pause",
+                                  "on_click": {
+                                    "intent": "action.confirm",
+                                    "title": "Pause $item.name?",
+                                    "message": "It won't run on its schedule until you resume it.",
+                                    "confirm_label": "Pause",
+                                    "then": {
+                                      "intent": "action.mutation.optimistic",
+                                      "entity_uri": "agents://schedules/$item.name",
+                                      "field": "paused",
+                                      "value_expr": "true",
+                                      "endpoint": "/v1/agents/schedules/pause",
+                                      "payload": {
+                                        "name": "$item.name"
+                                      },
+                                      "also": [
+                                        {
+                                          "field": "can_pause",
+                                          "value_expr": "false"
+                                        },
+                                        {
+                                          "field": "state_text",
+                                          "value_expr": "\"Paused\""
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "type": "core://Conditional",
+                                "value": "$item.paused",
+                                "content": {
+                                  "type": "core://Button",
+                                  "label": "Resume",
+                                  "on_click": {
+                                    "intent": "action.mutation.optimistic",
+                                    "entity_uri": "agents://schedules/$item.name",
+                                    "field": "paused",
+                                    "value_expr": "false",
+                                    "endpoint": "/v1/agents/schedules/resume",
+                                    "payload": {
+                                      "name": "$item.name"
+                                    },
+                                    "also": [
+                                      {
+                                        "field": "can_pause",
+                                        "value_expr": "true"
+                                      },
+                                      {
+                                        "field": "state_text",
+                                        "value_expr": "\"Active\""
+                                      }
+                                    ]
+                                  }
+                                },
+                                "equals": "true"
+                              }
+                            ],
+                            "spacing_dp": 8
+                          }
+                        ]
+                      },
+                      "spacing_dp": 10,
+                      "empty_text": "The runner has no schedules."
+                    },
+                    "equals": "schedules"
+                  },
+                  {
+                    "type": "core://Conditional",
+                    "value": "$form.agents_view",
+                    "content": {
+                      "type": "core://List",
+                      "query_key": "agents:sandboxes",
+                      "item_template": {
+                        "type": "core://Use",
+                        "component": "core:card",
+                        "args": {
+                          "spacing": 6
+                        },
+                        "children": [
+                          {
+                            "type": "core://Row",
+                            "children": [
+                              {
+                                "type": "core://Use",
+                                "component": "core:dot",
+                                "args": {
+                                  "color": "$item.color"
+                                }
+                              },
+                              {
+                                "type": "core://Text",
+                                "value_expr": "$item.name",
+                                "style": "Label"
+                              },
+                              {
+                                "type": "core://Spacer"
+                              },
+                              {
+                                "type": "core://Text",
+                                "value_expr": "$item.state_text",
+                                "style": "Secondary"
+                              }
+                            ],
+                            "spacing_dp": 8
+                          },
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.last_seen_text",
+                            "content": {
+                              "type": "core://Text",
+                              "value_expr": "Last seen $item.last_seen_text",
+                              "style": "Caption"
+                            }
+                          },
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.awake",
+                            "content": {
+                              "type": "core://Button",
+                              "label": "Wake",
+                              "on_click": {
+                                "intent": "action.mutation.optimistic",
+                                "entity_uri": "agents://sandboxes/$item.name",
+                                "field": "state_text",
+                                "value_expr": "\"Waking…\"",
+                                "endpoint": "/v1/agents/sandboxes/wake",
+                                "payload": {
+                                  "workspace": "$item.workspace"
+                                }
+                              }
+                            },
+                            "equals": "false"
+                          }
+                        ]
+                      },
+                      "spacing_dp": 10,
+                      "empty_text": "No sandboxes."
+                    },
+                    "equals": "sandboxes"
+                  },
+                  {
+                    "type": "core://Conditional",
+                    "value": "$form.agents_view",
+                    "content": {
+                      "type": "core://List",
+                      "query_key": "agents:checks",
+                      "item_template": {
+                        "type": "core://Use",
+                        "component": "core:card",
+                        "args": {
+                          "spacing": 4
+                        },
+                        "children": [
+                          {
+                            "type": "core://Row",
+                            "children": [
+                              {
+                                "type": "core://Text",
+                                "value_expr": "$item.title",
+                                "style": "Label"
+                              },
+                              {
+                                "type": "core://Spacer"
+                              },
+                              {
+                                "type": "core://Use",
+                                "component": "core:pill",
+                                "args": {
+                                  "text": "$item.status_text",
+                                  "background": "$item.color",
+                                  "color": "#FFFFFF"
+                                }
+                              }
+                            ],
+                            "spacing_dp": 8
+                          },
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.detail",
+                            "content": {
+                              "type": "core://Text",
+                              "value_expr": "$item.detail",
+                              "style": "Secondary"
+                            }
+                          }
+                        ]
+                      },
+                      "spacing_dp": 10,
+                      "empty_text": "No checks."
+                    },
+                    "equals": "checks"
+                  },
+                  {
+                    "type": "core://Button",
+                    "label": "Sign out of the runner",
+                    "on_click": {
+                      "intent": "action.confirm",
+                      "title": "Sign out of the runner?",
+                      "message": "The pod forgets the runner's address, token and everything it sent.",
+                      "confirm_label": "Sign out",
+                      "then": {
+                        "intent": "action.mutation.optimistic",
+                        "entity_uri": "agents://runner/status",
+                        "field": "signed_in",
+                        "value_expr": "false",
+                        "endpoint": "/v1/agents/sign-out",
+                        "payload": {}
+                      }
+                    }
+                  }
+                ],
+                "spacing_dp": 12
+              },
+              "equals": "true"
+            }
+          ],
+          "spacing_dp": 12,
+          "padding_h_dp": 16,
+          "padding_v_dp": 8
+        }
+      }
+    ],
+    "screens": [
+      {
+        "id": "session",
+        "route": "agents://sessions/{id}",
+        "title": "${agents://sessions/$route.id#status_text}",
+        "data": "/v1/agents/sessions/timeline?id=$route.id",
+        "content": {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://Text",
+              "value_expr": "${agents://sessions/$route.id#title}",
+              "style": "Headline"
+            },
+            {
+              "type": "core://Row",
+              "children": [
+                {
+                  "type": "core://Use",
+                  "component": "core:pill",
+                  "args": {
+                    "text": "${agents://sessions/$route.id#status_text}",
+                    "background": "${agents://sessions/$route.id#status_color}",
+                    "color": "#FFFFFF"
+                  }
+                },
+                {
+                  "type": "core://Text",
+                  "value_expr": "${agents://sessions/$route.id#elapsed_text}",
+                  "style": "Secondary"
+                },
+                {
+                  "type": "core://Spacer"
+                },
+                {
+                  "type": "core://Text",
+                  "value_expr": "${agents://sessions/$route.id#cost_text}",
+                  "style": "Secondary"
+                }
+              ],
+              "spacing_dp": 8
+            },
+            {
+              "type": "core://Conditional",
+              "value": "${agents://sessions/$route.id#current_tool}",
+              "content": {
+                "type": "core://Text",
+                "value_expr": "${agents://sessions/$route.id#current_tool}",
+                "style": "Body"
+              }
+            },
+            {
+              "type": "core://Conditional",
+              "value": "${agents://sessions/$route.id#summary}",
+              "content": {
+                "type": "core://Text",
+                "value_expr": "${agents://sessions/$route.id#summary}",
+                "style": "Body"
+              }
+            },
+            {
+              "type": "core://Conditional",
+              "value": "${agents://sessions/$route.id#error}",
+              "content": {
+                "type": "core://Use",
+                "component": "core:warning_chip",
+                "args": {
+                  "text": "${agents://sessions/$route.id#error}"
+                }
+              }
+            },
+            {
+              "type": "core://Row",
+              "children": [
+                {
+                  "type": "core://Use",
+                  "component": "core:link_button",
+                  "args": {
+                    "label": "Open in Claude",
+                    "url": "${agents://sessions/$route.id#claude_url}"
+                  }
+                },
+                {
+                  "type": "core://Use",
+                  "component": "core:link_button",
+                  "args": {
+                    "label": "Pull request",
+                    "url": "${agents://sessions/$route.id#pr_url}"
+                  }
+                }
+              ],
+              "spacing_dp": 8
+            },
+            {
+              "type": "core://Conditional",
+              "value": "${agents://sessions/$route.id#active}",
+              "content": {
+                "type": "core://Button",
+                "label": "Stop",
+                "on_click": {
+                  "intent": "action.confirm",
+                  "title": "Stop this session?",
+                  "message": "Claude stops where it is; its work so far stays in the sandbox.",
+                  "confirm_label": "Stop",
+                  "then": {
+                    "intent": "action.mutation.optimistic",
+                    "entity_uri": "agents://sessions/$route.id",
+                    "field": "status_text",
+                    "value_expr": "\"Stopping…\"",
+                    "endpoint": "/v1/agents/sessions/stop",
+                    "payload": {
+                      "session_id": "$route.id"
+                    }
+                  }
+                }
+              },
+              "equals": "true"
+            },
+            {
+              "type": "core://Use",
+              "component": "core:section_header",
+              "args": {
+                "text": "Timeline",
+                "divider": true
+              }
+            },
+            {
+              "type": "core://List",
+              "query_key": "agents:timeline:$route.id",
+              "spacing_dp": 6,
+              "empty_text": "No events yet.",
+              "item_template": {
+                "type": "core://Row",
+                "children": [
+                  {
+                    "type": "core://Text",
+                    "value_expr": "$item.text",
+                    "style": "Body"
+                  },
+                  {
+                    "type": "core://Text",
+                    "value_expr": "$item.time_text",
+                    "style": "Caption"
+                  }
+                ],
+                "spacing_dp": 8
+              }
+            }
+          ],
+          "spacing_dp": 10,
+          "padding_h_dp": 16,
+          "padding_v_dp": 8
+        }
+      }
+    ]
+  }
+}
