@@ -13,9 +13,23 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SDK=${ANDROID_HOME:-$HOME/android-sdk}
-TOOLS=$(ls -d "$SDK"/build-tools/* | sort -V | tail -1)
-PLATFORM=$(ls -d "$SDK"/platforms/android-* | sort -V | tail -1)
-export ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-$(ls -d "$SDK"/ndk/* | sort -V | tail -1)}
+# The newest folder under $1 that holds $2: a real install, not a leftover such as `28.2.13676358.bak`.
+# Sorted by numeric version parts (`sort -V` isn't on every macOS).
+newest() {
+  local d
+  for d in "$1"/*/; do
+    d=${d%/}
+    [[ -e $d/$2 ]] && echo "$(basename "$d" | sed 's/^android-//') $d"
+  done | sort -t. -k1,1n -k2,2n -k3,3n | tail -1 | cut -d' ' -f2-
+}
+TOOLS=$(newest "$SDK/build-tools" aapt2)
+PLATFORM=$(newest "$SDK/platforms" android.jar)
+export ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-$(newest "$SDK/ndk" source.properties)}
+missing() { echo "no $1 found in $SDK (install it in Android Studio's SDK Manager)" >&2; exit 1; }
+[[ -n $TOOLS ]] || missing build-tools
+[[ -n $PLATFORM ]] || missing "SDK platform"
+[[ -n $ANDROID_NDK_HOME ]] || missing NDK
+echo "NDK: $ANDROID_NDK_HOME"
 OUT=build/android-native
 PKG=org.theconstruct.render
 mkdir -p "$OUT"
