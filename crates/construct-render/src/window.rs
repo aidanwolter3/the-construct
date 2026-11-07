@@ -41,6 +41,11 @@ pub trait Platform {
     fn open_link(&self, url: &str) {
         open_link_here(url);
     }
+    /// The platform closed the window for good (Android destroyed the
+    /// activity): the event loop ends.
+    fn gone(&self) -> bool {
+        false
+    }
 }
 
 /// Opens an address with the desktop's opener (`open`, `xdg-open`, `start`).
@@ -384,7 +389,12 @@ impl App {
 impl ApplicationHandler for App {
     /// Android doesn't tell the app when the keyboard or system bars change
     /// the visible area (winit drops it): check after every batch of events.
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.platform.as_ref().is_some_and(|p| p.gone()) {
+            log("the window is gone");
+            event_loop.exit();
+            return;
+        }
         if self.update_insets()
             && let Some(s) = &self.surface
         {

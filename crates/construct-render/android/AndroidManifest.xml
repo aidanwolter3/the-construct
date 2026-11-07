@@ -21,7 +21,7 @@
         <activity
             android:name="android.app.NativeActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|fontWeightAdjustment|colorMode|layoutDirection|locale"
             android:windowSoftInputMode="adjustResize">
             <meta-data android:name="android.app.lib_name" android:value="construct_render" />
             <intent-filter>

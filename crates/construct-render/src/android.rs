@@ -126,11 +126,41 @@ impl crate::window::Platform for Android {
         insets
     }
 
+    fn gone(&self) -> bool {
+        activity_gone(&self.0)
+    }
+
     fn open_link(&self, url: &str) {
         if let Err(e) = view_url(&self.0, url) {
             log(&format!("can't open {url}: {e}"));
         }
     }
+}
+
+/// Whether the activity is finishing or destroyed (`isFinishing`,
+/// `isDestroyed`): Android then waits for `android_main` to return.
+fn activity_gone(app: &AndroidApp) -> bool {
+    use jni::objects::JObject;
+    use jni::{jni_sig, jni_str};
+    // SAFETY: the VM pointer is valid for the life of the process.
+    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    let activity = app.activity_as_ptr() as jni::sys::jobject;
+    vm.attach_current_thread(|env| -> jni::errors::Result<bool> {
+        let run = |env: &mut jni::Env| -> jni::errors::Result<bool> {
+            // SAFETY: android-activity keeps its own reference to the activity.
+            let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
+            let mut gone = false;
+            for m in [jni_str!("isFinishing"), jni_str!("isDestroyed")] {
+                gone |= env.call_method(&*activity, m, jni_sig!("()Z"), &[])?.z()?;
+            }
+            Ok(gone)
+        };
+        Ok(run(env).unwrap_or_else(|e| {
+            log(&format!("activity state: {}", java_error(env, e)));
+            false
+        }))
+    })
+    .unwrap_or(false)
 }
 
 /// Opens `url` in the browser: an `ACTION_VIEW` intent from the activity.
@@ -546,13 +576,22 @@ fn android_main(app: AndroidApp) {
             session
         }
     };
+    // winit makes one event loop per process, but Android keeps the process
+    // when the activity goes (Back, a swipe from recents) and calls
+    // `android_main` again on the next launch. So the process ends with its
+    // activity, and every launch starts afresh.
     let event_loop = match EventLoop::builder().with_android_app(app.clone()).build() {
         Ok(l) => l,
-        Err(e) => return log(&format!("no event loop: {e}")),
+        Err(e) => {
+            log(&format!("no event loop: {e}; restarting"));
+            std::process::exit(0);
+        }
     };
     let window = crate::window::App::new(Controller::new(session), "The Construct")
         .with_platform(Box::new(Android(app, Default::default())));
     if let Err(e) = crate::window::run_app(event_loop, window) {
         log(&format!("window: {e}"));
     }
+    log("the activity is gone: ending the process");
+    std::process::exit(0);
 }

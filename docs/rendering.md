@@ -108,7 +108,8 @@ system bars with dark icons.
 code (or reads `CONSTRUCT_POD_CODE`), checks it with `POST /v1/pods/open`, and writes the session token the pod
 answers (on today's server, the pod code itself) to `pod.json` in the app's private storage with `run-as` (the APK is
 debuggable). It is stored unencrypted, unlike the main app's keystore. `--no-pod` deletes it and goes back to the
-demo. The app targets SDK 34, so the system keeps its window below the status bar and camera cutout and resizes it
+demo. winit makes one event loop per process while Android keeps the process after the activity goes, so the
+process ends with its activity (when it is finishing or destroyed) and every launch starts afresh. The app targets SDK 34, so the system keeps its window below the status bar and camera cutout and resizes it
 for the keyboard; a tapped text field opens the keyboard, and Back pops the stack. The layout stays inside the
 window insets Android reports (`getRootWindowInsets`: system bars, camera cutout and keyboard), logged as they change.
 
