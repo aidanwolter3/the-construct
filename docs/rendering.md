@@ -251,7 +251,8 @@ bottom (the pod's `detail`, else its error, with Dismiss; tagged `notice` and `n
 These commands (`Loader::device_command`) block the session while the pod answers, as `show_versions` does. Left to
 its own ticket: `request_notification_permission` (#168).
 `action.link.open` opens an `http(s)` address in the browser (an `ACTION_VIEW` intent on Android, `open` or
-`xdg-open` on desktops). `action.confirm` shows the app's own dialog (title, message, Cancel and the confirm label,
+`xdg-open` on desktops, `rundll32 url.dll,FileProtocolHandler` on Windows). Desktops hand the opener only `http`,
+`https` and `mailto` addresses, as one argument and never through a shell (`platform::openable`). `action.confirm` shows the app's own dialog (title, message, Cancel and the confirm label,
 tagged `confirm:cancel` and `confirm:ok`) and runs `then`, with the steps of a sequence after it, only on confirm;
 Cancel, Back or a tap outside do nothing. `action.auth.session` goes to the engine, which opens the session and
 keeps it in its secure store; the platform then remembers the code and shows the pod.

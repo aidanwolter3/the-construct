@@ -167,18 +167,76 @@ pub fn set_clipboard_here(text: &str) {
     eprintln!("construct-render: no clipboard tool (pbcopy, wl-copy, xclip or xsel) took the text");
 }
 
-/// Opens an address with the desktop's opener (`open`, `xdg-open`, `start`).
+/// Opens an address with the desktop's opener (`open`, `xdg-open`,
+/// `url.dll`'s handler on Windows).
 pub fn open_link_here(url: &str) {
+    open_url_here(url);
+}
+
+/// Whether the desktop hands `url` to its opener: `http`, `https` or
+/// `mailto` only (not a file, a program or another app's scheme), and one
+/// argument (no whitespace, quotes or control characters).
+pub fn openable(url: &str) -> bool {
+    let scheme = url.split_once(':').map(|(s, _)| s.to_ascii_lowercase());
+    matches!(scheme.as_deref(), Some("http" | "https" | "mailto"))
+        && !url
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '"')
+}
+
+/// Opens `url` with the desktop's opener; false when it isn't
+/// [`openable`] or the opener can't start. No shell is involved: on
+/// Windows, `cmd /C start` would run whatever follows a `&` in the URL.
+pub fn open_url_here(url: &str) -> bool {
+    if !openable(url) {
+        eprintln!("construct-render: not opening a link that isn't http(s) or mailto");
+        return false;
+    }
     let mut cmd = if cfg!(target_os = "macos") {
         std::process::Command::new("open")
     } else if cfg!(windows) {
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", "start", ""]);
+        let mut c = std::process::Command::new("rundll32");
+        c.arg("url.dll,FileProtocolHandler");
         c
     } else {
         std::process::Command::new("xdg-open")
     };
-    if let Err(e) = cmd.arg(url).spawn() {
-        eprintln!("construct-render: can't open {url}: {e}");
+    match cmd.arg(url).spawn() {
+        Ok(_) => true,
+        Err(e) => {
+            eprintln!("construct-render: can't open a link: {e}");
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_web_and_mail_links_are_opened() {
+        for url in [
+            "https://events.example/show?a=1&b=2",
+            "http://127.0.0.1:47823/callback",
+            "HTTPS://events.example",
+            "mailto:someone@mail.example",
+        ] {
+            assert!(openable(url), "{url}");
+        }
+        for url in [
+            "file:///etc/passwd",
+            "C:\\Windows\\System32\\calc.exe",
+            "javascript:alert(1)",
+            "ms-settings:",
+            "-a Calculator",
+            "https://events.example/a b",
+            "https://events.example/\"&calc",
+            "https://events.example/\n",
+            "events.example",
+            "",
+        ] {
+            assert!(!openable(url), "{url}");
+        }
     }
 }

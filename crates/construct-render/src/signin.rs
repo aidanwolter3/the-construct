@@ -99,25 +99,10 @@ impl<F: Fn(&str) -> bool + Send + Sync> UrlOpener for Opener<F> {
     }
 }
 
-/// Opens an address with the desktop's opener (`open`, `xdg-open`,
-/// `start`); false when it can't start.
+/// Opens an address with the desktop's opener
+/// ([`crate::platform::open_url_here`]); false when it can't.
 pub fn open_in_browser(url: &str) -> bool {
-    let mut cmd = if cfg!(target_os = "macos") {
-        std::process::Command::new("open")
-    } else if cfg!(windows) {
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", "start", ""]);
-        c
-    } else {
-        std::process::Command::new("xdg-open")
-    };
-    match cmd.arg(url).spawn() {
-        Ok(_) => true,
-        Err(e) => {
-            eprintln!("construct-render: can't open the browser: {e}");
-            false
-        }
-    }
+    crate::platform::open_url_here(url)
 }
 
 /// The Android app's: the browser through an `ACTION_VIEW` intent, and
