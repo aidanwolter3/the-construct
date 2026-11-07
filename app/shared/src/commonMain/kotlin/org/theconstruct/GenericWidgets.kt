@@ -201,11 +201,18 @@ internal fun NodeImage(node: UiNode.Image, entities: Map<String, JsonObject>, it
 
 /** `core://IconButton`: the bound `active` flag picks the active icon, tint and description. Tag = the bound `tag`. */
 @Composable
-internal fun NodeIconButton(node: UiNode.IconButton, item: JsonObject?, dispatch: (ActionIntent) -> Unit, modifier: Modifier) {
+internal fun NodeIconButton(
+    node: UiNode.IconButton,
+    entities: Map<String, JsonObject>,
+    item: JsonObject?,
+    dispatch: (ActionIntent) -> Unit,
+    modifier: Modifier,
+) {
     val active = node.active?.let { isTruthy(it, item) } == true
     val name = if (active) node.activeIcon ?: node.icon else node.icon
     val description = if (active) node.activeContentDescription ?: node.contentDescription else node.contentDescription
-    val tint = (if (active) parseHexColor(node.activeTint) else null) ?: MaterialTheme.colorScheme.onSurface
+    val activeTint = node.activeTint?.let { parseHexColor(interpolate(it, entities, item).trim()) }
+    val tint = (if (active) activeTint else null) ?: MaterialTheme.colorScheme.onSurface
     val tag = node.tag?.let { bindItemTokens(it, item) }
     IconButton(
         onClick = { dispatch(node.onClick) },

@@ -2,7 +2,7 @@
 //! rewritten onto server components records exactly the layout of the file
 //! it replaces, so nothing visible changed.
 
-use pod_core::layouts::{node_value, parse_files};
+use pod_core::layouts::{node_value, parse_file_with};
 
 /// `(app, file)`: files written with components whose layout must equal the
 /// file before them.
@@ -18,7 +18,23 @@ const REWRITTEN: &[(&str, u32)] = &[
 
 #[test]
 fn rewritten_blueprints_expand_to_the_layout_they_replace() {
-    let files = parse_files(&server::catalog(), &server::layout_files()).unwrap();
+    // The components as they were when the files were rewritten (version
+    // 1); later versions change what the files expand to (the theme's
+    // colours, decision `dark-palette`).
+    let catalog = server::catalog();
+    let first = pod_core::parts::Pending {
+        defs: catalog
+            .component_defs()
+            .defs
+            .iter()
+            .filter(|(_, v, _)| *v == 1)
+            .cloned()
+            .collect(),
+    };
+    let files: Vec<_> = server::layout_files()
+        .iter()
+        .map(|s| parse_file_with(&catalog, s, &first).unwrap())
+        .collect();
     let file = |app: &str, n: u32| {
         files
             .iter()

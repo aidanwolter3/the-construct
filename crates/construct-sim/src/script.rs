@@ -67,6 +67,8 @@ pub enum Step {
     AssertLink(String),
     WaitImages(u64),
     Screen(Screen),
+    /// `mode dark` or `mode light`: the system's mode (light at start).
+    Dark(bool),
     Offline,
     Online,
     PublishVersion(String),
@@ -111,6 +113,7 @@ impl Step {
             Step::AssertLink(_) => "assert-link",
             Step::WaitImages(_) => "wait-images",
             Step::Screen(_) => "screen",
+            Step::Dark(_) => "mode",
             Step::Offline => "offline",
             Step::Online => "online",
             Step::PublishVersion(_) => "publish-version",
@@ -256,6 +259,11 @@ pub fn parse(script: &str) -> Result<Vec<Line>, String> {
                 Screen::parse(&need("WxH or a preset (phone, tablet, desktop)")?)
                     .map_err(|e| format!("{}: {e}", at()))?,
             ),
+            "mode" => match need("dark or light")?.to_lowercase().as_str() {
+                "dark" => Step::Dark(true),
+                "light" => Step::Dark(false),
+                _ => return Err(format!("{}: 'mode' takes dark or light", at())),
+            },
             "offline" => none(Step::Offline)?,
             "online" => none(Step::Online)?,
             "publish-version" => Step::PublishVersion(need("a note (the changelog line)")?),

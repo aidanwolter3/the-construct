@@ -45,6 +45,7 @@ impl Rgba {
 
 /// The theme tokens with their light and dark defaults: the same table as
 /// `pod_core::porcelain::THEME_TOKENS` (the app has them built in too).
+/// The dark values are the app's dark palette (decision `dark-palette`).
 pub const THEME_DEFAULTS: &[(&str, &str, &str)] = &[
     ("card_border", "#E4E4EA", "#3A3A42"),
     ("accent", "#4A2C82", "#D9C8FF"),
@@ -54,6 +55,12 @@ pub const THEME_DEFAULTS: &[(&str, &str, &str)] = &[
     ("like", "#ED4956", "#FF6B7A"),
     ("unread", "#1E66D0", "#7AB0FF"),
     ("error", "#B3261E", "#F2B8B5"),
+    ("card", "#FFFFFF", "#242428"),
+    ("muted_text", "#6B6B76", "#A3A3AD"),
+    ("success", "#137333", "#81C995"),
+    ("success_surface", "#E6F4EA", "#1E3325"),
+    ("error_surface", "#FCE8E6", "#3D2321"),
+    ("highlight", "#FFF3CF", "#3B3320"),
 ];
 
 /// The entity the pod's bundle carries its theme in (`<token>` light,
@@ -68,6 +75,8 @@ pub struct Theme {
     pub background: Rgba,
     pub on_background: Rgba,
     pub muted_text: Rgba,
+    /// What floats over the page: dialogs, sheets, panels, menus.
+    pub surface: Rgba,
     pub primary: Rgba,
     pub on_primary: Rgba,
     pub outline: Rgba,
@@ -90,30 +99,34 @@ impl Theme {
                 (if dark { *dk } else { *light }).to_owned(),
             );
         }
-        if let Some(e) = entities.get(THEME_ENTITY) {
-            for (t, _, _) in THEME_DEFAULTS {
-                let key = if dark {
-                    format!("{t}_dark")
-                } else {
-                    (*t).to_owned()
-                };
-                if let Some(v) = e.get_str(&key).filter(|v| Rgba::hex(v).is_some()) {
-                    tokens.insert((*t).to_owned(), v.to_owned());
-                }
-            }
-        }
-        if let Some(e) = entities.get("local://theme") {
+        // The pod's theme (`<token>` light, `<token>_dark`), then the
+        // device's own (`local://theme`, the same shape): each mode takes
+        // only its own values, so a light-only theme keeps the dark
+        // defaults. Any token is taken, so a token newer than this build
+        // still binds.
+        for uri in [THEME_ENTITY, "local://theme"] {
+            let Some(e) = entities.get(uri) else {
+                continue;
+            };
             for (k, v) in &e.0 {
+                let token = match k.strip_suffix("_dark") {
+                    Some(t) if dark => t,
+                    Some(_) => continue,
+                    None if dark => continue,
+                    None => k.as_str(),
+                };
                 if let Some(v) = v.as_str().filter(|v| Rgba::hex(v).is_some()) {
-                    tokens.insert(k.clone(), v.to_owned());
+                    tokens.insert(token.to_owned(), v.to_owned());
                 }
             }
         }
         let tok = |t: &str| Rgba::hex(&tokens[t]).unwrap_or(Rgba::TRANSPARENT);
         Theme {
             dark,
+            // Dark: the palette's page; light: Material's background, as
+            // the Compose app draws.
             background: if dark {
-                Rgba::rgb(0x14, 0x13, 0x18)
+                tok("page")
             } else {
                 Rgba::rgb(0xFE, 0xFB, 0xFF)
             },
@@ -122,18 +135,15 @@ impl Theme {
             } else {
                 Rgba::rgb(0x1C, 0x1B, 0x1F)
             },
-            muted_text: if dark {
-                Rgba::rgb(0x9A, 0x99, 0xA3)
-            } else {
-                Rgba::rgb(0x6B, 0x6B, 0x76)
-            },
+            muted_text: tok("muted_text"),
+            surface: tok("card"),
             primary: if dark {
-                Rgba::rgb(0xD0, 0xBC, 0xFF)
+                tok("accent")
             } else {
                 Rgba::rgb(0x67, 0x50, 0xA4)
             },
             on_primary: if dark {
-                Rgba::rgb(0x38, 0x1E, 0x72)
+                tok("accent_surface")
             } else {
                 Rgba::rgb(0xFF, 0xFF, 0xFF)
             },
@@ -149,11 +159,7 @@ impl Theme {
             } else {
                 Rgba::rgb(0x79, 0x74, 0x7E)
             },
-            warning_surface: if dark {
-                Rgba::rgb(0x4A, 0x3A, 0x10)
-            } else {
-                Rgba::rgb(0xFF, 0xF1, 0xC7)
-            },
+            warning_surface: tok("highlight"),
             warning_text: if dark {
                 Rgba::rgb(0xFF, 0xD8, 0x80)
             } else {
@@ -259,5 +265,25 @@ mod tests {
             Theme::new(false, &BTreeMap::new()).token_text("accent"),
             Some("#4A2C82")
         );
+    }
+
+    #[test]
+    fn a_light_only_theme_keeps_the_dark_defaults() {
+        let mut entities = BTreeMap::new();
+        let mut local = EntityRecord::new();
+        local.set("card", "#FAFAFA");
+        local.set("brand_new", "#010203");
+        local.set("brand_new_dark", "#040506");
+        entities.insert("local://theme".to_owned(), local);
+        let light = Theme::new(false, &entities);
+        let dark = Theme::new(true, &entities);
+        assert_eq!(light.token_text("card"), Some("#FAFAFA"));
+        assert_eq!(dark.token_text("card"), Some("#242428"));
+        // A token this build doesn't know still binds.
+        assert_eq!(light.token_text("brand_new"), Some("#010203"));
+        assert_eq!(dark.token_text("brand_new"), Some("#040506"));
+        // Dark roles come from the palette.
+        assert_eq!(dark.background, Rgba::hex("#1A1A1C").unwrap());
+        assert_eq!(dark.surface, Rgba::hex("#242428").unwrap());
     }
 }

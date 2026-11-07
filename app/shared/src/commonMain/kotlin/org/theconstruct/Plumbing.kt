@@ -58,7 +58,7 @@ fun screenEntity(load: LoadState?): JsonObject = buildJsonObject {
     put("error", if (load?.state == "error") load.error ?: "Couldn't load this." else "")
 }
 
-/** The theme tokens and their light and dark defaults (`pod_core::porcelain::THEME_TOKENS`). */
+/** The theme tokens and their light and dark defaults (`pod_core::porcelain::THEME_TOKENS`, decision `dark-palette`). */
 val THEME_DEFAULTS: List<Triple<String, String, String>> = listOf(
     Triple("card_border", "#E4E4EA", "#3A3A42"),
     Triple("accent", "#4A2C82", "#D9C8FF"),
@@ -68,17 +68,29 @@ val THEME_DEFAULTS: List<Triple<String, String, String>> = listOf(
     Triple("like", "#ED4956", "#FF6B7A"),
     Triple("unread", "#1E66D0", "#7AB0FF"),
     Triple("error", "#B3261E", "#F2B8B5"),
+    Triple("card", "#FFFFFF", "#242428"),
+    Triple("muted_text", "#6B6B76", "#A3A3AD"),
+    Triple("success", "#137333", "#81C995"),
+    Triple("success_surface", "#E6F4EA", "#1E3325"),
+    Triple("error_surface", "#FCE8E6", "#3D2321"),
+    Triple("highlight", "#FFF3CF", "#3B3320"),
 )
 
 /**
  * `local://theme` (feature `theme`): each token's colour for the app's mode, from the pod's theme ([pod], the
- * `core://theme` entity: `<token>` light, `<token>_dark`) or the defaults.
+ * `core://theme` entity: `<token>` light, `<token>_dark`) or the defaults. A token this build doesn't know is
+ * taken too, so a newer pod's tokens still bind.
  */
 fun themeEntity(pod: JsonObject?, dark: Boolean): JsonObject = buildJsonObject {
-    for ((token, light, darkDefault) in THEME_DEFAULTS) {
-        val key = if (dark) "${token}_dark" else token
-        val set = (pod?.get(key) as? JsonPrimitive)?.contentOrNull?.takeIf { parseHexColor(it) != null }
-        put(token, set ?: if (dark) darkDefault else light)
+    for ((token, light, darkDefault) in THEME_DEFAULTS) put(token, if (dark) darkDefault else light)
+    for ((key, value) in pod.orEmpty()) {
+        val token = when {
+            key.endsWith("_dark") -> if (dark) key.removeSuffix("_dark") else continue
+            dark -> continue
+            else -> key
+        }
+        val color = (value as? JsonPrimitive)?.contentOrNull?.takeIf { parseHexColor(it) != null } ?: continue
+        put(token, color)
     }
 }
 

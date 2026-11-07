@@ -586,7 +586,7 @@
                         },
                         {
                           "content": {
-                            "background": "#EEF0F4",
+                            "background": "${local://theme#muted_surface}",
                             "content": {
                               "children": [
                                 {
@@ -729,7 +729,7 @@
                       "type": "core://Text",
                       "value_expr": "${local://screen#error}"
                     },
-                    "content_color": "#B3261E",
+                    "content_color": "${local://theme#error}",
                     "type": "core://Box"
                   },
                   {
@@ -1121,7 +1121,7 @@
                       "type": "core://Text",
                       "value_expr": "${local://screen#error}"
                     },
-                    "content_color": "#B3261E",
+                    "content_color": "${local://theme#error}",
                     "type": "core://Box"
                   },
                   {
@@ -1513,7 +1513,7 @@
                       "type": "core://Text",
                       "value_expr": "${local://screen#error}"
                     },
-                    "content_color": "#B3261E",
+                    "content_color": "${local://theme#error}",
                     "type": "core://Box"
                   },
                   {
@@ -1717,7 +1717,7 @@
                   {
                     "empty_text": "No comments yet. Be the first!",
                     "focus": {
-                      "background": "#FFF3CF",
+                      "background": "${local://theme#highlight}",
                       "uri": "pixelfed://comments/$route.comment"
                     },
                     "indent": {

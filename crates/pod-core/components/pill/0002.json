@@ -1,0 +1,53 @@
+{
+  "note": "Theme colours: accent_surface and accent, so pills follow dark mode",
+  "component": {
+    "doc": "A small tinted tag with text (a date, a status).",
+    "params": [
+      {
+        "name": "text",
+        "type": "text",
+        "doc": "The text.",
+        "required": true
+      },
+      {
+        "name": "background",
+        "type": "text",
+        "doc": "Fill colour.",
+        "default": "${local://theme#accent_surface}"
+      },
+      {
+        "name": "color",
+        "type": "text",
+        "doc": "Text colour.",
+        "default": "${local://theme#accent}"
+      },
+      {
+        "name": "style",
+        "type": "text",
+        "doc": "A core://Text style.",
+        "default": "Caption"
+      }
+    ],
+    "template": {
+      "type": "core://Box",
+      "background": "$arg.background",
+      "content_color": "$arg.color",
+      "corner_dp": 8,
+      "padding_h_dp": 8,
+      "padding_v_dp": 3,
+      "content": {
+        "type": "core://Text",
+        "value_expr": "$arg.text",
+        "style": "$arg.style"
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "text": "$item.start_text"
+        },
+        "note": "an event's date"
+      }
+    ]
+  }
+}

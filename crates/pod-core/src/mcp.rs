@@ -374,7 +374,7 @@ fn base_tools() -> Vec<Value> {
         tool(
             "set_theme",
             "The pod's theme colours, each with a light and a dark value; layouts bind them as ${local://theme#<token>} and the app picks the value for the device's mode. Without theme: answers the current theme and its tokens.",
-            json!({ "theme": { "type": "object", "description": "{token: {light?: #RRGGBB, dark?: #RRGGBB}}" } }),
+            json!({ "theme": { "type": "object", "description": "{token: {light?: #RRGGBB, dark?: #RRGGBB}}, or flat: {token: #RRGGBB (light), token_dark: #RRGGBB}. A token left unset follows the default for each mode." } }),
             &[],
         ),
         tool(
@@ -444,10 +444,17 @@ async fn call_tool(pod: &Pod, headers: &HeaderMap, params: &Value) -> Value {
         "describe_vocabulary" => vocabulary(pod).await,
         "get_layout" => get_layout(pod, &args).await,
         "sample_data" => sample_data(pod, headers, &args).await,
-        "validate_layout" => custom::validate(pod, &args).map_err(refused),
+        "validate_layout" => custom::validate(pod, &args)
+            .map(|v| with_colour_advice(v, &args["layout"]))
+            .map_err(refused),
         "create_layout" | "create_app" => custom::create(pod, &args, Writer::Claude)
             .await
-            .map(|w| json!({ "ok": true, "id": w.id, "version": w.version }))
+            .map(|w| {
+                with_colour_advice(
+                    json!({ "ok": true, "id": w.id, "version": w.version }),
+                    &args["layout"],
+                )
+            })
             .map_err(refused),
         "update_layout" => update_layout(pod, &args).await,
         "restore_version" => match str_arg(&args, "app") {
@@ -529,8 +536,14 @@ async fn set_theme(pod: &Pod, args: &Value) -> Result<Value, Value> {
     .await
     .map_err(store_err)?;
     match r {
-        Ok(t) => Ok(json!({ "ok": true, "theme": t,
-            "use": "bind ${local://theme#<token>} where a colour goes (core://Box background, border_color, content_color; core://IconButton active_tint); the app picks the light or dark value. Devices pick a change up the next time they load the layout." })),
+        Ok(t) => {
+            let tokens: serde_json::Map<String, Value> = crate::porcelain::THEME_TOKENS
+                .iter()
+                .map(|(t, _, _, what)| ((*t).to_owned(), json!(what)))
+                .collect();
+            Ok(json!({ "ok": true, "theme": t, "tokens": tokens,
+            "use": "bind ${local://theme#<token>} where a colour goes (core://Box background, border_color, content_color; core://IconButton active_tint; core://List focus colours) instead of a fixed #RRGGBB, so the layout follows the device's light or dark mode: page for a page's background, card for cards and rows on it, card_border for their borders, muted_text for secondary text. Devices pick a change up the next time they load the layout." }))
+        }
         Err(e) => Err(json!({ "error": "invalid_theme", "detail": e })),
     }
 }
@@ -773,8 +786,23 @@ async fn update_layout(pod: &Pod, args: &Value) -> Result<Value, Value> {
     }
     custom::update_layout(pod, &app, &body, Writer::Claude)
         .await
-        .map(|w| json!({ "ok": true, "id": w.id, "version": w.version }))
+        .map(|w| {
+            with_colour_advice(
+                json!({ "ok": true, "id": w.id, "version": w.version }),
+                &body["layout"],
+            )
+        })
         .map_err(refused)
+}
+
+/// A layout write's answer with `warnings`: the fixed colours it uses,
+/// which stay the same in dark mode (none: the answer as it is).
+fn with_colour_advice(mut answer: Value, layout: &Value) -> Value {
+    let warnings = crate::validate::fixed_colours(layout);
+    if !warnings.is_empty() {
+        answer["warnings"] = json!(warnings);
+    }
+    answer
 }
 
 async fn sample_data(pod: &Pod, headers: &HeaderMap, args: &Value) -> Result<Value, Value> {
@@ -1450,7 +1478,7 @@ fn snippets() -> Value {
         },
         "card_of_layout": {
             "doc": "another layout in a card-sized region of the page",
-            "node": {"type": "core://Box", "corner_dp": 12, "border_color": "#DDDDDD",
+            "node": {"type": "core://Box", "corner_dp": 12, "background": "${local://theme#card}", "border_color": "${local://theme#card_border}",
                 "content": {"type": "core://Layout", "layout": "<layout id>", "height_dp": 240}}
         },
         "sign_in_row": {

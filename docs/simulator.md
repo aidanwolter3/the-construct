@@ -32,7 +32,8 @@ clients have no outbox). Images whose path ends in `/storage/<file>` or `/v1/pix
 
 Default bundles: `pixelfed_sample_no_login` (`pixelfed_sample_bundle.json`), `pixelfed` (`pixelfed_feed_bundle.json`,
 the default workspace), `events` (`events_bundle.json`) and `c-kitchen2dm` (`custom_kitchen_bundle.json`); any other
-bundle with `--fixture`. Every bundle's layout is what a pod serves this build: a workspace as the `core://Page` it
+bundle with `--fixture`. `theme_home_bundle.json`, `theme_groceries_bundle.json` and `theme_log_bundle.json` are
+hand-written pages drawn only with theme tokens (a home, a shopping list, a log), for checking both modes. Every bundle's layout is what a pod serves this build: a workspace as the `core://Page` it
 expands to. `UPDATE_FIXTURES=1 cargo test -p server --test integration fixtures::` writes the Pixelfed ones and the
 blueprints from the pod (and the hand-written ones from their sources in `crates/server/tests/data/simulator/`; the
 test fails when one is stale); edit the source and rerun it.
@@ -88,6 +89,7 @@ word is the command and the rest of the entry, as written, its argument: `click 
 | `assert-link <text>` | An `action.link.open` opened a link containing the text. |
 | `wait-images [ms]` | Waits until no on-screen image is loading (default 10 s). |
 | `screen <WxH or preset>` | A new screen size; the session carries over. |
+| `mode dark` / `mode light` | The system's light or dark mode (light at start); `mode dark; shot dark` shows a screen in dark mode. |
 | `offline` / `online` | Fixture mode: the fake pod becomes unreachable / reachable. |
 | `open-layout <id> [push\|sheet\|panel]` | Presents a layout (`action.navigation.open {layout}`) and waits for its data. |
 | `open-settings` | Presents the Settings layout as a side panel. |

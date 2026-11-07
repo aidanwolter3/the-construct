@@ -1,0 +1,44 @@
+{
+  "note": "Same layout, with core:message_page's theme colours (dark mode)",
+  "layout": {
+    "type": "core://Workspace",
+    "id": "shell",
+    "title": "The Construct",
+    "slots": [
+      {
+        "slot_id": "home",
+        "provider_uri": "local://home",
+        "content": {
+          "type": "core://Use",
+          "component": "core:message_page",
+          "args": {
+            "title": "The Construct",
+            "body": "Ask your agent to build anything"
+          },
+          "children": [
+            {
+              "type": "core://IconButton",
+              "icon": "notifications",
+              "content_description": "Notifications",
+              "on_click": {
+                "intent": "action.navigation.open",
+                "layout": "inbox",
+                "presentation": "Sheet"
+              }
+            },
+            {
+              "type": "core://IconButton",
+              "icon": "settings",
+              "content_description": "Settings",
+              "on_click": {
+                "intent": "action.navigation.open",
+                "layout": "settings",
+                "presentation": "Panel"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

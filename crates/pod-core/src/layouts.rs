@@ -252,6 +252,16 @@ fn collect_unknown_intent_tags(
 
 /// Parse and validate one file of an app in `catalog` (`Err` names the file).
 pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, String> {
+    parse_file_with(catalog, src, catalog.component_defs())
+}
+
+/// [`parse_file`] with these server components (`defs`) instead of this
+/// build's: what a file expanded to when its components were older.
+pub fn parse_file_with(
+    catalog: &Catalog,
+    src: &LayoutSource,
+    defs: &crate::parts::Pending,
+) -> Result<LayoutFile, String> {
     let path = format!("{}/{}/{}.json", src.dir, src.app_id, src.name);
     let fail = |e: String| format!("{path}: {e}");
     if !catalog.is_app(src.app_id) {
@@ -292,7 +302,7 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
     // here: the pod records the plumbing the file stands for.
     let expanded;
     let layout = if src.text.contains(crate::components::USE_TYPE) {
-        expanded = crate::parts::expand_file(catalog, written)
+        expanded = crate::parts::expand_file_with(catalog, written, defs)
             .map_err(|e| fail(format!("invalid layout: {e}")))?;
         &expanded
     } else {
@@ -347,7 +357,7 @@ pub fn parse_file(catalog: &Catalog, src: &LayoutSource) -> Result<LayoutFile, S
                 return Err(fail(format!("part name '{name}' must be [a-z0-9_]+")));
             }
             let v = if v.to_string().contains(crate::components::USE_TYPE) {
-                crate::parts::expand_file(catalog, v)
+                crate::parts::expand_file_with(catalog, v, defs)
                     .map_err(|e| fail(format!("part '{name}': {e}")))?
             } else {
                 v.clone()

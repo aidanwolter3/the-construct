@@ -306,6 +306,60 @@ fn check_color(c: &str) -> Result<(), String> {
     }
 }
 
+/// Node fields (and component arguments) that hold a colour.
+const COLOUR_KEYS: &[&str] = &[
+    "background",
+    "border_color",
+    "content_color",
+    "color",
+    "tint",
+    "active_tint",
+];
+
+/// Advice, not errors: every fixed `#RRGGBB` colour in a layout, which
+/// stays the same in dark mode, with the theme token to use instead when
+/// one has that light colour (decision `dark-palette`). Each is
+/// `"<JSON pointer>: <advice>"`.
+pub fn fixed_colours(doc: &Value) -> Vec<String> {
+    fn walk(v: &Value, at: &str, out: &mut Vec<String>) {
+        match v {
+            Value::Object(m) => {
+                for (k, v) in m {
+                    let here = format!("{at}/{}", escape_pointer(k));
+                    if let Value::String(c) = v
+                        && COLOUR_KEYS.contains(&k.as_str())
+                        && check_tint(c).is_ok()
+                    {
+                        let token = crate::porcelain::THEME_TOKENS
+                            .iter()
+                            .find(|t| t.1.eq_ignore_ascii_case(c))
+                            .map(|t| t.0);
+                        out.push(match token {
+                            Some(t) => format!(
+                                "{here}: {c} stays the same in dark mode; use ${{local://theme#{t}}}"
+                            ),
+                            None => format!(
+                                "{here}: {c} stays the same in dark mode; use a ${{local://theme#<token>}} that fits (set_theme lists them)"
+                            ),
+                        });
+                    } else {
+                        walk(v, &here, out);
+                    }
+                }
+            }
+            Value::Array(a) => {
+                for (i, v) in a.iter().enumerate() {
+                    walk(v, &format!("{at}/{i}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(doc, "", &mut out);
+    out
+}
+
 /// Numeric fields the renderers cannot draw sensibly (a non-finite `f32`
 /// would even serialize as `null` and make the stored layout unreadable), and
 /// names clients must know (icons, tints).
@@ -434,8 +488,9 @@ fn check_values(node: &UiNode) -> Result<(), String> {
                     return Err("list focus needs a uri".into());
                 }
                 for c in [&f.background, &f.content_color].into_iter().flatten() {
-                    check_tint(c)
-                        .map_err(|_| format!("list focus colour '{c}' must be #RRGGBB"))?;
+                    check_color(c).map_err(|_| {
+                        format!("list focus colour '{c}' must be #RRGGBB or a binding")
+                    })?;
                 }
             }
             if *columns > MAX_COLUMNS {
@@ -567,7 +622,7 @@ fn check_values(node: &UiNode) -> Result<(), String> {
                 check_icon(i)?;
             }
             if let Some(t) = active_tint {
-                check_tint(t)?;
+                check_color(t)?;
             }
             if let Some(s) = size_dp {
                 check_dp("icon size_dp", *s, MAX_SIZE_DP)?;
@@ -1406,6 +1461,18 @@ mod tests {
         assert_eq!(check_values(&p(sized)), Ok(()));
         let huge = json!({"type": "core://Progress", "size_dp": 9999});
         assert!(check_values(&p(huge)).is_err());
+    }
+
+    #[test]
+    fn fixed_colours_are_pointed_out() {
+        let doc = json!({"type": "core://Box", "background": "#ffffff",
+            "border_color": "${local://theme#card_border}",
+            "content": {"type": "core://Use", "component": "core:pill",
+                "args": {"background": "#123456", "text": "#FFFFFF"}}});
+        let w = fixed_colours(&doc);
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(w[0].starts_with("/background: #ffffff") && w[0].ends_with("theme#card}"));
+        assert!(w[1].starts_with("/content/args/background: #123456"));
     }
 
     #[test]

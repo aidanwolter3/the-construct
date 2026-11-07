@@ -1,0 +1,617 @@
+{
+  "note": "Theme colours instead of fixed ones, so it follows dark mode",
+  "layout": {
+    "type": "core://Workspace",
+    "id": "events",
+    "title": "Events",
+    "slots": [
+      {
+        "slot_id": "events",
+        "provider_uri": "events://matches",
+        "content": {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://Sticky",
+              "content": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://ChoiceChips",
+                    "field": "view",
+                    "remember": true,
+                    "padding_h_dp": 16,
+                    "options": [
+                      {
+                        "label": "Matches",
+                        "value": ""
+                      },
+                      {
+                        "label": "Sites",
+                        "value": "sites"
+                      }
+                    ]
+                  }
+                ],
+                "padding_v_dp": 8
+              }
+            },
+            {
+              "type": "core://Conditional",
+              "value": "$form.view",
+              "content": {
+                "type": "core://List",
+                "query_key": "collection:events:alerted",
+                "item_template": {
+                  "type": "core://Tappable",
+                  "on_click": {
+                    "intent": "action.navigation.open",
+                    "presentation": "Push",
+                    "target_uri": "collections://events/$item.id"
+                  },
+                  "content": {
+                    "type": "core://Use",
+                    "component": "core:card",
+                    "args": {
+                      "spacing": 6
+                    },
+                    "children": [
+                      {
+                        "type": "core://Row",
+                        "children": [
+                          {
+                            "type": "core://Use",
+                            "component": "core:pill",
+                            "args": {
+                              "text": "$item.start_text"
+                            }
+                          },
+                          {
+                            "type": "core://Spacer"
+                          },
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.seen",
+                            "content": {
+                              "type": "core://Chip",
+                              "text": "New"
+                            },
+                            "equals": "false"
+                          }
+                        ],
+                        "align": "Center",
+                        "spacing_dp": 8
+                      },
+                      {
+                        "type": "core://Text",
+                        "value_expr": "$item.title",
+                        "style": "Label"
+                      },
+                      {
+                        "type": "core://Conditional",
+                        "value": "$item.venue",
+                        "content": {
+                          "type": "core://Text",
+                          "value_expr": "$item.venue",
+                          "style": "Secondary"
+                        }
+                      },
+                      {
+                        "type": "core://Conditional",
+                        "value": "$item.alert_names",
+                        "content": {
+                          "type": "core://Text",
+                          "value_expr": "$item.filler_title · $item.alert_names",
+                          "style": "Caption"
+                        }
+                      }
+                    ]
+                  },
+                  "content_description": "Open $item.title"
+                },
+                "spacing_dp": 10,
+                "padding_h_dp": 16,
+                "empty_text": "No matching events yet. Ask Claude to watch a website or change its alerts."
+              },
+              "equals": ""
+            },
+            {
+              "type": "core://Conditional",
+              "value": "$form.view",
+              "content": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://List",
+                    "query_key": "collection:events:fillers",
+                    "item_template": {
+                      "type": "core://Tappable",
+                      "on_click": {
+                        "intent": "action.navigation.open",
+                        "presentation": "Push",
+                        "target_uri": "collections://events/fillers/$item.id"
+                      },
+                      "content": {
+                        "type": "core://Use",
+                        "component": "core:card",
+                        "args": {
+                          "spacing": 4
+                        },
+                        "children": [
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.title",
+                            "style": "Label"
+                          },
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.alerts_text",
+                            "style": "Body"
+                          },
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.detail",
+                            "style": "Secondary"
+                          },
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.failing",
+                            "content": {
+                              "type": "core://Row",
+                              "children": [
+                                {
+                                  "type": "core://Use",
+                                  "component": "core:warning_chip",
+                                  "args": {
+                                    "text": "Needs attention"
+                                  }
+                                }
+                              ],
+                              "align": "Center"
+                            },
+                            "equals": "true"
+                          }
+                        ]
+                      },
+                      "content_description": "Open $item.title"
+                    },
+                    "spacing_dp": 10,
+                    "padding_h_dp": 16,
+                    "empty_text": "No websites yet. Ask Claude to watch a website or change its alerts."
+                  },
+                  {
+                    "type": "core://Use",
+                    "component": "core:section_header",
+                    "args": {
+                      "text": "Ask Claude to watch a website or change its alerts.",
+                      "style": "Secondary",
+                      "padding_v": 4
+                    }
+                  }
+                ],
+                "spacing_dp": 6
+              },
+              "equals": "sites"
+            }
+          ],
+          "spacing_dp": 4
+        }
+      }
+    ],
+    "screens": [
+      {
+        "id": "event",
+        "route": "collections://events/{id}",
+        "title": "${collections://events/$route.id#filler_title}",
+        "data": "/v1/collections/events/row?id=$route.id",
+        "content": {
+          "type": "core://List",
+          "query_key": "collection:events:row:$route.id",
+          "item_template": {
+            "type": "core://Column",
+            "children": [
+              {
+                "type": "core://Box",
+                "content": {
+                  "type": "core://Column",
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.start_text",
+                      "style": "Label"
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.title",
+                      "style": "Headline"
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.venue",
+                      "content": {
+                        "type": "core://Text",
+                        "value_expr": "$item.venue",
+                        "style": "Body"
+                      }
+                    }
+                  ],
+                  "spacing_dp": 6
+                },
+                "background": "${local://theme#accent_surface}",
+                "content_color": "${local://theme#accent}",
+                "corner_dp": 16,
+                "padding_h_dp": 16,
+                "padding_v_dp": 16
+              },
+              {
+                "type": "core://Conditional",
+                "value": "$item.alert_names",
+                "content": {
+                  "type": "core://Row",
+                  "children": [
+                    {
+                      "type": "core://Chip",
+                      "text": "$item.alert_names"
+                    },
+                    {
+                      "type": "core://Spacer"
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.seen",
+                      "content": {
+                        "type": "core://Button",
+                        "label": "Mark as seen",
+                        "on_click": {
+                          "intent": "action.mutation.optimistic",
+                          "entity_uri": "$item.uri",
+                          "field": "seen",
+                          "value_expr": "true",
+                          "rollback_value": false,
+                          "endpoint": "/v1/collections/events/update",
+                          "payload": {
+                            "id": "$item.id",
+                            "seen": "$value"
+                          }
+                        }
+                      },
+                      "equals": "false"
+                    }
+                  ],
+                  "align": "Center",
+                  "spacing_dp": 8
+                }
+              },
+              {
+                "type": "core://Row",
+                "children": [
+                  {
+                    "type": "core://Use",
+                    "component": "core:link_button",
+                    "args": {
+                      "label": "Get tickets",
+                      "url": "$item.tickets_url"
+                    }
+                  },
+                  {
+                    "type": "core://Use",
+                    "component": "core:link_button",
+                    "args": {
+                      "label": "Event page",
+                      "url": "$item.url"
+                    }
+                  }
+                ],
+                "align": "Center",
+                "spacing_dp": 8
+              },
+              {
+                "type": "core://Conditional",
+                "value": "$item.description",
+                "content": {
+                  "type": "core://Column",
+                  "children": [
+                    {
+                      "type": "core://Text",
+                      "value_expr": "About",
+                      "style": "Label"
+                    },
+                    {
+                      "type": "core://Text",
+                      "value_expr": "$item.description",
+                      "style": "Body"
+                    }
+                  ],
+                  "spacing_dp": 6
+                }
+              }
+            ],
+            "spacing_dp": 16,
+            "padding_v_dp": 16
+          },
+          "spacing_dp": 0,
+          "padding_h_dp": 16
+        }
+      },
+      {
+        "id": "target",
+        "route": "collections://events/fillers/{id}",
+        "title": "${collections://events/fillers/$route.id#title}",
+        "data": "/v1/collections/events/fillers/$route.id",
+        "content": {
+          "type": "core://Column",
+          "children": [
+            {
+              "type": "core://List",
+              "query_key": "collection:events:filler:$route.id",
+              "item_template": {
+                "type": "core://Column",
+                "children": [
+                  {
+                    "type": "core://Use",
+                    "component": "core:card",
+                    "args": {
+                      "spacing": 6
+                    },
+                    "children": [
+                      {
+                        "type": "core://Text",
+                        "value_expr": "$item.detail",
+                        "style": "Body"
+                      },
+                      {
+                        "type": "core://Conditional",
+                        "value": "$item.failing",
+                        "content": {
+                          "type": "core://Row",
+                          "children": [
+                            {
+                              "type": "core://Use",
+                              "component": "core:warning_chip",
+                              "args": {
+                                "text": "Needs attention"
+                              }
+                            }
+                          ],
+                          "align": "Center"
+                        },
+                        "equals": "true"
+                      },
+                      {
+                        "type": "core://Text",
+                        "value_expr": "$item.url",
+                        "style": "Secondary"
+                      },
+                      {
+                        "type": "core://Text",
+                        "value_expr": "$item.alerts_text",
+                        "style": "Caption"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "core://Row",
+                    "children": [
+                      {
+                        "type": "core://Button",
+                        "label": "Check now",
+                        "on_click": {
+                          "intent": "action.mutation.optimistic",
+                          "entity_uri": "$item.uri",
+                          "field": "refreshing",
+                          "value_expr": "true",
+                          "rollback_value": false,
+                          "endpoint": "/v1/collections/events/refresh",
+                          "payload": {
+                            "filler": "$item.id"
+                          }
+                        }
+                      }
+                    ],
+                    "align": "Center"
+                  }
+                ],
+                "spacing_dp": 10,
+                "padding_v_dp": 12
+              },
+              "spacing_dp": 10,
+              "padding_h_dp": 16
+            },
+            {
+              "type": "core://Use",
+              "component": "core:section_header",
+              "args": {
+                "text": "Alerts",
+                "style": "Title",
+                "padding_v": 4
+              }
+            },
+            {
+              "type": "core://List",
+              "query_key": "collection:events:filler:$route.id:alerts",
+              "item_template": {
+                "type": "core://Use",
+                "component": "core:card",
+                "args": {
+                  "spacing": 2
+                },
+                "children": [
+                  {
+                    "type": "core://Text",
+                    "value_expr": "$item.name",
+                    "style": "Label"
+                  },
+                  {
+                    "type": "core://Text",
+                    "value_expr": "$item.summary",
+                    "style": "Secondary"
+                  }
+                ]
+              },
+              "spacing_dp": 10,
+              "padding_h_dp": 16,
+              "empty_text": "No alerts yet: nothing on this site notifies you."
+            },
+            {
+              "type": "core://Column",
+              "children": [
+                {
+                  "type": "core://Text",
+                  "value_expr": "Events",
+                  "style": "Title"
+                },
+                {
+                  "type": "core://Text",
+                  "value_expr": "Matches are highlighted.",
+                  "style": "Secondary"
+                }
+              ],
+              "spacing_dp": 2,
+              "padding_h_dp": 16,
+              "padding_v_dp": 4
+            },
+            {
+              "type": "core://List",
+              "query_key": "collection:events:filler:$route.id:rows",
+              "item_template": {
+                "type": "core://Tappable",
+                "on_click": {
+                  "intent": "action.navigation.open",
+                  "presentation": "Push",
+                  "target_uri": "collections://events/$item.id"
+                },
+                "content": {
+                  "type": "core://Column",
+                  "children": [
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.alert_matched",
+                      "content": {
+                        "type": "core://Box",
+                        "content": {
+                          "type": "core://Column",
+                          "children": [
+                            {
+                              "type": "core://Row",
+                              "children": [
+                                {
+                                  "type": "core://Use",
+                                  "component": "core:pill",
+                                  "args": {
+                                    "text": "$item.start_text"
+                                  }
+                                },
+                                {
+                                  "type": "core://Spacer"
+                                },
+                                {
+                                  "type": "core://Chip",
+                                  "text": "Match"
+                                }
+                              ],
+                              "align": "Center",
+                              "spacing_dp": 8
+                            },
+                            {
+                              "type": "core://Text",
+                              "value_expr": "$item.title",
+                              "style": "Label"
+                            },
+                            {
+                              "type": "core://Conditional",
+                              "value": "$item.venue",
+                              "content": {
+                                "type": "core://Text",
+                                "value_expr": "$item.venue",
+                                "style": "Secondary"
+                              }
+                            },
+                            {
+                              "type": "core://Conditional",
+                              "value": "$item.alert_names",
+                              "content": {
+                                "type": "core://Text",
+                                "value_expr": "$item.alert_names",
+                                "style": "Caption"
+                              }
+                            }
+                          ],
+                          "spacing_dp": 6
+                        },
+                        "background": "${local://theme#accent_surface}",
+                        "border_color": "${local://theme#card_border}",
+                        "corner_dp": 14,
+                        "padding_h_dp": 14,
+                        "padding_v_dp": 12
+                      },
+                      "equals": "true"
+                    },
+                    {
+                      "type": "core://Conditional",
+                      "value": "$item.alert_matched",
+                      "content": {
+                        "type": "core://Use",
+                        "component": "core:card",
+                        "args": {
+                          "spacing": 6
+                        },
+                        "children": [
+                          {
+                            "type": "core://Row",
+                            "children": [
+                              {
+                                "type": "core://Use",
+                                "component": "core:pill",
+                                "args": {
+                                  "text": "$item.start_text"
+                                }
+                              },
+                              {
+                                "type": "core://Spacer"
+                              }
+                            ],
+                            "align": "Center",
+                            "spacing_dp": 8
+                          },
+                          {
+                            "type": "core://Text",
+                            "value_expr": "$item.title",
+                            "style": "Label"
+                          },
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.venue",
+                            "content": {
+                              "type": "core://Text",
+                              "value_expr": "$item.venue",
+                              "style": "Secondary"
+                            }
+                          },
+                          {
+                            "type": "core://Conditional",
+                            "value": "$item.alert_names",
+                            "content": {
+                              "type": "core://Text",
+                              "value_expr": "$item.alert_names",
+                              "style": "Caption"
+                            }
+                          }
+                        ]
+                      },
+                      "equals": "false"
+                    }
+                  ]
+                },
+                "content_description": "Open $item.title"
+              },
+              "spacing_dp": 10,
+              "padding_h_dp": 16,
+              "empty_text": "No upcoming events found on this page."
+            }
+          ],
+          "spacing_dp": 8
+        }
+      }
+    ]
+  }
+}

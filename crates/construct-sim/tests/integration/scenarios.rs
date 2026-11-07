@@ -128,3 +128,32 @@ fn picked_photos_show_and_post() {
         Some(&serde_json::json!(["construct://attachments/sim-2"]))
     );
 }
+
+#[test]
+fn dark_mode_draws_the_dark_palette() {
+    let out = out_dir("dark");
+    let (mut runner, results) = run(
+        "pixelfed",
+        "mode dark; shot feed; open-inbox; assert-text @bob commented on your post; shot inbox; \
+         mode light; shot light",
+        &out,
+    );
+    assert_ok(&results);
+    let page = |runner: &mut construct_sim::run::Runner| {
+        runner.session.scene().map(|s| s.background).unwrap()
+    };
+    // Light again: Material's background, as the Compose app draws.
+    assert_eq!(
+        page(&mut runner),
+        construct_render::style::Rgba::rgb(0xFE, 0xFB, 0xFF).0
+    );
+    runner.session.set_dark(true);
+    // Dark: the theme's page token.
+    assert_eq!(
+        page(&mut runner),
+        construct_render::style::Rgba::hex("#1A1A1C").unwrap().0
+    );
+    for f in ["02-feed.png", "05-inbox.png", "07-light.png"] {
+        assert!(out.join(f).is_file(), "{f}");
+    }
+}
