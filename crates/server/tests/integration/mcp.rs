@@ -1532,3 +1532,62 @@ async fn agents_preview_a_layout_and_tap_it() {
     .await;
     assert!(err && text.contains("layout_not_loaded"), "{text}");
 }
+
+/// A use costs its expansion's work, not a copy of its definition: a
+/// component whose bulk sits in a branch it doesn't take (an `IfArg` that is
+/// false) is cheap to use many times, as its work budget says, instead of
+/// copying and checking its whole definition at every use (seconds of CPU
+/// for one `expand` before definitions were read once per expansion).
+#[tokio::test]
+async fn using_a_large_component_often_costs_only_what_it_expands_to() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+
+    // `pod:bulky`: about 57 KB of text behind a branch it doesn't take.
+    let texts: Vec<Value> = (0..600)
+        .map(|i| json!({"type": "core://Text", "style": "Body", "value_expr": format!("{i:0>40}")}))
+        .collect();
+    let bulky = json!({"doc": "Mostly hidden.", "params": [
+            {"name": "show", "type": "bool", "doc": "Show the rest.", "default": false}],
+        "template": {"type": "core://IfArg", "arg": "show",
+            "then": {"type": "core://Column", "children": texts},
+            "else": {"type": "core://Text", "style": "Body", "value_expr": "-"}},
+        "examples": [{"args": {}}]});
+    let (err, d) = env
+        .tool(
+            &access,
+            "define_component",
+            json!({"name": "bulky", "component": bulky}),
+        )
+        .await;
+    assert!(!err, "{d}");
+    // `pod:many`: 400 uses of it.
+    let uses: Vec<Value> = (0..400)
+        .map(|_| json!({"type": "core://Use", "component": "pod:bulky"}))
+        .collect();
+    let many = json!({"doc": "Many.", "params": [],
+        "template": {"type": "core://Column", "children": uses}, "examples": [{"args": {}}]});
+    let (err, d) = env
+        .tool(
+            &access,
+            "define_component",
+            json!({"name": "many", "component": many}),
+        )
+        .await;
+    assert!(!err, "{d}");
+
+    // 4,000 uses of pod:bulky: well within the work budget.
+    let node = json!({"type": "core://Column", "children": (0..10)
+        .map(|_| json!({"type": "core://Use", "component": "pod:many"}))
+        .collect::<Vec<_>>()});
+    let started = std::time::Instant::now();
+    let (err, x) = env.tool(&access, "expand", json!({"node": node})).await;
+    let took = started.elapsed();
+    assert!(!err, "{x}");
+    assert_eq!(x["expanded"]["children"].as_array().unwrap().len(), 10);
+    assert!(
+        took < std::time::Duration::from_secs(10),
+        "expanding took {took:?}"
+    );
+}
