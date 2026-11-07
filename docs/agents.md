@@ -25,7 +25,9 @@ the runner.
   `resume_schedule {name}`. Errors are `{error}` with 400, 401, 404, 429 or 502.
 
 Session statuses: `starting`, `working`, `waiting_permission`, `waiting_input`, `idle`, `finished`, `failed`,
-`stale`. A scheduled run's `task_id` is `schedule/<name>/<local minute or manual-…>`.
+`stale`. Only `starting` and `working` count as working in `agents:status` (`working_count`, `summary_text`), and
+`waiting_permission` and `waiting_input` as needing you; `idle` counts as neither, since each sandbox's Remote
+Control keeps an idle standby session open and a finished run's session stays open idle. A scheduled run's `task_id` is `schedule/<name>/<local minute or manual-…>`.
 
 ## In the pod
 
@@ -39,8 +41,8 @@ Session statuses: `starting`, `working`, `waiting_permission`, `waiting_input`, 
   event updates the stored state and the session's timeline (`agents_events`, the last 200 per session), and the
   pod's clients reload. While the runner can't be reached the feeds serve the last state, with
   `agents:status.stale` true and a "Can't reach …" line.
-- **Feeds:** `sessions` (`agents:status` and `agents:sessions`: active first, the ones that need you before them),
-  `sandboxes`, `checks`, `schedules`; and `/v1/agents/sessions/timeline?id=<id>` (`agents:timeline:<id>`). The
+- **Feeds:** `sessions` (`agents:status` and `agents:sessions`: the ones that need you, then working, idle and ended
+  ones, each newest first), `sandboxes`, `checks`, `schedules`; and `/v1/agents/sessions/timeline?id=<id>` (`agents:timeline:<id>`). The
   entities and their fields are in the source's manifest (`describe_vocabulary`, `list_data_sources`).
 - **Actions:** `/v1/agents/sessions/stop`, `/v1/agents/sandboxes/wake`, `/v1/agents/tasks/start`,
   `/v1/agents/schedules/run`, `/pause` and `/resume`. They need a valid pod session; runner refusals come back as

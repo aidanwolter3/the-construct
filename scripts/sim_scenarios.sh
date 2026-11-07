@@ -16,7 +16,7 @@ scenario() {
 }
 
 scenario like pixelfed_sample_no_login \
-  "shot feed; click Like; assert-text Unlike; shot liked; offline; shot offline"
+  "shot feed; click Like; assert-text Unlike; assert-text 90; shot liked; offline; shot offline"
 scenario layouts pixelfed \
   "shot feed; open-layout events; shot events; back; open-settings; shot settings; back; open-inbox; shot inbox"
 scenario comments pixelfed \

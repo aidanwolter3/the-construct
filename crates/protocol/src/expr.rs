@@ -1,4 +1,5 @@
-//! Minimal mutation-expression evaluator (docs/DECISIONS.md D4).
+//! Minimal mutation-expression evaluator (docs/DECISIONS.md D4), shared by
+//! the engines (client-core and construct-render) so they agree.
 //!
 //! Stands in for a real CEL evaluator. Supported forms, evaluated against the
 //! target entity's current payload:
@@ -14,7 +15,7 @@
 
 use std::fmt;
 
-use protocol::EntityRecord;
+use crate::EntityRecord;
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -2399,19 +2399,24 @@ impl Session {
             "action.confirm" => self.confirm(intent, out),
             "action.local.set" => {
                 let uri = intent["entity_uri"].as_str().unwrap_or("").to_owned();
-                let mut fields = BTreeMap::new();
-                let mut updates = vec![(intent["field"].clone(), intent["value_expr"].clone())];
-                for a in intent["also"].as_array().into_iter().flatten() {
-                    updates.push((a["field"].clone(), a["value_expr"].clone()));
-                }
+                let updates: Vec<(String, String)> = std::iter::once(intent)
+                    .chain(intent["also"].as_array().into_iter().flatten())
+                    .filter_map(|a| {
+                        Some((
+                            a["field"].as_str()?.to_owned(),
+                            a["value_expr"].as_str()?.to_owned(),
+                        ))
+                    })
+                    .collect();
                 let entity = self.data.entities.entry(uri.clone()).or_default();
-                for (f, e) in updates {
-                    let (Some(f), Some(e)) = (f.as_str(), e.as_str()) else {
-                        continue;
-                    };
-                    let v = eval(e, entity);
-                    entity.set(f, v.clone());
-                    fields.insert(f.to_owned(), v);
+                let Some(values) = eval_all(&updates, entity) else {
+                    out.push(Effect::Nothing);
+                    return;
+                };
+                let mut fields = BTreeMap::new();
+                for (f, v) in values {
+                    entity.set(&f, v.clone());
+                    fields.insert(f, v);
                 }
                 out.push(Effect::LocalSet {
                     entity_uri: uri,
@@ -2661,20 +2666,23 @@ impl Session {
         };
         let mut updates = vec![(
             field.to_owned(),
-            intent["value_expr"].as_str().unwrap_or(""),
+            intent["value_expr"].as_str().unwrap_or("").to_owned(),
         )];
         for a in intent["also"].as_array().into_iter().flatten() {
             if let (Some(f), Some(e)) = (a["field"].as_str(), a["value_expr"].as_str()) {
-                updates.push((f.to_owned(), e));
+                updates.push((f.to_owned(), e.to_owned()));
             }
         }
         let entity = self.data.entities.entry(uri.clone()).or_default();
         let pre = entity.clone();
+        let Some(values) = eval_all(&updates, &pre) else {
+            out.push(Effect::Nothing);
+            return;
+        };
         let mut before = BTreeMap::new();
         let mut fields = BTreeMap::new();
-        for (i, (f, e)) in updates.iter().enumerate() {
-            let v = eval(e, &pre);
-            let old = pre.get(f).cloned().unwrap_or_else(|| {
+        for (i, (f, v)) in values.into_iter().enumerate() {
+            let old = pre.get(&f).cloned().unwrap_or_else(|| {
                 if i == 0 {
                     intent["rollback_value"].clone()
                 } else {
@@ -2682,8 +2690,8 @@ impl Session {
                 }
             });
             before.insert(f.clone(), old);
-            entity.set(f, v.clone());
-            fields.insert(f.clone(), v);
+            entity.set(f.clone(), v.clone());
+            fields.insert(f, v);
         }
         let value = fields.get(field).cloned().unwrap_or(Value::Null);
         out.push(Effect::LocalSet {
@@ -3367,36 +3375,23 @@ fn notice_text(error: &str) -> String {
     }
 }
 
-/// The value of a `value_expr` for `action.local.set`, against the entity
-/// as it is: `true`, `false`, numbers, quoted text, `entity.<f>` or
-/// `!entity.<f>` (also `$item.`); anything else is the text itself.
-fn eval(expr: &str, entity: &protocol::EntityRecord) -> Value {
-    let e = expr.trim();
-    let field = |s: &str| {
-        s.strip_prefix("entity.")
-            .or_else(|| s.strip_prefix("$item."))
-            .map(str::to_owned)
-    };
-    match e {
-        "true" => return Value::Bool(true),
-        "false" => return Value::Bool(false),
-        _ => {}
-    }
-    if let Ok(n) = e.parse::<i64>() {
-        return json!(n);
-    }
-    if let Some(f) = e.strip_prefix('!').and_then(field) {
-        return Value::Bool(!entity.get(&f).is_some_and(crate::bind::truthy));
-    }
-    if let Some(f) = field(e) {
-        return entity.get(&f).cloned().unwrap_or(Value::Null);
-    }
-    if e.len() >= 2
-        && (e.starts_with('"') && e.ends_with('"') || e.starts_with('\'') && e.ends_with('\''))
-    {
-        return Value::String(e[1..e.len() - 1].to_owned());
-    }
-    Value::String(e.to_owned())
+/// Every `(field, value_expr)` evaluated against `entity` as it is, with
+/// the engine's expression language (`protocol::expr`, as client-core). `None`
+/// if one fails: then nothing changes, as in client-core.
+fn eval_all(
+    updates: &[(String, String)],
+    entity: &protocol::EntityRecord,
+) -> Option<Vec<(String, Value)>> {
+    updates
+        .iter()
+        .map(|(f, e)| match protocol::expr::eval(e, entity) {
+            Ok(v) => Some((f.clone(), v)),
+            Err(err) => {
+                eprintln!("[construct-render] {f} = {e}: {err}; no change");
+                None
+            }
+        })
+        .collect()
 }
 
 /// Every string that is exactly `$value` replaced by `value` (client-core's
