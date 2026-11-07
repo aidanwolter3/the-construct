@@ -218,9 +218,15 @@ type DockEntry<'n> = (
 #[derive(Default)]
 pub struct SceneBuilder {
     pub text: TextEngine,
+    /// The viewer's day (an epoch day) that `format` dates read against;
+    /// `None`: today on this device.
+    pub today: Option<i64>,
 }
 
 struct Build<'t, 'i> {
+    today: i64,
+    /// The scrolling views with `follow_end`, by semantic id.
+    follow_end: Vec<String>,
     tree: TaffyTree<Leaf>,
     elems: Vec<Elem>,
     text: &'t mut TextEngine,
@@ -269,6 +275,8 @@ impl SceneBuilder {
     pub fn layout(&mut self, input: &Input) -> Result<Laid, RenderError> {
         let theme = Theme::new(input.dark, &input.data.entities);
         let mut b = Build {
+            today: self.today.unwrap_or_else(crate::dates::today),
+            follow_end: Vec::new(),
             tree: TaffyTree::new(),
             elems: Vec::new(),
             text: &mut self.text,
@@ -332,6 +340,7 @@ impl SceneBuilder {
             viewport: vp,
             scroll_max: BTreeMap::new(),
             pagers: BTreeMap::new(),
+            follow_end: b.follow_end,
         };
         laid.scroll_max = laid.scroll_extents();
         laid.pagers = laid
@@ -394,9 +403,7 @@ fn fills_width(n: &UiNode) -> bool {
         | UiNode::Container { .. }
         | UiNode::Workspace { .. }
         | UiNode::Page { .. }
-        | UiNode::Dock { .. }
-        | UiNode::Drawer { .. }
-        | UiNode::AppFrame { .. } => true,
+        | UiNode::Dock { .. } => true,
         UiNode::Image { size_dp, .. } => size_dp.is_none(),
         UiNode::Box {
             fill,
@@ -417,8 +424,6 @@ fn fills_height(n: &UiNode) -> bool {
     match n {
         UiNode::Scroll { .. }
         | UiNode::Dock { .. }
-        | UiNode::Drawer { .. }
-        | UiNode::AppFrame { .. }
         | UiNode::Workspace { .. }
         | UiNode::Page { .. } => true,
         UiNode::Box { fill, .. } => *fill,
@@ -726,7 +731,10 @@ impl<'i> Build<'_, 'i> {
                     false,
                 )
             }
-            UiNode::Scroll { content, .. } => {
+            UiNode::Scroll {
+                content,
+                follow_end,
+            } => {
                 let kid = self.node(content, &b.child(0, Axis::Column));
                 let mut style = column(0, pad(0, 0), AlignItems::FLEX_START);
                 style.overflow = taffy::Point {
@@ -742,6 +750,9 @@ impl<'i> Build<'_, 'i> {
                     true,
                 );
                 self.elems[i].scrolls = true;
+                if *follow_end && let Some(s) = &self.elems[i].sem {
+                    self.follow_end.push(s.id.clone());
+                }
                 i
             }
             UiNode::Column {
@@ -813,9 +824,12 @@ impl<'i> Build<'_, 'i> {
                 value_expr,
                 style,
                 count,
-                ..
+                format,
             } => {
-                let mut text = ctx.text(value_expr);
+                let mut text = match format {
+                    Some(f) => self.dated(value_expr, f, &ctx),
+                    None => ctx.text(value_expr),
+                };
                 if let Some(c) = count {
                     let n = self.count(c, &ctx);
                     text = match (n, &c.zero_text) {
@@ -1920,40 +1934,13 @@ impl<'i> Build<'_, 'i> {
                     false,
                 )
             }
-            UiNode::Drawer {
-                field,
-                before,
-                after,
-                ..
-            } => {
-                let pages: Vec<&protocol::DrawerPage> = before.iter().chain(after).collect();
-                let selected = ctx.form.get(field).cloned();
-                let page = pages
-                    .iter()
-                    .find(|p| Some(&p.value) == selected.as_ref())
-                    .or(pages.first());
-                let menu = self.icon("settings", self.fg(b), 24.0);
-                let mut ms = column(0, pad(8, 8), AlignItems::FLEX_START);
-                ms.flex_shrink = 0.0;
-                let mut sem = self.sem(b, n, Some("Menu".into()), None);
-                sem.id = format!("drawer:{field}");
-                let mut kids = vec![self.push(ms, vec![menu], Paint::None, Some(sem), false)];
-                if let Some(p) = page {
-                    let k = self.node(&p.content, &b.child("page", Axis::Column));
-                    kids.extend(k);
-                }
-                self.push(
-                    column(0, pad(0, 0), AlignItems::STRETCH),
-                    kids,
-                    Paint::None,
-                    None,
-                    false,
-                )
-            }
-            UiNode::AppFrame { app } => self.placeholder(&format!("App {}", ctx.text(app))),
+            // Removed vocabulary and nodes this build doesn't know: named,
+            // as the shared UI names them.
+            UiNode::Drawer { .. } => self.unsupported("core://Drawer", b, n),
+            UiNode::AppFrame { .. } => self.unsupported("core://AppFrame", b, n),
             UiNode::Unknown(raw) => {
-                let t = raw.get("type").and_then(Value::as_str).unwrap_or("unknown");
-                self.placeholder(t)
+                let t = raw.get("type").and_then(Value::as_str).unwrap_or("");
+                self.unsupported(t, b, n)
             }
         };
         Some(out)
@@ -1976,6 +1963,32 @@ impl<'i> Build<'_, 'i> {
                 shape: icon_shape(name),
                 color,
             },
+            None,
+            false,
+        )
+    }
+
+    /// A node this build doesn't draw, as the shared UI shows it:
+    /// "Unsupported component: <type>" in small grey text.
+    fn unsupported(&mut self, node_type: &str, b: &B, n: &UiNode) -> usize {
+        let name = if node_type.is_empty() {
+            "<missing type>"
+        } else {
+            node_type
+        };
+        let label = format!("Unsupported component: {name}");
+        let sem = self.sem(b, n, Some(label.clone()), None);
+        let t = self.text_leaf(
+            Style::default(),
+            label,
+            crate::style::LABEL_SMALL,
+            Rgba::hex("#888888").unwrap_or(self.theme.muted_text),
+            Some(sem),
+        );
+        self.push(
+            column(0, pad(4, 4), AlignItems::FLEX_START),
+            vec![t],
+            Paint::None,
             None,
             false,
         )
@@ -2004,6 +2017,27 @@ impl<'i> Build<'_, 'i> {
             None,
             false,
         )
+    }
+
+    /// A `core://Text` with `format`: every bound `YYYY-MM-DD` value drawn
+    /// as a date; `past` instead when one is before today.
+    fn dated(&self, expr: &str, f: &protocol::TextFormat, ctx: &Ctx) -> String {
+        let today = self.today;
+        let mut past = false;
+        let text = ctx.text_with(
+            expr,
+            &mut |v| match v.as_str().and_then(crate::dates::iso_date) {
+                Some(day) => {
+                    past |= day < today;
+                    crate::dates::format_date(day, today, f.date)
+                }
+                None => crate::bind::render(v),
+            },
+        );
+        match &f.past {
+            Some(p) if past => ctx.text(p),
+            _ => text,
+        }
     }
 
     fn count(&self, c: &protocol::TextCount, ctx: &Ctx) -> Option<usize> {
@@ -2075,6 +2109,9 @@ pub struct Laid {
     pub scroll_max: BTreeMap<String, f32>,
     /// Each carousel (by semantic id): its page width and page count.
     pub pagers: BTreeMap<String, (f32, usize)>,
+    /// The scrolling views that follow their content to the end after an
+    /// action from outside them (`core://Scroll` `follow_end`).
+    pub follow_end: Vec<String>,
 }
 
 // SAFETY: taffy's `CompactLength` holds a raw pointer only for CSS `calc()`
@@ -2143,6 +2180,11 @@ impl Laid {
     /// The theme the frame was laid out with.
     pub fn theme(&self) -> &Theme {
         &self.theme
+    }
+
+    /// How tall the root's content is (a bar laid out on its own).
+    pub fn used_height(&self) -> f32 {
+        self.content_height(&self.elems[self.root])
     }
 
     fn content_height(&self, e: &Elem) -> f32 {

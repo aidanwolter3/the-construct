@@ -3,7 +3,8 @@
 //! drawn on the CPU at 390 × 844 @3, as the simulator's phone, to compare
 //! with `:desktopApp:simulate -PbaseUrl`. Script steps, `;`-separated:
 //! `open <layout>`, `present <layout> <Sheet|Panel|Overlay> [edge]`, `tap <text or id>`, `type <field> <text>`, `scroll <dy>`,
-//! `back`, `wait <ms>` (images keep loading meanwhile), `shot <name>`, `press <id or text>` (a long press), `images` (the frame's images).
+//! `back`, `wait <ms>` (images keep loading meanwhile), `shot <name>`, `press <id or text>` (a long press), `images` (the frame's images),
+//! `device <command> [app] [id]` (an `action.device` command), `dark` and `light`.
 
 use construct_render::Viewport;
 use construct_render::interact::Target;
@@ -53,6 +54,16 @@ fn main() {
             "back" => s
                 .dispatch(&json!({ "intent": "action.navigation.back" }))
                 .map(|o| o.effects),
+            "device" => {
+                let mut it = arg.split(' ');
+                let (command, app, id) = (it.next().unwrap_or(""), it.next(), it.next());
+                s.dispatch(&json!({ "intent": "action.device", "command": command, "app": app, "id": id }))
+                    .map(|o| o.effects)
+            }
+            "dark" | "light" => {
+                s.set_dark(cmd == "dark");
+                Ok(Vec::new())
+            }
             "wait" => {
                 // Draw now and then, as a window does when data or images
                 // arrive, so the frame's images are asked for.

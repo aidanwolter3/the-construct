@@ -30,6 +30,8 @@ taffy = { version = "0.15", default-features = false, features = ["std", "flexbo
 cosmic-text = "0.19"
 # Icon paths (SVG path data) to coverage masks; already under cosmic-text.
 zeno = "0.3"
+# The device's time zone, for `format` dates ("tomorrow").
+jiff = "0.2"
 image = { version = "0.25", default-features = false, features = ["png", "webp"] }
 wgpu = { version = "30", optional = true }
 glyphon = { version = "0.12", optional = true }

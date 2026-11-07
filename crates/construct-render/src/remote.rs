@@ -3,8 +3,10 @@
 //! device's list of layouts (`local:layouts`) from `GET /v1/apps`, screen
 //! data from data paths, and images downloaded on background threads.
 //!
-//! Read-only: what a tap would change on the pod is reported, not sent
-//! (`crate::interact`). There is no cache, outbox or event stream.
+//! Writes, device commands (notification switches, hiding and deleting
+//! layouts, older notifications) and pinned versions go to the pod as the
+//! shared UI sends them (`crate::interact`). There is no cache, outbox or
+//! event stream.
 
 use protocol::{DataBundle, EntityRecord, UiNode, WorkspaceSpec};
 use serde_json::{Value, json};
@@ -23,10 +25,23 @@ pub struct PodClient {
     http: reqwest::blocking::Client,
     /// Layout titles by id (from `/v1/apps`), for device data rows.
     titles: Arc<Mutex<std::collections::HashMap<String, String>>>,
-    /// Versions picked on this device (`pin_version`), by layout. Drawn in
-    /// the version list; the layout itself still shows its latest version.
-    pins: Arc<Mutex<std::collections::HashMap<String, i64>>>,
+    /// Versions picked on this device (`pin_version`), by layout: the
+    /// layout is drawn at that version until `follow_latest`.
+    pins: Arc<Mutex<Pins>>,
+    /// Called with the pins after each change, to keep them.
+    on_pins: Option<KeepPins>,
+    /// The servers the platform offers (`local:servers`): id, title, URL.
+    servers: Vec<(String, String, String)>,
+    /// This device's id on the pod (`/v1/devices/<id>`), for its
+    /// notification channels.
+    device_id: String,
 }
+
+/// Pinned versions by layout.
+pub type Pins = std::collections::BTreeMap<String, i64>;
+
+/// What keeps the pins when they change.
+type KeepPins = Arc<dyn Fn(&Pins) + Send + Sync>;
 
 fn client() -> reqwest::blocking::Client {
     reqwest::blocking::Client::builder()
@@ -63,7 +78,45 @@ impl PodClient {
             http,
             titles: Arc::default(),
             pins: Arc::default(),
+            on_pins: None,
+            servers: Vec::new(),
+            device_id: String::new(),
         })
+    }
+
+    /// The versions pinned on this device, and what keeps them when they
+    /// change.
+    pub fn with_pins(mut self, pins: Pins, keep: impl Fn(&Pins) + Send + Sync + 'static) -> Self {
+        self.pins = Arc::new(Mutex::new(pins));
+        self.on_pins = Some(Arc::new(keep));
+        self
+    }
+
+    /// The servers the platform offers, for `local:servers` (id, title,
+    /// URL).
+    pub fn with_servers(mut self, servers: Vec<(String, String, String)>) -> Self {
+        self.servers = servers;
+        self
+    }
+
+    /// This device's id (`[A-Za-z0-9_-]{8,64}`), registered on the pod
+    /// when a notification channel is first switched.
+    pub fn with_device_id(mut self, id: &str) -> Self {
+        self.device_id = id.to_owned();
+        self
+    }
+
+    fn set_pin(&self, app: &str, version: Option<i64>) {
+        let Ok(mut p) = self.pins.lock() else {
+            return;
+        };
+        match version {
+            Some(n) => p.insert(app.to_owned(), n),
+            None => p.remove(app),
+        };
+        if let Some(keep) = &self.on_pins {
+            keep(&p);
+        }
     }
 
     /// The pod's base URL.
@@ -102,12 +155,25 @@ impl PodClient {
 
     /// POSTs `body` to a pod path; the answer's JSON (`null` when empty).
     pub fn post(&self, path: &str, body: &Value) -> Result<Value, String> {
+        self.call(reqwest::Method::POST, path, Some(body))
+    }
+
+    /// A request to a pod path with a JSON body; the answer's JSON (`null`
+    /// when empty).
+    pub fn call(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<Value, String> {
         let url = format!("{}/{}", self.base, path.trim_start_matches('/'));
         let mut req = self
             .http
-            .post(&url)
-            .header(protocol::FEATURES_HEADER, protocol::features_header())
-            .json(body);
+            .request(method, &url)
+            .header(protocol::FEATURES_HEADER, protocol::features_header());
+        if let Some(b) = body {
+            req = req.json(b);
+        }
         if !self.token.is_empty() {
             req = req.bearer_auth(&self.token);
         }
@@ -222,42 +288,39 @@ impl PodClient {
             json!({ "platform": if cfg!(target_os = "android") { "android" } else { "desktop" },
                     "notification_permission": "" }),
         );
-        set(
-            "local://servers/current",
-            json!({ "id": "current", "title": self.base, "url": self.base, "selected": true }),
-        );
-        out.queries.insert(
-            "local:servers".into(),
-            vec!["local://servers/current".into()],
-        );
-        let now = now_secs();
+        let mut servers = Vec::new();
+        for (id, title, url) in &self.servers {
+            let uri = format!("local://servers/{id}");
+            set(
+                &uri,
+                json!({ "id": id, "title": title, "url": url,
+                        "selected": url.trim_end_matches('/') == self.base }),
+            );
+            servers.push(uri);
+        }
+        if servers.is_empty() {
+            set(
+                "local://servers/current",
+                json!({ "id": "current", "title": self.base, "url": self.base, "selected": true }),
+            );
+            servers.push("local://servers/current".into());
+        }
+        out.queries.insert("local:servers".into(), servers);
         let mut unread_total = 0;
+        let mut next_before = None;
         if (needs.contains("local:notifications") || needs.contains("local://inbox"))
-            && let Ok(v) = self.get("/v1/notifications?limit=50")
+            && let Ok(page) = self.notifications(None)
         {
-            unread_total = v["unread_total"].as_i64().unwrap_or(0);
-            let mut list = Vec::new();
-            for n in v["notifications"].as_array().into_iter().flatten() {
-                let id = n["id"].as_str().unwrap_or_default();
-                let at = n["created_at"].as_i64().unwrap_or(now);
-                let uri = format!("local://notifications/{id}");
-                let app = n["app_id"].as_str().unwrap_or_default();
-                let mut e = n.clone();
-                e["app_title"] = json!(self.app_title(app));
-                e["when"] = json!(time_label(at, now));
-                e["day"] = json!(day_label(at, now));
-                e["unread"] = json!(!n["read"].as_bool().unwrap_or(true));
-                if let Ok(rec) = serde_json::from_value(e) {
-                    out.entities.insert(uri.clone(), rec);
-                }
-                list.push(uri);
-            }
-            out.queries.insert("local:notifications".into(), list);
+            unread_total = page.1;
+            next_before = page.2;
+            out.entities.extend(page.0.entities);
+            out.queries.extend(page.0.queries);
         }
         if let Ok(e) = serde_json::from_value(json!({
             "unread": unread_total,
             "label": if unread_total == 0 { "All read".to_owned() } else { format!("{unread_total} unread") },
-            "has_older": false, "loading": false }))
+            "has_older": next_before.is_some(), "next_before": next_before.unwrap_or_default(),
+            "loading": false }))
         {
             out.entities.insert("local://inbox".into(), e);
         }
@@ -331,6 +394,89 @@ impl PodClient {
             out.queries.insert("local:providers".into(), providers);
         }
         out
+    }
+
+    /// A page of notifications, newest first (before `before`, a cursor
+    /// the previous page gave): `local:notifications` and an entity for
+    /// each, the unread total and where the next page starts.
+    pub fn notifications(
+        &self,
+        before: Option<&str>,
+    ) -> Result<(DataBundle, i64, Option<String>), String> {
+        let mut path = "/v1/notifications?limit=50".to_owned();
+        if let Some(b) = before {
+            path.push_str(&format!("&before={}", url_segment(b)));
+        }
+        let v = self.get(&path)?;
+        let now = now_secs();
+        let mut out = DataBundle::default();
+        let mut list = Vec::new();
+        for n in v["notifications"].as_array().into_iter().flatten() {
+            let id = n["id"].as_str().unwrap_or_default();
+            let at = n["created_at"].as_i64().unwrap_or(now);
+            let uri = format!("local://notifications/{id}");
+            let app = n["app_id"].as_str().unwrap_or_default();
+            let mut e = n.clone();
+            e["app_title"] = json!(self.app_title(app));
+            e["when"] = json!(time_label(at, now));
+            e["day"] = json!(day_label(at, now));
+            e["unread"] = json!(!n["read"].as_bool().unwrap_or(true));
+            if let Ok(rec) = serde_json::from_value(e) {
+                out.entities.insert(uri.clone(), rec);
+            }
+            list.push(uri);
+        }
+        out.queries.insert("local:notifications".into(), list);
+        let next = match &v["next_before"] {
+            Value::String(s) if !s.is_empty() => Some(s.clone()),
+            Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        };
+        Ok((out, v["unread_total"].as_i64().unwrap_or(0), next))
+    }
+
+    /// Switches one notification channel on or off for this device,
+    /// registering the device first when the pod doesn't know it.
+    fn set_channel(&self, app: &str, id: &str, enabled: bool) -> Result<(), String> {
+        if self.device_id.is_empty() {
+            return Err("this device has no id to keep notification choices under".into());
+        }
+        let path = format!("/v1/devices/{}/channels", self.device_id);
+        let body = json!({ protocol::channel_key(app, id): enabled });
+        match self.call(reqwest::Method::PUT, &path, Some(&body)) {
+            Err(e) if e.contains("device_not_found") || e.contains("404") => {
+                let platform = if cfg!(target_os = "android") {
+                    "android"
+                } else {
+                    "desktop"
+                };
+                self.call(
+                    reqwest::Method::PUT,
+                    &format!("/v1/devices/{}", self.device_id),
+                    Some(&json!({ "platform": platform, "name": "The Construct (Rust)" })),
+                )?;
+                self.call(reqwest::Method::PUT, &path, Some(&body))
+                    .map(|_| ())
+            }
+            r => r.map(|_| ()),
+        }
+    }
+
+    /// A layout as this device draws it: its pinned version's layout in
+    /// place of the latest, when one is pinned.
+    fn pinned(&self, id: &str, latest: UiNode) -> UiNode {
+        let Some(n) = self.pins.lock().ok().and_then(|p| p.get(id).copied()) else {
+            return latest;
+        };
+        let v = self.get(&format!("/v1/apps/{}/versions/{n}", url_segment(id)));
+        match v.and_then(|v| serde_json::from_value(v["layout"].clone()).map_err(|e| e.to_string()))
+        {
+            Ok(root) => root,
+            Err(e) => {
+                eprintln!("construct-render: v{n} of {id}: {e}; drawing the latest");
+                latest
+            }
+        }
     }
 
     /// `local://versions` and `local:versions` for a layout, as the shared UI
@@ -419,11 +565,12 @@ impl PodClient {
             // Home still draws, with an empty list.
             Err(e) => eprintln!("construct-render: layouts: {e}"),
         }
-        let root_json = serde_json::to_string(&spec.workspace).unwrap_or_default();
+        let root = self.pinned(layout, spec.workspace);
+        let root_json = serde_json::to_string(&root).unwrap_or_default();
         let device = self.device(&root_json);
         data.entities.extend(device.entities);
         data.queries.extend(device.queries);
-        let mut s = Session::new(layout, spec.workspace, data, viewport);
+        let mut s = Session::new(layout, root, data, viewport);
         s.loader = Some(Box::new(self.clone()));
         fetch_images(&s.images);
         Ok(s)
@@ -435,20 +582,56 @@ impl Loader for PodClient {
         match command {
             "show_versions" => Some(self.versions(app)),
             "pin_version" => {
-                let n = id.parse::<i64>().ok()?;
-                if let Ok(mut p) = self.pins.lock() {
-                    p.insert(app.to_owned(), n);
-                }
+                let n = id.trim().parse::<i64>().ok()?;
+                self.set_pin(app, Some(n));
                 Some(self.versions(app))
             }
             "follow_latest" => {
-                if let Ok(mut p) = self.pins.lock() {
-                    p.remove(app);
-                }
+                self.set_pin(app, None);
                 Some(self.versions(app))
             }
             _ => None,
         }
+    }
+
+    fn device_command(&self, command: &str, args: &Value) -> Option<Result<DataBundle, String>> {
+        let text = |k: &str| args[k].as_str().unwrap_or("").trim().to_owned();
+        let app = text("app");
+        Some(match command {
+            "toggle_channel" => self
+                .set_channel(&app, &text("id"), args["enabled"].as_bool().unwrap_or(true))
+                .map(|()| DataBundle::default()),
+            "load_older_notifications" => {
+                self.notifications(Some(&text("before")))
+                    .map(|(mut page, _, next)| {
+                        if let Ok(e) = serde_json::from_value(json!({
+                            "has_older": next.is_some(), "next_before": next.unwrap_or_default() }))
+                        {
+                            page.entities.insert("local://inbox".into(), e);
+                        }
+                        page
+                    })
+            }
+            "hide_layout" | "unhide_layout" => self
+                .call(
+                    reqwest::Method::PUT,
+                    &format!("/v1/apps/{}/hidden", url_segment(&app)),
+                    Some(&json!({ "hidden": command == "hide_layout" })),
+                )
+                .and_then(|_| self.layouts()),
+            "delete_layout" => {
+                let deleted = self.call(
+                    reqwest::Method::DELETE,
+                    &format!("/v1/custom-apps/{}", url_segment(&app)),
+                    None,
+                );
+                deleted.and_then(|_| {
+                    self.set_pin(&app, None);
+                    self.layouts()
+                })
+            }
+            _ => return None,
+        })
     }
 
     fn layout(&self, id: &str) -> Result<(UiNode, DataBundle), String> {
@@ -457,11 +640,12 @@ impl Loader for PodClient {
             entities: spec.entities,
             queries: spec.queries,
         };
+        let root = self.pinned(id, spec.workspace);
         // Fresh device data for what this layout binds (the inbox, Settings).
-        let device = self.device(&serde_json::to_string(&spec.workspace).unwrap_or_default());
+        let device = self.device(&serde_json::to_string(&root).unwrap_or_default());
         data.entities.extend(device.entities);
         data.queries.extend(device.queries);
-        Ok((spec.workspace, data))
+        Ok((root, data))
     }
 
     fn data(&self, path: &str) -> Result<DataBundle, String> {
@@ -513,6 +697,19 @@ impl Loader for PodClient {
         });
         true
     }
+}
+
+/// A path segment with what a URL can't carry as is escaped.
+fn url_segment(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 fn now_secs() -> i64 {

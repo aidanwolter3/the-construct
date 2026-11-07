@@ -73,11 +73,18 @@ fn log(m: &str) {
 }
 
 fn pod_home() -> PodHome {
+    let server = std::env::var("CONSTRUCT_POD_URL")
+        .map(|u| u.trim_end_matches('/').to_owned())
+        .unwrap_or_else(|_| construct_render::pods::DEFAULT_SERVER.to_owned());
     PodHome {
         file: state_dir().map(|d| d.join("pod.json")),
-        server: std::env::var("CONSTRUCT_POD_URL")
-            .map(|u| u.trim_end_matches('/').to_owned())
-            .unwrap_or_else(|_| construct_render::pods::DEFAULT_SERVER.to_owned()),
+        // As the desktop app's picker: staging, a local server, and
+        // `CONSTRUCT_POD_URL` when it is another.
+        servers: construct_render::pods::server_options(
+            &[("local", "Local", "http://127.0.0.1:8080")],
+            &server,
+        ),
+        server,
         log,
     }
 }

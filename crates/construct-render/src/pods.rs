@@ -4,6 +4,7 @@
 //! signing in, leaving the pod and loading it again. The Android app and the
 //! desktop viewer both start here, so they behave the same.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::interact::Session;
@@ -14,22 +15,83 @@ use crate::window::Reopen;
 pub const DEFAULT_SERVER: &str = "https://the-construct-pod.fly.dev";
 
 /// What the file keeps: the server, the session token (none after leaving
-/// the pod) and the last pod code used.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+/// the pod), the last pod code used, the versions pinned on this device,
+/// this device's id, and what it keeps for the other servers it has used.
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PodState {
     pub url: String,
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
     pub last_code: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pins: crate::remote::Pins,
+    #[serde(default)]
+    pub device_id: Option<String>,
+    /// The other servers' sessions, codes and pins, by URL (`set_server`
+    /// goes back to them).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub servers: BTreeMap<String, ServerState>,
 }
 
+/// What a server not in use keeps.
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ServerState {
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub last_code: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pins: crate::remote::Pins,
+}
+
+/// A server the device offers (`local:servers`): id, title, URL.
+pub type ServerOption = (String, String, String);
+
 /// A device's pod: where its state is kept, the server to sign in to when
-/// it has none, and where to log.
+/// it has none, the servers it offers, and where to log.
+#[derive(Clone)]
 pub struct PodHome {
     pub file: Option<PathBuf>,
     pub server: String,
+    pub servers: Vec<ServerOption>,
     pub log: fn(&str),
+}
+
+/// The servers a device offers, as the main app's picker: staging and
+/// `local` (on Android, the emulator's host and USB), and `server` when
+/// it is none of those.
+pub fn server_options(local: &[(&str, &str, &str)], server: &str) -> Vec<ServerOption> {
+    let mut out: Vec<ServerOption> =
+        vec![("staging".into(), "Staging".into(), DEFAULT_SERVER.into())];
+    out.extend(
+        local
+            .iter()
+            .map(|(id, title, url)| ((*id).into(), (*title).into(), (*url).into())),
+    );
+    let server = server.trim_end_matches('/');
+    if !server.is_empty() && !out.iter().any(|(_, _, u)| u == server) {
+        out.push(("custom".into(), "Custom".into(), server.into()));
+    }
+    out
+}
+
+/// A new device id: 32 hex digits from the standard library's random
+/// hasher keys.
+fn new_device_id() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    (0..2)
+        .map(|i| {
+            let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+            h.write_u64(i);
+            h.write_u128(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos()),
+            );
+            format!("{:016x}", h.finish())
+        })
+        .collect()
 }
 
 impl PodHome {
@@ -74,6 +136,7 @@ impl PodHome {
                     url: url.clone(),
                     token: Some(token.clone()),
                     last_code: Some(token.clone()),
+                    ..Default::default()
                 });
                 self.live(&url, &token)
             }
@@ -97,8 +160,30 @@ impl PodHome {
             }
             Reopen::Left => {
                 state.token = None;
+                state.pins.clear();
                 self.write(&state);
                 self.sign_in(&state.url, state.last_code.as_deref())
+            }
+            Reopen::Server(url) => {
+                let url = url.trim_end_matches('/').to_owned();
+                // Keep this server's session for coming back to it.
+                let here = ServerState {
+                    token: state.token.take(),
+                    last_code: state.last_code.take(),
+                    pins: std::mem::take(&mut state.pins),
+                };
+                let old = std::mem::replace(&mut state.url, url.clone());
+                state.servers.insert(old, here);
+                let there = state.servers.remove(&url).unwrap_or_default();
+                state.token = there.token;
+                state.last_code = there.last_code;
+                state.pins = there.pins;
+                self.write(&state);
+                (self.log)(&format!("switched to {url}"));
+                match state.token.clone().filter(|t| !t.is_empty()) {
+                    Some(token) => self.live(&url, &token),
+                    None => self.sign_in(&url, state.last_code.as_deref()),
+                }
             }
             Reopen::Reload => match state.token.clone().filter(|t| !t.is_empty()) {
                 Some(token) => self.live(&state.url, &token),
@@ -113,6 +198,7 @@ impl PodHome {
         (self.log)(&format!("opening {url}"));
         let started = std::time::Instant::now();
         match crate::remote::PodClient::connect(url, token)
+            .map(|c| self.equip(c))
             .and_then(|c| c.session("home", Viewport::PHONE))
         {
             Ok(s) => {
@@ -137,11 +223,36 @@ impl PodHome {
         }
     }
 
+    /// A client with what this device keeps: its pins (saved again when
+    /// they change), its servers and its device id.
+    fn equip(&self, client: crate::remote::PodClient) -> crate::remote::PodClient {
+        let mut state = self.read().unwrap_or_default();
+        let id = match state.device_id.clone() {
+            Some(id) => id,
+            None => {
+                let id = new_device_id();
+                state.device_id = Some(id.clone());
+                self.write(&state);
+                id
+            }
+        };
+        let home = self.clone();
+        client
+            .with_servers(self.servers.clone())
+            .with_device_id(&id)
+            .with_pins(state.pins, move |pins| {
+                let mut s = home.read().unwrap_or_default();
+                s.pins = pins.clone();
+                home.write(&s);
+            })
+    }
+
     /// The pod's own sign-in screen (what it answers without a session: a
     /// pod code box, and a temporary pod), with the last code filled in.
     pub fn sign_in(&self, url: &str, last_code: Option<&str>) -> Session {
         (self.log)(&format!("signing in to {url}"));
         match crate::remote::PodClient::connect(url, "")
+            .map(|c| self.equip(c))
             .and_then(|c| c.session("home", Viewport::PHONE))
         {
             Ok(mut s) => {
@@ -178,4 +289,50 @@ pub fn error_page(message: &str) -> Session {
         protocol::DataBundle::default(),
         Viewport::PHONE,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn switching_servers_keeps_each_ones_session() {
+        let dir = std::env::temp_dir().join(format!("construct-pods-{}", std::process::id()));
+        let home = PodHome {
+            file: Some(dir.join("pod.json")),
+            // Nothing listens on port 1: each open fails at once.
+            server: "http://127.0.0.1:1".into(),
+            servers: server_options(
+                &[("local", "Local", "http://127.0.0.1:2")],
+                "http://127.0.0.1:1",
+            ),
+            log: |_| {},
+        };
+        assert_eq!(
+            home.servers
+                .iter()
+                .map(|s| s.0.as_str())
+                .collect::<Vec<_>>(),
+            ["staging", "local", "custom"]
+        );
+        home.write(&PodState {
+            url: "http://127.0.0.1:1".into(),
+            token: Some("session-one".into()),
+            last_code: Some("code-one".into()),
+            pins: BTreeMap::from([("notes".to_owned(), 2)]),
+            ..Default::default()
+        });
+        home.reopen(Reopen::Server("http://127.0.0.1:2/".into()));
+        let s = home.read().unwrap();
+        assert_eq!(s.url, "http://127.0.0.1:2");
+        assert_eq!((s.token, s.last_code), (None, None));
+        assert!(s.pins.is_empty());
+        home.reopen(Reopen::Server("http://127.0.0.1:1".into()));
+        let s = home.read().unwrap();
+        assert_eq!(s.token.as_deref(), Some("session-one"));
+        assert_eq!(s.last_code.as_deref(), Some("code-one"));
+        assert_eq!(s.pins.get("notes"), Some(&2));
+        assert!(s.servers.contains_key("http://127.0.0.1:2"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
