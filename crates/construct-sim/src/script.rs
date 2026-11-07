@@ -152,10 +152,7 @@ pub fn parse(script: &str) -> Result<Vec<Line>, String> {
         if entry.is_empty() || entry.starts_with('#') {
             continue;
         }
-        let raw_command = entry
-            .split([' ', '\t'])
-            .next()
-            .unwrap_or(entry);
+        let raw_command = entry.split([' ', '\t']).next().unwrap_or(entry);
         let command = raw_command.to_lowercase();
         let arg = entry[raw_command.len()..].trim().to_owned();
         let at = || format!("command #{} '{entry}'", index + 1);
