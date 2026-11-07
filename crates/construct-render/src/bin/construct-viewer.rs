@@ -76,15 +76,23 @@ fn log(m: &str) {
 
 fn pod_home() -> PodHome {
     let dir = state_dir();
+    let server = std::env::var("CONSTRUCT_POD_URL")
+        .map(|u| u.trim_end_matches('/').to_owned())
+        .unwrap_or_else(|_| construct_render::pods::DEFAULT_SERVER.to_owned());
+    // As the desktop app's picker: staging, a local server, and
+    // `CONSTRUCT_POD_URL` when it is another.
+    let servers = construct_render::pods::server_options(
+        &[("local", "Local", "http://127.0.0.1:8080")],
+        &server,
+    );
     PodHome::new(
         dir.as_ref().map(|d| d.join("pod.json")),
         dir.as_ref().map(|d| d.join("engine")),
-        std::env::var("CONSTRUCT_POD_URL")
-            .map(|u| u.trim_end_matches('/').to_owned())
-            .unwrap_or_else(|_| construct_render::pods::DEFAULT_SERVER.to_owned()),
+        server,
         construct_render::engine::desktop_store(dir.as_deref()),
         log,
     )
+    .with_servers(servers)
 }
 
 /// The desktop: no on-screen keyboard or insets; signing in and leaving the

@@ -155,6 +155,10 @@ impl crate::window::Platform for Android {
         activity_gone(&self.0)
     }
 
+    fn dark(&self) -> Option<bool> {
+        night_mode(&self.0)
+    }
+
     fn pick_images(&self, max: u32) -> bool {
         with_activity(&self.0, |env, activity| {
             crate::bridge::pick_images(env, activity, max)
@@ -212,6 +216,55 @@ fn activity_gone(app: &AndroidApp) -> bool {
         }))
     })
     .unwrap_or(false)
+}
+
+/// Whether the system is in dark mode: the activity's
+/// `getResources().getConfiguration().uiMode` has `UI_MODE_NIGHT_YES`. The
+/// activity takes `uiMode` changes itself (the manifest), so this is read
+/// again after each batch of events.
+fn night_mode(app: &AndroidApp) -> Option<bool> {
+    use jni::objects::JObject;
+    use jni::{jni_sig, jni_str};
+    const UI_MODE_NIGHT_MASK: i32 = 0x30;
+    const UI_MODE_NIGHT_YES: i32 = 0x20;
+    // SAFETY: the VM pointer is valid for the life of the process.
+    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    let activity = app.activity_as_ptr() as jni::sys::jobject;
+    vm.attach_current_thread(|env| -> jni::errors::Result<Option<bool>> {
+        let run = |env: &mut jni::Env| -> jni::errors::Result<bool> {
+            // SAFETY: android-activity keeps its own reference to the activity.
+            let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
+            let res = env
+                .call_method(
+                    &*activity,
+                    jni_str!("getResources"),
+                    jni_sig!("()Landroid/content/res/Resources;"),
+                    &[],
+                )?
+                .l()?;
+            let config = env
+                .call_method(
+                    &res,
+                    jni_str!("getConfiguration"),
+                    jni_sig!("()Landroid/content/res/Configuration;"),
+                    &[],
+                )?
+                .l()?;
+            let mode = env
+                .get_field(&config, jni_str!("uiMode"), jni_sig!("I"))?
+                .i()?;
+            Ok(mode & UI_MODE_NIGHT_MASK == UI_MODE_NIGHT_YES)
+        };
+        Ok(match run(env) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                log(&format!("night mode: {}", java_error(env, e)));
+                None
+            }
+        })
+    })
+    .ok()
+    .flatten()
 }
 
 /// The clipboard's text (`ClipboardManager.getPrimaryClip()`'s first item,
@@ -926,13 +979,25 @@ fn keystore_decrypt(app: &AndroidApp, iv_b64: &str, ct_b64: &str) -> Result<Stri
 /// the main app's secure store.
 fn pod_home(app: &AndroidApp) -> crate::pods::PodHome {
     let files = app.internal_data_path();
+    let server = main_app_server(app);
+    // As the main app's picker (`ServerPrefs`): staging, the emulator's
+    // host, USB (adb reverse), and the main app's server when it is
+    // another.
+    let servers = crate::pods::server_options(
+        &[
+            ("emulator", "Local emulator", "http://10.0.2.2:8080"),
+            ("usb", "Local USB", "http://127.0.0.1:8080"),
+        ],
+        &server,
+    );
     crate::pods::PodHome::new(
         files.as_ref().map(|d| d.join("pod.json")),
         files.as_ref().map(|d| d.join("engine")),
-        main_app_server(app),
+        server,
         std::sync::Arc::new(KeystoreStore(app.clone(), Default::default())),
         log,
     )
+    .with_servers(servers)
 }
 
 #[unsafe(no_mangle)]
