@@ -527,12 +527,25 @@ fn reload_device(engine: Weak<ConstructEngine>, shared: Arc<Shared>) {
     });
 }
 
+/// Writes `file` whole: to a file beside it, then renamed over it, so a
+/// start reading it meanwhile (another engine of the same pod) never sees
+/// it half written.
+fn write_whole(file: &Path, text: &str) -> std::io::Result<()> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let tmp = file.with_extension(format!("tmp{}-{n}", std::process::id()));
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, file).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
 fn device_data(engine: &ConstructEngine, shared: &Shared) -> DataBundle {
     let mut out = DataBundle::default();
     match engine.list_apps() {
         Ok(body) => {
             if let Some(f) = &shared.apps_file
-                && let Err(e) = std::fs::write(f, &body)
+                && let Err(e) = write_whole(f, &body)
             {
                 eprintln!("construct-render: {}: {e}", f.display());
             }
