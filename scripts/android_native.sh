@@ -17,21 +17,28 @@
 #                                          # over a debug build of it signed with this machine's debug key: it opens
 #                                          # the pod the main app is signed in to, with its saved session. Its data
 #                                          # stays, so `./gradlew :androidApp:installDebug` (in app/) goes back.
+#   scripts/android_native.sh --as-app --pod https://the-construct-pod.fly.dev
+#                                          # the same, but with the pod code asked for (as --pod) rather than the
+#                                          # main app's saved session
 #
 # Needs: an Android SDK with an NDK and build-tools (ANDROID_HOME, else ~/android-sdk), cargo-ndk, and
 # `rustup target add aarch64-linux-android`. Output: build/android-native/construct-render.apk.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-MODE=test POD_URL=
-case "${1:-}" in
-  --build-only) MODE=build ;;
-  --pod) MODE=pod POD_URL=${2:?--pod needs the pod URL, e.g. https://the-construct-pod.fly.dev} ;;
-  --no-pod) MODE=demo ;;
-  --as-app) MODE=app ;;
-  "") ;;
-  *) echo "usage: $0 [--build-only | --pod <url> | --no-pod | --as-app]" >&2; exit 2 ;;
-esac
+MODE=test POD_URL= AS_APP=
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --build-only) MODE=build ;;
+    --pod) MODE=pod POD_URL=${2:?--pod needs the pod URL, e.g. https://the-construct-pod.fly.dev}; shift ;;
+    --no-pod) MODE=demo ;;
+    --as-app) AS_APP=1 ;;
+    *) echo "usage: $0 [--build-only | --pod <url> | --no-pod] [--as-app]" >&2; exit 2 ;;
+  esac
+  shift
+done
+# --as-app alone: the main app's saved session; with --pod, the pod code asked for.
+[[ -n $AS_APP && $MODE == test ]] && MODE=app
 POD_URL=${POD_URL%/}
 
 SDK=${ANDROID_HOME:-$HOME/android-sdk}
@@ -56,7 +63,7 @@ OUT=build/android-native
 PKG=org.theconstruct.render
 MANIFEST=crates/construct-render/android/AndroidManifest.xml
 mkdir -p "$OUT"
-if [[ $MODE == app ]]; then
+if [[ -n $AS_APP ]]; then
   # The main app's package and name: an update of it, keeping its data (and so its sign-in).
   PKG=org.theconstruct.android
   sed -e "s/package=\"org.theconstruct.render\"/package=\"$PKG\"/" \
@@ -105,7 +112,7 @@ fi
 echo "device: $("$ADB" get-serialno) via $ADB"
 
 echo "==> installing"
-if [[ $MODE == app ]]; then
+if [[ -n $AS_APP ]]; then
   # -d: the main app's versionCode may be higher; a debuggable app may go down.
   if ! INSTALLED=$("$ADB" install -r -d "$OUT/construct-render.apk" 2>&1); then
     echo "$INSTALLED" >&2
@@ -117,7 +124,11 @@ if [[ $MODE == app ]]; then
     exit 1
   fi
   echo "$INSTALLED"
+fi
+if [[ $MODE == app ]]; then
   "$ADB" shell am force-stop "$PKG"
+  # The main app's saved session, not one --pod wrote.
+  "$ADB" shell "run-as $PKG rm -f files/pod.json"
   "$ADB" logcat -c
   "$ADB" shell am start -W -n "$PKG/android.app.NativeActivity" >/dev/null
   for _ in $(seq 1 60); do
@@ -127,7 +138,7 @@ if [[ $MODE == app ]]; then
   "$ADB" logcat -d -s construct-render
   exit 0
 fi
-"$ADB" install -r "$OUT/construct-render.apk"
+[[ -n $AS_APP ]] || "$ADB" install -r "$OUT/construct-render.apk"
 
 if [[ $MODE == pod || $MODE == demo ]]; then
   "$ADB" shell am force-stop "$PKG"

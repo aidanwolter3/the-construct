@@ -100,7 +100,9 @@ engine reads the server the main app uses (`shared_prefs/server.xml`, else stagi
 (`shared_prefs/construct_secure.xml`, decrypted with the main app's Android keystore key through the SDK), so you
 stay signed in. `cd app && ./gradlew :androidApp:installDebug` goes back to the Compose app with the same data. An
 install over a build signed with another key fails, and the script says so rather than uninstall (which would sign
-you out). Its theme draws light system bars with dark icons.
+you out). When the saved session can't be used (none for that server, or it doesn't decrypt), the app says why on
+screen and in logcat; `--as-app --pod <url>` asks for the pod code instead, as `--pod` does. Its theme draws light
+system bars with dark icons.
 
 `scripts/android_native.sh --pod <url>` instead installs it and opens that pod **live** (below): it asks for the pod
 code (or reads `CONSTRUCT_POD_CODE`), checks it with `POST /v1/pods/open`, and writes the session token the pod

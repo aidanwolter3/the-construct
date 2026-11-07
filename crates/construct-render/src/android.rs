@@ -277,7 +277,7 @@ fn error_page(message: &str) -> Session {
         "padding_h_dp": 16, "padding_v_dp": 16, "spacing_dp": 8, "children": [
             { "type": "core://Text", "value_expr": "Couldn't open the pod", "style": "Title" },
             { "type": "core://Text", "value_expr": message, "style": "Body" },
-            { "type": "core://Text", "value_expr": "Run scripts/android_native.sh --pod again, then reopen the app.", "style": "Secondary" }
+            { "type": "core://Text", "value_expr": "scripts/android_native.sh --as-app --pod <url> asks for the pod code instead; logcat (tag construct-render) has the details.", "style": "Secondary" }
         ] } }))
     .expect("a valid page");
     Session::new(
@@ -312,31 +312,86 @@ fn pref(xml: &str, key: &str) -> Option<String> {
     )
 }
 
+/// A pending Java exception, cleared and described (Java keeps it pending
+/// after a failed call, and the next JNI call would abort the app).
+fn java_error(env: &mut jni::Env, e: jni::errors::Error) -> String {
+    use jni::objects::JString;
+    use jni::{jni_sig, jni_str};
+    if !env.exception_check() {
+        return e.to_string();
+    }
+    let Some(t) = env.exception_occurred() else {
+        return e.to_string();
+    };
+    env.exception_clear();
+    let text = env
+        .call_method(
+            &t,
+            jni_str!("toString"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )
+        .and_then(|v| v.l())
+        .and_then(|o| env.cast_local::<JString>(o))
+        .and_then(|s| s.try_to_string(env));
+    env.exception_clear();
+    text.unwrap_or_else(|_| e.to_string())
+}
+
 /// The session the main app (installed as the same package, see
 /// `scripts/android_native.sh --as-app`) saved: its server (`server.xml`,
 /// else staging) and its pod session, AES-GCM encrypted with the key
 /// `construct_session_key` in the Android keystore (`KeystoreSecureStore`).
-fn main_app_session(app: &AndroidApp) -> Option<(String, String)> {
-    let prefs = app.internal_data_path()?.parent()?.join("shared_prefs");
+/// `Ok(None)`: this isn't the main app's package; `Err`: why its session
+/// can't be used.
+fn main_app_session(app: &AndroidApp) -> Result<Option<(String, String)>, String> {
+    let files = app.internal_data_path().ok_or("no data directory")?;
+    if !files.to_string_lossy().contains("org.theconstruct.android") {
+        return Ok(None);
+    }
+    let prefs = files
+        .parent()
+        .ok_or("no data directory")?
+        .join("shared_prefs");
     let server = std::fs::read_to_string(prefs.join("server.xml"))
         .ok()
         .and_then(|x| pref(&x, "baseUrl"))
         .unwrap_or_else(|| DEFAULT_SERVER.to_owned());
     let server = server.trim_end_matches('/').to_owned();
-    let secure = std::fs::read_to_string(prefs.join("construct_secure.xml")).ok()?;
-    let stored = pref(&secure, &format!("pod_session:{server}"))?;
-    let (iv, ct) = stored.split_once(':')?;
-    let raw = match keystore_decrypt(app, iv, ct) {
-        Ok(r) => r,
-        Err(e) => {
-            log(&format!("the main app's session doesn't decrypt: {e}"));
-            return None;
-        }
+    log(&format!("the main app's server: {server}"));
+    let secure = std::fs::read_to_string(prefs.join("construct_secure.xml")).map_err(|e| {
+        format!(
+            "The Construct has no saved sign-in on this phone ({}: {e}). Sign in with the Compose app first, \
+             or run scripts/android_native.sh --as-app --pod <url>.",
+            prefs.join("construct_secure.xml").display()
+        )
+    })?;
+    let key = format!("pod_session:{server}");
+    let Some(stored) = pref(&secure, &key) else {
+        // Names only (never values), to see which servers have a session.
+        let names: Vec<&str> = secure
+            .split("<string name=\"")
+            .skip(1)
+            .filter_map(|r| r.split('"').next())
+            .collect();
+        return Err(format!(
+            "No saved session for {server} (saved: {names:?}). Sign in to it in the Compose app, \
+             or run scripts/android_native.sh --as-app --pod <url>."
+        ));
     };
-    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let token = v["token"].as_str()?.to_owned();
+    let (iv, ct) = stored
+        .split_once(':')
+        .ok_or("the saved session isn't in the expected form")?;
+    let raw = keystore_decrypt(app, iv, ct)
+        .map_err(|e| format!("The saved session doesn't decrypt: {e}"))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("the saved session: {e}"))?;
+    let token = v["token"]
+        .as_str()
+        .ok_or("the saved session has no token")?
+        .to_owned();
     log(&format!("using the main app's session for {server}"));
-    Some((server, token))
+    Ok(Some((server, token)))
 }
 
 /// `KeystoreSecureStore.get`'s decryption, through the Android SDK: base64
@@ -346,77 +401,92 @@ fn keystore_decrypt(app: &AndroidApp, iv_b64: &str, ct_b64: &str) -> Result<Stri
     use jni::{jni_sig, jni_str};
     // SAFETY: the VM pointer is valid for the life of the process.
     let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
-    vm.attach_current_thread(|env| -> jni::errors::Result<Vec<u8>> {
-        let mut decode = |s: &str| -> jni::errors::Result<JObject<'_>> {
-            let js = env.new_string(s)?;
-            env.call_static_method(
-                jni_str!("android/util/Base64"),
-                jni_str!("decode"),
-                jni_sig!("(Ljava/lang/String;I)[B"),
-                &[JValue::Object(&js), JValue::Int(2)],
-            )?
-            .l()
-        };
-        let iv = decode(iv_b64)?;
-        let ct = decode(ct_b64)?;
-        let kind = env.new_string("AndroidKeyStore")?;
-        let ks = env
-            .call_static_method(
-                jni_str!("java/security/KeyStore"),
-                jni_str!("getInstance"),
-                jni_sig!("(Ljava/lang/String;)Ljava/security/KeyStore;"),
-                &[JValue::Object(&kind)],
-            )?
-            .l()?;
-        env.call_method(
-            &ks,
-            jni_str!("load"),
-            jni_sig!("(Ljava/security/KeyStore$LoadParameter;)V"),
-            &[JValue::Object(&JObject::null())],
-        )?;
-        let alias = env.new_string("construct_session_key")?;
-        let key = env
-            .call_method(
-                &ks,
-                jni_str!("getKey"),
-                jni_sig!("(Ljava/lang/String;[C)Ljava/security/Key;"),
-                &[JValue::Object(&alias), JValue::Object(&JObject::null())],
-            )?
-            .l()?;
-        let transform = env.new_string("AES/GCM/NoPadding")?;
-        let cipher = env
-            .call_static_method(
-                jni_str!("javax/crypto/Cipher"),
-                jni_str!("getInstance"),
-                jni_sig!("(Ljava/lang/String;)Ljavax/crypto/Cipher;"),
-                &[JValue::Object(&transform)],
-            )?
-            .l()?;
-        let spec = env.new_object(
-            jni_str!("javax/crypto/spec/GCMParameterSpec"),
-            jni_sig!("(I[B)V"),
-            &[JValue::Int(128), JValue::Object(&iv)],
-        )?;
-        env.call_method(
-            &cipher,
-            jni_str!("init"),
-            jni_sig!("(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V"),
-            &[JValue::Int(2), JValue::Object(&key), JValue::Object(&spec)],
-        )?;
-        let out = env
-            .call_method(
-                &cipher,
-                jni_str!("doFinal"),
-                jni_sig!("([B)[B"),
-                &[JValue::Object(&ct)],
-            )?
-            .l()?;
-        // SAFETY: doFinal answers a byte[].
-        let out = unsafe { JByteArray::from_raw(env, out.into_raw()) };
-        env.convert_byte_array(&out)
-    })
-    .map_err(|e| e.to_string())
-    .and_then(|b| String::from_utf8(b).map_err(|e| e.to_string()))
+    let bytes = vm
+        .attach_current_thread(|env| -> jni::errors::Result<Result<Vec<u8>, String>> {
+            let run = |env: &mut jni::Env| -> jni::errors::Result<Vec<u8>> {
+                let iv_s = env.new_string(iv_b64)?;
+                let iv = env
+                    .call_static_method(
+                        jni_str!("android/util/Base64"),
+                        jni_str!("decode"),
+                        jni_sig!("(Ljava/lang/String;I)[B"),
+                        &[JValue::Object(&iv_s), JValue::Int(2)],
+                    )?
+                    .l()?;
+                let ct_s = env.new_string(ct_b64)?;
+                let ct = env
+                    .call_static_method(
+                        jni_str!("android/util/Base64"),
+                        jni_str!("decode"),
+                        jni_sig!("(Ljava/lang/String;I)[B"),
+                        &[JValue::Object(&ct_s), JValue::Int(2)],
+                    )?
+                    .l()?;
+                let kind = env.new_string("AndroidKeyStore")?;
+                let ks = env
+                    .call_static_method(
+                        jni_str!("java/security/KeyStore"),
+                        jni_str!("getInstance"),
+                        jni_sig!("(Ljava/lang/String;)Ljava/security/KeyStore;"),
+                        &[JValue::Object(&kind)],
+                    )?
+                    .l()?;
+                env.call_method(
+                    &ks,
+                    jni_str!("load"),
+                    jni_sig!("(Ljava/security/KeyStore$LoadParameter;)V"),
+                    &[JValue::Object(&JObject::null())],
+                )?;
+                let alias = env.new_string("construct_session_key")?;
+                let key = env
+                    .call_method(
+                        &ks,
+                        jni_str!("getKey"),
+                        jni_sig!("(Ljava/lang/String;[C)Ljava/security/Key;"),
+                        &[JValue::Object(&alias), JValue::Object(&JObject::null())],
+                    )?
+                    .l()?;
+                if key.is_null() {
+                    return Err(jni::errors::Error::NullPtr(
+                        "no construct_session_key in the keystore",
+                    ));
+                }
+                let transform = env.new_string("AES/GCM/NoPadding")?;
+                let cipher = env
+                    .call_static_method(
+                        jni_str!("javax/crypto/Cipher"),
+                        jni_str!("getInstance"),
+                        jni_sig!("(Ljava/lang/String;)Ljavax/crypto/Cipher;"),
+                        &[JValue::Object(&transform)],
+                    )?
+                    .l()?;
+                let spec = env.new_object(
+                    jni_str!("javax/crypto/spec/GCMParameterSpec"),
+                    jni_sig!("(I[B)V"),
+                    &[JValue::Int(128), JValue::Object(&iv)],
+                )?;
+                env.call_method(
+                    &cipher,
+                    jni_str!("init"),
+                    jni_sig!("(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V"),
+                    &[JValue::Int(2), JValue::Object(&key), JValue::Object(&spec)],
+                )?;
+                let out = env
+                    .call_method(
+                        &cipher,
+                        jni_str!("doFinal"),
+                        jni_sig!("([B)[B"),
+                        &[JValue::Object(&ct)],
+                    )?
+                    .l()?;
+                // SAFETY: doFinal answers a byte[].
+                let out = unsafe { JByteArray::from_raw(env, out.into_raw()) };
+                env.convert_byte_array(&out)
+            };
+            Ok(run(env).map_err(|e| java_error(env, e)))
+        })
+        .map_err(|e| e.to_string())??;
+    String::from_utf8(bytes).map_err(|e| e.to_string())
 }
 
 fn pod_session(app: &AndroidApp) -> Option<Session> {
@@ -432,7 +502,14 @@ fn pod_session(app: &AndroidApp) -> Option<Session> {
             };
             (url.to_owned(), token.to_owned())
         }
-        Err(_) => main_app_session(app)?,
+        Err(_) => match main_app_session(app) {
+            Ok(Some(found)) => found,
+            Ok(None) => return None,
+            Err(e) => {
+                log(&e);
+                return Some(error_page(&e));
+            }
+        },
     };
     let (url, token) = (url.as_str(), token.as_str());
     log(&format!("opening {url}"));
