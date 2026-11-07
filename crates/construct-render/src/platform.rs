@@ -42,6 +42,11 @@ pub trait Platform {
     fn events(&self) -> Vec<PlatformEvent> {
         Vec::new()
     }
+    /// Whether the system is in dark mode; `None`: as the window says
+    /// (winit's theme).
+    fn dark(&self) -> Option<bool> {
+        None
+    }
     /// The keyboard's own editing (Android's input connection: suggestions,
     /// autocorrect, composing), given the focused field as the engine has it
     /// (`None`: none is focused). Returns what the keyboard did since last
@@ -85,6 +90,9 @@ pub enum Reopen {
     Left,
     /// Load the pod again (`refresh`, Try again).
     Reload,
+    /// Open another server (`set_server`): its saved session, else its
+    /// sign-in screen.
+    Server(String),
 }
 
 /// The desktop's clipboard, through its command-line tools (`pbpaste` on

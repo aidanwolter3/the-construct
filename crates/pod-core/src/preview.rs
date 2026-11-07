@@ -277,6 +277,7 @@ fn effect_line(e: &Effect) -> String {
         Effect::OpenLink { url } => format!("would open {url} in the browser"),
         Effect::SignedIn { .. } => "signed in".into(),
         Effect::LeftPod => "would leave the pod on this device".into(),
+        Effect::SwitchServer { url } => format!("would switch this device to the server {url}"),
         Effect::Paste { field } => format!("would paste the clipboard into {field}"),
         Effect::Copy { text } => format!("would copy {text:?}"),
         Effect::PickMedia { field, .. } => format!("would open the photo picker for {field}"),

@@ -363,6 +363,7 @@ impl App {
         let old = &self.controller.session;
         session.resize(old.viewport);
         session.set_insets(old.insets);
+        session.set_dark(old.dark);
         self.controller = Controller::new(session);
         self.drag = None;
         self.fling = None;
@@ -394,6 +395,23 @@ impl App {
             return false;
         }
         self.controller.session.set_insets(insets);
+        true
+    }
+
+    /// Follows the system's light or dark mode; true when it changed.
+    fn update_dark(&mut self) -> bool {
+        let dark = match self.platform.as_ref().and_then(|p| p.dark()) {
+            Some(d) => d,
+            None => match self.surface.as_ref().and_then(|s| s.window.theme()) {
+                Some(t) => t == winit::window::Theme::Dark,
+                None => return false,
+            },
+        };
+        if dark == self.controller.session.dark {
+            return false;
+        }
+        log(&format!("{} mode", if dark { "dark" } else { "light" }));
+        self.controller.session.set_dark(dark);
         true
     }
 
@@ -513,6 +531,7 @@ impl App {
             renderer,
         });
         self.update_insets();
+        self.update_dark();
         Ok(())
     }
 
@@ -668,6 +687,9 @@ impl App {
                         })
                     }
                     crate::interact::Effect::LeftPod => reopen = Some(Reopen::Left),
+                    crate::interact::Effect::SwitchServer { url } => {
+                        reopen = Some(Reopen::Server(url.clone()))
+                    }
                     crate::interact::Effect::Paste { field } => match self.clipboard() {
                         Some(text) => {
                             self.controller.session.paste(field, &text);
@@ -718,7 +740,8 @@ impl ApplicationHandler for App {
         }
         self.platform_events();
         self.sync_text_input();
-        if self.update_insets()
+        let insets = self.update_insets();
+        if (insets | self.update_dark())
             && let Some(s) = &self.surface
         {
             s.window.request_redraw();

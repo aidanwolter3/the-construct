@@ -63,6 +63,8 @@ struct Pod {
     /// Closes every connection unanswered: the pod can't be reached.
     down: AtomicBool,
     posts: AtomicUsize,
+    /// `PUT /v1/apps/<id>/hidden` bodies, by path.
+    hidden: Mutex<Vec<(String, String)>>,
     streams: Mutex<Vec<mpsc::Sender<String>>>,
     /// Home is a New post screen (a media picker and Share).
     compose: AtomicBool,
@@ -176,6 +178,15 @@ fn handle(stream: TcpStream, pod: &Pod) {
                     return;
                 }
             }
+        }
+        ("GET", "/v1/apps/home/versions/1") => {
+            let v = json!({ "app_id": "home", "version": 1, "layout": home(1, 0)["workspace"] });
+            send(&mut out, "200 OK", "", &v.to_string());
+        }
+        ("PUT", p) if p.ends_with("/hidden") => {
+            let b = String::from_utf8_lossy(&body).into_owned();
+            pod.hidden.lock().unwrap().push((p.to_owned(), b));
+            send(&mut out, "200 OK", "", "{}");
         }
         ("GET", p) if p.starts_with("/v1/apps") => {
             let apps = json!({ "apps": [
@@ -314,6 +325,62 @@ fn a_layout_event_redraws_the_open_session() {
     });
     stub.publish(2);
     wait_until("home v2", || shows(&mut s, "Home v2"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_pinned_home_stays_on_its_version_until_following_the_latest() {
+    let stub = Stub::start();
+    stub.pod.version.store(2, Ordering::SeqCst);
+    let dir = storage("pins");
+    let pod = PodEngine::open_with(&stub.base, Some(&dir), store(&stub.base), config());
+    let mut s = pod.session(construct_render::Viewport::PHONE);
+    wait_until("home", || shows(&mut s, "Home v2"));
+    let device = |command: &str| json!({ "intent": "action.device", "command": command, "app": "home", "id": "1" });
+    s.dispatch(&device("pin_version")).unwrap();
+    assert!(shows(&mut s, "Home v1"), "drew {:?}", texts(&mut s));
+    // A new version published meanwhile doesn't replace the pinned one.
+    wait_until("the event stream", || {
+        !stub.pod.streams.lock().unwrap().is_empty()
+    });
+    stub.publish(3);
+    thread::sleep(Duration::from_millis(500));
+    assert!(shows(&mut s, "Home v1"), "drew {:?}", texts(&mut s));
+    // The engine keeps the pin: a new start draws it too.
+    let again = PodEngine::open_with(&stub.base, Some(&dir), store(&stub.base), config());
+    assert!(shows(
+        &mut again.session(construct_render::Viewport::PHONE),
+        "Home v1"
+    ));
+    s.dispatch(&device("follow_latest")).unwrap();
+    wait_until("the latest home", || shows(&mut s, "Home v3"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn hiding_a_layout_goes_to_the_pod() {
+    let stub = Stub::start();
+    let dir = storage("hide");
+    let pod = PodEngine::open_with(&stub.base, Some(&dir), store(&stub.base), config());
+    let mut s = pod.session(construct_render::Viewport::PHONE);
+    wait_until("home", || shows(&mut s, "Home v1"));
+    let out = s
+        .dispatch(&json!({ "intent": "action.device", "command": "hide_layout", "app": "garden" }))
+        .unwrap();
+    assert!(
+        out.effects.contains(&Effect::Device {
+            command: "hide_layout".into()
+        }),
+        "{:?}",
+        out.effects
+    );
+    assert_eq!(
+        stub.pod.hidden.lock().unwrap()[0],
+        (
+            "/v1/apps/garden/hidden".to_owned(),
+            r#"{"hidden":true}"#.to_owned()
+        )
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

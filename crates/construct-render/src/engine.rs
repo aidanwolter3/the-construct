@@ -28,6 +28,9 @@ use crate::interact::{Changes, Loaded, Loader, Session};
 use crate::layout::Viewport;
 use crate::remote;
 
+/// A server the device offers (`local:servers`): id, title, URL.
+pub type ServerOption = (String, String, String);
+
 /// The layout clients open first, and the engine's own workspace.
 pub const HOME: &str = "home";
 /// How long opening a layout or a data path the engine has never had waits
@@ -65,8 +68,14 @@ struct Shared {
     images: Mutex<Option<ImageStore>>,
     /// Layout titles by id, for device data rows.
     titles: Mutex<HashMap<String, String>>,
-    /// Versions picked on this device (`pin_version`), by layout.
-    pins: Mutex<HashMap<String, i64>>,
+    /// Versions picked on this device (`pin_version`), by layout: the
+    /// version and its layout, drawn in place of the latest.
+    pins: Mutex<HashMap<String, (i64, UiNode)>>,
+    /// The servers the platform offers (`local:servers`).
+    servers: Mutex<Vec<ServerOption>>,
+    /// Where the inbox's next older page starts, and the older pages
+    /// loaded so far (kept under the newest page when it is listed again).
+    older: Mutex<(Option<String>, Vec<String>)>,
     /// The layouts opened (their JSON, by id), for the device data they
     /// bind.
     needs: Mutex<HashMap<String, String>>,
@@ -103,6 +112,21 @@ impl Shared {
         let before = kinds(&self.needs());
         lock(&self.needs).insert(id.to_owned(), json);
         before != kinds(&self.needs())
+    }
+
+    /// `local://inbox`: the unread count, and whether older notifications
+    /// can be loaded (`next_before`).
+    fn inbox(&self, unread: i64) -> protocol::EntityRecord {
+        let mut e = remote::inbox_entity(unread);
+        let next = lock(&self.older).0.clone();
+        e.set("has_older", next.is_some());
+        e.set("next_before", next.unwrap_or_default());
+        e
+    }
+
+    /// The layout a pin draws in place of `id`'s latest.
+    fn pinned(&self, id: &str) -> Option<UiNode> {
+        lock(&self.pins).get(id).map(|(_, root)| root.clone())
     }
 
     fn push(&self, c: Changes) {
@@ -254,8 +278,17 @@ impl PodEngine {
             "desktop"
         };
         engine.set_device_info(platform, "The Construct (Rust)");
+        let pins = engine
+            .pinned_versions()
+            .into_iter()
+            .filter_map(|p| {
+                let root = serde_json::from_str::<UiNode>(&p.spec).ok()?;
+                Some((p.layout_id, (p.version, root)))
+            })
+            .collect();
         let shared = Arc::new(Shared {
             apps_file: dir.map(|d| d.join(APPS_FILE)),
+            pins: Mutex::new(pins),
             ..Shared::default()
         });
         let pod = PodEngine {
@@ -277,6 +310,11 @@ impl PodEngine {
         &self.base
     }
 
+    /// The servers this device offers, for `local:servers`.
+    pub fn set_servers(&self, servers: Vec<ServerOption>) {
+        *lock(&self.shared.servers) = servers;
+    }
+
     /// Whether the engine has a pod session (else home is the pod's
     /// sign-in screen).
     pub fn signed_in(&self) -> bool {
@@ -286,6 +324,9 @@ impl PodEngine {
     /// Leaves the pod on this device: the engine forgets its session and
     /// shows the pod's sign-in screen once the pod answers.
     pub fn forget_session(&self) {
+        // The engine forgets its pins too; the inbox starts afresh.
+        lock(&self.shared.pins).clear();
+        *lock(&self.shared.older) = (None, Vec::new());
         self.engine.forget_session();
     }
 
@@ -314,8 +355,11 @@ impl PodEngine {
         // What came in before is in the snapshot too.
         lock(&self.shared.news).take();
         let snap = self.engine.snapshot();
-        let root = serde_json::from_str::<UiNode>(&snap.workspace_json)
-            .unwrap_or_else(|_| opening_page(&self.base));
+        let root = match self.shared.pinned(HOME) {
+            Some(r) => r,
+            None => serde_json::from_str::<UiNode>(&snap.workspace_json)
+                .unwrap_or_else(|_| opening_page(&self.base)),
+        };
         let mut data = bundle(&snap);
         let apps = self.cached_apps();
         merge(&mut data, apps);
@@ -338,8 +382,54 @@ impl PodEngine {
             session_entity(snap, &self.base),
         );
         out.entities
-            .insert("local://inbox".into(), remote::inbox_entity(unread(snap)));
+            .insert("local://inbox".into(), self.shared.inbox(unread(snap)));
+        let servers = lock(&self.shared.servers).clone();
+        if !servers.is_empty() {
+            let mut uris = Vec::new();
+            for (id, title, url) in servers {
+                let uri = format!("local://servers/{id}");
+                if let Ok(e) = serde_json::from_value(json!({ "id": id, "title": title, "url": url,
+                    "selected": url.trim_end_matches('/') == self.base }))
+                {
+                    out.entities.insert(uri.clone(), e);
+                }
+                uris.push(uri);
+            }
+            out.entities.remove("local://servers/current");
+            out.queries.insert("local:servers".into(), uris);
+        }
         out
+    }
+
+    /// The pod's layouts list now (kept for offline starts).
+    fn apps_now(&self) -> Result<DataBundle, String> {
+        let body = self.engine.list_apps().map_err(|e| e.reason().to_owned())?;
+        if let Some(f) = &self.shared.apps_file {
+            let _ = std::fs::write(f, &body);
+        }
+        let v: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+        Ok(remote::layouts_bundle(&v, &mut lock(&self.shared.titles)))
+    }
+
+    /// Pins version `n` of `app` (its layout fetched from the pod), or
+    /// (`None`) follows its latest again; the engine keeps the pin.
+    fn pin(&self, app: &str, n: Option<i64>) -> Result<(), String> {
+        let Some(n) = n else {
+            lock(&self.shared.pins).remove(app);
+            self.engine.set_pinned_version(app, None);
+            return Ok(());
+        };
+        let v: Value = self
+            .engine
+            .app_version(app, n)
+            .map_err(|e| e.reason().to_owned())
+            .and_then(|b| serde_json::from_str(&b).map_err(|e| e.to_string()))?;
+        let root: UiNode = serde_json::from_value(v["layout"].clone())
+            .map_err(|e| format!("v{n} of {app}: {e}"))?;
+        let spec = v["layout"].to_string();
+        self.engine.set_pinned_version(app, Some((n, &spec)));
+        lock(&self.shared.pins).insert(app.to_owned(), (n, root));
+        Ok(())
     }
 
     /// The layouts list kept from the last time the pod gave it.
@@ -396,7 +486,7 @@ impl PodEngine {
             .app_versions(app, None, Some(100))
             .map_err(|e| e.reason().to_owned())
             .and_then(|b| serde_json::from_str(&b).map_err(|e| e.to_string()))?;
-        let pinned = lock(&self.shared.pins).get(app).copied();
+        let pinned = lock(&self.shared.pins).get(app).map(|p| p.0);
         let title = lock(&self.shared.titles)
             .get(app)
             .cloned()
@@ -429,7 +519,10 @@ fn observe(engine: &Weak<ConstructEngine>, shared: &Arc<Shared>, base: &str, sna
         if snap.workspace_json != seen.workspace {
             seen.workspace = snap.workspace_json.clone();
             if let Ok(root) = serde_json::from_str::<UiNode>(&snap.workspace_json) {
-                c.layouts.push((HOME.to_owned(), root));
+                // A pinned home keeps drawing its pinned version.
+                if shared.pinned(HOME).is_none() {
+                    c.layouts.push((HOME.to_owned(), root));
+                }
                 shared.note(HOME, snap.workspace_json.clone());
                 reload = true;
             }
@@ -442,7 +535,9 @@ fn observe(engine: &Weak<ConstructEngine>, shared: &Arc<Shared>, base: &str, sna
                 continue;
             }
             if let Ok(root) = serde_json::from_value::<UiNode>(l["workspace"].clone()) {
-                c.layouts.push((id.clone(), root));
+                if shared.pinned(&id).is_none() {
+                    c.layouts.push((id.clone(), root));
+                }
                 shared.note(&id, text.clone());
                 reload = true;
             }
@@ -463,7 +558,7 @@ fn observe(engine: &Weak<ConstructEngine>, shared: &Arc<Shared>, base: &str, sna
     // The count at once; the list follows.
     c.data
         .entities
-        .insert("local://inbox".into(), remote::inbox_entity(unread(snap)));
+        .insert("local://inbox".into(), shared.inbox(unread(snap)));
     shared.push(c);
     if reload {
         reload_device(engine.clone(), shared.clone());
@@ -528,10 +623,24 @@ fn device_data(engine: &ConstructEngine, shared: &Shared) -> DataBundle {
         match engine.list_notifications(None, INBOX_LIMIT, None) {
             Ok(list) => {
                 let v = serde_json::to_value(&list).unwrap_or_default();
-                merge(
-                    &mut out,
-                    remote::notifications_bundle(&v, &titles, remote::now_secs()),
-                );
+                let mut page = remote::notifications_bundle(&v, &titles, remote::now_secs());
+                // Older pages loaded before stay under the newest.
+                let mut older = lock(&shared.older);
+                if older.1.is_empty() {
+                    older.0 = list.next_before.clone();
+                }
+                if let Some(q) = page.queries.get_mut("local:notifications") {
+                    for u in &older.1 {
+                        if !q.contains(u) {
+                            q.push(u.clone());
+                        }
+                    }
+                }
+                drop(older);
+                merge(&mut out, page);
+                let unread = i64::from(list.unread_total);
+                out.entities
+                    .insert("local://inbox".into(), shared.inbox(unread));
             }
             Err(e) => eprintln!("construct-render: notifications: {e}"),
         }
@@ -584,7 +693,11 @@ impl Loader for PodEngine {
                     .to_owned())
             })
         });
-        let (root, mut data) = got.unwrap_or_else(|| Err(client_core::LOAD_OFFLINE.to_owned()))?;
+        let (mut root, mut data) =
+            got.unwrap_or_else(|| Err(client_core::LOAD_OFFLINE.to_owned()))?;
+        if let Some(pinned) = self.shared.pinned(id) {
+            root = pinned;
+        }
         self.needs(id, &root);
         merge(&mut data, self.device_now(&self.engine.snapshot()));
         Ok((root, data))
@@ -620,16 +733,68 @@ impl Loader for PodEngine {
         match command {
             "show_versions" => Some(self.versions(app)),
             "pin_version" => {
-                let n = id.parse::<i64>().ok()?;
-                lock(&self.shared.pins).insert(app.to_owned(), n);
-                Some(self.versions(app))
+                let n = id.trim().parse::<i64>().ok()?;
+                Some(self.pin(app, Some(n)).and_then(|()| self.versions(app)))
             }
-            "follow_latest" => {
-                lock(&self.shared.pins).remove(app);
-                Some(self.versions(app))
-            }
+            "follow_latest" => Some(self.pin(app, None).and_then(|()| self.versions(app))),
             _ => None,
         }
+    }
+
+    fn device_command(&self, command: &str, args: &Value) -> Option<Result<DataBundle, String>> {
+        let text = |k: &str| args[k].as_str().unwrap_or("").trim().to_owned();
+        let app = text("app");
+        let reason = |e: client_core::LayoutApiError| e.reason().to_owned();
+        Some(match command {
+            "toggle_channel" => {
+                let on = args["enabled"].as_bool().unwrap_or(true);
+                let r = self.engine.set_channel_enabled(&app, &text("id"), on);
+                self.reload_device();
+                r.map(|()| DataBundle::default()).map_err(reason)
+            }
+            "load_older_notifications" => {
+                let before = text("before");
+                self.engine
+                    .list_notifications(Some(&before), INBOX_LIMIT, None)
+                    .map_err(reason)
+                    .map(|list| {
+                        let titles = lock(&self.shared.titles).clone();
+                        let v = serde_json::to_value(&list).unwrap_or_default();
+                        let page = remote::notifications_bundle(&v, &titles, remote::now_secs());
+                        {
+                            let mut older = lock(&self.shared.older);
+                            older.0 = list.next_before.clone();
+                            if let Some(q) = page.queries.get("local:notifications") {
+                                older.1.extend(q.iter().cloned());
+                            }
+                        }
+                        let mut out = page;
+                        if let Ok(e) = serde_json::from_value(json!({
+                            "has_older": list.next_before.is_some(),
+                            "next_before": list.next_before.unwrap_or_default() }))
+                        {
+                            out.entities.insert("local://inbox".into(), e);
+                        }
+                        out
+                    })
+            }
+            "hide_layout" | "unhide_layout" => self
+                .engine
+                .set_app_hidden(&app, command == "hide_layout")
+                .map_err(reason)
+                .and_then(|()| self.apps_now()),
+            "delete_layout" => self
+                .engine
+                .delete_custom_app(&app)
+                .map_err(reason)
+                .and_then(|()| {
+                    if lock(&self.shared.pins).contains_key(&app) {
+                        let _ = self.pin(&app, None);
+                    }
+                    self.apps_now()
+                }),
+            _ => return None,
+        })
     }
 
     /// The engine opens the session (it keeps it in its secure store and
