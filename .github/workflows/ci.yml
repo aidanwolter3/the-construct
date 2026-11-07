@@ -1,7 +1,8 @@
 name: CI
 
-# Every PR and push: Rust checks, JVM/shared-UI tests, headless simulator screenshots (artifact) and an
-#   Android compile (Kotlin only, no Rust .so files).
+# Every PR and push: Rust checks, simulator screenshots on the Rust engine (artifact `simulator`), JVM/shared-UI
+#   tests with the Compose simulator's screenshots (until issue #166), and an Android compile (Kotlin only, no Rust
+#   .so files).
 # Push to main (or a manual run on main): if Rust checks pass, deploy the pod to Fly.io staging,
 #   https://the-construct-pod.fly.dev   (deploy/fly/pod.toml)
 # The fake Pixelfed it talks to deploys from its own workflow (fake-pixelfed.yml).
@@ -61,6 +62,17 @@ jobs:
       # The Rust clients' live sessions on the engine (feature `remote`, off in the workspace build).
       - run: cargo nextest run -p construct-render --features remote --profile ci -E 'test(/^engine::/)'
       - run: cargo test --workspace --doc
+      # The headless simulator (docs/simulator.md), CPU-drawn: the scenarios' PNGs are what PRs embed.
+      - name: Simulator screenshots (construct-sim, fixture mode)
+        run: scripts/sim_scenarios.sh "$RUNNER_TEMP/sim"
+      - name: Upload simulator screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: simulator
+          path: ${{ runner.temp }}/sim
+          if-no-files-found: ignore
+          retention-days: 14
 
   audit:
     name: Dependency advisories (cargo-deny)
@@ -96,7 +108,8 @@ jobs:
       - name: Shared + desktop tests
         working-directory: app
         run: ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test
-      - name: Simulator screenshots (fixture mode)
+      # The Compose app's simulator, until the clients cut over to the Rust engine (issue #166).
+      - name: Compose simulator screenshots (fixture mode)
         working-directory: app
         run: |
           ./gradlew -PskipRustBuild :desktopApp:simulate \

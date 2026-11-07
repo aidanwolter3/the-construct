@@ -33,6 +33,7 @@ Names older decisions may still use, and what they are now.
 | `layouts/<app>/` | `crates/<adapter>/layouts/<app>/` | [rename-apps-and-folders](rename-apps-and-folders.md) |
 | `kmp-app/` | `app/` | [rename-apps-and-folders](rename-apps-and-folders.md) |
 | `fixtures/` | next to the code that reads each file | [data-next-to-its-code](data-next-to-its-code.md) |
+| `app/desktopApp/src/sim/resources/` | `crates/construct-sim/data/` | [rust-simulator](rust-simulator.md) |
 
 The decision files [watcher](watcher.md) and [watcher-rules-per-site](watcher-rules-per-site.md) keep their names:
 other decisions link to them.

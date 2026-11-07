@@ -250,7 +250,7 @@ fun defaultFixture(workspace: String, from: File): File {
 }
 
 /** The simulator's own fixture files (test and simulator data only; nothing here ships). */
-const val SIM_FIXTURES = "app/desktopApp/src/sim/resources"
+const val SIM_FIXTURES = "crates/construct-sim/data"
 
 /**
  * Where fixture [name] lives, relative to the repo root: in [SIM_FIXTURES]. Each bundle's layout is what a pod serves

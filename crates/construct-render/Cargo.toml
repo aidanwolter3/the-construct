@@ -74,6 +74,3 @@ crate-type = ["lib", "cdylib"]
 
 [dev-dependencies]
 
-[[example]]
-name = "pod_shots"
-required-features = ["remote"]
