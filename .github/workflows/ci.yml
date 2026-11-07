@@ -44,12 +44,20 @@ jobs:
       - uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
           tool: cargo-nextest@0.9.145
+      # lavapipe (Mesa's software Vulkan): construct-render's GPU tests draw on it, and must
+      # (CONSTRUCT_REQUIRE_GPU below fails them instead of skipping when no adapter is found).
+      - name: Install a software Vulkan driver
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers
       - run: scripts/check_decisions.sh
       - run: scripts/check_test_data.sh
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # The engine's window and viewer code (features off in the workspace build).
+      - run: cargo clippy -p construct-render --features viewer --all-targets -- -D warnings
       # nextest runs tests from different binaries in parallel (cargo test runs one
       # binary at a time); profile in .config/nextest.toml. It skips doctests.
       - run: cargo nextest run --workspace --profile ci
+        env:
+          CONSTRUCT_REQUIRE_GPU: "1"
       - run: cargo test --workspace --doc
 
   audit:

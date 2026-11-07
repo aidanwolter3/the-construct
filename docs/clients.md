@@ -61,6 +61,14 @@ Debug builds also take intent extras, read when the engine starts (use `am start
 Settings must be `https://` otherwise. That rule covers images (loaded by Kotlin); the engine's own traffic goes
 through Rust and is not restricted by Android's network security config.
 
+## Rust-native prototype
+
+`crates/construct-render` draws layouts without the JVM: `construct-viewer` is a desktop window (Metal or Vulkan)
+and `scripts/android_native.sh` builds a NativeActivity APK. Both open your pod with its own sign-in screen and keep
+the session. They draw a layout file, or a pod live (the APK installs as
+the main Android app and keeps its sign-in), sending writes straight to the pod, with no engine behind
+them (no cache, outbox or event stream). See [rendering.md](rendering.md).
+
 ## Home and the layouts it shows
 
 The client opens the pod's `home` layout (the default) and draws everything from it (decision `layouts-not-apps`):

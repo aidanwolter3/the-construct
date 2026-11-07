@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The engine's Android app: a NativeActivity drawn by libconstruct_render.so (scripts/android_native.sh), installed as
+     The Construct itself (the main app's package), so it keeps the main app's data and sign-in. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.theconstruct.android"
+    android:versionCode="1"
+    android:versionName="0.1">
+    <!-- Target 34: the system keeps the window below the status bar and camera cutout and resizes it for the
+         keyboard (35+ draws edge to edge). -->
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="34" />
+    <uses-feature android:name="android.hardware.vulkan.version" android:required="false" />
+    <!-- A live session (scripts/android_native.sh with pod): layouts, data and images from the pod. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application
+        android:label="The Construct"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:hasCode="false"
+        android:debuggable="true"
+        android:extractNativeLibs="true"
+        android:theme="@style/Construct">
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|fontWeightAdjustment|colorMode|layoutDirection|locale"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data android:name="android.app.lib_name" android:value="construct_render" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

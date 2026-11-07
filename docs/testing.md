@@ -17,6 +17,10 @@ file as a `mod` there, not as a new `tests/*.rs` (linking one binary per file wa
 file's tests with a filter, e.g. `cargo test -p server --test integration fixtures::`. The tests of a crate share a
 process under `cargo test`, so don't assume process-wide state (such as the server's metrics counters) starts empty.
 
+The Rust rendering engine (`crates/construct-render`) has golden frames: CPU frames are compared with
+`tests/data/goldens/`, and GPU frames with the same files when a wgpu adapter exists (CI installs lavapipe,
+`mesa-vulkan-drivers`, and sets `CONSTRUCT_REQUIRE_GPU=1`). See [rendering.md](rendering.md#tests).
+
 There are no on-device tests: UI is checked with the [headless simulator](simulator.md). Android's ICU regex engine
 rejects some patterns that `java.util.regex` accepts, so `AndroidRegexSyntaxTest` checks every `Regex` in the shared
 code on the JVM. Other Android-only runtime failures show only when the app runs on a phone.

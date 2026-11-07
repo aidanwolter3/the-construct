@@ -47,6 +47,7 @@ if command -v apt-get >/dev/null; then
   command -v sqlite3 >/dev/null || need+=(sqlite3)
   dpkg -s fonts-dejavu-core >/dev/null 2>&1 || need+=(fonts-dejavu-core fontconfig)  # simulator text rendering
   dpkg -s pkg-config >/dev/null 2>&1 || need+=(pkg-config)
+  dpkg -s mesa-vulkan-drivers >/dev/null 2>&1 || need+=(mesa-vulkan-drivers)  # lavapipe: construct-render's GPU tests
   if [[ ${#need[@]} -gt 0 ]]; then
     $SUDO apt-get update -y
     DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y "${need[@]}"

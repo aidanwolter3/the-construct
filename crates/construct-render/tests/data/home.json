@@ -1,0 +1,61 @@
+{
+  "note": "A made-up home: a greeting card with a drop shadow look (a border), a row of buttons, a divider, a switch and an image placeholder.",
+  "layout": {
+    "type": "core://Page",
+    "id": "home",
+    "title": "Home",
+    "root": {
+      "type": "core://Scroll",
+      "content": {
+        "type": "core://Column",
+        "spacing_dp": 16,
+        "padding_h_dp": 16,
+        "padding_v_dp": 16,
+        "children": [
+          { "type": "core://Text", "value_expr": "Good morning, ${demo://me#name}", "style": "Display" },
+          {
+            "type": "core://Box",
+            "background": "${local://theme#accent_surface}",
+            "content_color": "${local://theme#accent}",
+            "corner_dp": 16,
+            "padding_h_dp": 16,
+            "padding_v_dp": 16,
+            "content": {
+              "type": "core://Column",
+              "spacing_dp": 4,
+              "children": [
+                { "type": "core://Text", "value_expr": "3 things today", "style": "Title" },
+                { "type": "core://Text", "value_expr": "The farmers market opens at nine on Elm Street.", "style": "Body" }
+              ]
+            }
+          },
+          {
+            "type": "core://Row",
+            "spacing_dp": 8,
+            "children": [
+              { "type": "core://Button", "label": "Save", "on_click": { "intent": "action.navigation.back" } },
+              { "type": "core://Button", "label": "Cancel", "on_click": { "intent": "action.navigation.back" } },
+              { "type": "core://Spacer" },
+              { "type": "core://Chip", "text": "Due soon", "icon": "timer", "tone": "Warning" }
+            ]
+          },
+          { "type": "core://Divider" },
+          {
+            "type": "core://Row",
+            "children": [
+              { "type": "core://Text", "value_expr": "Quiet hours", "style": "Body" },
+              { "type": "core://Spacer" },
+              { "type": "core://Switch", "checked": "${demo://me#quiet}", "content_description": "Quiet hours", "on_click": { "intent": "action.local.set", "entity_uri": "demo://me", "field": "quiet", "value_expr": "!entity.quiet" } }
+            ]
+          },
+          { "type": "core://Image", "url": "https://img.example/garden.jpg", "shape": "Rounded", "aspect_ratio": 1.5, "blurhash": "LKO2?U%2Tw=w]~RBVZRi};RPxuwH", "content_description": "The garden" },
+          { "type": "core://TextField", "field": "note", "placeholder": "Add a note", "on_submit": { "intent": "action.navigation.back" } }
+        ]
+      }
+    }
+  },
+  "data": {
+    "entities": { "demo://me": { "name": "Robin", "quiet": false } },
+    "queries": {}
+  }
+}

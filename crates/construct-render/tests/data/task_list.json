@@ -1,0 +1,111 @@
+{
+  "note": "A made-up task list: a header, a status filter (form field `filter`) and cards bound to tasks:all.",
+  "layout": {
+    "type": "core://Page",
+    "id": "tasks",
+    "title": "Tasks",
+    "root": {
+      "type": "core://Column",
+      "children": [
+        {
+          "type": "core://Row",
+          "padding_h_dp": 16,
+          "padding_v_dp": 12,
+          "children": [
+            { "type": "core://Text", "value_expr": "Tasks", "style": "Title" },
+            { "type": "core://Spacer" },
+            {
+              "type": "core://IconButton",
+              "icon": "add",
+              "content_description": "New task",
+              "tag": "add_task",
+              "on_click": { "intent": "action.navigation.open", "layout": "new_task", "presentation": "Sheet" }
+            }
+          ]
+        },
+        {
+          "type": "core://ChoiceChips",
+          "field": "filter",
+          "padding_h_dp": 16,
+          "options": [
+            { "label": "All", "value": "" },
+            { "label": "To do", "value": "todo" },
+            { "label": "Started", "value": "started" },
+            { "label": "Done", "value": "done" }
+          ]
+        },
+        {
+          "type": "core://Row",
+          "padding_h_dp": 16,
+          "padding_v_dp": 8,
+          "children": [
+            {
+              "type": "core://Text",
+              "value_expr": "$count open",
+              "style": "Secondary",
+              "count": { "query_key": "tasks:all", "where": [{ "field": "status", "equals": "$form.filter" }], "zero_text": "Nothing here" }
+            }
+          ]
+        },
+        {
+          "type": "core://Scroll",
+          "content": {
+            "type": "core://List",
+            "query_key": "tasks:all",
+            "spacing_dp": 8,
+            "padding_h_dp": 16,
+            "empty_text": "No tasks",
+            "where": { "field": "status", "equals": "$form.filter" },
+            "item_template": {
+              "type": "core://Tappable",
+              "tag": "task_$item.id",
+              "content_description": "Open $item.title",
+              "on_click": { "intent": "action.navigation.open", "presentation": "Push", "target_uri": "demo://tasks/$item.id" },
+              "content": {
+                "type": "core://Box",
+                "background": "${local://theme#muted_surface}",
+                "border_color": "${local://theme#card_border}",
+                "corner_dp": 12,
+                "padding_h_dp": 16,
+                "padding_v_dp": 12,
+                "content": {
+                  "type": "core://Row",
+                  "spacing_dp": 12,
+                  "children": [
+                    {
+                      "type": "core://Column",
+                      "spacing_dp": 2,
+                      "children": [
+                        { "type": "core://Text", "value_expr": "$item.title", "style": "Label" },
+                        { "type": "core://Text", "value_expr": "Due $item.due", "style": "Secondary" }
+                      ]
+                    },
+                    {
+                      "type": "core://Box",
+                      "background": "$item.status_color",
+                      "content_color": "#FFFFFF",
+                      "corner_dp": 10,
+                      "padding_h_dp": 10,
+                      "padding_v_dp": 4,
+                      "content": { "type": "core://Text", "value_expr": "$item.status_label", "style": "Caption" }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "data": {
+    "entities": {
+      "demo://tasks/1": { "id": "1", "title": "Repaint the Millbrook fence", "due": "Nov 12", "status": "started", "status_label": "Started", "status_color": "#1E66D0" },
+      "demo://tasks/2": { "id": "2", "title": "Order seeds for the spring beds", "due": "Nov 15", "status": "todo", "status_label": "To do", "status_color": "#6B6B76" },
+      "demo://tasks/3": { "id": "3", "title": "Return library books", "due": "Nov 9", "status": "done", "status_label": "Done", "status_color": "#2E7D32" },
+      "demo://tasks/4": { "id": "4", "title": "Book the van for the move to Oakridge Lane", "due": "Nov 20", "status": "started", "status_label": "Started", "status_color": "#1E66D0" },
+      "demo://tasks/5": { "id": "5", "title": "Call the plumber", "due": "Nov 10", "status": "todo", "status_label": "To do", "status_color": "#6B6B76" }
+    },
+    "queries": { "tasks:all": ["demo://tasks/1", "demo://tasks/2", "demo://tasks/3", "demo://tasks/4", "demo://tasks/5"] }
+  }
+}
