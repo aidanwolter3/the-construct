@@ -6,12 +6,14 @@
 //! construct-viewer --demo                # the bundled demo
 //! ```
 //!
-//! Your pod: the one opened last, with its session kept in `pod.json` (in
+//! Your pod: the one opened last (`pod.json`, in
 //! `~/Library/Application Support/The Construct` on macOS, else
-//! `$XDG_CONFIG_HOME/the-construct` or `~/.config/the-construct`); without
-//! one, the pod's sign-in screen (a pod code, or a temporary pod), staging
-//! unless `CONSTRUCT_POD_URL` says otherwise. Leave pod in Settings goes back
-//! to it, with the last code filled in.
+//! `$XDG_CONFIG_HOME/the-construct` or `~/.config/the-construct`), run by
+//! the engine with its cache there (`engine/`), so it opens offline as last
+//! seen; its session in the Keychain on macOS, else in `secure.json` there.
+//! Without a session, the pod's sign-in screen (a pod code, or a temporary
+//! pod), staging unless `CONSTRUCT_POD_URL` says otherwise. Leave pod in
+//! Settings goes back to it, with the last code filled in.
 
 use construct_render::interact::Session;
 use construct_render::pods::PodHome;
@@ -73,20 +75,24 @@ fn log(m: &str) {
 }
 
 fn pod_home() -> PodHome {
+    let dir = state_dir();
     let server = std::env::var("CONSTRUCT_POD_URL")
         .map(|u| u.trim_end_matches('/').to_owned())
         .unwrap_or_else(|_| construct_render::pods::DEFAULT_SERVER.to_owned());
-    PodHome {
-        file: state_dir().map(|d| d.join("pod.json")),
-        // As the desktop app's picker: staging, a local server, and
-        // `CONSTRUCT_POD_URL` when it is another.
-        servers: construct_render::pods::server_options(
-            &[("local", "Local", "http://127.0.0.1:8080")],
-            &server,
-        ),
+    // As the desktop app's picker: staging, a local server, and
+    // `CONSTRUCT_POD_URL` when it is another.
+    let servers = construct_render::pods::server_options(
+        &[("local", "Local", "http://127.0.0.1:8080")],
+        &server,
+    );
+    PodHome::new(
+        dir.as_ref().map(|d| d.join("pod.json")),
+        dir.as_ref().map(|d| d.join("engine")),
         server,
+        construct_render::engine::desktop_store(dir.as_deref()),
         log,
-    }
+    )
+    .with_servers(servers)
 }
 
 /// The desktop: no on-screen keyboard or insets; signing in and leaving the

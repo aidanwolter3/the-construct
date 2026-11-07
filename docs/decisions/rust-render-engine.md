@@ -1,5 +1,7 @@
 # A Rust rendering engine next to the Compose UI, starting with agent previews
 
+Superseded in part (the Rust clients' live sessions) by [rust-clients-on-the-engine](rust-clients-on-the-engine.md).
+
 Date: 2026-11-07. Related: [plumbing-and-porcelain](plumbing-and-porcelain.md), [mcp-connector](mcp-connector.md),
 [layouts-not-apps](layouts-not-apps.md).
 

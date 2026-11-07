@@ -34,8 +34,9 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 | `images` | Images by URL, cut to their box (on a background thread for the GPU) |
 | `viewer` | `Controller`: platform events (resize, tap, long press, wheel, text, editing keys, Back) applied to a session; what windows feed |
 | `window` | winit + wgpu surface (feature `window`): touch (drags, flings, swipes, long presses, handles), the clipboard, the `Platform` a window runs on; used by `construct-viewer` and Android |
-| `remote` | `PodClient`: a live session over a pod (feature `remote`) |
-| `pods` | A device's own pod: its saved session, the pod's sign-in screen, leaving and reloading (features `remote` and `window`); shared by Android and the desktop viewer |
+| `engine` | `PodEngine`: a live session over a pod run by the engine (`client-core`: cache, outbox, event stream), the session's `Loader` (feature `remote`); `FileStore`, a desktop's secure store without a keychain |
+| `remote` | `PodClient`: a session fetched straight from the pod (`pod_shots`), and the device data builders both use (feature `remote`) |
+| `pods` | A device's own pod: the pod it opened last, its engine, the pod's sign-in screen, leaving and reloading (features `remote` and `window`); shared by Android and the desktop viewer |
 | `android` | `android_main` for the NativeActivity (Android builds with `window`) |
 
 The pod builds the crate with `default-features = false`: no wgpu, CPU only.
@@ -93,9 +94,9 @@ sideways toward its edge, follows the finger and closes past a quarter of its si
 over the last 100 ms with Android's impulse strategy (`VelocityTracker`'s and Compose's default), which weighs the
 speed at release over the average. A drag's scrolling is applied once per frame, and the GPU renderer keeps shaped text between frames. `action.device` `show_versions` fills `local://versions` and `local:versions` from
 `/v1/apps/<id>/versions`; `pin_version` draws that version (`/v1/apps/<id>/versions/<n>`'s layout over the
-layout's latest data) wherever the layout shows, home included, until `follow_latest`; pins are kept in `pod.json`
-across restarts and forgotten on Leave pod. The session follows the platform's light or dark mode
-(`Session::set_dark`). `core://Sticky` pins at the top of its scrolling view, over the page
+layout's latest data) wherever the layout shows, home included, until `follow_latest`, and new versions published
+meanwhile don't replace it; the engine keeps pins across restarts (`set_pinned_version`) and forgets them on Leave
+pod. The session follows the platform's light or dark mode (`Session::set_dark`). `core://Sticky` pins at the top of its scrolling view, over the page
 background, until its parent scrolls away; one that rests within 24 points of the view's top (a column's padding)
 pins where it rests, so it never moves (the shared UI moves it up to the top first).
 
@@ -107,13 +108,14 @@ cargo run --release -p construct-render --features viewer --bin construct-viewer
 cargo run --release -p construct-render --features viewer --bin construct-viewer -- --demo       # the demo
 ```
 
-With no file it opens your pod as the phone app does (`pods`, shared with Android): the pod opened last, its
-session kept in `pod.json` (`~/Library/Application Support/The Construct` on macOS, else
-`$XDG_CONFIG_HOME/the-construct` or `~/.config/the-construct`); without one, the pod's sign-in screen (staging, or
-`CONSTRUCT_POD_URL`). `local:servers` offers Staging, Local (`http://127.0.0.1:8080`) and `CONSTRUCT_POD_URL` when
-it is another; `set_server` opens that server's saved session, else its sign-in screen, and `pod.json` keeps each
-server's session, code and pins for coming back. The window follows the system's light or dark mode (winit's
-theme). Click, scroll, type, Escape for Back; each interaction's effects are logged. Copy and paste use
+With no file it opens your pod as the phone app does (`pods`, shared with Android): the pod opened last
+(`pod.json`, in `~/Library/Application Support/The Construct` on macOS, else `$XDG_CONFIG_HOME/the-construct` or
+`~/.config/the-construct`), with the engine's cache next to it (`engine/<server>/`) and its session in the login
+Keychain on macOS, else in `secure.json` there (readable by you only); without a session, the pod's sign-in screen
+(staging, or `CONSTRUCT_POD_URL`). `local:servers` offers Staging, Local (`http://127.0.0.1:8080`) and
+`CONSTRUCT_POD_URL` when it is another; `set_server` opens that server (its session is in the secure store already,
+and `pod.json` keeps each server's last code). The window follows the system's light or dark mode (winit's theme).
+Click, scroll, type, Escape for Back; each interaction's effects are logged. Copy and paste use
 the system clipboard through `pbcopy`/`pbpaste` on macOS and `wl-copy`, `xclip` or `xsel` on Linux. It draws with
 Metal on macOS and Vulkan (or GL) on Linux; on a headless Linux box, `Xvfb` plus Mesa's `mesa-vulkan-drivers`
 (lavapipe) is enough.
@@ -131,66 +133,76 @@ machine's debug key, so the app's data stays. An install over a build signed wit
 says so rather than uninstall (which would sign you out). `cd app && ./gradlew :androidApp:installDebug` goes back to
 the Compose app with the same data.
 
-The app opens a pod live (below). It keeps its pod in its private files (`pod.json`: the server, the session token,
-the last pod code used, the versions pinned, the device's id and the other servers' sessions; unencrypted, unlike the main app's keystore) and opens, in order: that pod; the main
-app's own sign-in, which it reads (`shared_prefs/server.xml` for the server, else staging;
-`shared_prefs/construct_secure.xml` for the session, decrypted with the main app's Android keystore key through the
-SDK); else the pod's sign-in screen, which the pod answers without a session (a pod code box, Open pod and Try a
-temporary pod), with the last code used filled in. Signing in (`action.auth.session`) saves the session; Leave pod
-(`leave_pod`, after its `action.confirm` dialog) forgets it and shows the sign-in screen again, as does a session the
-pod no longer knows. A pod that can't be reached shows what went wrong with Try again (`refresh`) and Sign in with
-another code. A `layout.json` pushed to the external files directory (`{"layout", "data"}`) is drawn instead.
+The app opens a pod live (below), with the engine's cache in its private files (`engine/<server>/`). It keeps its
+pod there too (`pod.json`: the server, the last pod code used and the other servers' last codes), else uses the main app's server
+(`shared_prefs/server.xml`, else staging). Sessions are kept as the main app keeps them (`KeystoreStore`, through
+JNI: AES/GCM with the Android keystore key `construct_session_key`, in the private SharedPreferences file
+`construct_secure`), so the main app's sign-in carries over, and a session token an older build kept in `pod.json`
+moves there on the first start. Without a session the pod answers its sign-in screen (a pod code box, Open pod and
+Try a temporary pod), with the last code used filled in. Signing in (`action.auth.session`) keeps the session;
+Leave pod (`leave_pod`, after its `action.confirm` dialog) forgets it and shows the sign-in screen again, as does a
+session the pod no longer knows. A `layout.json` pushed to the external files directory (`{"layout", "data"}`) is
+drawn instead.
 
 winit makes one event loop per process while Android keeps the process after the activity goes, so the process ends
 with its activity (when it is finishing or destroyed) and every launch starts afresh. The app targets SDK 34, so the
 system keeps its window below the status bar and camera cutout and resizes it for the keyboard; a tapped text field
 opens the keyboard, and Back pops the stack. The layout stays inside the window insets Android reports
 (`getRootWindowInsets`: system bars, camera cutout and keyboard), logged as they change. Its theme draws light system
-bars with dark icons; in dark mode (`values-night`), dark bars with light icons. The layouts follow the system's mode:
-`Configuration.uiMode` read through JNI after each batch of events (the activity handles `uiMode` changes itself,
-so the system bars keep the mode the app started in until the next launch). `local:servers` offers the main app's
-servers: Staging, Local emulator (`10.0.2.2:8080`), Local USB (`127.0.0.1:8080`, with `adb reverse`) and the main
-app's own server when it is another; `set_server` switches as on the desktop.
+bars with dark icons; in dark mode (`values-night`), dark bars with light icons. The layouts follow the system's
+mode: `Configuration.uiMode` read through JNI after each batch of events (the activity handles `uiMode` changes
+itself, so the system bars keep the mode the app started in until the next launch). `local:servers` offers the main
+app's servers: Staging, Local emulator (`10.0.2.2:8080`), Local USB (`127.0.0.1:8080`, with `adb reverse`) and the
+main app's own server when it is another; `set_server` switches as on the desktop.
 
 ## Live sessions (`remote`)
 
-Feature `remote` (on in the viewer and the APK) runs a session over a pod: `PodClient` fetches home as a
-client does (`GET /v1/workspaces/home`), builds the device's list of layouts (`local:layouts`, `local:apps`) from
-`GET /v1/apps?all=1`, and is the session's `Loader`: a layout a tap opens is fetched then, a page screen whose route
-matches a tap's `target_uri` opens with its `$route` bound and its `item`, and slides in at once while its `data`
-path loads in the background (`local://screen#loading`). `local://nav` and
+Feature `remote` (on in the viewer and the APK) runs a session over a pod with the engine the Compose clients run
+(`client-core`, decision `rust-clients-on-the-engine`): `PodEngine` is the session's `Loader`. Home shows as the
+engine has it, from its cache at once (offline too; "Opening your pod…" with the connection's state on a first
+start, until the pod answers), and the device's list of layouts (`local:layouts`, `local:apps`) comes from
+`GET /v1/apps?all=1`, kept in `apps.json` next to the cache for offline starts. A layout a tap opens is the engine's
+cached copy at once, fetched again behind it (`open_layout`; a layout it never had waits for the pod), and a page
+screen whose route matches a tap's `target_uri` opens with its `$route` bound and its `item`, and slides in at once
+while its `data` path loads through the engine (`action.data.load`, cached; `local://screen#loading`). Every
+snapshot the engine sends reaches the session on its next frame (`Loader::changes`; the window is woken): data,
+`local://connection` (online, offline or connecting, and how many writes wait), and the new root of every layout
+the event stream announced, so a layout edited over MCP, or a change from another device, shows without opening it
+again. `pod_shots` still fetches straight from the pod (`PodClient`). `local://nav` and
 `local://screen` are set as the shared UI sets them. Images (`core://Image`) download on four background threads, newest request first,
 without the session (the pod serves media from public paths), are cut to their box (cropped to fill, corners
 rounded) and drawn over their placeholder once they arrive; the window redraws then.
 
-Writes go to the pod as the shared UI sends them, without an outbox: `$form.<f>`, `$form?.<f>` and one `$nonce`
-per tap are bound when the tap runs (a blank `$form.<f>` sends nothing). `action.mutation.optimistic` changes the
-entity at once (every `value_expr` against the entity as it was), POSTs its payload with `$value` as the new value
-on a background thread, and puts the fields back if the pod refuses. `action.mutation.create` adds its entity to its
-list at once, POSTs, then loads the layouts on the stack again (a refusal takes it out). `action.device`
+Writes go to the engine's outbox, as the shared UI sends them (`Loader::take`): `$form.<f>`, `$form?.<f>` and one
+`$nonce` per tap are bound when the tap runs (a blank `$form.<f>` sends nothing). `action.mutation.optimistic`
+changes the entity at once (every `value_expr` against the entity as it was) and the engine keeps the write until
+the pod has it, offline or through a failed POST, with `$value` as the new value; a refusal puts the fields back.
+`action.mutation.create` adds its entity to its list at once, and the engine loads its list again once the pod has
+it (a refusal takes it out). A loader without an outbox (`PodClient`) POSTs on a background thread instead
+(`Loader::send`) and the session undoes a refusal itself. `action.device`
 `open_notification` marks it read (`POST /v1/notifications/read`), closes the inbox's sheet or panel and opens the
 notification's layout and `target_uri` screen; `mark_read` and `mark_all_read` mark them here and on the pod;
 `load_older_notifications` adds the next page under the newer ones (`local://inbox` keeps `has_older` and
-`next_before`). `open_settings` and `open_inbox` present the `settings` layout as a panel and `inbox` as a sheet.
-`toggle_channel` flips the switch at once and tells the pod (`PUT /v1/devices/<id>/channels`, registering the device
-with `PUT /v1/devices/<id>` the first time; its id is kept in `pod.json`), flipping it back when refused.
-`hide_layout`, `unhide_layout` and `delete_layout` go to the pod (`PUT /v1/apps/<id>/hidden`,
-`DELETE /v1/custom-apps/<id>`) and load its list of layouts again; a deleted layout leaves the stack and its pin is
-forgotten; home is never hidden or deleted. `set_server` hands the platform another of `local:servers`
-(`Effect::SwitchServer`), below. A refused write or device command shows the shared UI's notice bar at the bottom
-(the pod's `detail`, else its error, with Dismiss; tagged `notice` and `notice-dismiss`) until dismissed. These
-commands block the session while the pod answers, as `show_versions` does. Left to their own tickets: `sign_in` and
-`sign_out` (#169), `request_notification_permission` (#168).
+`next_before`; older pages stay when the inbox is listed again). `open_settings` and `open_inbox` present the
+`settings` layout as a panel and `inbox` as a sheet. `toggle_channel` flips the switch at once and the engine tells
+the pod (registering the device first), flipping it back when refused. `hide_layout`, `unhide_layout` and
+`delete_layout` go to the pod through the engine and load its list of layouts again; a deleted layout leaves the
+stack and its pin is forgotten; home is never hidden or deleted. `set_server` hands the platform another of
+`local:servers` (`Effect::SwitchServer`). A refused write or device command shows the shared UI's notice bar at the
+bottom (the pod's `detail`, else its error, with Dismiss; tagged `notice` and `notice-dismiss`) until dismissed.
+These commands (`Loader::device_command`) block the session while the pod answers, as `show_versions` does. Left to
+their own tickets: `sign_in` and `sign_out` (#169), `request_notification_permission` (#168).
 `action.link.open` opens an `http(s)` address in the browser (an `ACTION_VIEW` intent on Android, `open` or
 `xdg-open` on desktops). `action.confirm` shows the app's own dialog (title, message, Cancel and the confirm label,
 tagged `confirm:cancel` and `confirm:ok`) and runs `then`, with the steps of a sequence after it, only on confirm;
-Cancel, Back or a tap outside do nothing. `action.auth.session` POSTs its payload and hands the session token to the
-platform, which saves it and opens the pod; `leave_pod` and `refresh` go to the platform too. There is no cache or event stream: what other devices change shows on the next load. The
-device data the
-shared UI builds (`DeviceData`) is built from the pod the same way: `local://connection`, `local://session`,
-`local://inbox`, the layouts with their versions, and, for a layout that binds them, `local:notifications`
-(`/v1/notifications`, with `when` and `day` labels in UTC), `local:channels` and `local:sign_ins` /
-`local:providers`.
+Cancel, Back or a tap outside do nothing. `action.auth.session` goes to the engine, which opens the session and
+keeps it in its secure store; the platform then remembers the code and shows the pod. `leave_pod` (the engine
+forgets the session) and `refresh` (home fetched again) go to the platform too. The device data the shared UI builds
+(`DeviceData`) is built the same way: `local://connection`, `local://session` (from the engine's sign-in state),
+`local://inbox` (the engine's unread count), the layouts with their versions, and, for a layout that binds them,
+`local:notifications` (the engine's list, cached; `when` and `day` labels in UTC; loaded again when the count
+changes), `local:channels` and `local:sign_ins` / `local:providers`. Marking notifications read goes through the
+engine, which sends it again when the pod is back.
 
 Windows place a laid-out frame again on scroll without laying it out (`Laid::emit`), so dragging is cheap. A drag
 that scrolls flings on release and slows down each frame; one that scrolls nothing, past 48 points, is a swipe that
@@ -202,7 +214,8 @@ cursor shows its handle and the bar (Paste, Select all). Typing and pasting repl
 field's `max_length`. With a hardware keyboard: arrows, Home and End (Shift selects), Delete and Ctrl or Command+A, C,
 X and V. On Android the clipboard is `ClipboardManager` through the SDK.
 `pod_shots` (feature `remote`) drives a live session from a script and writes PNGs, to compare with the simulator's
-live mode; `device <command> [app] [id]` runs an `action.device` command and `dark` / `light` set the mode.
+live mode; `device <command> [app] [id]` runs an `action.device` command (only those `PodClient` runs reach the
+pod) and `dark` / `light` set the mode.
 
 ## Agent previews (MCP)
 
@@ -227,6 +240,8 @@ device state and answers the same, with the interaction's effects; a tap that wo
 - `device`: Settings and the inbox presented, notification switches (sent, refused and flipped back), older
   notifications, hiding and deleting layouts, `set_server`, pinned versions, the notice bar, `follow_end`, dark mode,
   `format` dates and unsupported nodes. `pods`' own unit test (switching servers) runs with `--features viewer`.
+- `engine` (feature `remote`, against a stub pod): offline starts and the outbox, layout events, a pinned home that
+  stays on its version until `follow_latest`, and hiding a layout.
 - `writes`: optimistic changes and creates (sent, refused and undone), form binding, notifications, links, dragging a
   sheet closed, carousel paging, confirm dialogs, signing in, and editing text (cursor, selection, the edit bar,
   `max_length`).

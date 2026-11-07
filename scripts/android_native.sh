@@ -6,8 +6,9 @@
 #
 #   scripts/android_native.sh
 #
-# The app opens the pod it opened last (its session is kept in the app's private files, `pod.json`), else the main
-# app's own sign-in, else the pod's sign-in screen (a pod code, or a temporary pod; the last code used is filled in).
+# The app opens the pod it opened last (`pod.json` in the app's private files), else the main app's server, with the
+# engine (its cache there too) and the main app's own saved sessions (the keystore), else the pod's sign-in screen
+# (a pod code, or a temporary pod; the last code used is filled in).
 # Leaving the pod in Settings goes back to that screen. `cd app && ./gradlew :androidApp:installDebug` goes back to
 # the Compose app with the same data.
 #
