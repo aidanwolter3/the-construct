@@ -2,8 +2,8 @@
 
 Server-driven UI: a Rust pod serves app layouts (JSON `UiNode` trees) and entities; desktop, Android and a headless
 simulator draw them with shared Compose code over a shared Rust engine. Built-in layouts are blueprints, not listed:
-Pixelfed (`pixelfed`), Recipes (`recipes`), Events (`events`), the blank home (`shell`), Settings (`settings`) and the
-inbox (`inbox`). There are no apps at runtime: a pod's layouts are the user's own (from blueprints or Collections),
+Pixelfed (`pixelfed`), Recipes (`recipes`), Events (`events`), Agents (`agents`), the blank home (`shell`), Settings
+(`settings`) and the inbox (`inbox`). There are no apps at runtime: a pod's layouts are the user's own (from blueprints or Collections),
 starting with `home`, which clients open first and which embeds and presents the others on one engine
 (decision `layouts-not-apps`).
 
@@ -18,7 +18,8 @@ issues. `docs/history/` is archived; don't treat it as current.
 - `crates/protocol` wire types; `crates/pod-core` the generic pod (knows apps only through `AppAdapter`,
   `adapter.rs`; `validate.rs` checks layout files); `crates/pod-host` many pods per server; `crates/server` the
   binary and `server pods` CLI.
-- `crates/app-pixelfed`, `app-recipes`, `app-collections`, `app-events` (Events), `app-monitor`, `app-shell` (the home blueprint): the adapters.
+- `crates/app-pixelfed`, `app-recipes`, `app-collections`, `app-events` (Events), `app-monitor`, `app-agents` (Agents:
+  an external agent runner, [docs/agents.md](docs/agents.md)), `app-shell` (the home blueprint): the adapters.
   `crates/web-extract`: page fetching and extraction for fillers.
 - `crates/client-core` the engine; `crates/client-ffi` UniFFI (Kotlin bindings in
   `app/shared/src/jvmCommonMain`); `app/shared/src/commonMain` the shared UI.

@@ -792,6 +792,22 @@ async fn write_row(pod: &Pod, collection: &str, op: RowOp, body: Value) -> Resul
     Ok(out)
 }
 
+/// Update row `id` of `collection` with `values` (`{field name: value}`), as
+/// a layout's update would: checked against the definition, computed
+/// fields rerun, clients told. For other adapters that keep rows in step
+/// with an upstream (the `agents` source's Tasks wiring). `Err` is the
+/// refusal body (`{error, ...}`).
+pub async fn update_row(
+    pod: &Pod,
+    collection: &str,
+    id: &str,
+    values: Map<String, Value>,
+) -> Result<Value, Value> {
+    let mut body = values;
+    body.insert("id".into(), json!(id));
+    write_row(pod, collection, RowOp::Update, Value::Object(body)).await
+}
+
 async fn row_route(
     pod: Pod,
     collection: String,

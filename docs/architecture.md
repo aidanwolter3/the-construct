@@ -11,6 +11,7 @@ engine, and know nothing about any particular app.
                          │  │ layouts, versions, sessions, sign-ins, SQLite      │   │
                          │  │ adapters: app-pixelfed, app-recipes,               │   │
                          │  │           app-collections, app-events, app-monitor│   │
+                         │  │           app-agents                               │   │
                          │  └────────────────────────────────────────────────────┘   │
                          └──────────────▲──────────────────────────▲──────────────────┘
                      HTTP: layouts +    │                          │  SSE: layout, data,
@@ -66,6 +67,7 @@ The server binary picks the adapters at compile time (`server::adapters`). Apps 
 | `shell` | Home | `app-shell` | The home blueprint: a blank page with Notifications and Settings, which every pod's `home` references |
 | `settings` | Settings | `app-shell` | Settings as a layout over device data: connection, layouts and versions, sign-ins, channels, server |
 | `inbox` | Notifications | `app-shell` | The notification inbox as a layout over device data |
+| `agents` | Agents | `app-agents` | Claude Code sessions, schedules, sandboxes and checks of an external agent runner ([agents.md](agents.md)) |
 
 These are **blueprints** (decision `blueprints-and-home`): served by id and updated by deploys, but not listed.
 There are no apps at runtime (decision `layouts-not-apps`): a pod has **layouts**, starting with `home`, the root
@@ -74,7 +76,8 @@ pod has only `home`, a reference to the `shell` blueprint; the user's agent adds
 blueprints. Home owns every feed; each layout binds any of them, and loads only the ones it binds.
 
 Two more sources have no app of their own: **Collections** (`app-collections`), typed data that custom apps declare,
-and **Server monitoring** (`app-monitor`). Users build their own apps on top of all of these; see
+and **Server monitoring** (`app-monitor`). The **Agents** source (`app-agents`) follows an external agent runner
+([agents.md](agents.md)). Users build their own apps on top of all of these; see
 [custom-apps.md](custom-apps.md).
 
 ## Layouts

@@ -23,6 +23,7 @@ app-shell = { path = "../app-shell" }
 app-collections = { path = "../app-collections" }
 app-events = { path = "../app-events" }
 app-monitor = { path = "../app-monitor" }
+app-agents = { path = "../app-agents" }
 protocol = { workspace = true }
 axum = { version = "0.8", features = ["http2"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
