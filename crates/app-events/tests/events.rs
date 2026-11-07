@@ -429,8 +429,8 @@ async fn describe(pod: &Pod) -> Value {
 
 /// The Events app's simulator fixtures, from a real pod: two sites (one
 /// failing), alerts, matches (one seen). `UPDATE_FIXTURES=1` writes
-/// `app/desktopApp/src/sim/resources/events_bundle.json` (the app's workspace) and
-/// `app/desktopApp/src/sim/resources/events_screen_data.json` (its screens' data paths), with the
+/// `crates/construct-sim/data/events_bundle.json` (the app's workspace) and
+/// `crates/construct-sim/data/events_screen_data.json` (its screens' data paths), with the
 /// local site's address replaced by a stable one.
 #[tokio::test]
 async fn simulator_fixture() {
@@ -525,8 +525,7 @@ async fn simulator_fixture() {
     let bundle = json!({"version": "1.0.0", "workspace": ws["workspace"],
         "entities": ws["entities"], "queries": ws["queries"]});
     if std::env::var("UPDATE_FIXTURES").is_ok_and(|v| v == "1") {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../app/desktopApp/src/sim/resources");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../construct-sim/data");
         std::fs::write(root.join("events_bundle.json"), stable(&bundle)).unwrap();
         std::fs::write(
             root.join("events_screen_data.json"),
