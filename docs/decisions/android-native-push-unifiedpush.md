@@ -1,6 +1,8 @@
 # The Rust Android app receives push through the UnifiedPush connector's receiver, keys and decryption in Rust
 
-The connector 2.5.0 part is superseded by [android-native-push-embedded-fcm](android-native-push-embedded-fcm.md).
+The connector 2.5.0 part is superseded by [android-native-push-embedded-fcm](android-native-push-embedded-fcm.md):
+connector 3.3.5, with the embedded FCM distributor as the fallback for phones without a distributor app, and the keys
+still in Rust (through the connector's `KeyManager`).
 
 Date: 2026-11-07. Related: D52 / [`../notifications.md`](../notifications.md),
 [android-native-bridge](android-native-bridge.md),
@@ -37,7 +39,5 @@ Decision:
 - `request_notification_permission` shows Android's prompt while it still can, else the app's notification
   settings.
 
-Not yet: the FCM fallback for phones without a distributor (the embedded FCM distributor needs Google's Firebase
-library and Play services; without a distributor the Rust app gets notifications only while it runs); syncing
-channel names and groups from the pod's channel list; `local://device#notification_permission`; checked on a
-phone.
+Not yet: syncing channel names and groups from the pod's channel list; `local://device#notification_permission`;
+checked on a phone.

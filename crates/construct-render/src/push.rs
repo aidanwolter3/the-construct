@@ -415,7 +415,9 @@ pub mod android {
     ) {
         env.with_env(|env| -> jni::errors::Result<()> {
             let (endpoint, instance) = (text(env, &endpoint)?, text(env, &instance)?);
-            log(&format!("push: new endpoint for {instance}"));
+            // The host only: FCM (fcm.googleapis.com) or the distributor's server.
+            let host = endpoint.split('/').nth(2).unwrap_or("?");
+            log(&format!("push: new endpoint for {instance} at {host}"));
             let store = store(&files_dir(env, &context)?);
             super::new_endpoint(&store, &instance, &endpoint, log);
             Ok(())
@@ -672,9 +674,9 @@ pub mod android {
     /// Asks the distributor for an endpoint for `instance` (the connector's
     /// `UnifiedPush.register`, with the pod's `vapid` key and `PushKeys`, so
     /// the keys stay here); the endpoint comes to the receiver. The
-    /// distributor saved before, else the first installed distributor app,
-    /// else the embedded FCM distributor (this app itself; it fails later
-    /// without Play services). False when there is none.
+    /// distributor saved before while it is installed, else the first
+    /// distributor app, else the embedded FCM distributor (this app itself;
+    /// it fails later without Play services). False when there is none.
     pub fn register(
         env: &mut jni::Env,
         context: &JObject,
@@ -694,49 +696,51 @@ pub mod android {
                 &[JValue::Object(context)],
             )?
             .l()?;
-        let saved = env.cast_local::<JString>(saved)?;
-        if text(env, &saved)?.is_empty() {
-            let own = env
+        let saved = text(env, &env.cast_local::<JString>(saved)?)?;
+        let own = env
+            .call_method(
+                context,
+                jni_str!("getPackageName"),
+                jni_sig!("()Ljava/lang/String;"),
+                &[],
+            )?
+            .l()?;
+        let own = text(env, &env.cast_local::<JString>(own)?)?;
+        let list = env
+            .call_static_method(
+                &up,
+                jni_str!("getDistributors"),
+                jni_sig!("(Landroid/content/Context;)Ljava/util/List;"),
+                &[JValue::Object(context)],
+            )?
+            .l()?;
+        let n = env
+            .call_method(&list, jni_str!("size"), jni_sig!("()I"), &[])?
+            .i()?;
+        let mut names = Vec::new();
+        for i in 0..n {
+            let d = env
                 .call_method(
-                    context,
-                    jni_str!("getPackageName"),
-                    jni_sig!("()Ljava/lang/String;"),
-                    &[],
+                    &list,
+                    jni_str!("get"),
+                    jni_sig!("(I)Ljava/lang/Object;"),
+                    &[JValue::Int(i)],
                 )?
                 .l()?;
-            let own = text(env, &env.cast_local::<JString>(own)?)?;
-            let list = env
-                .call_static_method(
-                    &up,
-                    jni_str!("getDistributors"),
-                    jni_sig!("(Landroid/content/Context;)Ljava/util/List;"),
-                    &[JValue::Object(context)],
-                )?
-                .l()?;
-            let n = env
-                .call_method(&list, jni_str!("size"), jni_sig!("()I"), &[])?
-                .i()?;
-            let mut names = Vec::new();
-            for i in 0..n {
-                let d = env
-                    .call_method(
-                        &list,
-                        jni_str!("get"),
-                        jni_sig!("(I)Ljava/lang/Object;"),
-                        &[JValue::Int(i)],
-                    )?
-                    .l()?;
-                names.push(text(env, &env.cast_local::<JString>(d)?)?);
-            }
-            // A distributor app first: the user installed it to be used.
-            let Some(pick) = names
-                .iter()
-                .find(|d| **d != own)
-                .or_else(|| names.iter().find(|d| **d == own))
-            else {
-                return Ok(false);
-            };
-            log(&format!("push: distributor {pick}"));
+            names.push(text(env, &env.cast_local::<JString>(d)?)?);
+        }
+        // The saved one while it is still installed, else a distributor app
+        // (the user installed it to be used), else the embedded one.
+        let Some(pick) = names
+            .iter()
+            .find(|d| **d == saved)
+            .or_else(|| names.iter().find(|d| **d != own))
+            .or_else(|| names.iter().find(|d| **d == own))
+        else {
+            return Ok(false);
+        };
+        log(&format!("push: distributor {pick}"));
+        if *pick != saved {
             let pick = env.new_string(pick)?;
             env.call_static_method(
                 &up,

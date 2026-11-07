@@ -29,9 +29,9 @@ APK 10,352,744 B, 12,285 dex method references):
 Decision:
 
 - **UnifiedPush stays; FCM is the fallback.** Registration (`push::android::register`) uses the distributor saved
-  before, else the first distributor app installed, else the embedded FCM distributor (this app itself, listed
-  because the manifest declares its receivers); on a phone without Play services that registration fails and
-  notifications show only while the app runs, as before.
+  before while it is still installed, else the first distributor app installed, else the embedded FCM distributor
+  (this app itself, listed because the manifest declares its receivers); on a phone without Play services that
+  registration fails and notifications show only while the app runs, as before.
 - **Connector 3.3.5**, with the embedded FCM distributor 3.1.0, kotlin-stdlib 2.3.0 and kotlinx-coroutines-core-jvm
   1.10.2 added by the script (Maven Central, pinned by hash). Their manifest entries are copied into ours by hand
   (the script doesn't merge library manifests): the distributor's `FirebaseReceiver` and `UnifiedPushReceiver`, the
