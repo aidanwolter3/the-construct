@@ -866,6 +866,31 @@ impl Loader for PodEngine {
     fn changes(&self) -> Option<Changes> {
         lock(&self.shared.news).take()
     }
+
+    /// The engine stages it (decoded, upright, scaled, re-encoded without
+    /// metadata) on a thread of its own: it takes a moment.
+    fn stage(&self, file: &std::path::Path, done: crate::interact::StageDone) -> bool {
+        let engine = self.engine.clone();
+        let path = file.to_string_lossy().into_owned();
+        std::thread::spawn(move || {
+            done(
+                engine
+                    .stage_attachment(&path)
+                    .map(|a| crate::interact::Staged {
+                        id: a.id,
+                        uri: a.uri,
+                        url: a.url,
+                        width: a.width,
+                        height: a.height,
+                    }),
+            )
+        });
+        true
+    }
+
+    fn discard(&self, id: &str) {
+        self.engine.discard_attachment(id);
+    }
 }
 
 /// A [`SecureStore`] in a file only this user can read (desktops without a

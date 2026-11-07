@@ -31,7 +31,9 @@ pub trait Platform {
         set_clipboard_here(text);
     }
     /// Opens the platform's photo picker for up to `max` photos; false when
-    /// it has none. What is picked comes back as [`PlatformEvent::Picked`].
+    /// it has none (the desktop's file dialog then opens:
+    /// `Session::pick_here`). What is picked comes back as
+    /// [`PlatformEvent::Picked`].
     fn pick_images(&self, _max: u32) -> bool {
         false
     }
@@ -58,9 +60,10 @@ pub trait Platform {
 pub enum PlatformEvent {
     /// A link opened the app (`construct://…`).
     Link(String),
-    /// Photos came back from the picker: how many, and their total size in
-    /// bytes.
-    Picked { count: usize, bytes: u64 },
+    /// Photos came back from the picker, each copied to a local file (or
+    /// why it couldn't be read); empty when it was closed. The app stages
+    /// them (`Session::picked`).
+    Picked(Vec<Result<std::path::PathBuf, String>>),
     /// A message arrived for the app.
     Message(String),
 }

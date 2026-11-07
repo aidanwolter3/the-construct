@@ -26,6 +26,9 @@ use crate::layout::{Input, Laid, RenderError, SceneBuilder, Viewport};
 use crate::scene::{Draw, QuadInstance, Scene, SemanticNode, Tap};
 use crate::style::Rgba;
 
+mod media;
+pub use media::{StageDone, Staged, attachment_uri, pick_files_here};
+
 /// What a tap or scroll aims at.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Target {
@@ -103,7 +106,8 @@ pub enum Effect {
         text: String,
     },
     /// A media picker was tapped: the platform opens its photo picker for
-    /// up to `max` photos for this field.
+    /// up to `max` photos (what the field still takes) and hands what is
+    /// picked to [`Session::picked`] (the desktop: [`Session::pick_here`]).
     PickMedia {
         field: String,
         max: u32,
@@ -286,6 +290,15 @@ enum Answer {
         path: String,
         result: Result<DataBundle, String>,
     },
+    /// A picked photo the engine staged (or why it couldn't) for a media
+    /// picker's field holding at most `max`.
+    Staged {
+        field: String,
+        max: u32,
+        result: Result<Staged, String>,
+    },
+    /// The desktop's file dialog closed with these files.
+    Picked(Vec<Result<std::path::PathBuf, String>>),
 }
 
 /// What undoes a write's local change when the pod refuses it.
@@ -348,6 +361,14 @@ pub trait Loader: Send {
     fn take(&self, _intent: &Value) -> bool {
         false
     }
+    /// Stages a picked photo for a create's `attachments` (D49), off the
+    /// caller's thread, and calls `done` with it; false when this loader
+    /// can't.
+    fn stage(&self, _file: &std::path::Path, _done: StageDone) -> bool {
+        false
+    }
+    /// Forgets a staged photo taken off its picker before it was sent.
+    fn discard(&self, _id: &str) {}
     /// What changed since the last call (another device, an agent, a write
     /// the pod answered); `None` when nothing did, or the loader doesn't
     /// hear of changes. Called every frame: it must not block.
@@ -449,6 +470,11 @@ pub struct Session {
     /// A handle being dragged, and how far the finger is below the text
     /// point it moves.
     grab: Option<(Grab, f32)>,
+    /// The media picker the platform's picker is open for: its field and
+    /// most photos.
+    picking: Option<(String, u32)>,
+    /// Photos being picked or staged (a script waits for them).
+    pub staging: usize,
 }
 
 /// How long the caret shows, then hides (Android's 500 ms).
@@ -558,6 +584,8 @@ impl Session {
             caret_shown: None,
             handles: Vec::new(),
             grab: None,
+            picking: None,
+            staging: 0,
         }
     }
 
@@ -1200,6 +1228,14 @@ impl Session {
         for answer in done {
             let (undo, w) = match answer {
                 Answer::Write(undo, w) => (undo, w),
+                Answer::Staged { field, max, result } => {
+                    self.staged(field, max, result);
+                    continue;
+                }
+                Answer::Picked(files) => {
+                    self.dialog_closed(files);
+                    continue;
+                }
                 Answer::Data { path, result } => {
                     let error = result.as_ref().err().cloned();
                     if let Ok(d) = result {
@@ -1268,7 +1304,7 @@ impl Session {
 
     /// Whether writes or loads are still out (a script waits for them).
     pub fn busy(&self) -> bool {
-        self.pending > 0 || self.stack.iter().any(|e| e.loading.is_some())
+        self.pending > 0 || self.staging > 0 || self.stack.iter().any(|e| e.loading.is_some())
     }
 
     /// Waits until nothing is out, or `timeout` (scripts and tests).
@@ -2259,10 +2295,16 @@ impl Session {
                 }
             }
             "edit.select_all" => self.select_all(),
-            "media.pick" => out.push(Effect::PickMedia {
-                field: intent["field"].as_str().unwrap_or("").to_owned(),
-                max: intent["max"].as_u64().unwrap_or(1) as u32,
-            }),
+            "media.pick" => {
+                let field = intent["field"].as_str().unwrap_or("").to_owned();
+                let max = self.start_pick(&field, intent["max"].as_u64().unwrap_or(1) as u32);
+                out.push(Effect::PickMedia { field, max });
+            }
+            "media.remove" => {
+                let field = intent["field"].as_str().unwrap_or("");
+                self.remove_media(field, intent["id"].as_str().unwrap_or(""));
+                out.push(Effect::Nothing);
+            }
             "form.clear" => {
                 // The session's own step after a field's Send.
                 if let Some(f) = intent["field"].as_str() {
@@ -2506,7 +2548,9 @@ impl Session {
     fn create(&mut self, intent: &Value, out: &mut Vec<Effect>) {
         let uri = intent["entity_uri"].as_str().unwrap_or("").to_owned();
         let query_key = intent["query_key"].as_str().unwrap_or("").to_owned();
-        if let Ok(e) = serde_json::from_value::<protocol::EntityRecord>(intent["entity"].clone()) {
+        let mut entity = intent["entity"].clone();
+        Session::bind_attachments(intent, &mut entity);
+        if let Ok(e) = serde_json::from_value::<protocol::EntityRecord>(entity) {
             self.data.entities.insert(uri.clone(), e);
         }
         let list = self.data.queries.entry(query_key.clone()).or_default();
@@ -2521,6 +2565,7 @@ impl Session {
             fields: BTreeMap::new(),
         });
         if self.taken(intent, out) {
+            self.attachments_taken(intent);
             return;
         }
         let write = Write {

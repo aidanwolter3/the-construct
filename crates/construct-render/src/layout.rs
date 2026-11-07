@@ -1737,41 +1737,124 @@ impl<'i> Build<'_, 'i> {
                 label,
                 max_items,
             } => {
-                let plus = self.icon("add_photo", theme.muted_text, 24.0);
-                let mut tile = column(0, pad(0, 0), AlignItems::CENTER);
-                tile.justify_content = JustifyContent::CENTER;
-                tile.size = Size {
-                    width: length(80.0),
-                    height: length(80.0),
-                };
-                let mut sem = self.sem(
-                    b,
-                    n,
-                    label.as_deref().map(|l| ctx.text(l)),
-                    // The platform's photo picker (`Effect::PickMedia`).
-                    Some(Tap::Intent {
-                        intent: json!({ "intent": "media.pick", "field": field, "max": max_items }),
-                    }),
-                );
-                sem.id = format!("media:{field}");
-                let t = self.push(
-                    tile,
-                    vec![plus],
-                    Paint::Quad {
-                        bg: Rgba::TRANSPARENT,
-                        border: Some(theme.outline),
-                        radius: 8.0,
-                    },
-                    Some(sem),
-                    false,
-                );
-                self.push(
-                    row(8, pad(0, 0), AlignItems::CENTER),
-                    vec![t],
-                    Paint::None,
-                    None,
-                    false,
-                )
+                // The photos staged so far (their ids in the form), each with
+                // a remove button, then the add tile while there is room;
+                // wrapping like the shared UI's FlowRow.
+                let ids: Vec<String> = ctx
+                    .form
+                    .get(field)
+                    .and_then(|v| serde_json::from_str(v).ok())
+                    .unwrap_or_default();
+                let mut tiles = Vec::new();
+                for (i, id) in ids.iter().enumerate() {
+                    let url = ctx
+                        .entities
+                        .get(&format!("construct://attachments/{id}"))
+                        .and_then(|e| e.get_str("preview_url").or_else(|| e.get_str("url")))
+                        .unwrap_or_default()
+                        .to_owned();
+                    let mut sem = self.sem(
+                        b,
+                        n,
+                        Some(format!("Photo {} of {}", i + 1, ids.len())),
+                        None,
+                    );
+                    sem.id = format!("media:{field}/{i}");
+                    let img = self.push(
+                        fixed(80.0, 80.0),
+                        Vec::new(),
+                        Paint::Image {
+                            url,
+                            placeholder: theme.surface_variant,
+                            radius: 8.0,
+                        },
+                        Some(sem),
+                        false,
+                    );
+                    let x = self.icon("close", Rgba::rgb(255, 255, 255), 16.0);
+                    let mut rs = column(0, pad(0, 0), AlignItems::CENTER);
+                    rs.justify_content = JustifyContent::CENTER;
+                    rs.size = Size {
+                        width: length(24.0),
+                        height: length(24.0),
+                    };
+                    rs.position = Position::Absolute;
+                    // The tile's top right corner (a right inset resolves
+                    // against the row, not the tile).
+                    rs.inset = Rect {
+                        left: length(80.0 - 24.0 - 4.0),
+                        right: auto(),
+                        top: length(4.0),
+                        bottom: auto(),
+                    };
+                    let mut rsem = self.sem(
+                        b,
+                        n,
+                        Some(format!("Remove photo {}", i + 1)),
+                        Some(Tap::Intent {
+                            intent: json!({ "intent": "media.remove", "field": field, "id": id }),
+                        }),
+                    );
+                    rsem.id = format!("media-remove:{id}");
+                    let rm = self.push(
+                        rs,
+                        vec![x],
+                        Paint::Quad {
+                            bg: Rgba([0.0, 0.0, 0.0, 0.6]),
+                            border: None,
+                            radius: 12.0,
+                        },
+                        Some(rsem),
+                        false,
+                    );
+                    tiles.push(self.push(
+                        fixed(80.0, 80.0),
+                        vec![img, rm],
+                        Paint::None,
+                        None,
+                        false,
+                    ));
+                }
+                if (ids.len() as u32) < (*max_items).max(1) {
+                    let plus = self.icon("add_photo", theme.muted_text, 24.0);
+                    let mut tile = column(0, pad(0, 0), AlignItems::CENTER);
+                    tile.justify_content = JustifyContent::CENTER;
+                    tile.size = Size {
+                        width: length(80.0),
+                        height: length(80.0),
+                    };
+                    let mut sem = self.sem(
+                        b,
+                        n,
+                        Some(
+                            label
+                                .as_deref()
+                                .map(|l| ctx.text(l))
+                                .filter(|l| !l.trim().is_empty())
+                                .unwrap_or_else(|| "Add photo".to_owned()),
+                        ),
+                        // The platform's photo picker (`Effect::PickMedia`).
+                        Some(Tap::Intent {
+                            intent: json!({ "intent": "media.pick", "field": field, "max": max_items }),
+                        }),
+                    );
+                    sem.id = format!("media:{field}");
+                    tiles.push(self.push(
+                        tile,
+                        vec![plus],
+                        Paint::Quad {
+                            bg: Rgba::TRANSPARENT,
+                            border: Some(theme.outline),
+                            radius: 8.0,
+                        },
+                        Some(sem),
+                        false,
+                    ));
+                }
+                let mut style = row(8, pad(0, 0), AlignItems::CENTER);
+                style.flex_wrap = FlexWrap::Wrap;
+                style.gap.height = length(8.0);
+                self.push(style, tiles, Paint::None, None, false)
             }
             UiNode::Layout {
                 layout,
@@ -2452,7 +2535,11 @@ impl Laid {
                 let mut q = QuadInstance::fill(rect, *placeholder, r);
                 q.clip = clip;
                 scene.draws.push(Draw::Quad(q));
-                if url.starts_with("http://") || url.starts_with("https://") {
+                // `file://`: a staged photo (a media picker's thumbnail).
+                if url.starts_with("http://")
+                    || url.starts_with("https://")
+                    || url.starts_with("file://")
+                {
                     scene.draws.push(Draw::Image(ImageRun {
                         url: url.clone(),
                         rect,

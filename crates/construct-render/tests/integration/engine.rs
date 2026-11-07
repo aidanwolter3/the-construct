@@ -36,6 +36,26 @@ fn home(version: u64, count: i64) -> Value {
     })
 }
 
+/// A New post screen: a media picker and a Share button that creates a
+/// post with the picked photos (Pixelfed's compose, smaller).
+fn compose_home() -> Value {
+    json!({
+        "version": "1.0.0",
+        "workspace": { "type": "core://Column", "children": [
+            { "type": "core://MediaPicker", "field": "photos", "max_items": 4, "label": "Add photos" },
+            { "type": "core://Button", "label": "Share", "on_click": {
+                "intent": "action.mutation.create", "query_key": "timeline", "position": "start",
+                "entity_uri": "x://posts/pending-$nonce",
+                "entity": { "media_uris": "$attachments.photos" },
+                "attachments": { "photos": "$form.photos" },
+                "endpoint": "/v1/posts/create",
+                "payload": { "media": "$attachments.photos", "client_id": "$nonce" } } }
+        ] },
+        "entities": {},
+        "queries": {}
+    })
+}
+
 #[derive(Default)]
 struct Pod {
     version: AtomicU64,
@@ -46,6 +66,11 @@ struct Pod {
     /// `PUT /v1/apps/<id>/hidden` bodies, by path.
     hidden: Mutex<Vec<(String, String)>>,
     streams: Mutex<Vec<mpsc::Sender<String>>>,
+    /// Home is a New post screen (a media picker and Share).
+    compose: AtomicBool,
+    /// Bytes of each upload, and the bodies of the posts created.
+    uploads: Mutex<Vec<usize>>,
+    created: Mutex<Vec<Value>>,
 }
 
 struct Stub {
@@ -119,12 +144,23 @@ fn handle(stream: TcpStream, pod: &Pod) {
         ("GET", "/v1/workspaces/home") => {
             let count = *pod.count.lock().unwrap();
             let header = format!("X-Construct-Layout-Version: {version}\r\n");
-            send(
-                &mut out,
-                "200 OK",
-                &header,
-                &home(version, count).to_string(),
-            );
+            let home = if pod.compose.load(Ordering::SeqCst) {
+                compose_home()
+            } else {
+                home(version, count)
+            };
+            send(&mut out, "200 OK", &header, &home.to_string());
+        }
+        ("POST", "/v1/uploads") => {
+            let mut uploads = pod.uploads.lock().unwrap();
+            uploads.push(body.len());
+            let id = json!({ "upload_id": format!("up-{}", uploads.len()) });
+            send(&mut out, "201 Created", "", &id.to_string());
+        }
+        ("POST", "/v1/posts/create") => {
+            let v: Value = serde_json::from_slice(&body).unwrap_or_default();
+            pod.created.lock().unwrap().push(v);
+            send(&mut out, "200 OK", "", "{}");
         }
         ("GET", "/v1/workspaces/home/events") => {
             let _ = write!(
@@ -345,5 +381,44 @@ fn hiding_a_layout_goes_to_the_pod() {
             r#"{"hidden":true}"#.to_owned()
         )
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_picked_photo_is_staged_uploaded_and_posted() {
+    let stub = Stub::start();
+    stub.pod.compose.store(true, Ordering::SeqCst);
+    let dir = storage("photos");
+    let pod = PodEngine::open_with(&stub.base, Some(&dir), store(&stub.base), config());
+    let mut s = pod.session(construct_render::Viewport::PHONE);
+    wait_until("home", || shows(&mut s, "Share"));
+
+    // A photo as the picker leaves it: a file the engine stages.
+    std::fs::create_dir_all(&dir).unwrap();
+    let photo = dir.join("picked.png");
+    image::RgbaImage::from_pixel(64, 48, image::Rgba([200, 80, 40, 255]))
+        .save(&photo)
+        .unwrap();
+    s.tap(&Target::Id("media:photos".into())).unwrap();
+    s.picked(vec![Ok(photo)]);
+    wait_until("the photo to be staged", || {
+        s.poll();
+        s.media_ids("photos").len() == 1
+    });
+    let id = s.media_ids("photos")[0].clone();
+    let url = s.data.entities[&format!("construct://attachments/{id}")]
+        .get_str("url")
+        .unwrap()
+        .to_owned();
+    assert!(url.starts_with("file://"), "{url}");
+    assert!(shows(&mut s, "Photo 1 of 1"));
+
+    // Share: the engine uploads it, then creates the post with its upload id.
+    s.tap(&Target::Text("Share".into())).unwrap();
+    wait_until("the post", || !stub.pod.created.lock().unwrap().is_empty());
+    assert_eq!(stub.pod.uploads.lock().unwrap().len(), 1);
+    let post = stub.pod.created.lock().unwrap()[0].clone();
+    assert_eq!(post["media"], json!(["up-1"]), "{post}");
+    assert!(s.media_ids("photos").is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }

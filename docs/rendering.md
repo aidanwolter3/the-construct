@@ -28,7 +28,7 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 | `accessibility` | The semantic tree as an AccessKit tree for screen readers (roles, labels, values, states), and their requests back as taps, scrolls and field values |
 | `cpu` | The CPU rasterizer: `sd_rounded_box` and `shade` (the shader's maths), 8-bit premultiplied target, glyphs placed as glyphon places them |
 | `gpu` | `Renderer` (any texture view), `HeadlessSurface` (offscreen + readback); feature `gpu` (default) |
-| `interact` | `Session`: a layout with form values, scroll offsets and a back stack; `tap`, `long_press`, `scroll_by`, `type_text`, `dispatch`; text editing (cursor, selection, handles, the edit bar); confirm dialogs; sheet drags and carousel paging; writes through its `Loader` |
+| `interact` | `Session`: a layout with form values, scroll offsets and a back stack; `tap`, `long_press`, `scroll_by`, `type_text`, `dispatch`; text editing (cursor, selection, handles, the edit bar); confirm dialogs; sheet drags and carousel paging; writes through its `Loader`; photos for a media picker (`interact/media.rs`: staged through the `Loader`, the desktop's file dialog) |
 | `text` | Fonts, shaping and measuring (cosmic-text); caret stops for editing |
 | `dates` | `core://Text` `format`: `YYYY-MM-DD` values as "tomorrow" or "Nov 5", against the device's day (its time zone through jiff) |
 | `images` | Images by URL, cut to their box (on a background thread for the GPU) |
@@ -40,6 +40,7 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 | `platform` | `Platform`: what the app needs from the system it runs on (keyboard, insets, browser, clipboard, photo picker, events, the pod's saved session), implemented per platform |
 | `android` | `android_main` for the NativeActivity (Android builds with `window`) |
 | `bridge` | The Rust side of the Android bridge (`android/java`): links, the photo picker's result, messages |
+| `picked` | The photos Android's picker returned, read through the content resolver into files the engine stages (HEIC and other formats it can't decode become JPEG through `ImageDecoder`) |
 
 The pod builds the crate with `default-features = false`: no wgpu, CPU only.
 
@@ -84,9 +85,14 @@ footer's Send, makes it follow its content to the end once that has grown, while
 given), Carousel (pages side by side, an "n/N" badge and dots; a sideways drag pages it, snapping to a page), and
 every named icon (`icons.rs`: the shared UI's Material path data, rasterized with zeno; on the GPU they are glyphon
 custom glyphs). Images draw once loaded (over a placeholder in the blurhash's colour; only live sessions load them;
-in a window they are cut to their box on a background thread). Removed vocabulary (`core://AppFrame`,
-`core://Drawer`) and nodes this build doesn't know are named as the shared UI names them: "Unsupported component:
-<type>" in small grey text. Approximated: MediaPicker (the add tile; the picker is its own ticket, #170).
+in a window they are cut to their box on a background thread; `file://` ones, staged photos, are read from disk).
+MediaPicker as the shared UI's: a thumbnail per staged photo with a remove button, then the add tile while there is
+room, wrapping. Its tile opens the platform's photo picker (Android's, through the bridge) or the desktop's file
+dialog (`osascript` on macOS, `zenity` or `kdialog` on Linux); each photo is staged with the engine
+(`stage_attachment`, D49) and its id kept in the field, and a create's `attachments` hands them to the engine, which
+uploads them before the POST ([posting.md](posting.md)). Removed vocabulary (`core://AppFrame`, `core://Drawer`) and
+nodes this build doesn't know are named as the shared UI names them: "Unsupported component: <type>" in small grey
+text.
 Presented layouts are drawn as the shared UI draws them: a sheet (85% of the height, with a handle), a side panel
 (86% of the width, at most 340 points) or an overlay from its edge, over a 32% black scrim that closes it when
 tapped; a screen a sheet or panel opens stays inside it. A sheet dragged by its handle strip, or a panel dragged
@@ -165,12 +171,13 @@ app logic: `ConstructActivity` (NativeActivity plus `onNewIntent` and `onActivit
 `askPermission` that Rust calls), `ConstructReceiver` (a message, also while the app is closed) and `Native` (the
 native methods, `Java_org_theconstruct_android_Native_*` in `src/bridge.rs`). The script compiles them with `javac`
 and `d8` into the APK's `classes.dex`. Events queue in `bridge.rs`, wake the window and reach it through
-`Platform::events`; for now each shows as a notice. Decision:
+`Platform::events`: picked photos go to the media picker that asked (read by `picked.rs`); links and messages show
+as a notice for now. Decision:
 [`android-native-bridge`](decisions/android-native-bridge.md). Try it with the app installed:
 
 ```bash
 adb shell am start -a android.intent.action.VIEW -d "construct://bridge/hello"     # a link opens the app
-# Pixelfed → New post → the Add photos tile: Android's photo picker; the count and size come back to Rust
+# Pixelfed → New post → the Add photos tile: Android's photo picker; the photos show as thumbnails, Share posts them
 # Swipe the app away, then (only adb and the system may send this):
 adb shell am broadcast -n org.theconstruct.android/.ConstructReceiver --es message "Hello"   # a notification
 ```

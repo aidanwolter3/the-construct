@@ -95,7 +95,8 @@ word is the command and the rest of the entry, as written, its argument: `click 
 | `pin-version <layout> <n or latest>` | `pin_version` / `follow_latest` (live mode; the engine still shows the latest version). |
 | `notify <app_id> <channel> <title>` | Fixture mode: a notification arrives (the inbox and its count update). |
 | `toggle-channel <app>.<channel>` | Flips a notification channel (`toggle_channel`; fixture mode). |
-| `pick <path> [<path>…]` / `publish-version <note>` | Parsed, but fail: the engine opens no media picker and always shows a layout's latest version. The Compose simulator below still runs them. |
+| `pick <path> [<path>…]` | Queues files (relative to the repository root) for the next media picker tap, at most its `max`; none queued is a cancelled pick. Fixture mode: the fake pod stages each file where it is (`sim-<n>` ids). |
+| `publish-version <note>` | Parsed, but fails: the engine always shows a layout's latest version. The Compose simulator below still runs it. |
 
 A step whose tap or intent fails (a load the pod refuses, an intent nothing in this mode runs) fails.
 
