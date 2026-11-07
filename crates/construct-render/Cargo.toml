@@ -16,9 +16,9 @@ default = ["gpu"]
 gpu = ["dep:wgpu", "dep:glyphon", "dep:pollster", "dep:bytemuck"]
 # A native window (winit): the desktop viewer and the Android activity.
 window = ["gpu", "dep:winit", "dep:jni"]
-# A live, read-only session over a pod (`remote`): layouts, data and images
-# over HTTP.
-remote = ["dep:reqwest", "image/jpeg"]
+# A live session over a pod (`remote`): run by the engine (`client-core`:
+# its cache, outbox and event stream), images over HTTP.
+remote = ["dep:reqwest", "dep:client-core", "image/jpeg"]
 # The `construct-viewer` binary (`--pod` runs it on a pod).
 viewer = ["window", "remote"]
 
@@ -36,8 +36,9 @@ glyphon = { version = "0.12", optional = true }
 pollster = { version = "0.4", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
 winit = { version = "0.30", optional = true }
-# `remote`: the pod's HTTP API.
+# `remote`: the pod's HTTP API, and the engine the Compose clients run.
 reqwest = { workspace = true, optional = true }
+client-core = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 # NativeActivity glue (winit re-exports android-activity).

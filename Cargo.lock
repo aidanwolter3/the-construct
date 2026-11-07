@@ -827,6 +827,7 @@ name = "construct-render"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "client-core",
  "cosmic-text",
  "glyphon",
  "image",
