@@ -119,6 +119,34 @@ pub enum Effect {
     Nothing,
 }
 
+impl Effect {
+    /// The effect's name (its `effect` tag), for logs: never its values,
+    /// which can be what was typed (a pod code) or a session token.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Effect::FormSet { .. } => "form_set",
+            Effect::Focused { .. } => "focused",
+            Effect::LocalSet { .. } => "local_set",
+            Effect::Opened { .. } => "opened",
+            Effect::OpenedScreen { .. } => "opened_screen",
+            Effect::Device { .. } => "device",
+            Effect::LoadFailed { .. } => "load_failed",
+            Effect::Back => "back",
+            Effect::Scrolled { .. } => "scrolled",
+            Effect::Sent { .. } => "sent",
+            Effect::OpenLink { .. } => "open_link",
+            Effect::SignedIn { .. } => "signed_in",
+            Effect::LeftPod => "left_pod",
+            Effect::SwitchServer { .. } => "switch_server",
+            Effect::Paste { .. } => "paste",
+            Effect::Copy { .. } => "copy",
+            Effect::PickMedia { .. } => "pick_media",
+            Effect::NotSent { .. } => "not_sent",
+            Effect::Nothing => "nothing",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Outcome {
     pub node: Option<SemanticNode>,
@@ -3497,4 +3525,33 @@ fn bind_form_text(
     }
     out.push_str(rest);
     Value::String(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_effects_name_is_its_tag_and_carries_no_value() {
+        let effects = [
+            Effect::FormSet {
+                field: "pod_token".into(),
+                value: "secret-code".into(),
+            },
+            Effect::SignedIn {
+                token: "secret-session".into(),
+                code: "secret-code".into(),
+            },
+            Effect::Copy {
+                text: "secret-text".into(),
+            },
+            Effect::LeftPod,
+            Effect::Nothing,
+        ];
+        for e in &effects {
+            let tagged = serde_json::to_value(e).unwrap();
+            assert_eq!(tagged["effect"], e.name(), "{e:?}");
+            assert!(!e.name().contains("secret"));
+        }
+    }
 }

@@ -92,7 +92,7 @@ pub extern "system" fn Java_org_theconstruct_android_Native_message<'l>(
         } else {
             message.try_to_string(env)?
         };
-        log(&format!("message: {text}"));
+        log("message received");
         if let Err(e) = notify(env, &context, &text) {
             log(&format!("notification: {e}"));
             env.exception_clear();
