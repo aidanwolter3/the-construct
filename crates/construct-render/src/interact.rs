@@ -328,6 +328,18 @@ pub trait Loader: Send {
     fn take(&self, _intent: &Value) -> bool {
         false
     }
+    /// Starts a sign-in to an upstream or signs out of it, where the loader
+    /// runs the engine's sign-in (`crate::signin`): `action.auth.login`, or
+    /// `action.device` `sign_in`, `sign_out` and `set_server`. True when
+    /// taken; its progress shows in `local://session`.
+    fn auth(&self, _intent: &Value) -> bool {
+        false
+    }
+    /// Hands a link that opened the app to a sign-in waiting for its
+    /// redirect; false when it isn't one, or nothing waits for it.
+    fn redirect(&self, _url: &str) -> bool {
+        false
+    }
     /// What changed since the last call (another device, an agent, a write
     /// the pod answered); `None` when nothing did, or the loader doesn't
     /// hear of changes. Called every frame: it must not block.
@@ -2199,6 +2211,17 @@ impl Session {
             }
             "action.mutation.optimistic" => self.optimistic(intent, out),
             "action.auth.session" => self.open_session(intent, out),
+            "action.auth.login" => {
+                if self.loader.as_ref().is_some_and(|l| l.auth(intent)) {
+                    out.push(Effect::Device {
+                        command: "sign_in".into(),
+                    });
+                } else {
+                    out.push(Effect::NotSent {
+                        intent: intent.clone(),
+                    });
+                }
+            }
             "action.mutation.create" => self.create(intent, out),
             "action.link.open" => {
                 let url = intent["url"].as_str().unwrap_or("").trim();
@@ -2283,6 +2306,12 @@ impl Session {
                     }
                     "mark_all_read" => {
                         self.mark_read(None, out);
+                        out.push(Effect::Device { command });
+                        return;
+                    }
+                    "sign_in" | "sign_out" | "set_server"
+                        if self.loader.as_ref().is_some_and(|l| l.auth(intent)) =>
+                    {
                         out.push(Effect::Device { command });
                         return;
                     }
@@ -2567,6 +2596,12 @@ impl Session {
     /// A message from the app itself (not a layout), in its own dialog with
     /// an OK button: what the platform reports (a link that opened the app,
     /// photos picked, a message received).
+    /// A link that opened the app: true when it was a sign-in's redirect
+    /// and went to the sign-in waiting for it ([`Loader::redirect`]).
+    pub fn auth_redirect(&mut self, url: &str) -> bool {
+        self.loader.as_ref().is_some_and(|l| l.redirect(url))
+    }
+
     pub fn notice(&mut self, title: &str, message: &str) {
         let root = json!({ "type": "core://Box", "fill": true, "align": "Center", "padding_h_dp": 32,
             "content": { "type": "core://Box", "background": "${local://theme#page}", "corner_dp": 28,

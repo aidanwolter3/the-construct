@@ -13,7 +13,9 @@
 //! seen; its session in the Keychain on macOS, else in `secure.json` there.
 //! Without a session, the pod's sign-in screen (a pod code, or a temporary
 //! pod), staging unless `CONSTRUCT_POD_URL` says otherwise. Leave pod in
-//! Settings goes back to it, with the last code filled in.
+//! Settings goes back to it, with the last code filled in. Signing in to
+//! Pixelfed from Settings opens the browser and comes back on a loopback
+//! redirect (`http://127.0.0.1:<port>/callback`).
 
 use construct_render::interact::Session;
 use construct_render::pods::PodHome;
@@ -85,6 +87,7 @@ fn pod_home() -> PodHome {
         construct_render::engine::desktop_store(dir.as_deref()),
         log,
     )
+    .with_sign_in(construct_render::signin::SignIn::desktop())
 }
 
 /// The desktop: no on-screen keyboard or insets; signing in and leaving the

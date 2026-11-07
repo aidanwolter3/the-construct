@@ -43,6 +43,17 @@
                 <data android:scheme="construct" android:host="oauth" />
                 <data android:scheme="construct" android:host="bridge" />
             </intent-filter>
+            <!-- The sign-in redirect as a verified App Link (decision android-app-link-sign-in-redirect), for the
+                 staging pod (src/signin.rs APP_LINK_HOST): used once Android has verified it against the pod's
+                 assetlinks.json (this build's signing cert listed), else construct://oauth above. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="the-construct-pod.fly.dev" />
+                <data android:path="/oauth/android" />
+            </intent-filter>
         </activity>
         <!-- A message for the app, also while it is closed (what a push does). Only the shell (adb) and the system
              hold DUMP, so no other app can send one. -->

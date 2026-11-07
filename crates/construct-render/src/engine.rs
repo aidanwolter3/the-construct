@@ -19,7 +19,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
-use client_core::{ConstructEngine, EngineConfig, EngineOptions, SecureStore, StateSnapshot};
+use client_core::{
+    ConstructEngine, EngineConfig, EngineOptions, RedirectMode, SecureStore, StateSnapshot,
+};
 use protocol::{DataBundle, UiNode};
 use serde_json::{Value, json};
 
@@ -27,6 +29,7 @@ use crate::images::ImageStore;
 use crate::interact::{Changes, Loaded, Loader, Session};
 use crate::layout::Viewport;
 use crate::remote;
+use crate::signin::SignIn;
 
 /// The layout clients open first, and the engine's own workspace.
 pub const HOME: &str = "home";
@@ -52,6 +55,8 @@ pub struct PodEngine {
     base: String,
     store: Arc<dyn SecureStore>,
     shared: Arc<Shared>,
+    /// Upstream sign-in runs here (the platform gave a [`SignIn`]).
+    signs_in: bool,
 }
 
 /// What the engine's observer and the session share.
@@ -67,6 +72,9 @@ struct Shared {
     titles: Mutex<HashMap<String, String>>,
     /// Versions picked on this device (`pin_version`), by layout.
     pins: Mutex<HashMap<String, i64>>,
+    /// The upstreams to sign in to (`local:providers`), by id: their
+    /// `action.auth.login` and whether they take another server.
+    providers: Mutex<HashMap<String, Value>>,
     /// The layouts opened (their JSON, by id), for the device data they
     /// bind.
     needs: Mutex<HashMap<String, String>>,
@@ -227,6 +235,19 @@ impl PodEngine {
         store: Arc<dyn SecureStore>,
         config: EngineConfig,
     ) -> PodEngine {
+        PodEngine::open_signing_in(base, storage, store, config, None)
+    }
+
+    /// [`PodEngine::open_with`] that signs in to upstreams the platform's
+    /// way ([`SignIn`]: its browser and redirect); without one, a sign-in
+    /// isn't taken.
+    pub fn open_signing_in(
+        base: &str,
+        storage: Option<&Path>,
+        store: Arc<dyn SecureStore>,
+        config: EngineConfig,
+        sign_in: Option<&SignIn>,
+    ) -> PodEngine {
         let base = base.trim_end_matches('/').to_owned();
         let dir = storage.map(|d| storage_for(d, &base));
         if let Some(d) = &dir
@@ -245,6 +266,10 @@ impl PodEngine {
             EngineOptions {
                 config,
                 secure_store: Some(store.clone()),
+                url_opener: sign_in.map(|s| s.opener.clone()),
+                redirect: sign_in
+                    .map(|s| (s.redirect)(&base))
+                    .unwrap_or(RedirectMode::Loopback),
                 ..EngineOptions::default()
             },
         ));
@@ -263,6 +288,7 @@ impl PodEngine {
             base,
             store,
             shared,
+            signs_in: sign_in.is_some(),
         };
         // The observer holds the engine weakly: the engine owns it.
         let weak = Arc::downgrade(&pod.engine);
@@ -321,7 +347,14 @@ impl PodEngine {
         merge(&mut data, apps);
         merge(&mut data, self.device_now(&snap));
         let mut s = Session::new(HOME, root, data, viewport);
-        self.shared.note(HOME, snap.workspace_json.clone());
+        {
+            // Under the observer's lock: home may have come in since the
+            // snapshot, and its newer JSON stays.
+            let seen = lock(&self.shared.seen);
+            if seen.workspace.is_empty() {
+                self.shared.note(HOME, snap.workspace_json.clone());
+            }
+        }
         *lock(&self.shared.images) = Some(s.images.clone());
         s.loader = Some(Box::new(self.clone()));
         remote::fetch_images(&s.images);
@@ -506,8 +539,10 @@ fn device_data(engine: &ConstructEngine, shared: &Shared) -> DataBundle {
     let mut out = DataBundle::default();
     match engine.list_apps() {
         Ok(body) => {
-            if let Some(f) = &shared.apps_file
-                && let Err(e) = std::fs::write(f, &body)
+            // Whole or not at all: a new start may read it meanwhile.
+            let tmp = shared.apps_file.as_ref().map(|f| f.with_extension("tmp"));
+            if let (Some(f), Some(tmp)) = (&shared.apps_file, tmp)
+                && let Err(e) = std::fs::write(&tmp, &body).and_then(|()| std::fs::rename(&tmp, f))
             {
                 eprintln!("construct-render: {}: {e}", f.display());
             }
@@ -548,6 +583,12 @@ fn device_data(engine: &ConstructEngine, shared: &Shared) -> DataBundle {
             .sign_ins()
             .map(|b| serde_json::from_str::<Value>(&b).unwrap_or_default())
     {
+        *lock(&shared.providers) = v["providers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|p| Some((p["id"].as_str()?.to_owned(), p.clone())))
+            .collect();
         merge(&mut out, remote::sign_ins_bundle(&v));
     }
     out
@@ -700,6 +741,52 @@ impl Loader for PodEngine {
 
     fn changes(&self) -> Option<Changes> {
         lock(&self.shared.news).take()
+    }
+
+    /// The engine's sign-in (D19): `action.auth.login` registers the
+    /// client with the pod and opens the browser; `sign_in` starts a
+    /// provider's (`local:providers`), on another server when it takes one
+    /// and the layout passes it (`value`); `sign_out` signs out through
+    /// the pod. `set_server`: this device has only its own pod to pick.
+    fn auth(&self, intent: &Value) -> bool {
+        if !self.signs_in {
+            return false;
+        }
+        let login = match (intent["intent"].as_str(), intent["command"].as_str()) {
+            (Some("action.auth.login"), _) => intent.clone(),
+            (Some("action.device"), Some("sign_in")) => {
+                let id = intent["id"].as_str().unwrap_or("");
+                let Some(p) = lock(&self.shared.providers).get(id).cloned() else {
+                    eprintln!("construct-render: sign_in: no provider {id:?}");
+                    return false;
+                };
+                let mut start = p["intent"].clone();
+                if start["intent"] != "action.auth.login" {
+                    return false;
+                }
+                let server = intent["value"].as_str().unwrap_or("").trim();
+                if !server.is_empty() && !p["server_placeholder"].is_null() {
+                    start["instance_url"] = json!(server);
+                }
+                start
+            }
+            (Some("action.device"), Some("sign_out")) => {
+                self.engine.logout();
+                self.reload_device();
+                return true;
+            }
+            (Some("action.device"), Some("set_server")) => {
+                let id = intent["id"].as_str().unwrap_or("");
+                return id == "current" || id == self.base;
+            }
+            _ => return false,
+        };
+        self.engine.dispatch(&login.to_string());
+        true
+    }
+
+    fn redirect(&self, url: &str) -> bool {
+        self.engine.handle_auth_redirect(url)
     }
 }
 
