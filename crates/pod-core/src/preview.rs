@@ -402,12 +402,19 @@ pub(crate) async fn render_layout_preview(pod: &Pod, headers: &HeaderMap, args: 
             Err(e) => return error(e),
         }
     };
+    // What the renderer draws must be in the bounds a saved layout's values
+    // are held to (an icon of 65535 dp would be a 4 GB mask on the server).
+    if let Err(e) = crate::validate::check_node_values(&root) {
+        return error(json!({ "error": "invalid_layout", "detail": e }));
+    }
     let mut layouts = BTreeMap::new();
     for linked in linked_layouts(&root).into_iter().take(MAX_LINKED_LAYOUTS) {
         if linked == id {
             continue;
         }
-        if let Ok(spec) = fetch(pod, headers, &linked).await {
+        if let Ok(spec) = fetch(pod, headers, &linked).await
+            && crate::validate::check_node_values(&spec.workspace).is_ok()
+        {
             merge(&mut data, spec.entities, spec.queries);
             layouts.insert(linked, spec.workspace);
         }
