@@ -25,6 +25,7 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 |---|---|
 | `layout` | `SceneBuilder::build(&Input)`: every plumbing node to a taffy style (Material 3 metrics, as the Compose renderer), bindings resolved (`bind`), lists filtered (`where`, `filter`, `group_by`, grids), `$count`, theme tokens |
 | `scene` | `QuadInstance` (the GPU vertex layout), `TextRun`, `SemanticNode`, `hit_test`, `find_node`, `find_text` |
+| `accessibility` | The semantic tree as an AccessKit tree for screen readers (roles, labels, values, states), and their requests back as taps, scrolls and field values |
 | `cpu` | The CPU rasterizer: `sd_rounded_box` and `shade` (the shader's maths), 8-bit premultiplied target, glyphs placed as glyphon places them |
 | `gpu` | `Renderer` (any texture view), `HeadlessSurface` (offscreen + readback); feature `gpu` (default) |
 | `interact` | `Session`: a layout with form values, scroll offsets and a back stack; `tap`, `long_press`, `scroll_by`, `type_text`, `dispatch`; text editing (cursor, selection, handles, the edit bar); confirm dialogs; sheet drags and carousel paging; writes through its `Loader` |
@@ -48,6 +49,23 @@ What agents and tests address: a node's `tag` (bound, e.g. `task_$item.id`); `<f
 `core://ChoiceChips` option or a `core://Dock` tab (`filter=started`, `filter=` for the empty value);
 `field:<name>` for a `core://TextField`; `list:<query_key>`, `chips:<field>`, `layout:<id>`; otherwise the node's
 path from the root (`root/0/2/i3/0`, `i3` being a list's fourth item). Bounds are logical points.
+
+## Screen readers
+
+The window serves screen readers from the semantic tree through AccessKit (`accessibility`, decision
+`rust-client-accessibility`): VoiceOver on macOS, Narrator on Windows and Orca on Linux (`accesskit_winit`). Each
+frame's tree is sent while one is listening. Roles follow the node type: a button, icon button, tappable or dock
+tab is a button (a tab is selected when on); a switch is a switch with its state; a `core://ChoiceChips` is a radio
+group of its options; a text field is a text input with its value, named by its placeholder, and focused while
+typed into; a scroll is a scroll view; an image is named by its `content_description`; other text is a label. As
+in Compose, a tappable's texts fold into it: it is read as one element, named by its own description, else by its
+texts. Under a dialog's or panel's scrim nothing is listed. Activating an element taps it by its semantic id
+(`Session::tap`), Focus on a field focuses it, a value set on a field replaces it, and Scroll up or down moves a
+scroll view by most of its height. AccessKit's ids are hashes of the semantic ids, so a screen reader keeps its
+place from frame to frame.
+
+Android isn't served yet: AccessKit's Android adapter needs a Java class (a prebuilt dex, or the app's own Java)
+and a GameActivity, and the app is a NativeActivity with no Java (issue #172).
 
 ## Coverage
 

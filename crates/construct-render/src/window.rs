@@ -1,6 +1,8 @@
 //! A native window drawing a [`Controller`]'s session with wgpu: Metal on
 //! macOS, Vulkan (or GL) on Linux and Android, presented straight from the
-//! surface texture. Input goes through [`crate::viewer`].
+//! surface texture. Input goes through [`crate::viewer`]. On the desktop,
+//! screen readers read and act on the scene's semantic tree through
+//! AccessKit ([`crate::accessibility`]).
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -14,6 +16,8 @@ use winit::window::{Window, WindowId};
 use crate::gpu::{Gpu, Renderer};
 use crate::interact::CursorMove;
 use crate::interact::DragAxis;
+#[cfg(not(target_os = "android"))]
+use crate::interact::Target;
 use crate::viewer::{Controller, EditKey, Event};
 
 /// Writes a line to the platform log (logcat on Android, stderr elsewhere).
@@ -77,6 +81,61 @@ pub enum Reopen {
 }
 
 type Waker = Arc<dyn Fn() + Send + Sync>;
+
+/// What a screen reader asked for, from AccessKit's threads, until the
+/// event loop runs it.
+#[derive(Default)]
+struct A11yInbox {
+    /// A screen reader started: send the whole tree.
+    wants_tree: bool,
+    actions: Vec<accesskit::ActionRequest>,
+}
+
+/// The window's AccessKit adapter and what its tree stands for.
+#[cfg(not(target_os = "android"))]
+struct A11y {
+    adapter: accesskit_winit::Adapter,
+    nodes: std::collections::HashMap<accesskit::NodeId, crate::accessibility::Exposed>,
+}
+
+#[cfg(not(target_os = "android"))]
+struct Inbox {
+    inbox: Arc<std::sync::Mutex<A11yInbox>>,
+    waker: Option<Waker>,
+}
+
+#[cfg(not(target_os = "android"))]
+impl Inbox {
+    fn with(&self, f: impl FnOnce(&mut A11yInbox)) {
+        if let Ok(mut i) = self.inbox.lock() {
+            f(&mut i);
+        }
+        if let Some(w) = &self.waker {
+            w();
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+impl accesskit::ActivationHandler for Inbox {
+    /// The tree is built on the event loop (it owns the session).
+    fn request_initial_tree(&mut self) -> Option<accesskit::TreeUpdate> {
+        self.with(|i| i.wants_tree = true);
+        None
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+impl accesskit::ActionHandler for Inbox {
+    fn do_action(&mut self, request: accesskit::ActionRequest) {
+        self.with(|i| i.actions.push(request));
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+impl accesskit::DeactivationHandler for Inbox {
+    fn deactivate_accessibility(&mut self) {}
+}
 
 /// The desktop's clipboard, through its command-line tools (`pbpaste` on
 /// macOS, `wl-paste`, `xclip` or `xsel` on Linux).
@@ -297,6 +356,10 @@ pub struct App {
     waker: Option<Waker>,
     /// Shift, Control, Command held on a hardware keyboard.
     mods: ModifiersState,
+    /// Screen readers' requests, and the adapter that serves them.
+    inbox: Arc<std::sync::Mutex<A11yInbox>>,
+    #[cfg(not(target_os = "android"))]
+    a11y: Option<A11y>,
 }
 
 impl App {
@@ -311,6 +374,9 @@ impl App {
             fling: None,
             waker: None,
             mods: ModifiersState::empty(),
+            inbox: Default::default(),
+            #[cfg(not(target_os = "android"))]
+            a11y: None,
         }
     }
 
@@ -406,7 +472,29 @@ impl App {
         let attrs = Window::default_attributes()
             .with_title(&self.title)
             .with_inner_size(winit::dpi::LogicalSize::new(390.0, 844.0));
+        // AccessKit's adapter must exist before the window is first shown.
+        #[cfg(not(target_os = "android"))]
+        let attrs = attrs.with_visible(false);
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
+        #[cfg(not(target_os = "android"))]
+        {
+            let handler = || Inbox {
+                inbox: self.inbox.clone(),
+                waker: self.waker.clone(),
+            };
+            let adapter = accesskit_winit::Adapter::with_direct_handlers(
+                event_loop,
+                &window,
+                handler(),
+                handler(),
+                handler(),
+            );
+            self.a11y = Some(A11y {
+                adapter,
+                nodes: Default::default(),
+            });
+            window.set_visible(true);
+        }
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(
                 Box::new(event_loop.owned_display_handle()),
@@ -522,11 +610,87 @@ impl App {
         }
         self.controller.frames += 1;
         self.controller.dirty = false;
+        self.update_a11y();
+    }
+
+    /// Sends the frame's tree to a screen reader, if one is listening.
+    #[cfg(not(target_os = "android"))]
+    fn update_a11y(&mut self) {
+        let Some(a11y) = self.a11y.as_mut() else {
+            return;
+        };
+        let session = &mut self.controller.session;
+        let title = &self.title;
+        let nodes = &mut a11y.nodes;
+        a11y.adapter.update_if_active(|| {
+            let form = session.form.clone();
+            let focused = session.focused.clone();
+            let empty = crate::scene::Scene::default();
+            let scene = match session.scene() {
+                Ok(scene) => scene,
+                Err(_) => &empty,
+            };
+            let tree = crate::accessibility::tree(scene, &form, focused.as_deref(), title);
+            *nodes = tree.nodes;
+            tree.update
+        });
+    }
+
+    #[cfg(target_os = "android")]
+    fn update_a11y(&mut self) {}
+
+    /// Runs what screen readers asked for since the last time.
+    fn serve_a11y(&mut self) {
+        let (wants_tree, actions) = match self.inbox.lock() {
+            Ok(mut i) => (
+                std::mem::take(&mut i.wants_tree),
+                std::mem::take(&mut i.actions),
+            ),
+            Err(_) => return,
+        };
+        #[cfg(not(target_os = "android"))]
+        for req in actions {
+            use crate::accessibility::Request;
+            let Some(a11y) = &self.a11y else { break };
+            match crate::accessibility::request(&a11y.nodes, &req) {
+                Some(Request::Tap(id)) => {
+                    let out = self.controller.session.tap(&Target::Id(id)).ok();
+                    self.controller.dirty = true;
+                    self.after(out, true);
+                }
+                Some(Request::Scroll { id, dy }) => {
+                    let _ = self.controller.session.scroll_by(Some(&Target::Id(id)), dy);
+                    self.controller.dirty = true;
+                }
+                Some(Request::SetValue { field, value }) => {
+                    self.controller.session.type_text(&field, &value);
+                    self.controller.dirty = true;
+                }
+                None => {}
+            }
+        }
+        #[cfg(target_os = "android")]
+        let _ = actions;
+        if wants_tree || self.controller.dirty {
+            self.update_a11y();
+        }
+        if self.controller.dirty
+            && let Some(s) = &self.surface
+        {
+            s.window.request_redraw();
+        }
     }
 
     fn apply(&mut self, e: Event) {
         let tap = matches!(e, Event::Tap { .. } | Event::LongPress { .. });
-        if let Some(out) = self.controller.handle(e) {
+        let out = self.controller.handle(e);
+        self.after(out, tap);
+    }
+
+    /// Carries out what an interaction did (links, sign-in, the clipboard,
+    /// the keyboard) and draws again.
+    fn after(&mut self, out: Option<crate::interact::Outcome>, tap: bool) {
+        if let Some(out) = out {
             if let Ok(json) = serde_json::to_string(&out.effects) {
                 log(&json);
             }
@@ -627,8 +791,10 @@ impl ApplicationHandler for App {
         }
     }
 
-    /// An image arrived: draw again.
+    /// An image arrived, or a screen reader asked for something: draw
+    /// again.
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
+        self.serve_a11y();
         if let Some(s) = &self.surface {
             s.window.request_redraw();
         }
@@ -646,10 +812,18 @@ impl ApplicationHandler for App {
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
         // Android takes the native window away while paused.
         self.surface = None;
+        #[cfg(not(target_os = "android"))]
+        {
+            self.a11y = None;
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let scale = self.scale();
+        #[cfg(not(target_os = "android"))]
+        if let (Some(a11y), Some(s)) = (self.a11y.as_mut(), self.surface.as_ref()) {
+            a11y.adapter.process_event(&s.window, &event);
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),

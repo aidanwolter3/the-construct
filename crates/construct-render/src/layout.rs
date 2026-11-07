@@ -157,6 +157,8 @@ struct Sem {
     selected: bool,
     /// `core://Gesture` handlers other than the tap, by name.
     gestures: BTreeMap<String, Value>,
+    /// A text field's placeholder.
+    hint: Option<String>,
 }
 
 struct Elem {
@@ -634,6 +636,7 @@ impl<'i> Build<'_, 'i> {
             tap,
             selected: false,
             gestures: BTreeMap::new(),
+            hint: None,
         }
     }
 
@@ -713,6 +716,7 @@ impl<'i> Build<'_, 'i> {
                     tap: None,
                     selected: false,
                     gestures: BTreeMap::new(),
+                    hint: None,
                 };
                 kids.push(self.text_leaf(style, ctx.text(title), t, fg, Some(sem)));
                 for (i, s) in slots.iter().enumerate() {
@@ -1208,6 +1212,7 @@ impl<'i> Build<'_, 'i> {
                     }),
                 );
                 sem.id = format!("field:{field}");
+                sem.hint = Some(ctx.text(placeholder)).filter(|h| !h.is_empty());
                 if on_submit.is_some() {
                     // Next to the field, as the shared UI's Send button.
                     style.flex_grow = 1.0;
@@ -1307,6 +1312,7 @@ impl<'i> Build<'_, 'i> {
                         }),
                         selected,
                         gestures: BTreeMap::new(),
+                        hint: None,
                     };
                     kids.push(self.push(style, vec![t], paint, Some(sem), false));
                 }
@@ -1376,6 +1382,7 @@ impl<'i> Build<'_, 'i> {
                             tap: None,
                             selected: false,
                             gestures: BTreeMap::new(),
+                            hint: None,
                         };
                         let style = Style {
                             padding: pad(16, 24),
@@ -1590,6 +1597,7 @@ impl<'i> Build<'_, 'i> {
                         tap: None,
                         selected: false,
                         gestures: BTreeMap::new(),
+                        hint: None,
                     };
                     let t = self.text_leaf(
                         Style::default(),
@@ -1662,6 +1670,7 @@ impl<'i> Build<'_, 'i> {
                     tap: None,
                     selected: false,
                     gestures: BTreeMap::new(),
+                    hint: None,
                 };
                 let dots = self.push(ds, dots, Paint::None, Some(sem), false);
                 self.push(outer, vec![frame, dots], Paint::None, None, false)
@@ -1895,6 +1904,7 @@ impl<'i> Build<'_, 'i> {
                         }),
                         selected: on,
                         gestures: BTreeMap::new(),
+                        hint: None,
                     };
                     bar.push(self.push(s, cell, Paint::None, Some(sem), false));
                 }
@@ -2228,6 +2238,7 @@ impl Laid {
                 selected: s.selected,
                 parent: parent_sem,
                 gestures: s.gestures.clone(),
+                hint: s.hint.clone(),
             });
             sem_index = Some(scene.semantics.len() - 1);
         }

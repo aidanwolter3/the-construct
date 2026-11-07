@@ -15,7 +15,8 @@ default = ["gpu"]
 # The wgpu pipeline: WGSL instanced SDF quads plus glyphon text, offscreen.
 gpu = ["dep:wgpu", "dep:glyphon", "dep:pollster", "dep:bytemuck"]
 # A native window (winit): the desktop viewer and the Android activity.
-window = ["gpu", "dep:winit", "dep:jni"]
+# On the desktop it also serves screen readers (AccessKit).
+window = ["gpu", "dep:winit", "dep:jni", "dep:accesskit_winit"]
 # A live, read-only session over a pod (`remote`): layouts, data and images
 # over HTTP.
 remote = ["dep:reqwest", "image/jpeg"]
@@ -36,8 +37,15 @@ glyphon = { version = "0.12", optional = true }
 pollster = { version = "0.4", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
 winit = { version = "0.30", optional = true }
+# The semantic tree as an accessibility tree (`accessibility`): plain data.
+accesskit = "0.25"
 # `remote`: the pod's HTTP API.
 reqwest = { workspace = true, optional = true }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+# Screen readers on the desktop: VoiceOver, Narrator, Orca. Android's
+# adapter needs a Java class (a dex) the NativeActivity doesn't have.
+accesskit_winit = { version = "0.34", optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 # NativeActivity glue (winit re-exports android-activity).

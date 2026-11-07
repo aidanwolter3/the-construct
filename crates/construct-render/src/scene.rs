@@ -149,6 +149,10 @@ pub struct SemanticNode {
     /// `swipe_down`, `swipe_left`, `swipe_right`), bound intents.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub gestures: std::collections::BTreeMap<String, Value>,
+    /// What a text field asks for (its placeholder): its name for screen
+    /// readers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
 }
 
 /// A laid-out frame: what to draw and what is where.
