@@ -26,6 +26,9 @@ use crate::layout::{Input, Laid, RenderError, SceneBuilder, Viewport};
 use crate::scene::{Draw, QuadInstance, Scene, SemanticNode, Tap};
 use crate::style::Rgba;
 
+mod media;
+pub use media::{StageDone, Staged, attachment_uri, pick_files_here};
+
 /// What a tap or scroll aims at.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Target {
@@ -98,7 +101,8 @@ pub enum Effect {
         text: String,
     },
     /// A media picker was tapped: the platform opens its photo picker for
-    /// up to `max` photos for this field.
+    /// up to `max` photos (what the field still takes) and hands what is
+    /// picked to [`Session::picked`] (the desktop: [`Session::pick_here`]).
     PickMedia {
         field: String,
         max: u32,
@@ -274,6 +278,15 @@ enum Answer {
         path: String,
         result: Result<DataBundle, String>,
     },
+    /// A picked photo the engine staged (or why it couldn't) for a media
+    /// picker's field holding at most `max`.
+    Staged {
+        field: String,
+        max: u32,
+        result: Result<Staged, String>,
+    },
+    /// The desktop's file dialog closed with these files.
+    Picked(Vec<Result<std::path::PathBuf, String>>),
 }
 
 /// What undoes a write's local change when the pod refuses it.
@@ -328,6 +341,14 @@ pub trait Loader: Send {
     fn take(&self, _intent: &Value) -> bool {
         false
     }
+    /// Stages a picked photo for a create's `attachments` (D49), off the
+    /// caller's thread, and calls `done` with it; false when this loader
+    /// can't.
+    fn stage(&self, _file: &std::path::Path, _done: StageDone) -> bool {
+        false
+    }
+    /// Forgets a staged photo taken off its picker before it was sent.
+    fn discard(&self, _id: &str) {}
     /// What changed since the last call (another device, an agent, a write
     /// the pod answered); `None` when nothing did, or the loader doesn't
     /// hear of changes. Called every frame: it must not block.
@@ -426,6 +447,11 @@ pub struct Session {
     /// A handle being dragged, and how far the finger is below the text
     /// point it moves.
     grab: Option<(Grab, f32)>,
+    /// The media picker the platform's picker is open for: its field and
+    /// most photos.
+    picking: Option<(String, u32)>,
+    /// Photos being picked or staged (a script waits for them).
+    pub staging: usize,
 }
 
 /// How long the caret shows, then hides (Android's 500 ms).
@@ -452,6 +478,8 @@ struct Edit {
     blink: Instant,
     /// The last tap on the field, for a double tap.
     last_tap: Option<(Instant, f32, f32)>,
+    /// The word the keyboard is composing (byte range), underlined.
+    composing: Option<(usize, usize)>,
 }
 
 impl Edit {
@@ -534,6 +562,8 @@ impl Session {
             caret_shown: None,
             handles: Vec::new(),
             grab: None,
+            picking: None,
+            staging: 0,
         }
     }
 
@@ -551,6 +581,7 @@ impl Session {
                 menu: false,
                 blink: Instant::now(),
                 last_tap: None,
+                composing: None,
             });
         }
         let e = self.edit.as_mut()?;
@@ -596,6 +627,7 @@ impl Session {
             e.cursor = cursor;
             e.anchor = anchor;
             e.blink = Instant::now();
+            e.composing = None;
         }
         self.form.insert(field.clone(), value.clone());
         self.invalidate();
@@ -727,6 +759,74 @@ impl Session {
     pub fn paste(&mut self, field: &str, text: &str) -> Outcome {
         self.focused = Some(field.to_owned());
         self.insert_text(text.trim_end_matches(['\n', '\r']))
+    }
+
+    /// The focused field as the platform's keyboard sees it (`crate::ime`):
+    /// its value, selection and the word being composed.
+    pub fn text_state(&mut self) -> Option<crate::ime::TextState> {
+        let (value, e) = self.editing()?;
+        let composing = e
+            .composing
+            .filter(|&(a, b)| a < b && b <= value.len())
+            .filter(|&(a, b)| value.is_char_boundary(a) && value.is_char_boundary(b));
+        Some(crate::ime::TextState {
+            field: e.field,
+            value,
+            cursor: e.cursor,
+            anchor: e.anchor,
+            composing,
+        })
+    }
+
+    /// The focused field as the keyboard left it (it typed, corrected,
+    /// composed or moved the cursor), no longer than the field's maximum
+    /// length. Handles and the menu go, as on Android.
+    pub fn set_text_state(&mut self, s: &crate::ime::TextState) -> Outcome {
+        if self.focused.as_ref() != Some(&s.field) || self.edit_now().is_none() {
+            return Outcome {
+                node: None,
+                effects: vec![Effect::Nothing],
+            };
+        }
+        let mut value = s.value.replace('\r', "");
+        if let Some(max) = self.max_length(&s.field) {
+            value = value.chars().take(max).collect();
+        }
+        let fix = |i: usize| {
+            let mut i = i.min(value.len());
+            while !value.is_char_boundary(i) {
+                i -= 1;
+            }
+            i
+        };
+        let (cursor, anchor) = (fix(s.cursor), fix(s.anchor));
+        let composing = s
+            .composing
+            .map(|(a, b)| (fix(a), fix(b)))
+            .filter(|(a, b)| a < b);
+        let changed = self.form.get(&s.field) != Some(&value);
+        if let Some(e) = self.edit.as_mut() {
+            e.handles = false;
+            e.menu = false;
+        }
+        let out = if changed {
+            self.set_edit(value, cursor, anchor)
+        } else {
+            if let Some(e) = self.edit.as_mut() {
+                e.cursor = cursor;
+                e.anchor = anchor;
+                e.blink = Instant::now();
+            }
+            self.scene = None;
+            Outcome {
+                node: None,
+                effects: vec![Effect::Nothing],
+            }
+        };
+        if let Some(e) = self.edit.as_mut() {
+            e.composing = composing;
+        }
+        out
     }
 
     /// The edit's caret stops in the frame, with the field's text box.
@@ -1176,6 +1276,14 @@ impl Session {
         for answer in done {
             let (undo, w) = match answer {
                 Answer::Write(undo, w) => (undo, w),
+                Answer::Staged { field, max, result } => {
+                    self.staged(field, max, result);
+                    continue;
+                }
+                Answer::Picked(files) => {
+                    self.dialog_closed(files);
+                    continue;
+                }
                 Answer::Data { path, result } => {
                     let error = result.as_ref().err().cloned();
                     if let Ok(d) = result {
@@ -1243,7 +1351,7 @@ impl Session {
 
     /// Whether writes or loads are still out (a script waits for them).
     pub fn busy(&self) -> bool {
-        self.pending > 0 || self.stack.iter().any(|e| e.loading.is_some())
+        self.pending > 0 || self.staging > 0 || self.stack.iter().any(|e| e.loading.is_some())
     }
 
     /// Waits until nothing is out, or `timeout` (scripts and tests).
@@ -1809,6 +1917,33 @@ impl Session {
                 clip,
             );
         }
+        if let Some((cs, ce)) = e.composing.filter(|&(a, b)| a < b && b <= value.len()) {
+            // The word being composed is underlined, one line per row.
+            let (a, b) = (stop(cs), stop(ce));
+            let mut tops: Vec<f32> = stops
+                .iter()
+                .filter(|s| s.byte >= cs && s.byte <= ce)
+                .map(|s| s.top)
+                .collect();
+            tops.dedup();
+            for top in tops {
+                let on: Vec<&crate::text::CaretStop> =
+                    stops.iter().filter(|s| s.top == top).collect();
+                let x0 = if top == a.top { a.x } else { 0.0 };
+                let x1 = if top == b.top {
+                    b.x
+                } else {
+                    on.iter().map(|s| s.x).fold(0.0, f32::max)
+                };
+                let h = on.first().map_or(fb.line_height, |s| s.height);
+                quad(
+                    [ox + x0, oy + top + h - 2.0, (x1 - x0).max(1.0), 1.5],
+                    theme.on_background,
+                    [0.0; 4],
+                    clip,
+                );
+            }
+        }
         if e.handles {
             let r = HANDLE / 2.0;
             let under = |s: crate::text::CaretStop| (ox + s.x, oy + s.top + s.height);
@@ -2187,10 +2322,16 @@ impl Session {
                 }
             }
             "edit.select_all" => self.select_all(),
-            "media.pick" => out.push(Effect::PickMedia {
-                field: intent["field"].as_str().unwrap_or("").to_owned(),
-                max: intent["max"].as_u64().unwrap_or(1) as u32,
-            }),
+            "media.pick" => {
+                let field = intent["field"].as_str().unwrap_or("").to_owned();
+                let max = self.start_pick(&field, intent["max"].as_u64().unwrap_or(1) as u32);
+                out.push(Effect::PickMedia { field, max });
+            }
+            "media.remove" => {
+                let field = intent["field"].as_str().unwrap_or("");
+                self.remove_media(field, intent["id"].as_str().unwrap_or(""));
+                out.push(Effect::Nothing);
+            }
             "form.clear" => {
                 // The session's own step after a field's Send.
                 if let Some(f) = intent["field"].as_str() {
@@ -2400,7 +2541,9 @@ impl Session {
     fn create(&mut self, intent: &Value, out: &mut Vec<Effect>) {
         let uri = intent["entity_uri"].as_str().unwrap_or("").to_owned();
         let query_key = intent["query_key"].as_str().unwrap_or("").to_owned();
-        if let Ok(e) = serde_json::from_value::<protocol::EntityRecord>(intent["entity"].clone()) {
+        let mut entity = intent["entity"].clone();
+        Session::bind_attachments(intent, &mut entity);
+        if let Ok(e) = serde_json::from_value::<protocol::EntityRecord>(entity) {
             self.data.entities.insert(uri.clone(), e);
         }
         let list = self.data.queries.entry(query_key.clone()).or_default();
@@ -2415,6 +2558,7 @@ impl Session {
             fields: BTreeMap::new(),
         });
         if self.taken(intent, out) {
+            self.attachments_taken(intent);
             return;
         }
         let write = Write {

@@ -16,6 +16,7 @@ pub mod demo;
 pub mod encode;
 pub mod icons;
 pub mod images;
+pub mod ime;
 pub mod interact;
 pub mod layout;
 pub mod platform;
@@ -41,6 +42,8 @@ pub mod remote;
 mod android;
 #[cfg(all(target_os = "android", feature = "window"))]
 mod bridge;
+#[cfg(all(target_os = "android", feature = "window"))]
+mod picked;
 
 pub use interact::{Effect, Outcome, Session, Target};
 pub use layout::{Input, RenderError, SceneBuilder, Viewport};

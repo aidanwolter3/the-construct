@@ -284,8 +284,9 @@ impl App {
         }
     }
 
-    /// What the platform reported: shown as a notice for now (the bridge's
-    /// prototype); sign-in redirects and attachments build on these.
+    /// What the platform reported: picked photos are staged for the media
+    /// picker that asked; the rest shows as a notice for now (the bridge's
+    /// prototype); sign-in redirects build on these.
     fn platform_events(&mut self) {
         let events = self
             .platform
@@ -296,22 +297,59 @@ impl App {
             log(&format!("platform: {e:?}"));
             let (title, message) = match e {
                 PlatformEvent::Link(uri) => ("Opened with a link".to_owned(), uri),
-                PlatformEvent::Picked { count: 0, .. } => (
-                    "No photos picked".to_owned(),
-                    "The picker was closed.".to_owned(),
-                ),
-                PlatformEvent::Picked { count, bytes } => (
-                    format!("{count} photo{} picked", if count == 1 { "" } else { "s" }),
-                    format!(
-                        "{:.1} MB in all, read from Rust.",
-                        bytes as f64 / 1_000_000.0
-                    ),
-                ),
+                PlatformEvent::Picked(files) => {
+                    self.controller.session.picked(files);
+                    if let Some(s) = &self.surface {
+                        s.window.request_redraw();
+                    }
+                    continue;
+                }
                 PlatformEvent::Message(m) => ("Message received".to_owned(), m),
             };
             self.controller.session.notice(&title, &message);
             if let Some(s) = &self.surface {
                 s.window.request_redraw();
+            }
+        }
+    }
+
+    /// Brings the platform's keyboard and the focused field together
+    /// ([`Platform::text_input`]): what the keyboard typed, corrected or
+    /// composed goes into the session, and the session's own changes reach
+    /// the keyboard.
+    fn sync_text_input(&mut self) {
+        // Twice at most: the keyboard's edit, then the session's answer to it
+        // (a value cut to the field's maximum length).
+        for _ in 0..2 {
+            let field = self.controller.session.text_state();
+            let Some(edit) = self
+                .platform
+                .as_ref()
+                .and_then(|p| p.text_input(field.as_ref()))
+            else {
+                return;
+            };
+            if let Some(state) = &edit.state {
+                let out = self.controller.session.set_text_state(state);
+                self.after(Some(out), false);
+            }
+            if let Some(intent) = edit.menu {
+                let out = self
+                    .controller
+                    .session
+                    .dispatch(&serde_json::json!({ "intent": intent }))
+                    .ok();
+                self.after(out, false);
+            }
+            if edit.done {
+                // As Enter on a hardware keyboard.
+                if let Some(p) = &self.platform {
+                    p.show_keyboard(false);
+                }
+                self.controller.unfocus();
+                if let Some(s) = &self.surface {
+                    s.window.request_redraw();
+                }
             }
         }
     }
@@ -638,7 +676,9 @@ impl App {
                     },
                     crate::interact::Effect::Copy { text } => self.set_clipboard(text),
                     crate::interact::Effect::PickMedia { max, .. } => {
-                        if !self.platform.as_ref().is_some_and(|p| p.pick_images(*max)) {
+                        if !self.platform.as_ref().is_some_and(|p| p.pick_images(*max))
+                            && !self.controller.session.pick_here(*max)
+                        {
                             self.controller.session.notice(
                                 "No photo picker",
                                 "Picking photos isn't available here yet.",
@@ -677,6 +717,7 @@ impl ApplicationHandler for App {
             return;
         }
         self.platform_events();
+        self.sync_text_input();
         if self.update_insets()
             && let Some(s) = &self.surface
         {
@@ -726,6 +767,7 @@ impl ApplicationHandler for App {
     /// something: draw again.
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
         self.platform_events();
+        self.sync_text_input();
         self.serve_a11y();
         if let Some(s) = &self.surface {
             s.window.request_redraw();

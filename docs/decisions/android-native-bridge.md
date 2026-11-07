@@ -18,6 +18,10 @@ or needs an activity method is a small public method (`pickImages`, `askPermissi
 in Java; a new need adds a forwarding method or class, never behaviour. Events queue in `bridge.rs`, wake the
 window and reach it through `Platform::events`.
 
+The keyboard (#171) is the bridge's too, not GameActivity: an invisible, focusable view over the NativeActivity
+whose `InputConnection` forwards each call to Rust (`src/ime.rs`), which answers from the field's value and the
+engine's own editing, and asks Android to update or restart the keyboard when the engine changes the field.
+
 The platform interface (`platform.rs`: `Platform`, `PlatformEvent`, `Reopen`) is what each platform implements:
 Android (`android.rs` with the bridge), the desktop viewer, and later a web build, so the engine and the window
 don't change per platform.
