@@ -310,7 +310,7 @@ impl App {
                 }
                 continue;
             }
-            log(&format!("platform: {e:?}"));
+            log(&format!("platform: {}", e.name()));
             let (title, message) = match e {
                 PlatformEvent::Link(uri) => ("Opened with a link".to_owned(), uri),
                 PlatformEvent::Picked(files) => {
@@ -714,8 +714,11 @@ impl App {
     /// the keyboard) and draws again.
     fn after(&mut self, out: Option<crate::interact::Outcome>, tap: bool) {
         if let Some(out) = out {
-            if let Ok(json) = serde_json::to_string(&out.effects) {
-                log(&json);
+            // Only the effects' names: their values can be what was typed
+            // (a pod code) or a session token.
+            if !out.effects.is_empty() {
+                let names: Vec<&str> = out.effects.iter().map(|e| e.name()).collect();
+                log(&format!("effects: {}", names.join(", ")));
             }
             let mut reopen = None;
             for e in &out.effects {
