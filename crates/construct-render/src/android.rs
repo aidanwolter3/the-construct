@@ -253,15 +253,15 @@ fn set_up_push(app: &AndroidApp, home: &crate::pods::PodHome) {
     let app = app.clone();
     std::thread::spawn(move || {
         let store = crate::push::android::store(&files);
-        let Some(instance) = crate::push::set_up(&store, &engine, log) else {
+        let Some((instance, vapid)) = crate::push::set_up(&store, &engine, log) else {
             return;
         };
         match with_activity(&app, |env, activity| {
-            crate::push::android::register(env, activity, &instance)
+            crate::push::android::register(env, activity, &instance, &vapid)
         }) {
             Ok(true) => log(&format!("push: asked the distributor for {instance}")),
             Ok(false) => log(
-                "push: no UnifiedPush distributor (ntfy, ...) installed: notifications only while the app runs",
+                "push: no UnifiedPush distributor (an app such as ntfy, or the embedded FCM one): notifications only while the app runs",
             ),
             Err(e) => log(&format!("push: registering: {e}")),
         }

@@ -14,7 +14,7 @@
 # the Compose app with the same data.
 #
 # Needs: an Android SDK with an NDK and build-tools (ANDROID_HOME, else ~/android-sdk), a JDK (javac), cargo-ndk,
-# `rustup target add aarch64-linux-android`, and Maven Central the first time (the UnifiedPush connector's classes).
+# `rustup target add aarch64-linux-android`, and Maven Central the first time (the UnifiedPush libraries' classes).
 # Output: build/android-native/construct-render.apk.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -72,8 +72,10 @@ for j in "${JAVA_HOME:+$JAVA_HOME/bin/javac}" "$(command -v javac || true)" \
 done
 [[ -n $JAVAC ]] || { echo "no javac (a JDK: JAVA_HOME, PATH, or Android Studio's)" >&2; exit 1; }
 # Prebuilt libraries' classes go in too: the UnifiedPush connector (push while the app is closed: `PushReceiver`
-# extends its receiver) and the Kotlin standard library it needs. Downloaded once from Maven Central into
-# build/android-native/libs, and checked against these hashes.
+# extends its receiver, `PushKeys` keeps its keys in Rust), the embedded FCM distributor (push through Play services
+# on phones without a distributor app; it registers with the pod's VAPID key, so no Firebase project), and the Kotlin
+# libraries they need. Not Tink, protobuf or gson, the connector's own key store's: `PushKeys` replaces it, so they
+# never load. Downloaded once from Maven Central into build/android-native/libs, and checked against these hashes.
 LIBS=$OUT/libs
 mkdir -p "$LIBS"
 fetch() { # path on Maven Central, file, sha256
@@ -82,12 +84,18 @@ fetch() { # path on Maven Central, file, sha256
     echo "$3  $LIBS/$2" | shasum -a 256 -c --status - || { echo "$2: unexpected contents" >&2; rm -f "$LIBS/$2"; exit 1; }
   fi
 }
-fetch org/unifiedpush/android/connector/2.5.0 connector-2.5.0.aar \
-  5d37754a3a8c5cc7be7a1b628a2d56d4e894a92ea82de67563aaab0951aa290e
-fetch org/jetbrains/kotlin/kotlin-stdlib/2.0.10 kotlin-stdlib-2.0.10.jar \
-  60f1cefbf1c101676abc9f413f569dad464929d7dc63d5e70e15ae26986e08ac
-unzip -oq "$LIBS/connector-2.5.0.aar" classes.jar -d "$LIBS/connector"
-JARS=("$LIBS/connector/classes.jar" "$LIBS/kotlin-stdlib-2.0.10.jar")
+fetch org/unifiedpush/android/connector/3.3.5 connector-3.3.5.aar \
+  fa017cdfabbdc9af021e1f8c8eff2c8098e701d7a2c599937dce0b4ecf1e929b
+fetch org/unifiedpush/android/embedded-fcm-distributor/3.1.0 embedded-fcm-distributor-3.1.0.aar \
+  a2e730e33c54a5d59141ac6657b6969375c91e27f64ae9299fab2275e4707291
+fetch org/jetbrains/kotlin/kotlin-stdlib/2.3.0 kotlin-stdlib-2.3.0.jar \
+  887587c91713250ad52fe14ad9166d042c33835049890e9437f355ffc5a195b1
+fetch org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.10.2 kotlinx-coroutines-core-jvm-1.10.2.jar \
+  5ca175b38df331fd64155b35cd8cae1251fa9ee369709b36d42e0a288ccce3fd
+unzip -oq "$LIBS/connector-3.3.5.aar" classes.jar -d "$LIBS/connector-3.3.5"
+unzip -oq "$LIBS/embedded-fcm-distributor-3.1.0.aar" classes.jar -d "$LIBS/embedded-fcm-distributor-3.1.0"
+JARS=("$LIBS/connector-3.3.5/classes.jar" "$LIBS/embedded-fcm-distributor-3.1.0/classes.jar"
+  "$LIBS/kotlin-stdlib-2.3.0.jar" "$LIBS/kotlinx-coroutines-core-jvm-1.10.2.jar")
 rm -rf "$OUT/classes" "$OUT/apk/dex" && mkdir -p "$OUT/classes" "$OUT/apk/dex"
 "$JAVAC" -nowarn --release 11 -classpath "$PLATFORM/android.jar:${JARS[0]}" -d "$OUT/classes" \
   $(find crates/construct-render/android/java -name '*.java')

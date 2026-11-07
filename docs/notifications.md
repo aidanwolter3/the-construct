@@ -83,5 +83,5 @@ in a row. Limits per pod: 20 devices, 60 deliveries a minute. The routes are in 
 Closed-app notifications on desktop; removing an Android notification when it is read on another device; per-app
 notification screens inside layouts; upstream push instead of polling where an upstream offers it. The Android
 permission prompt, channels, UnifiedPush and the FCM fallback have not been checked on a device yet. The Rust Android app
-(`construct-render`) receives push through UnifiedPush too, with its own keys and decryption, but has no FCM
-fallback yet (decision [`android-native-push-unifiedpush`](decisions/android-native-push-unifiedpush.md)).
+(`construct-render`) receives push through UnifiedPush too, with its own keys and decryption, and the same embedded
+FCM fallback (decision [`android-native-push-embedded-fcm`](decisions/android-native-push-embedded-fcm.md)).

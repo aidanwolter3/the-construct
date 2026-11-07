@@ -191,14 +191,17 @@ adb shell am broadcast -n org.theconstruct.android/.ConstructReceiver --es messa
 
 #### Push
 
-The pod's Web Push reaches the app while it is closed through a UnifiedPush distributor (ntfy, ...): `PushReceiver`
-extends the UnifiedPush connector's receiver (2.5.0; the script adds its classes and the Kotlin standard library's
-to the APK, downloaded once from Maven Central and checked by hash) and forwards each callback to `NativePush`
-(`src/push.rs`). Rust keeps a key pair per server (`push.json`), sends the endpoint to the pod, decrypts messages,
+The pod's Web Push reaches the app while it is closed through a UnifiedPush distributor: an app such as ntfy if one
+is installed, else the embedded FCM distributor (Play services, with the pod's VAPID key; no Firebase project).
+`PushReceiver` extends the UnifiedPush connector's receiver (3.3.5; the script adds its classes, the embedded FCM
+distributor's and the Kotlin libraries' to the APK, downloaded once from Maven Central and checked by hash) and
+forwards each callback to `NativePush` (`src/push.rs`); `PushKeys` is the connector's key store, forwarding to Rust
+too. Rust keeps a key pair per server (`push.json`), sends the endpoint to the pod, decrypts messages,
 posts them (channel `<app_id>.<channel>`) and opens a tapped one's layout and screen; a tap link only opens a
 notification this app posted. Nothing is posted while the app shows that pod. `request_notification_permission`
-asks for the permission. Decision: [`android-native-push-unifiedpush`](decisions/android-native-push-unifiedpush.md).
-Without a distributor (no FCM fallback yet), notifications show only while the app runs. To try it: install ntfy,
+asks for the permission. Decisions: [`android-native-push-unifiedpush`](decisions/android-native-push-unifiedpush.md),
+[`android-native-push-embedded-fcm`](decisions/android-native-push-embedded-fcm.md). On a phone without a distributor
+app or Play services, notifications show only while the app runs. To try it: install ntfy,
 open the app signed in to a pod (logcat: `push: asked the distributor`, then `push: new endpoint`), swipe it away,
 and make the pod notify (a matched event); the notification opens the event.
 

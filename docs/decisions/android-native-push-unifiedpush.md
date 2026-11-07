@@ -1,5 +1,7 @@
 # The Rust Android app receives push through the UnifiedPush connector's receiver, keys and decryption in Rust
 
+The connector 2.5.0 part is superseded by [android-native-push-embedded-fcm](android-native-push-embedded-fcm.md).
+
 Date: 2026-11-07. Related: D52 / [`../notifications.md`](../notifications.md),
 [android-native-bridge](android-native-bridge.md),
 [android-push-registration-per-server](android-push-registration-per-server.md), issue #168.
