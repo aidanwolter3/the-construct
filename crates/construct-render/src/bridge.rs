@@ -33,6 +33,12 @@ pub fn take_events() -> Vec<PlatformEvent> {
 
 fn push(e: PlatformEvent) {
     EVENTS.lock().unwrap_or_else(|p| p.into_inner()).push(e);
+    wake();
+}
+
+/// Wakes the window (the keyboard's input connection, `ime.rs`, edited the
+/// field).
+pub(crate) fn wake() {
     if let Some(w) = WAKER.get() {
         w();
     }

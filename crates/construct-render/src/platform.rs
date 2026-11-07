@@ -40,6 +40,17 @@ pub trait Platform {
     fn events(&self) -> Vec<PlatformEvent> {
         Vec::new()
     }
+    /// The keyboard's own editing (Android's input connection: suggestions,
+    /// autocorrect, composing), given the focused field as the engine has it
+    /// (`None`: none is focused). Returns what the keyboard did since last
+    /// asked, for the window to apply first; else the keyboard is told of the
+    /// engine's changes. `None` where the keyboard only sends keys.
+    fn text_input(
+        &self,
+        _field: Option<&crate::ime::TextState>,
+    ) -> Option<crate::ime::KeyboardEdit> {
+        None
+    }
     /// The session to show next ([`Reopen`]); `None` when the platform
     /// can't.
     fn reopen(&self, _how: Reopen) -> Option<crate::interact::Session> {

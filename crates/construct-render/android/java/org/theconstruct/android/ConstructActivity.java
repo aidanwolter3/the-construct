@@ -19,9 +19,13 @@ public final class ConstructActivity extends NativeActivity {
 
     private static final int PICK_IMAGES = 1;
 
+    /** What the keyboard connects to (read from Rust, src/ime.rs). */
+    public volatile TextInputView textInput;
+
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        textInput = TextInputView.attach(this);
         link(getIntent());
     }
 
