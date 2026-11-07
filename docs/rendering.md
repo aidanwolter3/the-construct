@@ -37,9 +37,10 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 | `engine` | `PodEngine`: a live session over a pod run by the engine (`client-core`: cache, outbox, event stream), the session's `Loader` (feature `remote`); `FileStore`, a desktop's secure store without a keychain |
 | `remote` | `PodClient`: a session fetched straight from the pod (`construct-sim`'s live mode), and the device data builders both use (feature `remote`) |
 | `pods` | A device's own pod: the pod it opened last, its engine, the pod's sign-in screen, leaving and reloading (features `remote` and `window`); shared by Android and the desktop viewer |
+| `signin` | `SignIn`: how a platform signs in to an upstream (its browser, and the redirect for a server: loopback on desktops, the App Link or `construct://oauth` on Android) (feature `remote`) |
 | `platform` | `Platform`: what the app needs from the system it runs on (keyboard, insets, browser, clipboard, photo picker, events, the pod's saved session), implemented per platform |
 | `android` | `android_main` for the NativeActivity (Android builds with `window`) |
-| `bridge` | The Rust side of the Android bridge (`android/java`): links, the photo picker's result, messages |
+| `bridge` | The Rust side of the Android bridge (`android/java`): links (the sign-in redirect), the photo picker's result, messages |
 | `ime` | The keyboard's input connection: the focused field as a keyboard sees it (`TextState`: value, selection, the word being composed), the `InputConnection` edits over it in UTF-16 offsets, and the hand-off between the keyboard and the window (`Connection`); on Android, `NativeText`'s natives |
 | `picked` | The photos Android's picker returned, read through the content resolver into files the engine stages (HEIC and other formats it can't decode become JPEG through `ImageDecoder`) |
 
@@ -124,6 +125,8 @@ Keychain on macOS, else in `secure.json` there (readable by you only); without a
 (staging, or `CONSTRUCT_POD_URL`). `local:servers` offers Staging, Local (`http://127.0.0.1:8080`) and
 `CONSTRUCT_POD_URL` when it is another; `set_server` opens that server (its session is in the secure store already,
 and `pod.json` keeps each server's last code). The window follows the system's light or dark mode (winit's theme).
+Signing in to Pixelfed from Settings opens the system browser, and the redirect comes back to a loopback listener
+the engine runs (`http://127.0.0.1:47823/callback`, another port when that one is busy; below).
 Click, scroll, type, Escape for Back; each interaction's effects are logged. Copy and paste use
 the system clipboard through `pbcopy`/`pbpaste` on macOS and `wl-copy`, `xclip` or `xsel` on Linux. It draws with
 Metal on macOS and Vulkan (or GL) on Linux; on a headless Linux box, `Xvfb` plus Mesa's `mesa-vulkan-drivers`
@@ -173,8 +176,8 @@ app logic: `ConstructActivity` (NativeActivity plus `onNewIntent` and `onActivit
 native methods, `Java_org_theconstruct_android_Native_*` in `src/bridge.rs`), and the keyboard's `TextInputView`,
 `TextInput` and `NativeText` (`src/ime.rs`, above). The script compiles them with `javac`
 and `d8` into the APK's `classes.dex`. Events queue in `bridge.rs`, wake the window and reach it through
-`Platform::events`: picked photos go to the media picker that asked (read by `picked.rs`); links and messages show
-as a notice for now. Decision:
+`Platform::events`: a sign-in redirect goes to the engine's sign-in (below); picked photos go to the media picker
+that asked (read by `picked.rs`); other links and messages show as a notice for now. Decision:
 [`android-native-bridge`](decisions/android-native-bridge.md). Try it with the app installed:
 
 ```bash
@@ -223,12 +226,24 @@ stack and its pin is forgotten; home is never hidden or deleted. `set_server` ha
 `local:servers` (`Effect::SwitchServer`). A refused write or device command shows the shared UI's notice bar at the
 bottom (the pod's `detail`, else its error, with Dismiss; tagged `notice` and `notice-dismiss`) until dismissed.
 These commands (`Loader::device_command`) block the session while the pod answers, as `show_versions` does. Left to
-their own tickets: `sign_in` and `sign_out` (#169), `request_notification_permission` (#168).
+its own ticket: `request_notification_permission` (#168).
 `action.link.open` opens an `http(s)` address in the browser (an `ACTION_VIEW` intent on Android, `open` or
 `xdg-open` on desktops). `action.confirm` shows the app's own dialog (title, message, Cancel and the confirm label,
 tagged `confirm:cancel` and `confirm:ok`) and runs `then`, with the steps of a sequence after it, only on confirm;
 Cancel, Back or a tap outside do nothing. `action.auth.session` goes to the engine, which opens the session and
-keeps it in its secure store; the platform then remembers the code and shows the pod. `leave_pod` (the engine
+keeps it in its secure store; the platform then remembers the code and shows the pod.
+Signing in to an upstream (D19) is the engine's flow too (`client_core::auth`), started by `action.auth.login` or
+Settings' `sign_in` (a provider of `local:providers`, on the server typed for it when it takes one): the engine
+registers the client with the pod (`app_path`) and the platform opens the authorize page in the browser (`signin`).
+The desktop viewer gets the redirect on the engine's loopback listener. The Android app registers the verified App
+Link `https://the-construct-pod.fly.dev/oauth/android` for the staging pod once Android has verified it (decision
+[`android-app-link-sign-in-redirect`](decisions/android-app-link-sign-in-redirect.md); the APK's debug key must be
+in the pod's `CONSTRUCT_ANDROID_CERT_SHA256`), else `construct://oauth`; either opens the app (`onNewIntent`, or
+`onCreate` when Android had ended it) and goes through the bridge to the engine, which matches its `state` and
+exchanges the code (`token_path`). Its progress and errors show in `local://session` (`status`), the session lands in
+the secure store and home, the sign-ins and the feed load again. `sign_out` signs out through the pod
+(`POST /v1/auth/logout`, which keeps a pod code's session) and loads the sign-ins again. Each server's engine
+picks its own redirect, so `set_server` to another pod signs in there the same way. `leave_pod` (the engine
 forgets the session) and `refresh` (home fetched again) go to the platform too. The device data the shared UI builds
 (`DeviceData`) is built the same way: `local://connection`, `local://session` (from the engine's sign-in state),
 `local://inbox` (the engine's unread count), the layouts with their versions, and, for a layout that binds them,

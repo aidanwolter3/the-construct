@@ -392,7 +392,7 @@ fn set_clipboard_text(app: &AndroidApp, text: &str) -> Result<(), String> {
 }
 
 /// Opens `url` in the browser: an `ACTION_VIEW` intent from the activity.
-fn view_url(app: &AndroidApp, url: &str) -> jni::errors::Result<()> {
+pub(crate) fn view_url(app: &AndroidApp, url: &str) -> jni::errors::Result<()> {
     use jni::objects::{JObject, JValue};
     use jni::{jni_sig, jni_str};
     // SAFETY: the VM pointer is valid for the life of the process.
@@ -602,7 +602,7 @@ const KEY_ALIAS: &str = "construct_session_key";
 
 /// Runs `f` with the JNI environment and the activity (as its `Context`);
 /// a Java exception comes back described.
-fn with_activity<T>(
+pub(crate) fn with_activity<T>(
     app: &AndroidApp,
     f: impl FnOnce(&mut jni::Env, &jni::objects::JObject) -> jni::errors::Result<T>,
 ) -> Result<T, String> {
@@ -997,6 +997,7 @@ fn pod_home(app: &AndroidApp) -> crate::pods::PodHome {
         std::sync::Arc::new(KeystoreStore(app.clone(), Default::default())),
         log,
     )
+    .with_sign_in(crate::signin::android(app))
     .with_servers(servers)
 }
 

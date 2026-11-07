@@ -284,9 +284,10 @@ impl App {
         }
     }
 
-    /// What the platform reported: picked photos are staged for the media
-    /// picker that asked; the rest shows as a notice for now (the bridge's
-    /// prototype); sign-in redirects build on these.
+    /// What the platform reported: a sign-in's redirect goes to the
+    /// engine's sign-in (`crate::signin`); picked photos are staged for the
+    /// media picker that asked; the rest shows as a notice for now (the
+    /// bridge's prototype).
     fn platform_events(&mut self) {
         let events = self
             .platform
@@ -294,6 +295,21 @@ impl App {
             .map(|p| p.events())
             .unwrap_or_default();
         for e in events {
+            #[cfg(feature = "remote")]
+            if let PlatformEvent::Link(uri) = &e
+                && crate::signin::is_redirect(uri, crate::signin::APP_LINK_HOST)
+            {
+                // The code is not logged: the engine exchanges it.
+                let taken = self.controller.session.auth_redirect(uri);
+                log(&format!(
+                    "sign-in redirect {}",
+                    if taken { "taken" } else { "not used" }
+                ));
+                if let Some(s) = &self.surface {
+                    s.window.request_redraw();
+                }
+                continue;
+            }
             log(&format!("platform: {e:?}"));
             let (title, message) = match e {
                 PlatformEvent::Link(uri) => ("Opened with a link".to_owned(), uri),
