@@ -14,7 +14,8 @@
     <!-- Notifications from the bridge's receiver (Android 13+ asks the user). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Push (PushReceiver, the UnifiedPush connector's receiver): it holds a wake lock while a message is handled,
-         and finds the installed distributors (ntfy, ...) by these actions. -->
+         and finds the installed distributors (ntfy, ...) by these actions; the embedded FCM distributor talks to
+         Play services (com.google.android.gms) directly. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <queries>
         <intent>
@@ -23,6 +24,7 @@
         <intent>
             <action android:name="org.unifiedpush.android.distributor.UNREGISTER" />
         </intent>
+        <package android:name="com.google.android.gms" />
     </queries>
     <!-- No backups or device-to-device transfers, as the main app (app/androidApp's manifest): pod.json, the engine's
          cache database (the private feed, the outbox, queued photos) and the push keys and endpoints are not
@@ -90,7 +92,39 @@
                 <action android:name="org.unifiedpush.android.connector.UNREGISTERED" />
                 <action android:name="org.unifiedpush.android.connector.NEW_ENDPOINT" />
                 <action android:name="org.unifiedpush.android.connector.REGISTRATION_FAILED" />
-                <action android:name="org.unifiedpush.android.connector.REGISTRATION_REFUSED" />
+                <action android:name="org.unifiedpush.android.connector.TEMP_UNAVAILABLE" />
+            </intent-filter>
+        </receiver>
+        <!-- A distributor (connector 3.x, AND_3) may start this to let the app run while it delivers a message. -->
+        <service
+            android:name="org.unifiedpush.android.connector.internal.RaiseToForegroundService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.RAISE_TO_FOREGROUND" />
+            </intent-filter>
+        </service>
+        <!-- The embedded FCM distributor (library classes, no code of ours), used when no distributor app is
+             installed: the app is its own distributor. It registers with Play services using the pod's VAPID key, so
+             the endpoint is FCM's own Web Push one (fcm.googleapis.com/fcm/send/...): no Firebase project, no
+             gateway. FirebaseReceiver takes Play services' messages (only Play services holds c2dm SEND);
+             UnifiedPushReceiver answers the connector's REGISTER/UNREGISTER from this same app. -->
+        <receiver
+            android:name="org.unifiedpush.android.embedded_fcm_distributor.impl.FirebaseReceiver"
+            android:exported="true"
+            android:permission="com.google.android.c2dm.permission.SEND">
+            <intent-filter>
+                <action android:name="com.google.android.c2dm.intent.RECEIVE" />
+                <action android:name="com.google.android.c2dm.intent.REGISTRATION" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name="org.unifiedpush.android.embedded_fcm_distributor.impl.UnifiedPushReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter android:priority="-500">
+                <action android:name="org.unifiedpush.android.distributor.feature.BYTES_MESSAGE" />
+                <action android:name="org.unifiedpush.android.distributor.REGISTER" />
+                <action android:name="org.unifiedpush.android.distributor.UNREGISTER" />
             </intent-filter>
         </receiver>
     </application>

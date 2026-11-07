@@ -65,7 +65,8 @@ in a row. Limits per pod: 20 devices, 60 deliveries a minute. The routes are in 
   settings once Android won't show the prompt again ([layouts.md](layouts.md)); creates OS channels `<app_id>.<channel>` grouped per app; shows
   live arrivals while in the background; and receives closed-app push through
   [UnifiedPush](https://unifiedpush.org): a distributor app such as ntfy if installed, otherwise the embedded FCM
-  distributor via Play services and the UnifiedPush project's public gateway. No Firebase project or Google
+  distributor via Play services, which registers with the pod's VAPID key so the pod sends Web Push straight to
+  FCM's own Web Push endpoint (`fcm.googleapis.com/fcm/send/...`). No Firebase project, gateway or Google
   credentials are involved; build with `-PnoFcmFallback` to leave the fallback out. Each server gets its own push
   registration (decision [`android-push-registration-per-server`](decisions/android-push-registration-per-server.md)).
 - **Desktop:** tray notifications while running and unfocused, and a dock badge where supported. There is no
@@ -83,5 +84,5 @@ in a row. Limits per pod: 20 devices, 60 deliveries a minute. The routes are in 
 Closed-app notifications on desktop; removing an Android notification when it is read on another device; per-app
 notification screens inside layouts; upstream push instead of polling where an upstream offers it. The Android
 permission prompt, channels, UnifiedPush and the FCM fallback have not been checked on a device yet. The Rust Android app
-(`construct-render`) receives push through UnifiedPush too, with its own keys and decryption, but has no FCM
-fallback yet (decision [`android-native-push-unifiedpush`](decisions/android-native-push-unifiedpush.md)).
+(`construct-render`) receives push through UnifiedPush too, with its own keys and decryption, and the same embedded
+FCM fallback (decision [`android-native-push-embedded-fcm`](decisions/android-native-push-embedded-fcm.md)).

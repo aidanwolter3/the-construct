@@ -1,8 +1,11 @@
 //! Push notifications while the app is closed (decision
 //! `android-push-unifiedpush`): the pod sends Web Push (RFC 8291, D52) to an
-//! endpoint a UnifiedPush distributor (ntfy, ...) gives the app. The
+//! endpoint a UnifiedPush distributor gives the app: a distributor app
+//! (ntfy, ...), else the embedded FCM distributor (Play services, with the
+//! pod's VAPID key: an FCM Web Push endpoint, no Firebase project). The
 //! distributor's broadcasts reach `PushReceiver` (the connector library's
-//! receiver, `android/java`), which only forwards them here.
+//! receiver, `android/java`), which only forwards them here; the connector's
+//! key store is `PushKeys`, which forwards to this module too.
 //!
 //! This module keeps one registration per server (decision
 //! `android-push-registration-per-server`: instance `server:<base url>`):
@@ -32,6 +35,8 @@ use crate::engine::PodEngine;
 
 /// Notifications whose taps are remembered (the newest).
 const TAPS_KEPT: usize = 50;
+/// How long push setup waits for the engine's saved session at start.
+const SESSION_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
 /// The link a tapped notification opens the app with, before its token.
 pub const TAP_LINK: &str = "construct://notification/";
 
@@ -167,6 +172,19 @@ impl PushStore {
         })
     }
 
+    /// Whether `instance` has keys.
+    pub fn exists(&self, instance: &str) -> bool {
+        self.read().instances.contains_key(instance)
+    }
+
+    /// Forgets `instance`'s keys and endpoint (the connector deletes them
+    /// when a registration ends; a new one makes new keys).
+    pub fn forget(&self, instance: &str) -> Result<(), String> {
+        self.change(|s| {
+            s.instances.remove(instance);
+        })
+    }
+
     /// The endpoint the distributor gave `instance`.
     pub fn endpoint(&self, instance: &str) -> Option<String> {
         self.read().instances.get(instance)?.endpoint.clone()
@@ -262,17 +280,28 @@ fn live(instance: &str) -> Option<PodEngine> {
 
 /// Readies push for the pod the app opened (on a background thread: it
 /// asks the pod): its keys, its saved endpoint sent to the pod again, and
-/// the instance to ask the distributor for an endpoint for. `None` without
-/// a session, or when the pod sends no push.
-pub fn set_up(store: &PushStore, engine: &PodEngine, log: fn(&str)) -> Option<String> {
+/// the instance to ask the distributor for an endpoint for, with the pod's
+/// VAPID key (base64url; the embedded FCM distributor registers with it).
+/// `None` without a session (a saved one is waited for briefly), or when
+/// the pod sends no push.
+pub fn set_up(store: &PushStore, engine: &PodEngine, log: fn(&str)) -> Option<(String, String)> {
     *lock(&LIVE) = Some(engine.clone());
-    if !engine.signed_in() {
-        return None;
+    // At start the engine may still be loading its saved session.
+    let waited = std::time::Instant::now();
+    while !engine.signed_in() {
+        if waited.elapsed() >= SESSION_WAIT {
+            log(&format!(
+                "push: no session for {}: set up after sign-in",
+                engine.base()
+            ));
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
     }
-    if let Err(e) = engine.push_public_key() {
-        log(&format!("push: {}: {e}", engine.base()));
-        return None;
-    }
+    let vapid = engine
+        .push_public_key()
+        .map_err(|e| log(&format!("push: {}: {e}", engine.base())))
+        .ok()?;
     let instance = instance_for(engine.base());
     let keys = store
         .keys(&instance)
@@ -283,7 +312,7 @@ pub fn set_up(store: &PushStore, engine: &PodEngine, log: fn(&str)) -> Option<St
     {
         log(&format!("push registration: {e}"));
     }
-    Some(instance)
+    Some((instance, vapid))
 }
 
 /// The distributor gave `instance` an endpoint: kept, and sent to its pod
@@ -319,21 +348,20 @@ pub fn unregistered(store: &PushStore, instance: &str, log: fn(&str)) {
     }
 }
 
-/// A message for `instance`: decrypted, and given to its pod's engine
+/// A message for `instance` (decrypted by the connector through
+/// `PushKeys`, that is [`PushStore::decrypt`]): given to its pod's engine
 /// when the app has it open (its inbox and count). The notification to
 /// post, unless the app shows that pod in the foreground (its own bell
 /// shows it then).
 pub fn arrived(
-    store: &PushStore,
     instance: &str,
-    body: &[u8],
+    json: &str,
     foreground: impl FnOnce() -> bool,
 ) -> Result<Option<protocol::Notification>, String> {
-    let json = store.decrypt(instance, body)?;
-    let n = notification(&json).ok_or("not a notification")?;
+    let n = notification(json).ok_or("not a notification")?;
     match live(instance) {
         Some(engine) => {
-            engine.handle_push_message(&json);
+            engine.handle_push_message(json);
             Ok((!foreground()).then_some(n))
         }
         None => Ok(Some(n)),
@@ -345,7 +373,8 @@ pub fn arrived(
 #[cfg(all(target_os = "android", feature = "window"))]
 pub mod android {
     use jni::errors::ThrowRuntimeExAndDefault;
-    use jni::objects::{JByteArray, JClass, JObject, JString, JValue};
+    use jni::objects::{JByteArray, JClass, JObject, JObjectArray, JString, JValue};
+    use jni::sys::jboolean;
     use jni::{EnvUnowned, jni_sig, jni_str};
 
     use super::{PushStore, TAP_LINK};
@@ -398,7 +427,9 @@ pub mod android {
     ) {
         env.with_env(|env| -> jni::errors::Result<()> {
             let (endpoint, instance) = (text(env, &endpoint)?, text(env, &instance)?);
-            log(&format!("push: new endpoint for {instance}"));
+            // The host only: FCM (fcm.googleapis.com) or the distributor's server.
+            let host = endpoint.split('/').nth(2).unwrap_or("?");
+            log(&format!("push: new endpoint for {instance} at {host}"));
             let store = store(&files_dir(env, &context)?);
             super::new_endpoint(&store, &instance, &endpoint, log);
             Ok(())
@@ -406,20 +437,32 @@ pub mod android {
         .resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    /// `NativePush.message`: a push message for `instance` (encrypted).
+    /// `NativePush.message`: a push message for `instance`, decrypted by
+    /// the connector with `PushKeys` (that is, by [`PushStore::decrypt`]).
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_org_theconstruct_android_NativePush_message<'l>(
         mut env: EnvUnowned<'l>,
         _class: JClass<'l>,
         context: JObject<'l>,
         message: JByteArray<'l>,
+        decrypted: jboolean,
         instance: JString<'l>,
     ) {
         env.with_env(|env| -> jni::errors::Result<()> {
             let instance = text(env, &instance)?;
+            if !decrypted {
+                log(&format!(
+                    "push message for {instance} dropped: not decrypted"
+                ));
+                return Ok(());
+            }
             let body = env.convert_byte_array(&message)?;
+            let Ok(json) = String::from_utf8(body) else {
+                log(&format!("push message for {instance} dropped: not text"));
+                return Ok(());
+            };
             let store = store(&files_dir(env, &context)?);
-            let shown = super::arrived(&store, &instance, &body, || {
+            let shown = super::arrived(&instance, &json, || {
                 foreground(env).unwrap_or_else(|_| {
                     env.exception_clear();
                     false
@@ -463,19 +506,131 @@ pub mod android {
         .resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    /// `NativePush.failed`: the distributor refused `instance`.
+    /// `NativePush.failed`: the distributor refused `instance` (`reason`:
+    /// the connector's `FailedReason`, e.g. `INTERNAL_ERROR` from the
+    /// embedded FCM distributor on a phone without Play services).
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_org_theconstruct_android_NativePush_failed<'l>(
         mut env: EnvUnowned<'l>,
         _class: JClass<'l>,
         _context: JObject<'l>,
+        reason: JString<'l>,
         instance: JString<'l>,
     ) {
         env.with_env(|env| -> jni::errors::Result<()> {
             log(&format!(
-                "push: registration failed for {}",
-                text(env, &instance)?
+                "push: registration failed for {}: {}",
+                text(env, &instance)?,
+                text(env, &reason)?
             ));
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+    }
+
+    /// `NativePush.decrypt` (`PushKeys.decrypt`): a message for `instance`
+    /// decrypted with its keys (RFC 8291), or an exception, on which the
+    /// connector hands the message on undecrypted (and `message` drops it).
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_org_theconstruct_android_NativePush_decrypt<'l>(
+        mut env: EnvUnowned<'l>,
+        _class: JClass<'l>,
+        context: JObject<'l>,
+        instance: JString<'l>,
+        sealed: JByteArray<'l>,
+    ) -> JByteArray<'l> {
+        env.with_env(|env| -> jni::errors::Result<JByteArray<'l>> {
+            let instance = text(env, &instance)?;
+            let body = env.convert_byte_array(&sealed)?;
+            match store(&files_dir(env, &context)?).decrypt(&instance, &body) {
+                Ok(json) => env.byte_array_from_slice(json.as_bytes()),
+                Err(e) => {
+                    log(&format!("push: decrypting for {instance}: {e}"));
+                    env.throw_new(
+                        jni::jni_str!("java/lang/IllegalStateException"),
+                        jni::jni_str!("push message not decrypted"),
+                    )?;
+                    Ok(JByteArray::default())
+                }
+            }
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+    }
+
+    /// `NativePush.generate` (`PushKeys.generate`): keys for `instance`,
+    /// made unless it has some.
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_org_theconstruct_android_NativePush_generate<'l>(
+        mut env: EnvUnowned<'l>,
+        _class: JClass<'l>,
+        context: JObject<'l>,
+        instance: JString<'l>,
+    ) {
+        env.with_env(|env| -> jni::errors::Result<()> {
+            let instance = text(env, &instance)?;
+            if let Err(e) = store(&files_dir(env, &context)?).keys(&instance) {
+                log(&format!("push keys: {e}"));
+            }
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+    }
+
+    /// `NativePush.publicKeys` (`PushKeys.getPublicKeySet`): `{p256dh,
+    /// auth}` of `instance`, or null without keys.
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_org_theconstruct_android_NativePush_publicKeys<'l>(
+        mut env: EnvUnowned<'l>,
+        _class: JClass<'l>,
+        context: JObject<'l>,
+        instance: JString<'l>,
+    ) -> JObjectArray<'l> {
+        env.with_env(|env| -> jni::errors::Result<JObjectArray<'l>> {
+            let instance = text(env, &instance)?;
+            let store = store(&files_dir(env, &context)?);
+            if !store.exists(&instance) {
+                return Ok(JObjectArray::default());
+            }
+            let Ok(keys) = store.keys(&instance) else {
+                return Ok(JObjectArray::default());
+            };
+            let p256dh = env.new_string(&keys.p256dh)?;
+            let auth = env.new_string(&keys.auth)?;
+            let array = env.new_object_array(2, jni::jni_str!("java/lang/String"), &p256dh)?;
+            array.set_element(env, 1, &auth)?;
+            Ok(array)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+    }
+
+    /// `NativePush.exists` (`PushKeys.exists`).
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_org_theconstruct_android_NativePush_exists<'l>(
+        mut env: EnvUnowned<'l>,
+        _class: JClass<'l>,
+        context: JObject<'l>,
+        instance: JString<'l>,
+    ) -> jboolean {
+        env.with_env(|env| -> jni::errors::Result<jboolean> {
+            let instance = text(env, &instance)?;
+            Ok(store(&files_dir(env, &context)?).exists(&instance))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+    }
+
+    /// `NativePush.delete` (`PushKeys.delete`): the registration ended.
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_org_theconstruct_android_NativePush_delete<'l>(
+        mut env: EnvUnowned<'l>,
+        _class: JClass<'l>,
+        context: JObject<'l>,
+        instance: JString<'l>,
+    ) {
+        env.with_env(|env| -> jni::errors::Result<()> {
+            let instance = text(env, &instance)?;
+            if let Err(e) = store(&files_dir(env, &context)?).forget(&instance) {
+                log(&format!("push: forgetting {instance}: {e}"));
+            }
             Ok(())
         })
         .resolve::<ThrowRuntimeExAndDefault>()
@@ -529,78 +684,111 @@ pub mod android {
     }
 
     /// Asks the distributor for an endpoint for `instance` (the connector's
-    /// `UnifiedPush.registerApp`); the endpoint comes to the receiver. The
-    /// distributor saved before, else the first installed one; false when
-    /// the phone has none (notifications then only show in the open app).
+    /// `UnifiedPush.register`, with the pod's `vapid` key and `PushKeys`, so
+    /// the keys stay here); the endpoint comes to the receiver. The
+    /// distributor app saved before while it is installed, else the first
+    /// distributor app, else the embedded FCM distributor (this app itself;
+    /// it fails later without Play services), so an app installed later
+    /// takes over from the fallback. False when there is none.
     pub fn register(
         env: &mut jni::Env,
         context: &JObject,
         instance: &str,
+        vapid: &str,
     ) -> jni::errors::Result<bool> {
         let up = app_class(
             env,
             context,
             "org.unifiedpush.android.connector.UnifiedPush",
         )?;
-        let features = env
-            .call_static_method(
-                &up,
-                jni_str!("getDEFAULT_FEATURES"),
-                jni_sig!("()Ljava/util/ArrayList;"),
-                &[],
-            )?
-            .l()?;
         let saved = env
             .call_static_method(
                 &up,
-                jni_str!("getDistributor"),
+                jni_str!("getSavedDistributor"),
                 jni_sig!("(Landroid/content/Context;)Ljava/lang/String;"),
                 &[JValue::Object(context)],
             )?
             .l()?;
-        let saved = env.cast_local::<JString>(saved)?;
-        if text(env, &saved)?.is_empty() {
-            let list = env
-                .call_static_method(
-                    &up,
-                    jni_str!("getDistributors"),
-                    jni_sig!("(Landroid/content/Context;Ljava/util/ArrayList;)Ljava/util/List;"),
-                    &[JValue::Object(context), JValue::Object(&features)],
-                )?
-                .l()?;
-            if env
-                .call_method(&list, jni_str!("size"), jni_sig!("()I"), &[])?
-                .i()?
-                == 0
-            {
-                return Ok(false);
-            }
-            let first = env
+        let saved = text(env, &env.cast_local::<JString>(saved)?)?;
+        let own = env
+            .call_method(
+                context,
+                jni_str!("getPackageName"),
+                jni_sig!("()Ljava/lang/String;"),
+                &[],
+            )?
+            .l()?;
+        let own = text(env, &env.cast_local::<JString>(own)?)?;
+        let list = env
+            .call_static_method(
+                &up,
+                jni_str!("getDistributors"),
+                jni_sig!("(Landroid/content/Context;)Ljava/util/List;"),
+                &[JValue::Object(context)],
+            )?
+            .l()?;
+        let n = env
+            .call_method(&list, jni_str!("size"), jni_sig!("()I"), &[])?
+            .i()?;
+        let mut names = Vec::new();
+        for i in 0..n {
+            let d = env
                 .call_method(
                     &list,
                     jni_str!("get"),
                     jni_sig!("(I)Ljava/lang/Object;"),
-                    &[JValue::Int(0)],
+                    &[JValue::Int(i)],
                 )?
                 .l()?;
+            names.push(text(env, &env.cast_local::<JString>(d)?)?);
+        }
+        // A distributor app over the embedded one (the user installed it to
+        // be used, also after the fallback was chosen): the saved app while
+        // it is still installed, else the first app, else the embedded one.
+        let Some(pick) = names
+            .iter()
+            .find(|d| **d == saved && **d != own)
+            .or_else(|| names.iter().find(|d| **d != own))
+            .or_else(|| names.iter().find(|d| **d == own))
+        else {
+            return Ok(false);
+        };
+        log(&format!("push: distributor {pick}"));
+        if *pick != saved {
+            let pick = env.new_string(pick)?;
             env.call_static_method(
                 &up,
                 jni_str!("saveDistributor"),
                 jni_sig!("(Landroid/content/Context;Ljava/lang/String;)V"),
-                &[JValue::Object(context), JValue::Object(&first)],
+                &[JValue::Object(context), JValue::Object(&pick)],
             )?;
         }
+        let keys_class = app_class(env, context, "org.theconstruct.android.PushKeys")?;
+        let app_context = env
+            .call_method(
+                context,
+                jni_str!("getApplicationContext"),
+                jni_sig!("()Landroid/content/Context;"),
+                &[],
+            )?
+            .l()?;
+        let keys = env.new_object(
+            &keys_class,
+            jni_sig!("(Landroid/content/Context;)V"),
+            &[JValue::Object(&app_context)],
+        )?;
         let instance = env.new_string(instance)?;
-        let message = env.new_string("")?;
+        let vapid = env.new_string(vapid)?;
         env.call_static_method(
             &up,
-            jni_str!("registerApp"),
-            jni_sig!("(Landroid/content/Context;Ljava/lang/String;Ljava/util/ArrayList;Ljava/lang/String;)V"),
+            jni_str!("register"),
+            jni_sig!("(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/unifiedpush/android/connector/keys/KeyManager;)V"),
             &[
                 JValue::Object(context),
                 JValue::Object(&instance),
-                JValue::Object(&features),
-                JValue::Object(&message),
+                JValue::Object(&JObject::null()),
+                JValue::Object(&vapid),
+                JValue::Object(&keys),
             ],
         )?;
         Ok(true)
@@ -983,6 +1171,12 @@ mod tests {
         );
         s.set_endpoint(&a, None).unwrap();
         assert_eq!(s.endpoint(&a), None);
+        assert!(s.exists(&a));
+        s.set_endpoint(&a, Some("https://push.example/up/abc"))
+            .unwrap();
+        s.forget(&a).unwrap();
+        assert!(!s.exists(&a), "keys and endpoint go together");
+        assert_eq!(s.endpoint(&a), None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1025,12 +1219,13 @@ mod tests {
         let (s, dir) = store();
         let a = instance_for("https://closed.example");
         let keys = s.keys(&a).unwrap();
-        let n = arrived(&s, &a, &sealed(&keys, PAYLOAD), || true).unwrap();
+        let json = s.decrypt(&a, &sealed(&keys, PAYLOAD)).unwrap();
+        let n = arrived(&a, &json, || true).unwrap();
         assert_eq!(
             n.map(|n| n.title),
             Some("Night Owls at The Harbour Room".into())
         );
-        assert!(arrived(&s, &a, b"not web push", || false).is_err());
+        assert!(arrived(&a, "not a notification", || false).is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
 }
