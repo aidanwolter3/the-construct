@@ -463,6 +463,67 @@ fn text_fields_edit_like_android() {
     assert!(s.scene().unwrap().find_node("edit:paste").is_none());
 }
 
+#[test]
+fn the_keyboards_input_connection_edits_the_field() {
+    use construct_render::ime::{Connection, Tell};
+    let root = json!({ "type": "core://Column", "children": [
+        { "type": "core://TextField", "field": "pod_token", "placeholder": "Pod code", "max_length": 12 } ] });
+    let (mut s, _) = session(root, json!({}), false);
+    let f = s
+        .scene()
+        .unwrap()
+        .find_node("field:pod_token")
+        .unwrap()
+        .bounds;
+    let underlines = |s: &mut Session| {
+        s.scene()
+            .unwrap()
+            .quads()
+            .filter(|q| q.rect[3] == 1.5 && q.rect[1] > f[1] && q.rect[1] < f[1] + f[3])
+            .count()
+    };
+    let mut keyboard = Connection::default();
+    assert_eq!(keyboard.sync(s.text_state().as_ref()), (None, None));
+    // A tap focuses the field: the keyboard starts on it.
+    s.tap(&Target::Id("field:pod_token".into())).unwrap();
+    assert_eq!(
+        keyboard.sync(s.text_state().as_ref()),
+        (None, Some(Tell::Restart))
+    );
+    // The keyboard composes a word: it is in the field, underlined.
+    keyboard.edit(|t| t.set_composing_text("cpod", 1));
+    let (edit, _) = keyboard.sync(s.text_state().as_ref());
+    s.set_text_state(&edit.unwrap().state.unwrap());
+    assert_eq!(s.form["pod_token"], "cpod");
+    assert_eq!(underlines(&mut s), 1);
+    assert_eq!(keyboard.sync(s.text_state().as_ref()), (None, None));
+    // Its suggestion replaces the word, no further than max_length: the
+    // keyboard starts over with what the field kept.
+    keyboard.edit(|t| t.commit_text("cpod_abcdefghij", 1));
+    let (edit, _) = keyboard.sync(s.text_state().as_ref());
+    s.set_text_state(&edit.unwrap().state.unwrap());
+    assert_eq!(s.form["pod_token"], "cpod_abcdefg");
+    assert_eq!(underlines(&mut s), 0);
+    assert_eq!(
+        keyboard.sync(s.text_state().as_ref()),
+        (None, Some(Tell::Restart))
+    );
+    // The engine's own editing: the keyboard hears where the cursor went.
+    s.move_cursor(construct_render::interact::CursorMove::Home, false);
+    assert_eq!(
+        keyboard.sync(s.text_state().as_ref()),
+        (None, Some(Tell::Selection([0, 0, -1, -1])))
+    );
+    // Its Done key ends editing.
+    keyboard.edit(|t| t.delete_surrounding(0, 1, false));
+    assert!(keyboard.action());
+    let (edit, _) = keyboard.sync(s.text_state().as_ref());
+    let edit = edit.unwrap();
+    assert!(edit.done);
+    s.set_text_state(&edit.state.unwrap());
+    assert_eq!(s.form["pod_token"], "pod_abcdefg");
+}
+
 /// A loader with an outbox of its own: it takes writes, and hands the
 /// session what it hears of.
 struct Outbox {
