@@ -48,7 +48,8 @@ pub mod attachments;
 pub mod auth;
 pub mod catalog;
 pub mod events;
-pub mod expr;
+/// The mutation-expression evaluator, shared with the Rust renderer.
+pub use protocol::expr;
 pub mod notify;
 pub mod store;
 
