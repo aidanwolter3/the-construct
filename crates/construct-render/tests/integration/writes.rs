@@ -633,3 +633,50 @@ fn the_notification_permission_is_asked_by_the_platform() {
     );
     assert!(writes.lock().unwrap().is_empty());
 }
+
+#[test]
+fn liking_a_post_counts_the_like_and_unliking_takes_it_back() {
+    // The sample feed's Like: a ternary with arithmetic in an `also` update.
+    let root = json!({ "type": "core://List", "query_key": "feed", "item_template": {
+        "type": "core://Row", "children": [
+            { "type": "core://Text", "style": "Body", "value_expr": "$item.like_count" },
+            { "type": "core://Tappable", "tag": "like_$item.id", "content_description": "Like",
+              "content": { "type": "core://Text", "style": "Label", "value_expr": "Like" },
+              "on_click": { "intent": "action.mutation.optimistic", "entity_uri": "$item.uri",
+                "field": "is_liked", "value_expr": "!entity.is_liked", "rollback_value": false,
+                "also": [ { "field": "like_count",
+                  "value_expr": "entity.is_liked ? entity.like_count - 1 : entity.like_count + 1" } ],
+                "endpoint": "/v1/posts/like", "payload": { "liked": "$value", "id": "$item.id" } } }
+        ] } });
+    let d = json!({ "entities": { "x://posts/101": { "id": "101", "is_liked": false, "like_count": 89 } },
+                    "queries": { "feed": ["x://posts/101"] } });
+    let (mut s, _) = session(root, d, false);
+    let like = Target::Id("like_101".into());
+    s.tap(&like).unwrap();
+    let post = &s.data.entities["x://posts/101"];
+    assert_eq!(post.get("like_count"), Some(&json!(90)));
+    assert_eq!(post.get_bool("is_liked"), Some(true));
+    assert!(texts(&mut s).contains(&"90".to_owned()));
+    s.tap(&like).unwrap();
+    s.scene().unwrap();
+    assert_eq!(
+        s.data.entities["x://posts/101"].get("like_count"),
+        Some(&json!(89))
+    );
+    assert!(texts(&mut s).contains(&"89".to_owned()));
+}
+
+#[test]
+fn a_local_set_evaluates_a_ternary() {
+    let root = json!({ "type": "core://Tappable", "tag": "step", "content_description": "Step",
+        "content": { "type": "core://Text", "style": "Body", "value_expr": "Step" },
+        "on_click": { "intent": "action.local.set", "entity_uri": "local://counter",
+          "field": "n", "value_expr": "entity.big ? entity.n + 10 : entity.n + 1" } });
+    let d = json!({ "entities": { "local://counter": { "n": 1, "big": true } } });
+    let (mut s, _) = session(root, d, false);
+    s.tap(&Target::Id("step".into())).unwrap();
+    assert_eq!(
+        s.data.entities["local://counter"].get("n"),
+        Some(&json!(11))
+    );
+}

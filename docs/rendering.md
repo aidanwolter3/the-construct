@@ -233,7 +233,8 @@ rounded) and drawn over their placeholder once they arrive; the window redraws t
 
 Writes go to the engine's outbox, as the shared UI sends them (`Loader::take`): `$form.<f>`, `$form?.<f>` and one
 `$nonce` per tap are bound when the tap runs (a blank `$form.<f>` sends nothing). `action.mutation.optimistic`
-changes the entity at once (every `value_expr` against the entity as it was) and the engine keeps the write until
+changes the entity at once (every `value_expr` against the entity as it was, in the expression language client-core
+uses, `protocol::expr`; one that fails changes nothing) and the engine keeps the write until
 the pod has it, offline or through a failed POST, with `$value` as the new value; a refusal puts the fields back.
 `action.mutation.create` adds its entity to its list at once, and the engine loads its list again once the pod has
 it (a refusal takes it out). A loader without an outbox (`PodClient`) POSTs on a background thread instead
@@ -309,7 +310,9 @@ device state and answers the same, with the interaction's effects; a tap that wo
 the value checks a saved layout gets (sizes, icons, tints; `validate::check_node_values`), a draft's and a saved
 layout's alike, since a component updated after a layout was saved isn't checked against it: a preview that fails
 them answers `invalid_layout`, and a linked layout that fails them isn't loaded. The renderer also draws no icon
-mask past 2048 px a side. Code: `pod_core::preview`.
+mask past 2048 px a side. An `id`, `data_from` or linked layout that isn't shaped like a layout id (lowercase
+letters, digits, `_` and `-`, at most 64) answers `unknown_layout` before any request is built. Code:
+`pod_core::preview`.
 
 ## Tests
 

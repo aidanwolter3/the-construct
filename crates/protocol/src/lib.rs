@@ -8,6 +8,7 @@
 
 pub mod ast;
 pub mod bundle;
+pub mod expr;
 pub mod features;
 pub mod intent;
 pub mod notify;

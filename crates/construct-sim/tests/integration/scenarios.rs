@@ -9,14 +9,14 @@ fn liking_a_post_and_going_offline() {
     let out = out_dir("like");
     let (runner, results) = run(
         "pixelfed_sample_no_login",
-        "shot feed; click Like; assert-text Unlike; shot liked; offline; shot offline",
+        "shot feed; click Like; assert-text Unlike; assert-text 90; shot liked; offline; shot offline",
         &out,
     );
     assert_ok(&results);
     for f in [
         "01-feed.png",
-        "04-liked.png",
-        "06-offline.png",
+        "05-liked.png",
+        "07-offline.png",
         "steps.log",
         "steps.json",
     ] {
