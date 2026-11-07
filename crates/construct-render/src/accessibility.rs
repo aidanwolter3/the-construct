@@ -3,8 +3,7 @@
 //! values, states, bounds), and what a screen reader asks for (activate,
 //! focus, scroll, set a text field's value) comes back as a [`Request`]
 //! the window runs on its session. The window hands the tree to the
-//! platform (`accesskit_winit`: VoiceOver on macOS, Narrator on Windows,
-//! Orca on Linux).
+//! platform (`accesskit_winit`: VoiceOver on macOS, Narrator on Windows).
 //!
 //! As Compose merges a clickable's descendants into it, an interactive
 //! node is one element: its label is its own text, else its descendants'

@@ -43,9 +43,11 @@ accesskit = "0.25"
 reqwest = { workspace = true, optional = true }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-# Screen readers on the desktop: VoiceOver, Narrator, Orca. Android's
-# adapter needs a Java class (a dex) the NativeActivity doesn't have.
-accesskit_winit = { version = "0.34", optional = true }
+# Screen readers on the desktop: VoiceOver (macOS) and Narrator (Windows).
+# Not Orca on Linux: AccessKit's AT-SPI adapter pulls in zvariant, which
+# is unmaintained (RUSTSEC-2026-0370) until AccessKit moves to zbus 6.
+# Android's adapter needs a Java class (a dex) the NativeActivity lacks.
+accesskit_winit = { version = "0.34", optional = true, default-features = false, features = ["rwh_06"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 # NativeActivity glue (winit re-exports android-activity).

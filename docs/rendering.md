@@ -53,16 +53,17 @@ path from the root (`root/0/2/i3/0`, `i3` being a list's fourth item). Bounds ar
 ## Screen readers
 
 The window serves screen readers from the semantic tree through AccessKit (`accessibility`, decision
-`rust-client-accessibility`): VoiceOver on macOS, Narrator on Windows and Orca on Linux (`accesskit_winit`). Each
-frame's tree is sent while one is listening. Roles follow the node type: a button, icon button, tappable or dock
-tab is a button (a tab is selected when on); a switch is a switch with its state; a `core://ChoiceChips` is a radio
-group of its options; a text field is a text input with its value, named by its placeholder, and focused while
-typed into; a scroll is a scroll view; an image is named by its `content_description`; other text is a label. As
-in Compose, a tappable's texts fold into it: it is read as one element, named by its own description, else by its
-texts. Under a dialog's or panel's scrim nothing is listed. Activating an element taps it by its semantic id
-(`Session::tap`), Focus on a field focuses it, a value set on a field replaces it, and Scroll up or down moves a
-scroll view by most of its height. AccessKit's ids are hashes of the semantic ids, so a screen reader keeps its
-place from frame to frame.
+`rust-client-accessibility`): VoiceOver on macOS and Narrator on Windows (`accesskit_winit`). Not Orca on Linux yet:
+AccessKit's AT-SPI adapter depends on `zvariant`, unmaintained since it moved into zbus 6 (RUSTSEC-2026-0370), so it
+is left off until AccessKit moves too. Each frame's tree is sent while one is listening. Roles follow the node type:
+a button, icon button, tappable or dock tab is a button (a tab is selected when on); a switch is a switch with its
+state; a `core://ChoiceChips` is a radio group of its options; a text field is a text input with its value, named by
+its placeholder, and focused while typed into; a scroll is a scroll view; an image is named by its
+`content_description`; other text is a label. As in Compose, a tappable's texts fold into it: it is read as one
+element, named by its own description, else by its texts. Under a dialog's or panel's scrim nothing is listed.
+Activating an element taps it by its semantic id (`Session::tap`), Focus on a field focuses it, a value set on a
+field replaces it, and Scroll up or down moves a scroll view by most of its height. AccessKit's ids are hashes of
+the semantic ids, so a screen reader keeps its place from frame to frame.
 
 Android isn't served yet: AccessKit's Android adapter needs a Java class (a prebuilt dex, or the app's own Java)
 and a GameActivity, and the app is a NativeActivity with no Java (issue #172).

@@ -10,7 +10,8 @@ option.
 
 Decision: the semantic tree is turned into an AccessKit tree (`construct-render/src/accessibility.rs`, plain data,
 always built and tested without a window), and the desktop window hands it to `accesskit_winit`, which serves
-VoiceOver, Narrator and Orca. Roles come from node types; a tappable's descendants fold into it, as Compose merges a
+VoiceOver and Narrator (its Linux adapter, for Orca, is off: it depends on the unmaintained `zvariant`,
+RUSTSEC-2026-0370). Roles come from node types; a tappable's descendants fold into it, as Compose merges a
 clickable's semantics; a scrim hides what is under it. Requests come back as the session's own steps (a tap by
 semantic id, a scroll, a field's value), so a screen reader does what a finger does. AccessKit node ids are stable
 hashes of the semantic ids. A text field's placeholder is kept in the tree (`SemanticNode::hint`) to name it.
