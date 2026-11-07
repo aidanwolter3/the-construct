@@ -26,6 +26,9 @@ use crate::layout::{Input, Laid, RenderError, SceneBuilder, Viewport};
 use crate::scene::{Draw, QuadInstance, Scene, SemanticNode, Tap};
 use crate::style::Rgba;
 
+mod media;
+pub use media::{StageDone, Staged, attachment_uri, pick_files_here};
+
 /// What a tap or scroll aims at.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Target {
@@ -88,6 +91,11 @@ pub enum Effect {
     },
     /// `leave_pod`: the platform forgets the session and shows sign-in.
     LeftPod,
+    /// `set_server`: the platform opens this server instead (its saved
+    /// session, else its sign-in screen).
+    SwitchServer {
+        url: String,
+    },
     /// Paste was chosen: the platform reads its clipboard and
     /// [`Session::paste`]s it into this field.
     Paste {
@@ -98,7 +106,8 @@ pub enum Effect {
         text: String,
     },
     /// A media picker was tapped: the platform opens its photo picker for
-    /// up to `max` photos for this field.
+    /// up to `max` photos (what the field still takes) and hands what is
+    /// picked to [`Session::picked`] (the desktop: [`Session::pick_here`]).
     PickMedia {
         field: String,
         max: u32,
@@ -211,6 +220,11 @@ struct Entry {
     closing: Option<Instant>,
     /// Laid out at this size (points, with these insets).
     laid: Option<(Laid, [f32; 2])>,
+    /// A page screen (opened by a `target_uri`), not the layout itself.
+    screen: bool,
+    /// An action from outside its `follow_end` scrolling views ran: they
+    /// follow their content to the end once it is laid out.
+    follow: bool,
 }
 
 impl Entry {
@@ -234,6 +248,8 @@ impl Entry {
             opened: Instant::now(),
             closing: None,
             laid: None,
+            screen: false,
+            follow: false,
         }
     }
 }
@@ -274,6 +290,15 @@ enum Answer {
         path: String,
         result: Result<DataBundle, String>,
     },
+    /// A picked photo the engine staged (or why it couldn't) for a media
+    /// picker's field holding at most `max`.
+    Staged {
+        field: String,
+        max: u32,
+        result: Result<Staged, String>,
+    },
+    /// The desktop's file dialog closed with these files.
+    Picked(Vec<Result<std::path::PathBuf, String>>),
 }
 
 /// What undoes a write's local change when the pod refuses it.
@@ -302,6 +327,14 @@ pub trait Loader: Send {
     /// An `action.device` command the device answers with data (a layout's
     /// versions); `None` when this loader doesn't run it.
     fn device(&self, _command: &str, _app: &str, _id: &str) -> Option<Result<DataBundle, String>> {
+        None
+    }
+    /// A device command that changes something on the pod (`toggle_channel`,
+    /// `hide_layout`, `unhide_layout`, `delete_layout`) or loads more of
+    /// the device data (`load_older_notifications`), with its arguments
+    /// (`app`, `id`, `enabled`, `before`): the device data to merge after
+    /// it; `None` when this loader doesn't run it.
+    fn device_command(&self, _command: &str, _args: &Value) -> Option<Result<DataBundle, String>> {
         None
     }
     /// Sends a write, off the caller's thread where it can, and calls
@@ -340,6 +373,14 @@ pub trait Loader: Send {
     fn redirect(&self, _url: &str) -> bool {
         false
     }
+    /// Stages a picked photo for a create's `attachments` (D49), off the
+    /// caller's thread, and calls `done` with it; false when this loader
+    /// can't.
+    fn stage(&self, _file: &std::path::Path, _done: StageDone) -> bool {
+        false
+    }
+    /// Forgets a staged photo taken off its picker before it was sent.
+    fn discard(&self, _id: &str) {}
     /// What changed since the last call (another device, an agent, a write
     /// the pod answered); `None` when nothing did, or the loader doesn't
     /// hear of changes. Called every frame: it must not block.
@@ -422,6 +463,9 @@ pub struct Session {
     pub pending: usize,
     /// The last write the pod refused, and why.
     pub last_error: Option<String>,
+    /// A one-line notice over the layouts (a refused write or device
+    /// command), until dismissed, as the shared UI's notice bar.
+    pub notice: Option<String>,
     /// How far the top sheet or panel is dragged toward its edge (points).
     frame_offset: f32,
     /// A released drag settling back: since when, from what offset.
@@ -438,6 +482,11 @@ pub struct Session {
     /// A handle being dragged, and how far the finger is below the text
     /// point it moves.
     grab: Option<(Grab, f32)>,
+    /// The media picker the platform's picker is open for: its field and
+    /// most photos.
+    picking: Option<(String, u32)>,
+    /// Photos being picked or staged (a script waits for them).
+    pub staging: usize,
 }
 
 /// How long the caret shows, then hides (Android's 500 ms).
@@ -464,6 +513,8 @@ struct Edit {
     blink: Instant,
     /// The last tap on the field, for a double tap.
     last_tap: Option<(Instant, f32, f32)>,
+    /// The word the keyboard is composing (byte range), underlined.
+    composing: Option<(usize, usize)>,
 }
 
 impl Edit {
@@ -539,6 +590,7 @@ impl Session {
             answered: Arc::new(Mutex::new(Vec::new())),
             pending: 0,
             last_error: None,
+            notice: None,
             frame_offset: 0.0,
             frame_settle: None,
             pager_anims: BTreeMap::new(),
@@ -546,6 +598,8 @@ impl Session {
             caret_shown: None,
             handles: Vec::new(),
             grab: None,
+            picking: None,
+            staging: 0,
         }
     }
 
@@ -563,6 +617,7 @@ impl Session {
                 menu: false,
                 blink: Instant::now(),
                 last_tap: None,
+                composing: None,
             });
         }
         let e = self.edit.as_mut()?;
@@ -608,6 +663,7 @@ impl Session {
             e.cursor = cursor;
             e.anchor = anchor;
             e.blink = Instant::now();
+            e.composing = None;
         }
         self.form.insert(field.clone(), value.clone());
         self.invalidate();
@@ -739,6 +795,74 @@ impl Session {
     pub fn paste(&mut self, field: &str, text: &str) -> Outcome {
         self.focused = Some(field.to_owned());
         self.insert_text(text.trim_end_matches(['\n', '\r']))
+    }
+
+    /// The focused field as the platform's keyboard sees it (`crate::ime`):
+    /// its value, selection and the word being composed.
+    pub fn text_state(&mut self) -> Option<crate::ime::TextState> {
+        let (value, e) = self.editing()?;
+        let composing = e
+            .composing
+            .filter(|&(a, b)| a < b && b <= value.len())
+            .filter(|&(a, b)| value.is_char_boundary(a) && value.is_char_boundary(b));
+        Some(crate::ime::TextState {
+            field: e.field,
+            value,
+            cursor: e.cursor,
+            anchor: e.anchor,
+            composing,
+        })
+    }
+
+    /// The focused field as the keyboard left it (it typed, corrected,
+    /// composed or moved the cursor), no longer than the field's maximum
+    /// length. Handles and the menu go, as on Android.
+    pub fn set_text_state(&mut self, s: &crate::ime::TextState) -> Outcome {
+        if self.focused.as_ref() != Some(&s.field) || self.edit_now().is_none() {
+            return Outcome {
+                node: None,
+                effects: vec![Effect::Nothing],
+            };
+        }
+        let mut value = s.value.replace('\r', "");
+        if let Some(max) = self.max_length(&s.field) {
+            value = value.chars().take(max).collect();
+        }
+        let fix = |i: usize| {
+            let mut i = i.min(value.len());
+            while !value.is_char_boundary(i) {
+                i -= 1;
+            }
+            i
+        };
+        let (cursor, anchor) = (fix(s.cursor), fix(s.anchor));
+        let composing = s
+            .composing
+            .map(|(a, b)| (fix(a), fix(b)))
+            .filter(|(a, b)| a < b);
+        let changed = self.form.get(&s.field) != Some(&value);
+        if let Some(e) = self.edit.as_mut() {
+            e.handles = false;
+            e.menu = false;
+        }
+        let out = if changed {
+            self.set_edit(value, cursor, anchor)
+        } else {
+            if let Some(e) = self.edit.as_mut() {
+                e.cursor = cursor;
+                e.anchor = anchor;
+                e.blink = Instant::now();
+            }
+            self.scene = None;
+            Outcome {
+                node: None,
+                effects: vec![Effect::Nothing],
+            }
+        };
+        if let Some(e) = self.edit.as_mut() {
+            e.composing = composing;
+        }
+        out
     }
 
     /// The edit's caret stops in the frame, with the field's text box.
@@ -1188,6 +1312,14 @@ impl Session {
         for answer in done {
             let (undo, w) = match answer {
                 Answer::Write(undo, w) => (undo, w),
+                Answer::Staged { field, max, result } => {
+                    self.staged(field, max, result);
+                    continue;
+                }
+                Answer::Picked(files) => {
+                    self.dialog_closed(files);
+                    continue;
+                }
                 Answer::Data { path, result } => {
                     let error = result.as_ref().err().cloned();
                     if let Ok(d) = result {
@@ -1211,6 +1343,7 @@ impl Session {
                 }
                 Err(e) => {
                     eprintln!("construct-render: write refused: {e}");
+                    self.notice = Some(notice_text(&e));
                     self.last_error = Some(e);
                     match undo {
                         Undo::Fields { uri, before } => {
@@ -1255,7 +1388,7 @@ impl Session {
 
     /// Whether writes or loads are still out (a script waits for them).
     pub fn busy(&self) -> bool {
-        self.pending > 0 || self.stack.iter().any(|e| e.loading.is_some())
+        self.pending > 0 || self.staging > 0 || self.stack.iter().any(|e| e.loading.is_some())
     }
 
     /// Waits until nothing is out, or `timeout` (scripts and tests).
@@ -1496,7 +1629,22 @@ impl Session {
             insets,
             focused: self.focused.as_deref(),
         })?;
-        self.stack[i].laid = Some((laid, size));
+        let e = &mut self.stack[i];
+        // After an action from outside it, a `follow_end` view goes to
+        // its end once it has something to scroll.
+        if e.follow {
+            let mut moved = false;
+            for id in &laid.follow_end {
+                if let Some(&max) = laid.scroll_max.get(id)
+                    && max > 0.0
+                {
+                    e.scroll.insert(id.clone(), max);
+                    moved = true;
+                }
+            }
+            e.follow = !moved && !laid.follow_end.is_empty();
+        }
+        e.laid = Some((laid, size));
         Ok(())
     }
 
@@ -1736,6 +1884,9 @@ impl Session {
                 self.images.request(&i.url);
             }
         }
+        if let Some(text) = self.notice.clone() {
+            self.notice_bar(&mut scene, &text)?;
+        }
         self.caret_shown = self.caret_on();
         self.edit_overlay(&mut scene, &theme);
         self.scene = Some(scene);
@@ -1820,6 +1971,33 @@ impl Session {
                 [1.0; 4],
                 clip,
             );
+        }
+        if let Some((cs, ce)) = e.composing.filter(|&(a, b)| a < b && b <= value.len()) {
+            // The word being composed is underlined, one line per row.
+            let (a, b) = (stop(cs), stop(ce));
+            let mut tops: Vec<f32> = stops
+                .iter()
+                .filter(|s| s.byte >= cs && s.byte <= ce)
+                .map(|s| s.top)
+                .collect();
+            tops.dedup();
+            for top in tops {
+                let on: Vec<&crate::text::CaretStop> =
+                    stops.iter().filter(|s| s.top == top).collect();
+                let x0 = if top == a.top { a.x } else { 0.0 };
+                let x1 = if top == b.top {
+                    b.x
+                } else {
+                    on.iter().map(|s| s.x).fold(0.0, f32::max)
+                };
+                let h = on.first().map_or(fb.line_height, |s| s.height);
+                quad(
+                    [ox + x0, oy + top + h - 2.0, (x1 - x0).max(1.0), 1.5],
+                    theme.on_background,
+                    [0.0; 4],
+                    clip,
+                );
+            }
         }
         if e.handles {
             let r = HANDLE / 2.0;
@@ -2019,6 +2197,7 @@ impl Session {
             }
             Some(Tap::Intent { intent }) => match self.bind_form(&intent) {
                 Some(bound) => {
+                    self.mark_follow(px, py);
                     let mut out = Vec::new();
                     self.run(&bound, &mut out);
                     out
@@ -2031,6 +2210,34 @@ impl Session {
             node: Some(node),
             effects,
         })
+    }
+
+    /// A tap at a point outside the top entry's `follow_end` scrolling
+    /// views (a footer's Send, not a like inside the list) makes them
+    /// follow their content to the end, as the shared UI does.
+    fn mark_follow(&mut self, x: f32, y: f32) {
+        let ti = self.top_index();
+        let follows = match &self.stack[ti].laid {
+            Some((l, _)) if !l.follow_end.is_empty() => l.follow_end.clone(),
+            _ => return,
+        };
+        let inside = self.scene.as_ref().is_some_and(|sc| {
+            sc.semantics.iter().any(|n| {
+                let [bx, by, bw, bh] = n.bounds;
+                follows.contains(&n.id) && x >= bx && x < bx + bw && y >= by && y < by + bh
+            })
+        });
+        if !inside {
+            self.stack[ti].follow = true;
+        }
+    }
+
+    /// The platform's light or dark mode: the next frame draws with it.
+    pub fn set_dark(&mut self, dark: bool) {
+        if dark != self.dark {
+            self.dark = dark;
+            self.invalidate();
+        }
     }
 
     /// Runs an intent as a tap would (system Back, a test).
@@ -2199,10 +2406,16 @@ impl Session {
                 }
             }
             "edit.select_all" => self.select_all(),
-            "media.pick" => out.push(Effect::PickMedia {
-                field: intent["field"].as_str().unwrap_or("").to_owned(),
-                max: intent["max"].as_u64().unwrap_or(1) as u32,
-            }),
+            "media.pick" => {
+                let field = intent["field"].as_str().unwrap_or("").to_owned();
+                let max = self.start_pick(&field, intent["max"].as_u64().unwrap_or(1) as u32);
+                out.push(Effect::PickMedia { field, max });
+            }
+            "media.remove" => {
+                let field = intent["field"].as_str().unwrap_or("");
+                self.remove_media(field, intent["id"].as_str().unwrap_or(""));
+                out.push(Effect::Nothing);
+            }
             "form.clear" => {
                 // The session's own step after a field's Send.
                 if let Some(f) = intent["field"].as_str() {
@@ -2309,11 +2522,42 @@ impl Session {
                         out.push(Effect::Device { command });
                         return;
                     }
-                    "sign_in" | "sign_out" | "set_server"
+                    "sign_in" | "sign_out"
                         if self.loader.as_ref().is_some_and(|l| l.auth(intent)) =>
                     {
                         out.push(Effect::Device { command });
                         return;
+                    }
+                    "open_settings" | "open_inbox" => {
+                        let (layout, presentation) = if command == "open_settings" {
+                            ("settings", "Panel")
+                        } else {
+                            ("inbox", "Sheet")
+                        };
+                        let open = json!({ "intent": "action.navigation.open",
+                            "layout": layout, "presentation": presentation });
+                        self.run(&open, out);
+                        out.push(Effect::Device { command });
+                        return;
+                    }
+                    // The notice bar's own: Dismiss, and the bar itself
+                    // (a tap on it reaches nothing under it).
+                    "dismiss_notice" => {
+                        self.notice = None;
+                        out.push(Effect::Nothing);
+                        return;
+                    }
+                    "notice" => {
+                        out.push(Effect::Nothing);
+                        return;
+                    }
+                    "set_server" => return self.set_server(&id, out),
+                    "toggle_channel" => return self.toggle_channel(&app, &id, out),
+                    "load_older_notifications" => return self.load_older(out),
+                    "hide_layout" | "unhide_layout" | "delete_layout" => {
+                        // The layout: `app` (or `layout`), else `id`.
+                        let layout = if app.trim().is_empty() { &id } else { &app };
+                        return self.layout_command(&command, layout.trim(), out);
                     }
                     _ => {}
                 }
@@ -2324,6 +2568,9 @@ impl Session {
                 {
                     Some(Ok(d)) => {
                         merge(&mut self.data, d);
+                        if command == "pin_version" || command == "follow_latest" {
+                            self.reload_layout(&app, out);
+                        }
                         out.push(Effect::Device { command });
                     }
                     Some(Err(error)) => out.push(Effect::LoadFailed {
@@ -2429,7 +2676,9 @@ impl Session {
     fn create(&mut self, intent: &Value, out: &mut Vec<Effect>) {
         let uri = intent["entity_uri"].as_str().unwrap_or("").to_owned();
         let query_key = intent["query_key"].as_str().unwrap_or("").to_owned();
-        if let Ok(e) = serde_json::from_value::<protocol::EntityRecord>(intent["entity"].clone()) {
+        let mut entity = intent["entity"].clone();
+        Session::bind_attachments(intent, &mut entity);
+        if let Ok(e) = serde_json::from_value::<protocol::EntityRecord>(entity) {
             self.data.entities.insert(uri.clone(), e);
         }
         let list = self.data.queries.entry(query_key.clone()).or_default();
@@ -2444,6 +2693,7 @@ impl Session {
             fields: BTreeMap::new(),
         });
         if self.taken(intent, out) {
+            self.attachments_taken(intent);
             return;
         }
         let write = Write {
@@ -2668,6 +2918,236 @@ impl Session {
         }
     }
 
+    /// `set_server`: another of the platform's servers (`local:servers`),
+    /// which the platform opens (`Effect::SwitchServer`).
+    fn set_server(&mut self, id: &str, out: &mut Vec<Effect>) {
+        let Some(server) = self.data.entities.get(&format!("local://servers/{id}")) else {
+            out.push(Effect::Nothing);
+            return;
+        };
+        let url = server.get_str("url").unwrap_or("").trim().to_owned();
+        if url.is_empty() || server.get("selected").is_some_and(crate::bind::truthy) {
+            out.push(Effect::Nothing);
+            return;
+        }
+        out.push(Effect::SwitchServer { url });
+    }
+
+    /// `toggle_channel`: the switch flips at once, then the pod is told; a
+    /// refusal flips it back and says why.
+    fn toggle_channel(&mut self, app: &str, id: &str, out: &mut Vec<Effect>) {
+        let uri = format!("local://channels/{app}/{id}");
+        let Some(c) = self.data.entities.get_mut(&uri) else {
+            out.push(Effect::Nothing);
+            return;
+        };
+        let on = !c.get("enabled").is_some_and(crate::bind::truthy);
+        c.set("enabled", on);
+        let args = json!({ "app": app, "id": id, "enabled": on });
+        let answer = self
+            .loader
+            .as_ref()
+            .and_then(|l| l.device_command("toggle_channel", &args));
+        if !matches!(answer, Some(Ok(_)))
+            && let Some(c) = self.data.entities.get_mut(&uri)
+        {
+            c.set("enabled", !on);
+        }
+        self.device_answer("toggle_channel", args, answer, out);
+    }
+
+    /// `load_older_notifications`: the next page of the inbox, after what
+    /// it shows (`local://inbox` `next_before` is where it starts).
+    fn load_older(&mut self, out: &mut Vec<Effect>) {
+        let before = self
+            .data
+            .entities
+            .get("local://inbox")
+            .and_then(|i| i.get_str("next_before"))
+            .unwrap_or("")
+            .to_owned();
+        if before.is_empty() {
+            out.push(Effect::Nothing);
+            return;
+        }
+        let args = json!({ "before": before });
+        let answer = self
+            .loader
+            .as_ref()
+            .and_then(|l| l.device_command("load_older_notifications", &args));
+        let Some(Ok(mut page)) = answer else {
+            return self.device_answer("load_older_notifications", args, answer, out);
+        };
+        // The older page goes under the newer ones; the inbox keeps its
+        // counts and learns where the next page starts.
+        let older = page
+            .queries
+            .remove("local:notifications")
+            .unwrap_or_default();
+        let list = self
+            .data
+            .queries
+            .entry("local:notifications".into())
+            .or_default();
+        for u in older {
+            if !list.contains(&u) {
+                list.push(u);
+            }
+        }
+        if let Some(fields) = page.entities.remove("local://inbox") {
+            let inbox = self
+                .data
+                .entities
+                .entry("local://inbox".into())
+                .or_default();
+            for (k, v) in fields.0 {
+                inbox.set(k, v);
+            }
+        }
+        merge(&mut self.data, page);
+        out.push(Effect::Device {
+            command: "load_older_notifications".into(),
+        });
+    }
+
+    /// `hide_layout`, `unhide_layout` and `delete_layout` on the pod; the
+    /// pod's list of layouts comes back. A deleted layout leaves the stack.
+    /// Home can't be hidden or deleted, nor the layout at the root.
+    fn layout_command(&mut self, command: &str, layout: &str, out: &mut Vec<Effect>) {
+        if layout.is_empty()
+            || layout == "home"
+            || (command == "delete_layout" && layout == self.stack[0].id)
+        {
+            out.push(Effect::Nothing);
+            return;
+        }
+        let args = json!({ "app": layout });
+        let answer = self
+            .loader
+            .as_ref()
+            .and_then(|l| l.device_command(command, &args));
+        if command == "delete_layout" && matches!(answer, Some(Ok(_))) {
+            let mut i = 0;
+            self.stack.retain(|e| {
+                i += 1;
+                i == 1 || e.id != layout
+            });
+            self.layouts.remove(layout);
+            self.focused = None;
+        }
+        self.device_answer(command, args, answer, out);
+    }
+
+    /// What a device command's answer does: its data merged, or the reason
+    /// it failed shown in the notice bar.
+    fn device_answer(
+        &mut self,
+        command: &str,
+        args: Value,
+        answer: Option<Result<DataBundle, String>>,
+        out: &mut Vec<Effect>,
+    ) {
+        match answer {
+            Some(Ok(d)) => {
+                merge(&mut self.data, d);
+                out.push(Effect::Device {
+                    command: command.to_owned(),
+                });
+            }
+            Some(Err(error)) => {
+                self.notice = Some(notice_text(&error));
+                out.push(Effect::LoadFailed {
+                    what: command.to_owned(),
+                    error,
+                });
+            }
+            None => {
+                let mut intent = args;
+                intent["intent"] = json!("action.device");
+                intent["command"] = json!(command);
+                out.push(Effect::NotSent { intent });
+            }
+        }
+    }
+
+    /// Loads a layout again (another version was pinned, or the latest
+    /// followed) and draws it wherever it shows.
+    fn reload_layout(&mut self, id: &str, out: &mut Vec<Effect>) {
+        let Some(loaded) = self.loader.as_ref().map(|l| l.layout(id)) else {
+            return;
+        };
+        match loaded {
+            Ok((root, data)) => {
+                merge(&mut self.data, data);
+                let screens = match &root {
+                    UiNode::Page { screens, .. } => screens.clone(),
+                    _ => Vec::new(),
+                };
+                for e in self.stack.iter_mut().filter(|e| e.id == id && !e.screen) {
+                    e.root = root.clone();
+                    e.screens = screens.clone();
+                    e.laid = None;
+                }
+                self.layouts.insert(id.to_owned(), root);
+            }
+            Err(error) => {
+                self.notice = Some(notice_text(&error));
+                out.push(Effect::LoadFailed {
+                    what: format!("layout {id}"),
+                    error,
+                });
+            }
+        }
+    }
+
+    /// The notice bar at the bottom, as the shared UI's: the text and
+    /// Dismiss (tagged `notice` and `notice-dismiss`).
+    fn notice_bar(&mut self, scene: &mut Scene, text: &str) -> Result<(), RenderError> {
+        let (surface, on_surface, action) = if self.dark {
+            ("#E6E1E5", "#313033", "#6750A4")
+        } else {
+            ("#313033", "#F4EFF4", "#D0BCFF")
+        };
+        let bar = json!({ "type": "core://Column", "children": [
+            { "type": "core://Box", "padding_h_dp": 16, "padding_v_dp": 16,
+              "content": { "type": "core://Tappable", "tag": "notice", "content_description": text,
+                "on_click": { "intent": "action.device", "command": "notice" },
+                "content": { "type": "core://Box", "background": surface, "corner_dp": 12,
+                  "content_color": on_surface,
+                  "content": { "type": "core://Row", "spacing_dp": 0, "children": [
+                    { "type": "core://Spacer", "size_dp": 16 },
+                    { "type": "core://Column", "padding_v_dp": 12, "children": [
+                      { "type": "core://Text", "style": "Body", "value_expr": text } ] },
+                    { "type": "core://Spacer" },
+                    { "type": "core://Tappable", "tag": "notice-dismiss", "content_description": "Dismiss",
+                      "on_click": { "intent": "action.device", "command": "dismiss_notice" },
+                      "content": { "type": "core://Box", "padding_h_dp": 12, "padding_v_dp": 10,
+                        "content_color": action,
+                        "content": { "type": "core://Text", "style": "Label", "value_expr": "Dismiss" } } },
+                    { "type": "core://Spacer", "size_dp": 4 }
+                  ] } } } }
+        ] });
+        let root: UiNode = serde_json::from_value(bar).map_err(|e| RenderError(e.to_string()))?;
+        let empty = BTreeMap::new();
+        let laid = self.builder.layout(&Input {
+            root: &root,
+            data: &self.data,
+            form: &empty,
+            route: &empty,
+            layouts: &BTreeMap::new(),
+            scroll: &BTreeMap::new(),
+            viewport: self.viewport,
+            dark: self.dark,
+            item: None,
+            insets: [0.0; 4],
+            focused: None,
+        })?;
+        let (w, h) = (self.viewport.width, self.viewport.height);
+        let y = h - self.insets[2] - laid.used_height();
+        laid.emit_into(scene, &BTreeMap::new(), (0.0, y), [0.0, 0.0, w, h]);
+        Ok(())
+    }
+
     /// A layout's root: given, or loaded (its data merged).
     fn layout_root(&mut self, id: &str, out: &mut Vec<Effect>) -> Option<UiNode> {
         if let Some(r) = self.layouts.get(id) {
@@ -2727,6 +3207,8 @@ impl Session {
             opened: Instant::now(),
             closing: None,
             laid: None,
+            screen: true,
+            follow: false,
         });
         out.push(Effect::OpenedScreen {
             screen: screen.id.clone(),
@@ -2820,6 +3302,35 @@ impl Session {
         json!({ "layout": self.current(), "form": self.form,
                 "scroll": self.stack.last().map(|e| e.scroll.clone()).unwrap_or_default(),
                 "stack": self.stack.iter().map(|e| e.id.clone()).collect::<Vec<_>>() })
+    }
+}
+
+/// An error as the notice bar shows it: the pod's own `detail` (or error
+/// code) when it answered one, else the error's first line; at most 160
+/// characters.
+fn notice_text(error: &str) -> String {
+    let said = error
+        .find('{')
+        .and_then(|i| serde_json::from_str::<Value>(&error[i..]).ok())
+        .and_then(|v| {
+            let s = |k: &str| v[k].as_str().map(str::trim).filter(|s| !s.is_empty());
+            s("detail")
+                .or(s("message"))
+                .map(str::to_owned)
+                .or_else(|| s("error").map(|e| format!("The pod refused it ({e})")))
+        });
+    let line = said
+        .as_deref()
+        .unwrap_or_else(|| error.lines().next().unwrap_or(""))
+        .trim();
+    let mut t: String = line.chars().take(160).collect();
+    if line.chars().count() > 160 {
+        t.push('…');
+    }
+    if t.is_empty() {
+        "Something went wrong".into()
+    } else {
+        t
     }
 }
 

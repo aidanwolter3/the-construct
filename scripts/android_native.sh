@@ -57,7 +57,8 @@ rm -rf "$OUT/res" && mkdir -p "$OUT/res"
 "$TOOLS/aapt2" compile -o "$OUT/res" \
   "$RES"/drawable/ic_launcher_{background,foreground,monochrome}.xml \
   "$RES"/mipmap-anydpi-v26/ic_launcher{,_round}.xml "$RES"/mipmap-*dpi/ic_launcher{,_round}.png \
-  crates/construct-render/android/res/values/styles.xml
+  crates/construct-render/android/res/values/styles.xml \
+  crates/construct-render/android/res/values-night/styles.xml
 "$TOOLS/aapt2" link -o "$OUT/unsigned.apk" --manifest crates/construct-render/android/AndroidManifest.xml \
   -I "$PLATFORM/android.jar" "$OUT"/res/*.flat
 # The bridge (crates/construct-render/android/java): a few Java classes that pass Android's callbacks to Rust,

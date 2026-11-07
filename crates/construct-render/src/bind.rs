@@ -57,22 +57,28 @@ impl<'a> Ctx<'a> {
     /// Text with every binding replaced (missing entity fields: "", a
     /// missing `$item` field: left as written, as the shared UI does).
     pub fn text(&self, expr: &str) -> String {
+        self.text_with(expr, &mut render)
+    }
+
+    /// [`Ctx::text`], with each bound item and entity value drawn by
+    /// `draw` (a `core://Text` `format` draws dates with it).
+    pub fn text_with(&self, expr: &str, draw: &mut dyn FnMut(&Value) -> String) -> String {
         if let Some(item) = self.item
             && let Some(f) = item_field(expr, true)
         {
             return self
                 .item_value(item, f)
-                .map(|v| render(&v))
+                .map(|v| draw(&v))
                 .unwrap_or_default();
         }
-        let mut s = self.tokens(expr);
+        let mut s = self.tokens(expr, draw);
         while let Some(start) = s.find("${") {
             let Some(len) = s[start..].find('}') else {
                 break;
             };
             let inner = &s[start + 2..start + len];
             let value = match inner.split_once('#') {
-                Some((uri, f)) => self.field(uri, f).map(|v| render(&v)).unwrap_or_default(),
+                Some((uri, f)) => self.field(uri, f).map(|v| draw(&v)).unwrap_or_default(),
                 None => String::new(),
             };
             s.replace_range(start..start + len + 1, &value);
@@ -81,7 +87,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// `$item.`, `$form.` and `$route.` tokens replaced.
-    fn tokens(&self, s: &str) -> String {
+    fn tokens(&self, s: &str, draw: &mut dyn FnMut(&Value) -> String) -> String {
         let mut out = String::with_capacity(s.len());
         let mut rest = s;
         while let Some(i) = rest.find('$') {
@@ -100,7 +106,7 @@ impl<'a> Ctx<'a> {
                             .item
                             .and_then(|it| self.item_value(it, name))
                             .filter(|v| !v.is_null())
-                            .map(|v| render(&v)),
+                            .map(|v| draw(&v)),
                         "form." => Some(self.form.get(name).cloned().unwrap_or_default()),
                         _ => self.route.get(name).cloned(),
                     };

@@ -28,8 +28,9 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 | `accessibility` | The semantic tree as an AccessKit tree for screen readers (roles, labels, values, states), and their requests back as taps, scrolls and field values |
 | `cpu` | The CPU rasterizer: `sd_rounded_box` and `shade` (the shader's maths), 8-bit premultiplied target, glyphs placed as glyphon places them |
 | `gpu` | `Renderer` (any texture view), `HeadlessSurface` (offscreen + readback); feature `gpu` (default) |
-| `interact` | `Session`: a layout with form values, scroll offsets and a back stack; `tap`, `long_press`, `scroll_by`, `type_text`, `dispatch`; text editing (cursor, selection, handles, the edit bar); confirm dialogs; sheet drags and carousel paging; writes through its `Loader` |
+| `interact` | `Session`: a layout with form values, scroll offsets and a back stack; `tap`, `long_press`, `scroll_by`, `type_text`, `dispatch`; text editing (cursor, selection, handles, the edit bar); confirm dialogs; sheet drags and carousel paging; writes through its `Loader`; photos for a media picker (`interact/media.rs`: staged through the `Loader`, the desktop's file dialog) |
 | `text` | Fonts, shaping and measuring (cosmic-text); caret stops for editing |
+| `dates` | `core://Text` `format`: `YYYY-MM-DD` values as "tomorrow" or "Nov 5", against the device's day (its time zone through jiff) |
 | `images` | Images by URL, cut to their box (on a background thread for the GPU) |
 | `viewer` | `Controller`: platform events (resize, tap, long press, wheel, text, editing keys, Back) applied to a session; what windows feed |
 | `window` | winit + wgpu surface (feature `window`): touch (drags, flings, swipes, long presses, handles), the clipboard, the `Platform` a window runs on; used by `construct-viewer` and Android |
@@ -40,6 +41,8 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 | `platform` | `Platform`: what the app needs from the system it runs on (keyboard, insets, browser, clipboard, photo picker, events, the pod's saved session), implemented per platform |
 | `android` | `android_main` for the NativeActivity (Android builds with `window`) |
 | `bridge` | The Rust side of the Android bridge (`android/java`): links (the sign-in redirect), the photo picker's result, messages |
+| `ime` | The keyboard's input connection: the focused field as a keyboard sees it (`TextState`: value, selection, the word being composed), the `InputConnection` edits over it in UTF-16 offsets, and the hand-off between the keyboard and the window (`Connection`); on Android, `NativeText`'s natives |
+| `picked` | The photos Android's picker returned, read through the content resolver into files the engine stages (HEIC and other formats it can't decode become JPEG through `ImageDecoder`) |
 
 The pod builds the crate with `default-features = false`: no wgpu, CPU only.
 
@@ -76,14 +79,22 @@ and a GameActivity, and the app is a NativeActivity with no Java (issue #172).
 
 Drawn like the app: Page, Workspace (title and slots), Column, Row, Container, Box, Text (styles, `count`), Button,
 IconButton (`active`), Chip, Badge, Spacer, Divider, Conditional, Container (children 8 points apart; horizontal
-ones wrap), Tappable, Gesture (tap), Scroll (clipped,
-offsets), List (`where`, `filter`, `group_by`, `columns`, `focus`, `indent`, `empty_text`), ChoiceChips, TextField
+ones wrap), Tappable, Gesture (tap), Scroll (clipped, offsets; with `follow_end`, a tap outside it, such as a
+footer's Send, makes it follow its content to the end once that has grown, while a tap inside it, a like, doesn't), Text
+`format` (bound `YYYY-MM-DD` values as "today", "in 3 days" or "Nov 5", or `past`, against the device's own day; a
+`SceneBuilder` can be given another with `today`), List (`where`, `filter`, `group_by`, `columns`, `focus`, `indent`, `empty_text`), ChoiceChips, TextField
 (with its Send button beside it when it has `on_submit`), Switch, Progress, Dock, Layout (inline, from the layouts
 given), Carousel (pages side by side, an "n/N" badge and dots; a sideways drag pages it, snapping to a page), and
 every named icon (`icons.rs`: the shared UI's Material path data, rasterized with zeno; on the GPU they are glyphon
 custom glyphs). Images draw once loaded (over a placeholder in the blurhash's colour; only live sessions load them;
-in a window they are cut to their box on a background thread). Approximated: MediaPicker (the add tile),
-Drawer (the selected page), AppFrame and unknown nodes (a labelled box). Not drawn: `format` dates.
+in a window they are cut to their box on a background thread; `file://` ones, staged photos, are read from disk).
+MediaPicker as the shared UI's: a thumbnail per staged photo with a remove button, then the add tile while there is
+room, wrapping. Its tile opens the platform's photo picker (Android's, through the bridge) or the desktop's file
+dialog (`osascript` on macOS, `zenity` or `kdialog` on Linux); each photo is staged with the engine
+(`stage_attachment`, D49) and its id kept in the field, and a create's `attachments` hands them to the engine, which
+uploads them before the POST ([posting.md](posting.md)). Removed vocabulary (`core://AppFrame`, `core://Drawer`) and
+nodes this build doesn't know are named as the shared UI names them: "Unsupported component: <type>" in small grey
+text.
 Presented layouts are drawn as the shared UI draws them: a sheet (85% of the height, with a handle), a side panel
 (86% of the width, at most 340 points) or an overlay from its edge, over a 32% black scrim that closes it when
 tapped; a screen a sheet or panel opens stays inside it. A sheet dragged by its handle strip, or a panel dragged
@@ -92,8 +103,10 @@ sideways toward its edge, follows the finger and closes past a quarter of its si
 280 ms (`FastOutSlowInEasing`); a fling follows Android's `OverScroller` spline from the release velocity, estimated
 over the last 100 ms with Android's impulse strategy (`VelocityTracker`'s and Compose's default), which weighs the
 speed at release over the average. A drag's scrolling is applied once per frame, and the GPU renderer keeps shaped text between frames. `action.device` `show_versions` fills `local://versions` and `local:versions` from
-`/v1/apps/<id>/versions`; `pin_version` and `follow_latest` mark the choice there, but the layout still shows its
-latest version. `core://Sticky` pins at the top of its scrolling view, over the page
+`/v1/apps/<id>/versions`; `pin_version` draws that version (`/v1/apps/<id>/versions/<n>`'s layout over the
+layout's latest data) wherever the layout shows, home included, until `follow_latest`, and new versions published
+meanwhile don't replace it; the engine keeps pins across restarts (`set_pinned_version`) and forgets them on Leave
+pod. The session follows the platform's light or dark mode (`Session::set_dark`). `core://Sticky` pins at the top of its scrolling view, over the page
 background, until its parent scrolls away; one that rests within 24 points of the view's top (a column's padding)
 pins where it rests, so it never moves (the shared UI moves it up to the top first).
 
@@ -109,9 +122,12 @@ With no file it opens your pod as the phone app does (`pods`, shared with Androi
 (`pod.json`, in `~/Library/Application Support/The Construct` on macOS, else `$XDG_CONFIG_HOME/the-construct` or
 `~/.config/the-construct`), with the engine's cache next to it (`engine/<server>/`) and its session in the login
 Keychain on macOS, else in `secure.json` there (readable by you only); without a session, the pod's sign-in screen
-(staging, or `CONSTRUCT_POD_URL`). Signing in to Pixelfed from Settings opens the system browser, and the redirect
-comes back to a loopback listener the engine runs (`http://127.0.0.1:47823/callback`, another port when that one is
-busy; below). Click, scroll, type, Escape for Back; each interaction's effects are logged. Copy and paste use
+(staging, or `CONSTRUCT_POD_URL`). `local:servers` offers Staging, Local (`http://127.0.0.1:8080`) and
+`CONSTRUCT_POD_URL` when it is another; `set_server` opens that server (its session is in the secure store already,
+and `pod.json` keeps each server's last code). The window follows the system's light or dark mode (winit's theme).
+Signing in to Pixelfed from Settings opens the system browser, and the redirect comes back to a loopback listener
+the engine runs (`http://127.0.0.1:47823/callback`, another port when that one is busy; below).
+Click, scroll, type, Escape for Back; each interaction's effects are logged. Copy and paste use
 the system clipboard through `pbcopy`/`pbpaste` on macOS and `wl-copy`, `xclip` or `xsel` on Linux. It draws with
 Metal on macOS and Vulkan (or GL) on Linux; on a headless Linux box, `Xvfb` plus Mesa's `mesa-vulkan-drivers`
 (lavapipe) is enough.
@@ -130,7 +146,7 @@ says so rather than uninstall (which would sign you out). `cd app && ./gradlew :
 the Compose app with the same data.
 
 The app opens a pod live (below), with the engine's cache in its private files (`engine/<server>/`). It keeps its
-pod there too (`pod.json`: the server and the last pod code used), else uses the main app's server
+pod there too (`pod.json`: the server, the last pod code used and the other servers' last codes), else uses the main app's server
 (`shared_prefs/server.xml`, else staging). Sessions are kept as the main app keeps them (`KeystoreStore`, through
 JNI: AES/GCM with the Android keystore key `construct_session_key`, in the private SharedPreferences file
 `construct_secure`), so the main app's sign-in carries over, and a session token an older build kept in `pod.json`
@@ -145,22 +161,28 @@ with its activity (when it is finishing or destroyed) and every launch starts af
 system keeps its window below the status bar and camera cutout and resizes it for the keyboard; a tapped text field
 opens the keyboard, and Back pops the stack. The layout stays inside the window insets Android reports
 (`getRootWindowInsets`: system bars, camera cutout and keyboard), logged as they change. Its theme draws light system
-bars with dark icons.
+bars with dark icons; in dark mode (`values-night`), dark bars with light icons. The layouts follow the system's
+mode: `Configuration.uiMode` read through JNI after each batch of events (the activity handles `uiMode` changes
+itself, so the system bars keep the mode the app started in until the next launch). `local:servers` offers the main
+app's servers: Staging, Local emulator (`10.0.2.2:8080`), Local USB (`127.0.0.1:8080`, with `adb reverse`) and the
+main app's own server when it is another; `set_server` switches as on the desktop.
 
 ### The Android bridge
 
 A NativeActivity gets none of the Android callbacks that arrive through Java: a link opening the app, an activity
 result, a broadcast while the app is closed. `android/java` holds a small bridge that passes them to Rust and holds no
 app logic: `ConstructActivity` (NativeActivity plus `onNewIntent` and `onActivityResult`, and `pickImages` and
-`askPermission` that Rust calls), `ConstructReceiver` (a message, also while the app is closed) and `Native` (the
-native methods, `Java_org_theconstruct_android_Native_*` in `src/bridge.rs`). The script compiles them with `javac`
+`askPermission` that Rust calls), `ConstructReceiver` (a message, also while the app is closed), `Native` (the
+native methods, `Java_org_theconstruct_android_Native_*` in `src/bridge.rs`), and the keyboard's `TextInputView`,
+`TextInput` and `NativeText` (`src/ime.rs`, above). The script compiles them with `javac`
 and `d8` into the APK's `classes.dex`. Events queue in `bridge.rs`, wake the window and reach it through
-`Platform::events`: a sign-in redirect goes to the engine's sign-in (below); the rest shows as a notice for now. Decision:
+`Platform::events`: a sign-in redirect goes to the engine's sign-in (below); picked photos go to the media picker
+that asked (read by `picked.rs`); other links and messages show as a notice for now. Decision:
 [`android-native-bridge`](decisions/android-native-bridge.md). Try it with the app installed:
 
 ```bash
 adb shell am start -a android.intent.action.VIEW -d "construct://bridge/hello"     # a link opens the app
-# Pixelfed → New post → the Add photos tile: Android's photo picker; the count and size come back to Rust
+# Pixelfed → New post → the Add photos tile: Android's photo picker; the photos show as thumbnails, Share posts them
 # Swipe the app away, then (only adb and the system may send this):
 adb shell am broadcast -n org.theconstruct.android/.ConstructReceiver --es message "Hello"   # a notification
 ```
@@ -194,7 +216,17 @@ the pod has it, offline or through a failed POST, with `$value` as the new value
 it (a refusal takes it out). A loader without an outbox (`PodClient`) POSTs on a background thread instead
 (`Loader::send`) and the session undoes a refusal itself. `action.device`
 `open_notification` marks it read (`POST /v1/notifications/read`), closes the inbox's sheet or panel and opens the
-notification's layout and `target_uri` screen; `mark_read` and `mark_all_read` mark them here and on the pod.
+notification's layout and `target_uri` screen; `mark_read` and `mark_all_read` mark them here and on the pod;
+`load_older_notifications` adds the next page under the newer ones (`local://inbox` keeps `has_older` and
+`next_before`; older pages stay when the inbox is listed again). `open_settings` and `open_inbox` present the
+`settings` layout as a panel and `inbox` as a sheet. `toggle_channel` flips the switch at once and the engine tells
+the pod (registering the device first), flipping it back when refused. `hide_layout`, `unhide_layout` and
+`delete_layout` go to the pod through the engine and load its list of layouts again; a deleted layout leaves the
+stack and its pin is forgotten; home is never hidden or deleted. `set_server` hands the platform another of
+`local:servers` (`Effect::SwitchServer`). A refused write or device command shows the shared UI's notice bar at the
+bottom (the pod's `detail`, else its error, with Dismiss; tagged `notice` and `notice-dismiss`) until dismissed.
+These commands (`Loader::device_command`) block the session while the pod answers, as `show_versions` does. Left to
+its own ticket: `request_notification_permission` (#168).
 `action.link.open` opens an `http(s)` address in the browser (an `ACTION_VIEW` intent on Android, `open` or
 `xdg-open` on desktops). `action.confirm` shows the app's own dialog (title, message, Cancel and the confirm label,
 tagged `confirm:cancel` and `confirm:ok`) and runs `then`, with the steps of a sequence after it, only on confirm;
@@ -210,8 +242,8 @@ in the pod's `CONSTRUCT_ANDROID_CERT_SHA256`), else `construct://oauth`; either 
 `onCreate` when Android had ended it) and goes through the bridge to the engine, which matches its `state` and
 exchanges the code (`token_path`). Its progress and errors show in `local://session` (`status`), the session lands in
 the secure store and home, the sign-ins and the feed load again. `sign_out` signs out through the pod
-(`POST /v1/auth/logout`, which keeps a pod code's session) and loads the sign-ins again; `set_server` has only the
-device's own pod to pick. `leave_pod` (the engine
+(`POST /v1/auth/logout`, which keeps a pod code's session) and loads the sign-ins again. Each server's engine
+picks its own redirect, so `set_server` to another pod signs in there the same way. `leave_pod` (the engine
 forgets the session) and `refresh` (home fetched again) go to the platform too. The device data the shared UI builds
 (`DeviceData`) is built the same way: `local://connection`, `local://session` (from the engine's sign-in state),
 `local://inbox` (the engine's unread count), the layouts with their versions, and, for a layout that binds them,
@@ -221,13 +253,25 @@ engine, which sends it again when the pod is back.
 
 Windows place a laid-out frame again on scroll without laying it out (`Laid::emit`), so dragging is cheap. A drag
 that scrolls flings on release and slows down each frame; one that scrolls nothing, past 48 points, is a swipe that
-runs the `core://Gesture` under its start (`on_swipe_*`). Text fields are edited by the engine itself (a NativeActivity gets key events, not Android's text input, so the
-keyboard's own paste and suggestions don't reach them), as Android's own fields behave: a tap puts the cursor where
+runs the `core://Gesture` under its start (`on_swipe_*`). Text fields are edited by the engine itself, as Android's
+own fields behave, and on Android the keyboard edits them too (below): a tap puts the cursor where
 it lands; the cursor blinks (500 ms); a long press or a double tap selects the word there, with handles to drag and a
 Cut / Copy / Paste / Select all bar over it (dragging on from a long press moves the selection's end); a tap on the
 cursor shows its handle and the bar (Paste, Select all). Typing and pasting replace the selection and are cut to the
 field's `max_length`. With a hardware keyboard: arrows, Home and End (Shift selects), Delete and Ctrl or Command+A, C,
 X and V. On Android the clipboard is `ClipboardManager` through the SDK.
+
+On Android the keyboard connects to the focused field (`ime.rs`), so its suggestions, autocorrect, swipe and voice
+typing, emoji and its own paste work. The bridge's `TextInputView` is an invisible, focusable view over the
+NativeActivity; its `InputConnection` (`TextInput`) forwards each call to `NativeText`'s natives, which run on
+Android's main thread and answer at once from a copy of the field (`Connection`). The keyboard's edits change the
+copy and wake the window, which applies them to the session first (`Session::set_text_state`, cut to `max_length`);
+the engine's own changes (a tap, a handle, the edit bar, a hardware key) then reach the keyboard: a moved selection
+with `InputMethodManager.updateSelection`, changed text or another field with `restartInput`. The word being
+composed is underlined. The keyboard's Done (or Enter) ends editing, as Enter does; its Cut, Copy, Paste and Select
+all run the edit bar's. Fields ask for text with capitals at sentences and autocorrect. Elsewhere `Platform::text_input`
+is `None` and the window types what key events bring.
+
 The headless simulator, `construct-sim` ([simulator.md](simulator.md)), drives a session from a script on fixture
 bundles or a live pod and writes PNGs drawn on the CPU.
 
@@ -251,6 +295,11 @@ device state and answers the same, with the interaction's effects; a tap that wo
 - `gpu`: GPU frames against the same goldens (0.2%, 24 levels), and one quad pixel for pixel. Without an adapter they
   skip; `CONSTRUCT_REQUIRE_GPU=1` (CI, with lavapipe) fails instead.
 - `interaction`: hit-testing, taps, `action.local.set`, opening and Back, scrolling, resize reflow, window events.
+- `device`: Settings and the inbox presented, notification switches (sent, refused and flipped back), older
+  notifications, hiding and deleting layouts, `set_server`, pinned versions, the notice bar, `follow_end`, dark mode,
+  `format` dates and unsupported nodes. `pods`' own unit test (switching servers) runs with `--features viewer`.
+- `engine` (feature `remote`, against a stub pod): offline starts and the outbox, layout events, a pinned home that
+  stays on its version until `follow_latest`, and hiding a layout.
 - `writes`: optimistic changes and creates (sent, refused and undone), form binding, notifications, links, dragging a
   sheet closed, carousel paging, confirm dialogs, signing in, and editing text (cursor, selection, the edit bar,
   `max_length`).

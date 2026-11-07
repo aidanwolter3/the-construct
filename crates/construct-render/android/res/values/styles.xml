@@ -8,4 +8,6 @@
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>
     </style>
+    <!-- The engine's dark page, for values-night (defined here too, as every resource needs a default). -->
+    <color name="construct_page_dark">#141318</color>
 </resources>

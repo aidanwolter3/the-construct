@@ -8,6 +8,7 @@
 //! to an upstream (`crate::signin`). The Android app and
 //! the desktop viewer both start here, so they behave the same.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -22,9 +23,11 @@ use crate::window::Reopen;
 /// The staging pod: the default server, as the main app's.
 pub const DEFAULT_SERVER: &str = "https://the-construct-pod.fly.dev";
 
-/// What the file keeps: the server and the last pod code used. `token`
-/// is read once from files written before sessions moved to the secure
-/// store, moved there, and dropped.
+/// What the file keeps: the server, the last pod code used, and the last
+/// code of each other server used (`set_server` goes back to them; their
+/// sessions are in the secure store). `token` is read once from files
+/// written before sessions moved to the secure store, moved there, and
+/// dropped.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct PodState {
     pub url: String,
@@ -32,6 +35,28 @@ pub struct PodState {
     pub token: Option<String>,
     #[serde(default)]
     pub last_code: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub other_codes: BTreeMap<String, String>,
+}
+
+pub use crate::engine::ServerOption;
+
+/// The servers a device offers, as the main app's picker: staging and
+/// `local` (on Android, the emulator's host and USB), and `server` when
+/// it is none of those.
+pub fn server_options(local: &[(&str, &str, &str)], server: &str) -> Vec<ServerOption> {
+    let mut out: Vec<ServerOption> =
+        vec![("staging".into(), "Staging".into(), DEFAULT_SERVER.into())];
+    out.extend(
+        local
+            .iter()
+            .map(|(id, title, url)| ((*id).into(), (*title).into(), (*url).into())),
+    );
+    let server = server.trim_end_matches('/');
+    if !server.is_empty() && !out.iter().any(|(_, _, u)| u == server) {
+        out.push(("custom".into(), "Custom".into(), server.into()));
+    }
+    out
 }
 
 /// A device's pod: where its state and the engine's cache are kept, the
@@ -47,6 +72,8 @@ pub struct PodHome {
     /// How this platform signs in to upstreams (Pixelfed); none: it
     /// doesn't.
     sign_in: Option<SignIn>,
+    /// The servers it offers (`local:servers`).
+    pub servers: Vec<ServerOption>,
     /// The pod's engine, kept from one session to the next.
     engine: Mutex<Option<PodEngine>>,
 }
@@ -66,6 +93,7 @@ impl PodHome {
             secure,
             log,
             sign_in: None,
+            servers: Vec::new(),
             engine: Mutex::new(None),
         }
     }
@@ -73,6 +101,12 @@ impl PodHome {
     /// Signs in to upstreams the platform's way (its browser and redirect).
     pub fn with_sign_in(mut self, sign_in: SignIn) -> PodHome {
         self.sign_in = Some(sign_in);
+        self
+    }
+
+    /// The servers this device offers (`local:servers`, `set_server`).
+    pub fn with_servers(mut self, servers: Vec<ServerOption>) -> PodHome {
+        self.servers = servers;
         self
     }
 
@@ -139,8 +173,8 @@ impl PodHome {
                 };
                 let state = PodState {
                     url,
-                    token: None,
                     last_code,
+                    ..Default::default()
                 };
                 self.write(&state);
                 state
@@ -166,6 +200,18 @@ impl PodHome {
                 self.engine(&state.url).forget_session();
             }
             Reopen::Reload => self.engine(&state.url).refresh(),
+            Reopen::Server(url) => {
+                // Each server keeps its session (the secure store) and its
+                // last code (here).
+                let url = url.trim_end_matches('/').to_owned();
+                let old = std::mem::replace(&mut state.url, url.clone());
+                if let Some(code) = state.last_code.take() {
+                    state.other_codes.insert(old, code);
+                }
+                state.last_code = state.other_codes.remove(&url);
+                self.write(&state);
+                (self.log)(&format!("switched to {url}"));
+            }
         }
         self.live(&state.url, state.last_code.as_deref())
     }
@@ -187,6 +233,7 @@ impl PodHome {
             client_core::EngineConfig::default(),
             self.sign_in.as_ref(),
         );
+        e.set_servers(self.servers.clone());
         *slot = Some(e.clone());
         e
     }
@@ -203,5 +250,46 @@ impl PodHome {
             s.form.insert("pod_token".into(), code.to_owned());
         }
         s
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn switching_servers_keeps_each_ones_code() {
+        let dir = std::env::temp_dir().join(format!("construct-pods-{}", std::process::id()));
+        let home = PodHome::new(
+            Some(dir.join("pod.json")),
+            None,
+            "http://127.0.0.1:1".into(),
+            Arc::new(client_core::MemoryStore::new()),
+            |_| {},
+        )
+        .with_servers(server_options(
+            &[("local", "Local", "http://127.0.0.1:2")],
+            "http://127.0.0.1:1",
+        ));
+        assert_eq!(
+            home.servers
+                .iter()
+                .map(|s| s.0.as_str())
+                .collect::<Vec<_>>(),
+            ["staging", "local", "custom"]
+        );
+        home.write(&PodState {
+            url: "http://127.0.0.1:1".into(),
+            last_code: Some("code-one".into()),
+            ..Default::default()
+        });
+        home.reopen(Reopen::Server("http://127.0.0.1:2/".into()));
+        let s = home.read().unwrap();
+        assert_eq!((s.url.as_str(), s.last_code), ("http://127.0.0.1:2", None));
+        home.reopen(Reopen::Server("http://127.0.0.1:1".into()));
+        let s = home.read().unwrap();
+        assert_eq!(s.last_code.as_deref(), Some("code-one"));
+        assert!(s.other_codes.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

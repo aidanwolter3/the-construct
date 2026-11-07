@@ -285,8 +285,9 @@ impl App {
     }
 
     /// What the platform reported: a sign-in's redirect goes to the
-    /// engine's sign-in (`crate::signin`); the rest shows as a notice for
-    /// now (the bridge's prototype).
+    /// engine's sign-in (`crate::signin`); picked photos are staged for the
+    /// media picker that asked; the rest shows as a notice for now (the
+    /// bridge's prototype).
     fn platform_events(&mut self) {
         let events = self
             .platform
@@ -312,22 +313,59 @@ impl App {
             log(&format!("platform: {e:?}"));
             let (title, message) = match e {
                 PlatformEvent::Link(uri) => ("Opened with a link".to_owned(), uri),
-                PlatformEvent::Picked { count: 0, .. } => (
-                    "No photos picked".to_owned(),
-                    "The picker was closed.".to_owned(),
-                ),
-                PlatformEvent::Picked { count, bytes } => (
-                    format!("{count} photo{} picked", if count == 1 { "" } else { "s" }),
-                    format!(
-                        "{:.1} MB in all, read from Rust.",
-                        bytes as f64 / 1_000_000.0
-                    ),
-                ),
+                PlatformEvent::Picked(files) => {
+                    self.controller.session.picked(files);
+                    if let Some(s) = &self.surface {
+                        s.window.request_redraw();
+                    }
+                    continue;
+                }
                 PlatformEvent::Message(m) => ("Message received".to_owned(), m),
             };
             self.controller.session.notice(&title, &message);
             if let Some(s) = &self.surface {
                 s.window.request_redraw();
+            }
+        }
+    }
+
+    /// Brings the platform's keyboard and the focused field together
+    /// ([`Platform::text_input`]): what the keyboard typed, corrected or
+    /// composed goes into the session, and the session's own changes reach
+    /// the keyboard.
+    fn sync_text_input(&mut self) {
+        // Twice at most: the keyboard's edit, then the session's answer to it
+        // (a value cut to the field's maximum length).
+        for _ in 0..2 {
+            let field = self.controller.session.text_state();
+            let Some(edit) = self
+                .platform
+                .as_ref()
+                .and_then(|p| p.text_input(field.as_ref()))
+            else {
+                return;
+            };
+            if let Some(state) = &edit.state {
+                let out = self.controller.session.set_text_state(state);
+                self.after(Some(out), false);
+            }
+            if let Some(intent) = edit.menu {
+                let out = self
+                    .controller
+                    .session
+                    .dispatch(&serde_json::json!({ "intent": intent }))
+                    .ok();
+                self.after(out, false);
+            }
+            if edit.done {
+                // As Enter on a hardware keyboard.
+                if let Some(p) = &self.platform {
+                    p.show_keyboard(false);
+                }
+                self.controller.unfocus();
+                if let Some(s) = &self.surface {
+                    s.window.request_redraw();
+                }
             }
         }
     }
@@ -341,6 +379,7 @@ impl App {
         let old = &self.controller.session;
         session.resize(old.viewport);
         session.set_insets(old.insets);
+        session.set_dark(old.dark);
         self.controller = Controller::new(session);
         self.drag = None;
         self.fling = None;
@@ -372,6 +411,23 @@ impl App {
             return false;
         }
         self.controller.session.set_insets(insets);
+        true
+    }
+
+    /// Follows the system's light or dark mode; true when it changed.
+    fn update_dark(&mut self) -> bool {
+        let dark = match self.platform.as_ref().and_then(|p| p.dark()) {
+            Some(d) => d,
+            None => match self.surface.as_ref().and_then(|s| s.window.theme()) {
+                Some(t) => t == winit::window::Theme::Dark,
+                None => return false,
+            },
+        };
+        if dark == self.controller.session.dark {
+            return false;
+        }
+        log(&format!("{} mode", if dark { "dark" } else { "light" }));
+        self.controller.session.set_dark(dark);
         true
     }
 
@@ -491,6 +547,7 @@ impl App {
             renderer,
         });
         self.update_insets();
+        self.update_dark();
         Ok(())
     }
 
@@ -646,6 +703,9 @@ impl App {
                         })
                     }
                     crate::interact::Effect::LeftPod => reopen = Some(Reopen::Left),
+                    crate::interact::Effect::SwitchServer { url } => {
+                        reopen = Some(Reopen::Server(url.clone()))
+                    }
                     crate::interact::Effect::Paste { field } => match self.clipboard() {
                         Some(text) => {
                             self.controller.session.paste(field, &text);
@@ -654,7 +714,9 @@ impl App {
                     },
                     crate::interact::Effect::Copy { text } => self.set_clipboard(text),
                     crate::interact::Effect::PickMedia { max, .. } => {
-                        if !self.platform.as_ref().is_some_and(|p| p.pick_images(*max)) {
+                        if !self.platform.as_ref().is_some_and(|p| p.pick_images(*max))
+                            && !self.controller.session.pick_here(*max)
+                        {
                             self.controller.session.notice(
                                 "No photo picker",
                                 "Picking photos isn't available here yet.",
@@ -693,7 +755,9 @@ impl ApplicationHandler for App {
             return;
         }
         self.platform_events();
-        if self.update_insets()
+        self.sync_text_input();
+        let insets = self.update_insets();
+        if (insets | self.update_dark())
             && let Some(s) = &self.surface
         {
             s.window.request_redraw();
@@ -742,6 +806,7 @@ impl ApplicationHandler for App {
     /// something: draw again.
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
         self.platform_events();
+        self.sync_text_input();
         self.serve_a11y();
         if let Some(s) = &self.surface {
             s.window.request_redraw();

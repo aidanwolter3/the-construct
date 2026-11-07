@@ -20,6 +20,7 @@ picker and create vocabulary) in [DECISIONS.md](DECISIONS.md).
 | --- | --- | --- |
 | Layout (`crates/app-pixelfed/layouts/pixelfed/`) | The compose screen, the 4-photo limit, what the placeholder looks like | — |
 | Shared UI | `core://MediaPicker`, picking files, closing the screen | Pixelfed, posts |
+| Rust clients (`construct-render`) | The same picker over the same engine: Android's photo picker through the bridge, the desktop's file dialog ([rendering.md](rendering.md)) | Pixelfed, posts |
 | Engine (`client-core`) | Staging files, uploading a create's attachments before its POST, `position`, `event: data` | What the files are for |
 | `pod-core` | Storing uploads, giving adapters access, `event: data`, the `resume` hook | Pixelfed, posts |
 | Pixelfed adapter | Media upload, processing, `POST /api/v1/statuses`, pending posts in the feed | — |

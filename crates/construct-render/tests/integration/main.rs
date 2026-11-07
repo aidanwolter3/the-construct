@@ -2,6 +2,7 @@
 
 mod accessibility;
 mod common;
+mod device;
 #[cfg(feature = "remote")]
 mod engine;
 mod golden;
@@ -9,4 +10,5 @@ mod golden;
 mod gpu;
 mod interaction;
 mod layout_math;
+mod media;
 mod writes;

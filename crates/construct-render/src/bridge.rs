@@ -1,7 +1,7 @@
 //! The Rust side of the Android bridge (`android/java`): the few Android
 //! callbacks a NativeActivity doesn't pass on, forwarded by small Java
 //! classes that hold no app logic. A link that opens the app and the photo
-//! picker's result come from `ConstructActivity`; a message for the app,
+//! picker's result (read by `crate::picked`) come from `ConstructActivity`; a message for the app,
 //! also while it is closed (what a push does), from `ConstructReceiver`.
 //! Events queue here and wake the window, which reads them through
 //! `Platform::events`.
@@ -33,6 +33,12 @@ pub fn take_events() -> Vec<PlatformEvent> {
 
 fn push(e: PlatformEvent) {
     EVENTS.lock().unwrap_or_else(|p| p.into_inner()).push(e);
+    wake();
+}
+
+/// Wakes the window (the keyboard's input connection, `ime.rs`, edited the
+/// field).
+pub(crate) fn wake() {
     if let Some(w) = WAKER.get() {
         w();
     }
@@ -52,8 +58,8 @@ pub extern "system" fn Java_org_theconstruct_android_Native_link<'l>(
     .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-/// `Native.picked(context, uris)`: the photo picker's result. Each photo's
-/// size is read through the content resolver, to show Rust can read them.
+/// `Native.picked(context, uris)`: the photo picker's result, read into
+/// local files (`crate::picked`) for the media picker to stage.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_theconstruct_android_Native_picked<'l>(
     mut env: EnvUnowned<'l>,
@@ -62,48 +68,9 @@ pub extern "system" fn Java_org_theconstruct_android_Native_picked<'l>(
     uris: JObjectArray<'l>,
 ) {
     env.with_env(|env| -> jni::errors::Result<()> {
-        let resolver = env
-            .call_method(
-                &context,
-                jni_str!("getContentResolver"),
-                jni_sig!("()Landroid/content/ContentResolver;"),
-                &[],
-            )?
-            .l()?;
-        let n = uris.len(env)?;
-        let mut bytes = 0u64;
-        for i in 0..n {
-            let s = uris.get_element(env, i)?;
-            let uri = env
-                .call_static_method(
-                    jni_str!("android/net/Uri"),
-                    jni_str!("parse"),
-                    jni_sig!("(Ljava/lang/String;)Landroid/net/Uri;"),
-                    &[JValue::Object(&s)],
-                )?
-                .l()?;
-            let mode = env.new_string("r")?;
-            let fd = env
-                .call_method(
-                    &resolver,
-                    jni_str!("openAssetFileDescriptor"),
-                    jni_sig!("(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;"),
-                    &[JValue::Object(&uri), JValue::Object(&mode)],
-                )?
-                .l()?;
-            if fd.is_null() {
-                continue;
-            }
-            let len = env
-                .call_method(&fd, jni_str!("getLength"), jni_sig!("()J"), &[])?
-                .j()?;
-            env.call_method(&fd, jni_str!("close"), jni_sig!("()V"), &[])?;
-            bytes += len.max(0) as u64;
-        }
-        push(PlatformEvent::Picked {
-            count: n,
-            bytes,
-        });
+        push(PlatformEvent::Picked(crate::picked::read_all(
+            env, &context, &uris,
+        )?));
         Ok(())
     })
     .resolve::<ThrowRuntimeExAndDefault>()
