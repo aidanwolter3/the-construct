@@ -398,10 +398,10 @@ fn signing_in_answers_the_session_and_the_code_to_remember() {
 }
 
 #[test]
-fn a_long_press_on_a_field_offers_paste() {
+fn text_fields_edit_like_android() {
     let root = json!({ "type": "core://Column", "children": [
         { "type": "core://Text", "style": "Body", "value_expr": "Enter your pod code" },
-        { "type": "core://TextField", "field": "pod_token", "placeholder": "Pod code" } ] });
+        { "type": "core://TextField", "field": "pod_token", "placeholder": "Pod code", "max_length": 12 } ] });
     let (mut s, _) = session(root, json!({}), false);
     let f = s
         .scene()
@@ -409,22 +409,56 @@ fn a_long_press_on_a_field_offers_paste() {
         .find_node("field:pod_token")
         .unwrap()
         .bounds;
+    // An empty field: a long press offers Paste only.
     s.long_press(f[0] + 20.0, f[1] + 20.0).unwrap();
     assert_eq!(s.focused.as_deref(), Some("pod_token"));
-    let out = s.tap(&Target::Id("paste".into())).unwrap();
+    assert!(s.scene().unwrap().find_node("edit:paste").is_some());
+    assert!(s.scene().unwrap().find_node("edit:copy").is_none());
+    let out = s.tap(&Target::Id("edit:paste".into())).unwrap();
     assert_eq!(
         out.effects,
         vec![Effect::Paste {
             field: "pod_token".into()
         }]
     );
-    // The platform pastes its clipboard; the field keeps the focus.
-    s.paste("pod_token", "cpod_abc\n");
-    assert_eq!(s.form["pod_token"], "cpod_abc");
-    assert!(s.scene().unwrap().find_node("paste").is_none());
-    // A tap on the field being typed into offers it too; a tap elsewhere doesn't.
-    s.tap(&Target::Id("field:pod_token".into())).unwrap();
-    assert!(s.scene().unwrap().find_node("paste").is_some());
+    // The platform pastes its clipboard (no further than max_length).
+    s.paste("pod_token", "cpod_abc def\n");
+    assert_eq!(s.form["pod_token"], "cpod_abc def");
+    // Typing goes in at the cursor, Backspace removes before it.
+    s.move_cursor(construct_render::interact::CursorMove::Home, false);
+    s.insert_text("x");
+    assert_eq!(s.form["pod_token"], "xcpod_abc de", "max_length");
+    s.backspace();
+    assert_eq!(s.form["pod_token"], "cpod_abc de");
+    // A long press selects the word under it; Copy and Cut give it to the
+    // platform.
+    s.long_press(f[0] + 20.0, f[1] + f[3] / 2.0).unwrap();
+    let out = s.tap(&Target::Id("edit:copy".into())).unwrap();
+    assert_eq!(
+        out.effects,
+        vec![Effect::Copy {
+            text: "cpod_abc".into()
+        }]
+    );
+    // Select all, then typing replaces it all.
+    s.long_press(f[0] + 20.0, f[1] + f[3] / 2.0).unwrap();
+    s.tap(&Target::Id("edit:select_all".into())).unwrap();
+    let out = s.tap(&Target::Id("edit:cut".into())).unwrap();
+    assert_eq!(
+        out.effects,
+        vec![Effect::Copy {
+            text: "cpod_abc de".into()
+        }]
+    );
+    assert_eq!(s.form["pod_token"], "");
+    s.insert_text("cpod_new");
+    // A tap in the text puts the cursor there.
+    s.tap(&Target::Point(f[0] + 16.0, f[1] + f[3] / 2.0))
+        .unwrap();
+    s.insert_text("!");
+    assert_eq!(s.form["pod_token"], "!cpod_new");
+    // A tap elsewhere ends editing.
     s.tap(&Target::Text("Enter your pod code".into())).unwrap();
-    assert!(s.scene().unwrap().find_node("paste").is_none());
+    assert!(s.focused.is_none());
+    assert!(s.scene().unwrap().find_node("edit:paste").is_none());
 }

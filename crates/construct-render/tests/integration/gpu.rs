@@ -103,7 +103,7 @@ fn gpu_quad_matches_the_cpu_sdf() {
         scale: 2.0,
         background: [1.0, 1.0, 1.0, 1.0],
         draws: vec![Draw::Quad(q)],
-        semantics: Vec::new(),
+        ..Default::default()
     };
     let mut text = TextEngine::new();
     let gpu = surface.render(&scene, &mut text).unwrap();

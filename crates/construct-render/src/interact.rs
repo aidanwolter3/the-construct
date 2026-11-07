@@ -85,10 +85,14 @@ pub enum Effect {
     },
     /// `leave_pod`: the platform forgets the session and shows sign-in.
     LeftPod,
-    /// The Paste bubble was tapped: the platform reads its clipboard and
+    /// Paste was chosen: the platform reads its clipboard and
     /// [`Session::paste`]s it into this field.
     Paste {
         field: String,
+    },
+    /// Copy or Cut was chosen: the platform puts this on its clipboard.
+    Copy {
+        text: String,
     },
     /// Would go to the pod or the platform; a preview doesn't send it.
     NotSent {
@@ -137,6 +141,15 @@ const SETTLE: Duration = Duration::from_millis(180);
 /// (points per second).
 const PAGE_SLIDE: Duration = Duration::from_millis(260);
 const PAGE_FLING: f32 = 300.0;
+
+/// Where [`Session::move_cursor`] moves the cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CursorMove {
+    Left,
+    Right,
+    Home,
+    End,
+}
 
 /// Which way a drag moves a sheet or panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -372,9 +385,94 @@ pub struct Session {
     /// Carousels sliding to a page after a swipe: since when, from and to
     /// what offset, and the page.
     pager_anims: BTreeMap<String, (Instant, f32, f32, usize)>,
-    /// The focused field a Paste bubble is shown over (a long press on it,
-    /// or a tap on it while typing).
-    paste_for: Option<String>,
+    /// The text being edited: cursor, selection, handles and menu.
+    edit: Option<Edit>,
+    /// Whether the caret was drawn in the frame kept (it blinks).
+    caret_shown: Option<bool>,
+    /// Where the edit handles are, to grab them (from the last frame).
+    handles: Vec<(Grab, [f32; 4])>,
+    /// A handle being dragged, and how far the finger is below the text
+    /// point it moves.
+    grab: Option<(Grab, f32)>,
+}
+
+/// How long the caret shows, then hides (Android's 500 ms).
+const BLINK: Duration = Duration::from_millis(500);
+/// Two taps this close in time are a double tap (Android's 300 ms).
+const DOUBLE_TAP: Duration = Duration::from_millis(300);
+/// The edit handles' size, and how much further a finger may land.
+const HANDLE: f32 = 22.0;
+const HANDLE_SLOP: f32 = 12.0;
+
+/// The text field being typed into: where the cursor is and what is
+/// selected (byte offsets in its value; `anchor` is the fixed end), and what
+/// shows around it.
+#[derive(Debug, Clone)]
+struct Edit {
+    field: String,
+    cursor: usize,
+    anchor: usize,
+    /// The handles show (the caret's after a tap, a selection's always).
+    handles: bool,
+    /// The Cut / Copy / Paste / Select all bar shows.
+    menu: bool,
+    /// The caret shows from here, blinking.
+    blink: Instant,
+    /// The last tap on the field, for a double tap.
+    last_tap: Option<(Instant, f32, f32)>,
+}
+
+impl Edit {
+    fn range(&self) -> (usize, usize) {
+        (self.cursor.min(self.anchor), self.cursor.max(self.anchor))
+    }
+    fn selected(&self) -> bool {
+        self.cursor != self.anchor
+    }
+}
+
+/// An edit handle a finger can drag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Grab {
+    /// The caret's handle.
+    Caret,
+    /// The start and end of a selection.
+    Start,
+    End,
+}
+
+/// The word around byte `at` of `text` (letters, digits and `_`), or the
+/// single other character there.
+fn word_at(text: &str, at: usize) -> (usize, usize) {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let at = at.min(text.len());
+    let after = text[at..].chars().next();
+    let before = text[..at].chars().next_back();
+    let inside = after.is_some_and(word) || before.is_some_and(word);
+    if !inside {
+        let end = after.map_or(at, |c| at + c.len_utf8());
+        return (at, end);
+    }
+    let start = text[..at]
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| word(*c))
+        .last()
+        .map_or(at, |(i, _)| i);
+    let end = text[at..]
+        .char_indices()
+        .take_while(|(_, c)| word(*c))
+        .last()
+        .map_or(at, |(i, c)| at + i + c.len_utf8());
+    (start, end)
+}
+
+/// The character boundary before and after byte `at`.
+fn prev_char(text: &str, at: usize) -> usize {
+    text[..at].char_indices().next_back().map_or(0, |(i, _)| i)
+}
+fn next_char(text: &str, at: usize) -> usize {
+    text[at..].chars().next().map_or(at, |c| at + c.len_utf8())
 }
 
 impl Session {
@@ -400,38 +498,406 @@ impl Session {
             frame_offset: 0.0,
             frame_settle: None,
             pager_anims: BTreeMap::new(),
-            paste_for: None,
+            edit: None,
+            caret_shown: None,
+            handles: Vec::new(),
+            grab: None,
         }
     }
 
-    /// Text pasted into a field, after what it holds (the platform's
-    /// clipboard, from [`Effect::Paste`]).
-    pub fn paste(&mut self, field: &str, text: &str) -> Outcome {
-        let mut v = self.form.get(field).cloned().unwrap_or_default();
-        v.push_str(text.trim_end_matches(['\n', '\r']));
-        self.paste_for = None;
-        self.focused = Some(field.to_owned());
-        self.type_text(field, &v)
+    /// The edit of the focused field (started at the end of its value if
+    /// it has none), its value clamped to the value as it is now.
+    fn edit_now(&mut self) -> Option<&mut Edit> {
+        let field = self.focused.clone()?;
+        let value = self.form.get(&field).cloned().unwrap_or_default();
+        if self.edit.as_ref().is_none_or(|e| e.field != field) {
+            self.edit = Some(Edit {
+                field: field.clone(),
+                cursor: value.len(),
+                anchor: value.len(),
+                handles: false,
+                menu: false,
+                blink: Instant::now(),
+                last_tap: None,
+            });
+        }
+        let e = self.edit.as_mut()?;
+        let fix = |i: usize| {
+            let mut i = i.min(value.len());
+            while !value.is_char_boundary(i) {
+                i -= 1;
+            }
+            i
+        };
+        e.cursor = fix(e.cursor);
+        e.anchor = fix(e.anchor);
+        Some(e)
     }
 
-    /// A long press at a point: on a text field, it is focused with a Paste
-    /// bubble; elsewhere the `core://Gesture` there runs its `long_press`.
+    /// The focused field's value and its edit (after [`Session::edit_now`]).
+    fn editing(&mut self) -> Option<(String, Edit)> {
+        let e = self.edit_now()?.clone();
+        let v = self.form.get(&e.field).cloned().unwrap_or_default();
+        Some((v, e))
+    }
+
+    /// The field's maximum length (characters), from the frame.
+    fn max_length(&mut self, field: &str) -> Option<usize> {
+        self.scene().ok()?;
+        self.scene
+            .as_ref()?
+            .fields
+            .iter()
+            .find(|f| f.field == field)?
+            .max_length
+    }
+
+    /// Sets the edited value and where the cursor and selection are.
+    fn set_edit(&mut self, value: String, cursor: usize, anchor: usize) -> Outcome {
+        let Some(field) = self.edit.as_ref().map(|e| e.field.clone()) else {
+            return Outcome {
+                node: None,
+                effects: vec![Effect::Nothing],
+            };
+        };
+        if let Some(e) = self.edit.as_mut() {
+            e.cursor = cursor;
+            e.anchor = anchor;
+            e.blink = Instant::now();
+        }
+        self.form.insert(field.clone(), value.clone());
+        self.invalidate();
+        Outcome {
+            node: None,
+            effects: vec![Effect::FormSet { field, value }],
+        }
+    }
+
+    /// Typed or pasted text, in place of the selection (no further than
+    /// the field's maximum length). Handles and the menu go, as on Android.
+    pub fn insert_text(&mut self, text: &str) -> Outcome {
+        let Some((value, e)) = self.editing() else {
+            return Outcome {
+                node: None,
+                effects: vec![Effect::Nothing],
+            };
+        };
+        let (lo, hi) = e.range();
+        let text: String = text.chars().filter(|c| *c != '\r').collect();
+        let mut v = format!("{}{}{}", &value[..lo], text, &value[hi..]);
+        // As the shared UI does: the value is cut to the field's length.
+        if let Some(max) = self.max_length(&e.field) {
+            v = v.chars().take(max).collect();
+        }
+        if let Some(e) = self.edit.as_mut() {
+            e.handles = false;
+            e.menu = false;
+        }
+        let at = (lo + text.len()).min(v.len());
+        self.set_edit(v, at, at)
+    }
+
+    /// Backspace: the selection, else the character before the cursor.
+    pub fn backspace(&mut self) -> Outcome {
+        let Some((value, e)) = self.editing() else {
+            return Outcome {
+                node: None,
+                effects: vec![Effect::Nothing],
+            };
+        };
+        let (lo, hi) = e.range();
+        let lo = if lo == hi { prev_char(&value, lo) } else { lo };
+        if let Some(e) = self.edit.as_mut() {
+            e.handles = false;
+            e.menu = false;
+        }
+        self.set_edit(format!("{}{}", &value[..lo], &value[hi..]), lo, lo)
+    }
+
+    /// Delete: the selection, else the character after the cursor.
+    pub fn delete_forward(&mut self) -> Outcome {
+        let Some((value, e)) = self.editing() else {
+            return Outcome {
+                node: None,
+                effects: vec![Effect::Nothing],
+            };
+        };
+        let (lo, hi) = e.range();
+        let hi = if lo == hi { next_char(&value, hi) } else { hi };
+        self.set_edit(format!("{}{}", &value[..lo], &value[hi..]), lo, lo)
+    }
+
+    /// Moves the cursor one character left or right, or to the start or
+    /// end; with `extend`, the selection grows with it.
+    pub fn move_cursor(&mut self, to: CursorMove, extend: bool) {
+        let Some((value, e)) = self.editing() else {
+            return;
+        };
+        let (lo, hi) = e.range();
+        let c = match to {
+            CursorMove::Left if !extend && e.selected() => lo,
+            CursorMove::Right if !extend && e.selected() => hi,
+            CursorMove::Left => prev_char(&value, e.cursor),
+            CursorMove::Right => next_char(&value, e.cursor),
+            CursorMove::Home => 0,
+            CursorMove::End => value.len(),
+        };
+        let anchor = if extend { e.anchor } else { c };
+        if let Some(e) = self.edit.as_mut() {
+            e.cursor = c;
+            e.anchor = anchor;
+            e.blink = Instant::now();
+            e.menu = false;
+            e.handles = false;
+        }
+        self.scene = None;
+    }
+
+    /// Selects the whole value (Select all, Ctrl+A).
+    pub fn select_all(&mut self) {
+        let Some((value, _)) = self.editing() else {
+            return;
+        };
+        if let Some(e) = self.edit.as_mut() {
+            e.anchor = 0;
+            e.cursor = value.len();
+            e.handles = !value.is_empty();
+            e.menu = true;
+        }
+        self.scene = None;
+    }
+
+    /// The selected text (Copy, Ctrl+C); with `cut`, it is removed too.
+    pub fn copy(&mut self, cut: bool) -> Option<String> {
+        let (value, e) = self.editing()?;
+        let (lo, hi) = e.range();
+        if lo == hi {
+            return None;
+        }
+        let text = value[lo..hi].to_owned();
+        if let Some(e) = self.edit.as_mut() {
+            e.menu = false;
+            e.handles = false;
+        }
+        if cut {
+            self.set_edit(format!("{}{}", &value[..lo], &value[hi..]), lo, lo);
+        } else {
+            if let Some(e) = self.edit.as_mut() {
+                e.anchor = e.cursor;
+            }
+            self.scene = None;
+        }
+        Some(text)
+    }
+
+    /// The platform's clipboard text pasted into a field, in place of its
+    /// selection ([`Effect::Paste`]).
+    pub fn paste(&mut self, field: &str, text: &str) -> Outcome {
+        self.focused = Some(field.to_owned());
+        self.insert_text(text.trim_end_matches(['\n', '\r']))
+    }
+
+    /// The edit's caret stops in the frame, with the field's text box.
+    fn caret_stops(
+        &mut self,
+        field: &str,
+    ) -> Option<(crate::scene::FieldBox, Vec<crate::text::CaretStop>)> {
+        self.scene().ok()?;
+        let fb = self
+            .scene
+            .as_ref()?
+            .fields
+            .iter()
+            .find(|f| f.field == field)?
+            .clone();
+        let value = self.form.get(field).cloned().unwrap_or_default();
+        let ty = crate::style::Type {
+            face: fb.face,
+            size: fb.size,
+            line_height: fb.line_height,
+        };
+        let stops =
+            self.builder
+                .text
+                .caret_stops(&value, ty, Some(fb.rect[2] + 0.5), self.viewport.scale);
+        Some((fb, stops))
+    }
+
+    /// The byte of `field`'s value nearest a point of the screen.
+    fn byte_at(&mut self, field: &str, x: f32, y: f32) -> Option<usize> {
+        let (fb, stops) = self.caret_stops(field)?;
+        crate::text::nearest_stop(&stops, x - fb.rect[0], y - fb.rect[1]).map(|s| s.byte)
+    }
+
+    /// A tap on a text field at a point: it is focused with the cursor
+    /// there; on the field being typed into, a tap on the caret shows the
+    /// menu, and a double tap selects the word.
+    fn focus_at(&mut self, field: &str, x: f32, y: f32, again: bool) {
+        self.focused = Some(field.to_owned());
+        let at = self.byte_at(field, x, y);
+        let now = Instant::now();
+        let Some(e) = self.edit_now() else {
+            return;
+        };
+        let double = again
+            && e.last_tap.is_some_and(|(t, tx, ty)| {
+                now.duration_since(t) < DOUBLE_TAP && (tx - x).abs() < 24.0 && (ty - y).abs() < 24.0
+            });
+        let on_caret = again && !e.selected() && at == Some(e.cursor);
+        e.last_tap = Some((now, x, y));
+        e.blink = now;
+        if double {
+            e.last_tap = None;
+            self.select_word(field, x, y);
+            return;
+        }
+        let Some(e) = self.edit.as_mut() else {
+            return;
+        };
+        if on_caret {
+            e.handles = true;
+            e.menu = !e.menu;
+            return;
+        }
+        let at = at.unwrap_or(e.cursor);
+        e.cursor = at;
+        e.anchor = at;
+        e.handles = again;
+        e.menu = false;
+    }
+
+    /// Selects the word at a point of a field, with handles and the menu
+    /// (an empty field: the menu, to paste).
+    fn select_word(&mut self, field: &str, x: f32, y: f32) {
+        self.focused = Some(field.to_owned());
+        let at = self.byte_at(field, x, y);
+        let value = self.form.get(field).cloned().unwrap_or_default();
+        let Some(e) = self.edit_now() else {
+            return;
+        };
+        let (lo, hi) = word_at(&value, at.unwrap_or(e.cursor));
+        e.anchor = lo;
+        e.cursor = hi;
+        e.handles = lo != hi;
+        e.menu = true;
+        e.blink = Instant::now();
+        // Laid out again: the field is drawn focused.
+        self.invalidate();
+    }
+
+    /// A long press at a point: on a text field, the word there is selected
+    /// (Cut, Copy, Paste and Select all show); elsewhere the
+    /// `core://Gesture` there runs its `long_press`.
     pub fn long_press(&mut self, x: f32, y: f32) -> Result<Outcome, String> {
         let hit = self.find(&Target::Point(x, y))?;
         if let Some(n) = &hit
             && let Some(Tap::Focus { field }) = &n.tap
         {
-            self.focused = Some(field.clone());
-            self.paste_for = Some(field.clone());
-            self.invalidate();
+            let field = field.clone();
+            self.select_word(&field, x, y);
             return Ok(Outcome {
                 node: hit.clone(),
-                effects: vec![Effect::Focused {
-                    field: field.clone(),
-                }],
+                effects: vec![Effect::Focused { field }],
             });
         }
         self.gesture(x, y, "long_press")
+    }
+
+    /// The edit handle under a point, if any: dragging it moves the caret
+    /// or that end of the selection.
+    pub fn grab_at(&mut self, x: f32, y: f32) -> Option<Grab> {
+        let _ = self.scene().ok()?;
+        let (g, r) = self.handles.iter().rev().find(|(_, r)| {
+            x >= r[0] - HANDLE_SLOP
+                && x < r[0] + r[2] + HANDLE_SLOP
+                && y >= r[1] - HANDLE_SLOP
+                && y < r[1] + r[3] + HANDLE_SLOP
+        })?;
+        let (g, r) = (*g, *r);
+        // The finger stays this far below the text point it moves.
+        self.grab = Some((g, (y - r[1]) + HANDLE / 2.0 + 10.0));
+        if let Some(e) = self.edit.as_mut() {
+            e.menu = false;
+        }
+        Some(g)
+    }
+
+    /// Starts dragging the end of the selection a long press just made
+    /// (dragging on selects more, as on Android).
+    pub fn grab_selection_end(&mut self) -> bool {
+        if self.edit.as_ref().is_some_and(Edit::selected) {
+            self.grab = Some((Grab::End, 0.0));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The grabbed handle follows the finger.
+    pub fn drag_grab(&mut self, x: f32, y: f32) {
+        let Some((g, dy)) = self.grab else {
+            return;
+        };
+        let Some(field) = self.edit.as_ref().map(|e| e.field.clone()) else {
+            return;
+        };
+        let Some(at) = self.byte_at(&field, x, y - dy) else {
+            return;
+        };
+        let Some(e) = self.edit.as_mut() else {
+            return;
+        };
+        let (lo, hi) = e.range();
+        match g {
+            Grab::Caret => {
+                e.cursor = at;
+                e.anchor = at;
+            }
+            // A selection keeps at least one character.
+            Grab::Start => {
+                if at < hi {
+                    e.anchor = hi;
+                    e.cursor = at;
+                }
+            }
+            Grab::End => {
+                if at > lo {
+                    e.anchor = lo;
+                    e.cursor = at;
+                }
+            }
+        }
+        e.blink = Instant::now();
+        self.scene = None;
+    }
+
+    /// The handle is let go: a selection shows the menu again.
+    pub fn release_grab(&mut self) {
+        self.grab = None;
+        if let Some(e) = self.edit.as_mut() {
+            e.menu = e.selected();
+            e.handles = true;
+        }
+        self.scene = None;
+    }
+
+    /// When the caret next blinks, for a window to draw then.
+    pub fn next_wake(&self) -> Option<Instant> {
+        let e = self.edit.as_ref()?;
+        if self.focused.as_ref() != Some(&e.field) || e.selected() {
+            return None;
+        }
+        let since = e.blink.elapsed().as_millis() / BLINK.as_millis();
+        Some(e.blink + BLINK * (since as u32 + 1))
+    }
+
+    /// Whether the caret shows now (it blinks).
+    fn caret_on(&self) -> Option<bool> {
+        let e = self.edit.as_ref()?;
+        if self.focused.as_ref() != Some(&e.field) || e.selected() {
+            return None;
+        }
+        Some((e.blink.elapsed().as_millis() / BLINK.as_millis()).is_multiple_of(2))
     }
 
     /// The carousel under a point, if it has more than one page.
@@ -959,6 +1425,9 @@ impl Session {
         self.poll();
         let now = Instant::now();
         self.step_pagers(now);
+        if self.caret_on() != self.caret_shown {
+            self.scene = None;
+        }
         let animate = self.animate;
         let before = self.stack.len();
         let mut k = 0;
@@ -1182,69 +1651,180 @@ impl Session {
                 self.images.request(&i.url);
             }
         }
-        self.paste_bubble(&mut scene, &theme);
+        self.caret_shown = self.caret_on();
+        self.edit_overlay(&mut scene, &theme);
         self.scene = Some(scene);
         Ok(self.scene.as_ref().expect("just built"))
     }
 
-    /// The Paste bubble over the field it was offered for, as Android draws
-    /// it: above the field (below when there is no room), on top of
-    /// everything.
-    fn paste_bubble(&mut self, scene: &mut Scene, theme: &crate::style::Theme) {
-        let Some(field) = self.paste_for.clone() else {
+    /// What editing draws over the focused field, as Android does: the
+    /// selection's highlight, the blinking caret, the handles, and the Cut /
+    /// Copy / Paste / Select all bar above the text (below when there is no
+    /// room), on top of everything.
+    fn edit_overlay(&mut self, scene: &mut Scene, theme: &crate::style::Theme) {
+        self.handles.clear();
+        let Some(e) = self.edit.clone() else {
             return;
         };
-        if self.focused.as_ref() != Some(&field) {
-            self.paste_for = None;
+        if self.focused.as_ref() != Some(&e.field) {
             return;
         }
-        let Some(f) = scene.find_node(&format!("field:{field}")).map(|n| n.bounds) else {
+        let Some(fb) = scene.fields.iter().find(|f| f.field == e.field).cloned() else {
             return;
         };
-        let ty = crate::style::type_for(protocol::TextStyle::Label);
-        let label = "Paste";
-        let m = self
-            .builder
-            .text
-            .measure(label, ty, None, self.viewport.scale);
-        let (w, h) = (m.width + 32.0, 40.0);
-        let x = (f[0] + 8.0).min(self.viewport.width - w - 8.0).max(8.0);
-        let y = if f[1] - h - 6.0 >= self.insets[0] {
-            f[1] - h - 6.0
-        } else {
-            f[1] + f[3] + 6.0
+        let value = self.form.get(&e.field).cloned().unwrap_or_default();
+        let ty = crate::style::Type {
+            face: fb.face,
+            size: fb.size,
+            line_height: fb.line_height,
         };
+        let stops =
+            self.builder
+                .text
+                .caret_stops(&value, ty, Some(fb.rect[2] + 0.5), self.viewport.scale);
+        let (ox, oy) = (fb.rect[0], fb.rect[1]);
+        let stop = |b: usize| {
+            stops
+                .iter()
+                .find(|s| s.byte == b)
+                .or(stops.last())
+                .copied()
+                .expect("one stop at least")
+        };
+        let clip = fb.clip;
+        let accent = theme.primary;
+        let mut quad = |r: [f32; 4], c: Rgba, radius: [f32; 4], clip: [f32; 4]| {
+            let mut q = QuadInstance::fill(r, c, 0.0);
+            q.radii = radius;
+            q.clip = clip;
+            scene.draws.push(Draw::Quad(q));
+        };
+        let (lo, hi) = e.range();
+        let (a, b) = (stop(lo), stop(hi));
         let all = [0.0, 0.0, self.viewport.width, self.viewport.height];
-        let mut q = QuadInstance::fill([x, y, w, h], theme.on_background, h / 2.0).shadow(
-            Rgba([0.0, 0.0, 0.0, 0.25]),
+        if e.selected() {
+            // One band per line the selection covers.
+            let mut tops: Vec<f32> = stops
+                .iter()
+                .filter(|s| s.byte >= lo && s.byte <= hi)
+                .map(|s| s.top)
+                .collect();
+            tops.dedup();
+            for top in tops {
+                let on: Vec<&crate::text::CaretStop> =
+                    stops.iter().filter(|s| s.top == top).collect();
+                let x0 = if top == a.top { a.x } else { 0.0 };
+                let x1 = if top == b.top {
+                    b.x
+                } else {
+                    on.iter().map(|s| s.x).fold(0.0, f32::max).max(fb.rect[2])
+                };
+                let h = on.first().map_or(fb.line_height, |s| s.height);
+                quad(
+                    [ox + x0, oy + top, (x1 - x0).max(1.0), h],
+                    accent.with_alpha(0.3),
+                    [0.0; 4],
+                    clip,
+                );
+            }
+        } else if self.caret_on() == Some(true) {
+            let c = stop(e.cursor);
+            quad(
+                [ox + c.x - 1.0, oy + c.top + 1.0, 2.0, c.height - 2.0],
+                accent,
+                [1.0; 4],
+                clip,
+            );
+        }
+        if e.handles {
+            let r = HANDLE / 2.0;
+            let under = |s: crate::text::CaretStop| (ox + s.x, oy + s.top + s.height);
+            if e.selected() {
+                let (sx, sy) = under(a);
+                let start = [sx - HANDLE, sy, HANDLE, HANDLE];
+                quad(start, accent, [r, 0.0, r, r], all);
+                self.handles.push((Grab::Start, start));
+                let (ex, ey) = under(b);
+                let end = [ex, ey, HANDLE, HANDLE];
+                quad(end, accent, [0.0, r, r, r], all);
+                self.handles.push((Grab::End, end));
+            } else {
+                let (cx, cy) = under(stop(e.cursor));
+                quad([cx - 1.0, cy, 2.0, 4.0], accent, [0.0; 4], all);
+                let knob = [cx - r, cy + 3.0, HANDLE, HANDLE];
+                quad(knob, accent, [r; 4], all);
+                self.handles.push((Grab::Caret, knob));
+            }
+        }
+        if !e.menu {
+            return;
+        }
+        let mut items: Vec<(&str, &str)> = Vec::new();
+        if e.selected() {
+            items.push(("Cut", "edit.cut"));
+            items.push(("Copy", "edit.copy"));
+        }
+        items.push(("Paste", "edit.paste"));
+        if !value.is_empty() && (lo > 0 || hi < value.len()) {
+            items.push(("Select all", "edit.select_all"));
+        }
+        let label = crate::style::type_for(protocol::TextStyle::Label);
+        let widths: Vec<(f32, f32)> = items
+            .iter()
+            .map(|(t, _)| {
+                let m = self
+                    .builder
+                    .text
+                    .measure(t, label, None, self.viewport.scale);
+                (m.width, m.height)
+            })
+            .collect();
+        let pad = 16.0;
+        let w: f32 = widths.iter().map(|(w, _)| w + 2.0 * pad).sum();
+        let h = 44.0;
+        let mid = (ox + (a.x + b.x) / 2.0).clamp(0.0, self.viewport.width);
+        let x = (mid - w / 2.0).clamp(8.0, (self.viewport.width - w - 8.0).max(8.0));
+        let above = oy + a.top - h - 8.0;
+        let y = if above >= self.insets[0] + 4.0 {
+            above
+        } else {
+            oy + b.top + b.height + HANDLE + 8.0
+        };
+        let mut bar = QuadInstance::fill([x, y, w, h], theme.background, 8.0).shadow(
+            Rgba([0.0, 0.0, 0.0, 0.28]),
             [0.0, 2.0],
-            6.0,
+            8.0,
             0.0,
         );
-        q.clip = all;
-        scene.draws.push(Draw::Quad(q));
-        scene.draws.push(Draw::Text(crate::scene::TextRun {
-            text: label.into(),
-            face: ty.face,
-            size: ty.size,
-            line_height: ty.line_height,
-            color: theme.background,
-            rect: [x + 16.0, y + (h - m.height) / 2.0, m.width, m.height],
-            clip: all,
-        }));
-        scene.semantics.push(SemanticNode {
-            id: "paste".into(),
-            node_type: "paste".into(),
-            bounds: [x, y, w, h],
-            text_content: Some(label.into()),
-            interactive: true,
-            tap: Some(Tap::Intent {
-                intent: json!({ "intent": "form.paste", "field": field }),
-            }),
-            selected: false,
-            parent: None,
-            gestures: BTreeMap::new(),
-        });
+        bar.clip = all;
+        scene.draws.push(Draw::Quad(bar));
+        let mut ix = x;
+        for ((text, intent), (tw, th)) in items.iter().zip(&widths) {
+            let iw = tw + 2.0 * pad;
+            scene.draws.push(Draw::Text(crate::scene::TextRun {
+                text: (*text).into(),
+                face: label.face,
+                size: label.size,
+                line_height: label.line_height,
+                color: theme.on_background,
+                rect: [ix + pad, y + (h - th) / 2.0, *tw, *th],
+                clip: all,
+            }));
+            scene.semantics.push(SemanticNode {
+                id: intent.replace('.', ":"),
+                node_type: "menu".into(),
+                bounds: [ix, y, iw, h],
+                text_content: Some((*text).into()),
+                interactive: true,
+                tap: Some(Tap::Intent {
+                    intent: json!({ "intent": intent }),
+                }),
+                selected: false,
+                parent: None,
+                gestures: BTreeMap::new(),
+            });
+            ix += iw;
+        }
     }
 
     /// Draws the current frame on the CPU.
@@ -1327,11 +1907,20 @@ impl Session {
             return Err(format!("nothing at {target:?}"));
         };
         // A tap anywhere but a field ends typing (the field's tap sets it
-        // again); a tap on the field being typed into offers Paste.
+        // again); the edit menu's items keep it.
         let again =
             matches!(&node.tap, Some(Tap::Focus { field }) if self.focused.as_ref() == Some(field));
-        self.paste_for = None;
-        self.focused = None;
+        let (px, py) = match target {
+            Target::Point(x, y) => (*x, *y),
+            _ => (
+                node.bounds[0] + node.bounds[2] / 2.0,
+                node.bounds[1] + node.bounds[3] / 2.0,
+            ),
+        };
+        let menu = node.node_type == "menu";
+        if !menu {
+            self.focused = None;
+        }
         let effects = match node.tap.clone() {
             None => vec![Effect::Nothing],
             Some(Tap::SetForm { field, value }) => {
@@ -1339,10 +1928,7 @@ impl Session {
                 vec![Effect::FormSet { field, value }]
             }
             Some(Tap::Focus { field }) => {
-                self.focused = Some(field.clone());
-                if again {
-                    self.paste_for = Some(field.clone());
-                }
+                self.focus_at(&field, px, py, again);
                 vec![Effect::Focused { field }]
             }
             Some(Tap::Intent { intent }) => match self.bind_form(&intent) {
@@ -1379,6 +1965,11 @@ impl Session {
     pub fn type_text(&mut self, field: &str, text: &str) -> Outcome {
         let field = field.strip_prefix("field:").unwrap_or(field);
         self.set_form(field, text);
+        // The whole value is replaced: the cursor goes to its end.
+        if let Some(e) = self.edit.as_mut().filter(|e| e.field == field) {
+            e.cursor = text.len();
+            e.anchor = text.len();
+        }
         Outcome {
             node: None,
             effects: vec![Effect::FormSet {
@@ -1506,14 +2097,22 @@ impl Session {
                     fields,
                 });
             }
-            "form.paste" => {
-                if let Some(f) = intent["field"].as_str() {
-                    self.focused = Some(f.to_owned());
-                    out.push(Effect::Paste {
-                        field: f.to_owned(),
-                    });
+            "edit.paste" => {
+                if let Some(f) = self.edit.as_ref().map(|e| e.field.clone()) {
+                    self.focused = Some(f.clone());
+                    if let Some(e) = self.edit.as_mut() {
+                        e.menu = false;
+                    }
+                    out.push(Effect::Paste { field: f });
                 }
             }
+            "edit.copy" | "edit.cut" => {
+                let cut = intent["intent"] == "edit.cut";
+                if let Some(text) = self.copy(cut) {
+                    out.push(Effect::Copy { text });
+                }
+            }
+            "edit.select_all" => self.select_all(),
             "form.clear" => {
                 // The session's own step after a field's Send.
                 if let Some(f) = intent["field"].as_str() {

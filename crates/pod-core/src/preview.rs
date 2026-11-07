@@ -278,6 +278,7 @@ fn effect_line(e: &Effect) -> String {
         Effect::SignedIn { .. } => "signed in".into(),
         Effect::LeftPod => "would leave the pod on this device".into(),
         Effect::Paste { field } => format!("would paste the clipboard into {field}"),
+        Effect::Copy { text } => format!("would copy {text:?}"),
         Effect::Nothing => "nothing happened".into(),
     }
 }

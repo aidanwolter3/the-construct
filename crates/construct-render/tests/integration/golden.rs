@@ -93,7 +93,7 @@ fn one_quad(q: QuadInstance, w: f32, h: f32, scale: f32) -> RgbaImage {
         scale,
         background: [1.0, 1.0, 1.0, 1.0],
         draws: vec![Draw::Quad(q)],
-        semantics: Vec::new(),
+        ..Default::default()
     };
     CpuRenderer::new().render(&scene, &mut TextEngine::new())
 }

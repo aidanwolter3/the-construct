@@ -134,30 +134,14 @@ impl crate::window::Platform for Android {
         clipboard_text(&self.0)
     }
 
+    fn set_clipboard(&self, text: &str) {
+        if let Err(e) = set_clipboard_text(&self.0, text) {
+            log(&format!("clipboard: {e}"));
+        }
+    }
+
     fn reopen(&self, how: crate::window::Reopen) -> Option<Session> {
-        use crate::window::Reopen;
-        let app = &self.0;
-        let mut state = read_state(app).unwrap_or_else(|| PodState {
-            url: main_app_server(app),
-            ..Default::default()
-        });
-        Some(match how {
-            Reopen::SignedIn { token, code } => {
-                state.token = Some(token.clone());
-                state.last_code = Some(code);
-                write_state(app, &state);
-                live(app, &state.url, &token)
-            }
-            Reopen::Left => {
-                state.token = None;
-                write_state(app, &state);
-                sign_in(&state.url, state.last_code.as_deref())
-            }
-            Reopen::Reload => match state.token.clone().filter(|t| !t.is_empty()) {
-                Some(token) => live(app, &state.url, &token),
-                None => sign_in(&state.url, state.last_code.as_deref()),
-            },
-        })
+        Some(pod_home(&self.0).reopen(how))
     }
 
     fn open_link(&self, url: &str) {
@@ -272,6 +256,49 @@ fn clipboard_text(app: &AndroidApp) -> Option<String> {
     .ok()
     .flatten()
     .filter(|t| !t.is_empty())
+}
+
+/// Puts text on the clipboard (`ClipData.newPlainText`, `setPrimaryClip`).
+fn set_clipboard_text(app: &AndroidApp, text: &str) -> Result<(), String> {
+    use jni::objects::{JObject, JValue};
+    use jni::{jni_sig, jni_str};
+    // SAFETY: the VM pointer is valid for the life of the process.
+    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    let activity = app.activity_as_ptr() as jni::sys::jobject;
+    vm.attach_current_thread(|env| -> jni::errors::Result<Result<(), String>> {
+        let run = |env: &mut jni::Env| -> jni::errors::Result<()> {
+            // SAFETY: android-activity keeps its own reference to the activity.
+            let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
+            let name = env.new_string("clipboard")?;
+            let cm = env
+                .call_method(
+                    &*activity,
+                    jni_str!("getSystemService"),
+                    jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
+                    &[JValue::Object(&name)],
+                )?
+                .l()?;
+            let label = env.new_string("The Construct")?;
+            let value = env.new_string(text)?;
+            let clip = env
+                .call_static_method(
+                    jni_str!("android/content/ClipData"),
+                    jni_str!("newPlainText"),
+                    jni_sig!("(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;"),
+                    &[JValue::Object(&label), JValue::Object(&value)],
+                )?
+                .l()?;
+            env.call_method(
+                &cm,
+                jni_str!("setPrimaryClip"),
+                jni_sig!("(Landroid/content/ClipData;)V"),
+                &[JValue::Object(&clip)],
+            )?;
+            Ok(())
+        };
+        Ok(run(env).map_err(|e| java_error(env, e)))
+    })
+    .map_err(|e| e.to_string())?
 }
 
 /// Opens `url` in the browser: an `ACTION_VIEW` intent from the activity.
@@ -411,30 +438,7 @@ fn window_insets(app: &AndroidApp) -> Option<[i32; 4]> {
     })
 }
 
-/// A page saying what went wrong, in place of the pod's home, with Try
-/// again (`refresh`: the pod is loaded again) and Sign in with another code.
-fn error_page(message: &str) -> Session {
-    let root: protocol::UiNode = serde_json::from_value(serde_json::json!({
-        "type": "core://Page", "id": "error", "root": { "type": "core://Column",
-        "padding_h_dp": 16, "padding_v_dp": 16, "spacing_dp": 12, "children": [
-            { "type": "core://Text", "value_expr": "Couldn't open the pod", "style": "Title" },
-            { "type": "core://Text", "value_expr": message, "style": "Body" },
-            { "type": "core://Button", "label": "Try again",
-              "on_click": { "intent": "action.device", "command": "refresh" } },
-            { "type": "core://Button", "label": "Sign in with another code",
-              "on_click": { "intent": "action.device", "command": "leave_pod" } }
-        ] } }))
-    .expect("a valid page");
-    Session::new(
-        "error",
-        root,
-        protocol::DataBundle::default(),
-        Viewport::PHONE,
-    )
-}
-
-/// The staging pod: the main app's default server.
-const DEFAULT_SERVER: &str = "https://the-construct-pod.fly.dev";
+use crate::pods::DEFAULT_SERVER;
 
 /// A `<string name="key">value</string>` of a SharedPreferences file.
 fn pref(xml: &str, key: &str) -> Option<String> {
@@ -644,124 +648,24 @@ fn keystore_decrypt(app: &AndroidApp, iv_b64: &str, ct_b64: &str) -> Result<Stri
     String::from_utf8(bytes).map_err(|e| e.to_string())
 }
 
-/// What this app keeps about its pod in its private files (`pod.json`):
-/// the server, the session token (none after leaving the pod) and the last
-/// pod code used, offered on the sign-in screen.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
-struct PodState {
-    url: String,
-    #[serde(default)]
-    token: Option<String>,
-    #[serde(default)]
-    last_code: Option<String>,
-}
-
-fn state_file(app: &AndroidApp) -> Option<PathBuf> {
-    Some(app.internal_data_path()?.join("pod.json"))
-}
-
-fn read_state(app: &AndroidApp) -> Option<PodState> {
-    let text = std::fs::read_to_string(state_file(app)?).ok()?;
-    match serde_json::from_str(&text) {
-        Ok(s) => Some(s),
-        Err(e) => {
-            log(&format!("pod.json: {e}"));
-            None
-        }
+/// This app's pod: kept in its private files (`pod.json`), else the main
+/// app's own sign-in, else the sign-in screen of the main app's server.
+fn pod_home(app: &AndroidApp) -> crate::pods::PodHome {
+    crate::pods::PodHome {
+        file: app.internal_data_path().map(|d| d.join("pod.json")),
+        server: main_app_server(app),
+        log,
     }
 }
 
-fn write_state(app: &AndroidApp, state: &PodState) {
-    let Some(f) = state_file(app) else {
-        return;
-    };
-    let _ = f.parent().map(std::fs::create_dir_all);
-    if let Err(e) = serde_json::to_string(state)
-        .map_err(|e| e.to_string())
-        .and_then(|t| std::fs::write(&f, t).map_err(|e| e.to_string()))
-    {
-        log(&format!("saving pod.json: {e}"));
-    }
-}
-
-/// The pod's home, live with this session; the sign-in screen when the pod
-/// no longer knows it.
-fn live(app: &AndroidApp, url: &str, token: &str) -> Session {
-    log(&format!("opening {url}"));
-    let started = std::time::Instant::now();
-    match crate::remote::PodClient::connect(url, token)
-        .and_then(|c| c.session("home", Viewport::PHONE))
-    {
-        Ok(s) => {
-            log(&format!(
-                "home loaded in {:.0} ms",
-                started.elapsed().as_secs_f64() * 1000.0
-            ));
-            s
-        }
-        Err(e) if e.contains("401") => {
-            log(&format!("the session is no longer valid: {e}"));
-            let mut state = read_state(app).unwrap_or_default();
-            state.url = url.to_owned();
-            state.token = None;
-            write_state(app, &state);
-            sign_in(url, state.last_code.as_deref())
-        }
-        Err(e) => {
-            log(&format!("couldn't open the pod: {e}"));
-            error_page(&e)
-        }
-    }
-}
-
-/// The pod's own sign-in screen (what it answers without a session: a pod
-/// code box, and a temporary pod), with the last code filled in.
-fn sign_in(url: &str, last_code: Option<&str>) -> Session {
-    log(&format!("signing in to {url}"));
-    match crate::remote::PodClient::connect(url, "")
-        .and_then(|c| c.session("home", Viewport::PHONE))
-    {
-        Ok(mut s) => {
-            if let Some(code) = last_code {
-                s.form.insert("pod_token".into(), code.to_owned());
-            }
-            s
-        }
-        Err(e) => {
-            log(&format!("couldn't reach the pod: {e}"));
-            error_page(&e)
-        }
-    }
-}
-
-/// The session to start with: the pod this app opened last (or its sign-in
-/// screen after leaving it), else the main app's own sign-in, else the
-/// sign-in screen of the main app's pod.
 fn pod_session(app: &AndroidApp) -> Session {
-    if let Some(state) = read_state(app) {
-        return match state.token.as_deref().filter(|t| !t.is_empty()) {
-            Some(token) => live(app, &state.url, token),
-            None => sign_in(&state.url, state.last_code.as_deref()),
-        };
-    }
-    match main_app_session(app) {
-        Ok(Some((url, token))) => {
-            write_state(
-                app,
-                &PodState {
-                    url: url.clone(),
-                    token: Some(token.clone()),
-                    last_code: Some(token.clone()),
-                },
-            );
-            live(app, &url, &token)
-        }
-        Ok(None) => sign_in(&main_app_server(app), None),
+    pod_home(app).start(|| match main_app_session(app) {
+        Ok(found) => found,
         Err(e) => {
             log(&e);
-            sign_in(&main_app_server(app), None)
+            None
         }
-    }
+    })
 }
 
 #[unsafe(no_mangle)]

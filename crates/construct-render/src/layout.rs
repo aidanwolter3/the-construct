@@ -173,6 +173,8 @@ struct Elem {
     /// A carousel's track: its pages, side by side, move left by the
     /// offset at `pager:<id>` (points).
     pager: Option<String>,
+    /// A text field's text: its field and maximum length.
+    field: Option<(String, Option<usize>)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -587,6 +589,7 @@ impl<'i> Build<'_, 'i> {
             scrolls: false,
             sticky: false,
             pager: None,
+            field: None,
         });
         self.elems.len() - 1
     }
@@ -618,6 +621,7 @@ impl<'i> Build<'_, 'i> {
             scrolls: false,
             sticky: false,
             pager: None,
+            field: None,
         });
         self.elems.len() - 1
     }
@@ -1166,7 +1170,7 @@ impl<'i> Build<'_, 'i> {
                 placeholder,
                 on_submit,
                 lines,
-                ..
+                max_length,
             } => {
                 let value = ctx.form.get(field).cloned().unwrap_or_default();
                 let (shown, color) = if value.is_empty() {
@@ -1184,50 +1188,12 @@ impl<'i> Build<'_, 'i> {
                     ..Default::default()
                 };
                 tstyle.flex_basis = length(0.0);
-                let mut kids =
-                    vec![self.text_leaf(tstyle, shown, type_for(TextStyle::Body), color, None)];
+                let text = self.text_leaf(tstyle, shown, type_for(TextStyle::Body), color, None);
+                // The session draws the caret, selection and handles over it.
+                self.elems[text].field = Some((field.clone(), max_length.map(|m| m as usize)));
+                let kids = vec![text];
                 let blank = value.trim().is_empty();
                 let focused = self.input.focused == Some(field.as_str());
-                if focused {
-                    // The caret, after the text typed so far.
-                    let at = if value.is_empty() {
-                        0.0
-                    } else {
-                        self.text
-                            .measure(
-                                &value,
-                                type_for(TextStyle::Body),
-                                None,
-                                self.input.viewport.scale,
-                            )
-                            .width
-                    };
-                    let caret = Style {
-                        position: Position::Absolute,
-                        inset: Rect {
-                            left: length(16.0 + at + 1.0),
-                            right: auto(),
-                            top: length(18.0),
-                            bottom: auto(),
-                        },
-                        size: Size {
-                            width: length(2.0),
-                            height: length(20.0),
-                        },
-                        ..Default::default()
-                    };
-                    kids.push(self.push(
-                        caret,
-                        Vec::new(),
-                        Paint::Quad {
-                            bg: theme.primary,
-                            border: None,
-                            radius: 1.0,
-                        },
-                        None,
-                        false,
-                    ));
-                }
                 let mut style = row(8, pad(16, 0), AlignItems::CENTER);
                 let extra = lines.map_or(0.0, |l| (l.saturating_sub(1)).min(4) as f32 * 20.0);
                 style.min_size.height = length(56.0 + extra);
@@ -2235,6 +2201,17 @@ impl Laid {
         let visible = intersects(rect, clip);
         if visible {
             self.paint(e, rect, l, clip, scene);
+            if let (Some((field, max_length)), Paint::Text { ty, .. }) = (&e.field, &e.paint) {
+                scene.fields.push(crate::scene::FieldBox {
+                    field: field.clone(),
+                    rect,
+                    clip,
+                    face: ty.face,
+                    size: ty.size,
+                    line_height: ty.line_height,
+                    max_length: *max_length,
+                });
+            }
         }
         let mut sem_index = parent_sem;
         if let Some(s) = &e.sem

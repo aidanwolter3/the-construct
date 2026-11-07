@@ -5,14 +5,16 @@
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
+use winit::event::StartCause;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::{Key, NamedKey};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
 use crate::gpu::{Gpu, Renderer};
+use crate::interact::CursorMove;
 use crate::interact::DragAxis;
-use crate::viewer::{Controller, Event};
+use crate::viewer::{Controller, EditKey, Event};
 
 /// Writes a line to the platform log (logcat on Android, stderr elsewhere).
 pub fn log(line: &str) {
@@ -46,9 +48,13 @@ pub trait Platform {
     fn gone(&self) -> bool {
         false
     }
-    /// The text on the clipboard, for the Paste bubble.
+    /// The text on the clipboard, for Paste.
     fn clipboard(&self) -> Option<String> {
-        None
+        clipboard_here()
+    }
+    /// Puts text on the clipboard (Copy, Cut).
+    fn set_clipboard(&self, text: &str) {
+        set_clipboard_here(text);
     }
     /// The session to show next ([`Reopen`]); `None` when the platform
     /// can't.
@@ -71,6 +77,59 @@ pub enum Reopen {
 }
 
 type Waker = Arc<dyn Fn() + Send + Sync>;
+
+/// The desktop's clipboard, through its command-line tools (`pbpaste` on
+/// macOS, `wl-paste`, `xclip` or `xsel` on Linux).
+pub fn clipboard_here() -> Option<String> {
+    let tries: &[&[&str]] = if cfg!(target_os = "macos") {
+        &[&["pbpaste"]]
+    } else {
+        &[
+            &["wl-paste", "--no-newline"],
+            &["xclip", "-selection", "clipboard", "-o"],
+            &["xsel", "--clipboard", "--output"],
+        ]
+    };
+    tries.iter().find_map(|cmd| {
+        let out = std::process::Command::new(cmd[0])
+            .args(&cmd[1..])
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    })
+}
+
+/// Puts text on the desktop's clipboard (`pbcopy`, `wl-copy`, `xclip`, `xsel`).
+pub fn set_clipboard_here(text: &str) {
+    use std::io::Write;
+    let tries: &[&[&str]] = if cfg!(target_os = "macos") {
+        &[&["pbcopy"]]
+    } else {
+        &[
+            &["wl-copy"],
+            &["xclip", "-selection", "clipboard"],
+            &["xsel", "--clipboard", "--input"],
+        ]
+    };
+    for cmd in tries {
+        let Ok(mut child) = std::process::Command::new(cmd[0])
+            .args(&cmd[1..])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        else {
+            continue;
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        if child.wait().is_ok_and(|s| s.success()) {
+            return;
+        }
+    }
+    log("no clipboard tool (pbcopy, wl-copy, xclip or xsel) took the text");
+}
 
 /// Opens an address with the desktop's opener (`open`, `xdg-open`, `start`).
 pub fn open_link_here(url: &str) {
@@ -111,6 +170,10 @@ struct Drag {
     pending: f32,
     /// When the finger went down.
     started: Instant,
+    /// It is moving an edit handle.
+    grabbing: bool,
+    /// It was held long enough to be a long press (which already ran).
+    long_pressed: bool,
 }
 
 impl Drag {
@@ -232,6 +295,8 @@ pub struct App {
     fling: Option<Fling>,
     /// Wakes the event loop (a session's images and answers arriving).
     waker: Option<Waker>,
+    /// Shift, Control, Command held on a hardware keyboard.
+    mods: ModifiersState,
 }
 
 impl App {
@@ -245,6 +310,21 @@ impl App {
             drag: None,
             fling: None,
             waker: None,
+            mods: ModifiersState::empty(),
+        }
+    }
+
+    fn clipboard(&self) -> Option<String> {
+        match &self.platform {
+            Some(p) => p.clipboard(),
+            None => clipboard_here(),
+        }
+    }
+
+    fn set_clipboard(&self, text: &str) {
+        match &self.platform {
+            Some(p) => p.set_clipboard(text),
+            None => set_clipboard_here(text),
         }
     }
 
@@ -464,14 +544,13 @@ impl App {
                         })
                     }
                     crate::interact::Effect::LeftPod => reopen = Some(Reopen::Left),
-                    crate::interact::Effect::Paste { field } => {
-                        match self.platform.as_ref().and_then(|p| p.clipboard()) {
-                            Some(text) => {
-                                self.controller.session.paste(field, &text);
-                            }
-                            None => log("nothing to paste"),
+                    crate::interact::Effect::Paste { field } => match self.clipboard() {
+                        Some(text) => {
+                            self.controller.session.paste(field, &text);
                         }
-                    }
+                        None => log("nothing to paste"),
+                    },
+                    crate::interact::Effect::Copy { text } => self.set_clipboard(text),
                     crate::interact::Effect::Device { command } if command == "refresh" => {
                         reopen = Some(Reopen::Reload)
                     }
@@ -508,6 +587,44 @@ impl ApplicationHandler for App {
         {
             s.window.request_redraw();
         }
+        // A finger held still long enough is a long press, while it is still
+        // down; dragging on from a word it selected moves the selection's end.
+        let mut wake = self.controller.session.next_wake();
+        let held = self
+            .drag
+            .as_ref()
+            .filter(|d| !d.dragging && !d.long_pressed && !d.grabbing)
+            .map(|d| {
+                (
+                    d.started + std::time::Duration::from_secs_f32(LONG_PRESS),
+                    d.last,
+                )
+            });
+        if let Some((due, at)) = held {
+            if Instant::now() >= due {
+                self.apply(Event::LongPress { x: at.0, y: at.1 });
+                let grabbing = self.controller.session.grab_selection_end();
+                if let Some(d) = self.drag.as_mut() {
+                    d.long_pressed = true;
+                    d.grabbing = grabbing;
+                }
+            } else {
+                wake = Some(wake.map_or(due, |w| w.min(due)));
+            }
+        }
+        event_loop.set_control_flow(match wake {
+            Some(t) => ControlFlow::WaitUntil(t),
+            None => ControlFlow::Wait,
+        });
+    }
+
+    /// A timer ran out (the caret blinks, a long press is due): draw again.
+    fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
+        if matches!(cause, StartCause::ResumeTimeReached { .. })
+            && let Some(s) = &self.surface
+        {
+            s.window.request_redraw();
+        }
     }
 
     /// An image arrived: draw again.
@@ -535,6 +652,7 @@ impl ApplicationHandler for App {
         let scale = self.scale();
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
             WindowEvent::Resized(size) => {
                 if let Some(s) = self.surface.as_mut() {
                     s.config.width = size.width.max(1);
@@ -591,6 +709,8 @@ impl ApplicationHandler for App {
                             }),
                             paging: false,
                             started: now,
+                            grabbing: self.controller.session.grab_at(p.0, p.1).is_some(),
+                            long_pressed: false,
                             pending: 0.0,
                         });
                     }
@@ -598,6 +718,19 @@ impl ApplicationHandler for App {
                         let Some(mut d) = self.drag.take() else {
                             return;
                         };
+                        // An edit handle follows the finger; after a long
+                        // press, nothing scrolls.
+                        if d.grabbing || d.long_pressed {
+                            if d.grabbing {
+                                self.controller.session.drag_grab(p.0, p.1);
+                                if let Some(s) = &self.surface {
+                                    s.window.request_redraw();
+                                }
+                            }
+                            d.last = p;
+                            self.drag = Some(d);
+                            return;
+                        }
                         let (tx, ty) = (p.0 - d.start.0, p.1 - d.start.1);
                         if !d.dragging && (tx.abs() > TOUCH_SLOP || ty.abs() > TOUCH_SLOP) {
                             d.dragging = true;
@@ -636,6 +769,15 @@ impl ApplicationHandler for App {
                         let Some(mut d) = self.drag.take() else {
                             return;
                         };
+                        if d.grabbing || d.long_pressed {
+                            if d.grabbing {
+                                self.controller.session.release_grab();
+                            }
+                            if let Some(s) = &self.surface {
+                                s.window.request_redraw();
+                            }
+                            return;
+                        }
                         if d.pending != 0.0 && self.scroll(d.start.0, d.start.1, d.pending) {
                             d.scrolled = true;
                         }
@@ -666,10 +808,6 @@ impl ApplicationHandler for App {
                             if let Some(s) = &self.surface {
                                 s.window.request_redraw();
                             }
-                        } else if !d.dragging
-                            && now.duration_since(d.started).as_secs_f32() >= LONG_PRESS
-                        {
-                            self.apply(Event::LongPress { x: p.0, y: p.1 });
                         } else if !d.dragging {
                             self.apply(Event::Tap { x: p.0, y: p.1 });
                         } else if !d.scrolled && tx.abs().max(ty.abs()) > SWIPE_DISTANCE {
@@ -698,6 +836,9 @@ impl ApplicationHandler for App {
                     }
                     TouchPhase::Cancelled => {
                         if let Some(d) = self.drag.take() {
+                            if d.grabbing {
+                                self.controller.session.release_grab();
+                            }
                             if d.moving_frame {
                                 self.controller.session.release_frame(0.0, 0.0);
                             }
@@ -728,6 +869,47 @@ impl ApplicationHandler for App {
                         self.controller.unfocus();
                     }
                     Key::Named(NamedKey::Backspace) => self.apply(Event::Backspace),
+                    Key::Named(NamedKey::Delete) => self.apply(Event::Edit(EditKey::Delete)),
+                    Key::Named(
+                        k @ (NamedKey::ArrowLeft
+                        | NamedKey::ArrowRight
+                        | NamedKey::Home
+                        | NamedKey::End),
+                    ) => {
+                        let to = match k {
+                            NamedKey::ArrowLeft => CursorMove::Left,
+                            NamedKey::ArrowRight => CursorMove::Right,
+                            NamedKey::Home => CursorMove::Home,
+                            _ => CursorMove::End,
+                        };
+                        self.apply(Event::Edit(EditKey::Move(to, self.mods.shift_key())));
+                    }
+                    Key::Character(c)
+                        if (self.mods.control_key() || self.mods.super_key())
+                            && self.controller.focused().is_some() =>
+                    {
+                        match c.to_lowercase().as_str() {
+                            "a" => self.apply(Event::Edit(EditKey::SelectAll)),
+                            "c" | "x" => {
+                                if let Some(t) =
+                                    self.controller.session.copy(c.eq_ignore_ascii_case("x"))
+                                {
+                                    self.set_clipboard(&t);
+                                }
+                                if let Some(s) = &self.surface {
+                                    s.window.request_redraw();
+                                }
+                            }
+                            "v" => {
+                                if let Some(t) = self.clipboard() {
+                                    self.apply(Event::Text(
+                                        t.trim_end_matches(['\n', '\r']).to_owned(),
+                                    ));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                     _ => {
                         if let Some(t) = event
                             .text

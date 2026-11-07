@@ -162,6 +162,20 @@ pub struct Scene {
     pub background: [f32; 4],
     pub draws: Vec<Draw>,
     pub semantics: Vec<SemanticNode>,
+    /// Where each visible text field's text is drawn, for editing it.
+    pub fields: Vec<FieldBox>,
+}
+
+/// A text field's text box: where its value is drawn and how.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldBox {
+    pub field: String,
+    pub rect: [f32; 4],
+    pub clip: [f32; 4],
+    pub face: Face,
+    pub size: f32,
+    pub line_height: f32,
+    pub max_length: Option<usize>,
 }
 
 impl Scene {

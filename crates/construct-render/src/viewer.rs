@@ -3,7 +3,7 @@
 //! desktop window (`crate::window`) and the Android activity feed their
 //! events through here, and tests synthesize them.
 
-use crate::interact::{Outcome, Session, Target};
+use crate::interact::{CursorMove, Outcome, Session, Target};
 use crate::layout::Viewport;
 
 /// A platform event, in logical points.
@@ -25,11 +25,22 @@ pub enum Event {
     Text(String),
     /// A character deleted from the focused field.
     Backspace,
+    /// An editing key in the focused field.
+    Edit(EditKey),
     /// System Back (Escape on desktop).
     Back,
     /// A swipe that started at a point and scrolled nothing: `swipe_up`,
     /// `swipe_down`, `swipe_left` or `swipe_right`.
     Swipe { x: f32, y: f32, kind: &'static str },
+}
+
+/// An editing key on a hardware keyboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditKey {
+    /// The cursor moves (with Shift, the selection grows).
+    Move(CursorMove, bool),
+    Delete,
+    SelectAll,
 }
 
 /// A session and the little UI state a window adds.
@@ -87,16 +98,23 @@ impl Controller {
                 self.session.scroll_by(Some(&Target::Point(x, y)), dy).ok()
             }
             Event::Text(t) => {
-                let field = self.session.focused.clone()?;
-                let mut v = self.session.form.get(&field).cloned().unwrap_or_default();
-                v.push_str(&t);
-                Some(self.session.type_text(&field, &v))
+                self.session.focused.as_ref()?;
+                Some(self.session.insert_text(&t))
             }
             Event::Backspace => {
-                let field = self.session.focused.clone()?;
-                let mut v = self.session.form.get(&field).cloned().unwrap_or_default();
-                v.pop();
-                Some(self.session.type_text(&field, &v))
+                self.session.focused.as_ref()?;
+                Some(self.session.backspace())
+            }
+            Event::Edit(k) => {
+                self.session.focused.as_ref()?;
+                match k {
+                    EditKey::Move(to, extend) => self.session.move_cursor(to, extend),
+                    EditKey::Delete => {
+                        self.session.delete_forward();
+                    }
+                    EditKey::SelectAll => self.session.select_all(),
+                }
+                None
             }
             Event::Swipe { x, y, kind } => self.session.gesture(x, y, kind).ok(),
             Event::Back => {

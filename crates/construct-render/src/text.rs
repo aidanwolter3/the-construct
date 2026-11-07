@@ -3,7 +3,7 @@
 //! machine: the pod, CI and each client.
 
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Weight, fontdb};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::style::{Face, Type};
 
@@ -19,6 +19,38 @@ const SYMBOLS: &[u8] = include_bytes!("../fonts/DejaVuSans-Symbols.ttf");
 pub struct Measured {
     pub width: f32,
     pub height: f32,
+}
+
+/// A place a caret can stand: a byte offset in the text and where it is
+/// drawn (points from the text's top left).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CaretStop {
+    pub byte: usize,
+    pub x: f32,
+    pub top: f32,
+    pub height: f32,
+}
+
+/// The stop nearest a point (points from the text's top left): on the line
+/// the point is on (the first or last when outside), the closest x.
+pub fn nearest_stop(stops: &[CaretStop], x: f32, y: f32) -> Option<CaretStop> {
+    let line_top = stops.iter().map(|s| s.top).fold(None::<f32>, |best, top| {
+        let s = stops.iter().find(|s| s.top == top).expect("from stops");
+        let inside = y >= top && y < top + s.height;
+        match best {
+            _ if inside => Some(top),
+            Some(b) => {
+                let d = |t: f32| (y - (t + s.height / 2.0)).abs();
+                Some(if d(top) < d(b) { top } else { b })
+            }
+            None => Some(top),
+        }
+    })?;
+    stops
+        .iter()
+        .filter(|s| s.top == line_top)
+        .min_by(|a, b| (a.x - x).abs().total_cmp(&(b.x - x).abs()))
+        .copied()
 }
 
 /// Fonts, shaping and a measurement cache. Measuring happens at the frame's
@@ -88,6 +120,92 @@ impl TextEngine {
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.fonts, false);
         buffer
+    }
+
+    /// Where a caret can stand in `text` laid out as it is drawn (wrapped
+    /// at `max_width` points): one stop per character boundary, in byte
+    /// order, with its x, its line's top and height (points, from the text's
+    /// top left). A boundary where a line wraps stands at the start of the
+    /// next line, as editors show it.
+    pub fn caret_stops(
+        &mut self,
+        text: &str,
+        ty: Type,
+        max_width: Option<f32>,
+        scale: f32,
+    ) -> Vec<CaretStop> {
+        let buffer = self.buffer(text, ty, max_width, scale);
+        // Byte offset of each paragraph (`\n`-separated line) in `text`.
+        let mut para = vec![0usize];
+        for (i, c) in text.char_indices() {
+            if c == '\n' {
+                para.push(i + 1);
+            }
+        }
+        let mut at: BTreeMap<usize, CaretStop> = BTreeMap::new();
+        let put = |at: &mut BTreeMap<usize, CaretStop>,
+                   byte: usize,
+                   x: f32,
+                   top: f32,
+                   h: f32,
+                   start_of_line: bool| {
+            let stop = CaretStop {
+                byte,
+                x: x / scale,
+                top: top / scale,
+                height: h / scale,
+            };
+            // A line's start wins over the previous line's end.
+            if start_of_line || !at.contains_key(&byte) {
+                at.insert(byte, stop);
+            }
+        };
+        let mut last_line = (0.0, ty.line_height * scale);
+        for run in buffer.layout_runs() {
+            let base = para.get(run.line_i).copied().unwrap_or(0);
+            last_line = (run.line_top, run.line_height);
+            let mut first = true;
+            for g in run.glyphs {
+                put(
+                    &mut at,
+                    base + g.start,
+                    g.x,
+                    run.line_top,
+                    run.line_height,
+                    first,
+                );
+                first = false;
+                put(
+                    &mut at,
+                    base + g.end,
+                    g.x + g.w,
+                    run.line_top,
+                    run.line_height,
+                    false,
+                );
+            }
+            if run.glyphs.is_empty() {
+                put(&mut at, base, 0.0, run.line_top, run.line_height, true);
+            }
+        }
+        if at.is_empty() {
+            put(&mut at, 0, 0.0, last_line.0, last_line.1, true);
+        }
+        // Every character boundary, standing where the nearest laid-out one
+        // before it does (inside a ligature or cluster).
+        let mut out = Vec::new();
+        let mut prev = *at.values().next().expect("one stop at least");
+        let bounds = text
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain(std::iter::once(text.len()));
+        for b in bounds {
+            if let Some(s) = at.get(&b) {
+                prev = *s;
+            }
+            out.push(CaretStop { byte: b, ..prev });
+        }
+        out
     }
 
     /// The size `text` takes, wrapped at `max_width` points (none: one line

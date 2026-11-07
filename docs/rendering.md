@@ -73,13 +73,16 @@ pins where it rests, so it never moves (the shared UI moves it up to the top fir
 ## The desktop viewer
 
 ```bash
-cargo run -p construct-render --features viewer --bin construct-viewer                      # the bundled demo
-cargo run -p construct-render --features viewer --bin construct-viewer -- layout.json       # {"layout", "data"}
-CONSTRUCT_POD_TOKEN=… cargo run -p construct-render --features viewer --bin construct-viewer -- \
-  --pod http://127.0.0.1:8080 --layout home                                                 # live
+cargo run --release -p construct-render --features viewer --bin construct-viewer               # your pod
+cargo run --release -p construct-render --features viewer --bin construct-viewer -- layout.json  # a file
+cargo run --release -p construct-render --features viewer --bin construct-viewer -- --demo       # the demo
 ```
 
-Click, scroll, type into a focused field, Escape for Back; each interaction's effects are logged. It draws with
+With no file it opens your pod as the phone app does (`pods`, shared with Android): the pod opened last, its
+session kept in `pod.json` (`~/Library/Application Support/The Construct` on macOS, else
+`$XDG_CONFIG_HOME/the-construct` or `~/.config/the-construct`); without one, the pod's sign-in screen (staging, or
+`CONSTRUCT_POD_URL`). Click, scroll, type, Escape for Back; each interaction's effects are logged. Copy and paste use
+the system clipboard through `pbcopy`/`pbpaste` on macOS and `wl-copy`, `xclip` or `xsel` on Linux. It draws with
 Metal on macOS and Vulkan (or GL) on Linux; on a headless Linux box, `Xvfb` plus Mesa's `mesa-vulkan-drivers`
 (lavapipe) is enough.
 
@@ -144,10 +147,13 @@ shared UI builds (`DeviceData`) is built from the pod the same way: `local://con
 
 Windows place a laid-out frame again on scroll without laying it out (`Laid::emit`), so dragging is cheap. A drag
 that scrolls flings on release and slows down each frame; one that scrolls nothing, past 48 points, is a swipe that
-runs the `core://Gesture` under its start (`on_swipe_*`). A focused text field shows a caret and a primary outline. Typing adds at the end and Backspace removes the last
-character; there is no cursor moving or selection, and the keyboard's own paste and suggestions don't reach the field
-(a NativeActivity gets key events, not Android's text input). A long press on a field, or a tap on the field being
-typed into, shows a Paste bubble that adds the clipboard's text (`ClipboardManager` through the SDK).
+runs the `core://Gesture` under its start (`on_swipe_*`). Text fields are edited by the engine itself (a NativeActivity gets key events, not Android's text input, so the
+keyboard's own paste and suggestions don't reach them), as Android's own fields behave: a tap puts the cursor where
+it lands; the cursor blinks (500 ms); a long press or a double tap selects the word there, with handles to drag and a
+Cut / Copy / Paste / Select all bar over it (dragging on from a long press moves the selection's end); a tap on the
+cursor shows its handle and the bar (Paste, Select all). Typing and pasting replace the selection and are cut to the
+field's `max_length`. With a hardware keyboard: arrows, Home and End (Shift selects), Delete and Ctrl or Command+A, C,
+X and V. On Android the clipboard is `ClipboardManager` through the SDK.
 `pod_shots` (feature `remote`) drives a live session from a script and writes PNGs, to compare with the simulator's
 live mode.
 
