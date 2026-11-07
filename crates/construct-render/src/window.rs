@@ -46,6 +46,10 @@ pub trait Platform {
     fn gone(&self) -> bool {
         false
     }
+    /// The text on the clipboard, for the Paste bubble.
+    fn clipboard(&self) -> Option<String> {
+        None
+    }
     /// The session to show next ([`Reopen`]); `None` when the platform
     /// can't.
     fn reopen(&self, _how: Reopen) -> Option<crate::interact::Session> {
@@ -105,6 +109,8 @@ struct Drag {
     paging: bool,
     /// Scrolling not applied yet: applied once per frame, in `draw`.
     pending: f32,
+    /// When the finger went down.
+    started: Instant,
 }
 
 impl Drag {
@@ -201,6 +207,9 @@ impl Fling {
 
 /// Movement before a touch counts as a drag (points).
 const TOUCH_SLOP: f32 = 8.0;
+/// A touch held this long without moving is a long press (Android's
+/// `ViewConfiguration.getLongPressTimeout()`).
+const LONG_PRESS: f32 = 0.5;
 /// Movement for a drag that scrolled nothing to count as a swipe (points).
 const SWIPE_DISTANCE: f32 = 48.0;
 /// Slowest and fastest flings (points per second, Android's
@@ -436,7 +445,7 @@ impl App {
     }
 
     fn apply(&mut self, e: Event) {
-        let tap = matches!(e, Event::Tap { .. });
+        let tap = matches!(e, Event::Tap { .. } | Event::LongPress { .. });
         if let Some(out) = self.controller.handle(e) {
             if let Ok(json) = serde_json::to_string(&out.effects) {
                 log(&json);
@@ -455,6 +464,14 @@ impl App {
                         })
                     }
                     crate::interact::Effect::LeftPod => reopen = Some(Reopen::Left),
+                    crate::interact::Effect::Paste { field } => {
+                        match self.platform.as_ref().and_then(|p| p.clipboard()) {
+                            Some(text) => {
+                                self.controller.session.paste(field, &text);
+                            }
+                            None => log("nothing to paste"),
+                        }
+                    }
                     crate::interact::Effect::Device { command } if command == "refresh" => {
                         reopen = Some(Reopen::Reload)
                     }
@@ -573,6 +590,7 @@ impl ApplicationHandler for App {
                                 (id, at)
                             }),
                             paging: false,
+                            started: now,
                             pending: 0.0,
                         });
                     }
@@ -648,6 +666,10 @@ impl ApplicationHandler for App {
                             if let Some(s) = &self.surface {
                                 s.window.request_redraw();
                             }
+                        } else if !d.dragging
+                            && now.duration_since(d.started).as_secs_f32() >= LONG_PRESS
+                        {
+                            self.apply(Event::LongPress { x: p.0, y: p.1 });
                         } else if !d.dragging {
                             self.apply(Event::Tap { x: p.0, y: p.1 });
                         } else if !d.scrolled && tx.abs().max(ty.abs()) > SWIPE_DISTANCE {

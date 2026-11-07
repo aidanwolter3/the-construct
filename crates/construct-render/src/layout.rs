@@ -782,12 +782,14 @@ impl<'i> Build<'_, 'i> {
                 padding_dp,
                 children,
             } => {
+                // Children 8 points apart, as the shared UI spaces them; a
+                // horizontal one wraps its children onto more lines (`FlowRow`).
                 let p = pad(*padding_dp, *padding_dp);
                 match orientation {
                     Orientation::Vertical => {
                         let kids = self.children(children, b, Axis::Column);
                         self.push(
-                            column(0, p, AlignItems::FLEX_START),
+                            column(8, p, AlignItems::FLEX_START),
                             kids,
                             Paint::None,
                             None,
@@ -796,13 +798,10 @@ impl<'i> Build<'_, 'i> {
                     }
                     Orientation::Horizontal => {
                         let kids = self.children(children, b, Axis::Row);
-                        self.push(
-                            row(0, p, AlignItems::CENTER),
-                            kids,
-                            Paint::None,
-                            None,
-                            false,
-                        )
+                        let mut style = row(8, p, AlignItems::CENTER);
+                        style.flex_wrap = FlexWrap::Wrap;
+                        style.gap.height = length(8.0);
+                        self.push(style, kids, Paint::None, None, false)
                     }
                 }
             }

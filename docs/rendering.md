@@ -48,7 +48,8 @@ path from the root (`root/0/2/i3/0`, `i3` being a list's fourth item). Bounds ar
 ## Coverage
 
 Drawn like the app: Page, Workspace (title and slots), Column, Row, Container, Box, Text (styles, `count`), Button,
-IconButton (`active`), Chip, Badge, Spacer, Divider, Conditional, Tappable, Gesture (tap), Scroll (clipped,
+IconButton (`active`), Chip, Badge, Spacer, Divider, Conditional, Container (children 8 points apart; horizontal
+ones wrap), Tappable, Gesture (tap), Scroll (clipped,
 offsets), List (`where`, `filter`, `group_by`, `columns`, `focus`, `indent`, `empty_text`), ChoiceChips, TextField
 (with its Send button beside it when it has `on_submit`), Switch, Progress, Dock, Layout (inline, from the layouts
 given), Carousel (pages side by side, an "n/N" badge and dots; a sideways drag pages it, snapping to a page), and
@@ -143,7 +144,10 @@ shared UI builds (`DeviceData`) is built from the pod the same way: `local://con
 
 Windows place a laid-out frame again on scroll without laying it out (`Laid::emit`), so dragging is cheap. A drag
 that scrolls flings on release and slows down each frame; one that scrolls nothing, past 48 points, is a swipe that
-runs the `core://Gesture` under its start (`on_swipe_*`). A focused text field shows a caret and a primary outline.
+runs the `core://Gesture` under its start (`on_swipe_*`). A focused text field shows a caret and a primary outline. Typing adds at the end and Backspace removes the last
+character; there is no cursor moving or selection, and the keyboard's own paste and suggestions don't reach the field
+(a NativeActivity gets key events, not Android's text input). A long press on a field, or a tap on the field being
+typed into, shows a Paste bubble that adds the clipboard's text (`ClipboardManager` through the SDK).
 `pod_shots` (feature `remote`) drives a live session from a script and writes PNGs, to compare with the simulator's
 live mode.
 

@@ -130,6 +130,10 @@ impl crate::window::Platform for Android {
         activity_gone(&self.0)
     }
 
+    fn clipboard(&self) -> Option<String> {
+        clipboard_text(&self.0)
+    }
+
     fn reopen(&self, how: crate::window::Reopen) -> Option<Session> {
         use crate::window::Reopen;
         let app = &self.0;
@@ -187,6 +191,87 @@ fn activity_gone(app: &AndroidApp) -> bool {
         }))
     })
     .unwrap_or(false)
+}
+
+/// The clipboard's text (`ClipboardManager.getPrimaryClip()`'s first item,
+/// as text). Android lets the app in front read it.
+fn clipboard_text(app: &AndroidApp) -> Option<String> {
+    use jni::objects::{JObject, JString, JValue};
+    use jni::{jni_sig, jni_str};
+    // SAFETY: the VM pointer is valid for the life of the process.
+    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    let activity = app.activity_as_ptr() as jni::sys::jobject;
+    vm.attach_current_thread(|env| -> jni::errors::Result<Option<String>> {
+        let run = |env: &mut jni::Env| -> jni::errors::Result<Option<String>> {
+            // SAFETY: android-activity keeps its own reference to the activity.
+            let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
+            let name = env.new_string("clipboard")?;
+            let cm = env
+                .call_method(
+                    &*activity,
+                    jni_str!("getSystemService"),
+                    jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
+                    &[JValue::Object(&name)],
+                )?
+                .l()?;
+            if cm.is_null() {
+                return Ok(None);
+            }
+            let clip = env
+                .call_method(
+                    &cm,
+                    jni_str!("getPrimaryClip"),
+                    jni_sig!("()Landroid/content/ClipData;"),
+                    &[],
+                )?
+                .l()?;
+            if clip.is_null() {
+                return Ok(None);
+            }
+            let count = env
+                .call_method(&clip, jni_str!("getItemCount"), jni_sig!("()I"), &[])?
+                .i()?;
+            if count < 1 {
+                return Ok(None);
+            }
+            let item = env
+                .call_method(
+                    &clip,
+                    jni_str!("getItemAt"),
+                    jni_sig!("(I)Landroid/content/ClipData$Item;"),
+                    &[JValue::Int(0)],
+                )?
+                .l()?;
+            let text = env
+                .call_method(
+                    &item,
+                    jni_str!("coerceToText"),
+                    jni_sig!("(Landroid/content/Context;)Ljava/lang/CharSequence;"),
+                    &[JValue::Object(&activity)],
+                )?
+                .l()?;
+            if text.is_null() {
+                return Ok(None);
+            }
+            let s = env
+                .call_method(
+                    &text,
+                    jni_str!("toString"),
+                    jni_sig!("()Ljava/lang/String;"),
+                    &[],
+                )?
+                .l()?;
+            let s = env.cast_local::<JString>(s)?;
+            Ok(Some(s.try_to_string(env)?))
+        };
+        Ok(run(env).unwrap_or_else(|e| {
+            log(&format!("clipboard: {}", java_error(env, e)));
+            None
+        }))
+    })
+    .ok()
+    .flatten()
+    .filter(|t| !t.is_empty())
 }
 
 /// Opens `url` in the browser: an `ACTION_VIEW` intent from the activity.

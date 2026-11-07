@@ -85,6 +85,11 @@ pub enum Effect {
     },
     /// `leave_pod`: the platform forgets the session and shows sign-in.
     LeftPod,
+    /// The Paste bubble was tapped: the platform reads its clipboard and
+    /// [`Session::paste`]s it into this field.
+    Paste {
+        field: String,
+    },
     /// Would go to the pod or the platform; a preview doesn't send it.
     NotSent {
         intent: Value,
@@ -367,6 +372,9 @@ pub struct Session {
     /// Carousels sliding to a page after a swipe: since when, from and to
     /// what offset, and the page.
     pager_anims: BTreeMap<String, (Instant, f32, f32, usize)>,
+    /// The focused field a Paste bubble is shown over (a long press on it,
+    /// or a tap on it while typing).
+    paste_for: Option<String>,
 }
 
 impl Session {
@@ -392,7 +400,38 @@ impl Session {
             frame_offset: 0.0,
             frame_settle: None,
             pager_anims: BTreeMap::new(),
+            paste_for: None,
         }
+    }
+
+    /// Text pasted into a field, after what it holds (the platform's
+    /// clipboard, from [`Effect::Paste`]).
+    pub fn paste(&mut self, field: &str, text: &str) -> Outcome {
+        let mut v = self.form.get(field).cloned().unwrap_or_default();
+        v.push_str(text.trim_end_matches(['\n', '\r']));
+        self.paste_for = None;
+        self.focused = Some(field.to_owned());
+        self.type_text(field, &v)
+    }
+
+    /// A long press at a point: on a text field, it is focused with a Paste
+    /// bubble; elsewhere the `core://Gesture` there runs its `long_press`.
+    pub fn long_press(&mut self, x: f32, y: f32) -> Result<Outcome, String> {
+        let hit = self.find(&Target::Point(x, y))?;
+        if let Some(n) = &hit
+            && let Some(Tap::Focus { field }) = &n.tap
+        {
+            self.focused = Some(field.clone());
+            self.paste_for = Some(field.clone());
+            self.invalidate();
+            return Ok(Outcome {
+                node: hit.clone(),
+                effects: vec![Effect::Focused {
+                    field: field.clone(),
+                }],
+            });
+        }
+        self.gesture(x, y, "long_press")
     }
 
     /// The carousel under a point, if it has more than one page.
@@ -1143,8 +1182,69 @@ impl Session {
                 self.images.request(&i.url);
             }
         }
+        self.paste_bubble(&mut scene, &theme);
         self.scene = Some(scene);
         Ok(self.scene.as_ref().expect("just built"))
+    }
+
+    /// The Paste bubble over the field it was offered for, as Android draws
+    /// it: above the field (below when there is no room), on top of
+    /// everything.
+    fn paste_bubble(&mut self, scene: &mut Scene, theme: &crate::style::Theme) {
+        let Some(field) = self.paste_for.clone() else {
+            return;
+        };
+        if self.focused.as_ref() != Some(&field) {
+            self.paste_for = None;
+            return;
+        }
+        let Some(f) = scene.find_node(&format!("field:{field}")).map(|n| n.bounds) else {
+            return;
+        };
+        let ty = crate::style::type_for(protocol::TextStyle::Label);
+        let label = "Paste";
+        let m = self
+            .builder
+            .text
+            .measure(label, ty, None, self.viewport.scale);
+        let (w, h) = (m.width + 32.0, 40.0);
+        let x = (f[0] + 8.0).min(self.viewport.width - w - 8.0).max(8.0);
+        let y = if f[1] - h - 6.0 >= self.insets[0] {
+            f[1] - h - 6.0
+        } else {
+            f[1] + f[3] + 6.0
+        };
+        let all = [0.0, 0.0, self.viewport.width, self.viewport.height];
+        let mut q = QuadInstance::fill([x, y, w, h], theme.on_background, h / 2.0).shadow(
+            Rgba([0.0, 0.0, 0.0, 0.25]),
+            [0.0, 2.0],
+            6.0,
+            0.0,
+        );
+        q.clip = all;
+        scene.draws.push(Draw::Quad(q));
+        scene.draws.push(Draw::Text(crate::scene::TextRun {
+            text: label.into(),
+            face: ty.face,
+            size: ty.size,
+            line_height: ty.line_height,
+            color: theme.background,
+            rect: [x + 16.0, y + (h - m.height) / 2.0, m.width, m.height],
+            clip: all,
+        }));
+        scene.semantics.push(SemanticNode {
+            id: "paste".into(),
+            node_type: "paste".into(),
+            bounds: [x, y, w, h],
+            text_content: Some(label.into()),
+            interactive: true,
+            tap: Some(Tap::Intent {
+                intent: json!({ "intent": "form.paste", "field": field }),
+            }),
+            selected: false,
+            parent: None,
+            gestures: BTreeMap::new(),
+        });
     }
 
     /// Draws the current frame on the CPU.
@@ -1226,7 +1326,11 @@ impl Session {
         let Some(node) = self.find(target)? else {
             return Err(format!("nothing at {target:?}"));
         };
-        // A tap anywhere but a field ends typing (the field's tap sets it again).
+        // A tap anywhere but a field ends typing (the field's tap sets it
+        // again); a tap on the field being typed into offers Paste.
+        let again =
+            matches!(&node.tap, Some(Tap::Focus { field }) if self.focused.as_ref() == Some(field));
+        self.paste_for = None;
         self.focused = None;
         let effects = match node.tap.clone() {
             None => vec![Effect::Nothing],
@@ -1236,6 +1340,9 @@ impl Session {
             }
             Some(Tap::Focus { field }) => {
                 self.focused = Some(field.clone());
+                if again {
+                    self.paste_for = Some(field.clone());
+                }
                 vec![Effect::Focused { field }]
             }
             Some(Tap::Intent { intent }) => match self.bind_form(&intent) {
@@ -1398,6 +1505,14 @@ impl Session {
                     entity_uri: uri,
                     fields,
                 });
+            }
+            "form.paste" => {
+                if let Some(f) = intent["field"].as_str() {
+                    self.focused = Some(f.to_owned());
+                    out.push(Effect::Paste {
+                        field: f.to_owned(),
+                    });
+                }
             }
             "form.clear" => {
                 // The session's own step after a field's Send.

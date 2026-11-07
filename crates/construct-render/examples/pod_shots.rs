@@ -3,7 +3,7 @@
 //! drawn on the CPU at 390 × 844 @3, as the simulator's phone, to compare
 //! with `:desktopApp:simulate -PbaseUrl`. Script steps, `;`-separated:
 //! `open <layout>`, `present <layout> <Sheet|Panel|Overlay> [edge]`, `tap <text or id>`, `type <field> <text>`, `scroll <dy>`,
-//! `back`, `wait <ms>` (images keep loading meanwhile), `shot <name>`, `images` (the frame's images).
+//! `back`, `wait <ms>` (images keep loading meanwhile), `shot <name>`, `press <id or text>` (a long press), `images` (the frame's images).
 
 use construct_render::Viewport;
 use construct_render::interact::Target;
@@ -71,6 +71,19 @@ fn main() {
                 std::fs::write(&path, construct_render::encode::png(&img)).unwrap();
                 println!("{step}: {path}");
                 Ok(Vec::new())
+            }
+            "press" => {
+                // A long press on a node (by id or text): its centre.
+                let n = s
+                    .scene()
+                    .ok()
+                    .and_then(|sc| sc.find_node(arg).or_else(|| sc.find_text(arg)).cloned());
+                match n {
+                    Some(n) => s
+                        .long_press(n.bounds[0] + n.bounds[2] / 2.0, n.bounds[1] + n.bounds[3] / 2.0)
+                        .map(|o| o.effects),
+                    None => Err(format!("nothing called {arg}")),
+                }
             }
             "images" => {
                 // The images the frame draws: url, box, whether loaded.

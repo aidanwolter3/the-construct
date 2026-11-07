@@ -396,3 +396,35 @@ fn signing_in_answers_the_session_and_the_code_to_remember() {
         }]
     );
 }
+
+#[test]
+fn a_long_press_on_a_field_offers_paste() {
+    let root = json!({ "type": "core://Column", "children": [
+        { "type": "core://Text", "style": "Body", "value_expr": "Enter your pod code" },
+        { "type": "core://TextField", "field": "pod_token", "placeholder": "Pod code" } ] });
+    let (mut s, _) = session(root, json!({}), false);
+    let f = s
+        .scene()
+        .unwrap()
+        .find_node("field:pod_token")
+        .unwrap()
+        .bounds;
+    s.long_press(f[0] + 20.0, f[1] + 20.0).unwrap();
+    assert_eq!(s.focused.as_deref(), Some("pod_token"));
+    let out = s.tap(&Target::Id("paste".into())).unwrap();
+    assert_eq!(
+        out.effects,
+        vec![Effect::Paste {
+            field: "pod_token".into()
+        }]
+    );
+    // The platform pastes its clipboard; the field keeps the focus.
+    s.paste("pod_token", "cpod_abc\n");
+    assert_eq!(s.form["pod_token"], "cpod_abc");
+    assert!(s.scene().unwrap().find_node("paste").is_none());
+    // A tap on the field being typed into offers it too; a tap elsewhere doesn't.
+    s.tap(&Target::Id("field:pod_token".into())).unwrap();
+    assert!(s.scene().unwrap().find_node("paste").is_some());
+    s.tap(&Target::Text("Enter your pod code".into())).unwrap();
+    assert!(s.scene().unwrap().find_node("paste").is_none());
+}

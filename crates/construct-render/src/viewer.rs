@@ -17,6 +17,8 @@ pub enum Event {
     },
     /// A primary click or tap ended at a point.
     Tap { x: f32, y: f32 },
+    /// A touch held still at a point (a text field offers Paste).
+    LongPress { x: f32, y: f32 },
     /// A wheel or drag scrolled by `dy` points (positive: content moves up).
     Scroll { x: f32, y: f32, dy: f32 },
     /// Text typed into the focused field.
@@ -80,6 +82,7 @@ impl Controller {
                 None
             }
             Event::Tap { x, y } => self.session.tap(&Target::Point(x, y)).ok(),
+            Event::LongPress { x, y } => self.session.long_press(x, y).ok(),
             Event::Scroll { x, y, dy } => {
                 self.session.scroll_by(Some(&Target::Point(x, y)), dy).ok()
             }
