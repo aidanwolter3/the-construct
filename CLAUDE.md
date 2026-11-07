@@ -23,7 +23,8 @@ issues. `docs/history/` is archived; don't treat it as current.
 - `crates/client-core` the engine; `crates/client-ffi` UniFFI (Kotlin bindings in
   `app/shared/src/jvmCommonMain`); `app/shared/src/commonMain` the shared UI.
 - `crates/construct-render` the Rust rendering engine (taffy, wgpu, a CPU rasterizer): the pod's MCP layout
-  previews, `construct-viewer` and the NativeActivity prototype ([docs/rendering.md](docs/rendering.md)).
+  previews, `construct-viewer` (desktop) and the NativeActivity prototype, which `scripts/android_native.sh` installs
+  as The Construct itself ([docs/rendering.md](docs/rendering.md)).
 - `fake-pixelfed/` the fake upstream (primary test target); `crates/e2e` the end-to-end suite.
 - `crates/app-*/layouts/<app>/NNNN.json` layout versions; `crates/protocol/features/` the named vocabulary (plumbing);
   `crates/pod-core/components/<name>/NNNN.json` the server components (porcelain, decision `plumbing-and-porcelain`);

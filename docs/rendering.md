@@ -27,9 +27,13 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 | `scene` | `QuadInstance` (the GPU vertex layout), `TextRun`, `SemanticNode`, `hit_test`, `find_node`, `find_text` |
 | `cpu` | The CPU rasterizer: `sd_rounded_box` and `shade` (the shader's maths), 8-bit premultiplied target, glyphs placed as glyphon places them |
 | `gpu` | `Renderer` (any texture view), `HeadlessSurface` (offscreen + readback); feature `gpu` (default) |
-| `interact` | `Session`: a layout with form values, scroll offsets and a back stack; `tap`, `scroll_by`, `type_text`, `dispatch`; writes through its `Loader` |
-| `viewer` | `Controller`: platform events (resize, tap, wheel, text, Back) applied to a session; what windows feed |
-| `window` | winit + wgpu surface (feature `window`); used by `construct-viewer` and Android |
+| `interact` | `Session`: a layout with form values, scroll offsets and a back stack; `tap`, `long_press`, `scroll_by`, `type_text`, `dispatch`; text editing (cursor, selection, handles, the edit bar); confirm dialogs; sheet drags and carousel paging; writes through its `Loader` |
+| `text` | Fonts, shaping and measuring (cosmic-text); caret stops for editing |
+| `images` | Images by URL, cut to their box (on a background thread for the GPU) |
+| `viewer` | `Controller`: platform events (resize, tap, long press, wheel, text, editing keys, Back) applied to a session; what windows feed |
+| `window` | winit + wgpu surface (feature `window`): touch (drags, flings, swipes, long presses, handles), the clipboard, the `Platform` a window runs on; used by `construct-viewer` and Android |
+| `remote` | `PodClient`: a live session over a pod (feature `remote`) |
+| `pods` | A device's own pod: its saved session, the pod's sign-in screen, leaving and reloading (features `remote` and `window`); shared by Android and the desktop viewer |
 | `android` | `android_main` for the NativeActivity (Android builds with `window`) |
 
 The pod builds the crate with `default-features = false`: no wgpu, CPU only.
@@ -177,6 +181,9 @@ device state and answers the same, with the interaction's effects; a tap that wo
 - `gpu`: GPU frames against the same goldens (0.2%, 24 levels), and one quad pixel for pixel. Without an adapter they
   skip; `CONSTRUCT_REQUIRE_GPU=1` (CI, with lavapipe) fails instead.
 - `interaction`: hit-testing, taps, `action.local.set`, opening and Back, scrolling, resize reflow, window events.
+- `writes`: optimistic changes and creates (sent, refused and undone), form binding, notifications, links, dragging a
+  sheet closed, carousel paging, confirm dialogs, signing in, and editing text (cursor, selection, the edit bar,
+  `max_length`).
 
 The MCP round trip is `mcp::agents_preview_a_layout_and_tap_it` in the server's integration tests.
 

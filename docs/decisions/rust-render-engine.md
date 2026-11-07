@@ -26,9 +26,9 @@ Decision: a Rust rendering engine, crate `construct-render`, drawing the plumbin
   per fragment, glyphon draws text) and a CPU rasterizer (always built) evaluating the same function in device
   pixels. The distance is computed in pixels, so the edge ramp is one pixel at any scale without `fwidth`, and
   both paths agree to the pixel on quads. CPU frames are the goldens; GPU frames must match them within 0.2%.
-- **Interaction** (`Session`): device state only, as the app keeps it: form values, chips, `action.local.set`,
-  opening a layout onto a back stack, scrolling. Writes go through the session's `Loader`; without one that sends
-  (agent previews) they are reported, never sent. Sign-in is never sent.
+- **Interaction** (`Session`): device state as the app keeps it: form values, chips, `action.local.set`, opening a
+  layout onto a back stack, scrolling, `action.confirm`'s dialog. Writes and sign-in (`action.auth.session`) go
+  through the session's `Loader`; without one that sends (agent previews) they are reported, never sent.
 - **Agents first**: the pod's MCP tools `render_layout_preview` and `dispatch_virtual_interaction` fetch a layout
   as a client does (`GET /v1/workspaces/<id>` through the pod's router, as the owner), draw it on the CPU and answer
   a lossless WebP with the semantic tree. A preview's state is kept in memory (the pod's last four).
@@ -43,9 +43,13 @@ Icons are the shared UI's own Material path data (`icons.rs`, generated from `Co
 The viewer and the APK can run a pod live (feature `remote`): layouts, screens, their data and images are fetched
 as they open, and taps that write (optimistic changes, creates, marking notifications read) are applied at once and
 POSTed in the background, undone if the pod refuses them. The APK can install as the main Android app's package and
-read its saved session (`scripts/android_native.sh`), so trying the engine keeps the user signed in.
+read its saved session (`scripts/android_native.sh`), so trying the engine keeps the user signed in. Both keep the
+pod they opened (`pods`): without a session they show the pod's own sign-in screen, and Leave pod goes back to it.
+A NativeActivity gets key events, not Android's text input, so the engine edits text fields itself, as Android's
+own fields behave (cursor, selection handles, Cut / Copy / Paste / Select all, the system clipboard).
 
-Not yet: a pinned version is not shown and dates are not formatted. The native window and
+Not yet: a pinned version is not shown, dates are not formatted, and the keyboard's suggestions, autocorrect and
+own paste button don't reach text fields. The native window and
 APK talk to no engine (`client-core`): no cache, outbox (a write made offline is lost), event stream or upstream
 sign-in. Moving the clients onto this engine, the
 web target and a shared golden suite with the simulator are later decisions.
