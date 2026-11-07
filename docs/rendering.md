@@ -40,6 +40,7 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 | `platform` | `Platform`: what the app needs from the system it runs on (keyboard, insets, browser, clipboard, photo picker, events, the pod's saved session), implemented per platform |
 | `android` | `android_main` for the NativeActivity (Android builds with `window`) |
 | `bridge` | The Rust side of the Android bridge (`android/java`): links, the photo picker's result, messages |
+| `ime` | The keyboard's input connection: the focused field as a keyboard sees it (`TextState`: value, selection, the word being composed), the `InputConnection` edits over it in UTF-16 offsets, and the hand-off between the keyboard and the window (`Connection`); on Android, `NativeText`'s natives |
 | `picked` | The photos Android's picker returned, read through the content resolver into files the engine stages (HEIC and other formats it can't decode become JPEG through `ImageDecoder`) |
 
 The pod builds the crate with `default-features = false`: no wgpu, CPU only.
@@ -168,8 +169,9 @@ main app's own server when it is another; `set_server` switches as on the deskto
 A NativeActivity gets none of the Android callbacks that arrive through Java: a link opening the app, an activity
 result, a broadcast while the app is closed. `android/java` holds a small bridge that passes them to Rust and holds no
 app logic: `ConstructActivity` (NativeActivity plus `onNewIntent` and `onActivityResult`, and `pickImages` and
-`askPermission` that Rust calls), `ConstructReceiver` (a message, also while the app is closed) and `Native` (the
-native methods, `Java_org_theconstruct_android_Native_*` in `src/bridge.rs`). The script compiles them with `javac`
+`askPermission` that Rust calls), `ConstructReceiver` (a message, also while the app is closed), `Native` (the
+native methods, `Java_org_theconstruct_android_Native_*` in `src/bridge.rs`), and the keyboard's `TextInputView`,
+`TextInput` and `NativeText` (`src/ime.rs`, above). The script compiles them with `javac`
 and `d8` into the APK's `classes.dex`. Events queue in `bridge.rs`, wake the window and reach it through
 `Platform::events`: picked photos go to the media picker that asked (read by `picked.rs`); links and messages show
 as a notice for now. Decision:
@@ -236,13 +238,25 @@ engine, which sends it again when the pod is back.
 
 Windows place a laid-out frame again on scroll without laying it out (`Laid::emit`), so dragging is cheap. A drag
 that scrolls flings on release and slows down each frame; one that scrolls nothing, past 48 points, is a swipe that
-runs the `core://Gesture` under its start (`on_swipe_*`). Text fields are edited by the engine itself (a NativeActivity gets key events, not Android's text input, so the
-keyboard's own paste and suggestions don't reach them), as Android's own fields behave: a tap puts the cursor where
+runs the `core://Gesture` under its start (`on_swipe_*`). Text fields are edited by the engine itself, as Android's
+own fields behave, and on Android the keyboard edits them too (below): a tap puts the cursor where
 it lands; the cursor blinks (500 ms); a long press or a double tap selects the word there, with handles to drag and a
 Cut / Copy / Paste / Select all bar over it (dragging on from a long press moves the selection's end); a tap on the
 cursor shows its handle and the bar (Paste, Select all). Typing and pasting replace the selection and are cut to the
 field's `max_length`. With a hardware keyboard: arrows, Home and End (Shift selects), Delete and Ctrl or Command+A, C,
 X and V. On Android the clipboard is `ClipboardManager` through the SDK.
+
+On Android the keyboard connects to the focused field (`ime.rs`), so its suggestions, autocorrect, swipe and voice
+typing, emoji and its own paste work. The bridge's `TextInputView` is an invisible, focusable view over the
+NativeActivity; its `InputConnection` (`TextInput`) forwards each call to `NativeText`'s natives, which run on
+Android's main thread and answer at once from a copy of the field (`Connection`). The keyboard's edits change the
+copy and wake the window, which applies them to the session first (`Session::set_text_state`, cut to `max_length`);
+the engine's own changes (a tap, a handle, the edit bar, a hardware key) then reach the keyboard: a moved selection
+with `InputMethodManager.updateSelection`, changed text or another field with `restartInput`. The word being
+composed is underlined. The keyboard's Done (or Enter) ends editing, as Enter does; its Cut, Copy, Paste and Select
+all run the edit bar's. Fields ask for text with capitals at sentences and autocorrect. Elsewhere `Platform::text_input`
+is `None` and the window types what key events bring.
+
 The headless simulator, `construct-sim` ([simulator.md](simulator.md)), drives a session from a script on fixture
 bundles or a live pod and writes PNGs drawn on the CPU.
 

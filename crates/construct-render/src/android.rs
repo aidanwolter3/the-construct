@@ -96,11 +96,34 @@ struct Android(AndroidApp, std::sync::Mutex<[f32; 4]>, crate::pods::PodHome);
 
 impl crate::window::Platform for Android {
     fn show_keyboard(&self, show: bool) {
-        if show {
-            self.0.show_soft_input(true);
-        } else {
-            self.0.hide_soft_input(false);
+        // Connected to the bridge's text input view (`ime.rs`), else keys
+        // only, as a NativeActivity has.
+        let shown = with_activity(&self.0, |env, activity| {
+            crate::ime::android::show_keyboard(env, activity, show)
+        });
+        if let Err(e) = shown {
+            log(&format!("keyboard: {e}"));
+            if show {
+                self.0.show_soft_input(true);
+            } else {
+                self.0.hide_soft_input(false);
+            }
         }
+    }
+
+    fn text_input(
+        &self,
+        field: Option<&crate::ime::TextState>,
+    ) -> Option<crate::ime::KeyboardEdit> {
+        let (edit, tell) = crate::ime::android::sync(field);
+        if let Some(t) = tell
+            && let Err(e) = with_activity(&self.0, |env, activity| {
+                crate::ime::android::tell(env, activity, t)
+            })
+        {
+            log(&format!("keyboard: {e}"));
+        }
+        edit
     }
 
     fn insets_px(&self, (_w, h): (u32, u32)) -> [f32; 4] {

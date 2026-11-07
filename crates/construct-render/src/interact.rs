@@ -501,6 +501,8 @@ struct Edit {
     blink: Instant,
     /// The last tap on the field, for a double tap.
     last_tap: Option<(Instant, f32, f32)>,
+    /// The word the keyboard is composing (byte range), underlined.
+    composing: Option<(usize, usize)>,
 }
 
 impl Edit {
@@ -603,6 +605,7 @@ impl Session {
                 menu: false,
                 blink: Instant::now(),
                 last_tap: None,
+                composing: None,
             });
         }
         let e = self.edit.as_mut()?;
@@ -648,6 +651,7 @@ impl Session {
             e.cursor = cursor;
             e.anchor = anchor;
             e.blink = Instant::now();
+            e.composing = None;
         }
         self.form.insert(field.clone(), value.clone());
         self.invalidate();
@@ -779,6 +783,74 @@ impl Session {
     pub fn paste(&mut self, field: &str, text: &str) -> Outcome {
         self.focused = Some(field.to_owned());
         self.insert_text(text.trim_end_matches(['\n', '\r']))
+    }
+
+    /// The focused field as the platform's keyboard sees it (`crate::ime`):
+    /// its value, selection and the word being composed.
+    pub fn text_state(&mut self) -> Option<crate::ime::TextState> {
+        let (value, e) = self.editing()?;
+        let composing = e
+            .composing
+            .filter(|&(a, b)| a < b && b <= value.len())
+            .filter(|&(a, b)| value.is_char_boundary(a) && value.is_char_boundary(b));
+        Some(crate::ime::TextState {
+            field: e.field,
+            value,
+            cursor: e.cursor,
+            anchor: e.anchor,
+            composing,
+        })
+    }
+
+    /// The focused field as the keyboard left it (it typed, corrected,
+    /// composed or moved the cursor), no longer than the field's maximum
+    /// length. Handles and the menu go, as on Android.
+    pub fn set_text_state(&mut self, s: &crate::ime::TextState) -> Outcome {
+        if self.focused.as_ref() != Some(&s.field) || self.edit_now().is_none() {
+            return Outcome {
+                node: None,
+                effects: vec![Effect::Nothing],
+            };
+        }
+        let mut value = s.value.replace('\r', "");
+        if let Some(max) = self.max_length(&s.field) {
+            value = value.chars().take(max).collect();
+        }
+        let fix = |i: usize| {
+            let mut i = i.min(value.len());
+            while !value.is_char_boundary(i) {
+                i -= 1;
+            }
+            i
+        };
+        let (cursor, anchor) = (fix(s.cursor), fix(s.anchor));
+        let composing = s
+            .composing
+            .map(|(a, b)| (fix(a), fix(b)))
+            .filter(|(a, b)| a < b);
+        let changed = self.form.get(&s.field) != Some(&value);
+        if let Some(e) = self.edit.as_mut() {
+            e.handles = false;
+            e.menu = false;
+        }
+        let out = if changed {
+            self.set_edit(value, cursor, anchor)
+        } else {
+            if let Some(e) = self.edit.as_mut() {
+                e.cursor = cursor;
+                e.anchor = anchor;
+                e.blink = Instant::now();
+            }
+            self.scene = None;
+            Outcome {
+                node: None,
+                effects: vec![Effect::Nothing],
+            }
+        };
+        if let Some(e) = self.edit.as_mut() {
+            e.composing = composing;
+        }
+        out
     }
 
     /// The edit's caret stops in the frame, with the field's text box.
@@ -1887,6 +1959,33 @@ impl Session {
                 [1.0; 4],
                 clip,
             );
+        }
+        if let Some((cs, ce)) = e.composing.filter(|&(a, b)| a < b && b <= value.len()) {
+            // The word being composed is underlined, one line per row.
+            let (a, b) = (stop(cs), stop(ce));
+            let mut tops: Vec<f32> = stops
+                .iter()
+                .filter(|s| s.byte >= cs && s.byte <= ce)
+                .map(|s| s.top)
+                .collect();
+            tops.dedup();
+            for top in tops {
+                let on: Vec<&crate::text::CaretStop> =
+                    stops.iter().filter(|s| s.top == top).collect();
+                let x0 = if top == a.top { a.x } else { 0.0 };
+                let x1 = if top == b.top {
+                    b.x
+                } else {
+                    on.iter().map(|s| s.x).fold(0.0, f32::max)
+                };
+                let h = on.first().map_or(fb.line_height, |s| s.height);
+                quad(
+                    [ox + x0, oy + top + h - 2.0, (x1 - x0).max(1.0), 1.5],
+                    theme.on_background,
+                    [0.0; 4],
+                    clip,
+                );
+            }
         }
         if e.handles {
             let r = HANDLE / 2.0;
