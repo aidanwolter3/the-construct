@@ -301,7 +301,11 @@ bundles or a live pod and writes PNGs drawn on the CPU.
 `preview_id`, `state`, timing and the nodes (id, type, bounds, text, tap, selected). `dispatch_virtual_interaction`
 (`preview_id`, `action` tap / scroll / type / back, with `node_id`, `text` or `x`/`y`, `dy`) changes that preview's
 device state and answers the same, with the interaction's effects; a tap that would reach the pod is reported as
-`not sent`. Layouts the previewed one embeds inline or opens are loaded with it (up to 8). Code: `pod_core::preview`.
+`not sent`. Layouts the previewed one embeds inline or opens are loaded with it (up to 8). What is drawn is held to
+the value checks a saved layout gets (sizes, icons, tints; `validate::check_node_values`), a draft's and a saved
+layout's alike, since a component updated after a layout was saved isn't checked against it: a preview that fails
+them answers `invalid_layout`, and a linked layout that fails them isn't loaded. The renderer also draws no icon
+mask past 2048 px a side. Code: `pod_core::preview`.
 
 ## Tests
 

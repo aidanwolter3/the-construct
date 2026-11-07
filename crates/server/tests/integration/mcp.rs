@@ -1532,3 +1532,132 @@ async fn agents_preview_a_layout_and_tap_it() {
     .await;
     assert!(err && text.contains("layout_not_loaded"), "{text}");
 }
+
+/// A preview draws only what a saved layout's value checks allow: an icon of
+/// 65535 dp (a 4 GB mask for the server's renderer) is refused, in a draft
+/// and in a saved layout whose component grew it after the layout was saved.
+#[tokio::test]
+async fn previews_refuse_values_past_a_saved_layouts_bounds() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+    let icon = |size: u64| {
+        json!({"type": "core://IconButton", "icon": "add", "content_description": "Add", "size_dp": size,
+               "on_click": {"intent": "action.navigation.open", "presentation": "Push", "target_uri": "recipes://recipes/1"}})
+    };
+
+    // A draft.
+    let draft = json!({"type": "core://Page", "id": "d", "root": icon(65535)});
+    let (err, _, text) = preview_call(
+        &env,
+        &access,
+        "render_layout_preview",
+        json!({"layout": draft}),
+    )
+    .await;
+    assert!(err && text.contains("invalid_layout"), "{text}");
+
+    // A saved layout, through a component updated after it was saved.
+    let component = |size: u64| json!({"doc": "A big button.", "params": [], "template": icon(size), "examples": [{"args": {}}]});
+    let (err, d) = env
+        .tool(
+            &access,
+            "define_component",
+            json!({"name": "big", "component": component(24)}),
+        )
+        .await;
+    assert!(!err, "{d}");
+    let layout = json!({"type": "core://Workspace", "title": "Home", "slots": [
+        {"slot_id": "b", "content": {"type": "core://Use", "component": "pod:big"}}]});
+    let (err, w) = env
+        .tool(
+            &access,
+            "update_layout",
+            json!({"id": "home", "layout": layout}),
+        )
+        .await;
+    assert!(!err, "{w}");
+    let (err, _, text) = preview_call(
+        &env,
+        &access,
+        "render_layout_preview",
+        json!({"id": "home"}),
+    )
+    .await;
+    assert!(!err, "{text}");
+    let (err, u) = env
+        .tool(
+            &access,
+            "update_component",
+            json!({"name": "pod:big", "component": component(65535)}),
+        )
+        .await;
+    assert!(!err, "{u}");
+    let (err, _, text) = preview_call(
+        &env,
+        &access,
+        "render_layout_preview",
+        json!({"id": "home"}),
+    )
+    .await;
+    assert!(err && text.contains("invalid_layout"), "{text}");
+}
+
+/// A use costs its expansion's work, not a copy of its definition: a
+/// component whose bulk sits in a branch it doesn't take (an `IfArg` that is
+/// false) is cheap to use many times, as its work budget says, instead of
+/// copying and checking its whole definition at every use (seconds of CPU
+/// for one `expand` before definitions were read once per expansion).
+#[tokio::test]
+async fn using_a_large_component_often_costs_only_what_it_expands_to() {
+    let env = env().await;
+    let pod_code = env.pod("mine").await;
+    let access = env.connect(&pod_code).await;
+
+    // `pod:bulky`: about 57 KB of text behind a branch it doesn't take.
+    let texts: Vec<Value> = (0..600)
+        .map(|i| json!({"type": "core://Text", "style": "Body", "value_expr": format!("{i:0>40}")}))
+        .collect();
+    let bulky = json!({"doc": "Mostly hidden.", "params": [
+            {"name": "show", "type": "bool", "doc": "Show the rest.", "default": false}],
+        "template": {"type": "core://IfArg", "arg": "show",
+            "then": {"type": "core://Column", "children": texts},
+            "else": {"type": "core://Text", "style": "Body", "value_expr": "-"}},
+        "examples": [{"args": {}}]});
+    let (err, d) = env
+        .tool(
+            &access,
+            "define_component",
+            json!({"name": "bulky", "component": bulky}),
+        )
+        .await;
+    assert!(!err, "{d}");
+    // `pod:many`: 400 uses of it.
+    let uses: Vec<Value> = (0..400)
+        .map(|_| json!({"type": "core://Use", "component": "pod:bulky"}))
+        .collect();
+    let many = json!({"doc": "Many.", "params": [],
+        "template": {"type": "core://Column", "children": uses}, "examples": [{"args": {}}]});
+    let (err, d) = env
+        .tool(
+            &access,
+            "define_component",
+            json!({"name": "many", "component": many}),
+        )
+        .await;
+    assert!(!err, "{d}");
+
+    // 4,000 uses of pod:bulky: well within the work budget.
+    let node = json!({"type": "core://Column", "children": (0..10)
+        .map(|_| json!({"type": "core://Use", "component": "pod:many"}))
+        .collect::<Vec<_>>()});
+    let started = std::time::Instant::now();
+    let (err, x) = env.tool(&access, "expand", json!({"node": node})).await;
+    let took = started.elapsed();
+    assert!(!err, "{x}");
+    assert_eq!(x["expanded"]["children"].as_array().unwrap().len(), 10);
+    assert!(
+        took < std::time::Duration::from_secs(10),
+        "expanding took {took:?}"
+    );
+}
