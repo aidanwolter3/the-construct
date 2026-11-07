@@ -34,6 +34,10 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 
 The pod builds the crate with `default-features = false`: no wgpu, CPU only.
 
+Fonts are bundled in `fonts/` and nothing else is loaded: Instrument Sans (regular, bold), Lora (the Display
+style) and `DejaVuSans-Symbols.ttf`, DejaVu Sans cut to punctuation, arrows, shapes, symbols and dingbats.
+cosmic-text falls back to any loaded font with the glyph, so ♥, ✓ and ★ come from the last one.
+
 ## Semantic ids
 
 What agents and tests address: a node's `tag` (bound, e.g. `task_$item.id`); `<field>=<value>` for a

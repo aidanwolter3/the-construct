@@ -10,6 +10,9 @@ use crate::style::{Face, Type};
 const SANS: &[u8] = include_bytes!("../fonts/InstrumentSans-Regular.ttf");
 const SANS_BOLD: &[u8] = include_bytes!("../fonts/InstrumentSans-Bold.ttf");
 const SERIF: &[u8] = include_bytes!("../fonts/Lora-Regular.ttf");
+/// Symbols the faces above lack (♥, ✓, ★, arrows): cosmic-text falls back
+/// to any loaded font that has a glyph, so this one fills those gaps.
+const SYMBOLS: &[u8] = include_bytes!("../fonts/DejaVuSans-Symbols.ttf");
 
 /// A measured text: its size in logical points.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -36,12 +39,17 @@ impl Default for TextEngine {
 impl TextEngine {
     pub fn new() -> TextEngine {
         let mut db = fontdb::Database::new();
-        for data in [SANS, SANS_BOLD, SERIF] {
+        for data in [SANS, SANS_BOLD, SERIF, SYMBOLS] {
             db.load_font_data(data.to_vec());
         }
         let family = |weight: u16, sans: bool| {
             db.faces()
-                .find(|f| f.weight.0 == weight && (f.families[0].0.contains("Sans") == sans))
+                .find(|f| {
+                    let name = &f.families[0].0;
+                    f.weight.0 == weight
+                        && name.contains("Sans") == sans
+                        && !name.contains("DejaVu")
+                })
                 .map(|f| f.families[0].0.clone())
                 .unwrap_or_default()
         };
@@ -135,6 +143,23 @@ mod tests {
         let wrapped = t.measure("Save everything now", body, Some(long.width / 2.0), 2.0);
         assert!(wrapped.height >= 40.0, "{wrapped:?}");
         assert!(wrapped.width <= long.width / 2.0 + 1.0);
+    }
+
+    #[test]
+    fn symbols_fall_back_to_a_font_that_has_them() {
+        let mut t = TextEngine::new();
+        for text in ["♥ 3", "✓", "★ ☆", "→ ›"] {
+            let buffer = t.buffer(text, type_for(TextStyle::Body), None, 2.0);
+            let glyphs: Vec<u16> = buffer
+                .layout_runs()
+                .flat_map(|r| r.glyphs.iter().map(|g| g.glyph_id))
+                .collect();
+            // Glyph 0 is .notdef: the box drawn for a missing character.
+            assert!(
+                !glyphs.is_empty() && glyphs.iter().all(|g| *g != 0),
+                "{text}: {glyphs:?}"
+            );
+        }
     }
 
     #[test]

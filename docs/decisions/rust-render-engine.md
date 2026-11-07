@@ -15,8 +15,9 @@ Decision: a Rust rendering engine, crate `construct-render`, drawing the plumbin
 (`protocol::UiNode`) with its data:
 
 - **Layout** with taffy (flexbox): each node type maps to a flex style with the Compose renderer's Material 3
-  metrics; text is measured with cosmic-text over fonts bundled in the crate (Instrument Sans, Lora; no system
-  fonts), so a frame measures the same on every machine.
+  metrics; text is measured with cosmic-text over fonts bundled in the crate (Instrument Sans, Lora, and a
+  symbol subset of DejaVu Sans for characters such as ♥ and ✓; no system fonts), so a frame measures the same on
+  every machine.
 - **Scene**: instanced rounded-box quads (`QuadInstance`: rect, fill, border, per-corner radii, drop shadow,
   clip), text runs in paint order, and a semantic tree (`SemanticNode`: id, type, bounds in points, text, what a
   tap does). Ids are a node's `tag`, `<field>=<value>` for chip options and dock tabs, `field:<name>` for text
