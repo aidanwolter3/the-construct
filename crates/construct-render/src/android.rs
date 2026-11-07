@@ -7,8 +7,10 @@
 //! the pod's server in `pod.json` there (`{"url"}`), else the main app's
 //! server. Sessions, and the last pod code used, are kept as the main app
 //! keeps sessions (`KeystoreSecureStore`'s format, through JNI:
-//! [`KeystoreStore`]), so its sign-in carries over. A `layout.json` in the external files directory
-//! (`{"layout", "data"}`, pushed with adb) is opened instead. With
+//! [`KeystoreStore`]), so its sign-in carries over. A `layout.json` in `files/dev/` (private storage;
+//! `{"layout", "data"}`, copied there with `adb shell run-as`) is opened
+//! instead: not external storage, which other apps can write on Android 9
+//! and 10. With
 //! `frame-request` there too, it first draws that layout offscreen at
 //! 390 × 844 @2x on the device's GPU and saves `frame.png` next to it
 //! (`frame_diff` compares it with the goldens).
@@ -1080,9 +1082,9 @@ fn pod_home(app: &AndroidApp) -> crate::pods::PodHome {
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
     log("construct-render starting");
-    // A layout pushed to the external files dir (development) wins; else
-    // the pod.
-    let dir = app.external_data_path();
+    // A layout copied to the private `files/dev/` (development) wins; else
+    // the pod. Never external storage: other apps could write the screen.
+    let dir = app.internal_data_path().map(|d| d.join("dev"));
     let home = pod_home(&app);
     let session = if dir.as_ref().is_some_and(|d| d.join("layout.json").exists()) {
         let (id, root, data) = load(dir.as_ref());

@@ -24,7 +24,14 @@
             <action android:name="org.unifiedpush.android.distributor.UNREGISTER" />
         </intent>
     </queries>
+    <!-- No backups or device-to-device transfers, as the main app (app/androidApp's manifest): pod.json, the engine's
+         cache database (the private feed, the outbox, queued photos) and the push keys and endpoints are not
+         encrypted. allowBackup covers Android 11 and older; the main app's res/xml/data_extraction_rules.xml
+         (compiled in by scripts/android_native.sh) covers Android 12+, where allowBackup no longer stops device
+         transfers. -->
     <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:label="The Construct"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
