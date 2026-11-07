@@ -52,7 +52,8 @@ Decision: the vocabulary splits in two.
     plumbing; every example of a definition must expand), lenient when serving (a missing component is "This part
     isn't available."), at most 8 uses deep and 1 MiB. Along the way it may build at most 4 MiB (approximate JSON:
     every node it visits and every copy of a use's children or arguments), checked as it goes, so a component that
-    repeats its children or an argument can't multiply a use into gigabytes first. Blueprint files may use `core:` components; the pod records
+    repeats its children or an argument can't multiply a use into gigabytes first. Each definition is read and parsed once per
+    expansion and its template walked in place, so a use costs only what it builds, not a copy of its definition. Blueprint files may use `core:` components; the pod records
     the expanded layout, and the file's hash is of the file as written.
   - **Updates.** A layout whose latest version uses a component without `version` gets a `ref_update` version
     ("pod:card updated to v3") when the component changes: a `pod:` write, or a deploy with a new `core:` file.
