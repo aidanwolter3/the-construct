@@ -1,0 +1,282 @@
+//! A live session run by the engine (`construct_render::engine`, feature
+//! `remote`) against a small stub of a pod: home and the layouts list come
+//! from the engine's cache offline, a tap's write waits in the outbox until
+//! the pod is back, and a `layout` event redraws the open session.
+
+use std::io::{BufRead, BufReader, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use client_core::{EngineConfig, MemoryStore, SecureStore};
+use construct_render::engine::PodEngine;
+use construct_render::interact::{Effect, Session, Target};
+use serde_json::{Value, json};
+
+const TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Home at `version`: its title says which, and a button adds one to the
+/// counter.
+fn home(version: u64, count: i64) -> Value {
+    json!({
+        "version": "1.0.0",
+        "workspace": { "type": "core://Column", "children": [
+            { "type": "core://Text", "value_expr": format!("Home v{version}"), "style": "Title" },
+            { "type": "core://Text", "value_expr": "Count ${core://counters/home#count}", "style": "Body" },
+            { "type": "core://Button", "label": "Add one", "on_click": {
+                "intent": "action.mutation.optimistic", "entity_uri": "core://counters/home",
+                "field": "count", "value_expr": "entity.count + 1", "rollback_value": 0,
+                "endpoint": "/v1/counters/home/increment", "payload": {} } }
+        ] },
+        "entities": { "core://counters/home": { "count": count } },
+        "queries": {}
+    })
+}
+
+#[derive(Default)]
+struct Pod {
+    version: AtomicU64,
+    count: Mutex<i64>,
+    /// Closes every connection unanswered: the pod can't be reached.
+    down: AtomicBool,
+    posts: AtomicUsize,
+    streams: Mutex<Vec<mpsc::Sender<String>>>,
+}
+
+struct Stub {
+    base: String,
+    pod: Arc<Pod>,
+}
+
+impl Stub {
+    fn start() -> Stub {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let pod = Arc::new(Pod::default());
+        pod.version.store(1, Ordering::SeqCst);
+        let shared = pod.clone();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let pod = shared.clone();
+                thread::spawn(move || handle(stream, &pod));
+            }
+        });
+        Stub { base, pod }
+    }
+
+    /// A new home version, announced on the event streams.
+    fn publish(&self, version: u64) {
+        self.pod.version.store(version, Ordering::SeqCst);
+        let event = format!("event: layout\ndata: {{\"version\":{version}}}\n\n");
+        for tx in self.pod.streams.lock().unwrap().iter() {
+            let _ = tx.send(event.clone());
+        }
+    }
+}
+
+fn handle(stream: TcpStream, pod: &Pod) {
+    if pod.down.load(Ordering::SeqCst) {
+        return;
+    }
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut line = String::new();
+    if reader.read_line(&mut line).is_err() {
+        return;
+    }
+    let mut parts = line.split_whitespace();
+    let (method, path) = (
+        parts.next().unwrap_or("").to_owned(),
+        parts.next().unwrap_or("").to_owned(),
+    );
+    let mut length = 0usize;
+    loop {
+        let mut h = String::new();
+        if reader.read_line(&mut h).is_err() || h.trim().is_empty() {
+            break;
+        }
+        if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
+            length = v.trim().parse().unwrap_or(0);
+        }
+    }
+    let mut body = vec![0u8; length];
+    let _ = std::io::Read::read_exact(&mut reader, &mut body);
+    let mut out = stream;
+    let send = |out: &mut TcpStream, status: &str, extra: &str, body: &str| {
+        let _ = write!(
+            out,
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{extra}Connection: close\r\n\r\n{body}",
+            body.len()
+        );
+    };
+    let version = pod.version.load(Ordering::SeqCst);
+    match (method.as_str(), path.as_str()) {
+        ("GET", "/healthz") => send(&mut out, "200 OK", "", "{}"),
+        ("GET", "/v1/workspaces/home") => {
+            let count = *pod.count.lock().unwrap();
+            let header = format!("X-Construct-Layout-Version: {version}\r\n");
+            send(
+                &mut out,
+                "200 OK",
+                &header,
+                &home(version, count).to_string(),
+            );
+        }
+        ("GET", "/v1/workspaces/home/events") => {
+            let _ = write!(
+                out,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\r\n: open\n\n"
+            );
+            let _ = out.flush();
+            let (tx, rx) = mpsc::channel::<String>();
+            pod.streams.lock().unwrap().push(tx);
+            while let Ok(event) = rx.recv() {
+                if pod.down.load(Ordering::SeqCst)
+                    || out.write_all(event.as_bytes()).is_err()
+                    || out.flush().is_err()
+                {
+                    return;
+                }
+            }
+        }
+        ("GET", p) if p.starts_with("/v1/apps") => {
+            let apps = json!({ "apps": [
+                { "id": "home", "title": "Home", "kind": "custom", "latest_version": version },
+                { "id": "garden", "title": "Garden", "kind": "custom", "latest_version": 3 }
+            ] });
+            send(&mut out, "200 OK", "", &apps.to_string());
+        }
+        ("POST", "/v1/counters/home/increment") => {
+            pod.posts.fetch_add(1, Ordering::SeqCst);
+            *pod.count.lock().unwrap() += 1;
+            send(&mut out, "200 OK", "", "{}");
+        }
+        _ => send(&mut out, "404 Not Found", "", "{}"),
+    }
+}
+
+fn config() -> EngineConfig {
+    EngineConfig {
+        poll_interval: Duration::from_millis(100),
+        backoff_base: Duration::from_millis(50),
+        backoff_cap: Duration::from_millis(200),
+    }
+}
+
+/// A store holding a session for `base`.
+fn store(base: &str) -> Arc<dyn SecureStore> {
+    let s = MemoryStore::new();
+    s.set(
+        &client_core::auth::session_key(base),
+        r#"{"token":"session-for-tests"}"#,
+    );
+    Arc::new(s)
+}
+
+fn storage(name: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!(
+        "construct-render-engine-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&d);
+    d
+}
+
+/// The texts the session draws now.
+fn texts(s: &mut Session) -> Vec<String> {
+    s.scene()
+        .unwrap()
+        .semantics
+        .iter()
+        .filter_map(|n| n.text_content.clone())
+        .collect()
+}
+
+fn wait_until(what: &str, mut ok: impl FnMut() -> bool) {
+    let until = Instant::now() + TIMEOUT;
+    while !ok() {
+        assert!(Instant::now() < until, "timed out waiting for {what}");
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn shows(s: &mut Session, text: &str) -> bool {
+    texts(s).iter().any(|t| t == text)
+}
+
+#[test]
+fn opens_from_the_cache_offline_and_sends_the_write_once_back() {
+    let stub = Stub::start();
+    let dir = storage("offline");
+    let store = store(&stub.base);
+    {
+        let pod = PodEngine::open_with(&stub.base, Some(&dir), store.clone(), config());
+        let mut s = pod.session(construct_render::Viewport::PHONE);
+        wait_until("home", || shows(&mut s, "Home v1"));
+        wait_until("the layouts list", || {
+            s.poll();
+            s.data
+                .queries
+                .get("local:layouts")
+                .is_some_and(|q| !q.is_empty())
+        });
+    }
+    // The pod can't be reached: a new start shows home and its layouts as
+    // last seen, at once.
+    stub.pod.down.store(true, Ordering::SeqCst);
+    let pod = PodEngine::open_with(&stub.base, Some(&dir), store, config());
+    let mut s = pod.session(construct_render::Viewport::PHONE);
+    assert!(shows(&mut s, "Home v1"), "drew {:?}", texts(&mut s));
+    assert!(shows(&mut s, "Count 0"));
+    assert_eq!(
+        s.data.queries["local:layouts"],
+        vec!["local://layouts/garden".to_owned()]
+    );
+
+    // A tap offline changes the count here and waits in the outbox.
+    let out = s.tap(&Target::Text("Add one".into())).unwrap();
+    assert!(
+        out.effects
+            .iter()
+            .any(|e| matches!(e, Effect::Sent { path } if path == "/v1/counters/home/increment")),
+        "{:?}",
+        out.effects
+    );
+    assert!(shows(&mut s, "Count 1"));
+    wait_until("the pending write", || {
+        s.poll();
+        s.data.entities["local://connection"].get("pending") == Some(&json!(1))
+    });
+    assert_eq!(stub.pod.posts.load(Ordering::SeqCst), 0);
+
+    // Back online, it reaches the pod, and the count stays.
+    stub.pod.down.store(false, Ordering::SeqCst);
+    wait_until("the write to reach the pod", || {
+        stub.pod.posts.load(Ordering::SeqCst) == 1
+    });
+    wait_until("the outbox to empty", || {
+        s.poll();
+        s.data.entities["local://connection"].get("pending") == Some(&json!(0))
+    });
+    assert!(shows(&mut s, "Count 1"), "drew {:?}", texts(&mut s));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_layout_event_redraws_the_open_session() {
+    let stub = Stub::start();
+    let dir = storage("events");
+    let pod = PodEngine::open_with(&stub.base, Some(&dir), store(&stub.base), config());
+    let mut s = pod.session(construct_render::Viewport::PHONE);
+    wait_until("home", || shows(&mut s, "Home v1"));
+    // Another device or an agent publishes a new version: the open session
+    // shows it without opening it again.
+    wait_until("the event stream", || {
+        !stub.pod.streams.lock().unwrap().is_empty()
+    });
+    stub.publish(2);
+    wait_until("home v2", || shows(&mut s, "Home v2"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
