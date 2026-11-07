@@ -99,6 +99,13 @@ JARS=("$LIBS/connector-3.3.5/classes.jar" "$LIBS/embedded-fcm-distributor-3.1.0/
 rm -rf "$OUT/classes" "$OUT/apk/dex" && mkdir -p "$OUT/classes" "$OUT/apk/dex"
 "$JAVAC" -nowarn --release 11 -classpath "$PLATFORM/android.jar:${JARS[0]}" -d "$OUT/classes" \
   $(find crates/construct-render/android/java -name '*.java')
+# Every class Rust names in a JNI signature (`L…;` in src/*.rs) must exist in the platform or the APK's classes:
+# a wrong one only fails at run time, on the phone ("Method not found").
+KNOWN=$( { unzip -Z1 "$PLATFORM/android.jar"; for j in "${JARS[@]}"; do unzip -Z1 "$j"; done
+  (cd "$OUT/classes" && find . -name '*.class' | sed 's|^\./||'); } | sed -n 's/\.class$//p' | sort -u)
+MISSING=$(grep -ohE '"[^"]*\(L[A-Za-z0-9_/$]+;[^"]*"|"L[A-Za-z0-9_/$]+;"' crates/construct-render/src/*.rs \
+  | grep -oE 'L[a-z][A-Za-z0-9_]*(/[A-Za-z0-9_$]+)+;' | sed 's/^L//; s/;$//' | sort -u | comm -23 - <(echo "$KNOWN"))
+[[ -z $MISSING ]] || { echo "JNI signatures name classes that don't exist: $MISSING" >&2; exit 1; }
 "$TOOLS/d8" --release --min-api 28 --lib "$PLATFORM/android.jar" --output "$OUT/apk/dex" \
   $(find "$OUT/classes" -name '*.class') "${JARS[@]}"
 rm -f "$OUT"/apk/classes*.dex && cp "$OUT"/apk/dex/classes*.dex "$OUT/apk/"

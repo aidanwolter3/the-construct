@@ -247,6 +247,7 @@ impl Android {
 /// runs it again.
 fn set_up_push(app: &AndroidApp, home: &crate::pods::PodHome) {
     let (Some(files), Some(state)) = (app.internal_data_path(), home.read()) else {
+        log("push: no open pod yet (pod.json): set up after sign-in");
         return;
     };
     let engine = home.engine(&state.url);
@@ -731,7 +732,7 @@ fn session_key<'l>(env: &mut jni::Env<'l>) -> jni::errors::Result<jni::objects::
     env.call_method(
         &ks,
         jni_str!("load"),
-        jni_sig!("(Ljava/security/KeyStore$LoadParameter;)V"),
+        jni_sig!("(Ljava/security/KeyStore$LoadStoreParameter;)V"),
         &[JValue::Object(&JObject::null())],
     )?;
     let alias = env.new_string(KEY_ALIAS)?;
@@ -995,7 +996,7 @@ fn keystore_decrypt(app: &AndroidApp, iv_b64: &str, ct_b64: &str) -> Result<Stri
                 env.call_method(
                     &ks,
                     jni_str!("load"),
-                    jni_sig!("(Ljava/security/KeyStore$LoadParameter;)V"),
+                    jni_sig!("(Ljava/security/KeyStore$LoadStoreParameter;)V"),
                     &[JValue::Object(&JObject::null())],
                 )?;
                 let alias = env.new_string("construct_session_key")?;

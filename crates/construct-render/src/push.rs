@@ -35,6 +35,8 @@ use crate::engine::PodEngine;
 
 /// Notifications whose taps are remembered (the newest).
 const TAPS_KEPT: usize = 50;
+/// How long push setup waits for the engine's saved session at start.
+const SESSION_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
 /// The link a tapped notification opens the app with, before its token.
 pub const TAP_LINK: &str = "construct://notification/";
 
@@ -280,11 +282,21 @@ fn live(instance: &str) -> Option<PodEngine> {
 /// asks the pod): its keys, its saved endpoint sent to the pod again, and
 /// the instance to ask the distributor for an endpoint for, with the pod's
 /// VAPID key (base64url; the embedded FCM distributor registers with it).
-/// `None` without a session, or when the pod sends no push.
+/// `None` without a session (a saved one is waited for briefly), or when
+/// the pod sends no push.
 pub fn set_up(store: &PushStore, engine: &PodEngine, log: fn(&str)) -> Option<(String, String)> {
     *lock(&LIVE) = Some(engine.clone());
-    if !engine.signed_in() {
-        return None;
+    // At start the engine may still be loading its saved session.
+    let waited = std::time::Instant::now();
+    while !engine.signed_in() {
+        if waited.elapsed() >= SESSION_WAIT {
+            log(&format!(
+                "push: no session for {}: set up after sign-in",
+                engine.base()
+            ));
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
     }
     let vapid = engine
         .push_public_key()
