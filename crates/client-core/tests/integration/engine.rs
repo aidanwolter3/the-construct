@@ -302,7 +302,7 @@ fn bad_and_unsupported_intents_change_nothing() {
     let base = serve_fixture();
     let engine = ConstructEngine::init("", &base);
     let rx = subscribe_channel(&engine);
-    wait_online(&rx);
+    let before = wait_online(&rx);
 
     engine.dispatch("not json");
     engine.dispatch(r#"{"intent":"action.unknown"}"#);
@@ -310,7 +310,13 @@ fn bad_and_unsupported_intents_change_nothing() {
     engine.dispatch(&INCREMENT.replace("entity.count + 1", "entity.count * 2"));
     engine.dispatch("");
     engine.dispatch("{}");
-    assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+    // A late snapshot from start-up may still arrive (under load it lands
+    // after `wait_online`); none may show a change.
+    while let Ok(s) = rx.recv_timeout(Duration::from_millis(200)) {
+        assert_eq!(count(&s), 0);
+        assert_eq!(s.pending_actions, before.pending_actions);
+        assert_eq!(s.workspace_json, before.workspace_json);
+    }
     assert_eq!(count(&engine.snapshot()), 0);
 }
 
