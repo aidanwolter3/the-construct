@@ -1580,6 +1580,7 @@ impl Session {
                             selected: false,
                             parent: None,
                             gestures: BTreeMap::new(),
+                            hint: None,
                         });
                     }
                     if p > 0.5 {
@@ -1606,6 +1607,7 @@ impl Session {
                             selected: false,
                             parent: None,
                             gestures: BTreeMap::new(),
+                            hint: None,
                         });
                     }
                     let radii = match edge {
@@ -1828,6 +1830,7 @@ impl Session {
                 selected: false,
                 parent: None,
                 gestures: BTreeMap::new(),
+                hint: None,
             });
             ix += iw;
         }

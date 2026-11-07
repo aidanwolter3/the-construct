@@ -9,6 +9,7 @@
 //! taps, which is what the pod's `render_layout_preview` and
 //! `dispatch_virtual_interaction` MCP tools run.
 
+pub mod accessibility;
 pub mod bind;
 pub mod cpu;
 pub mod demo;
