@@ -10,7 +10,7 @@
 ## Screenshots
 
 <!-- Required when the interface changes (layouts, shared UI, node types). Use the headless simulator
-     (:desktopApp:simulate) and show every modified screen/state, before and after where it helps.
+     (cargo run -p construct-sim, docs/simulator.md) and show every modified screen/state, before and after where it helps.
      Write "No interface change" otherwise. -->
 
 ## Testing

@@ -18,6 +18,9 @@ use crate::interact::CursorMove;
 use crate::interact::DragAxis;
 #[cfg(not(target_os = "android"))]
 use crate::interact::Target;
+pub use crate::platform::{
+    Platform, PlatformEvent, Reopen, clipboard_here, open_link_here, set_clipboard_here,
+};
 use crate::viewer::{Controller, EditKey, Event};
 
 /// Writes a line to the platform log (logcat on Android, stderr elsewhere).
@@ -34,58 +37,6 @@ struct Surface {
     config: wgpu::SurfaceConfiguration,
     gpu: Gpu,
     renderer: Renderer,
-}
-
-/// What a platform adds to the window: the soft keyboard, and the space its
-/// own UI covers (status bar, cutout, navigation bar).
-pub trait Platform {
-    /// Shows the keyboard while a text field is focused, hides it otherwise.
-    fn show_keyboard(&self, show: bool);
-    /// Insets in physical pixels: top, right, bottom, left.
-    fn insets_px(&self, window_px: (u32, u32)) -> [f32; 4];
-    /// Opens an `http(s)` address in the browser.
-    fn open_link(&self, url: &str) {
-        open_link_here(url);
-    }
-    /// The platform closed the window for good (Android destroyed the
-    /// activity): the event loop ends.
-    fn gone(&self) -> bool {
-        false
-    }
-    /// The text on the clipboard, for Paste.
-    fn clipboard(&self) -> Option<String> {
-        clipboard_here()
-    }
-    /// Puts text on the clipboard (Copy, Cut).
-    fn set_clipboard(&self, text: &str) {
-        set_clipboard_here(text);
-    }
-    /// Whether the system is in dark mode; `None`: as the window says
-    /// (winit's theme).
-    fn dark(&self) -> Option<bool> {
-        None
-    }
-    /// The session to show next ([`Reopen`]); `None` when the platform
-    /// can't.
-    fn reopen(&self, _how: Reopen) -> Option<crate::interact::Session> {
-        None
-    }
-}
-
-/// Why the window wants another session.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Reopen {
-    /// Signed in: save the session and open the pod; `code` is the one to
-    /// offer next time.
-    SignedIn { token: String, code: String },
-    /// Left the pod: forget the session, show the pod's sign-in screen with
-    /// the last code.
-    Left,
-    /// Load the pod again (`refresh`, Try again).
-    Reload,
-    /// Open another server (`set_server`): its saved session, else its
-    /// sign-in screen.
-    Server(String),
 }
 
 type Waker = Arc<dyn Fn() + Send + Sync>;
@@ -143,75 +94,6 @@ impl accesskit::ActionHandler for Inbox {
 #[cfg(not(target_os = "android"))]
 impl accesskit::DeactivationHandler for Inbox {
     fn deactivate_accessibility(&mut self) {}
-}
-
-/// The desktop's clipboard, through its command-line tools (`pbpaste` on
-/// macOS, `wl-paste`, `xclip` or `xsel` on Linux).
-pub fn clipboard_here() -> Option<String> {
-    let tries: &[&[&str]] = if cfg!(target_os = "macos") {
-        &[&["pbpaste"]]
-    } else {
-        &[
-            &["wl-paste", "--no-newline"],
-            &["xclip", "-selection", "clipboard", "-o"],
-            &["xsel", "--clipboard", "--output"],
-        ]
-    };
-    tries.iter().find_map(|cmd| {
-        let out = std::process::Command::new(cmd[0])
-            .args(&cmd[1..])
-            .output()
-            .ok()?;
-        out.status
-            .success()
-            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
-    })
-}
-
-/// Puts text on the desktop's clipboard (`pbcopy`, `wl-copy`, `xclip`, `xsel`).
-pub fn set_clipboard_here(text: &str) {
-    use std::io::Write;
-    let tries: &[&[&str]] = if cfg!(target_os = "macos") {
-        &[&["pbcopy"]]
-    } else {
-        &[
-            &["wl-copy"],
-            &["xclip", "-selection", "clipboard"],
-            &["xsel", "--clipboard", "--input"],
-        ]
-    };
-    for cmd in tries {
-        let Ok(mut child) = std::process::Command::new(cmd[0])
-            .args(&cmd[1..])
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-        else {
-            continue;
-        };
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(text.as_bytes());
-        }
-        if child.wait().is_ok_and(|s| s.success()) {
-            return;
-        }
-    }
-    log("no clipboard tool (pbcopy, wl-copy, xclip or xsel) took the text");
-}
-
-/// Opens an address with the desktop's opener (`open`, `xdg-open`, `start`).
-pub fn open_link_here(url: &str) {
-    let mut cmd = if cfg!(target_os = "macos") {
-        std::process::Command::new("open")
-    } else if cfg!(windows) {
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", "start", ""]);
-        c
-    } else {
-        std::process::Command::new("xdg-open")
-    };
-    if let Err(e) = cmd.arg(url).spawn() {
-        log(&format!("can't open {url}: {e}"));
-    }
 }
 
 /// A finger on the screen.
@@ -399,6 +281,38 @@ impl App {
         match &self.platform {
             Some(p) => p.set_clipboard(text),
             None => set_clipboard_here(text),
+        }
+    }
+
+    /// What the platform reported: shown as a notice for now (the bridge's
+    /// prototype); sign-in redirects and attachments build on these.
+    fn platform_events(&mut self) {
+        let events = self
+            .platform
+            .as_ref()
+            .map(|p| p.events())
+            .unwrap_or_default();
+        for e in events {
+            log(&format!("platform: {e:?}"));
+            let (title, message) = match e {
+                PlatformEvent::Link(uri) => ("Opened with a link".to_owned(), uri),
+                PlatformEvent::Picked { count: 0, .. } => (
+                    "No photos picked".to_owned(),
+                    "The picker was closed.".to_owned(),
+                ),
+                PlatformEvent::Picked { count, bytes } => (
+                    format!("{count} photo{} picked", if count == 1 { "" } else { "s" }),
+                    format!(
+                        "{:.1} MB in all, read from Rust.",
+                        bytes as f64 / 1_000_000.0
+                    ),
+                ),
+                PlatformEvent::Message(m) => ("Message received".to_owned(), m),
+            };
+            self.controller.session.notice(&title, &message);
+            if let Some(s) = &self.surface {
+                s.window.request_redraw();
+            }
         }
     }
 
@@ -745,6 +659,14 @@ impl App {
                         None => log("nothing to paste"),
                     },
                     crate::interact::Effect::Copy { text } => self.set_clipboard(text),
+                    crate::interact::Effect::PickMedia { max, .. } => {
+                        if !self.platform.as_ref().is_some_and(|p| p.pick_images(*max)) {
+                            self.controller.session.notice(
+                                "No photo picker",
+                                "Picking photos isn't available here yet.",
+                            );
+                        }
+                    }
                     crate::interact::Effect::Device { command } if command == "refresh" => {
                         reopen = Some(Reopen::Reload)
                     }
@@ -776,6 +698,7 @@ impl ApplicationHandler for App {
             event_loop.exit();
             return;
         }
+        self.platform_events();
         let insets = self.update_insets();
         if (insets | self.update_dark())
             && let Some(s) = &self.surface
@@ -822,9 +745,10 @@ impl ApplicationHandler for App {
         }
     }
 
-    /// An image arrived, or a screen reader asked for something: draw
-    /// again.
+    /// An image or a platform event arrived, or a screen reader asked for
+    /// something: draw again.
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
+        self.platform_events();
         self.serve_a11y();
         if let Some(s) = &self.surface {
             s.window.request_redraw();
