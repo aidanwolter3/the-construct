@@ -161,8 +161,12 @@ through JNI: AES/GCM with the Android keystore key `construct_session_key`, in t
 `pod.json` move there on the first start. Without a session the pod answers its sign-in screen (a pod code box, Open pod and
 Try a temporary pod), with the last code used filled in. Signing in (`action.auth.session`) keeps the session;
 Leave pod (`leave_pod`, after its `action.confirm` dialog) forgets it and shows the sign-in screen again, as does a
-session the pod no longer knows. A `layout.json` pushed to the external files directory (`{"layout", "data"}`) is
-drawn instead.
+session the pod no longer knows. A `layout.json` (`{"layout", "data"}`) in the app's private `files/dev/` is drawn
+instead (development; with `frame-request` next to it, it also saves `frame.png` there). It is never read from external
+storage, which other apps can write on Android 9 and 10. Copy one in with
+`adb push layout.json /data/local/tmp/ && adb shell run-as org.theconstruct.android sh -c 'mkdir -p files/dev && cp /data/local/tmp/layout.json files/dev/'`
+(the APK is debuggable). Like the main app, it allows no backups or device-to-device transfers (`allowBackup="false"`
+and the main app's `data_extraction_rules.xml`): `pod.json`, the engine's cache and the push keys stay on the device.
 
 winit makes one event loop per process while Android keeps the process after the activity goes, so the process ends
 with its activity (when it is finishing or destroyed) and every launch starts afresh. The app targets SDK 34, so the
