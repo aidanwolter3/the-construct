@@ -125,6 +125,47 @@ impl crate::window::Platform for Android {
         }
         insets
     }
+
+    fn open_link(&self, url: &str) {
+        if let Err(e) = view_url(&self.0, url) {
+            log(&format!("can't open {url}: {e}"));
+        }
+    }
+}
+
+/// Opens `url` in the browser: an `ACTION_VIEW` intent from the activity.
+fn view_url(app: &AndroidApp, url: &str) -> jni::errors::Result<()> {
+    use jni::objects::{JObject, JValue};
+    use jni::{jni_sig, jni_str};
+    // SAFETY: the VM pointer is valid for the life of the process.
+    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    let activity = app.activity_as_ptr() as jni::sys::jobject;
+    vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+        // SAFETY: the activity reference is valid while the app runs.
+        let activity = unsafe { env.as_cast_raw::<JObject>(&activity)? };
+        let s = env.new_string(url)?;
+        let uri = env
+            .call_static_method(
+                jni_str!("android/net/Uri"),
+                jni_str!("parse"),
+                jni_sig!("(Ljava/lang/String;)Landroid/net/Uri;"),
+                &[JValue::Object(&s)],
+            )?
+            .l()?;
+        let action = env.new_string("android.intent.action.VIEW")?;
+        let intent = env.new_object(
+            jni_str!("android/content/Intent"),
+            jni_sig!("(Ljava/lang/String;Landroid/net/Uri;)V"),
+            &[JValue::Object(&action), JValue::Object(&uri)],
+        )?;
+        env.call_method(
+            &*activity,
+            jni_str!("startActivity"),
+            jni_sig!("(Landroid/content/Intent;)V"),
+            &[JValue::Object(&intent)],
+        )?;
+        Ok(())
+    })
 }
 
 /// The window's insets in pixels (left, top, right, bottom):
@@ -248,16 +289,152 @@ fn error_page(message: &str) -> Session {
 }
 
 /// The pod's home, live, when `pod.json` is in the internal files dir.
+/// The staging pod: the main app's default server.
+const DEFAULT_SERVER: &str = "https://the-construct-pod.fly.dev";
+
+/// A `<string name="key">value</string>` of a SharedPreferences file.
+fn pref(xml: &str, key: &str) -> Option<String> {
+    let esc = key
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let open = format!("<string name=\"{esc}\">");
+    let start = xml.find(&open)? + open.len();
+    let len = xml[start..].find("</string>")?;
+    Some(
+        xml[start..start + len]
+            .replace("&quot;", "\"")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&apos;", "'")
+            .replace("&amp;", "&"),
+    )
+}
+
+/// The session the main app (installed as the same package, see
+/// `scripts/android_native.sh --as-app`) saved: its server (`server.xml`,
+/// else staging) and its pod session, AES-GCM encrypted with the key
+/// `construct_session_key` in the Android keystore (`KeystoreSecureStore`).
+fn main_app_session(app: &AndroidApp) -> Option<(String, String)> {
+    let prefs = app.internal_data_path()?.parent()?.join("shared_prefs");
+    let server = std::fs::read_to_string(prefs.join("server.xml"))
+        .ok()
+        .and_then(|x| pref(&x, "baseUrl"))
+        .unwrap_or_else(|| DEFAULT_SERVER.to_owned());
+    let server = server.trim_end_matches('/').to_owned();
+    let secure = std::fs::read_to_string(prefs.join("construct_secure.xml")).ok()?;
+    let stored = pref(&secure, &format!("pod_session:{server}"))?;
+    let (iv, ct) = stored.split_once(':')?;
+    let raw = match keystore_decrypt(app, iv, ct) {
+        Ok(r) => r,
+        Err(e) => {
+            log(&format!("the main app's session doesn't decrypt: {e}"));
+            return None;
+        }
+    };
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let token = v["token"].as_str()?.to_owned();
+    log(&format!("using the main app's session for {server}"));
+    Some((server, token))
+}
+
+/// `KeystoreSecureStore.get`'s decryption, through the Android SDK: base64
+/// IV and ciphertext, AES/GCM/NoPadding with a 128-bit tag.
+fn keystore_decrypt(app: &AndroidApp, iv_b64: &str, ct_b64: &str) -> Result<String, String> {
+    use jni::objects::{JByteArray, JObject, JValue};
+    use jni::{jni_sig, jni_str};
+    // SAFETY: the VM pointer is valid for the life of the process.
+    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    vm.attach_current_thread(|env| -> jni::errors::Result<Vec<u8>> {
+        let mut decode = |s: &str| -> jni::errors::Result<JObject<'_>> {
+            let js = env.new_string(s)?;
+            env.call_static_method(
+                jni_str!("android/util/Base64"),
+                jni_str!("decode"),
+                jni_sig!("(Ljava/lang/String;I)[B"),
+                &[JValue::Object(&js), JValue::Int(2)],
+            )?
+            .l()
+        };
+        let iv = decode(iv_b64)?;
+        let ct = decode(ct_b64)?;
+        let kind = env.new_string("AndroidKeyStore")?;
+        let ks = env
+            .call_static_method(
+                jni_str!("java/security/KeyStore"),
+                jni_str!("getInstance"),
+                jni_sig!("(Ljava/lang/String;)Ljava/security/KeyStore;"),
+                &[JValue::Object(&kind)],
+            )?
+            .l()?;
+        env.call_method(
+            &ks,
+            jni_str!("load"),
+            jni_sig!("(Ljava/security/KeyStore$LoadParameter;)V"),
+            &[JValue::Object(&JObject::null())],
+        )?;
+        let alias = env.new_string("construct_session_key")?;
+        let key = env
+            .call_method(
+                &ks,
+                jni_str!("getKey"),
+                jni_sig!("(Ljava/lang/String;[C)Ljava/security/Key;"),
+                &[JValue::Object(&alias), JValue::Object(&JObject::null())],
+            )?
+            .l()?;
+        let transform = env.new_string("AES/GCM/NoPadding")?;
+        let cipher = env
+            .call_static_method(
+                jni_str!("javax/crypto/Cipher"),
+                jni_str!("getInstance"),
+                jni_sig!("(Ljava/lang/String;)Ljavax/crypto/Cipher;"),
+                &[JValue::Object(&transform)],
+            )?
+            .l()?;
+        let spec = env.new_object(
+            jni_str!("javax/crypto/spec/GCMParameterSpec"),
+            jni_sig!("(I[B)V"),
+            &[JValue::Int(128), JValue::Object(&iv)],
+        )?;
+        env.call_method(
+            &cipher,
+            jni_str!("init"),
+            jni_sig!("(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V"),
+            &[JValue::Int(2), JValue::Object(&key), JValue::Object(&spec)],
+        )?;
+        let out = env
+            .call_method(
+                &cipher,
+                jni_str!("doFinal"),
+                jni_sig!("([B)[B"),
+                &[JValue::Object(&ct)],
+            )?
+            .l()?;
+        // SAFETY: doFinal answers a byte[].
+        let out = unsafe { JByteArray::from_raw(env, out.into_raw()) };
+        env.convert_byte_array(&out)
+    })
+    .map_err(|e| e.to_string())
+    .and_then(|b| String::from_utf8(b).map_err(|e| e.to_string()))
+}
+
 fn pod_session(app: &AndroidApp) -> Option<Session> {
     let file = app.internal_data_path()?.join("pod.json");
-    let text = std::fs::read_to_string(&file).ok()?;
-    let v: serde_json::Value = match serde_json::from_str(&text) {
-        Ok(v) => v,
-        Err(e) => return Some(error_page(&format!("pod.json: {e}"))),
+    let (url, token) = match std::fs::read_to_string(&file) {
+        Ok(text) => {
+            let v: serde_json::Value = match serde_json::from_str(&text) {
+                Ok(v) => v,
+                Err(e) => return Some(error_page(&format!("pod.json: {e}"))),
+            };
+            let (Some(url), Some(token)) = (v["url"].as_str(), v["token"].as_str()) else {
+                return Some(error_page("pod.json needs url and token"));
+            };
+            (url.to_owned(), token.to_owned())
+        }
+        Err(_) => main_app_session(app)?,
     };
-    let (Some(url), Some(token)) = (v["url"].as_str(), v["token"].as_str()) else {
-        return Some(error_page("pod.json needs url and token"));
-    };
+    let (url, token) = (url.as_str(), token.as_str());
     log(&format!("opening {url}"));
     let started = std::time::Instant::now();
     let session = crate::remote::PodClient::connect(url, token)

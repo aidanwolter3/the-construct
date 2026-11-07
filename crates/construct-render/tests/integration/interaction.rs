@@ -179,7 +179,8 @@ fn window_events_drive_the_session() {
         .find_node("field:note")
         .unwrap()
         .bounds;
-    assert!((field[2] - (400.0 - 32.0)).abs() < 0.01);
+    // The field, beside its 48pt Send button.
+    assert!((field[2] - (400.0 - 32.0 - 48.0)).abs() < 0.01, "{field:?}");
     c.handle(Event::Resized {
         width_px: 1600,
         height_px: 1688,
@@ -192,7 +193,7 @@ fn window_events_drive_the_session() {
         .find_node("field:note")
         .unwrap()
         .bounds;
-    assert!((field[2] - (800.0 - 32.0)).abs() < 0.01, "{field:?}");
+    assert!((field[2] - (800.0 - 32.0 - 48.0)).abs() < 0.01, "{field:?}");
     // A click on the field focuses it; typed text fills it; Backspace removes a character.
     c.handle(Event::Tap {
         x: field[0] + 10.0,

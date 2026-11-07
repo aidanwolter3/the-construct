@@ -11,6 +11,7 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 use crate::gpu::{Gpu, Renderer};
+use crate::interact::DragAxis;
 use crate::viewer::{Controller, Event};
 
 /// Writes a line to the platform log (logcat on Android, stderr elsewhere).
@@ -36,6 +37,26 @@ pub trait Platform {
     fn show_keyboard(&self, show: bool);
     /// Insets in physical pixels: top, right, bottom, left.
     fn insets_px(&self, window_px: (u32, u32)) -> [f32; 4];
+    /// Opens an `http(s)` address in the browser.
+    fn open_link(&self, url: &str) {
+        open_link_here(url);
+    }
+}
+
+/// Opens an address with the desktop's opener (`open`, `xdg-open`, `start`).
+pub fn open_link_here(url: &str) {
+    let mut cmd = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else if cfg!(windows) {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", ""]);
+        c
+    } else {
+        std::process::Command::new("xdg-open")
+    };
+    if let Err(e) = cmd.arg(url).spawn() {
+        log(&format!("can't open {url}: {e}"));
+    }
 }
 
 /// A finger on the screen.
@@ -43,12 +64,35 @@ struct Drag {
     start: (f32, f32),
     last: (f32, f32),
     at: Instant,
-    /// Recent positions (time, y), for the release velocity.
-    samples: std::collections::VecDeque<(Instant, f32)>,
+    /// Recent positions (time, x, y), for the release velocity.
+    samples: std::collections::VecDeque<(Instant, f32, f32)>,
     /// Moved far enough to be a drag, not a tap.
     dragging: bool,
     /// Something scrolled during it (so it is not a swipe).
     scrolled: bool,
+    /// The sheet or panel it could move (started on a sheet's handle, or
+    /// on a panel), and whether it does.
+    frame: Option<DragAxis>,
+    moving_frame: bool,
+    /// The carousel under its start and where its track was, and whether
+    /// the drag pages it.
+    pager: Option<(String, f32)>,
+    paging: bool,
+    /// Scrolling not applied yet: applied once per frame, in `draw`.
+    pending: f32,
+}
+
+impl Drag {
+    /// The release velocity over the last 100 ms, points per second (x, y).
+    fn velocity(&self) -> (f32, f32) {
+        match (self.samples.front(), self.samples.back()) {
+            (Some(a), Some(b)) if b.0 > a.0 => {
+                let t = b.0.duration_since(a.0).as_secs_f32();
+                ((b.1 - a.1) / t, (b.2 - a.2) / t)
+            }
+            _ => (0.0, 0.0),
+        }
+    }
 }
 
 /// A scroll still moving after the finger left, along Android's fling
@@ -259,6 +303,16 @@ impl App {
 
     fn draw(&mut self) {
         self.update_insets();
+        // The drag's scrolling since the last frame, in one step.
+        if let Some(mut d) = self.drag.take() {
+            if d.pending != 0.0 {
+                let dy = std::mem::take(&mut d.pending);
+                if self.scroll(d.start.0, d.start.1, dy) {
+                    d.scrolled = true;
+                }
+            }
+            self.drag = Some(d);
+        }
         let flinging = self.step_fling();
         let Some(s) = self.surface.as_mut() else {
             return;
@@ -305,10 +359,18 @@ impl App {
 
     fn apply(&mut self, e: Event) {
         let tap = matches!(e, Event::Tap { .. });
-        if let Some(out) = self.controller.handle(e)
-            && let Ok(json) = serde_json::to_string(&out.effects)
-        {
-            log(&json);
+        if let Some(out) = self.controller.handle(e) {
+            if let Ok(json) = serde_json::to_string(&out.effects) {
+                log(&json);
+            }
+            for e in &out.effects {
+                if let crate::interact::Effect::OpenLink { url } = e {
+                    match &self.platform {
+                        Some(p) => p.open_link(url),
+                        None => open_link_here(url),
+                    }
+                }
+            }
         }
         if tap && let Some(p) = &self.platform {
             p.show_keyboard(self.controller.focused().is_some());
@@ -400,9 +462,17 @@ impl ApplicationHandler for App {
                             start: p,
                             last: p,
                             at: now,
-                            samples: std::iter::once((now, p.1)).collect(),
+                            samples: std::iter::once((now, p.0, p.1)).collect(),
                             dragging: false,
                             scrolled: false,
+                            frame: self.controller.session.frame_drag_at(p.0, p.1),
+                            moving_frame: false,
+                            pager: self.controller.session.pager_at(p.0, p.1).map(|id| {
+                                let at = self.controller.session.pager_offset(&id);
+                                (id, at)
+                            }),
+                            paging: false,
+                            pending: 0.0,
                         });
                     }
                     TouchPhase::Moved => {
@@ -412,16 +482,27 @@ impl ApplicationHandler for App {
                         let (tx, ty) = (p.0 - d.start.0, p.1 - d.start.1);
                         if !d.dragging && (tx.abs() > TOUCH_SLOP || ty.abs() > TOUCH_SLOP) {
                             d.dragging = true;
+                            // A sheet moves on a drag along its axis; a panel on
+                            // a sideways one.
+                            d.moving_frame = match d.frame {
+                                Some(DragAxis::Vertical) => ty.abs() >= tx.abs(),
+                                Some(DragAxis::Horizontal) => tx.abs() > ty.abs(),
+                                None => false,
+                            };
+                            d.paging = !d.moving_frame && d.pager.is_some() && tx.abs() > ty.abs();
                         }
-                        if d.dragging && ty.abs() >= tx.abs() {
-                            let dy = d.last.1 - p.1;
-                            if self.scroll(d.start.0, d.start.1, dy) {
-                                d.scrolled = true;
-                            }
+                        if d.paging
+                            && let Some((id, at)) = &d.pager
+                        {
+                            self.controller.session.drag_pager(id, at - tx);
+                        } else if d.moving_frame {
+                            self.controller.session.drag_frame(tx, ty);
+                        } else if d.dragging && ty.abs() >= tx.abs() {
+                            d.pending += d.last.1 - p.1;
                         }
                         d.last = p;
                         d.at = now;
-                        d.samples.push_back((now, p.1));
+                        d.samples.push_back((now, p.0, p.1));
                         while d.samples.len() > 2
                             && now.duration_since(d.samples[0].0).as_secs_f32() > VELOCITY_HORIZON
                         {
@@ -433,21 +514,40 @@ impl ApplicationHandler for App {
                         }
                     }
                     TouchPhase::Ended => {
-                        let Some(d) = self.drag.take() else {
+                        let Some(mut d) = self.drag.take() else {
                             return;
                         };
+                        if d.pending != 0.0 && self.scroll(d.start.0, d.start.1, d.pending) {
+                            d.scrolled = true;
+                        }
                         let (tx, ty) = (p.0 - d.start.0, p.1 - d.start.1);
                         // The release velocity over the last 100 ms (content
                         // moving up is positive); none if the finger was held
                         // still before lifting.
                         let stale = now.duration_since(d.at).as_secs_f32() > STILL_BEFORE_LIFT;
-                        let velocity = match (d.samples.front(), d.samples.back()) {
-                            (Some(a), Some(b)) if b.0 > a.0 => {
-                                (a.1 - b.1) / b.0.duration_since(a.0).as_secs_f32()
+                        let (vx, vy) = d.velocity();
+                        // Content moving up is a positive scroll velocity.
+                        let velocity = -vy;
+                        if d.paging
+                            && let Some((id, _)) = &d.pager
+                        {
+                            self.controller
+                                .session
+                                .release_pager(id, if stale { 0.0 } else { vx });
+                            if let Some(s) = &self.surface {
+                                s.window.request_redraw();
                             }
-                            _ => 0.0,
-                        };
-                        if !d.dragging {
+                        } else if d.moving_frame {
+                            let (vx, vy) = if stale { (0.0, 0.0) } else { (vx, vy) };
+                            if self.controller.session.release_frame(vx, vy)
+                                && let Some(p) = &self.platform
+                            {
+                                p.show_keyboard(false);
+                            }
+                            if let Some(s) = &self.surface {
+                                s.window.request_redraw();
+                            }
+                        } else if !d.dragging {
                             self.apply(Event::Tap { x: p.0, y: p.1 });
                         } else if !d.scrolled && tx.abs().max(ty.abs()) > SWIPE_DISTANCE {
                             let kind = if tx.abs() > ty.abs() {
@@ -473,7 +573,18 @@ impl ApplicationHandler for App {
                             }
                         }
                     }
-                    TouchPhase::Cancelled => self.drag = None,
+                    TouchPhase::Cancelled => {
+                        if let Some(d) = self.drag.take() {
+                            if d.moving_frame {
+                                self.controller.session.release_frame(0.0, 0.0);
+                            }
+                            if d.paging
+                                && let Some((id, _)) = &d.pager
+                            {
+                                self.controller.session.release_pager(id, 0.0);
+                            }
+                        }
+                    }
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {

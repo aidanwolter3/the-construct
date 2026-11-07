@@ -59,6 +59,7 @@ fn main() {
                 Ok(Vec::new())
             }
             "shot" => {
+                s.settle(std::time::Duration::from_secs(10));
                 let img = s.render_cpu().expect("render");
                 let path = format!("{out}/{arg}.png");
                 std::fs::write(&path, construct_render::encode::png(&img)).unwrap();

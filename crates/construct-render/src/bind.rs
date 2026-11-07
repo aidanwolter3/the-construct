@@ -30,6 +30,16 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    /// An item's field; `uri` is the item's own URI unless it has one (as
+    /// the shared UI adds it to each list item).
+    fn item_value(&self, item: &EntityRecord, f: &str) -> Option<Value> {
+        match item.get(f) {
+            Some(v) => Some(v.clone()),
+            None if f == "uri" => self.item_uri.map(|u| Value::String(u.into())),
+            None => None,
+        }
+    }
+
     pub fn entity(&self, uri: &str) -> Option<&'a EntityRecord> {
         self.entities.get(uri)
     }
@@ -50,7 +60,10 @@ impl<'a> Ctx<'a> {
         if let Some(item) = self.item
             && let Some(f) = item_field(expr, true)
         {
-            return item.get(f).map(render).unwrap_or_default();
+            return self
+                .item_value(item, f)
+                .map(|v| render(&v))
+                .unwrap_or_default();
         }
         let mut s = self.tokens(expr);
         while let Some(start) = s.find("${") {
@@ -85,9 +98,9 @@ impl<'a> Ctx<'a> {
                     let value = match prefix {
                         "item." => self
                             .item
-                            .and_then(|it| it.get(name))
+                            .and_then(|it| self.item_value(it, name))
                             .filter(|v| !v.is_null())
-                            .map(render),
+                            .map(|v| render(&v)),
                         "form." => Some(self.form.get(name).cloned().unwrap_or_default()),
                         _ => self.route.get(name).cloned(),
                     };
@@ -116,8 +129,7 @@ impl<'a> Ctx<'a> {
         if let Some(f) = item_field(expr, true) {
             return self
                 .item
-                .and_then(|i| i.get(f))
-                .cloned()
+                .and_then(|i| self.item_value(i, f))
                 .unwrap_or(Value::Null);
         }
         if let Some(f) = expr.trim().strip_prefix("$form.") {

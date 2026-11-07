@@ -127,7 +127,20 @@ pub struct Renderer {
     swash: SwashCache,
     /// Where images come from; without one, image runs draw nothing.
     pub images: Option<crate::images::ImageStore>,
+    /// Shaped text kept between frames (a scroll moves runs, it doesn't
+    /// change them), with the frame it was last drawn in.
+    shaped: std::collections::HashMap<ShapeKey, (glyphon::Buffer, u64)>,
+    frame: u64,
 }
+
+/// A text run's shape: its text, face, size, line height, wrap width and
+/// scale (the floats as bits).
+type ShapeKey = (String, crate::style::Face, u32, u32, u32, u32);
+
+/// Shaped runs not drawn for this many frames are dropped once the cache
+/// holds more than [`SHAPED_MAX`].
+const SHAPED_IDLE_FRAMES: u64 = 120;
+const SHAPED_MAX: usize = 2000;
 
 /// One layer: a range of quad instances, then text runs.
 struct Layer {
@@ -213,7 +226,14 @@ fn layers(scene: &Scene, images: Option<&crate::images::ImageStore>) -> Layers {
                         color: Some(i.color),
                         clip: i.clip,
                     },
-                    Draw::Image(i) => match images.filter(|st| st.is_ready(&i.url)) {
+                    Draw::Image(i) => match images.filter(|st| {
+                        st.prepare(
+                            &i.url,
+                            (i.rect[2] * scene.scale).round() as u32,
+                            (i.rect[3] * scene.scale).round() as u32,
+                            i.radius * scene.scale,
+                        )
+                    }) {
                         Some(st) => GlyphRun {
                             id: st.glyph_id(&i.url, i.radius * scene.scale),
                             rect: i.rect,
@@ -334,6 +354,8 @@ impl Renderer {
             texts: Vec::new(),
             swash: SwashCache::new(),
             images: None,
+            shaped: std::collections::HashMap::new(),
+            frame: 0,
         }
     }
 
@@ -405,20 +427,45 @@ impl Renderer {
                 None,
             ));
         }
+        self.frame += 1;
+        let frame_no = self.frame;
+        let key = |t: &TextRun| -> ShapeKey {
+            (
+                t.text.clone(),
+                t.face,
+                t.size.to_bits(),
+                t.line_height.to_bits(),
+                (t.rect[2] + 0.5).to_bits(),
+                s.to_bits(),
+            )
+        };
+        // Shape at the frame's scale, as the CPU path does; runs drawn
+        // before are reused.
+        for runs in &text_layers {
+            for t in runs {
+                let k = key(t);
+                match self.shaped.get_mut(&k) {
+                    Some(e) => e.1 = frame_no,
+                    None => {
+                        let ty = Type {
+                            face: t.face,
+                            size: t.size,
+                            line_height: t.line_height,
+                        };
+                        let b = text.buffer(&t.text, ty, Some(t.rect[2] + 0.5), s);
+                        self.shaped.insert(k, (b, frame_no));
+                    }
+                }
+            }
+        }
+        if self.shaped.len() > SHAPED_MAX {
+            self.shaped
+                .retain(|_, (_, f)| frame_no - *f < SHAPED_IDLE_FRAMES);
+        }
         for (li, runs) in text_layers.iter().enumerate() {
-            // Shape at the frame's scale, as the CPU path does.
-            let buffers: Vec<glyphon::Buffer> = runs
-                .iter()
-                .map(|t| {
-                    let ty = Type {
-                        face: t.face,
-                        size: t.size,
-                        line_height: t.line_height,
-                    };
-                    text.buffer(&t.text, ty, Some(t.rect[2] + 0.5), s)
-                })
-                .collect();
-            let areas = runs.iter().zip(&buffers).map(|(t, b)| {
+            let buffers: Vec<&glyphon::Buffer> =
+                runs.iter().map(|t| &self.shaped[&key(t)].0).collect();
+            let areas = runs.iter().zip(buffers).map(|(t, b)| {
                 let [cx, cy, cw, ch] = t.clip.map(|v| v * s);
                 let bounds = TextBounds {
                     left: cx.max(-1.0e6) as i32,

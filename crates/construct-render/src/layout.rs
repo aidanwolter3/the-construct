@@ -7,7 +7,7 @@ use protocol::{
     ActionIntent, Align, DataBundle, EmbedPresentation, EntityRecord, ImageShape, Orientation,
     TextStyle, Tone, UiNode,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use taffy::prelude::*;
 use taffy::{LayoutInput, LayoutOutput, compute_leaf_layout};
@@ -170,6 +170,9 @@ struct Elem {
     scrolls: bool,
     /// `core://Sticky`: pinned at the top of its scrolling view.
     sticky: bool,
+    /// A carousel's track: its pages, side by side, move left by the
+    /// offset at `pager:<id>` (points).
+    pager: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -326,8 +329,18 @@ impl SceneBuilder {
             theme: b.theme,
             viewport: vp,
             scroll_max: BTreeMap::new(),
+            pagers: BTreeMap::new(),
         };
         laid.scroll_max = laid.scroll_extents();
+        laid.pagers = laid
+            .elems
+            .iter()
+            .filter_map(|e| {
+                let id = e.pager.clone()?;
+                let w = laid.tree.layout(e.node).ok()?.size.width;
+                Some((id, (w, e.kids.len())))
+            })
+            .collect();
         Ok(laid)
     }
 
@@ -511,12 +524,17 @@ fn node_type(n: &UiNode) -> String {
     n.type_tag()
 }
 
-/// An intent's JSON with `$item.`, `$form.` and `$route.` tokens bound
-/// (`value_expr` is left for the engine, as the shared UI does).
+/// An intent's JSON with `$item.` and `$route.` tokens and entity bindings
+/// bound (`value_expr` is left for the engine, as the shared UI does).
+/// `$form.`, `$form?.` and `$nonce` stay: the session binds them when the
+/// tap runs (`Session::bind_form`), with the form as it is then.
 fn bind_intent(intent: &ActionIntent, ctx: &Ctx) -> Value {
     fn walk(v: &Value, ctx: &Ctx, key: Option<&str>) -> Value {
         match v {
-            Value::String(s) if key != Some("value_expr") => Value::String(ctx.text(s)),
+            Value::String(s) if key != Some("value_expr") => Value::String(
+                ctx.text(&s.replace("$form.", "\u{1}form."))
+                    .replace('\u{1}', "$"),
+            ),
             Value::Array(a) => Value::Array(a.iter().map(|x| walk(x, ctx, None)).collect()),
             Value::Object(m) => Value::Object(
                 m.iter()
@@ -568,6 +586,7 @@ impl<'i> Build<'_, 'i> {
             clip,
             scrolls: false,
             sticky: false,
+            pager: None,
         });
         self.elems.len() - 1
     }
@@ -598,6 +617,7 @@ impl<'i> Build<'_, 'i> {
             clip: false,
             scrolls: false,
             sticky: false,
+            pager: None,
         });
         self.elems.len() - 1
     }
@@ -1157,9 +1177,7 @@ impl<'i> Build<'_, 'i> {
                 tstyle.flex_basis = length(0.0);
                 let mut kids =
                     vec![self.text_leaf(tstyle, shown, type_for(TextStyle::Body), color, None)];
-                if on_submit.is_some() {
-                    kids.push(self.icon("send", theme.primary, 20.0));
-                }
+                let blank = value.trim().is_empty();
                 let focused = self.input.focused == Some(field.as_str());
                 if focused {
                     // The caret, after the text typed so far.
@@ -1204,6 +1222,8 @@ impl<'i> Build<'_, 'i> {
                 let mut style = row(8, pad(16, 0), AlignItems::CENTER);
                 let extra = lines.map_or(0.0, |l| (l.saturating_sub(1)).min(4) as f32 * 20.0);
                 style.min_size.height = length(56.0 + extra);
+                // Room for a short placeholder ("Qty") on one line.
+                style.min_size.width = length(72.0);
                 let mut sem = self.sem(
                     b,
                     n,
@@ -1213,7 +1233,14 @@ impl<'i> Build<'_, 'i> {
                     }),
                 );
                 sem.id = format!("field:{field}");
-                self.push(
+                if on_submit.is_some() {
+                    // Next to the field, as the shared UI's Send button.
+                    style.flex_grow = 1.0;
+                    style.flex_shrink = 1.0;
+                    style.flex_basis = length(0.0);
+                    style.min_size.width = length(72.0);
+                }
+                let boxed = self.push(
                     style,
                     kids,
                     Paint::Quad {
@@ -1227,7 +1254,38 @@ impl<'i> Build<'_, 'i> {
                     },
                     Some(sem),
                     false,
-                )
+                );
+                let Some(submit) = on_submit else {
+                    return Some(boxed);
+                };
+                let glyph = self.icon(
+                    "send",
+                    if blank {
+                        theme.muted_text
+                    } else {
+                        theme.primary
+                    },
+                    24.0,
+                );
+                let mut bstyle = column(0, pad(0, 0), AlignItems::CENTER);
+                bstyle.justify_content = JustifyContent::CENTER;
+                bstyle.size = Size {
+                    width: length(48.0),
+                    height: length(48.0),
+                };
+                bstyle.flex_shrink = 0.0;
+                // Sends, then empties the field (`form.clear` is the session's own step).
+                let tap = (!blank).then(|| Tap::Intent {
+                    intent: json!({ "intent": "action.sequence", "steps": [
+                        bind_intent(submit, &ctx),
+                        { "intent": "form.clear", "field": field },
+                    ] }),
+                });
+                let mut ssem = self.sem(b, n, Some("Send".into()), tap);
+                ssem.id = format!("send:{field}");
+                let send = self.push(bstyle, vec![glyph], Paint::None, Some(ssem), false);
+                let outer = row(0, pad(0, 0), AlignItems::CENTER);
+                self.push(outer, vec![boxed, send], Paint::None, None, false)
             }
             UiNode::ChoiceChips {
                 field,
@@ -1490,45 +1548,86 @@ impl<'i> Build<'_, 'i> {
                 let aspect = aspect
                     .max(min_aspect.unwrap_or(0.1))
                     .min(max_aspect.unwrap_or(10.0));
-                let mut kids = Vec::new();
-                if let Some((uri, e)) = first {
+                let id = match tag {
+                    Some(t) => ctx.text(t),
+                    None => b.path.clone(),
+                };
+                // The page shown: set by the session when a swipe settles.
+                let count = uris.len();
+                let page = (self
+                    .input
+                    .scroll
+                    .get(&format!("page:{id}"))
+                    .copied()
+                    .unwrap_or(0.0)
+                    .round()
+                    .max(0.0) as usize)
+                    .min(count.saturating_sub(1));
+                // Every page, side by side on a track the carousel clips.
+                let mut pages = Vec::new();
+                for (i, uri) in uris.iter().enumerate() {
+                    let Some(e) = ctx.entity(uri) else {
+                        continue;
+                    };
                     let ib = B {
                         ctx: ctx.with_item(uri, e),
-                        ..b.child(0, Axis::Column)
+                        ..b.child(format!("p{i}"), Axis::Column)
                     };
                     if let Some(k) = self.node(item_template, &ib) {
+                        let mut ps = column(0, pad(0, 0), AlignItems::STRETCH);
+                        ps.size = Size {
+                            width: percent(1.0),
+                            height: percent(1.0),
+                        };
+                        ps.flex_shrink = 0.0;
                         let node = self.elems[k].node;
-                        let mut s = self.tree.style(node).cloned().unwrap_or_default();
-                        s.flex_grow = 1.0;
-                        s.align_self = Some(AlignSelf::STRETCH);
-                        let _ = self.tree.set_style(node, s);
-                        kids.push(k);
+                        let mut st = self.tree.style(node).cloned().unwrap_or_default();
+                        st.flex_grow = 1.0;
+                        st.align_self = Some(AlignSelf::STRETCH);
+                        let _ = self.tree.set_style(node, st);
+                        pages.push(self.push(ps, vec![k], Paint::None, None, false));
                     }
                 }
-                if uris.len() > 1 {
-                    let label = format!("1/{}", uris.len());
+                let mut track_style = row(0, pad(0, 0), AlignItems::STRETCH);
+                track_style.size = Size {
+                    width: percent(1.0),
+                    height: percent(1.0),
+                };
+                let track = self.push(track_style, pages, Paint::None, None, false);
+                self.elems[track].pager = Some(id.clone());
+                let mut kids = vec![track];
+                if count > 1 {
+                    let label = format!("{}/{count}", page + 1);
+                    let sem = Sem {
+                        id: format!("page:{id}"),
+                        node_type: "page".into(),
+                        text: Some(label.clone()),
+                        tap: None,
+                        selected: false,
+                        gestures: BTreeMap::new(),
+                    };
                     let t = self.text_leaf(
                         Style::default(),
                         label,
                         type_for(TextStyle::Caption),
                         Rgba::rgb(255, 255, 255),
-                        None,
+                        Some(sem),
                     );
-                    let mut style = row(0, pad(8, 2), AlignItems::CENTER);
+                    let mut style = row(0, pad(9, 3), AlignItems::CENTER);
                     style.position = Position::Absolute;
                     style.inset = Rect {
                         left: auto(),
-                        right: length(8.0),
-                        top: length(8.0),
+                        right: length(12.0),
+                        top: length(12.0),
                         bottom: auto(),
                     };
                     kids.push(self.push(
                         style,
                         vec![t],
                         Paint::Quad {
-                            bg: Rgba([0.0, 0.0, 0.0, 0.55]),
+                            bg: Rgba([0.0, 0.0, 0.0, 0.6]),
                             border: None,
-                            radius: 10.0,
+                            radius: 12.0,
                         },
                         None,
                         false,
@@ -1537,10 +1636,45 @@ impl<'i> Build<'_, 'i> {
                 let mut style = column(0, pad(0, 0), AlignItems::STRETCH);
                 style.aspect_ratio = Some(aspect as f32);
                 let mut sem = self.sem(b, n, None, None);
-                if let Some(t) = tag {
-                    sem.id = ctx.text(t);
+                sem.id = id.clone();
+                let frame = self.push(style, kids, Paint::None, Some(sem), true);
+                if count <= 1 {
+                    return Some(frame);
                 }
-                self.push(style, kids, Paint::None, Some(sem), true)
+                // Dots below the image, as the shared UI draws them.
+                let mut dots = Vec::new();
+                for i in 0..count {
+                    let c = if i == page {
+                        Rgba::rgb(0x00, 0x95, 0xF6)
+                    } else {
+                        Rgba::rgb(0xC7, 0xC7, 0xC7)
+                    };
+                    dots.push(self.push(
+                        fixed(6.0, 6.0),
+                        Vec::new(),
+                        Paint::Quad {
+                            bg: c,
+                            border: None,
+                            radius: 3.0,
+                        },
+                        None,
+                        false,
+                    ));
+                }
+                let mut ds = row(5, pad(0, 0), AlignItems::CENTER);
+                ds.align_self = Some(AlignSelf::CENTER);
+                ds.padding.top = length(10.0);
+                let sem = Sem {
+                    id: format!("dots:{id}"),
+                    node_type: "dots".into(),
+                    text: Some(format!("Page {} of {count}", page + 1)),
+                    tap: None,
+                    selected: false,
+                    gestures: BTreeMap::new(),
+                };
+                let dots = self.push(ds, dots, Paint::None, Some(sem), false);
+                let outer = column(0, pad(0, 0), AlignItems::STRETCH);
+                self.push(outer, vec![frame, dots], Paint::None, None, false)
             }
             UiNode::Progress { size_dp } => {
                 let s = size_dp.map_or(16.0, f32::from);
@@ -1922,13 +2056,22 @@ struct Pinned {
     origin: (f32, f32),
     clip: [f32; 4],
     parent_sem: Option<usize>,
+    /// The top of the view it is pinned in (the band above it is filled).
+    view_top: f32,
 }
+
+/// A sticky node this close to the top of its view when nothing is
+/// scrolled (a column's padding) pins where it rests, so it never moves;
+/// one further down pins at the top.
+const STICKY_REST: f32 = 24.0;
 
 /// What emitting knows about the place it is in.
 #[derive(Clone, Copy)]
 struct At {
     /// The top of the nearest scrolling view, for sticky nodes.
     scroll_top: Option<f32>,
+    /// How far that view is scrolled.
+    scrolled: f32,
     /// The parent's box (a sticky node stays inside it).
     parent: [f32; 4],
 }
@@ -1943,6 +2086,8 @@ pub struct Laid {
     viewport: Viewport,
     /// The farthest each scrolling view (by semantic id) can scroll.
     pub scroll_max: BTreeMap<String, f32>,
+    /// Each carousel (by semantic id): its page width and page count.
+    pub pagers: BTreeMap<String, (f32, usize)>,
 }
 
 // SAFETY: taffy's `CompactLength` holds a raw pointer only for CSS `calc()`
@@ -1992,6 +2137,7 @@ impl Laid {
         let vp = self.viewport;
         let at = At {
             scroll_top: None,
+            scrolled: 0.0,
             parent: [offset.0, offset.1, vp.width, vp.height],
         };
         let mut pinned = Vec::new();
@@ -2039,18 +2185,27 @@ impl Laid {
         let (w, h) = (l.size.width, l.size.height);
         if e.sticky
             && let Some(top) = at.scroll_top
-            && y < top
+            && at.scrolled > 0.0
         {
-            // Pinned at the top of the scrolling view, but never past the
-            // end of its parent (it scrolls away with it).
+            // Pinned at the top of the scrolling view (or where it rests,
+            // when that is just below it), but never past the end of its
+            // parent (it scrolls away with it).
+            let rest = y + at.scrolled - top;
+            let line = top
+                + if rest <= STICKY_REST {
+                    rest.max(0.0)
+                } else {
+                    0.0
+                };
             let parent_bottom = at.parent[1] + at.parent[3];
-            let to = top.min(parent_bottom - h);
+            let to = line.min(parent_bottom - h);
             if to > y {
                 pinned.push(Pinned {
                     elem: i,
                     origin: (origin.0, origin.1 + (to - y)),
                     clip,
                     parent_sem,
+                    view_top: top,
                 });
                 return;
             }
@@ -2082,6 +2237,7 @@ impl Laid {
         let mut oy = 0.0;
         let mut kid_at = At {
             scroll_top: at.scroll_top,
+            scrolled: at.scrolled,
             parent: rect,
         };
         let mut own_pins = Vec::new();
@@ -2090,12 +2246,18 @@ impl Laid {
             let max = (self.content_height(e) - h).max(0.0);
             oy = scroll.get(&s.id).copied().unwrap_or(0.0).clamp(0.0, max);
             kid_at.scroll_top = Some(y);
+            kid_at.scrolled = oy;
         }
+        let ox = e
+            .pager
+            .as_ref()
+            .and_then(|id| scroll.get(&format!("pager:{id}")).copied())
+            .unwrap_or(0.0);
         for k in &e.kids {
             let pins = if scrolls { &mut own_pins } else { &mut *pinned };
             self.emit_at(
                 *k,
-                (x, y - oy),
+                (x - ox, y - oy),
                 inner_clip,
                 sem_index,
                 kid_at,
@@ -2114,12 +2276,16 @@ impl Laid {
                     pl.size.width,
                     pl.size.height,
                 ];
-                let mut q = QuadInstance::fill(r, self.theme.background, 0.0);
+                // Over the content scrolling under it, up to the view's top.
+                let above = (r[1] - p.view_top).clamp(0.0, STICKY_REST);
+                let band = [r[0], r[1] - above, r[2], r[3] + above];
+                let mut q = QuadInstance::fill(band, self.theme.background, 0.0);
                 q.clip = p.clip;
                 scene.draws.push(Draw::Quad(q));
             }
             let free = At {
                 scroll_top: None,
+                scrolled: 0.0,
                 parent: rect,
             };
             let mut none = Vec::new();

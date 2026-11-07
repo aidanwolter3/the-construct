@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 type Hook = Arc<dyn Fn(String) + Send + Sync>;
+type CutKey = (String, u32, u32, u32);
 type Waker = Arc<dyn Fn() + Send + Sync>;
 
 enum Slot {
@@ -20,8 +21,12 @@ enum Slot {
 #[derive(Default)]
 struct Inner {
     slots: HashMap<String, Slot>,
-    /// Cut versions: (url, width, height, radius px) → pixels.
-    cut: HashMap<(String, u32, u32, u32), Arc<RgbaImage>>,
+    /// Cut versions: (url, width, height, radius px) → pixels and when
+    /// last asked for (the least recent goes first when full).
+    cut: HashMap<CutKey, (Arc<RgbaImage>, u64)>,
+    /// Cuts being made on a background thread ([`ImageStore::prepare`]).
+    cutting: std::collections::HashSet<CutKey>,
+    tick: u64,
     /// Stable ids for the GPU's custom glyphs: (url, radius px) ↔ id.
     ids: HashMap<(String, u32), u16>,
     by_id: Vec<(String, u32)>,
@@ -37,9 +42,8 @@ pub struct ImageStore {
 
 /// Custom glyph ids below this are icons (`crate::icons::id`).
 pub const FIRST_GLYPH_ID: u16 = 256;
-/// Most cut versions kept (oldest dropped first is not tracked: the cache
-/// is simply cleared when full).
-const MAX_CUT: usize = 128;
+/// Most cut versions kept (the least recently used goes first).
+const MAX_CUT: usize = 64;
 
 impl ImageStore {
     pub fn new() -> ImageStore {
@@ -94,6 +98,14 @@ impl ImageStore {
         }
     }
 
+    /// Asks the window for a redraw (something else arrived: a write's answer).
+    pub fn wake(&self) {
+        let waker = self.lock().waker.clone();
+        if let Some(w) = waker {
+            w();
+        }
+    }
+
     pub fn is_ready(&self, url: &str) -> bool {
         matches!(self.lock().slots.get(url), Some(Slot::Ready(_)))
     }
@@ -104,9 +116,12 @@ impl ImageStore {
         let r = radius.max(0.0).round() as u32;
         let key = (url.to_owned(), w, h, r);
         let src = {
-            let g = self.lock();
-            if let Some(c) = g.cut.get(&key) {
-                return Some(c.clone());
+            let mut g = self.lock();
+            g.tick += 1;
+            let tick = g.tick;
+            if let Some(c) = g.cut.get_mut(&key) {
+                c.1 = tick;
+                return Some(c.0.clone());
             }
             match g.slots.get(url) {
                 Some(Slot::Ready(i)) => i.clone(),
@@ -114,12 +129,60 @@ impl ImageStore {
             }
         };
         let out = Arc::new(cut(&src, w.max(1), h.max(1), r as f32));
-        let mut g = self.lock();
-        if g.cut.len() >= MAX_CUT {
-            g.cut.clear();
-        }
-        g.cut.insert(key, out.clone());
+        self.keep(key, out.clone());
         Some(out)
+    }
+
+    fn keep(&self, key: CutKey, img: Arc<RgbaImage>) {
+        let mut g = self.lock();
+        while g.cut.len() >= MAX_CUT {
+            let Some(oldest) = g
+                .cut
+                .iter()
+                .min_by_key(|(_, v)| v.1)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            g.cut.remove(&oldest);
+        }
+        g.tick += 1;
+        let tick = g.tick;
+        g.cut.insert(key, (img, tick));
+    }
+
+    /// Whether the image is ready to draw at `w` × `h` pixels with corners
+    /// of `radius` pixels. If it has loaded but isn't cut to that size yet,
+    /// it is cut on a background thread (the window is woken when done), so
+    /// a frame never waits for it: its placeholder shows meanwhile.
+    pub fn prepare(&self, url: &str, w: u32, h: u32, radius: f32) -> bool {
+        let r = radius.max(0.0).round() as u32;
+        let key = (url.to_owned(), w, h, r);
+        let src = {
+            let mut g = self.lock();
+            g.tick += 1;
+            let tick = g.tick;
+            if let Some(c) = g.cut.get_mut(&key) {
+                c.1 = tick;
+                return true;
+            }
+            if g.cutting.contains(&key) {
+                return false;
+            }
+            match g.slots.get(url) {
+                Some(Slot::Ready(i)) => i.clone(),
+                _ => return false,
+            }
+        };
+        self.lock().cutting.insert(key.clone());
+        let store = self.clone();
+        std::thread::spawn(move || {
+            let out = Arc::new(cut(&src, key.1.max(1), key.2.max(1), key.3 as f32));
+            store.lock().cutting.remove(&key);
+            store.keep(key, out);
+            store.wake();
+        });
+        false
     }
 
     /// A stable custom-glyph id for `url` drawn with `radius` pixel corners.

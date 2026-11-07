@@ -13,6 +13,10 @@
 #                                          # itself) in the app's private storage, unencrypted (the main app
 #                                          # keeps it in the Android keystore)
 #   scripts/android_native.sh --no-pod     # install and go back to the demo
+#   scripts/android_native.sh --as-app     # install it as the main app (org.theconstruct.android, "The Construct"),
+#                                          # over a debug build of it signed with this machine's debug key: it opens
+#                                          # the pod the main app is signed in to, with its saved session. Its data
+#                                          # stays, so `./gradlew :androidApp:installDebug` (in app/) goes back.
 #
 # Needs: an Android SDK with an NDK and build-tools (ANDROID_HOME, else ~/android-sdk), cargo-ndk, and
 # `rustup target add aarch64-linux-android`. Output: build/android-native/construct-render.apk.
@@ -24,8 +28,9 @@ case "${1:-}" in
   --build-only) MODE=build ;;
   --pod) MODE=pod POD_URL=${2:?--pod needs the pod URL, e.g. https://the-construct-pod.fly.dev} ;;
   --no-pod) MODE=demo ;;
+  --as-app) MODE=app ;;
   "") ;;
-  *) echo "usage: $0 [--build-only | --pod <url> | --no-pod]" >&2; exit 2 ;;
+  *) echo "usage: $0 [--build-only | --pod <url> | --no-pod | --as-app]" >&2; exit 2 ;;
 esac
 POD_URL=${POD_URL%/}
 
@@ -49,7 +54,15 @@ missing() { echo "no $1 found in $SDK (install it in Android Studio's SDK Manage
 echo "NDK: $ANDROID_NDK_HOME"
 OUT=build/android-native
 PKG=org.theconstruct.render
+MANIFEST=crates/construct-render/android/AndroidManifest.xml
 mkdir -p "$OUT"
+if [[ $MODE == app ]]; then
+  # The main app's package and name: an update of it, keeping its data (and so its sign-in).
+  PKG=org.theconstruct.android
+  sed -e "s/package=\"org.theconstruct.render\"/package=\"$PKG\"/" \
+    -e 's/android:label="[^"]*"/android:label="The Construct"/' "$MANIFEST" > "$OUT/AndroidManifest.xml"
+  MANIFEST=$OUT/AndroidManifest.xml
+fi
 
 echo "==> cross-compiling (arm64-v8a)"
 cargo ndk -t arm64-v8a -o "$OUT/jniLibs" build -p construct-render --features window,remote --release
@@ -62,8 +75,9 @@ RES=app/androidApp/src/main/res
 rm -rf "$OUT/res" && mkdir -p "$OUT/res"
 "$TOOLS/aapt2" compile -o "$OUT/res" \
   "$RES"/drawable/ic_launcher_{background,foreground,monochrome}.xml \
-  "$RES"/mipmap-anydpi-v26/ic_launcher{,_round}.xml "$RES"/mipmap-*dpi/ic_launcher{,_round}.png
-"$TOOLS/aapt2" link -o "$OUT/unsigned.apk" --manifest crates/construct-render/android/AndroidManifest.xml \
+  "$RES"/mipmap-anydpi-v26/ic_launcher{,_round}.xml "$RES"/mipmap-*dpi/ic_launcher{,_round}.png \
+  crates/construct-render/android/res/values/styles.xml
+"$TOOLS/aapt2" link -o "$OUT/unsigned.apk" --manifest "$MANIFEST" \
   -I "$PLATFORM/android.jar" "$OUT"/res/*.flat
 (cd "$OUT/apk" && zip -qr ../unsigned.apk lib)
 "$TOOLS/zipalign" -f -p 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
@@ -91,6 +105,28 @@ fi
 echo "device: $("$ADB" get-serialno) via $ADB"
 
 echo "==> installing"
+if [[ $MODE == app ]]; then
+  # -d: the main app's versionCode may be higher; a debuggable app may go down.
+  if ! INSTALLED=$("$ADB" install -r -d "$OUT/construct-render.apk" 2>&1); then
+    echo "$INSTALLED" >&2
+    if grep -q UPDATE_INCOMPATIBLE <<<"$INSTALLED"; then
+      echo "The Construct on the phone is signed with another key (a release build, or a debug build from another" >&2
+      echo "machine), so it can't be updated in place. Uninstalling it would sign you out; install a debug build" >&2
+      echo "from this machine first (cd app && ./gradlew :androidApp:installDebug), sign in, then run this again." >&2
+    fi
+    exit 1
+  fi
+  echo "$INSTALLED"
+  "$ADB" shell am force-stop "$PKG"
+  "$ADB" logcat -c
+  "$ADB" shell am start -W -n "$PKG/android.app.NativeActivity" >/dev/null
+  for _ in $(seq 1 60); do
+    "$ADB" logcat -d -s construct-render | grep -q "Frame 0 drawn\|couldn't open" && break
+    sleep 1
+  done
+  "$ADB" logcat -d -s construct-render
+  exit 0
+fi
 "$ADB" install -r "$OUT/construct-render.apk"
 
 if [[ $MODE == pod || $MODE == demo ]]; then

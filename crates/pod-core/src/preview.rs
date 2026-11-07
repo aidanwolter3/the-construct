@@ -273,6 +273,8 @@ fn effect_line(e: &Effect) -> String {
             "not sent (a preview doesn't reach the pod): {}",
             serde_json::to_string(intent).unwrap_or_default()
         ),
+        Effect::Sent { path } => format!("sent to {path}"),
+        Effect::OpenLink { url } => format!("would open {url} in the browser"),
         Effect::Nothing => "nothing happened".into(),
     }
 }

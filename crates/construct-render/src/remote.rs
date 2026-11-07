@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::images::ImageStore;
-use crate::interact::{Loader, Session};
+use crate::interact::{Done, Loaded, Loader, Session, Write, Written};
 use crate::layout::Viewport;
 
 /// A pod and a session on it.
@@ -92,6 +92,29 @@ impl PodClient {
             return Err(format!("{path}: HTTP {status}"));
         }
         resp.json().map_err(|e| format!("{path}: {e}"))
+    }
+
+    /// POSTs `body` to a pod path; the answer's JSON (`null` when empty).
+    pub fn post(&self, path: &str, body: &Value) -> Result<Value, String> {
+        let url = format!("{}/{}", self.base, path.trim_start_matches('/'));
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.token)
+            .header(protocol::FEATURES_HEADER, protocol::features_header())
+            .json(body)
+            .send()
+            .map_err(|e| format!("{path}: {e}"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().unwrap_or_default();
+            return Err(format!(
+                "{path}: HTTP {status} {}",
+                text.chars().take(200).collect::<String>()
+            ));
+        }
+        let text = resp.text().map_err(|e| format!("{path}: {e}"))?;
+        Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
     }
 
     /// A layout's bundle.
@@ -436,6 +459,31 @@ impl Loader for PodClient {
 
     fn data(&self, path: &str) -> Result<DataBundle, String> {
         serde_json::from_value(self.get(path)?).map_err(|e| format!("{path}: {e}"))
+    }
+
+    fn fetch(&self, path: &str, done: Loaded) -> bool {
+        let pod = self.clone();
+        let path = path.to_owned();
+        std::thread::spawn(move || done(Loader::data(&pod, &path)));
+        true
+    }
+
+    fn send(&self, write: Write, done: Done) -> bool {
+        let pod = self.clone();
+        std::thread::spawn(move || {
+            let result = pod.post(&write.path, &write.body);
+            let mut refreshed = Vec::new();
+            if result.is_ok() {
+                for id in &write.refresh {
+                    match Loader::layout(&pod, id) {
+                        Ok((_, d)) => refreshed.push(d),
+                        Err(e) => eprintln!("construct-render: reloading {id}: {e}"),
+                    }
+                }
+            }
+            done(Written { result, refreshed });
+        });
+        true
     }
 }
 

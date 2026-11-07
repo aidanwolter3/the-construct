@@ -27,8 +27,8 @@ Decision: a Rust rendering engine, crate `construct-render`, drawing the plumbin
   pixels. The distance is computed in pixels, so the edge ramp is one pixel at any scale without `fwidth`, and
   both paths agree to the pixel on quads. CPU frames are the goldens; GPU frames must match them within 0.2%.
 - **Interaction** (`Session`): device state only, as the app keeps it: form values, chips, `action.local.set`,
-  opening a layout onto a back stack, scrolling. Intents that would reach the pod or the platform (mutations,
-  sign-in, device commands) are reported, never sent.
+  opening a layout onto a back stack, scrolling. Writes go through the session's `Loader`; without one that sends
+  (agent previews) they are reported, never sent. Sign-in is never sent.
 - **Agents first**: the pod's MCP tools `render_layout_preview` and `dispatch_virtual_interaction` fetch a layout
   as a client does (`GET /v1/workspaces/<id>` through the pod's router, as the owner), draw it on the CPU and answer
   a lossless WebP with the semantic tree. A preview's state is kept in memory (the pod's last four).
@@ -40,10 +40,12 @@ draws today's plumbing, and new vocabulary still lands in Compose first.
 
 Icons are the shared UI's own Material path data (`icons.rs`, generated from `ConstructIcons.kt`).
 
-The viewer and the APK can run a pod live but read-only (feature `remote`): layouts, screens, their data and images
-are fetched as they open; nothing is sent back.
+The viewer and the APK can run a pod live (feature `remote`): layouts, screens, their data and images are fetched
+as they open, and taps that write (optimistic changes, creates, marking notifications read) are applied at once and
+POSTed in the background, undone if the pod refuses them. The APK can install as the main Android app's package and
+read its saved session (`scripts/android_native.sh --as-app`), so trying the engine keeps the user signed in.
 
 Not yet: dialogs are not drawn, a pinned version is not shown, carousels show their first item, and dates are not formatted. The native window and
-APK talk to no engine (`client-core`): no cache, outbox, event stream or upstream sign-in, so taps that change data
-are not sent. Moving the clients onto this engine, the
+APK talk to no engine (`client-core`): no cache, outbox (a write made offline is lost), event stream or upstream
+sign-in. Moving the clients onto this engine, the
 web target and a shared golden suite with the simulator are later decisions.

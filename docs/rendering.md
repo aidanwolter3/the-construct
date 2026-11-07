@@ -27,7 +27,7 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 | `scene` | `QuadInstance` (the GPU vertex layout), `TextRun`, `SemanticNode`, `hit_test`, `find_node`, `find_text` |
 | `cpu` | The CPU rasterizer: `sd_rounded_box` and `shade` (the shader's maths), 8-bit premultiplied target, glyphs placed as glyphon places them |
 | `gpu` | `Renderer` (any texture view), `HeadlessSurface` (offscreen + readback); feature `gpu` (default) |
-| `interact` | `Session`: a layout with form values, scroll offsets and a back stack; `tap`, `scroll_by`, `type_text`, `dispatch` |
+| `interact` | `Session`: a layout with form values, scroll offsets and a back stack; `tap`, `scroll_by`, `type_text`, `dispatch`; writes through its `Loader` |
 | `viewer` | `Controller`: platform events (resize, tap, wheel, text, Back) applied to a session; what windows feed |
 | `window` | winit + wgpu surface (feature `window`); used by `construct-viewer` and Android |
 | `android` | `android_main` for the NativeActivity (Android builds with `window`) |
@@ -49,19 +49,24 @@ path from the root (`root/0/2/i3/0`, `i3` being a list's fourth item). Bounds ar
 
 Drawn like the app: Page, Workspace (title and slots), Column, Row, Container, Box, Text (styles, `count`), Button,
 IconButton (`active`), Chip, Badge, Spacer, Divider, Conditional, Tappable, Gesture (tap), Scroll (clipped,
-offsets), List (`where`, `filter`, `group_by`, `columns`, `focus`, `indent`, `empty_text`), ChoiceChips, TextField,
-Switch, Progress, Dock, Layout (inline, from the layouts given), and every named icon (`icons.rs`: the shared UI's
-Material path data, rasterized with zeno; on the GPU they are glyphon custom glyphs). Images draw once loaded
-(over a placeholder in the blurhash's colour; only live sessions load them). Approximated: Carousel (first item and an "n/N" badge), MediaPicker (the add tile),
+offsets), List (`where`, `filter`, `group_by`, `columns`, `focus`, `indent`, `empty_text`), ChoiceChips, TextField
+(with its Send button beside it when it has `on_submit`), Switch, Progress, Dock, Layout (inline, from the layouts
+given), Carousel (pages side by side, an "n/N" badge and dots; a sideways drag pages it, snapping to a page), and
+every named icon (`icons.rs`: the shared UI's Material path data, rasterized with zeno; on the GPU they are glyphon
+custom glyphs). Images draw once loaded (over a placeholder in the blurhash's colour; only live sessions load them;
+in a window they are cut to their box on a background thread). Approximated: MediaPicker (the add tile),
 Drawer (the selected page), AppFrame and unknown nodes (a labelled box). Not drawn: dialogs, `format` dates.
 Presented layouts are drawn as the shared UI draws them: a sheet (85% of the height, with a handle), a side panel
 (86% of the width, at most 340 points) or an overlay from its edge, over a 32% black scrim that closes it when
-tapped; a screen a sheet or panel opens stays inside it. In a window, layouts and screens slide in and out over
+tapped; a screen a sheet or panel opens stays inside it. A sheet dragged by its handle strip, or a panel dragged
+sideways toward its edge, follows the finger and closes past a quarter of its size or on a flick faster than
+500 points per second, else settles back. In a window, layouts and screens slide in and out over
 280 ms (`FastOutSlowInEasing`); a fling follows Android's `OverScroller` spline with the release velocity of the
-last 100 ms. `action.device` `show_versions` fills `local://versions` and `local:versions` from
+last 100 ms. A drag's scrolling is applied once per frame, and the GPU renderer keeps shaped text between frames. `action.device` `show_versions` fills `local://versions` and `local:versions` from
 `/v1/apps/<id>/versions`; `pin_version` and `follow_latest` mark the choice there, but the layout still shows its
 latest version. `core://Sticky` pins at the top of its scrolling view, over the page
-background, until its parent scrolls away.
+background, until its parent scrolls away; one that rests within 24 points of the view's top (a column's padding)
+pins where it rests, so it never moves (the shared UI moves it up to the top first).
 
 ## The desktop viewer
 
@@ -69,7 +74,7 @@ background, until its parent scrolls away.
 cargo run -p construct-render --features viewer --bin construct-viewer                      # the bundled demo
 cargo run -p construct-render --features viewer --bin construct-viewer -- layout.json       # {"layout", "data"}
 CONSTRUCT_POD_TOKEN=… cargo run -p construct-render --features viewer --bin construct-viewer -- \
-  --pod http://127.0.0.1:8080 --layout home                                                 # live, read-only
+  --pod http://127.0.0.1:8080 --layout home                                                 # live
 ```
 
 Click, scroll, type into a focused field, Escape for Back; each interaction's effects are logged. It draws with
@@ -89,6 +94,14 @@ installs it, pushes the task-list fixture, launches, checks logcat for `surface 
 desktop golden (at most 1% of pixels may differ). `--build-only` stops after the APK. The activity opens
 `layout.json` from its external files directory, or the bundled demo.
 
+`scripts/android_native.sh --as-app` installs it **as the main app** (`org.theconstruct.android`, named "The
+Construct") over a debug build of it signed with the same machine's debug key, so the main app's data stays: the
+engine reads the server the main app uses (`shared_prefs/server.xml`, else staging) and its saved pod session
+(`shared_prefs/construct_secure.xml`, decrypted with the main app's Android keystore key through the SDK), so you
+stay signed in. `cd app && ./gradlew :androidApp:installDebug` goes back to the Compose app with the same data. An
+install over a build signed with another key fails, and the script says so rather than uninstall (which would sign
+you out). Its theme draws light system bars with dark icons.
+
 `scripts/android_native.sh --pod <url>` instead installs it and opens that pod **live** (below): it asks for the pod
 code (or reads `CONSTRUCT_POD_CODE`), checks it with `POST /v1/pods/open`, and writes the session token the pod
 answers (on today's server, the pod code itself) to `pod.json` in the app's private storage with `run-as` (the APK is
@@ -99,14 +112,25 @@ window insets Android reports (`getRootWindowInsets`: system bars, camera cutout
 
 ## Live sessions (`remote`)
 
-Feature `remote` (on in the viewer and the APK) runs a session over a pod, read-only: `PodClient` fetches home as a
+Feature `remote` (on in the viewer and the APK) runs a session over a pod: `PodClient` fetches home as a
 client does (`GET /v1/workspaces/home`), builds the device's list of layouts (`local:layouts`, `local:apps`) from
 `GET /v1/apps?all=1`, and is the session's `Loader`: a layout a tap opens is fetched then, a page screen whose route
-matches a tap's `target_uri` opens with its `$route` bound, its `item` and its `data` path loaded. `local://nav` and
+matches a tap's `target_uri` opens with its `$route` bound and its `item`, and slides in at once while its `data`
+path loads in the background (`local://screen#loading`). `local://nav` and
 `local://screen` are set as the shared UI sets them. Images (`core://Image`) download on four background threads
 without the session (the pod serves media from public paths), are cut to their box (cropped to fill, corners
-rounded) and drawn over their placeholder once they arrive; the window redraws then. What a tap would send to the
-pod (likes, adds, edits) is logged as not sent: there is no outbox, cache or event stream. The device data the
+rounded) and drawn over their placeholder once they arrive; the window redraws then.
+
+Writes go to the pod as the shared UI sends them, without an outbox: `$form.<f>`, `$form?.<f>` and one `$nonce`
+per tap are bound when the tap runs (a blank `$form.<f>` sends nothing). `action.mutation.optimistic` changes the
+entity at once (every `value_expr` against the entity as it was), POSTs its payload with `$value` as the new value
+on a background thread, and puts the fields back if the pod refuses. `action.mutation.create` adds its entity to its
+list at once, POSTs, then loads the layouts on the stack again (a refusal takes it out). `action.device`
+`open_notification` marks it read (`POST /v1/notifications/read`), closes the inbox's sheet or panel and opens the
+notification's layout and `target_uri` screen; `mark_read` and `mark_all_read` mark them here and on the pod.
+`action.link.open` opens an `http(s)` address in the browser (an `ACTION_VIEW` intent on Android, `open` or
+`xdg-open` on desktops). There is no cache or event stream: what other devices change shows on the next load. The
+device data the
 shared UI builds (`DeviceData`) is built from the pod the same way: `local://connection`, `local://session`,
 `local://inbox`, the layouts with their versions, and, for a layout that binds them, `local:notifications`
 (`/v1/notifications`, with `when` and `day` labels in UTC), `local:channels` and `local:sign_ins` /
