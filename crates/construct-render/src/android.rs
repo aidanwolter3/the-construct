@@ -132,6 +132,18 @@ impl crate::window::Platform for Android {
         activity_gone(&self.0)
     }
 
+    fn pick_images(&self, max: u32) -> bool {
+        with_activity(&self.0, |env, activity| {
+            crate::bridge::pick_images(env, activity, max)
+        })
+        .map_err(|e| log(&format!("photo picker: {e}")))
+        .is_ok()
+    }
+
+    fn events(&self) -> Vec<crate::window::PlatformEvent> {
+        crate::bridge::take_events()
+    }
+
     fn clipboard(&self) -> Option<String> {
         clipboard_text(&self.0)
     }
@@ -928,6 +940,16 @@ fn android_main(app: AndroidApp) {
             std::process::exit(0);
         }
     };
+    // The bridge's callbacks (links, picked photos, messages) wake the window.
+    let proxy = std::sync::Mutex::new(event_loop.create_proxy());
+    crate::bridge::set_waker(move || {
+        if let Ok(p) = proxy.lock() {
+            let _ = p.send_event(());
+        }
+    });
+    if let Err(e) = with_activity(&app, crate::bridge::ask_notifications) {
+        log(&format!("notification permission: {e}"));
+    }
     let window = crate::window::App::new(Controller::new(session), "The Construct")
         .with_platform(Box::new(Android(app, Default::default(), home)));
     if let Err(e) = crate::window::run_app(event_loop, window) {

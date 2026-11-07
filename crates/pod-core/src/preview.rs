@@ -279,6 +279,7 @@ fn effect_line(e: &Effect) -> String {
         Effect::LeftPod => "would leave the pod on this device".into(),
         Effect::Paste { field } => format!("would paste the clipboard into {field}"),
         Effect::Copy { text } => format!("would copy {text:?}"),
+        Effect::PickMedia { field, .. } => format!("would open the photo picker for {field}"),
         Effect::Nothing => "nothing happened".into(),
     }
 }

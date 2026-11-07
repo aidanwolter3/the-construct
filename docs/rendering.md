@@ -36,7 +36,9 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 | `engine` | `PodEngine`: a live session over a pod run by the engine (`client-core`: cache, outbox, event stream), the session's `Loader` (feature `remote`); `FileStore`, a desktop's secure store without a keychain |
 | `remote` | `PodClient`: a session fetched straight from the pod (`construct-sim`'s live mode), and the device data builders both use (feature `remote`) |
 | `pods` | A device's own pod: the pod it opened last, its engine, the pod's sign-in screen, leaving and reloading (features `remote` and `window`); shared by Android and the desktop viewer |
+| `platform` | `Platform`: what the app needs from the system it runs on (keyboard, insets, browser, clipboard, photo picker, events, the pod's saved session), implemented per platform |
 | `android` | `android_main` for the NativeActivity (Android builds with `window`) |
+| `bridge` | The Rust side of the Android bridge (`android/java`): links, the photo picker's result, messages |
 
 The pod builds the crate with `default-features = false`: no wgpu, CPU only.
 
@@ -141,6 +143,27 @@ system keeps its window below the status bar and camera cutout and resizes it fo
 opens the keyboard, and Back pops the stack. The layout stays inside the window insets Android reports
 (`getRootWindowInsets`: system bars, camera cutout and keyboard), logged as they change. Its theme draws light system
 bars with dark icons.
+
+### The Android bridge
+
+A NativeActivity gets none of the Android callbacks that arrive through Java: a link opening the app, an activity
+result, a broadcast while the app is closed. `android/java` holds a small bridge that passes them to Rust and holds no
+app logic: `ConstructActivity` (NativeActivity plus `onNewIntent` and `onActivityResult`, and `pickImages` and
+`askPermission` that Rust calls), `ConstructReceiver` (a message, also while the app is closed) and `Native` (the
+native methods, `Java_org_theconstruct_android_Native_*` in `src/bridge.rs`). The script compiles them with `javac`
+and `d8` into the APK's `classes.dex`. Events queue in `bridge.rs`, wake the window and reach it through
+`Platform::events`; for now each shows as a notice. Decision:
+[`android-native-bridge`](decisions/android-native-bridge.md). Try it with the app installed:
+
+```bash
+adb shell am start -a android.intent.action.VIEW -d "construct://bridge/hello"     # a link opens the app
+# Pixelfed → New post → the Add photos tile: Android's photo picker; the count and size come back to Rust
+# Swipe the app away, then (only adb and the system may send this):
+adb shell am broadcast -n org.theconstruct.android/.ConstructReceiver --es message "Hello"   # a notification
+```
+
+The platform interface (`platform.rs`: `Platform`, `PlatformEvent`, `Reopen`) is what each platform implements
+(Android, the desktop viewer; a web build later).
 
 ## Live sessions (`remote`)
 

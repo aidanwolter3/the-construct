@@ -11,17 +11,22 @@
     <uses-feature android:name="android.hardware.vulkan.version" android:required="false" />
     <!-- A live session (scripts/android_native.sh with pod): layouts, data and images from the pod. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Notifications from the bridge's receiver (Android 13+ asks the user). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
         android:label="The Construct"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:hasCode="false"
+        android:hasCode="true"
         android:debuggable="true"
         android:extractNativeLibs="true"
         android:theme="@style/Construct">
+        <!-- The bridge (android/java): NativeActivity plus the callbacks it doesn't pass on (links, the photo
+             picker's result), each forwarded to Rust. singleTask: a link reaches this same activity (onNewIntent). -->
         <activity
-            android:name="android.app.NativeActivity"
+            android:name=".ConstructActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|fontWeightAdjustment|colorMode|layoutDirection|locale"
             android:windowSoftInputMode="adjustResize">
             <meta-data android:name="android.app.lib_name" android:value="construct_render" />
@@ -29,6 +34,21 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Links into the app: construct://oauth (the sign-in redirect the main app uses) and construct://bridge
+                 (the prototype's test link). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="construct" android:host="oauth" />
+                <data android:scheme="construct" android:host="bridge" />
+            </intent-filter>
         </activity>
+        <!-- A message for the app, also while it is closed (what a push does). Only the shell (adb) and the system
+             hold DUMP, so no other app can send one. -->
+        <receiver
+            android:name=".ConstructReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP" />
     </application>
 </manifest>
