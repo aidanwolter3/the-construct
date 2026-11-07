@@ -94,6 +94,7 @@ settings are logged at startup.
 | `CONSTRUCT_METRICS_ADDR` | unset | Serve Prometheus `GET /metrics` on this separate address. |
 | `CONSTRUCT_MONITOR_AUTH_FAILURES_PER_HOUR` | `20` | The monitoring source warns above this many wrong pod codes and unknown tokens an hour. |
 | `CONSTRUCT_MONITOR_LLM_TOKENS_PER_DAY` | `1000000` | It warns above this many model tokens a day. |
+| `CONSTRUCT_AGENTS_PRIVATE_HOSTS` | unset | `1`: the Agents source may sign in to a runner on any address over http (local development only); otherwise `https://` public hosts. |
 | `CONSTRUCT_SHOW_DEV_APPS` | unset | `1`: `GET /v1/apps` also lists `pixelfed_sample_no_login` (it works either way). |
 | `CONSTRUCT_TEST_HOOKS` | unset | `1` enables `POST /v1/test/fault` and local Web Push receivers. Tests only. |
 

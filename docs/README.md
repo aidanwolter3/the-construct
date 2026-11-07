@@ -16,6 +16,7 @@ Start with [architecture.md](architecture.md), then the guide for what you're do
 | [pixelfed.md](pixelfed.md) | The Pixelfed app: sign-in, instances, its endpoints |
 | [posting.md](posting.md) | How photo posting works across client, engine, pod and adapter |
 | [notifications.md](notifications.md) | How notifications travel from an upstream to a device |
+| [agents.md](agents.md) | The Agents source: Claude Code sessions from an agent runner (CAP v1), its blueprint, notifications and Tasks wiring |
 
 **Decisions.** [DECISIONS.md](DECISIONS.md) holds D1–D52, numbered and closed to new entries. Newer decisions are
 one file each in [decisions/](decisions/) ([how to write one](decisions/README.md)). They record why, at the time;

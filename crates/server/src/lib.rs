@@ -6,11 +6,13 @@
 //! ...), `server::pixelfed` is the Pixelfed adapter crate and
 //! `server::recipes` the recipes adapter crate, `server::collections` the
 //! Collections adapter crate, `server::events` the Events adapter crate,
-//! `server::monitor` the monitoring source crate.
+//! `server::monitor` the monitoring source crate, `server::agents` the agent
+//! runner source crate.
 
 use std::path::Path;
 use std::sync::Arc;
 
+pub use app_agents as agents;
 pub use app_collections as collections;
 pub use app_events as events;
 pub use app_monitor as monitor;
@@ -27,7 +29,9 @@ pub use pod_host as host;
 /// home app starts from it, decision `blueprints-and-home`); and
 /// Collections (no apps of its own: data custom apps declare; fillers
 /// configured from `CONSTRUCT_INFER_*` and `CONSTRUCT_FILL_*`), and the
-/// server monitoring source (no apps; decision `server-monitoring`).
+/// server monitoring source (no apps; decision `server-monitoring`), and the
+/// agent runner source with its `agents` blueprint (decision
+/// `agents-data-source`).
 pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
     vec![
         Arc::new(PixelfedAdapter::new(pixelfed)),
@@ -46,6 +50,7 @@ pub fn adapters(pixelfed: PixelfedConfig) -> Vec<Arc<dyn AppAdapter>> {
         Arc::new(app_monitor::MonitorAdapter::new(
             app_monitor::MonitorConfig::from_env(),
         )),
+        app_agents::adapter(),
     ]
 }
 
