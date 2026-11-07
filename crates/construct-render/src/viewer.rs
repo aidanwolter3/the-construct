@@ -3,7 +3,7 @@
 //! desktop window (`crate::window`) and the Android activity feed their
 //! events through here, and tests synthesize them.
 
-use crate::interact::{Effect, Outcome, Session, Target};
+use crate::interact::{Outcome, Session, Target};
 use crate::layout::Viewport;
 
 /// A platform event, in logical points.
@@ -25,22 +25,37 @@ pub enum Event {
     Backspace,
     /// System Back (Escape on desktop).
     Back,
+    /// A swipe that started at a point and scrolled nothing: `swipe_up`,
+    /// `swipe_down`, `swipe_left` or `swipe_right`.
+    Swipe { x: f32, y: f32, kind: &'static str },
 }
 
-/// A session and the little UI state a window adds: the focused field.
+/// A session and the little UI state a window adds.
 pub struct Controller {
     pub session: Session,
-    pub focused: Option<String>,
     /// Whether the frame must be drawn again.
     pub dirty: bool,
     pub frames: u64,
 }
 
 impl Controller {
+    /// The text field being typed into.
+    pub fn focused(&self) -> Option<&str> {
+        self.session.focused.as_deref()
+    }
+
+    /// Stops typing (the keyboard closed); true if a field was focused.
+    pub fn unfocus(&mut self) -> bool {
+        let was = self.session.focused.take().is_some();
+        if was {
+            self.session.invalidate();
+        }
+        was
+    }
+
     pub fn new(session: Session) -> Controller {
         Controller {
             session,
-            focused: None,
             dirty: true,
             frames: 0,
         }
@@ -62,31 +77,23 @@ impl Controller {
                 });
                 None
             }
-            Event::Tap { x, y } => {
-                let out = self.session.tap(&Target::Point(x, y)).ok();
-                self.focused = out.as_ref().and_then(|o| {
-                    o.effects.iter().find_map(|e| match e {
-                        Effect::Focused { field } => Some(field.clone()),
-                        _ => None,
-                    })
-                });
-                out
-            }
+            Event::Tap { x, y } => self.session.tap(&Target::Point(x, y)).ok(),
             Event::Scroll { x, y, dy } => {
                 self.session.scroll_by(Some(&Target::Point(x, y)), dy).ok()
             }
             Event::Text(t) => {
-                let field = self.focused.clone()?;
+                let field = self.session.focused.clone()?;
                 let mut v = self.session.form.get(&field).cloned().unwrap_or_default();
                 v.push_str(&t);
                 Some(self.session.type_text(&field, &v))
             }
             Event::Backspace => {
-                let field = self.focused.clone()?;
+                let field = self.session.focused.clone()?;
                 let mut v = self.session.form.get(&field).cloned().unwrap_or_default();
                 v.pop();
                 Some(self.session.type_text(&field, &v))
             }
+            Event::Swipe { x, y, kind } => self.session.gesture(x, y, kind).ok(),
             Event::Back => {
                 let back = serde_json::json!({ "intent": "action.navigation.back" });
                 self.session.dispatch(&back).ok()

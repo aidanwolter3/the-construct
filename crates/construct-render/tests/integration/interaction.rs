@@ -198,7 +198,7 @@ fn window_events_drive_the_session() {
         x: field[0] + 10.0,
         y: field[1] + 10.0,
     });
-    assert_eq!(c.focused.as_deref(), Some("note"));
+    assert_eq!(c.focused(), Some("note"));
     c.handle(Event::Text("Buy ".into()));
     c.handle(Event::Text("figs!".into()));
     c.handle(Event::Backspace);
@@ -359,4 +359,96 @@ fn images_draw_once_loaded_and_insets_move_the_content() {
     let inset = s.render_cpu().unwrap();
     assert_ne!(inset.get_pixel(20, 20).0[..3], [255, 0, 0]);
     assert_eq!(inset.get_pixel(20, 50).0, [255, 0, 0, 255]);
+}
+
+#[test]
+fn sticky_pins_scroll_clamps_and_swipes_run_gestures() {
+    let rows: Vec<_> = (0..40)
+        .map(
+            |i| json!({ "type": "core://Text", "value_expr": format!("Row {i}"), "style": "Body" }),
+        )
+        .collect();
+    let mut children = vec![];
+    children.push(json!({ "type": "core://Sticky", "content":
+        { "type": "core://Text", "value_expr": "Pinned header", "style": "Title" } }));
+    children.extend(rows);
+    let page: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Page", "id": "p", "root": { "type": "core://Gesture",
+            "on_swipe_right": { "intent": "action.local.set", "entity_uri": "demo://ui", "field": "menu", "value_expr": "true" },
+            "content": { "type": "core://Column", "children": [
+                { "type": "core://Text", "value_expr": "Title", "style": "Headline" },
+                { "type": "core://Scroll", "content": { "type": "core://Column", "children": children } } ] } } }))
+    .unwrap();
+    let mut s = Session::new(
+        "p",
+        page,
+        Default::default(),
+        Viewport {
+            width: 300.0,
+            height: 400.0,
+            scale: 1.0,
+        },
+    );
+    let top = s
+        .scene()
+        .unwrap()
+        .find_text("Pinned header")
+        .unwrap()
+        .bounds[1];
+    s.scroll_by(None, 300.0).unwrap();
+    let scene = s.scene().unwrap();
+    // Pinned at the top of the scrolling view, and drawn over the rows.
+    assert_eq!(scene.find_text("Pinned header").unwrap().bounds[1], top);
+    assert!(scene.find_text("Row 0").is_none());
+    // Scrolling stops at the end: a huge scroll moves only to the end, and more does nothing.
+    s.scroll_by(None, 100_000.0).unwrap();
+    assert!(s.scene().unwrap().find_text("Row 39").is_some());
+    let out = s.scroll_by(None, 50.0).unwrap();
+    assert_eq!(out.effects, vec![Effect::Nothing]);
+    // A swipe right anywhere runs the gesture's handler.
+    let out = s.gesture(150.0, 200.0, "swipe_right").unwrap();
+    assert!(
+        matches!(&out.effects[0], Effect::LocalSet { .. }),
+        "{:?}",
+        out.effects
+    );
+    assert_eq!(
+        s.gesture(150.0, 200.0, "swipe_up").unwrap().effects,
+        vec![Effect::Nothing]
+    );
+}
+
+#[test]
+fn a_focused_field_draws_a_caret_after_its_text() {
+    let page: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Page", "id": "p", "root": { "type": "core://Column", "children": [
+            { "type": "core://TextField", "field": "q", "placeholder": "Search" } ] } }))
+    .unwrap();
+    let mut s = Session::new(
+        "p",
+        page,
+        Default::default(),
+        Viewport {
+            width: 300.0,
+            height: 200.0,
+            scale: 1.0,
+        },
+    );
+    let quads = |s: &mut Session| s.scene().unwrap().quads().count();
+    let before = quads(&mut s);
+    s.tap(&Target::Id("field:q".into())).unwrap();
+    assert_eq!(s.focused.as_deref(), Some("q"));
+    assert_eq!(quads(&mut s), before + 1, "a caret");
+    s.type_text("q", "soup");
+    let caret_x = |s: &mut Session| {
+        s.scene()
+            .unwrap()
+            .quads()
+            .find(|q| q.rect[2] == 2.0)
+            .map(|q| q.rect[0])
+            .unwrap()
+    };
+    let after_soup = caret_x(&mut s);
+    s.type_text("q", "soup and bread");
+    assert!(caret_x(&mut s) > after_soup + 20.0);
 }

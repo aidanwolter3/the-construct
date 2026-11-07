@@ -66,6 +66,8 @@ pub struct Input<'a> {
     /// Space the platform covers (top, right, bottom, left, points): the
     /// background fills it, the layout stays out of it.
     pub insets: [f32; 4],
+    /// The text field being typed into (its `field`): drawn with a caret.
+    pub focused: Option<&'a str>,
 }
 
 /// Why a frame couldn't be built.
@@ -153,6 +155,8 @@ struct Sem {
     text: Option<String>,
     tap: Option<Tap>,
     selected: bool,
+    /// `core://Gesture` handlers other than the tap, by name.
+    gestures: BTreeMap<String, Value>,
 }
 
 struct Elem {
@@ -164,6 +168,8 @@ struct Elem {
     clip: bool,
     /// A vertically scrolling view: its semantic id's offset applies.
     scrolls: bool,
+    /// `core://Sticky`: pinned at the top of its scrolling view.
+    sticky: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -249,11 +255,13 @@ impl SceneBuilder {
             dark: false,
             item: None,
             insets: [0.0; 4],
+            focused: None,
         })
     }
 
     /// Lays out one frame.
-    pub fn build(&mut self, input: &Input) -> Result<Scene, RenderError> {
+    /// Lays out one frame, to place with [`Laid::emit`] (again on scroll).
+    pub fn layout(&mut self, input: &Input) -> Result<Laid, RenderError> {
         let theme = Theme::new(input.dark, &input.data.entities);
         let mut b = Build {
             tree: TaffyTree::new(),
@@ -311,15 +319,21 @@ impl SceneBuilder {
             false,
         );
         b.compute(root, vp.scale)?;
-        let mut scene = Scene {
-            width: vp.width,
-            height: vp.height,
-            scale: vp.scale,
-            background: b.theme.background.0,
-            ..Default::default()
+        let mut laid = Laid {
+            tree: b.tree,
+            elems: b.elems,
+            root,
+            theme: b.theme,
+            viewport: vp,
+            scroll_max: BTreeMap::new(),
         };
-        b.emit(root, (0.0, 0.0), NO_CLIP, None, &mut scene);
-        Ok(scene)
+        laid.scroll_max = laid.scroll_extents();
+        Ok(laid)
+    }
+
+    /// Lays out and places one frame.
+    pub fn build(&mut self, input: &Input) -> Result<Scene, RenderError> {
+        Ok(self.layout(input)?.emit(input.scroll))
     }
 }
 
@@ -553,6 +567,7 @@ impl<'i> Build<'_, 'i> {
             kids,
             clip,
             scrolls: false,
+            sticky: false,
         });
         self.elems.len() - 1
     }
@@ -582,6 +597,7 @@ impl<'i> Build<'_, 'i> {
             kids: Vec::new(),
             clip: false,
             scrolls: false,
+            sticky: false,
         });
         self.elems.len() - 1
     }
@@ -593,6 +609,7 @@ impl<'i> Build<'_, 'i> {
             text,
             tap,
             selected: false,
+            gestures: BTreeMap::new(),
         }
     }
 
@@ -661,6 +678,7 @@ impl<'i> Build<'_, 'i> {
                     text: Some(title.clone()),
                     tap: None,
                     selected: false,
+                    gestures: BTreeMap::new(),
                 };
                 kids.push(self.text_leaf(style, ctx.text(title), t, fg, Some(sem)));
                 for (i, s) in slots.iter().enumerate() {
@@ -948,7 +966,18 @@ impl<'i> Build<'_, 'i> {
                 }
                 return self.node(content, b);
             }
-            UiNode::Sticky { content } => return self.node(content, b),
+            UiNode::Sticky { content } => {
+                let kid = self.node(content, &b.child(0, Axis::Column));
+                let i = self.push(
+                    column(0, pad(0, 0), AlignItems::STRETCH),
+                    kid.into_iter().collect(),
+                    Paint::None,
+                    None,
+                    false,
+                );
+                self.elems[i].sticky = true;
+                i
+            }
             UiNode::Tappable {
                 on_click,
                 content,
@@ -979,19 +1008,34 @@ impl<'i> Build<'_, 'i> {
             UiNode::Gesture {
                 content,
                 on_tap,
+                on_long_press,
+                on_swipe_up,
+                on_swipe_down,
+                on_swipe_left,
+                on_swipe_right,
                 content_description,
-                ..
             } => {
                 let kid = self.node(content, &b.child(0, Axis::Column));
                 let tap = on_tap.as_ref().map(|i| Tap::Intent {
                     intent: bind_intent(i, &ctx),
                 });
-                let sem = self.sem(
+                let mut sem = self.sem(
                     b,
                     n,
                     content_description.as_deref().map(|d| ctx.text(d)),
                     tap,
                 );
+                for (name, intent) in [
+                    ("long_press", on_long_press),
+                    ("swipe_up", on_swipe_up),
+                    ("swipe_down", on_swipe_down),
+                    ("swipe_left", on_swipe_left),
+                    ("swipe_right", on_swipe_right),
+                ] {
+                    if let Some(i) = intent {
+                        sem.gestures.insert(name.to_owned(), bind_intent(i, &ctx));
+                    }
+                }
                 self.push(
                     column(0, pad(0, 0), AlignItems::FLEX_START),
                     kid.into_iter().collect(),
@@ -1116,6 +1160,47 @@ impl<'i> Build<'_, 'i> {
                 if on_submit.is_some() {
                     kids.push(self.icon("send", theme.primary, 20.0));
                 }
+                let focused = self.input.focused == Some(field.as_str());
+                if focused {
+                    // The caret, after the text typed so far.
+                    let at = if value.is_empty() {
+                        0.0
+                    } else {
+                        self.text
+                            .measure(
+                                &value,
+                                type_for(TextStyle::Body),
+                                None,
+                                self.input.viewport.scale,
+                            )
+                            .width
+                    };
+                    let caret = Style {
+                        position: Position::Absolute,
+                        inset: Rect {
+                            left: length(16.0 + at + 1.0),
+                            right: auto(),
+                            top: length(18.0),
+                            bottom: auto(),
+                        },
+                        size: Size {
+                            width: length(2.0),
+                            height: length(20.0),
+                        },
+                        ..Default::default()
+                    };
+                    kids.push(self.push(
+                        caret,
+                        Vec::new(),
+                        Paint::Quad {
+                            bg: theme.primary,
+                            border: None,
+                            radius: 1.0,
+                        },
+                        None,
+                        false,
+                    ));
+                }
                 let mut style = row(8, pad(16, 0), AlignItems::CENTER);
                 let extra = lines.map_or(0.0, |l| (l.saturating_sub(1)).min(4) as f32 * 20.0);
                 style.min_size.height = length(56.0 + extra);
@@ -1133,7 +1218,11 @@ impl<'i> Build<'_, 'i> {
                     kids,
                     Paint::Quad {
                         bg: Rgba::TRANSPARENT,
-                        border: Some(theme.outline),
+                        border: Some(if focused {
+                            theme.primary
+                        } else {
+                            theme.outline
+                        }),
                         radius: 4.0,
                     },
                     Some(sem),
@@ -1184,6 +1273,7 @@ impl<'i> Build<'_, 'i> {
                             value: o.value.clone(),
                         }),
                         selected,
+                        gestures: BTreeMap::new(),
                     };
                     kids.push(self.push(style, vec![t], paint, Some(sem), false));
                 }
@@ -1252,6 +1342,7 @@ impl<'i> Build<'_, 'i> {
                             text: Some(text.clone()),
                             tap: None,
                             selected: false,
+                            gestures: BTreeMap::new(),
                         };
                         let style = Style {
                             padding: pad(16, 24),
@@ -1679,6 +1770,7 @@ impl<'i> Build<'_, 'i> {
                             value: value.clone(),
                         }),
                         selected: on,
+                        gestures: BTreeMap::new(),
                     };
                     bar.push(self.push(s, cell, Paint::None, Some(sem), false));
                 }
@@ -1808,14 +1900,118 @@ impl<'i> Build<'_, 'i> {
                 .count(),
         )
     }
+}
 
-    /// Emits elem `i` and its children at `origin` (absolute, points).
-    fn emit(
+fn intersect(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let x0 = a[0].max(b[0]);
+    let y0 = a[1].max(b[1]);
+    let x1 = (a[0] + a[2]).min(b[0] + b[2]);
+    let y1 = (a[1] + a[3]).min(b[1] + b[3]);
+    [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)]
+}
+
+fn intersects(a: [f32; 4], b: [f32; 4]) -> bool {
+    let r = intersect(a, b);
+    r[2] > 0.0 && r[3] > 0.0 || (a[2] == 0.0 || a[3] == 0.0)
+}
+
+/// A sticky node pinned at the top of its scrolling view: drawn after the
+/// view's other content, over the page background.
+struct Pinned {
+    elem: usize,
+    origin: (f32, f32),
+    clip: [f32; 4],
+    parent_sem: Option<usize>,
+}
+
+/// What emitting knows about the place it is in.
+#[derive(Clone, Copy)]
+struct At {
+    /// The top of the nearest scrolling view, for sticky nodes.
+    scroll_top: Option<f32>,
+    /// The parent's box (a sticky node stays inside it).
+    parent: [f32; 4],
+}
+
+/// A laid-out frame: the taffy tree and what each node paints. Scrolling
+/// only places it again ([`Laid::emit`]), without laying it out.
+pub struct Laid {
+    tree: TaffyTree<Leaf>,
+    elems: Vec<Elem>,
+    root: usize,
+    theme: Theme,
+    viewport: Viewport,
+    /// The farthest each scrolling view (by semantic id) can scroll.
+    pub scroll_max: BTreeMap<String, f32>,
+}
+
+// SAFETY: taffy's `CompactLength` holds a raw pointer only for CSS `calc()`
+// values, which this crate never builds (every length is `length`,
+// `percent` or `auto`). The tree owns everything else it holds, so moving a
+// laid-out frame to another thread (the pod keeps previews behind a mutex)
+// shares nothing.
+unsafe impl Send for Laid {}
+
+impl Laid {
+    /// How far each scrolling view can scroll (its content past its height).
+    fn scroll_extents(&self) -> BTreeMap<String, f32> {
+        self.elems
+            .iter()
+            .filter(|e| e.scrolls)
+            .filter_map(|e| {
+                let s = e.sem.as_ref()?;
+                let h = self.tree.layout(e.node).ok()?.size.height;
+                Some((s.id.clone(), (self.content_height(e) - h).max(0.0)))
+            })
+            .collect()
+    }
+
+    /// The scene at these scroll offsets.
+    pub fn emit(&self, scroll: &BTreeMap<String, f32>) -> Scene {
+        let vp = self.viewport;
+        let mut scene = Scene {
+            width: vp.width,
+            height: vp.height,
+            scale: vp.scale,
+            background: self.theme.background.0,
+            ..Default::default()
+        };
+        let at = At {
+            scroll_top: None,
+            parent: [0.0, 0.0, vp.width, vp.height],
+        };
+        let mut pinned = Vec::new();
+        self.emit_at(
+            self.root,
+            (0.0, 0.0),
+            NO_CLIP,
+            None,
+            at,
+            scroll,
+            &mut pinned,
+            &mut scene,
+        );
+        scene
+    }
+
+    fn content_height(&self, e: &Elem) -> f32 {
+        e.kids
+            .iter()
+            .filter_map(|k| self.tree.layout(self.elems[*k].node).ok())
+            .map(|kl| kl.location.y + kl.size.height)
+            .fold(0.0, f32::max)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_at(
         &self,
         i: usize,
         origin: (f32, f32),
         clip: [f32; 4],
         parent_sem: Option<usize>,
+        at: At,
+        scroll: &BTreeMap<String, f32>,
+        pinned: &mut Vec<Pinned>,
         scene: &mut Scene,
     ) {
         let e = &self.elems[i];
@@ -1823,6 +2019,24 @@ impl<'i> Build<'_, 'i> {
         let x = origin.0 + l.location.x;
         let y = origin.1 + l.location.y;
         let (w, h) = (l.size.width, l.size.height);
+        if e.sticky
+            && let Some(top) = at.scroll_top
+            && y < top
+        {
+            // Pinned at the top of the scrolling view, but never past the
+            // end of its parent (it scrolls away with it).
+            let parent_bottom = at.parent[1] + at.parent[3];
+            let to = top.min(parent_bottom - h);
+            if to > y {
+                pinned.push(Pinned {
+                    elem: i,
+                    origin: (origin.0, origin.1 + (to - y)),
+                    clip,
+                    parent_sem,
+                });
+                return;
+            }
+        }
         let rect = [x, y, w, h];
         let visible = intersects(rect, clip);
         if visible {
@@ -1842,31 +2056,65 @@ impl<'i> Build<'_, 'i> {
                 tap: s.tap.clone(),
                 selected: s.selected,
                 parent: parent_sem,
+                gestures: s.gestures.clone(),
             });
             sem_index = Some(scene.semantics.len() - 1);
         }
         let inner_clip = if e.clip { intersect(clip, rect) } else { clip };
         let mut oy = 0.0;
-        if e.scrolls
-            && let Some(s) = &e.sem
-        {
-            let content_h = e
-                .kids
-                .iter()
-                .filter_map(|k| self.tree.layout(self.elems[*k].node).ok())
-                .map(|kl| kl.location.y + kl.size.height)
-                .fold(0.0, f32::max);
-            let max = (content_h - h).max(0.0);
-            oy = self
-                .input
-                .scroll
-                .get(&s.id)
-                .copied()
-                .unwrap_or(0.0)
-                .clamp(0.0, max);
+        let mut kid_at = At {
+            scroll_top: at.scroll_top,
+            parent: rect,
+        };
+        let mut own_pins = Vec::new();
+        let scrolls = e.scrolls && e.sem.is_some();
+        if scrolls && let Some(s) = &e.sem {
+            let max = (self.content_height(e) - h).max(0.0);
+            oy = scroll.get(&s.id).copied().unwrap_or(0.0).clamp(0.0, max);
+            kid_at.scroll_top = Some(y);
         }
         for k in &e.kids {
-            self.emit(*k, (x, y - oy), inner_clip, sem_index, scene);
+            let pins = if scrolls { &mut own_pins } else { &mut *pinned };
+            self.emit_at(
+                *k,
+                (x, y - oy),
+                inner_clip,
+                sem_index,
+                kid_at,
+                scroll,
+                pins,
+                scene,
+            );
+        }
+        // Sticky nodes pinned in this view go over its content.
+        for p in own_pins {
+            let pe = &self.elems[p.elem];
+            if let Ok(pl) = self.tree.layout(pe.node) {
+                let r = [
+                    p.origin.0 + pl.location.x,
+                    p.origin.1 + pl.location.y,
+                    pl.size.width,
+                    pl.size.height,
+                ];
+                let mut q = QuadInstance::fill(r, self.theme.background, 0.0);
+                q.clip = p.clip;
+                scene.draws.push(Draw::Quad(q));
+            }
+            let free = At {
+                scroll_top: None,
+                parent: rect,
+            };
+            let mut none = Vec::new();
+            self.emit_at(
+                p.elem,
+                p.origin,
+                p.clip,
+                p.parent_sem,
+                free,
+                scroll,
+                &mut none,
+                scene,
+            );
         }
     }
 
@@ -1996,17 +2244,4 @@ impl<'i> Build<'_, 'i> {
             }
         }
     }
-}
-
-fn intersect(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
-    let x0 = a[0].max(b[0]);
-    let y0 = a[1].max(b[1]);
-    let x1 = (a[0] + a[2]).min(b[0] + b[2]);
-    let y1 = (a[1] + a[3]).min(b[1] + b[3]);
-    [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)]
-}
-
-fn intersects(a: [f32; 4], b: [f32; 4]) -> bool {
-    let r = intersect(a, b);
-    r[2] > 0.0 && r[3] > 0.0 || (a[2] == 0.0 || a[3] == 0.0)
 }

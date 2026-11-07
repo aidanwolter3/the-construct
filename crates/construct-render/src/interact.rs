@@ -82,6 +82,8 @@ struct Entry {
     screens: Vec<PageScreen>,
     /// The last load of this entry's data failed (`local://screen#error`).
     error: Option<String>,
+    /// Scroll offsets of this entry's scrolling views (by semantic id).
+    scroll: BTreeMap<String, f32>,
 }
 
 impl Entry {
@@ -97,6 +99,7 @@ impl Entry {
             item: None,
             screens,
             error: None,
+            scroll: BTreeMap::new(),
         }
     }
 }
@@ -160,13 +163,15 @@ pub struct Session {
     stack: Vec<Entry>,
     pub data: DataBundle,
     pub form: BTreeMap<String, String>,
-    pub scroll: BTreeMap<String, f32>,
     pub layouts: BTreeMap<String, UiNode>,
     pub viewport: Viewport,
     pub dark: bool,
     builder: SceneBuilder,
     cpu: CpuRenderer,
     scene: Option<Scene>,
+    laid: Option<crate::layout::Laid>,
+    /// The text field being typed into (drawn with a caret).
+    pub focused: Option<String>,
     /// Loads what taps open (a live session); `None`: only what is given.
     pub loader: Option<Box<dyn Loader>>,
     /// The images frames show, loaded by the store's fetcher.
@@ -182,13 +187,14 @@ impl Session {
             stack: vec![Entry::layout(id, root, BTreeMap::new())],
             data,
             form: BTreeMap::new(),
-            scroll: BTreeMap::new(),
             layouts: BTreeMap::new(),
             viewport,
             dark: false,
             builder: SceneBuilder::new(),
             cpu: CpuRenderer::new(),
             scene: None,
+            laid: None,
+            focused: None,
             loader: None,
             images: crate::images::ImageStore::new(),
             insets: [0.0; 4],
@@ -200,9 +206,11 @@ impl Session {
         &self.stack.last().expect("never empty").id
     }
 
-    /// Lays out the current frame (cached until something changes).
+    /// Lays out the current frame (cached until something changes; a
+    /// scroll only places the laid-out frame again).
     pub fn scene(&mut self) -> Result<&Scene, RenderError> {
-        if self.scene.is_none() {
+        if self.laid.is_none() {
+            self.invalidate();
             self.load_inline_layouts();
             // Device data a layout reads about where it is drawn (as the
             // shared UI's `local://nav` and `local://screen`).
@@ -219,18 +227,24 @@ impl Session {
             screen.set("loading", false);
             screen.set("error", top.error.clone().unwrap_or_default());
             self.data.entities.insert("local://screen".into(), screen);
-            let scene = self.builder.build(&Input {
+            let laid = self.builder.layout(&Input {
                 root: &top.root,
                 data: &self.data,
                 form: &self.form,
                 route: &top.route,
                 layouts: &self.layouts,
-                scroll: &self.scroll,
+                scroll: &top.scroll,
                 viewport: self.viewport,
                 dark: self.dark,
                 item: top.item.as_deref(),
                 insets: self.insets,
+                focused: self.focused.as_deref(),
             })?;
+            self.laid = Some(laid);
+        }
+        if self.scene.is_none() {
+            let top = self.stack.last().expect("never empty");
+            let scene = self.laid.as_ref().expect("laid out").emit(&top.scroll);
             for d in &scene.draws {
                 if let crate::scene::Draw::Image(i) = d {
                     self.images.request(&i.url);
@@ -262,11 +276,17 @@ impl Session {
         Ok((self.scene.as_ref().expect("built"), &mut self.builder.text))
     }
 
+    /// Lays the frame out again next time (data, form or size changed).
+    pub fn invalidate(&mut self) {
+        self.laid = None;
+        self.scene = None;
+    }
+
     /// New platform insets (points): the next frame lays out again.
     pub fn set_insets(&mut self, insets: [f32; 4]) {
         if insets != self.insets {
             self.insets = insets;
-            self.scene = None;
+            self.invalidate();
         }
     }
 
@@ -274,13 +294,13 @@ impl Session {
     pub fn resize(&mut self, viewport: Viewport) {
         if viewport != self.viewport {
             self.viewport = viewport;
-            self.scene = None;
+            self.invalidate();
         }
     }
 
     pub fn set_form(&mut self, field: &str, value: &str) {
         self.form.insert(field.to_owned(), value.to_owned());
-        self.scene = None;
+        self.invalidate();
     }
 
     fn find(&mut self, target: &Target) -> Result<Option<SemanticNode>, String> {
@@ -312,20 +332,25 @@ impl Session {
         let Some(node) = self.find(target)? else {
             return Err(format!("nothing at {target:?}"));
         };
+        // A tap anywhere but a field ends typing (the field's tap sets it again).
+        self.focused = None;
         let effects = match node.tap.clone() {
             None => vec![Effect::Nothing],
             Some(Tap::SetForm { field, value }) => {
                 self.set_form(&field, &value);
                 vec![Effect::FormSet { field, value }]
             }
-            Some(Tap::Focus { field }) => vec![Effect::Focused { field }],
+            Some(Tap::Focus { field }) => {
+                self.focused = Some(field.clone());
+                vec![Effect::Focused { field }]
+            }
             Some(Tap::Intent { intent }) => {
                 let mut out = Vec::new();
                 self.run(&intent, &mut out);
                 out
             }
         };
-        self.scene = None;
+        self.invalidate();
         Ok(Outcome {
             node: Some(node),
             effects,
@@ -336,7 +361,7 @@ impl Session {
     pub fn dispatch(&mut self, intent: &Value) -> Result<Outcome, String> {
         let mut effects = Vec::new();
         self.run(intent, &mut effects);
-        self.scene = None;
+        self.invalidate();
         Ok(Outcome {
             node: None,
             effects,
@@ -381,12 +406,50 @@ impl Session {
         let Some(id) = id else {
             return Err("no scrolling view there".into());
         };
-        let offset = (self.scroll.get(&id).copied().unwrap_or(0.0) + dy).max(0.0);
-        self.scroll.insert(id.clone(), offset);
+        let max = self
+            .laid
+            .as_ref()
+            .and_then(|l| l.scroll_max.get(&id).copied())
+            .unwrap_or(f32::MAX);
+        let top = self.stack.last_mut().expect("never empty");
+        let before = top.scroll.get(&id).copied().unwrap_or(0.0).min(max);
+        let offset = (before + dy).clamp(0.0, max);
+        if offset == before {
+            // At an end: nothing moves (a fling stops, a pull may be a swipe).
+            return Ok(Outcome {
+                node: None,
+                effects: vec![Effect::Nothing],
+            });
+        }
+        top.scroll.insert(id.clone(), offset);
         self.scene = None;
         Ok(Outcome {
             node: None,
             effects: vec![Effect::Scrolled { id, offset }],
+        })
+    }
+
+    /// A swipe (`swipe_up`, `swipe_down`, `swipe_left`, `swipe_right`) or a
+    /// `long_press` at a point: the innermost `core://Gesture` there with that
+    /// handler runs it.
+    pub fn gesture(&mut self, x: f32, y: f32, kind: &str) -> Result<Outcome, String> {
+        let scene = self.scene().map_err(|e| e.to_string())?;
+        let found = scene.semantics.iter().rev().find(|n| {
+            let [bx, by, bw, bh] = n.bounds;
+            x >= bx && x < bx + bw && y >= by && y < by + bh && n.gestures.contains_key(kind)
+        });
+        let Some(node) = found.cloned() else {
+            return Ok(Outcome {
+                node: None,
+                effects: vec![Effect::Nothing],
+            });
+        };
+        let mut effects = Vec::new();
+        self.run(&node.gestures[kind], &mut effects);
+        self.invalidate();
+        Ok(Outcome {
+            node: Some(node),
+            effects,
         })
     }
 
@@ -525,6 +588,7 @@ impl Session {
             item,
             screens,
             error: None,
+            scroll: BTreeMap::new(),
         });
         out.push(Effect::OpenedScreen {
             screen: screen.id.clone(),
@@ -597,7 +661,8 @@ impl Session {
 
     /// A summary of the state, for agents: the layout shown and the form.
     pub fn state(&self) -> Value {
-        json!({ "layout": self.current(), "form": self.form, "scroll": self.scroll,
+        json!({ "layout": self.current(), "form": self.form,
+                "scroll": self.stack.last().map(|e| e.scroll.clone()).unwrap_or_default(),
                 "stack": self.stack.iter().map(|e| e.id.clone()).collect::<Vec<_>>() })
     }
 }

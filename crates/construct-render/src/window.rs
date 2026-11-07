@@ -38,6 +38,35 @@ pub trait Platform {
     fn insets_px(&self, window_px: (u32, u32)) -> [f32; 4];
 }
 
+/// A finger on the screen.
+struct Drag {
+    start: (f32, f32),
+    last: (f32, f32),
+    at: Instant,
+    /// Points per second the content moves up (smoothed).
+    velocity: f32,
+    /// Moved far enough to be a drag, not a tap.
+    dragging: bool,
+    /// Something scrolled during it (so it is not a swipe).
+    scrolled: bool,
+}
+
+/// A scroll still moving after the finger left: it slows down each frame.
+struct Fling {
+    at: (f32, f32),
+    velocity: f32,
+    last: Instant,
+}
+
+/// Movement before a touch counts as a drag (points).
+const TOUCH_SLOP: f32 = 8.0;
+/// Movement for a drag that scrolled nothing to count as a swipe (points).
+const SWIPE_DISTANCE: f32 = 48.0;
+/// How fast a fling slows: velocity × e^(−FRICTION·t).
+const FRICTION: f32 = 4.0;
+/// Slowest fling worth animating (points per second).
+const MIN_FLING: f32 = 40.0;
+
 /// The window's state across the event loop.
 pub struct App {
     controller: Controller,
@@ -45,8 +74,8 @@ pub struct App {
     title: String,
     surface: Option<Surface>,
     cursor: (f32, f32),
-    touch_start: Option<(f32, f32)>,
-    touch_last: (f32, f32),
+    drag: Option<Drag>,
+    fling: Option<Fling>,
 }
 
 impl App {
@@ -57,8 +86,8 @@ impl App {
             surface: None,
             platform: None,
             cursor: (0.0, 0.0),
-            touch_start: None,
-            touch_last: (0.0, 0.0),
+            drag: None,
+            fling: None,
         }
     }
 
@@ -69,13 +98,47 @@ impl App {
 
     /// Re-reads the platform's insets (they change on rotation, or arrive
     /// after the first frame).
-    fn update_insets(&mut self) {
+    /// True when they changed (the frame must be drawn again).
+    fn update_insets(&mut self) -> bool {
         let (Some(p), Some(s)) = (&self.platform, &self.surface) else {
-            return;
+            return false;
         };
         let scale = s.window.scale_factor() as f32;
         let px = p.insets_px((s.config.width, s.config.height));
-        self.controller.session.set_insets(px.map(|v| v / scale));
+        let insets = px.map(|v| v / scale);
+        if insets == self.controller.session.insets {
+            return false;
+        }
+        self.controller.session.set_insets(insets);
+        true
+    }
+
+    /// Moves a fling on by the time since the last frame; true while it
+    /// still moves.
+    fn step_fling(&mut self) -> bool {
+        let Some(f) = self.fling.as_mut() else {
+            return false;
+        };
+        let now = Instant::now();
+        let dt = now.duration_since(f.last).as_secs_f32().min(0.05);
+        f.last = now;
+        let dy = f.velocity * dt;
+        f.velocity *= (-FRICTION * dt).exp();
+        let (x, y) = f.at;
+        let still = f.velocity.abs() > MIN_FLING;
+        let moved = self.scroll(x, y, dy);
+        if !moved || !still {
+            self.fling = None;
+        }
+        moved && still
+    }
+
+    /// Scrolls the view at a point; true if it moved.
+    fn scroll(&mut self, x: f32, y: f32, dy: f32) -> bool {
+        matches!(
+            self.controller.handle(Event::Scroll { x, y, dy }),
+            Some(out) if out.effects.iter().any(|e| matches!(e, crate::interact::Effect::Scrolled { .. }))
+        )
     }
 
     fn scale(&self) -> f32 {
@@ -152,6 +215,7 @@ impl App {
 
     fn draw(&mut self) {
         self.update_insets();
+        let flinging = self.step_fling();
         let Some(s) = self.surface.as_mut() else {
             return;
         };
@@ -182,6 +246,9 @@ impl App {
             Err(e) => log(&format!("layout failed: {e}")),
         }
         s.gpu.queue.present(frame);
+        if flinging {
+            s.window.request_redraw();
+        }
         if self.controller.frames == 0 {
             log(&format!(
                 "Frame 0 drawn in {:.2} ms",
@@ -200,7 +267,7 @@ impl App {
             log(&json);
         }
         if tap && let Some(p) = &self.platform {
-            p.show_keyboard(self.controller.focused.is_some());
+            p.show_keyboard(self.controller.focused().is_some());
         }
         if let Some(s) = &self.surface {
             s.window.request_redraw();
@@ -209,6 +276,16 @@ impl App {
 }
 
 impl ApplicationHandler for App {
+    /// Android doesn't tell the app when the keyboard or system bars change
+    /// the visible area (winit drops it): check after every batch of events.
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if self.update_insets()
+            && let Some(s) = &self.surface
+        {
+            s.window.request_redraw();
+        }
+    }
+
     /// An image arrived: draw again.
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
         if let Some(s) = &self.surface {
@@ -271,31 +348,86 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Touch(t) => {
                 let p = (t.location.x as f32 / scale, t.location.y as f32 / scale);
+                let now = Instant::now();
                 match t.phase {
                     TouchPhase::Started => {
-                        self.touch_start = Some(p);
-                        self.touch_last = p;
+                        self.fling = None;
+                        self.drag = Some(Drag {
+                            start: p,
+                            last: p,
+                            at: now,
+                            velocity: 0.0,
+                            dragging: false,
+                            scrolled: false,
+                        });
                     }
                     TouchPhase::Moved => {
-                        let dy = self.touch_last.1 - p.1;
-                        self.touch_last = p;
-                        self.apply(Event::Scroll { x: p.0, y: p.1, dy });
-                    }
-                    TouchPhase::Ended => {
-                        if let Some(s) = self.touch_start.take()
-                            && (s.0 - p.0).abs() < 8.0
-                            && (s.1 - p.1).abs() < 8.0
-                        {
-                            self.apply(Event::Tap { x: p.0, y: p.1 });
+                        let Some(mut d) = self.drag.take() else {
+                            return;
+                        };
+                        let (tx, ty) = (p.0 - d.start.0, p.1 - d.start.1);
+                        if !d.dragging && (tx.abs() > TOUCH_SLOP || ty.abs() > TOUCH_SLOP) {
+                            d.dragging = true;
+                        }
+                        if d.dragging && ty.abs() >= tx.abs() {
+                            let dy = d.last.1 - p.1;
+                            let dt = now.duration_since(d.at).as_secs_f32().max(0.001);
+                            d.velocity = 0.6 * (dy / dt) + 0.4 * d.velocity;
+                            if self.scroll(d.start.0, d.start.1, dy) {
+                                d.scrolled = true;
+                            }
+                        }
+                        d.last = p;
+                        d.at = now;
+                        self.drag = Some(d);
+                        if let Some(s) = &self.surface {
+                            s.window.request_redraw();
                         }
                     }
-                    TouchPhase::Cancelled => self.touch_start = None,
+                    TouchPhase::Ended => {
+                        let Some(d) = self.drag.take() else {
+                            return;
+                        };
+                        let (tx, ty) = (p.0 - d.start.0, p.1 - d.start.1);
+                        // A finger that stopped before lifting doesn't fling.
+                        let stale = now.duration_since(d.at).as_millis() > 80;
+                        if !d.dragging {
+                            self.apply(Event::Tap { x: p.0, y: p.1 });
+                        } else if !d.scrolled && tx.abs().max(ty.abs()) > SWIPE_DISTANCE {
+                            let kind = if tx.abs() > ty.abs() {
+                                if tx > 0.0 {
+                                    "swipe_right"
+                                } else {
+                                    "swipe_left"
+                                }
+                            } else if ty > 0.0 {
+                                "swipe_down"
+                            } else {
+                                "swipe_up"
+                            };
+                            self.apply(Event::Swipe {
+                                x: d.start.0,
+                                y: d.start.1,
+                                kind,
+                            });
+                        } else if d.scrolled && !stale && d.velocity.abs() > MIN_FLING * 4.0 {
+                            self.fling = Some(Fling {
+                                at: d.start,
+                                velocity: d.velocity,
+                                last: now,
+                            });
+                            if let Some(s) = &self.surface {
+                                s.window.request_redraw();
+                            }
+                        }
+                    }
+                    TouchPhase::Cancelled => self.drag = None,
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 match &event.logical_key {
                     Key::Named(NamedKey::Escape | NamedKey::BrowserBack | NamedKey::GoBack) => {
-                        if self.controller.focused.take().is_some() {
+                        if self.controller.unfocus() {
                             if let Some(p) = &self.platform {
                                 p.show_keyboard(false);
                             }
@@ -307,7 +439,7 @@ impl ApplicationHandler for App {
                         if let Some(p) = &self.platform {
                             p.show_keyboard(false);
                         }
-                        self.controller.focused = None;
+                        self.controller.unfocus();
                     }
                     Key::Named(NamedKey::Backspace) => self.apply(Event::Backspace),
                     _ => {

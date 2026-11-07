@@ -145,6 +145,10 @@ pub struct SemanticNode {
     /// Index of the parent in [`Scene::semantics`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<usize>,
+    /// `core://Gesture` handlers besides the tap (`long_press`, `swipe_up`,
+    /// `swipe_down`, `swipe_left`, `swipe_right`), bound intents.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub gestures: std::collections::BTreeMap<String, Value>,
 }
 
 /// A laid-out frame: what to draw and what is where.

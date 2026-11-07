@@ -54,7 +54,8 @@ Switch, Progress, Dock, Layout (inline, from the layouts given), and every named
 Material path data, rasterized with zeno; on the GPU they are glyphon custom glyphs). Images draw once loaded
 (over a placeholder in the blurhash's colour; only live sessions load them). Approximated: Carousel (first item and an "n/N" badge), MediaPicker (the add tile),
 Drawer (the selected page), AppFrame and unknown nodes (a labelled box). Not drawn: presented layouts (Sheet,
-Panel, Overlay), dialogs, `format` dates, sticky pinning.
+Panel, Overlay), dialogs, `format` dates. `core://Sticky` pins at the top of its scrolling view, over the page
+background, until its parent scrolls away.
 
 ## The desktop viewer
 
@@ -98,7 +99,17 @@ matches a tap's `target_uri` opens with its `$route` bound, its `item` and its `
 `local://screen` are set as the shared UI sets them. Images (`core://Image`) download on four background threads
 without the session (the pod serves media from public paths), are cut to their box (cropped to fill, corners
 rounded) and drawn over their placeholder once they arrive; the window redraws then. What a tap would send to the
-pod (likes, adds, edits) is logged as not sent: there is no outbox, cache or event stream.
+pod (likes, adds, edits) is logged as not sent: there is no outbox, cache or event stream. The device data the
+shared UI builds (`DeviceData`) is built from the pod the same way: `local://connection`, `local://session`,
+`local://inbox`, the layouts with their versions, and, for a layout that binds them, `local:notifications`
+(`/v1/notifications`, with `when` and `day` labels in UTC), `local:channels` and `local:sign_ins` /
+`local:providers`.
+
+Windows place a laid-out frame again on scroll without laying it out (`Laid::emit`), so dragging is cheap. A drag
+that scrolls flings on release and slows down each frame; one that scrolls nothing, past 48 points, is a swipe that
+runs the `core://Gesture` under its start (`on_swipe_*`). A focused text field shows a caret and a primary outline.
+`pod_shots` (feature `remote`) drives a live session from a script and writes PNGs, to compare with the simulator's
+live mode.
 
 ## Agent previews (MCP)
 

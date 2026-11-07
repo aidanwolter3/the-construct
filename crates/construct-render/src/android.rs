@@ -101,19 +101,17 @@ impl crate::window::Platform for Android {
         }
     }
 
-    fn insets_px(&self, (w, h): (u32, u32)) -> [f32; 4] {
-        // The area the system leaves the app: without the status bar, the
-        // camera cutout above it, the navigation bar and an open keyboard.
+    fn insets_px(&self, (_w, h): (u32, u32)) -> [f32; 4] {
+        // The window already sits below the status bar and cutout (the app
+        // targets SDK 34); what can still cover it is the keyboard, which
+        // shrinks the content rect but not the window. Only its height is
+        // used, whatever origin the rect is measured from.
         let r = self.0.content_rect();
-        if r.right <= r.left || r.bottom <= r.top {
+        let visible = r.bottom - r.top;
+        if visible <= 0 {
             return [0.0; 4];
         }
-        [
-            r.top.max(0) as f32,
-            (w as i32 - r.right).max(0) as f32,
-            (h as i32 - r.bottom).max(0) as f32,
-            r.left.max(0) as f32,
-        ]
+        [0.0, 0.0, (h as i32 - visible).max(0) as f32, 0.0]
     }
 }
 

@@ -36,6 +36,7 @@ pub fn build(
             dark: false,
             item: None,
             insets: [0.0; 4],
+            focused: None,
         })
         .unwrap()
 }
