@@ -107,6 +107,14 @@ fn check_slots(slots: &[protocol::SlotSpec]) -> Result<(), String> {
     Ok(())
 }
 
+/// The value checks a saved layout gets (sizes, icon names, tints, ...) for
+/// a tree drawn without them: a preview's draft, or a saved layout whose
+/// components changed after it was checked (an update to a component isn't
+/// checked against the layouts that use it).
+pub fn check_node_values(node: &UiNode) -> Result<(), String> {
+    node.walk().into_iter().try_for_each(check_values)
+}
+
 fn finish_structure(node: UiNode) -> Result<UiNode, String> {
     for n in node.walk() {
         check_values(n)?;
