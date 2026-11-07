@@ -197,6 +197,7 @@ pub fn layout_files() -> Vec<layouts::LayoutSource> {
     files.extend_from_slice(app_shell::FILES);
     files.extend_from_slice(app_shell::SETTINGS_FILES);
     files.extend_from_slice(app_shell::INBOX_FILES);
+    files.extend_from_slice(app_agents::FILES);
     files
 }
 

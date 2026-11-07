@@ -256,6 +256,7 @@ async fn apps_lists_dev_apps_only_when_shown() {
             ("shell", "Home", "dashboard", files("shell")),
             ("settings", "Settings", "dashboard", files("settings")),
             ("inbox", "Notifications", "dashboard", files("inbox")),
+            ("agents", "Agents", "dashboard", files("agents")),
             ("home", "Home", "dashboard", 1),
         ]
     );
