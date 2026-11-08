@@ -174,8 +174,9 @@ system keeps its window below the status bar and camera cutout and resizes it fo
 opens the keyboard, and Back pops the stack. The layout stays inside the window insets Android reports
 (`getRootWindowInsets`: system bars, camera cutout and keyboard), logged as they change. Its theme draws light system
 bars with dark icons; in dark mode (`values-night`), dark bars with light icons. The layouts follow the system's
-mode: `Configuration.uiMode` read through JNI after each batch of events (the activity handles `uiMode` changes
-itself, so the system bars keep the mode the app started in until the next launch). `local:servers` offers the main
+mode: `Configuration.uiMode` read through JNI after each batch of events. The activity handles `uiMode` changes
+itself (no restart), so it sets the system bars' colour and icons again in `onConfigurationChanged`, as the theme
+would. `local:servers` offers the main
 app's servers: Staging, Local emulator (`10.0.2.2:8080`), Local USB (`127.0.0.1:8080`, with `adb reverse`) and the
 main app's own server when it is another; `set_server` switches as on the desktop.
 
