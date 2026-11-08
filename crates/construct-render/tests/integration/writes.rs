@@ -614,6 +614,56 @@ fn a_loader_with_an_outbox_takes_writes_and_brings_changes() {
 }
 
 #[test]
+fn a_screen_open_in_a_layout_shows_the_layouts_new_version() {
+    let garden = |heading: &str| {
+        node(
+            json!({ "type": "core://Page", "id": "garden", "title": "Garden",
+            "root": { "type": "core://Tappable", "tag": "open_bed",
+              "content_description": "Bed 7",
+              "content": { "type": "core://Text", "style": "Body", "value_expr": "Beds" },
+              "on_click": { "intent": "action.navigation.open", "presentation": "Push",
+                "target_uri": "garden://beds/7" } },
+            "screens": [ { "id": "bed", "route": "garden://beds/{id}", "title": "Bed",
+              "root": { "type": "core://Text", "style": "Title", "value_expr": format!("{heading} $route.id") } } ] }),
+        )
+    };
+    let news = Arc::new(Mutex::new(None));
+    let mut s = Session::new(
+        "garden",
+        garden("Bed"),
+        DataBundle::default(),
+        Viewport::PHONE,
+    );
+    s.loader = Some(Box::new(Outbox {
+        taken: Arc::new(Mutex::new(Vec::new())),
+        news: news.clone(),
+        garden: garden("Bed"),
+    }));
+    s.tap(&Target::Id("open_bed".into())).unwrap();
+    assert!(
+        texts(&mut s).contains(&"Bed 7".to_owned()),
+        "{:?}",
+        texts(&mut s)
+    );
+    // The layout is edited while its screen is open: the screen shows the
+    // new version where it is, with its route.
+    *news.lock().unwrap() = Some(Changes {
+        data: DataBundle::default(),
+        layouts: vec![("garden".into(), garden("Raised bed"))],
+    });
+    let shown = texts(&mut s);
+    assert!(shown.contains(&"Raised bed 7".to_owned()), "{shown:?}");
+    // Back shows the layout itself, still there.
+    s.dispatch(&json!({ "intent": "action.navigation.back" }))
+        .unwrap();
+    assert!(
+        texts(&mut s).contains(&"Beds".to_owned()),
+        "{:?}",
+        texts(&mut s)
+    );
+}
+
+#[test]
 fn the_notification_permission_is_asked_by_the_platform() {
     let (mut s, writes) = session(
         json!({ "type": "core://Text", "style": "Body", "value_expr": "x" }),

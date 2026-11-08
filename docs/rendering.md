@@ -228,14 +228,17 @@ Feature `remote` (on in the viewer and the APK) runs a session over a pod with t
 (`client-core`, decision `rust-clients-on-the-engine`): `PodEngine` is the session's `Loader`. Home shows as the
 engine has it, from its cache at once (offline too; "Opening your pod…" with the connection's state on a first
 start, until the pod answers), and the device's list of layouts (`local:layouts`, `local:apps`) comes from
-`GET /v1/apps?all=1`, kept in `apps.json` next to the cache for offline starts. A layout a tap opens is the engine's
+`GET /v1/apps?all=1`, kept in `apps.json` next to the cache for offline starts, and loaded again whenever the event
+stream announces a layout made, edited or deleted (the engine's `announced_json`), opened here or not; home is in no
+list but has its entity, `local://layouts/home`, for its version. A layout a tap opens is the engine's
 cached copy at once, fetched again behind it (`open_layout`; a layout it never had waits for the pod), and a page
 screen whose route matches a tap's `target_uri` opens with its `$route` bound and its `item`, and slides in at once
 while its `data` path loads through the engine (`action.data.load`, cached; `local://screen#loading`). Every
 snapshot the engine sends reaches the session on its next frame (`Loader::changes`; the window is woken): data,
 `local://connection` (online, offline or connecting, and how many writes wait), and the new root of every layout
 the event stream announced, so a layout edited over MCP, or a change from another device, shows without opening it
-again. The simulator's live mode (`construct-sim --base-url`) still fetches straight from the pod (`PodClient`). `local://nav` and
+again: where the layout is open, and in each of its screens open on the stack (the screen of the same id in the new
+version, with its route, item and scroll kept; decision `layout-hot-reload`). The simulator's live mode (`construct-sim --base-url`) still fetches straight from the pod (`PodClient`). `local://nav` and
 `local://screen` are set as the Compose UI set them. Images (`core://Image`) download on four background threads, newest request first,
 without the session (the pod serves media from public paths), are cut to their box (cropped to fill, corners
 rounded) and drawn over their placeholder once they arrive; the window redraws then.

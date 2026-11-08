@@ -141,7 +141,8 @@ screen's `data` path answers the same `{entities, queries}` shape (`protocol::Da
   in the snapshot's `layouts_json`.
 - **Event stream.** While online, the engine keeps `GET /v1/workspaces/<root>/events` open; home's stream carries
   every layout's events, starting with every layout's current version so a reconnect catches up. `layout` events
-  trigger a refetch of that layout when a newer drawable version exists;
+  trigger a refetch of that layout when a newer drawable version exists, and are noted for every layout, opened or
+  not, in the snapshot's `announced_json`, so the device's list of layouts follows (decision `layout-hot-reload`);
   `deleted` marks it gone; `data` events say the data changed (D50); `notification` events feed the inbox (D52).
 - **Snapshots.** The UI observes immutable state snapshots (layout, entities, connectivity, pending count, sign-in
   state, unread counts) and dispatches intents back as JSON.

@@ -368,6 +368,11 @@ pub struct StateSnapshot {
     /// n|null, "gone": bool}}`. Their data is in `entities_json` and
     /// `queries_json`; their load state is `loads_json["layout:<id>"]`.
     pub layouts_json: String,
+    /// Every other layout of the pod the event stream announced, opened or
+    /// not, with its version: `{id: n}` (deleted ones left out). It changes
+    /// when a layout is made, edited or deleted anywhere, so a UI listing
+    /// the pod's layouts knows to list them again.
+    pub announced_json: String,
 }
 
 /// Another layout the engine holds (see [`StateSnapshot::layouts_json`]).
@@ -522,6 +527,9 @@ struct State {
     gone: bool,
     /// Other layouts, by id ([`StateSnapshot::layouts_json`]).
     layouts: BTreeMap<String, SubLayout>,
+    /// Every other layout's announced version
+    /// ([`StateSnapshot::announced_json`]).
+    announced: BTreeMap<String, u64>,
 }
 
 impl State {
@@ -573,6 +581,7 @@ impl State {
             loads_json,
             notifications_json: self.notifications_json(),
             layouts_json: serde_json::to_string(&self.layouts).unwrap_or_else(|_| "{}".into()),
+            announced_json: serde_json::to_string(&self.announced).unwrap_or_else(|_| "{}".into()),
         }
     }
 

@@ -337,8 +337,9 @@ pub fn needs_sign_ins(needs: &str) -> bool {
 
 /// The device data of the pod's layouts (`GET /v1/apps?all=1`'s answer),
 /// as the shared UI builds it: `local:layouts` (hidden ones left out),
-/// `local:all_layouts`, `local:apps`, and an entity for each. Every
-/// layout's title goes into `titles`.
+/// `local:all_layouts`, `local:apps`, and an entity for each, home's too
+/// (`local://layouts/home`, in no list, for its version). Every layout's
+/// title goes into `titles`.
 pub fn layouts_bundle(v: &Value, titles: &mut HashMap<String, String>) -> DataBundle {
     let mut out = DataBundle::default();
     let (mut listed, mut all) = (Vec::new(), Vec::new());
@@ -347,9 +348,6 @@ pub fn layouts_bundle(v: &Value, titles: &mut HashMap<String, String>) -> DataBu
             continue;
         };
         titles.insert(id.to_owned(), a["title"].as_str().unwrap_or(id).to_owned());
-        if id == "home" {
-            continue;
-        }
         let hidden = a["hidden"].as_bool().unwrap_or(false);
         let mut e = EntityRecord::new();
         e.set("id", id);
@@ -376,6 +374,10 @@ pub fn layouts_bundle(v: &Value, titles: &mut HashMap<String, String>) -> DataBu
         e.set("hidden", hidden);
         for prefix in ["local://layouts/", "local://apps/"] {
             out.entities.insert(format!("{prefix}{id}"), e.clone());
+        }
+        // Home is never listed (it is what lists the others).
+        if id == "home" {
+            continue;
         }
         all.push(format!("local://layouts/{id}"));
         if !hidden {

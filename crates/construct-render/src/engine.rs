@@ -99,6 +99,9 @@ struct Seen {
     layouts: HashMap<String, String>,
     notifications: String,
     auth: String,
+    /// Every layout's announced version: the layouts list is loaded again
+    /// when one is made, edited or deleted, opened here or not.
+    announced: String,
 }
 
 impl Shared {
@@ -612,6 +615,10 @@ fn observe(engine: &Weak<ConstructEngine>, shared: &Arc<Shared>, base: &str, sna
         }
         if snap.auth_json != seen.auth {
             seen.auth = snap.auth_json.clone();
+            reload = true;
+        }
+        if snap.announced_json != seen.announced {
+            seen.announced = snap.announced_json.clone();
             reload = true;
         }
     }

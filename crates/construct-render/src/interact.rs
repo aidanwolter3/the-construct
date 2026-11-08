@@ -250,9 +250,29 @@ struct Entry {
     laid: Option<(Laid, [f32; 2])>,
     /// A page screen (opened by a `target_uri`), not the layout itself.
     screen: bool,
+    /// That screen's id in its layout, to draw its new version when the
+    /// layout changes.
+    screen_id: Option<String>,
     /// An action from outside its `follow_end` scrolling views ran: they
     /// follow their content to the end once it is laid out.
     follow: bool,
+}
+
+/// A page screen's root and `item` with its route bound; `None` when the
+/// bound root doesn't read as a node.
+fn screen_root(
+    screen: &PageScreen,
+    route: &BTreeMap<String, String>,
+) -> Option<(UiNode, Option<String>)> {
+    let mut root = serde_json::to_value(&screen.root).unwrap_or(Value::Null);
+    bind_route(&mut root, route);
+    let root = serde_json::from_value::<UiNode>(root).ok()?;
+    let item = screen.item.as_ref().map(|i| {
+        let mut v = Value::String(i.clone());
+        bind_route(&mut v, route);
+        crate::bind::render(&v)
+    });
+    Some((root, item))
 }
 
 impl Entry {
@@ -277,6 +297,7 @@ impl Entry {
             closing: None,
             laid: None,
             screen: false,
+            screen_id: None,
             follow: false,
         }
     }
@@ -1408,10 +1429,35 @@ impl Session {
                     let fresh = Entry::layout(&id, root.clone(), BTreeMap::new());
                     e.root = fresh.root;
                     e.screens = fresh.screens;
+                    e.laid = None;
                 }
             }
+            self.refresh_screens(&id, &root);
         }
         self.invalidate();
+    }
+
+    /// The screens open from layout `id` draw its new version `root` of
+    /// them where they are, with their route, item and scroll kept (a screen
+    /// the new version no longer has stays as it was until closed).
+    fn refresh_screens(&mut self, id: &str, root: &UiNode) {
+        let screens = match root {
+            UiNode::Page { screens, .. } => screens.clone(),
+            _ => Vec::new(),
+        };
+        for e in self.stack.iter_mut().filter(|e| e.id == id && e.screen) {
+            let Some(screen) = screens.iter().find(|s| Some(&s.id) == e.screen_id.as_ref()) else {
+                continue;
+            };
+            e.screens = screens.clone();
+            if let Some((root, item)) = screen_root(screen, &e.route)
+                && root != e.root
+            {
+                e.root = root;
+                e.item = item;
+                e.laid = None;
+            }
+        }
     }
 
     /// Whether writes or loads are still out (a script waits for them).
@@ -3129,6 +3175,7 @@ impl Session {
                     e.screens = screens.clone();
                     e.laid = None;
                 }
+                self.refresh_screens(id, &root);
                 self.layouts.insert(id.to_owned(), root);
             }
             Err(error) => {
@@ -3223,16 +3270,9 @@ impl Session {
             return false;
         };
         let (id, screens, frame, size) = (top.id.clone(), top.screens.clone(), top.frame, top.size);
-        let mut root = serde_json::to_value(&screen.root).unwrap_or(Value::Null);
-        bind_route(&mut root, &route);
-        let Ok(root) = serde_json::from_value::<UiNode>(root) else {
+        let Some((root, item)) = screen_root(&screen, &route) else {
             return false;
         };
-        let item = screen.item.as_ref().map(|i| {
-            let mut v = Value::String(i.clone());
-            bind_route(&mut v, &route);
-            crate::bind::render(&v)
-        });
         self.stack.push(Entry {
             id,
             root,
@@ -3249,6 +3289,7 @@ impl Session {
             closing: None,
             laid: None,
             screen: true,
+            screen_id: Some(screen.id.clone()),
             follow: false,
         });
         out.push(Effect::OpenedScreen {

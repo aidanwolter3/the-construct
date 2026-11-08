@@ -82,6 +82,8 @@ fn compose_home() -> Value {
 #[derive(Default)]
 struct Pod {
     version: AtomicU64,
+    /// The layout `garden`'s latest version, as the layouts list gives it.
+    garden: AtomicU64,
     count: Mutex<i64>,
     /// Closes every connection unanswered: the pod can't be reached.
     down: AtomicBool,
@@ -118,6 +120,7 @@ impl Stub {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let pod = Arc::new(Pod::default());
         pod.version.store(1, Ordering::SeqCst);
+        pod.garden.store(3, Ordering::SeqCst);
         *pod.base.lock().unwrap() = base.clone();
         let shared = pod.clone();
         thread::spawn(move || {
@@ -133,6 +136,17 @@ impl Stub {
     fn publish(&self, version: u64) {
         self.pod.version.store(version, Ordering::SeqCst);
         let event = format!("event: layout\ndata: {{\"version\":{version}}}\n\n");
+        for tx in self.pod.streams.lock().unwrap().iter() {
+            let _ = tx.send(event.clone());
+        }
+    }
+
+    /// A new version of the layout `garden`, announced on home's stream.
+    fn publish_garden(&self, version: u64) {
+        self.pod.garden.store(version, Ordering::SeqCst);
+        let event = format!(
+            "event: layout\ndata: {{\"workspace_id\":\"garden\",\"version\":{version}}}\n\n"
+        );
         for tx in self.pod.streams.lock().unwrap().iter() {
             let _ = tx.send(event.clone());
         }
@@ -270,7 +284,8 @@ fn handle(stream: TcpStream, pod: &Pod) {
         ("GET", p) if p.starts_with("/v1/apps") => {
             let apps = json!({ "apps": [
                 { "id": "home", "title": "Home", "kind": "custom", "latest_version": version },
-                { "id": "garden", "title": "Garden", "kind": "custom", "latest_version": 3 }
+                { "id": "garden", "title": "Garden", "kind": "custom",
+                  "latest_version": pod.garden.load(Ordering::SeqCst) }
             ] });
             send(&mut out, "200 OK", "", &apps.to_string());
         }
@@ -433,6 +448,43 @@ fn a_layout_event_redraws_the_open_session() {
     });
     stub.publish(2);
     wait_until("home v2", || shows(&mut s, "Home v2"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_layouts_list_follows_an_edit_to_a_layout_never_opened() {
+    let stub = Stub::start();
+    let dir = storage("announced");
+    let pod = PodEngine::open_with(&stub.base, Some(&dir), store(&stub.base), config());
+    let mut s = pod.session(construct_render::Viewport::PHONE);
+    let version = |s: &mut Session, uri: &str| {
+        s.poll();
+        s.data
+            .entities
+            .get(uri)
+            .and_then(|e| e.get("version").cloned())
+    };
+    wait_until("the layouts list", || {
+        version(&mut s, "local://layouts/garden") == Some(json!("v3 · latest"))
+    });
+    // Home's own version is there too, though home is in no list.
+    assert_eq!(
+        version(&mut s, "local://layouts/home"),
+        Some(json!("v1 · latest"))
+    );
+    assert_eq!(
+        s.data.queries["local:all_layouts"],
+        vec!["local://layouts/garden".to_owned()]
+    );
+    // An agent edits the layout `garden`, which this device never opened:
+    // its version in the list follows without a restart.
+    wait_until("the event stream", || {
+        !stub.pod.streams.lock().unwrap().is_empty()
+    });
+    stub.publish_garden(4);
+    wait_until("garden v4 in the list", || {
+        version(&mut s, "local://layouts/garden") == Some(json!("v4 · latest"))
+    });
     let _ = std::fs::remove_dir_all(&dir);
 }
 

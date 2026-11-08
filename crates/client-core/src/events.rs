@@ -412,10 +412,12 @@ impl Inner {
                 // decision `layouts-not-apps`).
                 let snap = {
                     let mut st = lock(&self.state);
-                    let Some(l) = st.layouts.get_mut(other) else {
-                        return;
-                    };
-                    l.gone = true;
+                    let was_announced = st.announced.remove(other).is_some();
+                    match st.layouts.get_mut(other) {
+                        Some(l) => l.gone = true,
+                        None if was_announced => {}
+                        None => return,
+                    }
                     st.seq += 1;
                     st.snapshot()
                 };
@@ -461,11 +463,24 @@ impl Inner {
             return;
         };
         if let Some(other) = ws.as_deref().filter(|w| *w != self.workspace_id) {
+            // Every layout's version is noted, opened or not, so a list of
+            // the pod's layouts can follow (`announced_json`).
+            let (newer, announced) = {
+                let mut st = lock(&self.state);
+                let newer = st
+                    .layouts
+                    .get(other)
+                    .is_some_and(|l| l.version.is_none_or(|v| version > v));
+                let changed = st.announced.insert(other.to_owned(), version) != Some(version);
+                if changed {
+                    st.seq += 1;
+                }
+                (newer, changed.then(|| st.snapshot()))
+            };
+            if let Some(snap) = announced {
+                self.notify(snap);
+            }
             // Another layout this engine shows: fetch it again when newer.
-            let newer = lock(&self.state)
-                .layouts
-                .get(other)
-                .is_some_and(|l| l.version.is_none_or(|v| version > v));
             if newer && !self.signal.is_shut_down() {
                 println!(
                     "[ConstructEngine] events: layout {other} v{version} pushed; refetching it"

@@ -1582,7 +1582,7 @@ fn vocabulary_with(components: Vec<Value>) -> Value {
             "local://connection": "online (bool), pending (count of unsent changes), label (\"Online\", \"Offline · 2 pending\"), attention (true while offline or changes wait)",
             "local://inbox": "unread (count), label (\"3 unread\"), has_older (more notifications than local:notifications holds: show a Load older button sending load_older_notifications), loading (a page is loading)",
             "local://layouts": "count (the pod's layouts, home excluded)",
-            "local:layouts": "query of the pod's layouts but home (hidden ones left out): local://layouts/<id> with id, title, icon, kind, detail, unread, version (\"v12 · latest\" or \"v10 · pinned\"), hidden (always false here)",
+            "local:layouts": "query of the pod's layouts but home (hidden ones left out): local://layouts/<id> with id, title, icon, kind, detail, unread, version (\"v12 · latest\" or \"v10 · pinned\"), hidden (always false here). Home is in no list, but local://layouts/home has the same fields (bind ${local://layouts/home#version} for its version). The versions follow every edit without reopening anything",
             "local:all_layouts": "the same rows as local:layouts plus the hidden layouts (hidden: true), for a \"show hidden\" list with unhide_layout buttons",
             "local:notifications": "query of the newest notifications: id, app_id, app_title, title, body, when (\"5 min\"), day (\"Today\"), unread",
             "local:channels": "query of the notification channels: app_id, app_title, id, title, description, enabled",
