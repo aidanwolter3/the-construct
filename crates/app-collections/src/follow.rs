@@ -1,5 +1,5 @@
-//! Live computes (decision `live-computed-fields`): a `lookup` or `count`
-//! field follows the collection it reads. Every row write notes the row
+//! Live computes (decisions `live-computed-fields`, `collection-primitives`):
+//! a `lookup`, `count` or `rollup` field follows the collection it reads. Every row write notes the row
 //! and its state before ([`db::take_changed`]); before a transaction
 //! commits, [`settle`] finds the computed fields of any collection that
 //! read a changed row's collection and computes them again for the rows
@@ -11,7 +11,13 @@
 //!   match mode);
 //! - a `count` whose `collection` is the changed row's: when the row was
 //!   created, deleted or restored, or its `key` or a `where` field changed,
-//!   the rows whose `from` equals its key before or after.
+//!   the rows whose `from` equals its key before or after;
+//! - a lookup through a ref (`via`; its key is the read row's id): when the
+//!   row was created, deleted or restored, or its `value` changed, the rows
+//!   whose ref holds its id;
+//! - a `rollup` whose `collection` is the changed row's: when the row was
+//!   created, deleted or restored, or its `via`, `field` or a `where` field
+//!   changed, the rows its `via` pointed at before or after.
 //!
 //! A restored row's own lookups and counts are computed again too (they
 //! didn't follow while it was deleted). The rows this changes are saved
@@ -29,7 +35,7 @@ use serde_json::{Map, Value};
 use crate::compute::{self, Job, Lookups};
 use crate::db::{self, Row};
 use crate::lookup;
-use crate::model::{Compute, Definition, Match};
+use crate::model::{self, Compute, Definition, Match};
 use crate::{Caps, NAME};
 
 /// Waves of recomputing one transaction runs at most: a chain of computes
@@ -189,6 +195,18 @@ fn wave_step(
                     key,
                     live_changed || differs(key) || conditions.iter().any(|w| differs(&w.field)),
                 ),
+                Compute::Rollup {
+                    via,
+                    field,
+                    conditions,
+                    ..
+                } => (
+                    via,
+                    live_changed
+                        || differs(via)
+                        || field.as_deref().is_some_and(differs)
+                        || conditions.iter().any(|w| differs(&w.field)),
+                ),
                 Compute::Expr { .. } | Compute::Model { .. } => continue,
             };
             if !relevant {
@@ -198,7 +216,13 @@ fn wave_step(
                 .entry((dep.collection.clone(), dep.field.clone(), dep.kind))
                 .or_default();
             for side in &sides {
-                if let Some(k) = lookup::text_of(&value_of(tdef, key, side))
+                // A lookup through a ref matches the read row's own id.
+                let k = if key == model::ROW_ID {
+                    Some(ch.id.clone())
+                } else {
+                    lookup::text_of(&value_of(tdef, key, side))
+                };
+                if let Some(k) = k
                     && !entry.contains(&k)
                 {
                     entry.push(k);
@@ -214,21 +238,24 @@ fn wave_step(
         let Some(def) = defs.get(name) else {
             continue;
         };
-        // This collection's kinds to match: field, its source and the keys.
-        let matching: Vec<(&String, &String, Vec<lookup::KeyMatcher>)> = keys
+        // This collection's kinds to match: field and which rows.
+        let matching: Vec<(&String, Rows)> = keys
             .iter()
             .filter(|((c, _, _), _)| c == name)
             .filter_map(|((_, f, i), ks)| {
                 let (from, mode) = match def.by_id(f)?.compute.get(*i)? {
                     Compute::Lookup { from, mode, .. } => (from, *mode),
                     Compute::Count { from, .. } => (from, Match::Exact),
+                    Compute::Rollup { .. } => {
+                        return Some((f, Rows::Ids(ks.iter().cloned().collect())));
+                    }
                     Compute::Expr { .. } | Compute::Model { .. } => return None,
                 };
                 let ms = ks
                     .iter()
                     .map(|k| lookup::KeyMatcher::new(mode, k))
                     .collect();
-                Some((f, from, ms))
+                Some((f, Rows::From(from, ms)))
             })
             .collect();
         let back = restored.get(name);
@@ -239,14 +266,16 @@ fn wave_step(
             if back.is_some_and(|b| b.contains(&row.id)) {
                 fields.extend(own.iter().map(String::as_str));
             }
-            for (field_id, from, ms) in &matching {
+            for (field_id, rows) in &matching {
                 if fields.contains(&field_id.as_str()) {
                     continue;
                 }
-                let Some(input) = lookup::text_of(&value_of(def, from, &row.values)) else {
-                    continue;
+                let hit = match rows {
+                    Rows::Ids(ids) => ids.contains(&row.id),
+                    Rows::From(from, ms) => lookup::text_of(&value_of(def, from, &row.values))
+                        .is_some_and(|input| ms.iter().any(|m| m.matches(&input))),
                 };
-                if ms.iter().any(|m| m.matches(&input)) {
+                if hit {
                     fields.push(field_id.as_str());
                 }
             }
@@ -261,6 +290,14 @@ fn wave_step(
         }
     }
     Ok(())
+}
+
+/// Which rows of a collection a kind recomputes.
+enum Rows<'a> {
+    /// Those whose `from` matches one of the keys.
+    From(&'a String, Vec<lookup::KeyMatcher>),
+    /// Those with one of these ids (a rollup's parents).
+    Ids(HashSet<String>),
 }
 
 /// Compute `fields` of `row` again; whether a value changed.

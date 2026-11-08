@@ -870,6 +870,7 @@ mod tests {
             fillers: Vec::new(),
             alerts: Vec::new(),
             system: None,
+            actions: Vec::new(),
         }
     }
 

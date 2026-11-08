@@ -136,7 +136,8 @@ pub fn prompt_text(q: &Question<'_>) -> String {
         Kind::Bool => "true or false and nothing else".into(),
         Kind::Date => "a date as YYYY-MM-DD and nothing else".into(),
         Kind::Datetime => "a date and time as YYYY-MM-DDTHH:MM and nothing else".into(),
-        Kind::Text => "the text only, with no preamble".into(),
+        Kind::Text | Kind::Ref => "the text only, with no preamble".into(),
+        Kind::Quantity => "an amount and a unit (such as 1 1/2 cups) and nothing else".into(),
     };
     format!(
         "{}\n\n{}\n\nAnswer with {answer}.",
@@ -299,9 +300,27 @@ pub fn eval_expr(
 pub struct Lookups {
     rules: BTreeMap<(String, usize), Rules>,
     counts: BTreeMap<(String, usize), HashMap<String, i64>>,
+    rollups: BTreeMap<(String, usize), HashMap<String, Vec<Value>>>,
 }
 
 impl Lookups {
+    /// Rollup kind `i` of `field`: the values it aggregates (the rolled-up
+    /// field's, or `true` per row without a field) of the live rows of its
+    /// collection matching its conditions, by the row id their `via` holds.
+    fn rollups(
+        &mut self,
+        conn: &Connection,
+        field: &Field,
+        i: usize,
+    ) -> rusqlite::Result<&HashMap<String, Vec<Value>>> {
+        let k = (field.id.clone(), i);
+        if !self.rollups.contains_key(&k) {
+            let c = rollup_index(conn, &field.compute[i])?;
+            self.rollups.insert(k.clone(), c);
+        }
+        Ok(&self.rollups[&k])
+    }
+
     /// Count kind `i` of `field`: the live rows of its collection matching
     /// its conditions, by normalized key.
     fn counts(
@@ -364,6 +383,101 @@ fn count_index(conn: &Connection, compute: &Compute) -> rusqlite::Result<HashMap
     Ok(out)
 }
 
+/// The rows a rollup reads, grouped by the id their `via` holds (see
+/// [`Lookups::rollups`]).
+fn rollup_index(
+    conn: &Connection,
+    compute: &Compute,
+) -> rusqlite::Result<HashMap<String, Vec<Value>>> {
+    let mut out: HashMap<String, Vec<Value>> = HashMap::new();
+    let Compute::Rollup {
+        collection,
+        via,
+        field,
+        conditions,
+        ..
+    } = compute
+    else {
+        return Ok(out);
+    };
+    let Some((_, other)) = db::latest_def(conn, collection)? else {
+        return Ok(out);
+    };
+    if other.by_id(via).filter(|f| f.live()).is_none() {
+        return Ok(out);
+    }
+    let vf = field
+        .as_ref()
+        .and_then(|f| other.by_id(f))
+        .filter(|f| f.live());
+    for r in db::all_rows(conn, collection, false)? {
+        let Some(parent) = r.values.get(via).and_then(Value::as_str) else {
+            continue;
+        };
+        if !conditions.iter().all(|c| c.matches(&other, &r.values)) {
+            continue;
+        }
+        let v = match vf {
+            Some(f) => r
+                .values
+                .get(&f.id)
+                .cloned()
+                .unwrap_or_else(|| f.empty_value()),
+            None => json!(true),
+        };
+        out.entry(parent.to_owned()).or_default().push(v);
+    }
+    Ok(out)
+}
+
+/// A rollup's answer over `values` (see [`model::RollupOp`]) for a field of
+/// kind `kind`; `None`: empty.
+pub fn aggregate(op: model::RollupOp, kind: Kind, values: &[Value]) -> Option<Value> {
+    use model::RollupOp as Op;
+    let numbers = || {
+        values
+            .iter()
+            .filter_map(|v| v.as_f64().filter(|x| x.is_finite()))
+    };
+    match op {
+        Op::Count => Some(json!(values.len())),
+        Op::Any => Some(json!(!values.is_empty())),
+        Op::Sum => {
+            let qs: Vec<crate::quantity::Quantity> = values
+                .iter()
+                .filter_map(crate::quantity::from_value)
+                .collect();
+            if kind == Kind::Quantity {
+                let s = crate::quantity::sum(&qs);
+                return (!s.parts.is_empty()).then(|| s.to_value());
+            }
+            Some(model::number_value(numbers().sum::<f64>()))
+        }
+        Op::Min => numbers().reduce(f64::min).map(model::number_value),
+        Op::Max => numbers().reduce(f64::max).map(model::number_value),
+        Op::List => {
+            let mut seen: Vec<String> = Vec::new();
+            let mut out: Vec<String> = Vec::new();
+            for v in values {
+                let t = match v {
+                    Value::Null => continue,
+                    Value::String(s) => s.trim().to_owned(),
+                    other if crate::quantity::from_value(other).is_some() => {
+                        crate::quantity::text_of(other)
+                    }
+                    other => other.to_string(),
+                };
+                if t.is_empty() || seen.contains(&model::cache_key(&t)) {
+                    continue;
+                }
+                seen.push(model::cache_key(&t));
+                out.push(t);
+            }
+            (!out.is_empty()).then(|| json!(out.join(", ")))
+        }
+    }
+}
+
 /// What computing a field gave.
 #[derive(Debug, Clone, PartialEq)]
 enum Answer {
@@ -418,6 +532,18 @@ fn answer(
                     None => 0,
                 };
                 return Ok(Answer::Now(json!(n)));
+            }
+            Compute::Rollup { op, .. } => {
+                let empty = Vec::new();
+                let index = lookups.rollups(conn, field, i)?;
+                let values = index.get(&row.id).unwrap_or(&empty);
+                return Ok(match aggregate(*op, field.kind, values) {
+                    Some(v) => match model::coerce(field, &v, max_chars) {
+                        Ok(Some(v)) => Answer::Now(v),
+                        _ => Answer::None,
+                    },
+                    None => Answer::None,
+                });
             }
             Compute::Model { from, .. } => {
                 let Some((texts, key)) = inputs(def, from, &values) else {
@@ -568,10 +694,12 @@ pub fn backfill(
     if let Some(c) = field.learning_lookup() {
         learn_cache(tx, def, field, c, now, caps)?;
     }
-    let only_expr = field
-        .compute
-        .iter()
-        .all(|c| matches!(c, Compute::Expr { .. } | Compute::Count { .. }));
+    let only_expr = field.compute.iter().all(|c| {
+        matches!(
+            c,
+            Compute::Expr { .. } | Compute::Count { .. } | Compute::Rollup { .. }
+        )
+    });
     let mut lookups = Lookups::default();
     let mut jobs = Vec::new();
     for mut r in db::all_rows(tx, &def.name, false)? {

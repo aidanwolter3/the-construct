@@ -7,8 +7,10 @@
 //!   retries from the outbox.
 //! - `collections_aside`: values a type change couldn't convert, kept so
 //!   nothing is lost (and put back when a later change can read them).
-//! - `collections_edits` / `collections_edit_rows`: Claude's row edits,
-//!   each row's state before and after, so an edit undoes as one step.
+//! - `collections_edits` / `collections_edit_rows`: Claude's row edits and
+//!   action calls, each row's state before and after (and its collection
+//!   when it isn't the edit's), so an edit undoes as one step; an action
+//!   call's `client_id` answers a retry with the same edit.
 //! - `collections_computed`: answers for `model`-computed fields (decision
 //!   `collection-computed-fields`) as JSON, by collection, field id and the
 //!   normalized source values, so each input is asked about once; a
@@ -58,7 +60,18 @@ pub static MIGRATIONS: &[Step] = &[
     Step::sql("fill_past", FILL_PAST),
     // 7: deleted collections, restorable for 30 days (issue #107).
     Step::sql("deleted_collections", DELETED),
+    // 8: edits spanning collections (an action's parent and child rows) and
+    // the client id of an action call, so a retried call is applied once
+    // (decision `collection-primitives`).
+    Step::sql("action_edits", ACTION_EDITS),
 ];
+
+const ACTION_EDITS: &str = "
+ALTER TABLE collections_edit_rows ADD COLUMN collection TEXT;
+ALTER TABLE collections_edits ADD COLUMN client_id TEXT;
+CREATE UNIQUE INDEX collections_edits_client
+    ON collections_edits (client_id) WHERE client_id IS NOT NULL;
+";
 
 const DELETED: &str = "
 CREATE TABLE collections_deleted (
@@ -529,7 +542,10 @@ fn compare(field: &Field, x: &Value, y: &Value) -> Ordering {
             .unwrap_or("")
             .to_lowercase()
             .cmp(&y.as_str().unwrap_or("").to_lowercase()),
-        Kind::Date => x.as_str().cmp(&y.as_str()),
+        Kind::Date | Kind::Ref => x.as_str().cmp(&y.as_str()),
+        Kind::Quantity => crate::quantity::text_of(x)
+            .to_lowercase()
+            .cmp(&crate::quantity::text_of(y).to_lowercase()),
         Kind::Datetime => match (model::instant(x), model::instant(y)) {
             (Some(a), Some(b)) => a.cmp(&b),
             _ => x.as_str().cmp(&y.as_str()),
@@ -1014,11 +1030,32 @@ pub fn convert_field(
         field: new.name.clone(),
         ..Conversion::default()
     };
+    // A ref resolves text by its collection's row ids and unique fields.
+    let target = match (&new.kind, &new.collection) {
+        (Kind::Ref, Some(c)) => latest_def(tx, c)?.map(|(_, d)| d),
+        _ => None,
+    };
+    let convert = |v: &Value| -> rusqlite::Result<Result<Option<Value>, String>> {
+        if new.kind != Kind::Ref {
+            return Ok(model::convert(new, v, max_chars));
+        }
+        let Some(t) = &target else {
+            return Ok(Err("no collection".into()));
+        };
+        let text = match v {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            _ => return Ok(Err("not text".into())),
+        };
+        Ok(crate::refs::resolve_text(tx, t, &text)?
+            .map(|id| Some(json!(id)))
+            .ok_or_else(|| "no such row".to_owned()))
+    };
     for mut r in all_rows(tx, collection, true)? {
         let Some(v) = r.values.get(&new.id).cloned() else {
             continue;
         };
-        match model::convert(new, &v, max_chars) {
+        match convert(&v)? {
             Ok(Some(c)) => {
                 if c != v {
                     report.converted += 1;
@@ -1053,7 +1090,7 @@ pub fn convert_field(
     };
     for (row_id, value_json) in aside {
         let v: Value = serde_json::from_str(&value_json).unwrap_or(Value::Null);
-        let Ok(Some(c)) = model::convert(new, &v, max_chars) else {
+        let Ok(Some(c)) = convert(&v)? else {
             continue;
         };
         let Some(mut r) = row(tx, collection, &row_id)? else {
@@ -1108,33 +1145,77 @@ pub fn record_edit(
     changes: &[(String, Option<Value>, Value)],
     now: i64,
 ) -> rusqlite::Result<String> {
+    let rows: Vec<EditRow> = changes
+        .iter()
+        .map(|(id, b, a)| EditRow {
+            collection: collection.to_owned(),
+            id: id.clone(),
+            before: b.clone(),
+            after: a.clone(),
+        })
+        .collect();
+    record_edit_rows(tx, collection, note, &rows, None, now)
+}
+
+/// One row of an edit: its collection, id and state before (`None`: made
+/// by the edit) and after.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EditRow {
+    pub collection: String,
+    pub id: String,
+    pub before: Option<Value>,
+    pub after: Value,
+}
+
+/// Record an edit of rows of one or more collections (`collection`: the
+/// one it is listed under), with the client id of the call that made it.
+/// Returns its id.
+pub fn record_edit_rows(
+    tx: &Connection,
+    collection: &str,
+    note: &str,
+    rows: &[EditRow],
+    client_id: Option<&str>,
+    now: i64,
+) -> rusqlite::Result<String> {
     let id = new_id("e");
     tx.execute(
-        "INSERT INTO collections_edits (id, collection, note, count, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![id, collection, note, changes.len() as i64, now],
+        "INSERT INTO collections_edits (id, collection, note, count, created_at, client_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![id, collection, note, rows.len() as i64, now, client_id],
     )?;
-    for (row_id, before, after) in changes {
+    for r in rows {
         tx.execute(
-            "INSERT OR REPLACE INTO collections_edit_rows (edit_id, row_id, before_json, after_json)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT OR REPLACE INTO collections_edit_rows (edit_id, row_id, before_json, after_json,
+             collection) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 id,
-                row_id,
-                before.as_ref().map(Value::to_string),
-                after.to_string()
+                r.id,
+                r.before.as_ref().map(Value::to_string),
+                r.after.to_string(),
+                (r.collection != collection).then_some(r.collection.as_str())
             ],
         )?;
     }
     Ok(id)
 }
 
-/// An edit's `(collection, undone_at, rows: (row id, before, after))`.
+/// The edit an action call with client id `client_id` made.
+pub fn edit_by_client(conn: &Connection, client_id: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT id FROM collections_edits WHERE client_id = ?1",
+        [client_id],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+/// An edit's `(collection, undone_at, rows)`.
 #[allow(clippy::type_complexity)]
 pub fn edit(
     conn: &Connection,
     id: &str,
-) -> rusqlite::Result<Option<(String, Option<i64>, Vec<(String, Option<Value>, Value)>)>> {
+) -> rusqlite::Result<Option<(String, Option<i64>, Vec<EditRow>)>> {
     let head: Option<(String, Option<i64>)> = conn
         .query_row(
             "SELECT collection, undone_at FROM collections_edits WHERE id = ?1",
@@ -1146,17 +1227,20 @@ pub fn edit(
         return Ok(None);
     };
     let mut stmt = conn.prepare_cached(
-        "SELECT row_id, before_json, after_json FROM collections_edit_rows WHERE edit_id = ?1",
+        "SELECT row_id, before_json, after_json, collection FROM collections_edit_rows
+         WHERE edit_id = ?1 ORDER BY rowid",
     )?;
     let rows = stmt
         .query_map([id], |r| {
             let before: Option<String> = r.get(1)?;
             let after: String = r.get(2)?;
-            Ok((
-                r.get::<_, String>(0)?,
-                before.and_then(|b| serde_json::from_str(&b).ok()),
-                serde_json::from_str(&after).unwrap_or(Value::Null),
-            ))
+            let own: Option<String> = r.get(3)?;
+            Ok(EditRow {
+                collection: own.unwrap_or_else(|| collection.clone()),
+                id: r.get::<_, String>(0)?,
+                before: before.and_then(|b| serde_json::from_str(&b).ok()),
+                after: serde_json::from_str(&after).unwrap_or(Value::Null),
+            })
         })?
         .collect::<rusqlite::Result<_>>()?;
     Ok(Some((collection, undone, rows)))

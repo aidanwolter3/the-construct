@@ -272,6 +272,40 @@ mod tests {
     }
 
     #[test]
+    fn an_entity_binding_can_name_the_item_s_ref() {
+        // A collection ref holds a row id; a layout reads through it
+        // (decision `collection-primitives`): `$item.` is bound first.
+        let mut entities = BTreeMap::new();
+        entities.insert(
+            "collections://ingredients/r1".to_owned(),
+            record(json!({"name": "Chicken broth"})),
+        );
+        let (form, route, queries) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let theme = Theme::new(false, &entities);
+        let item = record(json!({"ingredient": "r1", "amount_text": "4 cups", "other": null}));
+        let ctx = Ctx {
+            entities: &entities,
+            queries: &queries,
+            form: &form,
+            route: &route,
+            theme: &theme,
+            item: None,
+            item_uri: None,
+        }
+        .with_item("collections://recipe_lines/r9", &item);
+        assert_eq!(
+            ctx.text("$item.amount_text ${collections://ingredients/$item.ingredient#name}"),
+            "4 cups Chicken broth"
+        );
+        // An empty ref, or a row not loaded, reads as nothing.
+        assert_eq!(
+            ctx.text("${collections://ingredients/$item.other#name}"),
+            ""
+        );
+        assert_eq!(ctx.text("${collections://ingredients/r2#name}"), "");
+    }
+
+    #[test]
     fn truthiness_matches_the_shared_ui() {
         for v in [
             json!(null),

@@ -16,7 +16,10 @@
 //!   list): its `field`, `also[].field` and `entity.<f>` in `value_expr`;
 //!   a create's `entity` keys;
 //! - the payload keys of `/v1/collections/<c>/{create,update,delete}`
-//!   (`refresh` takes none).
+//!   (`refresh` takes none); `/v1/collections/<c>/actions/<a>` names an
+//!   action of `c`, its payload keys are the action's params (and
+//!   `client_id`), and the mutation's own field is a view flag (not
+//!   checked).
 
 use std::collections::HashMap;
 
@@ -240,6 +243,35 @@ impl<'a> Checker<'a> {
         item: Option<&'a Definition>,
     ) -> Result<(), LayoutError> {
         let s = |k: &str| map.get(k).and_then(Value::as_str);
+        // An action's endpoint: the mutation's field is only a view flag.
+        if let Some(endpoint) = s("endpoint")
+            && let Some((c, op)) = route_of(endpoint)
+            && let Some(action) = op.strip_prefix("actions/")
+        {
+            let def = self.def(&format!("{at}/endpoint"), c)?;
+            let Some(a) = crate::actions::find(def, action.trim_end_matches('/')) else {
+                return Err(err(
+                    &format!("{at}/endpoint"),
+                    format!("collection '{c}' has no action '{action}'"),
+                    def.actions.iter().map(|a| a.name.clone()).collect(),
+                ));
+            };
+            if let Some(p) = map.get("payload").and_then(Value::as_object) {
+                for k in p.keys() {
+                    if k != "client_id" && !a.params.iter().any(|x| x.name == *k) {
+                        let mut allowed: Vec<String> =
+                            a.params.iter().map(|x| x.name.clone()).collect();
+                        allowed.push("client_id".into());
+                        return Err(err(
+                            &format!("{at}/payload/{}", escape(k)),
+                            format!("'{k}' is not a parameter of action '{action}' of '{c}'"),
+                            allowed,
+                        ));
+                    }
+                }
+            }
+            return Ok(());
+        }
         let target = match s("entity_uri") {
             Some(u) if collection_of_uri(u).is_some() => Some(self.def(
                 &format!("{at}/entity_uri"),
@@ -405,6 +437,7 @@ mod tests {
             fillers: Vec::new(),
             alerts: Vec::new(),
             system: None,
+            actions: Vec::new(),
         };
         def.fields[0].aliases.push("name".into());
         HashMap::from([("todos".to_owned(), def)])

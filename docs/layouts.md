@@ -109,7 +109,7 @@ may still be written with it; prefer a `core://Page` for a new one.
 | Syntax | Where | Means |
 |---|---|---|
 | `$item.<field>` | inside a List, Carousel or group-header template | a field of the current entity |
-| `${<uri>#<field>}` | any text | a field of any entity, e.g. `${core://sources/pixelfed#signed_in}` |
+| `${<uri>#<field>}` | any text | a field of any entity, e.g. `${core://sources/pixelfed#signed_in}`; the URI may hold `$item.<field>` (bound first), e.g. `${collections://ingredients/$item.ingredient#name}` reads through a collection ref |
 | `$route.<name>` | in a screen | a parameter captured from the route |
 | `$form.<field>` | in intents and filters | the value a TextField, ChoiceChips or MediaPicker with that `field` edits; an intent is not sent while a referenced value is blank |
 | `$form?.<field>` | in intents | the same, but a blank value binds to `""` instead of blocking |

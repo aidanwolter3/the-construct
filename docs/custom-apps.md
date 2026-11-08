@@ -110,8 +110,8 @@ The server's MCP instructions tell Claude how to use them. After a change to the
 ## Collections
 
 Collections is a built-in data source (`crates/app-collections`) that stores any collection Claude declares. Claude
-never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `datetime`, `choice`; optional, with a
-default), and the pod stores, validates and serves the rows.
+never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `datetime`, `choice`, `ref`,
+`quantity`; optional, with a default, `unique`), and the pod stores, validates and serves the rows.
 
 | A layout uses (for collection `<c>`) | |
 |---|---|
@@ -122,6 +122,7 @@ default), and the pod stores, validates and serves the rows.
 | `POST /v1/collections/<c>/update {id, <field>: …}` | For `action.mutation.optimistic`; an id `pending-<nonce>` finds a row whose create was just sent. |
 | `POST /v1/collections/<c>/delete {id}` | Sets `deleted`; hide such rows at once with `where: {field: "deleted", equals: "false"}`, or, with another filter, `where: [{field: "deleted", equals: "false"}, {field: "category", equals: "$form.tab"}]` (every condition must match). |
 | `GET /v1/collections/<c>/export` | Everything, deleted rows and kept-aside values included. |
+| `POST /v1/collections/<c>/actions/<a> {<param>: …, client_id?}` | Runs an insert-from-query action, sent with `action.mutation.optimistic` (its `field` a view flag, e.g. `adding` on `$item.uri`); the new rows arrive through the feed; a repeated `client_id` is applied once. |
 
 `describe_collection` gives ready-made layout snippets for all of these.
 
@@ -148,24 +149,50 @@ default), and the pod stores, validates and serves the rows.
   empties (or takes the next match's id) and comes back on restore. Decisions [`collection-computed-fields`](decisions/collection-computed-fields.md),
   [`collection-lookups`](decisions/collection-lookups.md) and
   [`live-computed-fields`](decisions/live-computed-fields.md).
+- **References.** A field `{type: "ref", collection}` holds the id of a row of that collection. Writes give the id
+  or `{"<unique field>": value}` (`{"meal": {"name": "Harvest Soup"}}`), resolved to the id; anything that names
+  no live row is refused. Rows serve the id; a layout reads through it with
+  `${collections://<target>/$item.<ref>#<field>}` (the target must be one of its feeds). When the target row is
+  deleted the ref keeps the id (reading through it shows nothing) and a restore heals it. `unique: true` (text or
+  ref) keeps a value to one live row, text ignoring case and spacing, on create, update and restore; making a field
+  unique fails while rows share a value. `update_field {type: "ref", collection}` turns a text field into a ref by
+  the target's ids and unique text fields, keeping what matches nothing aside. `{kind: "lookup", via: <ref>,
+  value}` reads a field of the row a ref points at, live.
+- **Rollups.** `{kind: "rollup", collection, via, op: count|sum|min|max|any|list, field?, where?}` aggregates the
+  rows of another collection whose ref `via` points at this row (and that match `where`): a count, a sum (numbers,
+  or quantities), the smallest or largest number, whether there is any, or the distinct values as a ", " list. The
+  field's only kind, live like a count; prefer it to `count` for new fields.
+- **Quantities.** A `quantity` field parses text such as "1 1/2 cups", "2 Tbsp", "1 (14 oz) can", "1/4 cup plus 2
+  tbsp" or "a pinch" (no model), stores `{amount, unit}`, and serves `<name>_text` ("1 1/2 cups"). Text that
+  doesn't parse ("to taste") is kept and shown as written, left out of sums, and counted by `describe_collection`.
+  A rollup `sum` converts within volume and weight (2 cups + 1 tbsp = "2 1/16 cups") and keeps other units apart
+  ("2 cups + 3 cloves"), choosing a sensible unit (48 tsp → "1 cup").
+- **Actions.** A collection may hold named insert-from-query actions (`apply_change {op: set_action}`): for each
+  row of a source collection matching `where`, find the row of this collection by `match` (else create it), apply
+  `update` (first deleting its children when it matches `reset_when`), and add a child row to another collection,
+  values scaled by `times / per` where marked. A grocery list built this way: one row per ingredient with the total
+  across recipes (a rollup sum over its entries) and the recipes it's for (a rollup list), manual items still typed
+  by hand, a checked-off item starting again when a recipe adds to it. A call is one edit across both collections,
+  undone with `undo_edit`; `run_action` runs one over MCP. Decision
+  [`collection-primitives`](decisions/collection-primitives.md).
 - **Reminders.** `apply_change {op: add_reminder, field: "due", title: "Due today: {title}", unless: {field:
   "done", equals: true}, at?: "09:00"}` notifies once per row when its date arrives, in the pod's time zone
   (`set_time_zone`). Decision [`collection-reminders`](decisions/collection-reminders.md).
 - **Row edits by Claude.** `edit_rows` (imports, backfills) first answers a preview and a confirm token, which Claude
   shows the user before applying; `undo_edit` reverts it. `add_row` writes one row the user just asked for at once,
   undoable the same way (decision [`collections-add-row`](decisions/collections-add-row.md)).
-- **Limits per pod:** 20 collections, 40 fields each, 5,000 rows and 4 MiB of values in all, 500 rows per edit,
+- **Limits per pod:** 20 collections, 40 fields each, 5,000 rows and 4 MiB of values in all, 500 rows per edit or action call,
   4,000 characters per text value.
 
-- **Deleting.** `delete_collection` removes a collection once no layout binds it and no other collection's lookup
-  or count reads it (the refusal names them); home's feed for it is dropped too. It is restorable with `restore_collection`
+- **Deleting.** `delete_collection` removes a collection once no layout binds it and no other collection's ref,
+  lookup, count, rollup or action names it (the refusal names them); home's feed for it is dropped too. It is restorable with `restore_collection`
   for 30 days, then purged (decision [`collection-delete`](decisions/collection-delete.md)); sooner when what the
   pod keeps for undoing passes twice its bytes cap (the oldest goes first). A stale feed alone is
   dropped with `rename_layout` on home, passing home's whole feed list without it.
 
 MCP tools: `list_collections`, `define_collection`, `describe_collection`, `apply_change`,
-`restore_collection_version`, `delete_collection`, `restore_collection`, `edit_rows`, `add_row`, `undo_edit`,
-`export_collection`.
+`restore_collection_version`, `delete_collection`, `restore_collection`, `edit_rows`, `add_row`, `run_action`,
+`undo_edit`, `export_collection`.
 
 ### Fillers and alerts
 
