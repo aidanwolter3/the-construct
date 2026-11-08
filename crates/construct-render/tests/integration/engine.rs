@@ -79,6 +79,35 @@ fn compose_home() -> Value {
     })
 }
 
+/// A list row that shows a tap at once (`action.local.set`) and then
+/// adds it on the pod (a create the pod answers after a moment), as a
+/// staples list does; the pod's row says `added` once the create is in.
+fn staples_home(added: i64) -> Value {
+    json!({
+        "version": "1.0.0",
+        "workspace": { "type": "core://Column", "children": [
+            { "type": "core://List", "query_key": "rows", "item_template": {
+                "type": "core://Column", "children": [
+                    { "type": "core://Conditional", "value": "$item.added", "equals": "0",
+                      "content": { "type": "core://Button", "label": "Add $item.name",
+                        "on_click": { "intent": "action.sequence", "steps": [
+                            { "intent": "action.local.set", "entity_uri": "$item.uri",
+                              "field": "added", "value_expr": "1" },
+                            { "intent": "action.mutation.create", "query_key": "added",
+                              "entity_uri": "x://added/pending-$nonce",
+                              "entity": { "row": "$item.uri" },
+                              "endpoint": "/v1/rows/add", "payload": { "client_id": "$nonce" } }
+                        ] } } },
+                    { "type": "core://Conditional", "value": "$item.added",
+                      "content": { "type": "core://Text", "value_expr": "$item.name added",
+                        "style": "Body" } }
+                ] } }
+        ] },
+        "entities": { "x://rows/1": { "name": "Garlic", "added": added } },
+        "queries": { "rows": ["x://rows/1"] }
+    })
+}
+
 #[derive(Default)]
 struct Pod {
     version: AtomicU64,
@@ -102,6 +131,8 @@ struct Pod {
     /// Bytes of each upload, and the bodies of the posts created.
     uploads: Mutex<Vec<usize>>,
     created: Mutex<Vec<Value>>,
+    /// Home is [`staples_home`].
+    staples: AtomicBool,
     /// As a pod host: a request without a session gets the "Open your pod"
     /// screen for any layout; with one, home and the layout `garden`.
     pod_code: AtomicBool,
@@ -219,6 +250,8 @@ fn handle(stream: TcpStream, pod: &Pod) {
             let header = format!("X-Construct-Layout-Version: {version}\r\n");
             let mut home = if pod.compose.load(Ordering::SeqCst) {
                 compose_home()
+            } else if pod.staples.load(Ordering::SeqCst) {
+                staples_home(count)
             } else {
                 home(version, count)
             };
@@ -302,6 +335,13 @@ fn handle(stream: TcpStream, pod: &Pod) {
         ("POST", "/v1/auth/logout") => {
             pod.logouts.fetch_add(1, Ordering::SeqCst);
             send(&mut out, "200 OK", "", r#"{"session_kept":true}"#);
+        }
+        ("POST", "/v1/rows/add") => {
+            // The pod takes a moment; its row says so once it has it.
+            thread::sleep(Duration::from_millis(300));
+            *pod.count.lock().unwrap() = 1;
+            pod.posts.fetch_add(1, Ordering::SeqCst);
+            send(&mut out, "200 OK", "", "{}");
         }
         ("POST", "/v1/counters/home/increment") => {
             pod.posts.fetch_add(1, Ordering::SeqCst);
@@ -736,5 +776,37 @@ fn a_picked_photo_is_staged_uploaded_and_posted() {
     let post = stub.pod.created.lock().unwrap()[0].clone();
     assert_eq!(post["media"], json!(["up-1"]), "{post}");
     assert!(s.media_ids("photos").is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_tap_shown_at_once_stays_while_its_write_goes_to_the_pod() {
+    let stub = Stub::start();
+    stub.pod.staples.store(true, Ordering::SeqCst);
+    let dir = storage("staples");
+    let pod = PodEngine::open_with(&stub.base, Some(&dir), store(&stub.base), config());
+    let mut s = pod.session(construct_render::Viewport::PHONE);
+    wait_until("the row", || shows(&mut s, "Add Garlic"));
+
+    s.tap(&Target::Text("Add Garlic".into())).unwrap();
+    // The first frame after the tap shows it, and every frame after it
+    // (the engine's snapshots, its outbox, the pod's answer and the reloads
+    // it brings) keeps showing it.
+    assert!(shows(&mut s, "Garlic added"), "drew {:?}", texts(&mut s));
+    let until = Instant::now() + Duration::from_millis(1500);
+    while Instant::now() < until {
+        assert!(
+            shows(&mut s, "Garlic added"),
+            "the row went back: {:?}",
+            texts(&mut s)
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(stub.pod.posts.load(Ordering::SeqCst), 1);
+    // A load after the pod has it says so too.
+    stub.publish(2);
+    pod.refresh();
+    thread::sleep(Duration::from_millis(300));
+    assert!(shows(&mut s, "Garlic added"), "drew {:?}", texts(&mut s));
     let _ = std::fs::remove_dir_all(&dir);
 }

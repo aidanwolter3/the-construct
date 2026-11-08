@@ -8,11 +8,11 @@ use protocol::{
     TextStyle, Tone, UiNode,
 };
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use taffy::prelude::*;
 use taffy::{LayoutInput, LayoutOutput, compute_leaf_layout};
 
-use crate::bind::{Ctx, fold, render};
+use crate::bind::{Ctx, ReadLog, Reads, fold, render};
 use crate::scene::{
     Draw, IconRun, ImageRun, NO_CLIP, QuadInstance, Scene, SemanticNode, Tap, TextRun,
 };
@@ -116,6 +116,7 @@ fn icon_shape(name: &str) -> Icon {
 }
 
 /// How an element paints itself (before its children).
+#[derive(Clone)]
 enum Paint {
     None,
     Quad {
@@ -149,6 +150,7 @@ enum Paint {
     },
 }
 
+#[derive(Clone)]
 struct Sem {
     id: String,
     node_type: String,
@@ -161,6 +163,7 @@ struct Sem {
     hint: Option<String>,
 }
 
+#[derive(Clone)]
 struct Elem {
     node: NodeId,
     paint: Paint,
@@ -234,6 +237,113 @@ struct Build<'t, 'i> {
     text: &'t mut TextEngine,
     theme: Theme,
     input: &'t Input<'i>,
+    /// The reads of the list items being built now ([`Build::list_item`]).
+    log: &'t ReadLog,
+    /// The frame this one is built over, when it was built against the same
+    /// [`Env`]: its list items whose data hasn't changed are reused.
+    prev: Option<Prev>,
+    /// This frame's list items, for the next frame to reuse.
+    parts: HashMap<PartKey, Part>,
+    /// The elements (in `elems`) at the top of each part taken over from
+    /// `prev`.
+    adopted: HashSet<usize>,
+    reuse: Reuse,
+}
+
+/// What a frame was built against besides its entities and queries. A
+/// frame built against other values reuses nothing of the one before.
+#[derive(Clone, PartialEq)]
+struct Env {
+    root: UiNode,
+    layouts: BTreeMap<String, UiNode>,
+    form: BTreeMap<String, String>,
+    route: BTreeMap<String, String>,
+    viewport: Viewport,
+    dark: bool,
+    item: Option<String>,
+    insets: [f32; 4],
+    focused: Option<String>,
+    today: i64,
+    /// The theme's entity (`local://theme`): every colour follows it.
+    theme: Option<EntityRecord>,
+    /// The carousels' pages (`page:<id>` of the scroll offsets: their
+    /// badges show them); other offsets only place the frame.
+    pages: Vec<(String, f32)>,
+}
+
+impl Env {
+    fn of(input: &Input, today: i64) -> Env {
+        Env {
+            root: input.root.clone(),
+            layouts: input.layouts.clone(),
+            form: input.form.clone(),
+            route: input.route.clone(),
+            viewport: input.viewport,
+            dark: input.dark,
+            item: input.item.map(str::to_owned),
+            insets: input.insets,
+            focused: input.focused.map(str::to_owned),
+            today,
+            theme: input.data.entities.get("local://theme").cloned(),
+            pages: input
+                .scroll
+                .iter()
+                .filter(|(k, _)| k.starts_with("page:"))
+                .map(|(k, v)| (k.clone(), *v))
+                .collect(),
+        }
+    }
+}
+
+/// A list item: its path (the semantic id it is built at) and its entity.
+type PartKey = (String, String);
+
+/// A built list item, kept for the next frame: its element (`None`: it
+/// draws nothing), what it was built in, the data it read (each value as
+/// it was), and the `follow_end` views in it.
+struct Part {
+    root: Option<usize>,
+    axis: Axis,
+    color: Option<Rgba>,
+    depth: usize,
+    entities: Vec<(String, Option<EntityRecord>)>,
+    queries: Vec<(String, Option<Vec<String>>)>,
+    follow_end: Vec<String>,
+}
+
+impl Part {
+    /// Whether everything it read is still the same.
+    fn holds(&self, data: &DataBundle) -> bool {
+        self.entities
+            .iter()
+            .all(|(u, e)| data.entities.get(u) == e.as_ref())
+            && self
+                .queries
+                .iter()
+                .all(|(k, q)| data.queries.get(k) == q.as_ref())
+    }
+
+    fn reads(&self) -> Reads {
+        Reads {
+            entities: self.entities.iter().map(|(u, _)| u.clone()).collect(),
+            queries: self.queries.iter().map(|(k, _)| k.clone()).collect(),
+        }
+    }
+}
+
+/// The frame before, taken apart for reuse.
+struct Prev {
+    /// Its elements; each one taken over is taken out.
+    elems: Vec<Option<Elem>>,
+    parts: HashMap<PartKey, Part>,
+}
+
+/// How many list items a frame built and how many it took over from the
+/// frame before ([`Laid::reuse`]).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Reuse {
+    pub built: usize,
+    pub reused: usize,
 }
 
 impl SceneBuilder {
@@ -272,18 +382,45 @@ impl SceneBuilder {
         })
     }
 
-    /// Lays out one frame.
     /// Lays out one frame, to place with [`Laid::emit`] (again on scroll).
     pub fn layout(&mut self, input: &Input) -> Result<Laid, RenderError> {
+        self.relayout(input, None)
+    }
+
+    /// [`SceneBuilder::layout`] over the frame before (`prev`, laid out for
+    /// the same screen): when it was built against the same layout, form,
+    /// viewport and theme ([`Env`]), its list items whose entity and every
+    /// other entity or query they read are unchanged are taken over as
+    /// they are (their nodes, bindings and measured layout), so a change to
+    /// one row of a long list builds and measures that row only.
+    pub fn relayout(&mut self, input: &Input, prev: Option<Laid>) -> Result<Laid, RenderError> {
+        let today = self.today.unwrap_or_else(crate::dates::today);
+        let env = Env::of(input, today);
+        let (tree, prev) = match prev {
+            Some(p) if p.env == env => (
+                p.tree,
+                Some(Prev {
+                    elems: p.elems.into_iter().map(Some).collect(),
+                    parts: p.parts,
+                }),
+            ),
+            _ => (TaffyTree::new(), None),
+        };
         let theme = Theme::new(input.dark, &input.data.entities);
+        let log = ReadLog::default();
         let mut b = Build {
-            today: self.today.unwrap_or_else(crate::dates::today),
+            today,
             follow_end: Vec::new(),
-            tree: TaffyTree::new(),
+            tree,
             elems: Vec::new(),
             text: &mut self.text,
             theme: theme.clone(),
             input,
+            log: &log,
+            prev,
+            parts: HashMap::new(),
+            adopted: HashSet::new(),
+            reuse: Reuse::default(),
         };
         let ctx = Ctx {
             entities: &input.data.entities,
@@ -293,6 +430,7 @@ impl SceneBuilder {
             theme: &theme,
             item: None,
             item_uri: None,
+            reads: Some(&log),
         };
         let ctx = match input
             .item
@@ -333,6 +471,7 @@ impl SceneBuilder {
             None,
             false,
         );
+        b.drop_prev();
         b.compute(root, vp.scale)?;
         let mut laid = Laid {
             tree: b.tree,
@@ -343,6 +482,9 @@ impl SceneBuilder {
             scroll_max: BTreeMap::new(),
             pagers: BTreeMap::new(),
             follow_end: b.follow_end,
+            env,
+            parts: b.parts,
+            reuse: b.reuse,
         };
         laid.scroll_max = laid.scroll_extents();
         laid.pagers = laid
@@ -631,6 +773,113 @@ impl<'i> Build<'_, 'i> {
             field: None,
         });
         self.elems.len() - 1
+    }
+
+    /// A list item (`n`, the template, for the entity `uri`): taken over
+    /// from the frame before when nothing it read has changed, else built
+    /// (and what it read recorded for the next frame).
+    fn list_item<'c>(&mut self, n: &'c UiNode, b: &B<'c>, uri: &str) -> Option<usize> {
+        let key = (b.path.clone(), uri.to_owned());
+        let data = &self.input.data;
+        let hit = self.prev.as_mut().and_then(|p| {
+            let part = p.parts.remove(&key)?;
+            (part.axis == b.axis && part.color == b.color && part.depth == b.depth)
+                .then_some(part)
+                .filter(|part| part.holds(data))
+        });
+        if let Some(part) = hit {
+            let root = part.root.map(|r| self.adopt(r));
+            if let Some(r) = root {
+                self.adopted.insert(r);
+            }
+            // An item being built around this one read what this one did.
+            let reads = part.reads();
+            for r in self.log.borrow_mut().iter_mut() {
+                r.entities.extend(reads.entities.iter().cloned());
+                r.queries.extend(reads.queries.iter().cloned());
+            }
+            self.follow_end.extend(part.follow_end.iter().cloned());
+            self.reuse.reused += 1;
+            self.parts.insert(key, Part { root, ..part });
+            return root;
+        }
+        self.log.borrow_mut().push(Reads::default());
+        let follows = self.follow_end.len();
+        let root = self.node(n, b);
+        let mut reads = self.log.borrow_mut().pop().unwrap_or_default();
+        reads.entities.insert(uri.to_owned());
+        for r in self.log.borrow_mut().iter_mut() {
+            r.entities.insert(uri.to_owned());
+        }
+        let data = &self.input.data;
+        let part = Part {
+            root,
+            axis: b.axis,
+            color: b.color,
+            depth: b.depth,
+            entities: reads
+                .entities
+                .into_iter()
+                .map(|u| {
+                    let e = data.entities.get(&u).cloned();
+                    (u, e)
+                })
+                .collect(),
+            queries: reads
+                .queries
+                .into_iter()
+                .map(|k| {
+                    let q = data.queries.get(&k).cloned();
+                    (k, q)
+                })
+                .collect(),
+            follow_end: self.follow_end[follows..].to_vec(),
+        };
+        self.reuse.built += 1;
+        self.parts.insert(key, part);
+        root
+    }
+
+    /// Takes element `old` of the frame before, and everything in it, into
+    /// this frame (same taffy nodes, so their measured layout stays).
+    fn adopt(&mut self, old: usize) -> usize {
+        let e = self
+            .prev
+            .as_mut()
+            .and_then(|p| p.elems.get_mut(old)?.take())
+            .expect("an element of the frame before, taken over once");
+        let kids = e.kids.iter().map(|k| self.adopt(*k)).collect();
+        self.elems.push(Elem { kids, ..e });
+        self.elems.len() - 1
+    }
+
+    /// Removes the frame before's nodes that weren't taken over, and hangs
+    /// the ones that were under their new parents.
+    fn drop_prev(&mut self) {
+        let Some(prev) = self.prev.take() else {
+            return;
+        };
+        // What was taken over was taken out.
+        for e in prev.elems.iter().flatten() {
+            let _ = self.tree.remove(e.node);
+        }
+        if self.adopted.is_empty() {
+            return;
+        }
+        for e in &self.elems {
+            if e.kids.iter().any(|k| self.adopted.contains(k)) {
+                let ids: Vec<NodeId> = e.kids.iter().map(|k| self.elems[*k].node).collect();
+                let _ = self.tree.set_children(e.node, &ids);
+            }
+        }
+    }
+
+    /// Sets a node's style when it differs (setting it clears the node's
+    /// measured layout).
+    fn restyle(&mut self, node: NodeId, style: Style) {
+        if self.tree.style(node).ok() != Some(&style) {
+            let _ = self.tree.set_style(node, style);
+        }
     }
 
     fn sem(&self, b: &B, n: &UiNode, text: Option<String>, tap: Option<Tap>) -> Sem {
@@ -1348,20 +1597,28 @@ impl<'i> Build<'_, 'i> {
                 focus,
                 indent,
             } => {
-                let Some(all) = ctx.queries.get(query_key) else {
+                let Some(all) = ctx.query(query_key) else {
                     // Not loaded yet: nothing, as the app shows while loading.
                     return Some(self.push(Style::default(), Vec::new(), Paint::None, None, false));
                 };
+                // Each condition's value once (it binds the form, not the
+                // item); a blank one matches everything.
+                let wants: Vec<(&String, String)> = where_
+                    .as_ref()
+                    .map(|w| {
+                        w.conditions()
+                            .iter()
+                            .map(|c| (&c.field, ctx.text(&c.equals)))
+                            .filter(|(_, want)| !want.trim().is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 let mut uris: Vec<&String> = all
                     .iter()
-                    .filter(|u| ctx.entity(u).is_some())
                     .filter(|u| {
-                        let e = ctx.entity(u).expect("filtered");
-                        where_.as_ref().is_none_or(|w| {
-                            w.conditions().iter().all(|c| {
-                                let want = ctx.text(&c.equals);
-                                want.trim().is_empty()
-                                    || e.get(&c.field).map(render).as_deref() == Some(want.as_str())
+                        ctx.entity(u).is_some_and(|e| {
+                            wants.iter().all(|(field, want)| {
+                                e.get(field.as_str()).is_some_and(|v| matches_text(v, want))
                             })
                         })
                     })
@@ -1453,7 +1710,7 @@ impl<'i> Build<'_, 'i> {
                             continue;
                         }
                     }
-                    let Some(mut cell) = self.node(item_template, &ib) else {
+                    let Some(mut cell) = self.list_item(item_template, &ib, uri) else {
                         continue;
                     };
                     let focused = focus
@@ -1488,7 +1745,7 @@ impl<'i> Build<'_, 'i> {
                         .unwrap_or_default();
                     tstyle.align_self = Some(AlignSelf::STRETCH);
                     tstyle.flex_shrink = 0.0;
-                    let _ = self.tree.set_style(self.elems[cell].node, tstyle.clone());
+                    self.restyle(self.elems[cell].node, tstyle.clone());
                     if indent.is_some() || focused {
                         cell = self.push(style, vec![cell], paint, None, false);
                     }
@@ -1927,7 +2184,7 @@ impl<'i> Build<'_, 'i> {
                     })
                     .collect();
                 if let (Some(q), Some(it)) = (query_key, item)
-                    && let Some(list) = ctx.queries.get(q)
+                    && let Some(list) = ctx.query(q)
                 {
                     for u in list.iter().take(max_items.map_or(8, usize::from)) {
                         if let Some(e) = ctx.entity(u) {
@@ -2139,7 +2396,7 @@ impl<'i> Build<'_, 'i> {
     }
 
     fn count(&self, c: &protocol::TextCount, ctx: &Ctx) -> Option<usize> {
-        let list = ctx.queries.get(&c.query_key)?;
+        let list = ctx.query(&c.query_key)?;
         Some(
             list.iter()
                 .filter_map(|u| ctx.entity(u))
@@ -2152,6 +2409,16 @@ impl<'i> Build<'_, 'i> {
                 })
                 .count(),
         )
+    }
+}
+
+/// Whether a value reads as `want` (as [`render`] would write it), without
+/// writing it out for the common kinds.
+fn matches_text(v: &Value, want: &str) -> bool {
+    match v {
+        Value::String(s) => s == want,
+        Value::Bool(b) => want == if *b { "true" } else { "false" },
+        _ => render(v) == want,
     }
 }
 
@@ -2210,6 +2477,10 @@ pub struct Laid {
     /// The scrolling views that follow their content to the end after an
     /// action from outside them (`core://Scroll` `follow_end`).
     pub follow_end: Vec<String>,
+    env: Env,
+    parts: HashMap<PartKey, Part>,
+    /// How many list items were built and how many taken over.
+    pub reuse: Reuse,
 }
 
 // SAFETY: taffy's `CompactLength` holds a raw pointer only for CSS `calc()`

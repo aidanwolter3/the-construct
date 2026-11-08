@@ -1,5 +1,7 @@
 # Actions compose: action.sequence and action.local.set instead of per-feature options
 
+Partly superseded by [held-local-sets-and-list-item-reuse](held-local-sets-and-list-item-reuse.md): a load that can't know of a local set yet keeps it.
+
 Date: 2026-11-03. Related: D34, [layout-features](layout-features.md), [collections](collections.md).
 
 A custom grocery app needed a recipe ingredient's + to add a grocery row and show the ingredient as added. The

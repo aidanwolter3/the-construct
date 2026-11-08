@@ -937,6 +937,13 @@ impl Loader for PodEngine {
         }
     }
 
+    /// The engine sets the fields too: its snapshots (the next one comes
+    /// with the write that usually follows) would otherwise put the old
+    /// values back before the pod's answer brings the new ones.
+    fn local_set(&self, intent: &Value) {
+        self.engine.dispatch(&intent.to_string());
+    }
+
     fn changes(&self) -> Option<Changes> {
         lock(&self.shared.news).take()
     }

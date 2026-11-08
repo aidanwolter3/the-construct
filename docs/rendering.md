@@ -23,7 +23,7 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 
 | Module | What it does |
 |---|---|
-| `layout` | `SceneBuilder::build(&Input)`: every plumbing node to a taffy style (Material 3 metrics, as the Compose renderer had), bindings resolved (`bind`), lists filtered (`where`, `filter`, `group_by`, grids), `$count`, theme tokens |
+| `layout` | `SceneBuilder::build(&Input)`, and `relayout` over the frame before (list items whose data didn't change are taken over, nodes and measured layout alike: decision `held-local-sets-and-list-item-reuse`): every plumbing node to a taffy style (Material 3 metrics, as the Compose renderer had), bindings resolved (`bind`), lists filtered (`where`, `filter`, `group_by`, grids), `$count`, theme tokens |
 | `scene` | `QuadInstance` (the GPU vertex layout), `TextRun`, `SemanticNode`, `hit_test`, `find_node`, `find_text` |
 | `accessibility` | The semantic tree as an AccessKit tree for screen readers (roles, labels, values, states), and their requests back as taps, scrolls and field values |
 | `cpu` | The CPU rasterizer: `sd_rounded_box` and `shade` (the shader's maths), 8-bit premultiplied target, glyphs placed as glyphon places them |
@@ -232,7 +232,7 @@ start, until the pod answers), and the device's list of layouts (`local:layouts`
 cached copy at once, fetched again behind it (`open_layout`; a layout it never had waits for the pod), and a page
 screen whose route matches a tap's `target_uri` opens with its `$route` bound and its `item`, and slides in at once
 while its `data` path loads through the engine (`action.data.load`, cached; `local://screen#loading`). Every
-snapshot the engine sends reaches the session on its next frame (`Loader::changes`; the window is woken): data,
+snapshot the engine sends reaches the session on its next frame (`Loader::changes`, snapshots since the last frame merged into one; the window is woken; only entities and queries that differ are taken, and news with nothing new draws nothing again): data,
 `local://connection` (online, offline or connecting, and how many writes wait), and the new root of every layout
 the event stream announced, so a layout edited over MCP, or a change from another device, shows without opening it
 again. The simulator's live mode (`construct-sim --base-url`) still fetches straight from the pod (`PodClient`). `local://nav` and
@@ -240,7 +240,7 @@ again. The simulator's live mode (`construct-sim --base-url`) still fetches stra
 without the session (the pod serves media from public paths), are cut to their box (cropped to fill, corners
 rounded) and drawn over their placeholder once they arrive; the window redraws then.
 
-Writes go to the engine's outbox, as the Compose UI sent them (`Loader::take`): `$form.<f>`, `$form?.<f>` and one
+`action.local.set` changes the session's entity and the engine's (`Loader::local_set`), so the engine's next snapshot doesn't put the old value back. Writes go to the engine's outbox, as the Compose UI sent them (`Loader::take`): `$form.<f>`, `$form?.<f>` and one
 `$nonce` per tap are bound when the tap runs (a blank `$form.<f>` sends nothing). `action.mutation.optimistic`
 changes the entity at once (every `value_expr` against the entity as it was, in the expression language client-core
 uses, `protocol::expr`; one that fails changes nothing) and the engine keeps the write until

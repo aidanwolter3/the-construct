@@ -132,7 +132,7 @@ evaluated against the entity before the change: a JSON literal, `entity.<field>`
 | `core://Column` | `children`, `spacing_dp`, `padding_h_dp`, `padding_v_dp`, `align` | Children stacked, full width. In a page's bounded height, a child that fills (a scroll, a filling box, an inline layout) takes the rest of it. |
 | `core://Row` | `children`, `spacing_dp`, paddings, `align` | Side by side, vertically centred, no wrapping. A Spacer without a size takes the remaining width. Controls (Switch, Chip, Button, IconButton, sized Image or Spacer, Box) keep their natural width; text-like children (Text, Container, Column, or a Conditional, Tappable or Gesture around one) take what is left, so long text wraps instead of pushing the controls off screen. |
 | `core://Container` | `orientation`, `padding_dp`, `children` | A plain stack; prefer Column and Row. |
-| `core://Box` | `content`, `background`, `content_color`, `border_color`, `corner_dp`, paddings, `width_dp`, `height_dp`, `align`, `fill` | A surface. `fill` (feature `box_fill`): fills the space given, content placed by `align` both ways; as a workspace's one slot, the whole screen with no title bar. Colours are `#RRGGBB` or a binding that resolves to one. |
+| `core://Box` | `content`, `background`, `content_color`, `border_color`, `corner_dp`, paddings, `width_dp`, `height_dp`, `align`, `fill` | A surface. `fill` (feature `box_fill`): fills the space given, content placed by `align` both ways.; as a workspace's one slot, the whole screen with no title bar. Colours are `#RRGGBB` or a binding that resolves to one. |
 | `core://Spacer` | `size_dp` | Empty space. |
 | `core://Divider` | | A thin line. |
 | `core://Sticky` | `content` | Scrolls until it reaches the top, then stays pinned while the rest of its parent scrolls under it. Not inside a List or Carousel template, or another Sticky. |
@@ -168,7 +168,7 @@ A node type the client doesn't know is skipped, and its JSON kept, so old versio
 | `action.navigation.back` | | Pops the top of the back stack (a screen or a presented layout), as system Back does. |
 | `action.mutation.optimistic` | `entity_uri`, `field`, `value_expr`, `endpoint`, `payload`, `also`, `rollback_value` | Changes fields at once and sends `payload` to `endpoint` through the outbox; a refusal restores each field's value from before the change. `rollback_value` (optional, `null` when left out) is what `field` gets back when it had no value before; leave it out (decision `optional-rollback-value`). |
 | `action.mutation.create` | `query_key`, `entity_uri`, `entity`, `endpoint`, `payload`, `refresh_workspace`, `attachments`, `position` | Adds `entity` to the list at once, uploads attachments, sends the create, then reloads what lists the query. A refusal removes it. |
-| `action.local.set` | `entity_uri`, `field`, `value_expr`, `also` | Changes fields on this device only (view state). |
+| `action.local.set` | `entity_uri`, `field`, `value_expr`, `also` | Changes fields on this device only (view state), in the engine too. Loads that started before it, or while a write was still on its way to the pod, keep it; the next load after every write is on the pod replaces it with the pod's value. |
 | `action.data.load` | `path` | Loads and caches a data path. |
 | `action.sequence` | `steps` | Runs intents in order as one tap, e.g. a create then `action.navigation.back`. |
 | `action.link.open` | `url` | Opens an `http(s)://` URL in the browser. |
