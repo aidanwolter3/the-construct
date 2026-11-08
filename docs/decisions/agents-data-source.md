@@ -31,7 +31,8 @@ Decision:
 - **Notifications** follow [server-monitoring-alerts](server-monitoring-alerts.md): three channels (`needs_you`,
   `sessions`, `warnings`) in the layout that shows the source, sent by the follower as events arrive. A security
   check notifies when it turns to warn and again only after it was ok; a session waiting for permission once per
-  wait. Schedules: missed and timed-out runs warn.
+  wait. Schedules: missed and timed-out runs warn, once per run (a timeout's session, a missed run's task id), so a
+  runner that repeats an event doesn't flood the inbox.
 - **Counts mean running now:** `agents:status` counts `starting` and `working` sessions as working and waiting ones
   as needing you; `idle` is neither (Remote Control's standby sessions and finished runs' open sessions are idle),
   so an idle runner says "Nothing running". `agents:sessions` lists idle sessions after working ones.

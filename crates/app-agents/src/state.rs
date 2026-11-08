@@ -15,6 +15,9 @@ use crate::text;
 pub const MAX_SESSIONS: usize = 200;
 
 /// Session statuses.
+/// How many notified runs [`State::notified`] remembers.
+pub const MAX_NOTIFIED: usize = 200;
+
 pub const STARTING: &str = "starting";
 pub const WORKING: &str = "working";
 pub const WAITING_PERMISSION: &str = "waiting_permission";
@@ -32,6 +35,11 @@ pub struct State {
     pub sessions: BTreeMap<String, Session>,
     pub checks: BTreeMap<String, Check>,
     pub schedules: BTreeMap<String, Schedule>,
+    /// Runs already notified as timed out (`timeout:<session or task id>`)
+    /// or missed (`missed:<task id>`), newest last and at most
+    /// [`MAX_NOTIFIED`], so a runner repeating an event notifies once.
+    #[serde(default)]
+    pub notified: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -577,31 +585,54 @@ impl State {
                         error: error.clone(),
                         ..Default::default()
                     });
-                    out.push(Effect::ScheduleMissed {
-                        name: sc.name.clone(),
-                        error,
-                    });
+                    let name = sc.name.clone();
+                    if self.first_notice("missed", e.task_id.as_deref()) {
+                        out.push(Effect::ScheduleMissed { name, error });
+                    }
                 }
             }
             "schedule.timeout" => {
                 let minutes = i(&e.data, "max_runtime_minutes");
                 let stopped = e.data["stopped"].as_bool().unwrap_or(false);
                 if let Some(sc) = self.schedule(e) {
-                    out.push(Effect::ScheduleTimeout {
-                        name: sc.name.clone(),
-                        minutes: if minutes > 0 {
-                            minutes
-                        } else {
-                            sc.max_runtime_minutes
-                        },
-                        stopped,
-                    });
+                    let name = sc.name.clone();
+                    let minutes = if minutes > 0 {
+                        minutes
+                    } else {
+                        sc.max_runtime_minutes
+                    };
+                    let run = e.session_id.as_deref().or(e.task_id.as_deref());
+                    if self.first_notice("timeout", run) {
+                        out.push(Effect::ScheduleTimeout {
+                            name,
+                            minutes,
+                            stopped,
+                        });
+                    }
                 }
             }
             _ => {}
         }
         self.trim();
         out
+    }
+
+    /// Whether `kind` hasn't been notified for run `run` yet (and remember
+    /// it now). An event without a run id always notifies.
+    fn first_notice(&mut self, kind: &str, run: Option<&str>) -> bool {
+        let Some(run) = run.map(str::trim).filter(|r| !r.is_empty()) else {
+            return true;
+        };
+        let key = format!("{kind}:{}", text::clean(run, 200));
+        if self.notified.contains(&key) {
+            return false;
+        }
+        self.notified.push(key);
+        if self.notified.len() > MAX_NOTIFIED {
+            let extra = self.notified.len() - MAX_NOTIFIED;
+            self.notified.drain(..extra);
+        }
+        true
     }
 
     fn schedule(&mut self, e: &Event) -> Option<&mut Schedule> {
@@ -815,6 +846,61 @@ mod tests {
                 error: "runner was down".into()
             }]
         );
+    }
+
+    #[test]
+    fn repeated_schedule_alerts_notify_once_per_run() {
+        let mut st = State::default();
+        let timeout = |seq, session: &str| {
+            ev(
+                seq,
+                "schedule.timeout",
+                json!({"session_id": session, "task_id": "schedule/nightly/2026-11-07T03:00",
+                    "data": {"schedule": "nightly", "max_runtime_minutes": 30, "stopped": false}}),
+            )
+        };
+        let missed = |seq, task: &str| {
+            ev(
+                seq,
+                "schedule.missed",
+                json!({"task_id": task, "data": {"schedule": "nightly", "error": "runner was down"}}),
+            )
+        };
+        let mut seq = 0;
+        let mut count = |st: &mut State, e: &dyn Fn(i64) -> Event| {
+            (0..10)
+                .map(|_| {
+                    seq += 1;
+                    st.apply(&e(seq)).len()
+                })
+                .sum::<usize>()
+        };
+        // A runner repeating the same run's timeout every 30 s: one notice.
+        assert_eq!(count(&mut st, &|n| timeout(n, "s1")), 1);
+        // Another run's timeout still notifies, once.
+        assert_eq!(count(&mut st, &|n| timeout(n, "s2")), 1);
+        assert_eq!(
+            count(&mut st, &|n| missed(n, "schedule/nightly/2026-11-08T03:00")),
+            1
+        );
+        assert_eq!(
+            count(&mut st, &|n| missed(n, "schedule/nightly/2026-11-09T03:00")),
+            1
+        );
+        // Remembered across a snapshot and a restart (the stored state).
+        st.apply_snapshot(&json!({"cursor": 100}));
+        let mut st: State = serde_json::from_str(&serde_json::to_string(&st).unwrap()).unwrap();
+        assert!(st.apply(&timeout(200, "s1")).is_empty());
+        // A state stored before this field existed still reads.
+        let old: State = serde_json::from_value(json!({"cursor": 3, "sprites": {}, "sessions": {},
+            "checks": {}, "schedules": {}}))
+        .unwrap();
+        assert!(old.notified.is_empty());
+        // The memory is capped.
+        for n in 0..(MAX_NOTIFIED as i64 + 10) {
+            st.apply(&missed(300 + n, &format!("run-{n}")));
+        }
+        assert_eq!(st.notified.len(), MAX_NOTIFIED);
     }
 
     #[test]

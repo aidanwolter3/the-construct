@@ -71,10 +71,11 @@ is signed in:
 |---|---|---|
 | `needs_you` "Needs you" | high | a session starts waiting for a permission |
 | `sessions` "Finished sessions" | default | a session finishes (summary and PR link) or fails |
-| `warnings` "Runner warnings" | high | a security check turns to warn (again only after it was ok), a schedule is missed or runs past its limit |
+| `warnings` "Runner warnings" | high | a security check turns to warn (again only after it was ok), a schedule is missed or runs past its limit (once per run: a repeated event for the same run is ignored) |
 
-The follower sends them as events arrive, while the pod is open; the source's 60-second poll keeps the follower
-running for pods with a registered device.
+A run is the event's `session_id` (else `task_id`) for a timeout and its `task_id` for a missed run; the pod
+remembers the last 200 notified runs in its stored state. The follower sends them as events arrive, while the pod is
+open; the source's 60-second poll keeps the follower running for pods with a registered device.
 
 ## The Tasks wiring
 
