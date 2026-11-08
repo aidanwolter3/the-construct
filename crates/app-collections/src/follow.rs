@@ -214,11 +214,22 @@ fn wave_step(
         let Some(def) = defs.get(name) else {
             continue;
         };
-        // This collection's kinds to match, with their keys.
-        let matching: Vec<(&String, usize, &Vec<String>)> = keys
+        // This collection's kinds to match: field, its source and the keys.
+        let matching: Vec<(&String, &String, Vec<lookup::KeyMatcher>)> = keys
             .iter()
             .filter(|((c, _, _), _)| c == name)
-            .map(|((_, f, i), k)| (f, *i, k))
+            .filter_map(|((_, f, i), ks)| {
+                let (from, mode) = match def.by_id(f)?.compute.get(*i)? {
+                    Compute::Lookup { from, mode, .. } => (from, *mode),
+                    Compute::Count { from, .. } => (from, Match::Exact),
+                    Compute::Expr { .. } | Compute::Model { .. } => return None,
+                };
+                let ms = ks
+                    .iter()
+                    .map(|k| lookup::KeyMatcher::new(mode, k))
+                    .collect();
+                Some((f, from, ms))
+            })
             .collect();
         let back = restored.get(name);
         let own = following(def);
@@ -228,22 +239,14 @@ fn wave_step(
             if back.is_some_and(|b| b.contains(&row.id)) {
                 fields.extend(own.iter().map(String::as_str));
             }
-            for (field_id, i, ks) in &matching {
+            for (field_id, from, ms) in &matching {
                 if fields.contains(&field_id.as_str()) {
                     continue;
                 }
-                let Some(c) = def.by_id(field_id).and_then(|f| f.compute.get(*i)) else {
-                    continue;
-                };
-                let (from, mode) = match c {
-                    Compute::Lookup { from, mode, .. } => (from, *mode),
-                    Compute::Count { from, .. } => (from, Match::Exact),
-                    Compute::Expr { .. } | Compute::Model { .. } => continue,
-                };
                 let Some(input) = lookup::text_of(&value_of(def, from, &row.values)) else {
                     continue;
                 };
-                if ks.iter().any(|k| lookup::key_matches(mode, k, &input)) {
+                if ms.iter().any(|m| m.matches(&input)) {
                     fields.push(field_id.as_str());
                 }
             }

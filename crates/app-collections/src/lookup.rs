@@ -188,21 +188,48 @@ impl Rules {
     }
 }
 
-/// Whether a rule with key `key` matches `input` under `mode`, as
-/// [`Rules::find`] matches (an invalid `regex` key matches nothing).
-pub fn key_matches(mode: Match, key: &str, input: &str) -> bool {
-    let norm = model::cache_key(input);
-    if norm.is_empty() {
-        return false;
-    }
-    match mode {
-        Match::Exact => model::cache_key(key) == norm,
-        Match::Contains => {
-            let k = words(key);
-            !k.is_empty() && words(input).windows(k.len()).any(|w| w == k.as_slice())
+/// One rule key ready to match inputs under a mode, as [`Rules::find`]
+/// matches (an invalid `regex` key matches nothing).
+#[derive(Debug, Clone)]
+pub struct KeyMatcher {
+    mode: Match,
+    norm: String,
+    words: Vec<String>,
+    regex: Option<Regex>,
+}
+
+impl KeyMatcher {
+    pub fn new(mode: Match, key: &str) -> Self {
+        Self {
+            mode,
+            norm: model::cache_key(key),
+            words: words(key),
+            regex: (mode == Match::Regex).then(|| compile(key).ok()).flatten(),
         }
-        Match::Regex => compile(key).is_ok_and(|re| re.is_match(&norm)),
     }
+
+    /// Whether the key matches `input`.
+    pub fn matches(&self, input: &str) -> bool {
+        let norm = model::cache_key(input);
+        if norm.is_empty() {
+            return false;
+        }
+        match self.mode {
+            Match::Exact => self.norm == norm,
+            Match::Contains => {
+                !self.words.is_empty()
+                    && words(input)
+                        .windows(self.words.len())
+                        .any(|w| w == self.words.as_slice())
+            }
+            Match::Regex => self.regex.as_ref().is_some_and(|re| re.is_match(&norm)),
+        }
+    }
+}
+
+/// Whether a rule with key `key` matches `input` under `mode`.
+pub fn key_matches(mode: Match, key: &str, input: &str) -> bool {
+    KeyMatcher::new(mode, key).matches(input)
 }
 
 /// The key a learned rule gets for `input`: the normalized input; for a
