@@ -387,6 +387,8 @@ fn answer(
 ) -> rusqlite::Result<Answer> {
     let mut values = row.values.clone();
     values.remove(&field.id);
+    // `entity.id` in an expression: the row's own id (never a field id).
+    values.insert(model::ROW_ID.to_owned(), json!(row.id));
     let learning = field.learning_lookup();
     for (i, c) in field.compute.iter().enumerate() {
         match c {

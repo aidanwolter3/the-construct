@@ -63,6 +63,27 @@ refused (it would match everything). Conditions may name computed fields of the 
 - `apply_change` `add_field` / `update_field` with a count compute every live row at once, like `expr`;
   `recompute_field` works.
 
+## Row ids
+
+Added the same day. A pod's `ingredients` should point at the matching row of `groceries`, so a button can delete
+that grocery with `/v1/collections/groceries/delete {id}`. A lookup could only return a field, and an expression
+could only read fields.
+
+- A lookup's `value` may be `id`, the row's system id, and no other system name. It is stored as the literal `id`
+  (field ids are `f<n>`, and `id` is a system name no field may take). The answer is the matched row's id as text,
+  so the field must be text, and the lookup can't `learn` (a rule can't choose a row's id).
+- It follows like any lookup: a row of the read collection that is created, deleted or restored, or whose key
+  changes, recomputes the rows matching its key (the id itself never changes). Deleted rows never match, so after
+  the grocery is deleted the field empties, or takes the next match's id.
+- When several rows match, the longest key wins as before, then the **oldest row** (by `created_at`), so the answer
+  is stable: adding a second "Butter" grocery doesn't move the pointer, deleting the first moves it to the second,
+  and restoring the first moves it back. Rejected: the newest row (a new duplicate would silently take over a
+  pointer a button was built on).
+- An `expr` may read `entity.id`, the row's own id. It is not a field, so it doesn't count as a source: an
+  expression of `entity.id` alone is computed when the row is created (or the field is added) and never changes.
+
+No migration and no client build: definitions store the name, and values change through the normal write path.
+
 ## Consequences
 
 - No schema migration, no protocol change and no client build: values change through the normal write path.
