@@ -569,14 +569,22 @@ fn fills_height(n: &UiNode) -> bool {
         | UiNode::Dock { .. }
         | UiNode::Workspace { .. }
         | UiNode::Page { .. } => true,
-        UiNode::Box { fill, .. } => *fill,
+        // A sized box keeps its height; an unsized one passes its content's on.
+        UiNode::Box {
+            fill,
+            height_dp,
+            content,
+            ..
+        } => *fill || (height_dp.is_none() && fills_height(content)),
         UiNode::Layout {
             height_dp: None, ..
         } => true,
         UiNode::Tappable { content, .. }
         | UiNode::Gesture { content, .. }
         | UiNode::Conditional { content, .. } => fills_height(content),
-        UiNode::Column { children, .. } => children.iter().any(fills_height),
+        UiNode::Column { children, .. } | UiNode::Row { children, .. } => {
+            children.iter().any(fills_height)
+        }
         _ => false,
     }
 }
@@ -625,6 +633,12 @@ fn placed(mut style: Style, n: &UiNode, axis: Axis) -> Style {
                 style.min_size.width = length(0.0);
             } else {
                 style.flex_shrink = 0.0;
+            }
+            // A tall child (a scrolling view, a filling box) takes the
+            // row's height, whatever the row's alignment, and no more.
+            if tall {
+                style.align_self = Some(AlignSelf::STRETCH);
+                style.min_size.height = length(0.0);
             }
         }
     }
