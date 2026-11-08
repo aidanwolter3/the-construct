@@ -46,6 +46,12 @@ pub const SYSTEM_FIELDS: &[&str] = &[
     "client_id",
 ];
 
+/// What a compute stores for a row's system id where it would store a
+/// field id: a `lookup`'s `value` (the matched row's id) and `entity.id`
+/// in an `expr`. Field ids are `f<n>`, so it never names a field, and
+/// `id` is a system name, so no field is called that.
+pub const ROW_ID: &str = "id";
+
 /// What a field holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -165,8 +171,9 @@ pub enum Compute {
     Model { from: Vec<String>, prompt: String },
     /// The `value` of the best row of collection `collection` whose `key`
     /// matches field `from` (field ids on both sides); evaluated in the
-    /// write itself ([`crate::lookup`]). `learn`: a later kind's answer
-    /// and a hand edit become rules.
+    /// write itself ([`crate::lookup`]). `value` may be [`ROW_ID`]: the
+    /// matched row's id, as text. `learn`: a later kind's answer and a
+    /// hand edit become rules.
     Lookup {
         from: String,
         collection: String,
@@ -235,13 +242,26 @@ impl Compute {
         }
     }
 
-    /// The field ids (of its own row) it reads.
+    /// The field ids (of its own row) it reads; an `expr`'s `entity.id`
+    /// is not a field (see [`Compute::reads_row_id`]).
     pub fn sources(&self) -> Vec<String> {
         match self {
-            Compute::Expr { .. } => self.parsed().map(|e| e.fields()).unwrap_or_default(),
+            Compute::Expr { .. } => self
+                .parsed()
+                .map(|e| e.fields())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|id| id != ROW_ID)
+                .collect(),
             Compute::Model { from, .. } => from.clone(),
             Compute::Lookup { from, .. } | Compute::Count { from, .. } => vec![from.clone()],
         }
+    }
+
+    /// Whether it is an `expr` reading `entity.id`, the row's own id.
+    pub fn reads_row_id(&self) -> bool {
+        self.parsed()
+            .is_some_and(|e| e.fields().iter().any(|id| id == ROW_ID))
     }
 
     /// The collection it reads rows of (a lookup's or a count's).
@@ -718,7 +738,13 @@ fn parse_compute(
             let text = o.get("expr").and_then(Value::as_str).unwrap_or("");
             let parsed = crate::expr::parse(text)
                 .map_err(|e| format!("field '{name}': compute.expr: {e}"))?;
-            let ids = parsed.map_fields(&|n| field_id(n))?;
+            let ids = parsed.map_fields(&|n| {
+                if n == ROW_ID {
+                    Ok(ROW_ID.to_owned())
+                } else {
+                    field_id(n)
+                }
+            })?;
             Ok(Compute::Expr {
                 expr: ids.to_string(),
             })
@@ -802,7 +828,12 @@ fn parse_compute(
                 })
             };
             let key = other_id("key")?;
-            let value = other_id("value")?;
+            // The matched row's own id: the one system name a lookup returns.
+            let value = if arg("value")? == ROW_ID {
+                ROW_ID.to_owned()
+            } else {
+                other_id("value")?
+            };
             let mode = match o.get("match") {
                 None | Some(Value::Null) => Match::Exact,
                 Some(m) => serde_json::from_value(m.clone()).map_err(|_| {
@@ -977,13 +1008,27 @@ pub fn check_lookups(def: &Definition, defs: &Defs) -> Result<(), String> {
                 })
             };
             let k = live(key, "key")?;
-            let v = live(value, "value")?;
             if k.kind != Kind::Text {
                 return Err(format!(
                     "{at}: the lookup's key '{}' of '{collection}' must be text (it holds the patterns)",
                     k.name
                 ));
             }
+            if value == ROW_ID {
+                if f.kind != Kind::Text {
+                    return Err(format!(
+                        "{at}: a lookup of the row id of '{collection}' fills a text field (it is {})",
+                        f.kind.as_str()
+                    ));
+                }
+                if *learn {
+                    return Err(format!(
+                        "{at}: a lookup of the row id of '{collection}' can't learn (a rule can't choose a row's id)"
+                    ));
+                }
+                continue;
+            }
+            let v = live(value, "value")?;
             if !(v.kind == f.kind || v.kind == Kind::Text || f.kind == Kind::Text) {
                 return Err(format!(
                     "{at}: the lookup's value '{}' of '{collection}' is {}, which doesn't fit a {} field (use text or the same type)",
@@ -1368,9 +1413,9 @@ pub fn check_definition(def: &Definition, max_fields: usize) -> Result<(), Strin
                 }
                 _ => {}
             }
-            if c.sources().is_empty() {
+            if c.sources().is_empty() && !c.reads_row_id() {
                 return Err(format!(
-                    "field '{}' is computed from no field (an expression reads entity.<field>)",
+                    "field '{}' is computed from no field (an expression reads entity.<field> or entity.id)",
                     f.name
                 ));
             }

@@ -132,7 +132,8 @@ default), and the pod stores, validates and serves the rows.
   field and keeps its data 30 days (`restore_field`); a type change converts row by row and keeps what doesn't
   convert aside. A write made under an older definition (an offline device) still lands.
 - **Computed fields.** A field's `compute` is one kind or a list tried in order: `expr` (a small expression over
-  the row), `lookup` (the value of the best-matching row of another collection, kept as editable rules), `count`
+  the row; `entity.id` reads the row's own id), `lookup` (the value of the best-matching row of another
+  collection, kept as editable rules: the longest key wins, then the oldest row; deleted rows never match), `count`
   and `model` (a model's answer, in the background). With `[lookup (learn: true), model]` the model is asked only
   when no rule matches, and its answers and hand edits become rules. `{kind: "count", from, collection, key,
   where?: [{field, equals}]}` (a number field's only kind) is the number of live rows of `collection` whose `key`
@@ -141,7 +142,10 @@ default), and the pod stores, validates and serves the rows.
   of the collection they read are created, changed, deleted or restored, the rows whose answer could change are
   computed again in the same write and reach devices through the normal change feed, cascading (a count's `where`
   may name a lookup field, e.g. meals → `meal_ingredients.favorite` → `ingredients.favorite_count`) for at most 8
-  waves, so a cycle ends. Decisions [`collection-computed-fields`](decisions/collection-computed-fields.md),
+  waves, so a cycle ends. A lookup's `value` may be `id`, the one system name it can return: the matched row's
+  id, as text (into a text field, without `learn`), so a button can act on that row, e.g. `ingredients.grocery_id`
+  → `/v1/collections/groceries/delete {id}`. It follows like any lookup: when that row is deleted the field
+  empties (or takes the next match's id) and comes back on restore. Decisions [`collection-computed-fields`](decisions/collection-computed-fields.md),
   [`collection-lookups`](decisions/collection-lookups.md) and
   [`live-computed-fields`](decisions/live-computed-fields.md).
 - **Reminders.** `apply_change {op: add_reminder, field: "due", title: "Due today: {title}", unless: {field:

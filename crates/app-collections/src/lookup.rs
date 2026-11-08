@@ -13,7 +13,9 @@
 //!   `describe_collection`).
 //!
 //! When several rules match, the longest key wins ("coconut milk" over
-//! "milk"), then the oldest rule. With `learn`, a later kind's answer (the
+//! "milk"), then the oldest rule (by `created_at`; deleted rows never
+//! match). The `value` may be the row's system `id` ([`model::ROW_ID`]):
+//! the answer is then the matched row's id, as text. With `learn`, a later kind's answer (the
 //! model's) and a hand edit of the field become rules (see [`learn`]).
 
 use regex::{Regex, RegexBuilder};
@@ -109,21 +111,30 @@ impl Rules {
         let Some((_, other)) = db::latest_def(conn, collection)? else {
             return Ok(out);
         };
-        let (Some(kf), Some(vf)) = (
-            other.by_id(key).filter(|f| f.live()),
-            other.by_id(value).filter(|f| f.live()),
-        ) else {
+        let Some(kf) = other.by_id(key).filter(|f| f.live()) else {
             return Ok(out);
+        };
+        // `None`: the value is the matched row's id (`model::ROW_ID`).
+        let vf = if value == model::ROW_ID {
+            None
+        } else {
+            match other.by_id(value).filter(|f| f.live()) {
+                Some(f) => Some(f),
+                None => return Ok(out),
+            }
         };
         for r in db::all_rows(conn, collection, false)? {
             let Some(k) = r.values.get(&kf.id).and_then(text_of) else {
                 continue;
             };
-            let v = r
-                .values
-                .get(&vf.id)
-                .cloned()
-                .unwrap_or_else(|| vf.empty_value());
+            let v = match vf {
+                Some(vf) => r
+                    .values
+                    .get(&vf.id)
+                    .cloned()
+                    .unwrap_or_else(|| vf.empty_value()),
+                None => json!(r.id),
+            };
             if text_of(&v).is_none() {
                 continue;
             }
