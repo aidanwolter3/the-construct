@@ -2,9 +2,9 @@
 
 `crates/construct-render` draws layouts without the JVM: a plumbing `UiNode` tree and its data are laid out with
 taffy, turned into a scene of rounded-box quads, text runs and a semantic tree, and drawn by wgpu or by a CPU
-rasterizer of the same distance function. The pod uses it for agents' layout previews; a desktop window and an
-Android NativeActivity show it as a prototype client. The Compose UI (`app/shared`) is still the app. Decision:
-[`rust-render-engine`](decisions/rust-render-engine.md).
+rasterizer of the same distance function. It is The Construct's only renderer: the desktop app (`construct-viewer`),
+the Android app (a NativeActivity), the headless simulator and the pod's layout previews for agents all draw with
+it. Decisions: [`rust-render-engine`](decisions/rust-render-engine.md), [`rust-clients`](decisions/rust-clients.md).
 
 ```
 layout (plumbing) + entities/queries + form, route, theme
@@ -23,7 +23,7 @@ PNG / WebP (encode.rs)                 HeadlessSurface (readback) or a window / 
 
 | Module | What it does |
 |---|---|
-| `layout` | `SceneBuilder::build(&Input)`: every plumbing node to a taffy style (Material 3 metrics, as the Compose renderer), bindings resolved (`bind`), lists filtered (`where`, `filter`, `group_by`, grids), `$count`, theme tokens |
+| `layout` | `SceneBuilder::build(&Input)`: every plumbing node to a taffy style (Material 3 metrics, as the Compose renderer had), bindings resolved (`bind`), lists filtered (`where`, `filter`, `group_by`, grids), `$count`, theme tokens |
 | `scene` | `QuadInstance` (the GPU vertex layout), `TextRun`, `SemanticNode`, `hit_test`, `find_node`, `find_text` |
 | `accessibility` | The semantic tree as an AccessKit tree for screen readers (roles, labels, values, states), and their requests back as taps, scrolls and field values |
 | `cpu` | The CPU rasterizer: `sd_rounded_box` and `shade` (the shader's maths), 8-bit premultiplied target, glyphs placed as glyphon places them |
@@ -86,17 +86,17 @@ footer's Send, makes it follow its content to the end once that has grown, while
 `SceneBuilder` can be given another with `today`), List (`where`, `filter`, `group_by`, `columns`, `focus`, `indent`, `empty_text`), ChoiceChips, TextField
 (with its Send button beside it when it has `on_submit`), Switch, Progress, Dock, Layout (inline, from the layouts
 given), Carousel (pages side by side, an "n/N" badge and dots; a sideways drag pages it, snapping to a page), and
-every named icon (`icons.rs`: the shared UI's Material path data, rasterized with zeno; on the GPU they are glyphon
+every named icon (`icons.rs`: Material path data, rasterized with zeno; on the GPU they are glyphon
 custom glyphs). Images draw once loaded (over a placeholder in the blurhash's colour; only live sessions load them;
 in a window they are cut to their box on a background thread; `file://` ones, staged photos, are read from disk).
-MediaPicker as the shared UI's: a thumbnail per staged photo with a remove button, then the add tile while there is
+MediaPicker as the Compose UI drew it: a thumbnail per staged photo with a remove button, then the add tile while there is
 room, wrapping. Its tile opens the platform's photo picker (Android's, through the bridge) or the desktop's file
 dialog (`osascript` on macOS, `zenity` or `kdialog` on Linux); each photo is staged with the engine
 (`stage_attachment`, D49) and its id kept in the field, and a create's `attachments` hands them to the engine, which
 uploads them before the POST ([posting.md](posting.md)). Removed vocabulary (`core://AppFrame`, `core://Drawer`) and
-nodes this build doesn't know are named as the shared UI names them: "Unsupported component: <type>" in small grey
+nodes this build doesn't know are named as the Compose UI named them: "Unsupported component: <type>" in small grey
 text.
-Presented layouts are drawn as the shared UI draws them: a sheet (85% of the height, with a handle), a side panel
+Presented layouts are drawn as the Compose UI drew them: a sheet (85% of the height, with a handle), a side panel
 (86% of the width, at most 340 points) or an overlay from its edge, over a 32% black scrim that closes it when
 tapped; a screen a sheet or panel opens stays inside it. A sheet dragged by its handle strip, or a panel dragged
 sideways toward its edge, follows the finger and closes past a quarter of its size or on a flick faster than
@@ -112,7 +112,7 @@ pod. The session follows the platform's light or dark mode (`Session::set_dark`)
 `card`, and each mode takes only its own token values from `core://theme` (`<token>`, `<token>_dark`), any token
 the pod sends included. `core://Sticky` pins at the top of its scrolling view, over the page
 background, until its parent scrolls away; one that rests within 24 points of the view's top (a column's padding)
-pins where it rests, so it never moves (the shared UI moves it up to the top first).
+pins where it rests, so it never moves (the Compose UI moved it up to the top first).
 
 ## The desktop viewer
 
@@ -148,16 +148,16 @@ Any workspace bundle (what `GET /v1/workspaces/<id>` answers) can be drawn to PN
 
 `scripts/android_native.sh` (no options) cross-compiles `libconstruct_render.so` (cargo-ndk, arm64-v8a), packages
 a NativeActivity APK with aapt2 (no Gradle, no Kotlin), signs it with the debug key and installs it on the adb device
-**as The Construct itself** (`org.theconstruct.android`), over a debug build of the main app signed with the same
-machine's debug key, so the app's data stays. An install over a build signed with another key fails, and the script
-says so rather than uninstall (which would sign you out). `cd app && ./gradlew :androidApp:installDebug` goes back to
-the Compose app with the same data.
+as The Construct (`org.theconstruct.android`), keeping the data of a build signed with the same key (an earlier one,
+or the Compose app it replaced). An install over a build signed with another key fails, and the script says so
+rather than uninstall (which would sign you out). `--release` builds a release APK instead (not debuggable, signed
+with the release key; [clients.md](clients.md#releases)).
 
 The app opens a pod live (below), with the engine's cache in its private files (`engine/<server>/`). It keeps its
-pod's server there too (`pod.json`), else uses the main app's server (`shared_prefs/server.xml`, else staging).
-Sessions, and the last pod code used with each server, are kept as the main app keeps sessions (`KeystoreStore`,
-through JNI: AES/GCM with the Android keystore key `construct_session_key`, in the private SharedPreferences file
-`construct_secure`), so the main app's sign-in carries over; a session token or pod codes an older build kept in
+pod's server there too (`pod.json`), else uses the Compose app's saved server (`shared_prefs/server.xml`, else
+staging). Sessions, and the last pod code used with each server, are kept as the Compose app kept them
+(`KeystoreStore`, through JNI: AES/GCM with the Android keystore key `construct_session_key`, in the private
+SharedPreferences file `construct_secure`), so its sign-in carries over; a session token or pod codes an older build kept in
 `pod.json` move there on the first start. Without a session the pod answers its sign-in screen (a pod code box, Open pod and
 Try a temporary pod), with the last code used filled in. Signing in (`action.auth.session`) keeps the session;
 Leave pod (`leave_pod`, after its `action.confirm` dialog) forgets it and shows the sign-in screen again, as does a
@@ -165,8 +165,9 @@ session the pod no longer knows. A `layout.json` (`{"layout", "data"}`) in the a
 instead (development; with `frame-request` next to it, it also saves `frame.png` there). It is never read from external
 storage, which other apps can write on Android 9 and 10. Copy one in with
 `adb push layout.json /data/local/tmp/ && adb shell run-as org.theconstruct.android sh -c 'mkdir -p files/dev && cp /data/local/tmp/layout.json files/dev/'`
-(the APK is debuggable). Like the main app, it allows no backups or device-to-device transfers (`allowBackup="false"`
-and the main app's `data_extraction_rules.xml`): `pod.json`, the engine's cache and the push keys stay on the device.
+(a development build is debuggable; a release build is not, so this needs one). It allows no backups or
+device-to-device transfers (`allowBackup="false"` and `android/res/xml/data_extraction_rules.xml`): `pod.json`, the
+engine's cache and the push keys stay on the device.
 
 winit makes one event loop per process while Android keeps the process after the activity goes, so the process ends
 with its activity (when it is finishing or destroyed) and every launch starts afresh. The app targets SDK 34, so the
@@ -176,9 +177,8 @@ opens the keyboard, and Back pops the stack. The layout stays inside the window 
 bars with dark icons; in dark mode (`values-night`), dark bars with light icons. The layouts follow the system's
 mode: `Configuration.uiMode` read through JNI after each batch of events. The activity handles `uiMode` changes
 itself (no restart), so it sets the system bars' colour and icons again in `onConfigurationChanged`, as the theme
-would. `local:servers` offers the main
-app's servers: Staging, Local emulator (`10.0.2.2:8080`), Local USB (`127.0.0.1:8080`, with `adb reverse`) and the
-main app's own server when it is another; `set_server` switches as on the desktop.
+would. `local:servers` offers Staging, Local emulator (`10.0.2.2:8080`), Local USB (`127.0.0.1:8080`, with
+`adb reverse`) and the saved server when it is another; `set_server` switches as on the desktop.
 
 ### The Android bridge
 
@@ -224,7 +224,7 @@ The platform interface (`platform.rs`: `Platform`, `PlatformEvent`, `Reopen`) is
 
 ## Live sessions (`remote`)
 
-Feature `remote` (on in the viewer and the APK) runs a session over a pod with the engine the Compose clients run
+Feature `remote` (on in the viewer and the APK) runs a session over a pod with the engine
 (`client-core`, decision `rust-clients-on-the-engine`): `PodEngine` is the session's `Loader`. Home shows as the
 engine has it, from its cache at once (offline too; "Opening your pod…" with the connection's state on a first
 start, until the pod answers), and the device's list of layouts (`local:layouts`, `local:apps`) comes from
@@ -236,11 +236,11 @@ snapshot the engine sends reaches the session on its next frame (`Loader::change
 `local://connection` (online, offline or connecting, and how many writes wait), and the new root of every layout
 the event stream announced, so a layout edited over MCP, or a change from another device, shows without opening it
 again. The simulator's live mode (`construct-sim --base-url`) still fetches straight from the pod (`PodClient`). `local://nav` and
-`local://screen` are set as the shared UI sets them. Images (`core://Image`) download on four background threads, newest request first,
+`local://screen` are set as the Compose UI set them. Images (`core://Image`) download on four background threads, newest request first,
 without the session (the pod serves media from public paths), are cut to their box (cropped to fill, corners
 rounded) and drawn over their placeholder once they arrive; the window redraws then.
 
-Writes go to the engine's outbox, as the shared UI sends them (`Loader::take`): `$form.<f>`, `$form?.<f>` and one
+Writes go to the engine's outbox, as the Compose UI sent them (`Loader::take`): `$form.<f>`, `$form?.<f>` and one
 `$nonce` per tap are bound when the tap runs (a blank `$form.<f>` sends nothing). `action.mutation.optimistic`
 changes the entity at once (every `value_expr` against the entity as it was, in the expression language client-core
 uses, `protocol::expr`; one that fails changes nothing) and the engine keeps the write until
@@ -256,7 +256,7 @@ notification's layout and `target_uri` screen; `mark_read` and `mark_all_read` m
 the pod (registering the device first), flipping it back when refused. `hide_layout`, `unhide_layout` and
 `delete_layout` go to the pod through the engine and load its list of layouts again; a deleted layout leaves the
 stack and its pin is forgotten; home is never hidden or deleted. `set_server` hands the platform another of
-`local:servers` (`Effect::SwitchServer`). A refused write or device command shows the shared UI's notice bar at the
+`local:servers` (`Effect::SwitchServer`). A refused write or device command shows a notice bar at the
 bottom (the pod's `detail`, else its error, with Dismiss; tagged `notice` and `notice-dismiss`) until dismissed.
 These commands (`Loader::device_command`) block the session while the pod answers, as `show_versions` does. Left to
 its own ticket: `request_notification_permission` (#168).
@@ -278,8 +278,8 @@ exchanges the code (`token_path`). Its progress and errors show in `local://sess
 the secure store and home, the sign-ins and the feed load again. `sign_out` signs out through the pod
 (`POST /v1/auth/logout`, which keeps a pod code's session) and loads the sign-ins again. Each server's engine
 picks its own redirect, so `set_server` to another pod signs in there the same way. `leave_pod` (the engine
-forgets the session) and `refresh` (home fetched again) go to the platform too. The device data the shared UI builds
-(`DeviceData`) is built the same way: `local://connection`, `local://session` (from the engine's sign-in state),
+forgets the session) and `refresh` (home fetched again) go to the platform too. The device data (`DeviceData`) is built from the
+engine: `local://connection`, `local://session` (from the engine's sign-in state),
 `local://inbox` (the engine's unread count), the layouts with their versions, and, for a layout that binds them,
 `local:notifications` (the engine's list, cached; `when` and `day` labels in UTC; loaded again when the count
 changes), `local:channels` and `local:sign_ins` / `local:providers`. Marking notifications read goes through the

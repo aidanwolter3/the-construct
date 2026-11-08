@@ -1,15 +1,15 @@
 # The Construct
 
 **Native apps whose screens come from your own server.** A Rust server, the *pod*, holds your data and sign-ins and
-decides what every screen looks like. Desktop and Android clients draw those screens natively with one shared Compose
-UI and one shared Rust engine, and keep working offline. A new pod starts as a blank home screen; your agent (Claude,
+decides what every screen looks like. Desktop and Android clients draw those screens natively with one Rust renderer
+(wgpu, no web view) over one Rust engine, and keep working offline. A new pod starts as a blank home screen; your agent (Claude,
 through the pod's MCP endpoint) builds the rest into it, only what you ask for, with no client release.
 
 - **Your layouts, built by your agent.** There are no apps at runtime. A pod's screens are its own layouts, starting
   with `home`, and the agent writes them from blueprints, components and your data. Every write is validated and
   appears live on your devices; any version can be restored.
 - **Server-driven, but native.** Layouts are JSON trees of generic nodes (`core://List`, `core://Carousel`,
-  `core://TextField`, …) rendered with Compose, not a web view.
+  `core://TextField`, …) drawn by the Rust renderer, not a web view.
 - **Device data and commands.** Layouts read what the device knows (`local://connection`, the inbox, the pod's
   layouts, the theme) and ask the device to act (`action.device`: sign in, hide a layout, leave the pod), so even
   Settings and the inbox are layouts.
@@ -30,7 +30,7 @@ through the pod's MCP endpoint) builds the rest into it, only what you ask for, 
 ## How it works
 
 ```
- Pixelfed, web pages ◀──▶ pod (Rust, Axum, SQLite) ── layouts + entities, events ──▶ engine (Rust) ──▶ Compose UI
+ Pixelfed, web pages ◀──▶ pod (Rust, Axum, SQLite) ── layouts + entities, events ──▶ engine (Rust) ──▶ renderer (Rust)
                           adapters: pixelfed,                                         cache, outbox,     desktop,
  Claude (MCP) ──────────▶ recipes, collections, …                                     sign-in, SSE       Android
 ```
@@ -51,7 +51,8 @@ says which features it can draw, and the pod serves it the newest version of eac
 
 ## Quick start
 
-You need Rust and, for the clients, JDK 21. Details for macOS and Linux are in [CONTRIBUTING.md](CONTRIBUTING.md#setup).
+You need Rust; for the Android app also an Android SDK with an NDK. Details are in
+[CONTRIBUTING.md](CONTRIBUTING.md#setup).
 
 1. Run the server with fixed local codes, so the app and Claude Code keep working across restarts
    ([docs/server.md](docs/server.md#fixed-codes-for-local-testing)):
@@ -65,11 +66,8 @@ You need Rust and, for the clients, JDK 21. Details for macOS and Linux are in [
    Construct", "Ask your agent to build anything", and Notifications and Settings buttons.
 
    ```bash
-   cd app && ./gradlew :desktopApp:run -Dconstruct.baseUrl=http://127.0.0.1:8080
+   CONSTRUCT_POD_URL=http://127.0.0.1:8080 cargo run --release -p construct-render --features viewer --bin construct-viewer
    ```
-
-   On Linux, build the engine first and skip the macOS build step: `cargo build -p client-ffi --release`, then add
-   `-PskipRustBuild`.
 
 3. Connect Claude Code to the pod and ask for a first layout, such as "show my recipes on home":
 
@@ -82,7 +80,7 @@ You need Rust and, for the clients, JDK 21. Details for macOS and Linux are in [
    The Claude apps can connect to a deployed server as a custom connector instead
    ([docs/custom-apps.md](docs/custom-apps.md#building-apps-with-claude)).
 
-Without `-Dconstruct.baseUrl`, clients use the public staging server, where **Try a temporary pod** gives you a
+Without `CONSTRUCT_POD_URL`, clients use the public staging server, where **Try a temporary pod** gives you a
 24-hour pod to explore.
 
 To render layouts headlessly to PNGs (no window, no device), use the simulator:
@@ -119,17 +117,18 @@ crates/app-*            adapters: pixelfed, recipes, collections, events, monito
                           inbox); blueprint versions in layouts/<id>/NNNN.json
 crates/web-extract      fetching pages and reading structured data out of them, for fillers
 crates/client-core      the engine: SQLite cache, outbox, PKCE sign-in, event stream
-crates/client-ffi       the UniFFI bridge to Kotlin
+crates/construct-render the renderer and the clients: the desktop app (construct-viewer), the Android app
+                          (NativeActivity, android/), the pod's layout previews
+crates/construct-sim    the headless simulator: scripted UI checks to PNGs
 crates/e2e              end-to-end suite
 fake-pixelfed/          a fake Pixelfed upstream for tests and staging
-app/                    Gradle: :shared (Compose UI), :desktopApp (and the simulator), :androidApp
 deploy/, dev/, scripts/, assets/icon/
 ```
 
 ## Status
 
 The Construct is under active development. The server and both clients work and run on a staging server; the
-Android app is not in a store. The API and the layout format may change.
+Android app and the Mac app come from GitHub releases (`.github/workflows/release.yml`), not a store. The API and the layout format may change.
 
 ## Contributing
 

@@ -10,8 +10,8 @@
 //! background paths). Signing out deletes the device on the pod and clears
 //! the cache.
 //!
-//! Every call runs on the caller's thread (Kotlin calls them off the UI
-//! thread) and never holds an engine lock during HTTP.
+//! Every call runs on the caller's thread (never the UI thread) and never
+//! holds an engine lock during HTTP.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

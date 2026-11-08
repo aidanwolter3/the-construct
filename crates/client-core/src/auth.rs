@@ -239,8 +239,8 @@ pub fn default_secure_store() -> Box<dyn SecureStore> {
     }
 }
 
-/// Run a platform callback, turning a panic (e.g. a foreign exception that
-/// UniFFI surfaces as a panic) into `None`.
+/// Run a platform callback, turning a panic (e.g. from a JNI call) into
+/// `None`.
 pub(crate) fn guarded<T>(what: &str, f: impl FnOnce() -> T) -> Option<T> {
     match panic::catch_unwind(AssertUnwindSafe(f)) {
         Ok(v) => Some(v),

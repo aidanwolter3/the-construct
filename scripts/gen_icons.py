@@ -3,8 +3,8 @@
 
 One geometry definition (scene()) is emitted three ways, so every output matches:
   * SVG          assets/icon/construct.svg (full-bleed tile), assets/icon/construct-macos.svg (macOS margin + shadow)
-  * Android      VectorDrawables (adaptive background / foreground / monochrome) in androidApp res/drawable
-  * PNG          rasterised with Pillow (4x supersampled), for the Linux PNG, legacy mipmaps, desktop resource,
+  * Android      VectorDrawables (adaptive background / foreground / monochrome) in crates/construct-render/android/res
+  * PNG          rasterised with Pillow (4x supersampled), for the Linux PNG, legacy mipmaps,
                  macOS .icns (via iconutil) and Windows .ico
 
 Detail levels: "full" (large PNGs, SVG master), "launcher" (Android adaptive layers: heavier lines, bigger cube, since
@@ -24,8 +24,7 @@ from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ICON_DIR = os.path.join(ROOT, "assets", "icon")
-ANDROID_RES = os.path.join(ROOT, "app", "androidApp", "src", "main", "res")
-DESKTOP_RES = os.path.join(ROOT, "app", "desktopApp", "src", "main", "resources", "icon")
+ANDROID_RES = os.path.join(ROOT, "crates", "construct-render", "android", "res")
 
 # ---------------------------------------------------------------------------------------------- geometry
 # Art space: the unit square (y down). Ops may extend beyond it; every target clips to its own frame.
@@ -458,10 +457,7 @@ def main():
         raster_ops(all_ops(sc), 432, (72, 72, 288)).resize((432, 432), Image.LANCZOS).save(
             os.path.join(pv, "adaptive_full_preview.png"))
 
-    # Desktop: runtime window/dock icon resource, Linux png, Windows ico, macOS icns.
-    os.makedirs(DESKTOP_RES, exist_ok=True)
-    macos_png(1024).save(os.path.join(DESKTOP_RES, "construct-macos-1024.png"))
-    tile_png(512).save(os.path.join(DESKTOP_RES, "construct-512.png"))
+    # Desktop: the macOS .icns (the app bundle's icon, scripts/macos_app.sh).
     tmp = tempfile.mkdtemp()
     iconset = os.path.join(tmp, "construct.iconset")
     os.makedirs(iconset)
@@ -474,7 +470,7 @@ def main():
     else:
         print("iconutil not found (not macOS?): construct.icns left unchanged", file=sys.stderr)
     shutil.rmtree(tmp)
-    print("icons written to", ICON_DIR, ANDROID_RES, DESKTOP_RES)
+    print("icons written to", ICON_DIR, ANDROID_RES)
 
 
 if __name__ == "__main__":

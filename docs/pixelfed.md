@@ -41,10 +41,10 @@ use the staging fake.
    Add `PIXELFED_MEDIA_HOSTS=<cdn host>` if the instance serves media from another host.
 2. Make it reachable from the phone. Simplest is USB: `adb reverse tcp:8080 tcp:8080` and the server
    `http://127.0.0.1:8080`. Over a LAN (`CONSTRUCT_ADDR=0.0.0.0:8080`) the open `dev` pod is refused, so create a pod
-   with `server pods create` and enter its code; images need `adb reverse` or HTTPS, since Android allows cleartext
-   only to local addresses.
-3. Install the app (`./gradlew :androidApp:installDebug`) and pick **Local USB** in Settings' server picker, or start
-   a debug build with `--es baseUrl http://127.0.0.1:8080`.
+   with `server pods create` and enter its code; the app accepts plain `http://` only for local and private network
+   addresses.
+3. Install the app (`scripts/android_native.sh`) and pick **Local USB** in Settings' server picker (or on the sign-in
+   screen).
 4. Tap **Sign in with Pixelfed**, log in and approve in the browser; the `construct://oauth` redirect returns to the
    app and the feed loads.
 

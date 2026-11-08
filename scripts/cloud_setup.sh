@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
-# Setup for Claude Code cloud environments (Ubuntu containers): toolchains for cargo tests, the JVM tests and
-# the headless simulator, plus warm caches so a session doesn't download hundreds of artifacts on its first build.
+# Setup for Claude Code cloud environments (Ubuntu containers): the toolchains for the cargo tests and the headless
+# simulator, plus warm caches so a session doesn't download and compile hundreds of crates on its first build.
 # Use it as the environment's setup script (paste the snippet from CLAUDE.md "Cloud sessions" into the
 # environment settings), or run it once in a session: `bash scripts/cloud_setup.sh`. Idempotent.
 #
-# Cache warm-up: builds client-ffi (target/release/libclient_ffi.so) and compiles the Kotlin main + test sources,
-# which fills ~/.gradle with every dependency the JVM tests and the simulator need. Gradle tries Google's Maven
-# Central mirror before repo.maven.apache.org (app/settings.gradle.kts), because Maven Central answers
-# HTTP 429 to shared cloud egress IPs. A failed step is retried with long, growing waits (30s..4min), never in a
-# tight loop; a warm-up that still fails only leaves a warning: sessions then download on first build.
+# Cache warm-up: fetches every crate, builds the headless simulator (construct-sim) and installs cargo-nextest. A
+# failed step is retried with long, growing waits (30s..4min), never in a tight loop; a warm-up that still fails
+# only leaves a warning: sessions then download on first build.
 #
-# The warm-up (~2-3 min) runs in the background by default, so the session starts right away. A Gradle or cargo
-# build started meanwhile waits on the cache lock instead of downloading twice. Progress goes to
-# ~/.construct-cloud-warmup.log; ~/.construct-cloud-warmup.status reads "running <pid>", "done" or
-# "failed <step>". `scripts/await_warmup.sh` waits for it, and restarts it when the status says running but the
-# process is gone (a container restart or a killed shell leaves that behind).
+# The warm-up runs in the background by default, so the session starts right away. A cargo build started meanwhile
+# waits on cargo's lock instead of building twice. Progress goes to ~/.construct-cloud-warmup.log;
+# ~/.construct-cloud-warmup.status reads "running <pid>", "done" or "failed <step>". `scripts/await_warmup.sh` waits
+# for it, and restarts it when the status says running but the process is gone (a container restart or a killed
+# shell leaves that behind).
 # Env: CONSTRUCT_SETUP_WARM=background (default) | foreground | skip.
 #
 # Disk: a session has a fixed allowance (~30 GB). The script turns off incremental compilation for this user
@@ -22,14 +20,9 @@
 #
 # Network access the environment needs (allow these domains in the environment's network policy):
 #   static.rust-lang.org, sh.rustup.rs, crates.io, index.crates.io, static.crates.io   (Rust)
-#   maven-central.storage-download.googleapis.com, repo.maven.apache.org, repo1.maven.org,
-#   dl.google.com, maven.google.com, plugins.gradle.org, services.gradle.org, downloads.gradle.org,
-#   maven.pkg.jetbrains.space, packages.jetbrains.team, download.jetbrains.com         (Gradle/Kotlin/Compose)
 #   github.com, api.github.com, objects.githubusercontent.com                          (git, gh)
 #   the-construct-pod.fly.dev, the-construct-fake-pixelfed.fly.dev                     (staging checks)
-# Android: a compile-only SDK (platform + build-tools, ~0.5 GB, no NDK or emulator) goes to ~/android-sdk, and
-# app/local.properties (gitignored) points at it, so sessions can run CI's Android compile. Not needed in the
-# cloud: the NDK, an emulator, macOS tools (device QA happens on the developer's Mac).
+# Not installed: an Android SDK and NDK (the APK is built by CI and on the developer's Mac), macOS tools.
 
 set -euo pipefail
 
@@ -40,10 +33,8 @@ if [[ $EUID -ne 0 ]] && command -v sudo >/dev/null; then SUDO="sudo"; fi
 
 if command -v apt-get >/dev/null; then
   need=()
-  command -v java >/dev/null && java -version 2>&1 | grep -q '"21' || need+=(openjdk-21-jdk-headless)
   command -v cc >/dev/null || need+=(build-essential)
   command -v jq >/dev/null || need+=(jq)
-  command -v unzip >/dev/null || need+=(unzip)  # the Android command-line tools
   command -v sqlite3 >/dev/null || need+=(sqlite3)
   dpkg -s fonts-dejavu-core >/dev/null 2>&1 || need+=(fonts-dejavu-core fontconfig)  # simulator text rendering
   dpkg -s pkg-config >/dev/null 2>&1 || need+=(pkg-config)
@@ -69,8 +60,6 @@ if ! grep -qs '^incremental' "$HOME/.cargo/config.toml"; then
   printf '\n[build]\nincremental = false\n' >>"$HOME/.cargo/config.toml"
 fi
 
-JAVA_HOME_GUESS="$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")"
-
 # Runs a command; after a failure waits 30s, 60s, 120s, 240s before the next try (5 tries in all).
 with_backoff() {
   local delay=30 attempt=1 max=5
@@ -89,46 +78,14 @@ with_backoff() {
 WARM_LOG="$HOME/.construct-cloud-warmup.log"
 WARM_STATUS="$HOME/.construct-cloud-warmup.status"
 NEXTEST_VERSION=0.9.145
-ANDROID_SDK="$HOME/android-sdk"
-
-# The compile-only Android SDK, then app/local.properties' sdk.dir (unless one is already set).
-install_android_sdk() {
-  local sdkmanager="$ANDROID_SDK/cmdline-tools/latest/bin/sdkmanager" zip
-  if [[ ! -x "$sdkmanager" ]]; then
-    zip="$(mktemp --suffix=.zip)"
-    curl -fsSLo "$zip" https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip || return 1
-    rm -rf "$ANDROID_SDK/cmdline-tools" && mkdir -p "$ANDROID_SDK/cmdline-tools"
-    unzip -q "$zip" -d "$ANDROID_SDK/cmdline-tools" && mv "$ANDROID_SDK/cmdline-tools/cmdline-tools" \
-      "$ANDROID_SDK/cmdline-tools/latest"
-    local ok=$?
-    rm -f "$zip"
-    ((ok == 0)) || return 1
-  fi
-  # The platform matches compileSdk in app/androidApp/build.gradle.kts. `yes` accepts the licences (and dies of
-  # SIGPIPE when sdkmanager is done, hence the `|| true` under pipefail).
-  { yes 2>/dev/null || true; } | JAVA_HOME="$JAVA_HOME_GUESS" "$sdkmanager" --sdk_root="$ANDROID_SDK" \
-    "platforms;android-36" "build-tools;36.0.0" >/dev/null || return 1
-  local props="$REPO_ROOT/app/local.properties"
-  grep -qs '^sdk.dir=' "$props" || echo "sdk.dir=$ANDROID_SDK" >>"$props"
-}
 
 warm_caches() {
   local failed=()
   echo "running $$" >"$WARM_STATUS"
   # Anything that ends the warm-up early (a signal, a crash) must not leave "running" behind.
   trap 'grep -q "^running" "$WARM_STATUS" 2>/dev/null && echo "failed interrupted" >"$WARM_STATUS"' EXIT
-  (cd "$REPO_ROOT" && with_backoff cargo build -p client-ffi --release) || failed+=(client-ffi)
-  local android=()
-  if [[ -n "${ANDROID_HOME:-}" ]] || with_backoff install_android_sdk; then
-    android=(:shared:compileAndroidMain :androidApp:compileDebugKotlin)
-  else
-    failed+=(android-sdk)
-  fi
-  # Compiling main + test sources resolves everything :shared:allTests, :desktopApp:test and :desktopApp:simulate
-  # use, plus CI's Android compile when the SDK is there. --no-daemon so no Gradle daemon outlives the warm-up.
-  (cd "$REPO_ROOT/app" && JAVA_HOME="$JAVA_HOME_GUESS" with_backoff ./gradlew -PskipRustBuild \
-    --no-daemon --quiet :shared:compileTestKotlinDesktop :desktopApp:compileTestKotlin "${android[@]}") \
-    || failed+=(gradle)
+  (cd "$REPO_ROOT" && with_backoff cargo fetch) || failed+=(fetch)
+  (cd "$REPO_ROOT" && cargo build -p construct-sim) || failed+=(construct-sim)
   # The test runner CI uses (same version as .github/workflows/ci.yml), built from crates.io.
   if ! cargo nextest --version 2>/dev/null | grep -q "$NEXTEST_VERSION"; then
     with_backoff cargo install --locked --quiet cargo-nextest --version "$NEXTEST_VERSION" || failed+=(nextest)
@@ -146,8 +103,8 @@ case "$warm_mode" in
   foreground) warm_caches 2>&1 | tee "$WARM_LOG" ;;
   background)
     # setsid + nohup: detached from the setup script, so it keeps running after the script returns.
-    export -f warm_caches with_backoff install_android_sdk
-    export REPO_ROOT JAVA_HOME_GUESS WARM_STATUS NEXTEST_VERSION ANDROID_SDK PATH
+    export -f warm_caches with_backoff
+    export REPO_ROOT WARM_STATUS NEXTEST_VERSION PATH
     setsid nohup bash -c warm_caches >"$WARM_LOG" 2>&1 </dev/null &
     # The child writes its own pid too; writing it here closes the gap before it starts.
     echo "running $!" >"$WARM_STATUS"
@@ -157,10 +114,4 @@ case "$warm_mode" in
   *) echo "cloud_setup: unknown CONSTRUCT_SETUP_WARM=$warm_mode (background|foreground|skip)" >&2; exit 2 ;;
 esac
 
-cat <<EOF
-Cloud setup done.
-  rustc:  $(rustc --version)
-  java:   $(java -version 2>&1 | grep -v "^Picked up" | head -n 1)
-Gradle uses the JDK in JAVA_HOME (or java on PATH); if JAVA_HOME is unset or not JDK 21:
-  export JAVA_HOME=$JAVA_HOME_GUESS
-EOF
+echo "Cloud setup done. rustc: $(rustc --version)"

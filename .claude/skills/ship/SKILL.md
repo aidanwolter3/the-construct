@@ -18,8 +18,8 @@ a step below says to.
    - **Migration lists** (named migrations, see docs/decisions/named-migrations.md): keep both entries, main's
      first. Never rename a migration that main already has.
    - **Docs, decisions**: keep both sides' content.
-2. Run the checks in CONTRIBUTING.md "Checks". In a cloud session run `scripts/await_warmup.sh` before the JVM
-   tests. For an interface change, take simulator screenshots (docs/simulator.md).
+2. Run the checks in CONTRIBUTING.md "Checks". In a cloud session run `scripts/await_warmup.sh` first. For an
+   interface change, take simulator screenshots (docs/simulator.md).
 3. Commit (CONTRIBUTING.md commit style) and `git push -u origin <branch>`.
 
 ## 2. Open the PR

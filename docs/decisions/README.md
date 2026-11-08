@@ -34,6 +34,8 @@ Names older decisions may still use, and what they are now.
 | `kmp-app/` | `app/` | [rename-apps-and-folders](rename-apps-and-folders.md) |
 | `fixtures/` | next to the code that reads each file | [data-next-to-its-code](data-next-to-its-code.md) |
 | `app/desktopApp/src/sim/resources/` | `crates/construct-sim/data/` | [rust-simulator](rust-simulator.md) |
+| `app/androidApp/src/main/res/` (launcher icon, backup rules) | `crates/construct-render/android/res/` | [rust-clients](rust-clients.md) |
+| `app/` (the Compose clients) | deleted; the clients are `crates/construct-render` | [rust-clients](rust-clients.md) |
 
 The decision files [watcher](watcher.md) and [watcher-rules-per-site](watcher-rules-per-site.md) keep their names:
 other decisions link to them.

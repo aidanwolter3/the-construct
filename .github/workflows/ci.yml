@@ -1,8 +1,8 @@
 name: CI
 
-# Every PR and push: Rust checks, simulator screenshots on the Rust engine (artifact `simulator`), JVM/shared-UI
-#   tests with the Compose simulator's screenshots (until issue #166), and an Android compile (Kotlin only, no Rust
-#   .so files).
+# Every PR and push: Rust checks, simulator screenshots on the Rust engine (artifact `simulator`), and the Android
+#   app built as CI's development APK (scripts/android_native.sh, artifact `android-apk`). Release builds (a signed
+#   APK, the macOS app) come from release.yml.
 # Push to main (or a manual run on main): if Rust checks pass, deploy the pod to Fly.io staging,
 #   https://the-construct-pod.fly.dev   (deploy/fly/pod.toml)
 # The fake Pixelfed it talks to deploys from its own workflow (fake-pixelfed.yml).
@@ -87,10 +87,13 @@ jobs:
         with:
           command: check advisories
 
-  jvm:
-    name: JVM tests + simulator screenshots
+  android:
+    name: Android APK (cargo-ndk)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
+    # The Android app as scripts/android_native.sh builds it on a Mac: the engine cross-compiled with cargo-ndk, the
+    # Java bridge (javac + d8), aapt2's manifest and resources, signed with a throwaway debug key. The runner image
+    # ships an Android SDK with an NDK (ANDROID_HOME); there is no device, so the script builds only.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -99,52 +102,21 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - name: Install the pinned Rust (rust-toolchain.toml)
-        run: rustup toolchain install
+      - name: Install the pinned Rust (rust-toolchain.toml) and the Android target
+        run: rustup toolchain install && rustup target add aarch64-linux-android
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
-      - name: Build the Rust engine for the JVM (target/release/libclient_ffi.so)
-        run: cargo build -p client-ffi --release
-      - name: Shared + desktop tests
-        working-directory: app
-        run: ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test
-      # The Compose app's simulator, until the clients cut over to the Rust engine (issue #166).
-      - name: Compose simulator screenshots (fixture mode)
-        working-directory: app
-        run: |
-          ./gradlew -PskipRustBuild :desktopApp:simulate \
-            -Pworkspace=pixelfed_sample_no_login -Pscreen=phone -Pout="$RUNNER_TEMP/sim/pixelfed" \
-            -Pscript="shot feed; click Like; assert-text Unlike; shot liked; offline; shot offline"
-      - name: Upload screenshots and test reports
-        if: always()
+        with:
+          key: android
+      - name: Install cargo-ndk
+        run: command -v cargo-ndk >/dev/null || cargo install --locked cargo-ndk --version 4.1.2
+      - run: scripts/android_native.sh
+      - name: Upload the APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: simulator-and-test-reports
-          path: |
-            ${{ runner.temp }}/sim
-            app/**/build/reports/tests
-          if-no-files-found: ignore
+          name: android-apk
+          path: build/android-native/construct-render.apk
+          if-no-files-found: error
           retention-days: 14
-
-  android:
-    name: Android compile
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    # Compiles the Android Kotlin (:shared's android target and :androidApp), which the JVM job never builds.
-    # Compile-only: -PskipRustBuild skips the cargo-ndk engine build (the UniFFI bindings are checked in). The
-    # runner image ships an Android SDK (ANDROID_HOME); AGP fetches a missing platform itself.
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false # no job pushes; keep GITHUB_TOKEN out of .git/config
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
-        with:
-          distribution: temurin
-          java-version: "21"
-      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
-      - name: Compile shared (android) + androidApp
-        working-directory: app
-        run: ./gradlew -PskipRustBuild :shared:compileAndroidMain :androidApp:compileDebugKotlin
 
   deploy:
     name: Deploy to Fly.io staging

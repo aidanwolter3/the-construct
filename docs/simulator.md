@@ -2,7 +2,7 @@
 
 `construct-sim` (`crates/construct-sim`) runs a small script against a session of the Rust engine
 (`construct-render`, [rendering.md](rendering.md)), draws each `shot` on the CPU and writes PNGs. There is no window,
-no GPU and no JVM, and a run takes a second or two, so it works in CI and cloud sessions. It is the project's UI check:
+no GPU, and a run takes a second or two, so it works in CI and cloud sessions. It is the project's UI check:
 there are no emulator or on-device tests. Decision: [`rust-simulator`](decisions/rust-simulator.md).
 
 ```bash
@@ -98,13 +98,13 @@ word is the command and the rest of the entry, as written, its argument: `click 
 | `notify <app_id> <channel> <title>` | Fixture mode: a notification arrives (the inbox and its count update). |
 | `toggle-channel <app>.<channel>` | Flips a notification channel (`toggle_channel`; fixture mode). |
 | `pick <path> [<path>…]` | Queues files (relative to the repository root) for the next media picker tap, at most its `max`; none queued is a cancelled pick. Fixture mode: the fake pod stages each file where it is (`sim-<n>` ids). |
-| `publish-version <note>` | Parsed, but fails: the engine always shows a layout's latest version. The Compose simulator below still runs it. |
+| `publish-version <note>` | Parsed, but fails: the engine always shows a layout's latest version. |
 
 A step whose tap or intent fails (a load the pod refuses, an intent nothing in this mode runs) fails.
 
 A `<target>` is `tag:<id>`, a single word, or `"quoted text"`. `tag:<id>` is a semantic id
-([rendering.md](rendering.md#semantic-ids)): exact, else the first id containing it; the Compose tags
-`textfield:<f>` and `textfield-send:<f>` stand for `field:<f>` and `send:<f>`. Text is matched exactly (tappable
+([rendering.md](rendering.md#semantic-ids)): exact, else the first id containing it; the old Compose
+simulator's tags `textfield:<f>` and `textfield-send:<f>` stand for `field:<f>` and `send:<f>`. Text is matched exactly (tappable
 nodes first), then as a substring, against texts and content descriptions. The engine leaves what is off screen out
 of the semantic tree, so a target not on screen is searched for by scrolling the screen's largest scrolling view.
 
@@ -122,27 +122,3 @@ Examples:
 # Notifications
 --script 'notify pixelfed likes Bob liked your post; open-inbox; shot inbox; click @bob commented on your post; shot thread'
 ```
-
-## The Compose simulator (until #166)
-
-`:desktopApp:simulate` draws the Compose app (`ConstructApp`) offscreen with the same script language, for as long
-as Compose is the product; issue #166 deletes it. It reads the same fixtures from `crates/construct-sim/data/`.
-
-```bash
-cd app && ./gradlew -PskipRustBuild :desktopApp:simulate -Pworkspace=pixelfed_sample_no_login -Pscreen=phone \
-  -Pout=/tmp/sim -Pscript="shot feed; click Like; assert-text Unlike; shot liked; offline; shot offline"
-```
-
-Its flags are `-P` properties: `-Pworkspace`, `-Pscreen`, `-Pdensity`, `-Pscript`, `-PscriptFile`, `-Pfixture`,
-`-Pout` as above (relative paths resolve against the repository root), plus `-Ptoday=YYYY-MM-DD` (the date
-formatting draws against), `-PbaseUrl` (live mode, the real Rust engine through JNA, with a fresh temporary
-storage unless `-Pstorage`), `-PtimeoutMs`, and `-PpixelfedLogin=<login>:<password>` (live sign-in through a real
-Pixelfed's web form; against the fake Pixelfed the scripted browser approves at once). Its fake engine
-(`FakeEngineBridge`) models the outbox (`offline` queues writes, `online` flushes them), keeps created posts and
-comments, serves a fake app catalog (Pixelfed v1..v3, Pixelfed sample v1..v2) for `publish-version` and
-`pin-version`, and runs `pick`.
-
-Its targets are Compose test tags: layout nodes' `tag`s as above, `screen:<id>`, `screen-back`, `layout-back`,
-`textfield:<field>`, `textfield-send:<field>`, `list-empty`, `sheet-handle`, `sheet:<layout>`, the inbox's
-`notification-row:<id>`, `inbox-mark-all`, `channel:<app>.<channel>`, `channel-switch:<app>.<channel>`, and the
-version picker's `version-picker`, `version-latest`, `version-pinned`, `version-<n>`.

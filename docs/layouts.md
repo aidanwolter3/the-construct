@@ -186,7 +186,8 @@ each version `compatible` or, for that client, `update_required` (uses something
 removed). See decision [`named-vocabulary`](decisions/named-vocabulary.md).
 
 - **Adding vocabulary** needs a client build: add the type or field to `protocol`, a feature file, an arm in
-  `required_features`, the Kotlin model and renderer in `app/shared`, and tests. Steps:
+  `required_features`, drawing it in `crates/construct-render` (and `construct-sim` scripts if it adds
+  interaction), and tests. Steps:
   [`crates/protocol/features/README.md`](../crates/protocol/features/README.md). Then layouts can use it; clients
   without it keep getting the previous version.
 - **Removing vocabulary** never edits layout files: move the feature's file to `crates/protocol/features/removed/`,
@@ -211,7 +212,7 @@ request. Any layout may bind them; a custom app needs no feed for them.
 | `local:versions` (query) | the versions of the layout `show_versions` named, newest first: `version`, `label`, `detail`, `when`, `compatible`, `showing` |
 | `local://versions` | `app_id`, `app_title`, `pinned` (or "" while following the latest), `loading` |
 | `local:servers` (query) | `id`, `title`, `url`, `selected`: the servers this device can use |
-| `local://device` | `platform`; `notification_permission`: `granted` or `denied` on Android (whether notifications can show), `""` where it doesn't apply (desktop, simulator) |
+| `local://device` | `platform`; `notification_permission`: meant to be `granted` or `denied` on Android (whether notifications can show); `""` today on every client (the Android app doesn't report it yet, decision `rust-clients`), and where it doesn't apply (desktop, simulator) |
 | `local://nav` | Where the layout is drawn (feature `nav_data`): `can_go_back`, `presentation` (`root`, `push`, `sheet`, `panel`, `screen`, `inline`), `pushed`, `inline`, `in_frame` (in a sheet, panel or overlay; an overlay from the top or bottom says `sheet`, from the start or end `panel`) |
 | `local://screen` | In a page screen (feature `nav_data`): `loading`, `error` ("" when none) of its `data` load |
 | `local://theme` | The pod's theme colours for the app's mode (feature `theme`): `page` (a page's background), `card` (cards and rows on it), `card_border`, `muted_text`, `accent`, `accent_surface`, `muted_surface`, `success`, `success_surface`, `error`, `error_surface`, `highlight`, `like`, `unread`, each with a light and a dark value; set with MCP `set_theme`. Bind these instead of fixed `#RRGGBB` colours, which stay the same in dark mode (decision `dark-palette`; layout writes answer `warnings` for each). |
