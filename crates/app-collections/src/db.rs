@@ -764,8 +764,89 @@ pub fn usage(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
     )
 }
 
+// ---------- the rows a transaction changed ----------
+
+/// The rows changed since the last [`take_changed`], each with its state
+/// before its first change (`{values, deleted_at}`; null: it didn't exist),
+/// for live computes ([`crate::follow`]). A temporary table: it belongs to
+/// the connection, and its rows roll back with the transaction that wrote
+/// them.
+const CHANGED: &str = "CREATE TEMP TABLE IF NOT EXISTS collections_changed (
+    collection TEXT NOT NULL,
+    id TEXT NOT NULL,
+    before_json TEXT,
+    PRIMARY KEY (collection, id)
+)";
+
+fn record_change(
+    conn: &Connection,
+    collection: &str,
+    id: &str,
+    before: Option<&Row>,
+) -> rusqlite::Result<()> {
+    conn.prepare_cached(CHANGED)?.execute([])?;
+    conn.prepare_cached(
+        "INSERT OR IGNORE INTO temp.collections_changed (collection, id, before_json)
+         VALUES (?1, ?2, ?3)",
+    )?
+    .execute(params![
+        collection,
+        id,
+        before.map(|r| r.state().to_string())
+    ])?;
+    Ok(())
+}
+
+/// Note that row `id` of `collection` is about to change (or go): its
+/// state now is what it was before. [`insert_row`], [`save_row`] and
+/// [`save_row_values`] note their rows themselves.
+pub fn note_change(conn: &Connection, collection: &str, id: &str) -> rusqlite::Result<()> {
+    let before = row(conn, collection, id)?;
+    record_change(conn, collection, id, before.as_ref())
+}
+
+/// A changed row: its collection, id, and its live values before the
+/// change (`None`: it didn't exist or was deleted) and whether it existed,
+/// deleted or not.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Changed {
+    pub collection: String,
+    pub id: String,
+    pub before: Option<Map<String, Value>>,
+    pub existed: bool,
+}
+
+/// The rows changed since the last call (and forget them).
+pub fn take_changed(conn: &Connection) -> rusqlite::Result<Vec<Changed>> {
+    conn.prepare_cached(CHANGED)?.execute([])?;
+    let out: Vec<Changed> = {
+        let mut stmt = conn.prepare_cached(
+            "SELECT collection, id, before_json FROM temp.collections_changed ORDER BY rowid",
+        )?;
+        stmt.query_map([], |r| {
+            let before: Option<String> = r.get(2)?;
+            let state: Option<Value> = before.and_then(|b| serde_json::from_str(&b).ok());
+            let live = state
+                .as_ref()
+                .filter(|s| s["deleted_at"].is_null())
+                .and_then(|s| s["values"].as_object().cloned());
+            Ok(Changed {
+                collection: r.get(0)?,
+                id: r.get(1)?,
+                before: live,
+                existed: state.is_some(),
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?
+    };
+    conn.prepare_cached("DELETE FROM temp.collections_changed")?
+        .execute([])?;
+    Ok(out)
+}
+
 /// Insert a new row.
 pub fn insert_row(tx: &Connection, collection: &str, row: &Row) -> rusqlite::Result<()> {
+    record_change(tx, collection, &row.id, None)?;
     tx.execute(
         "INSERT INTO collections_rows (collection, id, client_id, values_json, created_at,
          updated_at, deleted_at, filler) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -785,6 +866,7 @@ pub fn insert_row(tx: &Connection, collection: &str, row: &Row) -> rusqlite::Res
 
 /// Store a row's values and deleted state.
 pub fn save_row(tx: &Connection, collection: &str, row: &Row) -> rusqlite::Result<()> {
+    note_change(tx, collection, &row.id)?;
     tx.execute(
         "UPDATE collections_rows SET values_json = ?1, updated_at = ?2, deleted_at = ?3
          WHERE collection = ?4 AND id = ?5",
@@ -994,6 +1076,7 @@ pub fn convert_field(
 /// Store a row's values without touching `updated_at` (a definition change
 /// is not an edit of the row).
 pub fn save_row_values(tx: &Connection, collection: &str, row: &Row) -> rusqlite::Result<()> {
+    note_change(tx, collection, &row.id)?;
     tx.execute(
         "UPDATE collections_rows SET values_json = ?1 WHERE collection = ?2 AND id = ?3",
         params![

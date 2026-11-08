@@ -9,7 +9,7 @@
 //! | `{op: remove_field, field}` | soft removal: hidden, data kept for the purge window |
 //! | `{op: restore_field, field}` | undo a removal (its data comes back) |
 //! | `{op: update_field, field, type?, options?, optional?, default?, compute?}` | values converted row by row; what doesn't fit is kept aside (`compute: null` stops computing; values stay) |
-//! | `{op: recompute_field, field}` | compute the field again for every row now (after editing the rules a lookup reads; a value only the model could answer stays) |
+//! | `{op: recompute_field, field}` | compute the field again for every row now (e.g. after changing how it computes; lookups and counts already follow the rows they read; a value only the model could answer stays) |
 //! | `{op: set_order, field?, descending?}` | the list order: a field or a list of fields, first key first (none: oldest first) |
 //! | `{op: set_title, title}` | the collection's title |
 //! | `{op: add_reminder, field, title, body?, at?, unless?, label?, app?}` | notify when a row's date is reached (decision `collection-reminders`) |

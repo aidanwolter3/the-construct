@@ -5,5 +5,6 @@
 mod collections;
 mod computed;
 mod fillers;
+mod follow;
 mod lookup;
 mod reminders;

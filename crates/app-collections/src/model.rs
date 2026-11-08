@@ -29,6 +29,8 @@ pub const MAX_PROMPT_CHARS: usize = 500;
 pub const MAX_SOURCES: usize = 4;
 /// Most kinds in a `compute` list (tried in order).
 pub const MAX_COMPUTES: usize = 4;
+/// Most conditions of a `count`'s `where`.
+pub const MAX_CONDITIONS: usize = 8;
 /// Most fields a collection is ordered by.
 pub const MAX_ORDER_KEYS: usize = 4;
 
@@ -175,6 +177,44 @@ pub enum Compute {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         learn: bool,
     },
+    /// The number of live rows of collection `collection` whose `key`
+    /// equals field `from` (as an `exact` lookup matches: ignoring case and
+    /// spacing) and which match every condition of `conditions` (decision
+    /// `live-computed-fields`, [`crate::follow`]). A number field's only
+    /// kind; kept up to date as those rows change.
+    Count {
+        from: String,
+        collection: String,
+        key: String,
+        #[serde(rename = "where", default, skip_serializing_if = "Vec::is_empty")]
+        conditions: Vec<Condition>,
+    },
+}
+
+/// A `count` condition: field `field` (an id of the counted collection),
+/// as text, equals `equals`, as a layout's `where` compares (a bool reads
+/// "true" or "false", a number its digits, an empty field its default).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Condition {
+    pub field: String,
+    pub equals: String,
+}
+
+impl Condition {
+    /// Whether the row `values` of `def` matches.
+    pub fn matches(&self, def: &Definition, values: &Map<String, Value>) -> bool {
+        let v = values
+            .get(&self.field)
+            .cloned()
+            .or_else(|| def.by_id(&self.field).map(Field::empty_value))
+            .unwrap_or(Value::Null);
+        let text = match v {
+            Value::Null => String::new(),
+            Value::String(s) => s,
+            other => other.to_string(),
+        };
+        text == self.equals
+    }
 }
 
 impl Compute {
@@ -183,6 +223,7 @@ impl Compute {
             Compute::Expr { .. } => "expr",
             Compute::Model { .. } => "model",
             Compute::Lookup { .. } => "lookup",
+            Compute::Count { .. } => "count",
         }
     }
 
@@ -199,7 +240,17 @@ impl Compute {
         match self {
             Compute::Expr { .. } => self.parsed().map(|e| e.fields()).unwrap_or_default(),
             Compute::Model { from, .. } => from.clone(),
-            Compute::Lookup { from, .. } => vec![from.clone()],
+            Compute::Lookup { from, .. } | Compute::Count { from, .. } => vec![from.clone()],
+        }
+    }
+
+    /// The collection it reads rows of (a lookup's or a count's).
+    pub fn reads(&self) -> Option<&str> {
+        match self {
+            Compute::Lookup { collection, .. } | Compute::Count { collection, .. } => {
+                Some(collection)
+            }
+            Compute::Expr { .. } | Compute::Model { .. } => None,
         }
     }
 }
@@ -451,6 +502,29 @@ impl Definition {
                 }
                 v
             }
+            Compute::Count {
+                from,
+                collection,
+                key,
+                conditions,
+            } => {
+                let other = |id: &str| {
+                    others
+                        .get(collection)
+                        .map_or_else(|| id.to_owned(), |d| d.name_of(id))
+                };
+                let mut v = json!({ "kind": "count", "from": self.name_of(from),
+                    "collection": collection, "key": other(key) });
+                if !conditions.is_empty() {
+                    v["where"] = Value::Array(
+                        conditions
+                            .iter()
+                            .map(|c| json!({ "field": other(&c.field), "equals": c.equals }))
+                            .collect(),
+                    );
+                }
+                v
+            }
         }
     }
 
@@ -633,7 +707,7 @@ fn parse_compute(
     };
     let shape = || {
         format!(
-            "field '{name}': compute is {{kind: \"expr\", expr}}, {{kind: \"model\", from, prompt}}, {{kind: \"lookup\", from, collection, key, value, match?, learn?}}, a list of those (tried in order) or null"
+            "field '{name}': compute is {{kind: \"expr\", expr}}, {{kind: \"model\", from, prompt}}, {{kind: \"lookup\", from, collection, key, value, match?, learn?}}, {{kind: \"count\", from, collection, key, where?}}, a list of those (tried in order) or null"
         )
     };
     let Value::Object(o) = v else {
@@ -752,17 +826,130 @@ fn parse_compute(
                 learn,
             })
         }
+        Some("count") => {
+            let arg = |k: &str| {
+                o.get(k)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| format!("field '{name}': a count needs \"{k}\" (a name)"))
+            };
+            let from = field_id(arg("from")?)?;
+            let collection = arg("collection")?.to_owned();
+            if collection == def.name {
+                return Err(format!(
+                    "field '{name}': a count reads another collection, not its own"
+                ));
+            }
+            let Some(other) = others.get(&collection) else {
+                return Err(format!(
+                    "field '{name}': compute.collection '{collection}' is not a collection ({}); define it first",
+                    others.keys().cloned().collect::<Vec<_>>().join(", ")
+                ));
+            };
+            let other_id = |at: &str, n: &str| -> Result<String, String> {
+                other.field(n).map(|f| f.id.clone()).ok_or_else(|| {
+                    format!(
+                        "field '{name}': compute.{at} '{n}' is not a field of '{collection}' ({})",
+                        other
+                            .live_fields()
+                            .map(|f| f.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })
+            };
+            let key = other_id("key", arg("key")?)?;
+            let items: Vec<&Value> = match o.get("where") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(a)) => a.iter().collect(),
+                Some(one @ Value::Object(_)) => vec![one],
+                Some(_) => {
+                    return Err(format!(
+                        "field '{name}': compute.where is {{field, equals}} or a list of them"
+                    ));
+                }
+            };
+            if items.len() > MAX_CONDITIONS {
+                return Err(format!(
+                    "field '{name}': compute.where has at most {MAX_CONDITIONS} conditions"
+                ));
+            }
+            let mut conditions = Vec::new();
+            for c in items {
+                let field = c
+                    .get("field")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| {
+                        format!("field '{name}': each compute.where condition names a field")
+                    })?;
+                let equals = match c.get("equals") {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(v @ (Value::Bool(_) | Value::Number(_))) => v.to_string(),
+                    _ => {
+                        return Err(format!(
+                            "field '{name}': compute.where '{field}' needs equals (text, true, false or a number)"
+                        ));
+                    }
+                };
+                if equals.trim().is_empty() {
+                    return Err(format!(
+                        "field '{name}': compute.where '{field}': equals is not blank (a blank condition would match every row)"
+                    ));
+                }
+                conditions.push(Condition {
+                    field: other_id("where", field)?,
+                    equals,
+                });
+            }
+            Ok(Compute::Count {
+                from,
+                collection,
+                key,
+                conditions,
+            })
+        }
         _ => Err(shape()),
     }
 }
 
-/// Check the lookups of `def` against the collections they read (`defs`:
-/// every live definition, `def`'s own included): the collection and its
-/// fields exist, the key is text, the value's type fits, and a collection
-/// a lookup learns into can take a new row of a key and a value.
+/// Check the lookups and counts of `def` against the collections they read
+/// (`defs`: every live definition, `def`'s own included): the collection
+/// exists and isn't `def`'s, and the fields read are live; for a lookup
+/// also the key is text, the value's type fits, and a collection it learns
+/// into can take a new row of a key and a value.
 pub fn check_lookups(def: &Definition, defs: &Defs) -> Result<(), String> {
     for f in def.live_fields() {
         for c in &f.compute {
+            if let Compute::Count {
+                collection,
+                key,
+                conditions,
+                ..
+            } = c
+            {
+                let at = format!("field '{}' of '{}'", f.name, def.name);
+                if *collection == def.name {
+                    return Err(format!(
+                        "{at}: a count reads another collection, not its own"
+                    ));
+                }
+                let Some(other) = defs.get(collection) else {
+                    return Err(format!(
+                        "{at} counts rows of '{collection}', which doesn't exist"
+                    ));
+                };
+                for id in std::iter::once(key).chain(conditions.iter().map(|c| &c.field)) {
+                    if other.by_id(id).filter(|x| x.live()).is_none() {
+                        return Err(format!(
+                            "{at} counts rows of '{collection}' by a field that is removed or gone; change that count first"
+                        ));
+                    }
+                }
+                continue;
+            }
             let Compute::Lookup {
                 collection,
                 key,
@@ -1164,6 +1351,19 @@ pub fn check_definition(def: &Definition, max_fields: usize) -> Result<(), Strin
                     return Err(format!(
                         "field '{}': a model answers in the background, so it is the last kind of the compute list",
                         f.name
+                    ));
+                }
+                Compute::Count { .. } if f.compute.len() != 1 => {
+                    return Err(format!(
+                        "field '{}': a count always answers, so it is the field's only kind",
+                        f.name
+                    ));
+                }
+                Compute::Count { .. } if f.kind != Kind::Number => {
+                    return Err(format!(
+                        "field '{}': a count is a number, so its field's type is number (it is {})",
+                        f.name,
+                        f.kind.as_str()
                     ));
                 }
                 _ => {}

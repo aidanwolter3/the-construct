@@ -29,12 +29,16 @@ shows it (restore_collection brings it back for 30 days). Any field may be compu
 whenever they change: compute: {kind: \"expr\", expr} evaluates a small expression at once (entity.<field>, \
 literals, + joins text or adds numbers, -, !, c ? a : b, parentheses); compute: {kind: \"lookup\", from, \
 collection, key, value, match: exact|contains|regex, learn?} takes the value of the best matching row of \
-another collection, kept as editable rules (the longest key wins); and compute: {kind: \"model\", from: \
+another collection, kept as editable rules (the longest key wins); compute: {kind: \"count\", from, \
+collection, key, where?: [{field, equals}]} (a number field) counts the rows of another collection whose key \
+equals this row's from and that match every condition; and compute: {kind: \"model\", from: \
 [fields], prompt} has a model answer the prompt about those fields in the background (a choice answers one \
 of its options; each input is asked once, and a value set by hand is kept and remembered for that input). \
 compute may be a list tried in order, e.g. [lookup with learn: true, model]: rules first, the model only \
-when none matches, and its answers (and hand edits) are added as rules. After editing rules, apply_change \
-{op: recompute_field} computes the field again for every row. \
+when none matches, and its answers (and hand edits) are added as rules. Lookups and counts are live: \
+when rows of the collection they read are added, changed, deleted or restored, the rows whose answer could \
+change are computed again at once (and that cascades, so a count's where may name a lookup field of the \
+collection it counts). apply_change {op: recompute_field} computes a field again for every row. \
 order_by may list several fields ([\"section\", \"done\"]; a choice sorts by the order of its options). \
 A collection can remind the user: apply_change {op: add_reminder, field: <a date field>, title: \"Due today: \
 {title}\", unless: {field: \"done\", equals: true}, at?: \"09:00\"} sends a notification from the app showing \
@@ -73,13 +77,17 @@ pub fn tools() -> Vec<Value> {
     let collection = json!({ "type": "string", "description": "A collection's name" });
     let note = json!({ "type": "string", "description": "What changed, in the user's words (shown in the history)" });
     let kind = json!({ "type": "object",
-        "properties": { "kind": { "type": "string", "enum": ["expr", "lookup", "model"] }, "expr": { "type": "string" },
+        "properties": { "kind": { "type": "string", "enum": ["expr", "lookup", "count", "model"] }, "expr": { "type": "string" },
             "from": { "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
             "prompt": { "type": "string" }, "collection": { "type": "string" }, "key": { "type": "string" },
             "value": { "type": "string" }, "match": { "type": "string", "enum": model::Match::ALL },
-            "learn": { "type": "boolean" } }, "required": ["kind"] });
+            "learn": { "type": "boolean" },
+            "where": { "description": "count: conditions every counted row matches, {field, equals} or a list of them",
+                "anyOf": [{ "type": "object" }, { "type": "array", "items": { "type": "object",
+                    "properties": { "field": { "type": "string" }, "equals": { "type": ["string", "number", "boolean"] } },
+                    "required": ["field", "equals"] } }] } }, "required": ["kind"] });
     let compute = json!({
-        "description": "The pod computes the value from the row's other fields (not from other computed fields), again whenever they change; a value written by hand stays until they change. One kind, or a list of kinds tried in order (the first with an answer wins; a model is last). kind \"lookup\": {kind, from: field, collection, key, value, match?: exact (the default; ignores case and spacing) | contains (the key's whole words, ignoring case) | regex (case-insensitive, at most 200 characters; an invalid one is skipped and listed by describe_collection), learn?}: the value field of the row of another collection whose key (a text field) matches this row's from field, the longest matching key winning; evaluated in the write; not recomputed when the rules change (apply_change recompute_field does). learn: true adds a rule (key: the input, lowercase with spaces collapsed; for match regex, that text escaped and anchored) when a later kind (the model) answers, and a hand edit of the field adds or changes that rule. Example: [{kind: \"lookup\", from: \"name\", collection: \"section_rules\", key: \"pattern\", value: \"section\", match: \"contains\", learn: true}, {kind: \"model\", from: \"name\", prompt: \"...\"}]. kind \"expr\": {kind, expr}, e.g. \"entity.quantity ? entity.name + \\\" (\\\" + entity.quantity + \\\")\\\" : entity.name\" (entity.<field>, JSON literals, + joins text or adds numbers, -, !, c ? a : b, parentheses; an empty value is \"\" or 0 and false in a condition), evaluated in the write. kind \"model\": {kind, from: field or [fields], prompt}, e.g. {from: \"name\", prompt: \"Which grocery store section is this item in?\"}: a model answers in the background (a choice: one of its options; text: trimmed), each input once; a value set by hand is remembered as the answer for that input. Needs optional or a default (what the row reads until computed). null: stop computing.",
+        "description": "The pod computes the value from the row's other fields (not from its other computed fields; a lookup or count may read computed fields of the collection it reads), again whenever they change; a value written by hand stays until they change (for a lookup or count, also until the rows it reads change). One kind, or a list of kinds tried in order (the first with an answer wins; a model is last). kind \"lookup\": {kind, from: field, collection, key, value, match?: exact (the default; ignores case and spacing) | contains (the key's whole words, ignoring case) | regex (case-insensitive, at most 200 characters; an invalid one is skipped and listed by describe_collection), learn?}: the value field of the row of another collection whose key (a text field) matches this row's from field, the longest matching key winning; evaluated in the write, and live: when a row of that collection is added, changed (its key or value), deleted or restored, the rows whose from matched its key before or after are computed again at once. learn: true adds a rule (key: the input, lowercase with spaces collapsed; for match regex, that text escaped and anchored) when a later kind (the model) answers, and a hand edit of the field adds or changes that rule. Example: [{kind: \"lookup\", from: \"name\", collection: \"section_rules\", key: \"pattern\", value: \"section\", match: \"contains\", learn: true}, {kind: \"model\", from: \"name\", prompt: \"...\"}]. kind \"count\": {kind, from: field, collection, key, where?: [{field, equals}]}: the number of live rows of another collection whose key equals this row's from field (ignoring case and spacing) and that match every condition (a field of that collection, computed ones too, whose value as text equals equals: \"true\", \"false\", a number or text; not blank); a number field's only kind; live like a lookup (computed again when those rows are added, deleted, restored or change their key or a where field, and when from changes). Example: {kind: \"count\", from: \"name\", collection: \"meal_ingredients\", key: \"item\", where: [{field: \"favorite\", equals: true}]}. A change cascades through lookups and counts (a few levels deep; a cycle stops). kind \"expr\": {kind, expr}, e.g. \"entity.quantity ? entity.name + \\\" (\\\" + entity.quantity + \\\")\\\" : entity.name\" (entity.<field>, JSON literals, + joins text or adds numbers, -, !, c ? a : b, parentheses; an empty value is \"\" or 0 and false in a condition), evaluated in the write. kind \"model\": {kind, from: field or [fields], prompt}, e.g. {from: \"name\", prompt: \"Which grocery store section is this item in?\"}: a model answers in the background (a choice: one of its options; text: trimmed), each input once; a value set by hand is remembered as the answer for that input. Needs optional or a default (what the row reads until computed). null: stop computing.",
         "anyOf": [kind, { "type": "array", "items": kind }, { "type": "null" }] });
     let field = json!({ "type": "object", "description": "{name, type: text|number|bool|date|datetime|choice, options? (choice), optional?, default?, compute?}",
         "properties": { "name": { "type": "string" }, "type": { "type": "string", "enum": model::Kind::ALL },
@@ -123,7 +131,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "apply_change",
-            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, optional?, default?, compute?} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title} | {op: add_reminder, field, title, body?, at?, unless?, label?, app?} | {op: update_reminder, reminder: id, ...} | {op: remove_reminder, reminder: id} | {op: set_filler, filler} | {op: remove_filler, filler: id} | {op: add_alert, ...} | {op: update_alert, alert: id, ...} | {op: remove_alert, alert: id}]. set_filler adds a filler (as define_collection's fillers), or changes the one filler.id names, and starts its fill; remove_filler stops one (its rows stay, no longer locked; its alerts go). add_alert notifies once per row when a row matches (as define_collection's alerts). describe_collection lists fillers and alerts with their ids. A reminder notifies the user once per row when its date field is reached: on that date at at (HH:MM, default 09:00) in the pod's time zone (set_time_zone), unless the row then has unless {field, equals} (e.g. {field: \"done\", equals: true}); dates before the day it was added never notify, and a reminder more than 7 days late is dropped. title and body are the notification's text with {field} replaced by the row's value; label names it in the user's notification settings (default \"<Title>: <field>\"); app (a custom app id) is the app it comes from and opens, default the oldest custom app with the collection as a feed (with none, nothing is sent). describe_collection lists reminders with their ids. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. A lookup is not recomputed when its rules change: after editing them, recompute_field computes the field again for every row (a row only the model could answer keeps its value). Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
+            "Change a collection's definition and the custom apps that show it in one step. changes: [{op: add_field, name, type, options?, optional?, default?, compute?} | {op: rename_field, field, to} | {op: remove_field, field} | {op: restore_field, field} | {op: update_field, field, type?, options?, optional?, default?, compute?} | {op: recompute_field, field} | {op: set_order, field?: name or [names], descending?} | {op: set_title, title} | {op: add_reminder, field, title, body?, at?, unless?, label?, app?} | {op: update_reminder, reminder: id, ...} | {op: remove_reminder, reminder: id} | {op: set_filler, filler} | {op: remove_filler, filler: id} | {op: add_alert, ...} | {op: update_alert, alert: id, ...} | {op: remove_alert, alert: id}]. set_filler adds a filler (as define_collection's fillers), or changes the one filler.id names, and starts its fill; remove_filler stops one (its rows stay, no longer locked; its alerts go). add_alert notifies once per row when a row matches (as define_collection's alerts). describe_collection lists fillers and alerts with their ids. A reminder notifies the user once per row when its date field is reached: on that date at at (HH:MM, default 09:00) in the pod's time zone (set_time_zone), unless the row then has unless {field, equals} (e.g. {field: \"done\", equals: true}); dates before the day it was added never notify, and a reminder more than 7 days late is dropped. title and body are the notification's text with {field} replaced by the row's value; label names it in the user's notification settings (default \"<Title>: <field>\"); app (a custom app id) is the app it comes from and opens, default the oldest custom app with the collection as a feed (with none, nothing is sent). describe_collection lists reminders with their ids. compute (one kind or a list tried in order: {kind: \"expr\", expr}, {kind: \"lookup\", from, collection, key, value, match?, learn?}, {kind: \"count\", from, collection, key, where?} or {kind: \"model\", from, prompt}, as in define_collection) is computed for existing rows too (a model only fills empty ones); null stops computing and keeps the values. Lookups and counts are live: a change to the rows of the collection they read recomputes the rows it affects at once, cascading. recompute_field computes the field again for every row (a row only the model could answer keeps its value), e.g. after changing a lookup's match. Every custom app using Collections is checked against the new definition; if any would break, nothing applies and the error names the app and the binding. Renamed fields keep their old name as an alias; removed fields are hidden and restorable for 30 days; type changes convert row by row and keep values that don't convert aside.",
             json!({ "collection": collection, "base_version": { "type": "integer", "description": "The definition version you read" },
                     "changes": { "type": "array", "items": { "type": "object" } }, "apps": apps, "note": note }),
             &["collection", "changes"],
@@ -136,7 +144,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "delete_collection",
-            "Delete a collection: its definition, rows, fillers, alerts and reminders. Only when the user asked for it. Refused while a layout binds it or another collection's lookup reads it (the error names them: change those first). Drops it from home's feeds. Restorable with restore_collection for 30 days, then purged.",
+            "Delete a collection: its definition, rows, fillers, alerts and reminders. Only when the user asked for it. Refused while a layout binds it or another collection's lookup or count reads it (the error names them: change those first). Drops it from home's feeds. Restorable with restore_collection for 30 days, then purged.",
             json!({ "collection": collection, "base_version": { "type": "integer", "description": "The definition version you read" } }),
             &["collection"],
         ),
@@ -1201,7 +1209,7 @@ async fn restore_version(pod: &Pod, caps: crate::Caps, args: &Value) -> Result<V
 // ---------- deleting a collection ----------
 
 /// Delete collection `{collection}` (issue #107): refused while a layout
-/// binds it or another collection's lookup reads it; its feed leaves
+/// binds it or another collection's lookup or count reads it; its feed leaves
 /// home's; the data stays, hidden, for [`KEEP_SECS`].
 async fn delete(pod: &Pod, caps: Caps, args: &Value) -> Result<Value, Value> {
     let name = str_arg(args, "collection")?.to_owned();
@@ -1258,11 +1266,7 @@ async fn delete(pod: &Pod, caps: Caps, args: &Value) -> Result<Value, Value> {
         .filter(|d| d.name != name)
         .flat_map(|d| {
             d.live_fields()
-                .filter(|f| {
-                    f.compute.iter().any(
-                        |c| matches!(c, model::Compute::Lookup { collection, .. } if *collection == name),
-                    )
-                })
+                .filter(|f| f.compute.iter().any(|c| c.reads() == Some(name.as_str())))
                 .map(|f| json!({ "collection": d.name, "field": f.name }))
                 .collect::<Vec<_>>()
         })
@@ -1271,7 +1275,7 @@ async fn delete(pod: &Pod, caps: Caps, args: &Value) -> Result<Value, Value> {
         return Err(
             json!({ "error": "collection_in_use", "collection": name, "lookups": lookups,
             "status": 409,
-            "detail": "another collection's computed field looks rows up in it: change that field's compute with apply_change first" }),
+            "detail": "another collection's computed field looks up or counts rows in it: change that field's compute with apply_change first" }),
         );
     }
     // Home's feed goes first: a layout naming a collection that doesn't

@@ -132,11 +132,18 @@ default), and the pod stores, validates and serves the rows.
   field and keeps its data 30 days (`restore_field`); a type change converts row by row and keeps what doesn't
   convert aside. A write made under an older definition (an offline device) still lands.
 - **Computed fields.** A field's `compute` is one kind or a list tried in order: `expr` (a small expression over
-  the row), `lookup` (the value of the best-matching row of another collection, kept as editable rules) and `model`
-  (a model's answer, in the background). With `[lookup (learn: true), model]` the model is asked only when no rule
-  matches, and its answers and hand edits become rules. Decisions
-  [`collection-computed-fields`](decisions/collection-computed-fields.md) and
-  [`collection-lookups`](decisions/collection-lookups.md).
+  the row), `lookup` (the value of the best-matching row of another collection, kept as editable rules), `count`
+  and `model` (a model's answer, in the background). With `[lookup (learn: true), model]` the model is asked only
+  when no rule matches, and its answers and hand edits become rules. `{kind: "count", from, collection, key,
+  where?: [{field, equals}]}` (a number field's only kind) is the number of live rows of `collection` whose `key`
+  equals this row's `from` (ignoring case and spacing) and that match every condition (the field's value as text,
+  as a layout `where` compares: `"true"`, `"false"`, a number or text). Lookups and counts are **live**: when rows
+  of the collection they read are created, changed, deleted or restored, the rows whose answer could change are
+  computed again in the same write and reach devices through the normal change feed, cascading (a count's `where`
+  may name a lookup field, e.g. meals → `meal_ingredients.favorite` → `ingredients.favorite_count`) for at most 8
+  waves, so a cycle ends. Decisions [`collection-computed-fields`](decisions/collection-computed-fields.md),
+  [`collection-lookups`](decisions/collection-lookups.md) and
+  [`live-computed-fields`](decisions/live-computed-fields.md).
 - **Reminders.** `apply_change {op: add_reminder, field: "due", title: "Due today: {title}", unless: {field:
   "done", equals: true}, at?: "09:00"}` notifies once per row when its date arrives, in the pod's time zone
   (`set_time_zone`). Decision [`collection-reminders`](decisions/collection-reminders.md).
@@ -147,7 +154,7 @@ default), and the pod stores, validates and serves the rows.
   4,000 characters per text value.
 
 - **Deleting.** `delete_collection` removes a collection once no layout binds it and no other collection's lookup
-  reads it (the refusal names them); home's feed for it is dropped too. It is restorable with `restore_collection`
+  or count reads it (the refusal names them); home's feed for it is dropped too. It is restorable with `restore_collection`
   for 30 days, then purged (decision [`collection-delete`](decisions/collection-delete.md)); sooner when what the
   pod keeps for undoing passes twice its bytes cap (the oldest goes first). A stale feed alone is
   dropped with `rename_layout` on home, passing home's whole feed list without it.
