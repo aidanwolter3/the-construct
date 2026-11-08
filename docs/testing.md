@@ -2,16 +2,18 @@
 
 ```bash
 cargo test --workspace                       # Rust, including the end-to-end suite against an in-process fake Pixelfed
-cd app && ./gradlew -PskipRustBuild :shared:allTests :desktopApp:test   # shared UI and desktop (needs the engine library)
-./gradlew :androidApp:assembleDebug          # Android build check (launches nothing)
+scripts/sim_scenarios.sh /tmp/sim            # the simulator's scenarios: UI checks, PNGs to look at
+scripts/android_native.sh                    # Android build check (needs an Android SDK and NDK; installs only if a
+                                             # device is connected)
 ```
 
 CI runs `scripts/check_decisions.sh`, `scripts/check_test_data.sh` (no test data in the pod binary, decision
 `data-next-to-its-code`), clippy with warnings denied, the Rust tests (with
 [cargo-nextest](https://nexte.st), which runs tests from different binaries in parallel, plus `cargo test --doc`,
 which nextest skips), a dependency advisory check (`cargo-deny`), the simulator's scenarios
-(`scripts/sim_scenarios.sh`, screenshots uploaded as the `simulator` artifact), and the JVM tests with a run of the
-Compose simulator.
+(`scripts/sim_scenarios.sh`, screenshots uploaded as the `simulator` artifact), and a build of the Android APK
+(`scripts/android_native.sh`, uploaded as the `android-apk` artifact). The release workflow (`release.yml`) also
+builds the release APK and the Mac app on pull requests that change their build scripts.
 
 A crate's integration tests are one test binary, `tests/integration/main.rs`, with one module per file: add a test
 file as a `mod` there, not as a new `tests/*.rs` (linking one binary per file was most of CI's build time). Pick a
@@ -22,9 +24,10 @@ The Rust rendering engine (`crates/construct-render`) has golden frames: CPU fra
 `tests/data/goldens/`, and GPU frames with the same files when a wgpu adapter exists (CI installs lavapipe,
 `mesa-vulkan-drivers`, and sets `CONSTRUCT_REQUIRE_GPU=1`). See [rendering.md](rendering.md#tests).
 
-There are no on-device tests: UI is checked with the [headless simulator](simulator.md). Android's ICU regex engine
-rejects some patterns that `java.util.regex` accepts, so `AndroidRegexSyntaxTest` checks every `Regex` in the shared
-code on the JVM. Other Android-only runtime failures show only when the app runs on a phone.
+There are no on-device tests: UI is checked with the [headless simulator](simulator.md), which draws with the same
+renderer as the apps. The Android build checks that every Java class the Rust code names in a JNI signature exists;
+other Android-only runtime failures (JNI calls, permissions, push with the app closed) show only when the app runs
+on a phone, and the macOS window only on a Mac.
 
 ## End-to-end suite
 
@@ -129,14 +132,16 @@ rejects a token whose user id equals the OAuth client's id, so the dev stack sta
 
 ## Manual checks
 
-The offline outbox, end to end on the desktop app:
+The offline outbox, end to end on the desktop app (the state directory is `~/Library/Application Support/The
+Construct` on macOS, `~/.config/the-construct` on Linux):
 
 ```bash
-cargo run -p server                                                    # terminal 1
-cd app && CONSTRUCT_BASE_URL=http://127.0.0.1:8080 CONSTRUCT_WORKSPACE=pixelfed_sample_no_login ./gradlew :desktopApp:run
-# stop the server: Settings (open it from a layout that has the button) says Offline
+cargo run -p server -- serve --pod-code cpod_localtest123                               # terminal 1
+CONSTRUCT_POD_URL=http://127.0.0.1:8080 cargo run --release -p construct-render --features viewer --bin construct-viewer
+# open the pod with cpod_localtest123 and have a layout with a feed on home (ask the agent, or the MCP tools)
+# stop the server: Settings says Offline
 # click the heart and the bookmark: both change at once and Settings shows "Offline · 2 pending"
-sqlite3 ~/.construct/servers/*/cache.db "SELECT id, endpoint, status FROM action_outbox;"
+sqlite3 "$HOME/.config/the-construct"/engine/*/cache.db "SELECT id, endpoint, status FROM action_outbox;"
 # start the server again: within a few seconds the rows are sent and deleted
 ```
 

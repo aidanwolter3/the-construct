@@ -1,29 +1,47 @@
 #!/usr/bin/env bash
-# The Rust engine's Android app (decision `rust-render-engine`): cross-compiles libconstruct_render.so with
-# cargo-ndk, packages it as a NativeActivity APK (no Gradle, no JVM UI; a few bridge classes pass Android's callbacks
-# to Rust) and installs it on the adb device as The
-# Construct itself (org.theconstruct.android), over a debug build of the main app signed with this machine's debug
-# key, so the app's data and sign-in stay:
+# The Construct's Android app (decision `rust-clients`): cross-compiles libconstruct_render.so with cargo-ndk and
+# packages it as a NativeActivity APK (no Gradle, no JVM UI; a few bridge classes pass Android's callbacks to Rust,
+# decision `android-native-bridge`).
 #
-#   scripts/android_native.sh
+#   scripts/android_native.sh             # a development build, signed with this machine's debug key, installed
+#                                         # on the adb device (if one is connected) and started
+#   scripts/android_native.sh --release   # a release build (not debuggable), signed with the release key below;
+#                                         # built only, never installed
 #
-# The app opens the pod it opened last (`pod.json` in the app's private files), else the main app's server, with the
-# engine (its cache there too) and the main app's own saved sessions (the keystore), else the pod's sign-in screen
-# (a pod code, or a temporary pod; the last code used is filled in).
-# Leaving the pod in Settings goes back to that screen. `cd app && ./gradlew :androidApp:installDebug` goes back to
-# the Compose app with the same data.
+# The app opens the pod it opened last (`pod.json` in the app's private files) with the engine (its cache there
+# too) and the saved sessions (the keystore), else the pod's sign-in screen (a pod code, or a temporary pod; the
+# last code used is filled in). Leaving the pod in Settings goes back to that screen.
 #
-# Needs: an Android SDK with an NDK and build-tools (ANDROID_HOME, else ~/android-sdk), a JDK (javac), cargo-ndk,
-# `rustup target add aarch64-linux-android`, and Maven Central the first time (the UnifiedPush libraries' classes).
-# Output: build/android-native/construct-render.apk.
+# Environment (all optional):
+#   CONSTRUCT_APP_LINK_HOST       the pod whose https://<host>/oauth/android App Link carries the sign-in redirect
+#                                 (default the staging pod's host). That pod must list this build's signing cert in
+#                                 CONSTRUCT_ANDROID_CERT_SHA256 (decision android-app-link-sign-in-redirect).
+#   CONSTRUCT_VERSION_CODE / CONSTRUCT_VERSION_NAME   the APK's version (default the manifest's, 1 / 0.1).
+#   Release signing (--release): CONSTRUCT_ANDROID_KEYSTORE (a .jks/.p12 file), CONSTRUCT_ANDROID_KEYSTORE_PASSWORD,
+#   CONSTRUCT_ANDROID_KEY_ALIAS, CONSTRUCT_ANDROID_KEY_PASSWORD (default the keystore's password). Without a
+#   keystore, a release build is signed with the debug key and a warning says so.
+#
+# Needs: an Android SDK with an NDK and build-tools (ANDROID_HOME, else ~/android-sdk), a JDK (javac, keytool),
+# cargo-ndk, `rustup target add aarch64-linux-android`, and Maven Central the first time (the UnifiedPush libraries'
+# classes). Output: build/android-native/construct-render.apk.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [[ $# -gt 0 ]]; then
-  echo "usage: $0   (no options)" >&2
+RELEASE=false
+case "${1:-}" in
+  "") ;;
+  --release) RELEASE=true ;;
+  *) echo "usage: $0 [--release]" >&2; exit 2 ;;
+esac
+[[ $# -le 1 ]] || { echo "usage: $0 [--release]" >&2; exit 2; }
+PKG=org.theconstruct.android
+APP_LINK_HOST=$(tr '[:upper:]' '[:lower:]' <<<"${CONSTRUCT_APP_LINK_HOST:-the-construct-pod.fly.dev}" | tr -d '[:space:]')
+if ! [[ $APP_LINK_HOST =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]]; then
+  echo "CONSTRUCT_APP_LINK_HOST must be a host name like pod.example.org, got '$APP_LINK_HOST'" >&2
   exit 2
 fi
-PKG=org.theconstruct.android
+# The Rust side reads the same host (src/signin.rs APP_LINK_HOST).
+export CONSTRUCT_APP_LINK_HOST=$APP_LINK_HOST
 
 SDK=${ANDROID_HOME:-$HOME/android-sdk}
 # The newest folder under $1 that holds $2: a real install, not a leftover such as `28.2.13676358.bak`.
@@ -52,18 +70,23 @@ cargo ndk -t arm64-v8a -o "$OUT/jniLibs" build -p construct-render --features wi
 echo "==> packaging"
 rm -rf "$OUT/apk" && mkdir -p "$OUT/apk/lib"
 cp -r "$OUT/jniLibs/arm64-v8a" "$OUT/apk/lib/"
-# The launcher icon: the main app's (app/androidApp), compiled from its resources.
-RES=app/androidApp/src/main/res
+# The resources: the launcher and notification icons (scripts/gen_icons.sh), the themes, the backup rules.
+RES=crates/construct-render/android/res
 rm -rf "$OUT/res" && mkdir -p "$OUT/res"
 "$TOOLS/aapt2" compile -o "$OUT/res" \
   "$RES"/drawable/ic_launcher_{background,foreground,monochrome}.xml \
   "$RES"/mipmap-anydpi-v26/ic_launcher{,_round}.xml "$RES"/mipmap-*dpi/ic_launcher{,_round}.png \
   "$RES"/drawable/ic_stat_notification.xml \
   "$RES"/xml/data_extraction_rules.xml \
-  crates/construct-render/android/res/values/styles.xml \
-  crates/construct-render/android/res/values-night/styles.xml
-"$TOOLS/aapt2" link -o "$OUT/unsigned.apk" --manifest crates/construct-render/android/AndroidManifest.xml \
-  -I "$PLATFORM/android.jar" "$OUT"/res/*.flat
+  "$RES"/values/styles.xml "$RES"/values-night/styles.xml
+# The manifest with the App Link host filled in; development builds are debuggable, release builds not.
+sed "s|@APP_LINK_HOST@|$APP_LINK_HOST|g" crates/construct-render/android/AndroidManifest.xml >"$OUT/AndroidManifest.xml"
+LINK=()
+$RELEASE || LINK+=(--debug-mode)
+[[ -z ${CONSTRUCT_VERSION_CODE:-} ]] || LINK+=(--version-code "$CONSTRUCT_VERSION_CODE" --replace-version)
+[[ -z ${CONSTRUCT_VERSION_NAME:-} ]] || LINK+=(--version-name "$CONSTRUCT_VERSION_NAME" --replace-version)
+"$TOOLS/aapt2" link -o "$OUT/unsigned.apk" --manifest "$OUT/AndroidManifest.xml" \
+  -I "$PLATFORM/android.jar" "${LINK[@]}" "$OUT"/res/*.flat
 # The bridge (crates/construct-render/android/java): a few Java classes that pass Android's callbacks to Rust,
 # compiled with javac and converted to dex with d8.
 JAVAC=""
@@ -124,12 +147,28 @@ rm -f "$OUT"/apk/classes*.dex && cp "$OUT"/apk/dex/classes*.dex "$OUT/apk/"
 (cd "$OUT/apk" && zip -qr ../unsigned.apk lib classes*.dex)
 "$TOOLS/zipalign" -f -p 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
 KEY=$HOME/.android/debug.keystore
+if $RELEASE && [[ -n ${CONSTRUCT_ANDROID_KEYSTORE:-} ]]; then
+  : "${CONSTRUCT_ANDROID_KEYSTORE_PASSWORD:?the release keystore's password}"
+  : "${CONSTRUCT_ANDROID_KEY_ALIAS:?the release key's alias}"
+  # Passwords through the environment, so they never show in a process list.
+  KS_PASS=$CONSTRUCT_ANDROID_KEYSTORE_PASSWORD KEY_PASS=${CONSTRUCT_ANDROID_KEY_PASSWORD:-$CONSTRUCT_ANDROID_KEYSTORE_PASSWORD} \
+    "$TOOLS/apksigner" sign --ks "$CONSTRUCT_ANDROID_KEYSTORE" --ks-key-alias "$CONSTRUCT_ANDROID_KEY_ALIAS" \
+    --ks-pass env:KS_PASS --key-pass env:KEY_PASS --out "$OUT/construct-render.apk" "$OUT/aligned.apk"
+  echo "built $OUT/construct-render.apk (release, signed with $CONSTRUCT_ANDROID_KEY_ALIAS)"
+  "$TOOLS/apksigner" verify --print-certs "$OUT/construct-render.apk" | grep -i 'SHA-256 digest' || true
+  exit 0
+fi
 if [[ ! -f $KEY ]]; then
   mkdir -p "$(dirname "$KEY")"
   keytool -genkeypair -keystore "$KEY" -storepass android -keypass android -alias androiddebugkey \
     -dname "CN=Android Debug,O=Android,C=US" -keyalg RSA -validity 10000 >/dev/null
 fi
 "$TOOLS/apksigner" sign --ks "$KEY" --ks-pass pass:android --out "$OUT/construct-render.apk" "$OUT/aligned.apk"
+if $RELEASE; then
+  echo "WARNING: no CONSTRUCT_ANDROID_KEYSTORE: the release build is signed with the debug key" >&2
+  echo "built $OUT/construct-render.apk (release, debug key)"
+  exit 0
+fi
 echo "built $OUT/construct-render.apk"
 
 # adb from PATH, else the SDK's own (a shell alias doesn't reach this script).
@@ -146,13 +185,13 @@ fi
 echo "device: $("$ADB" get-serialno) via $ADB"
 
 echo "==> installing"
-# -d: the main app's versionCode may be higher; a debuggable app may go down.
+# -d: a debuggable app may go down in version (a release build installed before may have a higher one).
 if ! INSTALLED=$("$ADB" install -r -d "$OUT/construct-render.apk" 2>&1); then
   echo "$INSTALLED" >&2
   if grep -q UPDATE_INCOMPATIBLE <<<"$INSTALLED"; then
     echo "The Construct on the phone is signed with another key (a release build, or a debug build from another" >&2
-    echo "machine), so it can't be updated in place. Uninstalling it would sign you out; install a debug build" >&2
-    echo "from this machine first (cd app && ./gradlew :androidApp:installDebug), or uninstall it, then run this again." >&2
+    echo "machine), so it can't be updated in place. Uninstall it (adb uninstall $PKG; you sign in to your pod" >&2
+    echo "again afterwards), then run this again." >&2
   fi
   exit 1
 fi

@@ -1,8 +1,8 @@
 # Architecture
 
 The Construct is a server-driven UI system. A server, the **pod**, decides what every screen looks like and holds the
-user's data and sign-ins. Native clients draw whatever the pod sends with one shared renderer and one shared Rust
-engine, and know nothing about any particular app.
+user's data and sign-ins. Native clients draw whatever the pod sends with one Rust renderer over one Rust engine, and
+know nothing about any particular app.
 
 ```
                          ┌──────────────── server (crates/server) ─────────────────┐
@@ -18,17 +18,18 @@ engine, and know nothing about any particular app.
                      entities, actions  │                          │  notification events
                          ┌──────────────┴──────────────────────────┴──────────────────┐
                          │ engine (crates/client-core, Rust): SQLite cache, outbox,   │
-                         │ sign-in, event stream; exposed through UniFFI (client-ffi) │
+                         │ sign-in, event stream                                      │
                          ├────────────────────────────────────────────────────────────┤
-                         │ shared Compose UI (app/shared): draws UiNode trees     │
+                         │ renderer (crates/construct-render): draws UiNode trees     │
                          ├───────────────┬───────────────────┬────────────────────────┤
-                         │ desktop (JVM) │ Android           │ headless simulator     │
+                         │ desktop       │ Android           │ headless simulator     │
+                         │ (viewer)      │ (NativeActivity)  │ (construct-sim)        │
                          └───────────────┴───────────────────┴────────────────────────┘
 ```
 
 ## The rule everything follows
 
-**Only adapters know apps.** `pod-core`, `pod-host`, the engine, the FFI and the shared UI handle layouts, entities,
+**Only adapters know apps.** `pod-core`, `pod-host`, the engine and the renderer handle layouts, entities,
 intents, uploads and notifications *in general* (decisions D34, D35, D40). Everything specific to Pixelfed lives in
 `crates/app-pixelfed`; everything specific to recipes lives in `crates/app-recipes`; and so on. A test
 (`the_core_names_no_app`) checks that the core names no app.
@@ -124,8 +125,8 @@ screen's `data` path answers the same `{entities, queries}` shape (`protocol::Da
 
 ## The engine
 
-`crates/client-core` (`ConstructEngine`) is the client's brain, written once in Rust and used by every client through
-UniFFI (`crates/client-ffi`; Kotlin bindings in `app/shared/src/jvmCommonMain`).
+`crates/client-core` (`ConstructEngine`) is the client's brain, used by every client as a Rust library
+(`construct-render`'s `PodEngine`, decision `rust-clients-on-the-engine`).
 
 - **Cache.** Every workspace, data load and entity is written to SQLite (`cache.db`), so the last screen shows at once
   on launch and offline (D13).
@@ -147,24 +148,23 @@ UniFFI (`crates/client-ffi`; Kotlin bindings in `app/shared/src/jvmCommonMain`).
 
 ## The clients
 
-`app/shared/src/commonMain` is one Compose Multiplatform UI used by every client: the node renderer, the root layout
-(`home`, or a bundled sign-in layout before a pod is open), and one back stack of presented layouts (pushed, sheets,
-side panels, animated in and out) and screens, popped by system Back (decision `layouts-not-apps`). Settings and the
-inbox are layouts too. Platform code is thin:
+`crates/construct-render` is the one renderer every client uses (decisions `rust-render-engine`, `rust-clients`):
+taffy layout, a scene of SDF quads and text, a CPU rasterizer and a wgpu pipeline, and a `Session` holding the root
+layout (`home`, or a bundled sign-in layout before a pod is open) and one back stack of presented layouts (pushed,
+sheets, side panels, animated in and out) and screens, popped by system Back (decision `layouts-not-apps`). Settings
+and the inbox are layouts too. Platform code is thin:
 
-- **Desktop** (`:desktopApp`, JVM): loads the engine through JNA; the loopback OAuth redirect; tray notifications.
-- **Android** (`:androidApp`): the engine cross-compiled to `libclient_ffi.so`; App Link sign-in redirect; Android
-  notification channels and closed-app push through UnifiedPush.
-- **Simulator** (`construct-sim`): the Rust engine's session drawn headlessly on the CPU to PNGs from a script,
-  against fixtures or a live pod. It is how UI changes are checked; see [simulator.md](simulator.md). The Compose
-  app's own simulator (`:desktopApp:simulate`) stays until the clients cut over (issue #166).
+- **Desktop** (`construct-viewer`, a winit window; `The Construct.app` on macOS): the loopback OAuth redirect, the
+  login Keychain.
+- **Android** (a NativeActivity APK, `scripts/android_native.sh`): the App Link sign-in redirect, the keystore, and
+  closed-app push through UnifiedPush; a small Java bridge forwards Android's callbacks to Rust
+  (decision `android-native-bridge`).
+- **Simulator** (`construct-sim`): the same session drawn headlessly on the CPU to PNGs from a script, against
+  fixtures or a live pod. It is how UI changes are checked; see [simulator.md](simulator.md).
+- **Agents' previews**: the pod draws a layout on the CPU for its MCP tools `render_layout_preview` and
+  `dispatch_virtual_interaction`.
 
-More on running them: [clients.md](clients.md).
-
-**The Rust rendering engine** (`crates/construct-render`, decision `rust-render-engine`) draws the same plumbing
-without the JVM: taffy layout, a scene of SDF quads and text, a CPU rasterizer and a wgpu pipeline. The pod uses it
-for agents' layout previews over MCP; a desktop window and an Android NativeActivity are prototypes, run by the
-same engine as the Compose clients (decision `rust-clients-on-the-engine`). See [rendering.md](rendering.md).
+More on running them: [clients.md](clients.md); on the renderer: [rendering.md](rendering.md).
 
 ## Background work on the server
 

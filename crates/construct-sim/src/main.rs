@@ -66,8 +66,7 @@ fn main() {
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let root = repo_root(&cwd);
-    // Relative paths resolve against the repository root, as the Compose
-    // simulator's do.
+    // Relative paths resolve against the repository root.
     let resolve = |p: String| -> PathBuf {
         let p = PathBuf::from(p);
         match (&root, p.is_relative()) {

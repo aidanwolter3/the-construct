@@ -1,9 +1,8 @@
 //! App catalog API (docs/DECISIONS.md D27, D32): blocking, read-only calls to
 //! the pod's public `/v1/apps` endpoints for the menu and the version picker,
 //! plus the session's sign-ins for Settings (`/v1/auth/sign-ins`).
-//! Each call runs on the caller's thread (Kotlin calls them on
-//! `Dispatchers.IO`, never the UI thread) with the engine's base URL and
-//! returns the pod's JSON body unchanged.
+//! Each call runs on the caller's thread (never the UI thread) with the
+//! engine's base URL and returns the pod's JSON body unchanged.
 //!
 //! The endpoints are public, so no bearer is sent and a 401 (which the pod
 //! does not answer for them) is just an [`LayoutApiError::Unauthorized`]

@@ -1,5 +1,5 @@
 //! A live session over a pod run by the engine (`client-core`, feature
-//! `remote`), as the Compose clients run theirs: home and every layout it
+//! `remote`): home and every layout it
 //! opens come from the engine's cache at once and are fetched again in the
 //! background; writes go to its outbox, which keeps them until the pod has
 //! them (offline too); and its event stream brings what other devices and

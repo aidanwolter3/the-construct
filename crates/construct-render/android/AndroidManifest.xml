@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The engine's Android app: a NativeActivity drawn by libconstruct_render.so (scripts/android_native.sh), installed as
-     The Construct itself (the main app's package), so it keeps the main app's data and sign-in. -->
+<!-- The Construct's Android app: a NativeActivity drawn by libconstruct_render.so (scripts/android_native.sh). The
+     script fills in the App Link host (CONSTRUCT_APP_LINK_HOST), the version (CONSTRUCT_VERSION_CODE / _NAME) and,
+     for development builds only, android:debuggable. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.theconstruct.android"
     android:versionCode="1"
@@ -26,11 +27,10 @@
         </intent>
         <package android:name="com.google.android.gms" />
     </queries>
-    <!-- No backups or device-to-device transfers, as the main app (app/androidApp's manifest): pod.json, the engine's
-         cache database (the private feed, the outbox, queued photos) and the push keys and endpoints are not
-         encrypted. allowBackup covers Android 11 and older; the main app's res/xml/data_extraction_rules.xml
-         (compiled in by scripts/android_native.sh) covers Android 12+, where allowBackup no longer stops device
-         transfers. -->
+    <!-- No backups or device-to-device transfers (security audit #31): pod.json, the engine's cache database (the
+         private feed, the outbox, queued photos) and the push keys and endpoints are not encrypted. allowBackup covers
+         Android 11 and older; res/xml/data_extraction_rules.xml covers Android 12+, where allowBackup no longer stops
+         device transfers. -->
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -38,7 +38,6 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:hasCode="true"
-        android:debuggable="true"
         android:extractNativeLibs="true"
         android:theme="@style/Construct">
         <!-- The bridge (android/java): NativeActivity plus the callbacks it doesn't pass on (links, the photo
@@ -54,8 +53,8 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Links into the app: construct://oauth (the sign-in redirect the main app uses) and construct://bridge
-                 (the prototype's test link). -->
+            <!-- Links into the app: construct://oauth (the sign-in redirect for servers without a verified App Link)
+                 and construct://bridge (the bridge's test link). -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -63,15 +62,16 @@
                 <data android:scheme="construct" android:host="oauth" />
                 <data android:scheme="construct" android:host="bridge" />
             </intent-filter>
-            <!-- The sign-in redirect as a verified App Link (decision android-app-link-sign-in-redirect), for the
-                 staging pod (src/signin.rs APP_LINK_HOST): used once Android has verified it against the pod's
-                 assetlinks.json (this build's signing cert listed), else construct://oauth above. -->
+            <!-- The sign-in redirect as a verified App Link (decision android-app-link-sign-in-redirect), for the pod
+                 on CONSTRUCT_APP_LINK_HOST (default the staging pod; src/signin.rs APP_LINK_HOST is built from the
+                 same variable): used once Android has verified it against the pod's assetlinks.json (this build's
+                 signing cert listed in the pod's CONSTRUCT_ANDROID_CERT_SHA256), else construct://oauth above. -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" />
-                <data android:host="the-construct-pod.fly.dev" />
+                <data android:host="@APP_LINK_HOST@" />
                 <data android:path="/oauth/android" />
             </intent-filter>
         </activity>

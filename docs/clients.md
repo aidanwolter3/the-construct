@@ -1,73 +1,94 @@
 # Clients
 
-Desktop and Android run the same shared Compose UI (`app/shared`) over the same Rust engine
-(`crates/client-core`). Every client defaults to the staging server, `https://the-construct-pod.fly.dev`, and to the
-pod's `home` app (the shell, below). Build prerequisites are in [CONTRIBUTING.md](../CONTRIBUTING.md#setup).
+The desktop and Android apps draw layouts with the Rust renderer (`crates/construct-render`) over the Rust engine
+(`crates/client-core`), decision `rust-clients`: `construct-viewer` on the desktop (`The Construct.app` on macOS) and
+a NativeActivity APK on Android. Both open your pod: the one opened last, else the pod's sign-in screen (a pod code,
+or **Try a temporary pod**) on the staging server, `https://the-construct-pod.fly.dev`. Renderer details, the
+Android bridge and push are in [rendering.md](rendering.md).
 
 ## Desktop
 
 ```bash
-cd app
-./gradlew :desktopApp:run                                              # the staging server
-./gradlew :desktopApp:run -Dconstruct.baseUrl=http://127.0.0.1:8080    # a local server
-./gradlew :desktopApp:run -Dconstruct.baseUrl=http://127.0.0.1:8080 -Dconstruct.workspace=pixelfed_sample_no_login
+cargo run --release -p construct-render --features viewer --bin construct-viewer               # your pod
+CONSTRUCT_POD_URL=http://127.0.0.1:8080 \
+  cargo run --release -p construct-render --features viewer --bin construct-viewer               # a local server
+cargo run --release -p construct-render --features viewer --bin construct-viewer -- layout.json  # a layout file
 ```
 
-`:desktopApp:run` builds the engine first (`scripts/build_ffi.sh`, macOS); `-PskipRustBuild` skips that and uses the
-library already in `target/release`.
+`CONSTRUCT_POD_URL` is the server the sign-in screen opens (default staging); once a pod is open, the window reopens
+it (`pod.json`). Settings' server picker (`local:servers`, `set_server`) offers Staging, Local
+(`http://127.0.0.1:8080`) and `CONSTRUCT_POD_URL` when it is another; each server has its own cache and outbox. Plain
+`http://` is accepted only for this machine and private network addresses.
 
-| Option (`-D` property or environment variable) | Default | Meaning |
-|---|---|---|
-| `construct.baseUrl` / `CONSTRUCT_BASE_URL` | the menu's saved choice, else staging | The server at launch. A layout with a server picker (`local:servers`, `set_server`) still switches the running app. |
-| `construct.workspace` / `CONSTRUCT_WORKSPACE` | `home` | The app opened at launch (`home` runs the shell; any other id runs that app alone with the native menu). |
+The viewer keeps its pod and the engine's cache in `~/Library/Application Support/The Construct` on macOS (else
+`$XDG_CONFIG_HOME/the-construct` or `~/.config/the-construct`), and sessions in the login Keychain on macOS (else
+`secure.json` there, readable by you only).
 
-The engine keeps its cache in `~/.construct/cache.db` for staging and `~/.construct/servers/<url>/` for any other
-server, so data and queued actions never cross servers. Sessions are kept in the macOS Keychain (service
-`org.theconstruct.client`).
+**The Mac app:** `scripts/macos_app.sh` (on a Mac) builds `build/macos/The Construct.app` and
+`build/macos/The-Construct.dmg`; copy the app to Applications. It is signed ad hoc, not notarized: a copy
+downloaded from a release opens only through Open in the Finder's context menu the first time (or after
+`xattr -dr com.apple.quarantine "/Applications/The Construct.app"`).
 
 ## Android
 
-Prerequisites once: an Android SDK with an NDK (the path from `app/local.properties` `sdk.dir=` or
-`ANDROID_HOME`), then:
+Prerequisites once: an Android SDK with an NDK and build-tools (`ANDROID_HOME`, else `~/android-sdk`), a JDK
+(`javac`; Android Studio's bundled one is found), then:
 
 ```bash
 cargo install cargo-ndk
-rustup target add aarch64-linux-android x86_64-linux-android
+rustup target add aarch64-linux-android
 ```
 
-Build and install from `app`; `assembleDebug` cross-compiles the engine first (`scripts/build_android.sh`):
+Build and install on the adb device (a phone over USB, or an arm64 emulator):
 
 ```bash
-./gradlew :androidApp:assembleDebug     # androidApp/build/outputs/apk/debug/androidApp-debug.apk
-./gradlew :androidApp:installDebug
-adb shell am start -n org.theconstruct.android/.MainActivity
-adb logcat -s ConstructEngine:V         # Kotlin log lines and the engine's output
+scripts/android_native.sh               # build/android-native/construct-render.apk, installed and started
+adb logcat -s construct-render          # the app's log
 ```
 
-| Gradle property | Default | Meaning |
+A development build is debuggable and signed with this machine's debug key; it installs over an earlier build signed
+with the same key, keeping the app's data and sign-in. A build signed with another key (a release, or another
+machine's) can't be updated in place: `adb uninstall org.theconstruct.android` first, then sign in again.
+
+| Environment variable | Default | Meaning |
 |---|---|---|
-| `-PskipRustBuild` | | Package the `.so` files already in `jniLibs` without running cargo. |
-| `-PandroidAbis` | `arm64-v8a,x86_64` | ABIs to build and package. |
-| `-PconstructBaseUrl` | staging | The built-in server (`http://10.0.2.2:8080` is the host machine from the emulator). |
-| `-PconstructWorkspace` | `home` | The app opened at launch. |
-| `-PconstructAppLinkHost` | the staging host | The host whose App Link the sign-in redirect uses. |
-| `-PnoFcmFallback` | | Leave out the embedded FCM push distributor. |
+| `CONSTRUCT_APP_LINK_HOST` | the staging host | The pod whose App Link carries the sign-in redirect (in the manifest and the Rust code). |
+| `CONSTRUCT_VERSION_CODE`, `CONSTRUCT_VERSION_NAME` | `1`, `0.1` | The APK's version. |
 
-Debug builds also take intent extras, read when the engine starts (use `am start -S` to restart):
-`--es baseUrl http://10.0.2.2:8080`, `--es workspace pixelfed_sample_no_login`. On a phone over USB, run
-`adb reverse tcp:8080 tcp:8080` and use `http://127.0.0.1:8080`.
+The server is picked on the sign-in screen and in Settings (`local:servers`: Staging, Local emulator
+`http://10.0.2.2:8080`, Local USB `http://127.0.0.1:8080` with `adb reverse tcp:8080 tcp:8080`, and the saved
+server when it is another). The APK is built for arm64-v8a only.
 
-**Cleartext:** the app allows plain HTTP only to `localhost`, `127.0.0.1` and `10.0.2.2`, and a custom server in
-Settings must be `https://` otherwise. That rule covers images (loaded by Kotlin); the engine's own traffic goes
-through Rust and is not restricted by Android's network security config.
+## Releases
 
-## Rust-native prototype
+`.github/workflows/release.yml` builds the release APK (`scripts/android_native.sh --release`: not debuggable) and the
+Mac app's `.dmg` on every tag `v<version>` and publishes them as a GitHub release (a manual run of the workflow
+uploads them as its artifacts). The version code is the workflow's run number, so each release installs over the
+previous one. The APK is signed with the release key from these repository secrets (without them, with a throwaway
+debug key and a warning):
 
-`crates/construct-render` draws layouts without the JVM: `construct-viewer` is a desktop window (Metal or Vulkan)
-and `scripts/android_native.sh` builds a NativeActivity APK. Both open your pod with its own sign-in screen and keep
-the session. They draw a layout file, or a pod live (the APK installs as
-the main Android app and keeps its sign-in) with the same engine behind them (`client-core`: cache, outbox, event
-stream), so they open offline as last seen. See [rendering.md](rendering.md).
+| Secret | What |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | The keystore file, base64 on one line. |
+| `ANDROID_KEYSTORE_PASSWORD` | Its password. |
+| `ANDROID_KEY_ALIAS` | The key's alias. |
+| `ANDROID_KEY_PASSWORD` | The key's password (optional: the keystore's when unset). |
+
+Make the key once and keep the keystore and passwords somewhere safe outside the repository: a lost key means users
+reinstall.
+
+```bash
+keytool -genkeypair -v -keystore construct-release.jks -storetype PKCS12 -alias construct \
+  -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=The Construct"
+base64 < construct-release.jks | tr -d '\n'     # the value of ANDROID_KEYSTORE_BASE64
+keytool -list -v -keystore construct-release.jks -alias construct | grep SHA256   # the cert fingerprint
+```
+
+(PKCS12 keystores use one password for the store and the key.) Add the fingerprint in front of the pod's
+`CONSTRUCT_ANDROID_CERT_SHA256` ([server.md](server.md)) so the release build's App Link sign-in redirect verifies;
+the workflow also prints it. To build a signed APK locally, set `CONSTRUCT_ANDROID_KEYSTORE` (the file),
+`CONSTRUCT_ANDROID_KEYSTORE_PASSWORD`, `CONSTRUCT_ANDROID_KEY_ALIAS` and `CONSTRUCT_ANDROID_KEY_PASSWORD` and run
+`scripts/android_native.sh --release`.
 
 ## Home and the layouts it shows
 
@@ -102,8 +123,8 @@ The client opens the pod's `home` layout (the default) and draws everything from
   hidden layouts with a Show button, sign-ins, notifications (one row per layout that sends them; a tap opens that layout's
   switches inside the panel), and **Leave pod**. On Android the notification permission row sits above it. The
   blueprint no longer lists servers: the platform still offers them in `local:servers` (Staging, Local, or its
-  others; each server has its own cache and outbox), so a layout can add a picker with `set_server`; desktop and
-  the simulator also take `CONSTRUCT_BASE_URL` / `-PbaseUrl`.
+  others; each server has its own cache and outbox), so a layout can add a picker with `set_server`; the desktop
+  also takes `CONSTRUCT_POD_URL`.
 - **The inbox** lists the newest page of notifications and a **Load older** button while there are more.
 - **If the pod has no home this build can draw**, a bundled screen offers Try again and Leave pod. Ask the agent to
   repair the home layout (`restore_version`); clearing the app's data also starts over.
@@ -133,5 +154,5 @@ Signing out (or a 401 from the pod) removes cached private data from the device.
 
 A white space with a grey perspective grid and one cube. Every asset is generated from one geometry definition in
 `scripts/gen_icons.py`: run `scripts/gen_icons.sh` (python3 with Pillow and numpy; `iconutil` on macOS for the
-`.icns`). It writes `assets/icon/`, the Android adaptive icon and the desktop window icon. Don't edit the generated
-files by hand.
+`.icns`). It writes `assets/icon/` (the Mac app's `construct.icns` among them) and the Android launcher icon in
+`crates/construct-render/android/res/`. Don't edit the generated files by hand.

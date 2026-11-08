@@ -1,6 +1,6 @@
-//! The icons the app draws (`protocol::ICONS`): the same Material 24 × 24 path
-//! data as the shared UI (`app/shared/.../ConstructIcons.kt`), rasterized with zeno.
-//! Generated from that file; keep the two in step. A smooth curve (`s`) right
+//! The icons the app draws (`protocol::ICONS`): Material 24 × 24 path data
+//! (first generated from the Compose UI's `ConstructIcons.kt`, now the only
+//! copy), rasterized with zeno. A smooth curve (`s`) right
 //! after a line is written as the equal `c` with its first control point at
 //! the current point, which zeno draws wrongly otherwise.
 

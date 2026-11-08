@@ -1,7 +1,7 @@
 # The Construct — notes for Claude
 
 Server-driven UI: a Rust pod serves app layouts (JSON `UiNode` trees) and entities; desktop, Android and a headless
-simulator draw them with shared Compose code over a shared Rust engine. Built-in layouts are blueprints, not listed:
+simulator draw them with one Rust renderer (`construct-render`) over one Rust engine (decision `rust-clients`). Built-in layouts are blueprints, not listed:
 Pixelfed (`pixelfed`), Recipes (`recipes`), Events (`events`), Agents (`agents`), the blank home (`shell`), Settings
 (`settings`) and the inbox (`inbox`). There are no apps at runtime: a pod's layouts are the user's own (from blueprints or Collections),
 starting with `home`, which clients open first and which embeds and presents the others on one engine
@@ -21,12 +21,13 @@ issues. `docs/history/` is archived; don't treat it as current.
 - `crates/app-pixelfed`, `app-recipes`, `app-collections`, `app-events` (Events), `app-monitor`, `app-agents` (Agents:
   an external agent runner, [docs/agents.md](docs/agents.md)), `app-shell` (the home blueprint): the adapters.
   `crates/web-extract`: page fetching and extraction for fillers.
-- `crates/client-core` the engine; `crates/client-ffi` UniFFI (Kotlin bindings in
-  `app/shared/src/jvmCommonMain`); `app/shared/src/commonMain` the shared UI.
-- `crates/construct-render` the Rust rendering engine (taffy, wgpu, a CPU rasterizer): the pod's MCP layout
-  previews, `construct-viewer` (desktop) and the NativeActivity prototype, which `scripts/android_native.sh` installs
-  as The Construct itself ([docs/rendering.md](docs/rendering.md)); `crates/construct-sim` the headless simulator
-  over it ([docs/simulator.md](docs/simulator.md)).
+- `crates/client-core` the engine (cache, outbox, sign-in, event stream), a library of the clients.
+- `crates/construct-render` the renderer and the clients (taffy, wgpu, a CPU rasterizer): the pod's MCP layout
+  previews, `construct-viewer` (desktop; `scripts/macos_app.sh` bundles the Mac app) and the Android app
+  (NativeActivity; `scripts/android_native.sh` builds and installs it, `android/` its manifest, resources and Java
+  bridge, which only forwards to Rust: decision `android-native-bridge`) ([docs/rendering.md](docs/rendering.md),
+  [docs/clients.md](docs/clients.md)); `crates/construct-sim` the headless simulator over it
+  ([docs/simulator.md](docs/simulator.md)).
 - `fake-pixelfed/` the fake upstream (primary test target); `crates/e2e` the end-to-end suite.
 - `crates/app-*/layouts/<app>/NNNN.json` layout versions; `crates/protocol/features/` the named vocabulary (plumbing);
   `crates/pod-core/components/<name>/NNNN.json` the server components (porcelain, decision `plumbing-and-porcelain`);
@@ -45,18 +46,16 @@ cargo run -p server                      # 127.0.0.1:8080; callers without a pod
 cargo run -p fake-pixelfed               # 127.0.0.1:8081
 scripts/e2e.sh                           # e2e suite against the fake binary
 
-# JVM (from app; any JDK 21 in JAVA_HOME or on PATH). The engine library first: cargo build -p client-ffi --release
-./gradlew -PskipRustBuild :shared:allTests :desktopApp:test
+cargo run --release -p construct-render --features viewer --bin construct-viewer   # the desktop app
 
-# Headless simulator: the Rust engine to PNGs (CPU, no JVM). Read the PNGs to check UI changes.
+# Headless simulator: the Rust renderer to PNGs (CPU, no window). Read the PNGs to check UI changes.
 cargo run -p construct-sim -- --workspace pixelfed_sample_no_login --screen phone --out /tmp/sim \
   --script "shot start; click Like; assert-text Unlike; shot after"
 scripts/sim_scenarios.sh /tmp/sim        # the scenarios CI screenshots
 ```
 
 Script commands and flags: [docs/simulator.md](docs/simulator.md). `--base-url http://127.0.0.1:8080` runs live
-against a local pod (token in `CONSTRUCT_POD_TOKEN`). The Compose app's simulator (`:desktopApp:simulate`, same
-scripts as `-P` properties) stays until issue #166. Easy to get wrong: `wait-text <ms> <text>` takes the timeout first, and a command's argument
+against a local pod (token in `CONSTRUCT_POD_TOKEN`). Easy to get wrong: `wait-text <ms> <text>` takes the timeout first, and a command's argument
 is the rest of the entry as written, so `click "Sign in"` looks for the quote marks too (only `type` and `pick`
 read quotes).
 
@@ -65,8 +64,8 @@ needs a device check.
 
 ## Cloud sessions
 
-`scripts/cloud_setup.sh` installs the toolchains and warms the caches (client-ffi build and every Gradle
-dependency), so the JVM tests work without Maven Central rate limits (HTTP 429, issue #4). The environment's setup
+`scripts/cloud_setup.sh` installs the toolchains and warms the caches (every crate fetched, the simulator built,
+cargo-nextest installed). The environment's setup
 script is stored in Claude Code settings, not in the repo: on claude.ai/code open the environment menu in the
 session's title bar → Edit → **Setup script**, and paste this (it starts one directory above the checkout; if it
 can't find one it clones a copy just to warm the caches):
@@ -81,16 +80,18 @@ tmp=$(mktemp -d) && git clone --depth 1 https://github.com/aidanwolter3/the-cons
   && exec bash "$tmp/the-construct/scripts/cloud_setup.sh"
 ```
 
-The warm-up (~3-5 min) runs in the background; builds started meanwhile wait on Gradle's cache lock. Before the
-JVM tests or the Compose simulator, run `scripts/await_warmup.sh`: it waits for the warm-up, restarts it if its process
-died (the status file can say `running` long after), and fails with the log's location if it failed. If there is
+The warm-up runs in the background; builds started meanwhile wait on cargo's lock. To wait for it, run
+`scripts/await_warmup.sh`: it waits for the warm-up, restarts it if its process died (the status file can say
+`running` long after), and fails with the log's location if it failed. If there is
 no setup script, run `CONSTRUCT_SETUP_WARM=foreground bash scripts/cloud_setup.sh` once.
 
 What a cloud session can't do, so don't spend time trying:
 - **Re-run a CI job**: the API answers 403. Fix the cause (or the flaky test) and push; merging `main` in also
   starts a fresh run.
 - **Delete remote branches**: merged PR branches are deleted by GitHub on merge.
-- **Run the Android app or open the macOS window**: say which device checks are left in your summary.
+- **Run the Android app or open the macOS window**: say which device checks are left in your summary. There is no
+  Android SDK or NDK in the cloud: CI's `android` job builds the APK, and `release.yml` the release APK and the Mac
+  app (on PRs that change their scripts).
 
 Habits that avoid known traps:
 - **Disk** is a fixed allowance of about 30 GB; incremental builds are off in cloud sessions (the setup script

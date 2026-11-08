@@ -9,8 +9,7 @@
 //! `PlatformEvent::Link`, handed to [`crate::engine::PodEngine`]): the
 //! verified App Link `https://<pod host>/oauth/android` for the pod on
 //! [`APP_LINK_HOST`] once Android has verified it, else `construct://oauth`
-//! (decision `android-app-link-sign-in-redirect`, as `AuthRedirects` in the
-//! Compose app).
+//! (decision `android-app-link-sign-in-redirect`).
 
 use std::sync::Arc;
 
@@ -22,9 +21,13 @@ pub const CUSTOM_SCHEME: &str = "construct://oauth";
 /// Path of the App Link on the pod (`pod_host::app_links::REDIRECT_PATH`).
 pub const APP_LINK_PATH: &str = "/oauth/android";
 /// The pod whose App Link the Android app's manifest claims
-/// (`android/AndroidManifest.xml`): the staging pod, as the main app's
-/// default `-PconstructAppLinkHost`.
-pub const APP_LINK_HOST: &str = "the-construct-pod.fly.dev";
+/// (`android/AndroidManifest.xml`): `CONSTRUCT_APP_LINK_HOST` when the app
+/// is built (`scripts/android_native.sh` puts the same host in the
+/// manifest), else the staging pod.
+pub const APP_LINK_HOST: &str = match option_env!("CONSTRUCT_APP_LINK_HOST") {
+    Some(host) => host,
+    None => "the-construct-pod.fly.dev",
+};
 
 /// `https://<host>/oauth/android` when `base` is that host over https on
 /// the default port (the server that serves the App Link's

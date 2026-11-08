@@ -1,4 +1,4 @@
-//! Screen sizes: the presets of the Compose simulator, in points (dp).
+//! Screen sizes: the simulator's presets, in points (dp).
 
 use construct_render::Viewport;
 

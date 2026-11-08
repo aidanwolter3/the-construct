@@ -59,18 +59,18 @@ in a row. Limits per pod: 20 devices, 60 deliveries a minute. The routes are in 
 - **Layouts:** the `inbox` blueprint lists every notification (`local:notifications`), grouped by day; tapping one
   presents its layout and target and marks it read. The `settings` blueprint lists the channels with switches (stored
   per device on the pod). Any layout can open them, or bind `${local://inbox#unread}` for a badge.
-- **Android:** asks for `POST_NOTIFICATIONS` once; layouts read whether notifications can show from
-  `local://device#notification_permission` (`granted`, `denied`; `""` on desktop) and ask again with the
+- **Android:** asks for `POST_NOTIFICATIONS` once; layouts can ask again with the
   `action.device` command `request_notification_permission`, which shows the system prompt, or the app's notification
-  settings once Android won't show the prompt again ([layouts.md](layouts.md)); creates OS channels `<app_id>.<channel>` grouped per app; shows
-  live arrivals while in the background; and receives closed-app push through
+  settings once Android won't show the prompt again ([layouts.md](layouts.md)) (`local://device#notification_permission`
+  reads `""` for now); creates the OS channel `<app_id>.<channel>` when its first notification arrives; and receives
+  push, also while the app is closed, through
   [UnifiedPush](https://unifiedpush.org): a distributor app such as ntfy if installed, otherwise the embedded FCM
   distributor via Play services, which registers with the pod's VAPID key so the pod sends Web Push straight to
   FCM's own Web Push endpoint (`fcm.googleapis.com/fcm/send/...`). No Firebase project, gateway or Google
-  credentials are involved; build with `-PnoFcmFallback` to leave the fallback out. Each server gets its own push
+  credentials are involved. Each server gets its own push
   registration (decision [`android-push-registration-per-server`](decisions/android-push-registration-per-server.md)).
-- **Desktop:** tray notifications while running and unfocused, and a dock badge where supported. There is no
-  closed-app push on desktop.
+- **Desktop:** no OS notifications, tray icon or dock badge yet (the Compose desktop app had them; decision
+  `rust-clients`): the inbox shows them.
 
 ## Trying it
 
@@ -81,8 +81,8 @@ in a row. Limits per pod: 20 devices, 60 deliveries a minute. The routes are in 
 
 ## Not done yet
 
-Closed-app notifications on desktop; removing an Android notification when it is read on another device; per-app
-notification screens inside layouts; upstream push instead of polling where an upstream offers it. The Android
-permission prompt, channels, UnifiedPush and the FCM fallback have not been checked on a device yet. The Rust Android app
-(`construct-render`) receives push through UnifiedPush too, with its own keys and decryption, and the same embedded
-FCM fallback (decision [`android-native-push-embedded-fcm`](decisions/android-native-push-embedded-fcm.md)).
+Desktop notifications; Android channels created from the pod's channel list (titles, importance, groups) rather
+than on arrival; removing an Android notification when it is read on another device; per-app notification screens
+inside layouts; upstream push instead of polling where an upstream offers it. The Android app decrypts push with its
+own keys (decisions [`android-native-push-unifiedpush`](decisions/android-native-push-unifiedpush.md),
+[`android-native-push-embedded-fcm`](decisions/android-native-push-embedded-fcm.md)).

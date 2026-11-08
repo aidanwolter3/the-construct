@@ -693,7 +693,8 @@ fn scroll_ancestor(scene: &Scene, node: &SemanticNode) -> Option<SemanticNode> {
     None
 }
 
-/// The semantic ids the Compose simulator's test tags stand for.
+/// The semantic ids the Compose simulator's test tags stood for (scripts
+/// written for it still run).
 fn tag_alias(tag: &str) -> String {
     if let Some(f) = tag.strip_prefix("textfield-send:") {
         format!("send:{f}")

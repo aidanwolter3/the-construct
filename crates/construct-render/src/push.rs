@@ -51,8 +51,8 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-/// The UnifiedPush instance of the pod at `base`: one per server, as the
-/// Compose app names them.
+/// The UnifiedPush instance of the pod at `base`: one per server, named as
+/// the Compose app named them, so its registrations carry over.
 pub fn instance_for(base: &str) -> String {
     format!("server:{}", base.trim_end_matches('/'))
 }

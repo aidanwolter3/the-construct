@@ -34,10 +34,4 @@ ignore = [
     # fine-grained timing of those background sends. Upgrade when web-push-native and
     # jwt-simple move to elliptic-curve 0.14 / crypto-bigint 0.6+.
     { id = "RUSTSEC-2026-0387", reason = "only reached via web-push-native/jwt-simple ES256; no fixed version usable by elliptic-curve 0.13" },
-    # basic-toml: unmaintained (archived), not a vulnerability. Path:
-    # client-ffi -> uniffi (`bindgen` feature) -> uniffi_bindgen -> askama -> askama_derive
-    # -> basic-toml. It parses askama's own config at compile time inside the
-    # uniffi-bindgen tool that generates the Kotlin bindings; it is not in the pod or the
-    # client library and never sees untrusted input. Drops out when uniffi updates askama.
-    { id = "RUSTSEC-2026-0374", reason = "unmaintained, build-time only (uniffi-bindgen -> askama); never parses untrusted input" },
 ]

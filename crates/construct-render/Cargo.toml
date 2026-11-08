@@ -44,7 +44,7 @@ bytemuck = { version = "1", features = ["derive"], optional = true }
 winit = { version = "0.30", optional = true }
 # The semantic tree as an accessibility tree (`accessibility`): plain data.
 accesskit = "0.25"
-# `remote`: the pod's HTTP API, and the engine the Compose clients run.
+# `remote`: the pod's HTTP API, and the engine (`client-core`) behind the clients.
 reqwest = { workspace = true, optional = true }
 client-core = { workspace = true, optional = true }
 # `remote`: push messages (`push`): Web Push decryption (RFC 8291) with

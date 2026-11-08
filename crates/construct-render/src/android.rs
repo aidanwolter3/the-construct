@@ -2,13 +2,16 @@
 //! with Vulkan (or GL), no JVM UI in between. Build and run it with
 //! `scripts/android_native.sh`.
 //!
-//! It is installed as the main app's package, so it opens the pod live with
-//! the engine (`crate::engine`, its cache in the internal files directory):
-//! the pod's server in `pod.json` there (`{"url"}`), else the main app's
-//! server. Sessions, and the last pod code used, are kept as the main app
-//! keeps sessions (`KeystoreSecureStore`'s format, through JNI:
-//! [`KeystoreStore`]), so its sign-in carries over. A `layout.json` in `files/dev/` (private storage;
-//! `{"layout", "data"}`, copied there with `adb shell run-as`) is opened
+//! It is The Construct's Android app (`org.theconstruct.android`, the package
+//! the Compose app had, decision `rust-clients`), so it opens the pod live
+//! with the engine (`crate::engine`, its cache in the internal files
+//! directory): the pod's server in `pod.json` there (`{"url"}`), else the
+//! Compose app's saved server ("the main app" below). Sessions, and the last
+//! pod code used, are kept as the Compose app kept them
+//! (`KeystoreSecureStore`'s format, through JNI: [`KeystoreStore`]), so an
+//! update over it keeps the sign-in. In a development build, a `layout.json`
+//! in `files/dev/` (private storage; `{"layout", "data"}`, copied there with
+//! `adb shell run-as`) is opened
 //! instead: not external storage, which other apps can write on Android 9
 //! and 10. With
 //! `frame-request` there too, it first draws that layout offscreen at
