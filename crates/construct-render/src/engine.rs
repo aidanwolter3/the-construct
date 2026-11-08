@@ -587,6 +587,11 @@ fn observe(engine: &Weak<ConstructEngine>, shared: &Arc<Shared>, base: &str, sna
         }
         let layouts: HashMap<String, Value> =
             serde_json::from_str(&snap.layouts_json).unwrap_or_default();
+        // A layout the engine forgot (leaving the pod or signing out clears
+        // them) or hasn't loaded again is new when it comes back, even with
+        // the same JSON: the session has to be told.
+        seen.layouts
+            .retain(|id, _| layouts.get(id).is_some_and(|l| !l["workspace"].is_null()));
         for (id, l) in layouts {
             let text = l["workspace"].to_string();
             if l["workspace"].is_null() || seen.layouts.get(&id) == Some(&text) {
@@ -745,7 +750,10 @@ impl Loader for PodEngine {
             }
             let layouts: Value = serde_json::from_str(&snap.layouts_json).unwrap_or_default();
             let l = &layouts[id];
-            if let Ok(root) = serde_json::from_value::<UiNode>(l["workspace"].clone()) {
+            // Not loaded yet (`null`, which would read as an unknown node).
+            if !l["workspace"].is_null()
+                && let Ok(root) = serde_json::from_value::<UiNode>(l["workspace"].clone())
+            {
                 return Some(Ok((root, bundle(snap))));
             }
             if l["gone"] == true {

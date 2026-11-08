@@ -1,7 +1,8 @@
 //! A live session run by the engine (`construct_render::engine`, feature
 //! `remote`) against a small stub of a pod: home and the layouts list come
 //! from the engine's cache offline, a tap's write waits in the outbox until
-//! the pod is back, a `layout` event redraws the open session, and signing
+//! the pod is back, a `layout` event redraws the open session, a layout opens
+//! again after leaving the pod and opening it again, and signing
 //! in to an upstream runs the engine's flow (a loopback redirect on the
 //! desktop, a link that opens the app on a phone).
 
@@ -101,6 +102,9 @@ struct Pod {
     /// Bytes of each upload, and the bodies of the posts created.
     uploads: Mutex<Vec<usize>>,
     created: Mutex<Vec<Value>>,
+    /// As a pod host: a request without a session gets the "Open your pod"
+    /// screen for any layout; with one, home and the layout `garden`.
+    pod_code: AtomicBool,
 }
 
 struct Stub {
@@ -150,14 +154,17 @@ fn handle(stream: TcpStream, pod: &Pod) {
         parts.next().unwrap_or("").to_owned(),
     );
     let mut length = 0usize;
+    let mut bearer = false;
     loop {
         let mut h = String::new();
         if reader.read_line(&mut h).is_err() || h.trim().is_empty() {
             break;
         }
-        if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
+        let lower = h.to_ascii_lowercase();
+        if let Some(v) = lower.strip_prefix("content-length:") {
             length = v.trim().parse().unwrap_or(0);
         }
+        bearer |= lower.starts_with("authorization: bearer ");
     }
     let mut body = vec![0u8; length];
     let _ = std::io::Read::read_exact(&mut reader, &mut body);
@@ -170,6 +177,41 @@ fn handle(stream: TcpStream, pod: &Pod) {
         );
     };
     let version = pod.version.load(Ordering::SeqCst);
+    if pod.pod_code.load(Ordering::SeqCst) {
+        let screen = |title: &str, children: Vec<Value>| {
+            let mut all =
+                vec![json!({ "type": "core://Text", "value_expr": title, "style": "Title" })];
+            all.extend(children);
+            json!({ "version": "1.0.0", "workspace": { "type": "core://Column", "children": all },
+                "entities": {}, "queries": {} })
+            .to_string()
+        };
+        match (method.as_str(), path.as_str()) {
+            ("POST", "/v1/pods/open") => {
+                send(&mut out, "200 OK", "", r#"{"session_token":"pod-session"}"#)
+            }
+            ("GET", p)
+                if p.starts_with("/v1/workspaces/") && !p.ends_with("/events") && !bearer =>
+            {
+                let open = screen(
+                    "Open your pod",
+                    vec![
+                        json!({ "type": "core://TextField", "field": "pod_token", "placeholder": "Pod code" }),
+                        json!({ "type": "core://Button", "label": "Open pod", "on_click": {
+                            "intent": "action.auth.session", "path": "/v1/pods/open",
+                            "payload": { "token": "$form.pod_token" } } }),
+                    ],
+                );
+                send(&mut out, "200 OK", "", &open)
+            }
+            ("GET", "/v1/workspaces/home") => send(&mut out, "200 OK", "", &screen("Home", vec![])),
+            ("GET", "/v1/workspaces/garden") => {
+                send(&mut out, "200 OK", "", &screen("Garden", vec![]))
+            }
+            _ => send(&mut out, "404 Not Found", "", "{}"),
+        }
+        return;
+    }
     match (method.as_str(), path.as_str()) {
         ("GET", "/healthz") => send(&mut out, "200 OK", "", "{}"),
         ("GET", "/v1/workspaces/home") => {
@@ -586,6 +628,48 @@ fn a_pinned_home_stays_on_its_version_until_following_the_latest() {
     ));
     s.dispatch(&device("follow_latest")).unwrap();
     wait_until("the latest home", || shows(&mut s, "Home v3"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn leaving_the_pod_and_opening_it_again_shows_its_layouts() {
+    let stub = Stub::start();
+    stub.pod.pod_code.store(true, Ordering::SeqCst);
+    let dir = storage("leave");
+    let pod = PodEngine::open_with(&stub.base, Some(&dir), store(&stub.base), config());
+    let open =
+        json!({ "intent": "action.navigation.open", "layout": "garden", "presentation": "Push" });
+    let mut s = pod.session(construct_render::Viewport::PHONE);
+    wait_until("home", || shows(&mut s, "Home"));
+    s.dispatch(&open).unwrap();
+    wait_until("the layout", || {
+        s.poll();
+        shows(&mut s, "Garden")
+    });
+    // Leave the pod (as `PodHome::reopen`) and open it again.
+    pod.forget_session();
+    let mut s = pod.session(construct_render::Viewport::PHONE);
+    wait_until("the sign-in screen", || {
+        s.poll();
+        shows(&mut s, "Open pod")
+    });
+    s.form.insert("pod_token".into(), "cpod_test".into());
+    let out = s.tap(&Target::Text("Open pod".into())).unwrap();
+    assert!(
+        out.effects
+            .iter()
+            .any(|e| matches!(e, Effect::SignedIn { .. })),
+        "{:?}",
+        out.effects
+    );
+    // The layout opens again: the same JSON as before, loaded afresh.
+    let mut s = pod.session(construct_render::Viewport::PHONE);
+    wait_until("home again", || shows(&mut s, "Home"));
+    s.dispatch(&open).unwrap();
+    wait_until("the layout again", || {
+        s.poll();
+        shows(&mut s, "Garden")
+    });
     let _ = std::fs::remove_dir_all(&dir);
 }
 
