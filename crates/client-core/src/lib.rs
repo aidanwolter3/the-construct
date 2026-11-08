@@ -522,9 +522,67 @@ struct State {
     gone: bool,
     /// Other layouts, by id ([`StateSnapshot::layouts_json`]).
     layouts: BTreeMap<String, SubLayout>,
+    /// Fields set on this device (`action.local.set`), by entity URI, kept
+    /// over loads that can't know of them yet ([`State::hold_local_sets`]).
+    local_sets: BTreeMap<String, LocalSet>,
+}
+
+/// An entity's fields set on this device, and the [`State::seq`] of the
+/// latest set.
+#[derive(Debug, Default)]
+struct LocalSet {
+    fields: BTreeMap<String, Value>,
+    seq: u64,
+}
+
+/// When a load started (under the `net` lock, before its request): the
+/// state's [`State::seq`] then, and whether every write was already on the
+/// pod (no pending outbox row). Only an answer from such a load, started
+/// after a local set, can say what the pod made of it.
+#[derive(Debug, Clone, Copy)]
+struct LoadStamp {
+    seq: u64,
+    clean: bool,
 }
 
 impl State {
+    /// Stamps a load that is about to send its request (see [`LoadStamp`]).
+    fn load_stamp(&self) -> LoadStamp {
+        LoadStamp {
+            seq: self.seq,
+            clean: self.pending_actions == 0,
+        }
+    }
+
+    /// Keeps this device's local sets over a load's answer: a load that
+    /// started before a set, or while a write was still on its way to the
+    /// pod (usually the write that follows the set, such as the create
+    /// whose result the set shows early), answers what the pod had before
+    /// and would put the old value back until the next load. Such an answer
+    /// gets the set fields again; the answer of a load that started later
+    /// with every write on the pod replaces them (the set is forgotten).
+    fn hold_local_sets(&mut self, fetched: &mut BTreeMap<String, EntityRecord>, stamp: LoadStamp) {
+        if self.local_sets.is_empty() {
+            return;
+        }
+        let mut done = Vec::new();
+        for (uri, set) in &self.local_sets {
+            let Some(entity) = fetched.get_mut(uri) else {
+                continue;
+            };
+            if stamp.clean && stamp.seq >= set.seq {
+                done.push(uri.clone());
+                continue;
+            }
+            for (f, v) in &set.fields {
+                entity.set(f.clone(), v.clone());
+            }
+        }
+        for uri in done {
+            self.local_sets.remove(&uri);
+        }
+    }
+
     /// Records what the server's answer (or its absence) says about
     /// connectivity.
     fn set_online(&mut self, online: bool) {
@@ -706,13 +764,14 @@ impl State {
     /// persisted in one transaction; a
     /// persistence failure is logged and the merged state is still applied
     /// (the store is only a fallback for it).
-    fn apply_fetched(&mut self, workspace_id: &str, spec: WorkspaceSpec) {
+    fn apply_fetched(&mut self, workspace_id: &str, spec: WorkspaceSpec, stamp: LoadStamp) {
         let WorkspaceSpec {
             workspace,
-            entities: fetched,
+            entities: mut fetched,
             queries,
             ..
         } = spec;
+        self.hold_local_sets(&mut fetched, stamp);
         let pending = match self.store.as_ref().map(|s| s.pending_outbox()) {
             Some(Ok(rows)) => rows,
             Some(Err(e)) => {
@@ -799,11 +858,12 @@ impl State {
     /// and settling creates of those queries are dropped (the answer now
     /// lists the real items). Persisted in one transaction (a failure is
     /// logged; memory is still updated).
-    fn apply_data(&mut self, path: &str, bundle: DataBundle) {
+    fn apply_data(&mut self, path: &str, bundle: DataBundle, stamp: LoadStamp) {
         let DataBundle {
             entities: mut fetched,
             queries,
         } = bundle;
+        self.hold_local_sets(&mut fetched, stamp);
         let pending = match self.store.as_ref().map(|s| s.pending_outbox()) {
             Some(Ok(rows)) => rows,
             Some(Err(e)) => {
@@ -956,6 +1016,7 @@ impl State {
         self.loads.clear();
         self.settling.clear();
         self.layouts.clear();
+        self.local_sets.clear();
         self.sync_pending_count();
     }
 
@@ -2194,6 +2255,7 @@ impl Inner {
 
     fn refresh(&self) -> FetchOutcome {
         let net = lock(&self.net);
+        let stamp = lock(&self.state).load_stamp();
         let mut token = self.session_token();
         let mut result = fetch(&self.workspace_url, token.as_deref(), &self.device_id);
         if let (Err(FetchError::Status(401)), Some(t)) = (&result, &token) {
@@ -2264,7 +2326,7 @@ impl Inner {
                         }
                         _ => st.layout_version = version,
                     }
-                    st.apply_fetched(&self.workspace_id, spec);
+                    st.apply_fetched(&self.workspace_id, spec, stamp);
                     st.set_online(true);
                     st.gone = false;
                     outcome = FetchOutcome::Fetched;
@@ -2794,7 +2856,9 @@ impl Inner {
     /// `action.local.set`: set fields of a loaded entity on this device only
     /// (memory and cache, no outbox row). Every expression is evaluated
     /// against the entity as it was; if one fails, or the entity is not
-    /// loaded, nothing changes. The next load of the entity replaces it.
+    /// loaded, nothing changes. Loads that can't know of it yet keep it
+    /// ([`State::hold_local_sets`]); the next load that started after it,
+    /// with every write on the pod, replaces it.
     fn local_set(
         &self,
         started: Instant,
@@ -2826,7 +2890,11 @@ impl Inner {
                     }
                 }
             }
+            st.seq += 1;
+            let held = st.local_sets.entry(entity_uri.clone()).or_default();
+            held.seq = st.seq;
             for (f, v) in values {
+                held.fields.insert(f.clone(), v.clone());
                 entity.set(f, v);
             }
             if let Some(store) = st.store.as_mut()
@@ -2836,7 +2904,6 @@ impl Inner {
                 eprintln!("[ConstructEngine] local set {entity_uri}: failed to cache ({e})");
             }
             st.entities.insert(entity_uri.clone(), entity);
-            st.seq += 1;
             st.snapshot()
         };
         self.notify(snap);
@@ -3019,6 +3086,7 @@ impl Inner {
     /// like a fetch 401 (and refetches).
     fn load_data(&self, path: &str) {
         let net = lock(&self.net);
+        let stamp = lock(&self.state).load_stamp();
         let token = self.session_token();
         // Another layout (decision `layouts-not-apps`): its workspace, whose
         // data merges like a data path's.
@@ -3062,7 +3130,7 @@ impl Inner {
                     if let (Some(id), Some((workspace, version))) = (layout_id, layout) {
                         st.apply_layout(id, workspace, version);
                     }
-                    st.apply_data(path, bundle);
+                    st.apply_data(path, bundle, stamp);
                     st.set_online(true);
                 }
                 Err(FetchError::Status(401))

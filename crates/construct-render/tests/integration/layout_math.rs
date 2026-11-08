@@ -169,3 +169,80 @@ fn theme_bindings_colour_boxes() {
     assert_eq!(c, [0xEE, 0xF0, 0xF4, 0xFF]);
     assert_eq!(quad.border_width, 1.0);
 }
+
+/// Two columns side by side, each scrolling on its own: a row in a filling
+/// box, a filling box and a fixed-width one, each with a scrolling view.
+/// The row takes the height the box leaves, each column takes the row's
+/// height (whatever the row's alignment), and each view scrolls its own
+/// content.
+#[test]
+fn side_by_side_scrolling_columns_get_the_row_s_height() {
+    let long = |n: usize, label: &str| {
+        let lines: Vec<_> = (0..n)
+            .map(|i| json!({ "type": "core://Text", "value_expr": format!("{label} {i}"), "style": "Body" }))
+            .collect();
+        json!({ "type": "core://Scroll", "content": { "type": "core://Column", "children": lines } })
+    };
+    let spec = json!({ "type": "core://Column", "children": [
+        { "type": "core://Text", "value_expr": "Groceries", "style": "Title" },
+        { "type": "core://Box", "fill": true, "content": {
+            "type": "core://Row", "align": "Start", "children": [
+                { "type": "core://Box", "fill": true, "content": long(80, "Left") },
+                { "type": "core://Box", "width_dp": 150, "content": {
+                    "type": "core://Box", "fill": true, "content": long(60, "Right") } }
+            ] } }
+    ] });
+    let root: protocol::UiNode = serde_json::from_value(spec).unwrap();
+    let data = protocol::DataBundle::default();
+    let empty = BTreeMap::new();
+    let laid = SceneBuilder::new()
+        .layout(&construct_render::Input {
+            root: &root,
+            data: &data,
+            form: &empty,
+            route: &empty,
+            layouts: &BTreeMap::new(),
+            scroll: &BTreeMap::new(),
+            viewport: Viewport::PHONE,
+            dark: false,
+            item: None,
+            insets: [0.0; 4],
+            focused: None,
+        })
+        .unwrap();
+    let scene = laid.emit(&BTreeMap::new());
+    let views: Vec<_> = scene
+        .semantics
+        .iter()
+        .filter(|n| n.node_type == "core://Scroll")
+        .collect();
+    assert_eq!(views.len(), 2);
+    let (left, right) = (views[0], views[1]);
+    let title = scene.find_text("Groceries").unwrap();
+    let below = title.bounds[1] + title.bounds[3];
+    for v in [left, right] {
+        assert!(
+            close(v.bounds[1], below),
+            "starts under the title: {:?}",
+            v.bounds
+        );
+        assert!(
+            close(v.bounds[1] + v.bounds[3], Viewport::PHONE.height),
+            "reaches the bottom: {:?}",
+            v.bounds
+        );
+        assert!(laid.scroll_max[&v.id] > 0.0, "{} scrolls", v.id);
+    }
+    assert!(
+        close(right.bounds[2], 150.0),
+        "the fixed column: {:?}",
+        right.bounds
+    );
+    assert!(close(left.bounds[2], Viewport::PHONE.width - 150.0));
+
+    // Scrolling one moves only its own content.
+    let scrolled = laid.emit(&BTreeMap::from([(left.id.clone(), 300.0)]));
+    let y = |s: &construct_render::Scene, t: &str| s.find_text(t).unwrap().bounds[1];
+    assert!(close(y(&scrolled, "Left 20"), y(&scene, "Left 20") - 300.0));
+    assert!(close(y(&scrolled, "Right 0"), y(&scene, "Right 0")));
+}
