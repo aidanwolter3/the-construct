@@ -104,9 +104,8 @@ enum Icon {
 
 fn icon_shape(name: &str) -> Icon {
     match name {
-        "favorite" | "bookmark" | "chat_bubble" | "notifications" | "flame" | "send" => {
-            Icon::Filled
-        }
+        "favorite" | "bookmark" | "chat_bubble" | "notifications" | "flame" | "send"
+        | "shopping_cart" => Icon::Filled,
         "add" | "add_photo" => Icon::Plus,
         "arrow_back" | "delete" | "close" | "check" => Icon::Minus,
         "check_box" => Icon::Square,
