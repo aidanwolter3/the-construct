@@ -12,6 +12,7 @@ use glyphon::{
     TextArea, TextAtlas, TextBounds, TextRenderer,
 };
 use image::RgbaImage;
+use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 use crate::scene::{Draw, QuadInstance, Scene, TextRun};
@@ -37,6 +38,10 @@ pub struct Gpu {
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    /// Validation errors the device reported since [`Gpu::take_errors`]:
+    /// kept for the log, where wgpu would otherwise panic on them and end
+    /// the app.
+    errors: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl Gpu {
@@ -79,12 +84,28 @@ impl Gpu {
             })
             .await
             .map_err(|e| GpuError(format!("no GPU device: {e}")))?;
+        let errors = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let kept = errors.clone();
+        device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
+            let mut g = kept.lock().unwrap_or_else(|p| p.into_inner());
+            // A frame that keeps failing reports once per frame: keep a few.
+            if g.len() < 8 {
+                g.push(e.to_string());
+            }
+        }));
         Ok(Gpu {
             instance,
             adapter,
             device,
             queue,
+            errors,
         })
+    }
+
+    /// The device's errors since the last call (each frame's are dropped,
+    /// not drawn).
+    pub fn take_errors(&self) -> Vec<String> {
+        std::mem::take(&mut *self.errors.lock().unwrap_or_else(|p| p.into_inner()))
     }
 
     /// The adapter's name and backend, for logs.
@@ -533,29 +554,40 @@ impl Renderer {
                     areas.chain(icon_areas),
                     &mut self.swash,
                     |req| {
+                        // glyphon draws its cached glyphs again when its atlas
+                        // grows and panics on `None` for one it drew before:
+                        // a glyph that can't be drawn now is transparent.
+                        let (w, h) = (req.width as usize, req.height as usize);
                         if req.id >= crate::images::FIRST_GLYPH_ID {
-                            let store = images.as_ref()?;
-                            let (url, radius) = store.glyph(req.id)?;
-                            let img = store.cut(
-                                &url,
-                                req.width as u32,
-                                req.height as u32,
-                                radius as f32,
-                            )?;
+                            let img = images.as_ref().and_then(|store| {
+                                let (url, radius) = store.glyph(req.id)?;
+                                store.cut(&url, w as u32, h as u32, radius as f32)
+                            });
+                            let data = match img {
+                                Some(i) if i.as_raw().len() == w * h * 4 => i.as_raw().clone(),
+                                _ => vec![0; w * h * 4],
+                            };
                             return Some(RasterizedCustomGlyph {
-                                data: img.as_raw().clone(),
+                                data,
                                 content_type: ContentType::Color,
                             });
                         }
-                        let name = crate::icons::name(req.id)?;
                         let size = req.width.min(req.height) as u32;
-                        let mask = crate::icons::mask(name, size)?;
+                        let Some(mask) =
+                            crate::icons::name(req.id).and_then(|n| crate::icons::mask(n, size))
+                        else {
+                            return Some(RasterizedCustomGlyph {
+                                data: vec![0; w * h],
+                                content_type: ContentType::Mask,
+                            });
+                        };
                         // A square mask in a request that isn't square: pad it.
-                        let (w, h) = (req.width as usize, req.height as usize);
+                        let n = size as usize;
                         let mut data = vec![0u8; w * h];
-                        for y in 0..size as usize {
-                            data[y * w..y * w + size as usize]
-                                .copy_from_slice(&mask[y * size as usize..(y + 1) * size as usize]);
+                        if mask.len() >= n * n {
+                            for y in 0..n {
+                                data[y * w..y * w + n].copy_from_slice(&mask[y * n..(y + 1) * n]);
+                            }
                         }
                         Some(RasterizedCustomGlyph {
                             data,

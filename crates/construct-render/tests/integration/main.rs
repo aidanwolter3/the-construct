@@ -10,5 +10,6 @@ mod golden;
 mod gpu;
 mod interaction;
 mod layout_math;
+mod live_edits;
 mod media;
 mod writes;

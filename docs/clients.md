@@ -43,8 +43,12 @@ Build and install on the adb device (a phone over USB, or an arm64 emulator):
 
 ```bash
 scripts/android_native.sh               # build/android-native/construct-render.apk, installed and started
-adb logcat -s construct-render          # the app's log
+adb logcat -s construct-render          # the app's log (panics too, with a backtrace)
 ```
+
+If the app closed by itself, the next start says why in a notice when a panic caused it
+([rendering.md](rendering.md#when-something-fails)); otherwise the reason is in logcat (`adb logcat -b crash` for
+native crashes, `ActivityManager` lines for one Android ended for memory).
 
 A development build is debuggable and signed with this machine's debug key; it installs over an earlier build signed
 with the same key, keeping the app's data and sign-in. A build signed with another key (a release, or another

@@ -250,6 +250,8 @@ pub struct App {
     inbox: Arc<std::sync::Mutex<A11yInbox>>,
     #[cfg(not(target_os = "android"))]
     a11y: Option<A11y>,
+    /// Panics recovered from so far ([`App::recover`]).
+    panics: u32,
 }
 
 impl App {
@@ -263,6 +265,7 @@ impl App {
             drag: None,
             fling: None,
             waker: None,
+            panics: 0,
             mods: ModifiersState::empty(),
             inbox: Default::default(),
             #[cfg(not(target_os = "android"))]
@@ -411,8 +414,10 @@ impl App {
         self.controller = Controller::new(session);
         self.drag = None;
         self.fling = None;
-        if let Some(s) = self.surface.as_mut() {
-            s.renderer.images = Some(self.controller.session.images.clone());
+        // A new session has its own images, numbered afresh: the atlas
+        // starts over, or its glyphs would point at the old session's.
+        self.fresh_renderer();
+        if let Some(s) = self.surface.as_ref() {
             s.window.request_redraw();
         }
         if let Some(p) = &self.platform {
@@ -579,6 +584,39 @@ impl App {
         Ok(())
     }
 
+    /// A new renderer on the same window: empty glyph and shape caches.
+    fn fresh_renderer(&mut self) {
+        if let Some(s) = self.surface.as_mut() {
+            s.renderer = Renderer::new(&s.gpu, s.renderer.format());
+            s.renderer.images = Some(self.controller.session.images.clone());
+        }
+    }
+
+    /// A panic while handling `what` was caught: it is logged, the frame's
+    /// caches start over, and the app goes on rather than closing.
+    fn recover(&mut self, what: &str, message: &str) {
+        self.panics += 1;
+        if self.panics <= MAX_PANIC_LOGS {
+            log(&format!("recovered from a panic in {what}: {message}"));
+        }
+        self.drag = None;
+        self.fling = None;
+        self.fresh_renderer();
+        let session = &mut self.controller.session;
+        session.invalidate();
+        if self.panics == 1 {
+            session.notice(
+                "Something went wrong",
+                "The Construct hit an error drawing this screen and carried on. If it looks wrong, go back and open it again.",
+            );
+        }
+        if let Some(s) = &self.surface {
+            s.window.request_redraw();
+        }
+        #[cfg(target_os = "android")]
+        crate::android::forget_crash();
+    }
+
     fn draw(&mut self) {
         self.update_insets();
         // The drag's scrolling since the last frame, in one step.
@@ -620,6 +658,9 @@ impl App {
                 }
             }
             Err(e) => log(&format!("layout failed: {e}")),
+        }
+        for e in s.gpu.take_errors() {
+            log(&format!("GPU error (frame dropped): {e}"));
         }
         s.gpu.queue.present(frame);
         if flinging || self.controller.session.animating() {
@@ -1165,7 +1206,66 @@ pub fn run_app(event_loop: EventLoop<()>, mut app: App) -> Result<(), String> {
     let w = waker.clone();
     app.controller.session.images.set_waker(move || w());
     app.waker = Some(waker);
-    event_loop.run_app(&mut app).map_err(|e| e.to_string())
+    event_loop
+        .run_app(&mut Guarded(app))
+        .map_err(|e| e.to_string())
+}
+
+/// Panics logged in full; later ones are counted only.
+const MAX_PANIC_LOGS: u32 = 20;
+
+/// The app with every event handled under `catch_unwind`: a panic in a
+/// frame or an event (a layout an agent is editing, a GPU cache) is logged
+/// and recovered from instead of closing the app, which on Android it
+/// would do without a word.
+struct Guarded(App);
+
+impl Guarded {
+    fn guard(&mut self, what: &str, f: impl FnOnce(&mut App)) {
+        let app = &mut self.0;
+        if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(app))) {
+            let message = panic_message(&*p);
+            self.0.recover(what, &message);
+        }
+    }
+}
+
+/// The text a panic was raised with.
+pub fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
+    p.downcast_ref::<String>()
+        .cloned()
+        .or_else(|| p.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .unwrap_or_else(|| "a panic without a message".to_owned())
+}
+
+impl ApplicationHandler for Guarded {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.guard("about_to_wait", |a| a.about_to_wait(event_loop));
+    }
+
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        self.guard("new_events", |a| a.new_events(event_loop, cause));
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: ()) {
+        self.guard("user_event", |a| a.user_event(event_loop, event));
+    }
+
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        self.guard("resumed", |a| a.resumed(event_loop));
+    }
+
+    fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        self.guard("suspended", |a| a.suspended(event_loop));
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        let what = match &event {
+            WindowEvent::RedrawRequested => "a frame",
+            _ => "an input event",
+        };
+        self.guard(what, |a| a.window_event(event_loop, id, event));
+    }
 }
 
 #[cfg(test)]

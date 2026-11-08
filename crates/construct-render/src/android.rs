@@ -49,6 +49,61 @@ pub(crate) fn log(line: &str) {
     }
 }
 
+/// Where the last panic is written (`files/last-crash.txt`), set at start.
+static CRASH_FILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+/// The UI thread: only a panic there closes the app (others end their
+/// thread).
+static UI_THREAD: std::sync::OnceLock<std::thread::ThreadId> = std::sync::OnceLock::new();
+
+/// Every panic, on any thread, goes to logcat with where it happened (Rust
+/// writes it to stderr, which Android drops), and into the crash file, so
+/// the next start can say why the app closed.
+fn log_panics(dir: Option<PathBuf>) {
+    if let Some(d) = dir {
+        let _ = CRASH_FILE.set(d.join("last-crash.txt"));
+    }
+    let _ = UI_THREAD.set(std::thread::current().id());
+    std::panic::set_hook(Box::new(|info| {
+        let thread = std::thread::current();
+        let line = format!(
+            "panic on thread {}: {info}\n{}",
+            thread.name().unwrap_or("?"),
+            std::backtrace::Backtrace::force_capture()
+        );
+        const ERROR: i32 = 6;
+        let tag = c"construct-render";
+        for chunk in line.lines() {
+            if let Ok(text) = CString::new(chunk.replace('\0', " ")) {
+                // SAFETY: both pointers are valid NUL-terminated strings.
+                unsafe {
+                    __android_log_write(ERROR, tag.as_ptr(), text.as_ptr());
+                }
+            }
+        }
+        if UI_THREAD.get() == Some(&thread.id())
+            && let Some(f) = CRASH_FILE.get()
+        {
+            let _ = std::fs::write(f, format!("{info}"));
+        }
+    }));
+}
+
+/// A panic the window recovered from didn't close the app: the next start
+/// needn't report it.
+pub(crate) fn forget_crash() {
+    if let Some(f) = CRASH_FILE.get() {
+        let _ = std::fs::remove_file(f);
+    }
+}
+
+/// The panic that closed the app last time, if one did (read once).
+fn last_crash() -> Option<String> {
+    let f = CRASH_FILE.get()?;
+    let text = std::fs::read_to_string(f).ok()?;
+    let _ = std::fs::remove_file(f);
+    Some(text.chars().take(400).collect())
+}
+
 fn load(dir: Option<&PathBuf>) -> (String, protocol::UiNode, protocol::DataBundle) {
     let file = dir.map(|d| d.join("layout.json"));
     if let Some(f) = file.filter(|f| f.exists()) {
@@ -1086,6 +1141,11 @@ fn pod_home(app: &AndroidApp) -> crate::pods::PodHome {
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
     log("construct-render starting");
+    log_panics(app.internal_data_path());
+    let crashed = last_crash();
+    if let Some(c) = &crashed {
+        log(&format!("the app closed after a panic last time: {c}"));
+    }
     // A layout copied to the private `files/dev/` (development) wins; else
     // the pod. Never external storage: other apps could write the screen.
     let dir = app.internal_data_path().map(|d| d.join("dev"));
@@ -1122,6 +1182,15 @@ fn android_main(app: AndroidApp) {
         log(&format!("notification permission: {e}"));
     }
     set_up_push(&app, &home);
+    let mut session = session;
+    if let Some(c) = crashed {
+        // Shown as text, never as a binding.
+        let c = c.replace('$', "＄");
+        session.notice(
+            "The Construct closed unexpectedly",
+            &format!("It hit an error last time: {c}"),
+        );
+    }
     let window = crate::window::App::new(Controller::new(session), "The Construct")
         .with_platform(Box::new(Android(app, Default::default(), home)));
     if let Err(e) = crate::window::run_app(event_loop, window) {

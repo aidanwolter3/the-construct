@@ -144,6 +144,17 @@ Any workspace bundle (what `GET /v1/workspaces/<id>` answers) can be drawn to PN
 `cargo run --release -p construct-render --no-default-features --example render_bundle -- a.json b.json --out dir`
 (390 × 844 at 3×, the simulator's phone).
 
+## When something fails
+
+A window never lets one bad frame or event close the app: every window callback runs under `catch_unwind`
+(`window::Guarded`). A panic is logged, the GPU renderer starts over (empty glyph and shape caches), the session is
+laid out again, and the first one shows a "Something went wrong" notice. GPU validation errors, which wgpu treats as
+fatal by default, are kept by the device (`Gpu::take_errors`) and logged with the frame they dropped. A new session
+(signing in, leaving, `refresh`) also gets a fresh renderer, since its images are numbered afresh. On Android every
+panic, on any thread, goes to logcat under `construct-render` with its backtrace (Rust's own message goes to stderr,
+which Android drops); one on the UI thread is also written to `files/last-crash.txt`, and the next start logs it and
+shows it in a notice.
+
 ## Android
 
 `scripts/android_native.sh` (no options) cross-compiles `libconstruct_render.so` (cargo-ndk, arm64-v8a), packages
@@ -345,7 +356,9 @@ letters, digits, `_` and `-`, at most 64) answers `unknown_layout` before any re
   stays on its version until `follow_latest`, and hiding a layout.
 - `writes`: optimistic changes and creates (sent, refused and undone), form binding, notifications, links, dragging a
   sheet closed, carousel paging, confirm dialogs, signing in, and editing text (cursor, selection, the edit bar,
-  `max_length`).
+  `max_length`); a screen open in a layout that changes.
+- `live_edits`: a session used at random (taps, scrolls, typing, Back, swipes, resizes) while its layouts and data
+  are replaced under it, as an agent editing over MCP does; nothing may panic (`LIVE_EDIT_SEEDS=600` runs longer).
 
 The MCP round trip is `mcp::agents_preview_a_layout_and_tap_it` in the server's integration tests.
 

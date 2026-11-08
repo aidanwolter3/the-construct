@@ -147,3 +147,24 @@ fn gpu_snapshot_latency() {
     );
     assert_eq!(&bytes[0..4], b"RIFF");
 }
+
+#[test]
+fn a_gpu_validation_error_is_reported_not_fatal() {
+    let Some(surface) = surface() else {
+        return;
+    };
+    // A write whose size isn't a multiple of 4 is invalid: wgpu's default
+    // handler panics on it, which on a phone closes the app.
+    let gpu = &surface.gpu;
+    let buf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("invalid write"),
+        size: 16,
+        usage: wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    gpu.queue.write_buffer(&buf, 0, &[1, 2, 3]);
+    gpu.queue.submit(None);
+    let errors = gpu.take_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(gpu.take_errors().is_empty());
+}
