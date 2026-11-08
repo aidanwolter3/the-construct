@@ -53,6 +53,7 @@ pub mod db;
 pub mod expr;
 pub mod fill;
 pub mod filler;
+pub mod follow;
 pub mod lookup;
 mod mcp;
 pub mod model;
@@ -554,10 +555,12 @@ pub(crate) async fn refusable<T: Send + 'static>(
 ) -> Result<T, Value> {
     let slot: Arc<std::sync::Mutex<Option<Value>>> = Default::default();
     let refused = slot.clone();
+    let caps = adapter(pod).caps;
     let r = pod
         .blocking(move |s| {
             s.transaction(|tx| match f(tx)? {
-                Ok(v) => Ok(v),
+                // The rows it changed move the computes that read them.
+                Ok(v) => Ok((v, follow::settle(tx, pod_core::util::now_secs(), caps)?)),
                 Err(body) => {
                     *refused.lock().unwrap_or_else(|e| e.into_inner()) = Some(body);
                     Err(rusqlite::Error::QueryReturnedNoRows)
@@ -568,11 +571,13 @@ pub(crate) async fn refusable<T: Send + 'static>(
     if let Some(body) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
         return Err(body);
     }
-    r.map_err(|e| {
+    let (v, followed) = r.map_err(|e| {
         let (status, Json(mut body)) = e;
         body["status"] = json!(status.as_u16());
         body
-    })
+    })?;
+    followed.finish(pod);
+    Ok(v)
 }
 
 // ---------- rows ----------

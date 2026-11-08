@@ -188,6 +188,23 @@ impl Rules {
     }
 }
 
+/// Whether a rule with key `key` matches `input` under `mode`, as
+/// [`Rules::find`] matches (an invalid `regex` key matches nothing).
+pub fn key_matches(mode: Match, key: &str, input: &str) -> bool {
+    let norm = model::cache_key(input);
+    if norm.is_empty() {
+        return false;
+    }
+    match mode {
+        Match::Exact => model::cache_key(key) == norm,
+        Match::Contains => {
+            let k = words(key);
+            !k.is_empty() && words(input).windows(k.len()).any(|w| w == k.as_slice())
+        }
+        Match::Regex => compile(key).is_ok_and(|re| re.is_match(&norm)),
+    }
+}
+
 /// The key a learned rule gets for `input`: the normalized input; for a
 /// `regex` lookup, that text escaped and anchored (`^oat milk$`), so it
 /// matches only that input, as an `exact` rule would.
@@ -366,6 +383,17 @@ mod tests {
         assert!(compile(&"a".repeat(MAX_PATTERN_CHARS + 1)).is_err());
         // Big repetitions exceed the size limit instead of costing time.
         assert!(compile("(\\w{100}){100}").is_err());
+    }
+
+    #[test]
+    fn key_matches_agrees_with_find() {
+        assert!(key_matches(Match::Contains, "milk", "Oat Milk"));
+        assert!(!key_matches(Match::Contains, "milk", "Buttermilk"));
+        assert!(key_matches(Match::Exact, "oat milk", " OAT  milk "));
+        assert!(!key_matches(Match::Exact, "oat milk", "oat milk 2%"));
+        assert!(key_matches(Match::Regex, "^cucumbers?$", "Cucumbers"));
+        assert!(!key_matches(Match::Regex, "(unclosed", "(unclosed"));
+        assert!(!key_matches(Match::Exact, "", ""));
     }
 
     #[test]

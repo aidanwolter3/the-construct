@@ -1,5 +1,7 @@
 # Computed fields can look up rules in another collection, and try kinds in order
 
+Its "Dependencies" section is superseded by [live-computed-fields](live-computed-fields.md).
+
 Date: 2026-11-03. Related: [collection-computed-fields](collection-computed-fields.md) (amended here),
 [composable-actions](composable-actions.md), [collections](collections.md), issue #70.
 
