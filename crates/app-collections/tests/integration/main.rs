@@ -7,5 +7,6 @@ mod computed;
 mod fillers;
 mod follow;
 mod lookup;
+mod primitives;
 mod reminders;
 mod row_id;

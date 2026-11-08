@@ -8,7 +8,7 @@
 //! | `{op: rename_field, field, to}` | a new name; the old one stays an alias |
 //! | `{op: remove_field, field}` | soft removal: hidden, data kept for the purge window |
 //! | `{op: restore_field, field}` | undo a removal (its data comes back) |
-//! | `{op: update_field, field, type?, options?, optional?, default?, compute?}` | values converted row by row; what doesn't fit is kept aside (`compute: null` stops computing; values stay) |
+//! | `{op: update_field, field, type?, collection?, options?, optional?, unique?, default?, compute?}` | values converted row by row; what doesn't fit is kept aside (`compute: null` stops computing; values stay); text to `ref` resolves each value by the target's row ids and unique text fields |
 //! | `{op: recompute_field, field}` | compute the field again for every row now (e.g. after changing how it computes; lookups and counts already follow the rows they read; a value only the model could answer stays) |
 //! | `{op: set_order, field?, descending?}` | the list order: a field or a list of fields, first key first (none: oldest first) |
 //! | `{op: set_title, title}` | the collection's title |
@@ -18,6 +18,8 @@
 //! | `{op: set_filler, filler}` | add a filler, or change the one `filler.id` names (decision `collection-fillers`; [`crate::filler::parse`]) |
 //! | `{op: remove_filler, filler}` | stop that filler (its rows stay, no longer locked) |
 //! | `{op: add_alert, ...}`, `{op: update_alert, alert, ...}`, `{op: remove_alert, alert}` | notify when a row matches ([`crate::alerts`]) |
+//! | `{op: set_action, action}` | add an insert-from-query action, or replace the one of that name ([`crate::actions`]) |
+//! | `{op: remove_action, action}` | remove the action of that name |
 //!
 //! A system collection (one a built-in app owns) refuses renaming, removing
 //! and retyping its fields.
@@ -131,9 +133,9 @@ fn to_convert(before: &Definition, after: &Definition) -> Vec<String> {
         .fields
         .iter()
         .filter(|f| {
-            before
-                .by_id(&f.id)
-                .is_some_and(|b| b.kind != f.kind || b.options != f.options)
+            before.by_id(&f.id).is_some_and(|b| {
+                b.kind != f.kind || b.options != f.options || b.collection != f.collection
+            })
         })
         .map(|f| f.id.clone())
         .collect()
@@ -241,6 +243,14 @@ fn apply_op(
                 })?;
             }
             model::set_options(f, op.get("options"))?;
+            model::set_ref(f, op.get("collection"))?;
+            model::set_unique(f, op.get("unique"))?;
+            if f.kind == model::Kind::Ref {
+                if op.get("default").is_some_and(|d| !d.is_null()) {
+                    return Err(format!("field '{}': a ref has no default", f.name));
+                }
+                f.default = None;
+            }
             if let Some(o) = op.get("optional").and_then(Value::as_bool) {
                 f.optional = o;
             }
@@ -318,9 +328,34 @@ fn apply_op(
         }
         "update_alert" => crate::alerts::update(def, op)?,
         "remove_alert" => crate::alerts::remove(def, op)?,
+        "set_action" => {
+            let spec = op.get("action").filter(|a| a.is_object()).ok_or_else(|| {
+                "set_action needs \"action\": an action spec {name, source, match, ...}".to_owned()
+            })?;
+            let a = crate::actions::parse(def, spec, others)?;
+            match def.actions.iter().position(|x| x.name == a.name) {
+                Some(i) => def.actions[i] = a,
+                None => def.actions.push(a),
+            }
+        }
+        "remove_action" => {
+            let n = arg("action").to_owned();
+            let before = def.actions.len();
+            def.actions.retain(|a| a.name != n);
+            if def.actions.len() == before {
+                return Err(format!(
+                    "no action '{n}' (actions: {})",
+                    def.actions
+                        .iter()
+                        .map(|a| a.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
         other => {
             return Err(format!(
-                "unknown op '{other}' (add_field, rename_field, remove_field, restore_field, update_field, recompute_field, set_order, set_title, add_reminder, update_reminder, remove_reminder, set_filler, remove_filler, add_alert, update_alert, remove_alert)"
+                "unknown op '{other}' (add_field, rename_field, remove_field, restore_field, update_field, recompute_field, set_order, set_title, add_reminder, update_reminder, remove_reminder, set_filler, remove_filler, add_alert, update_alert, remove_alert, set_action, remove_action)"
             ));
         }
     }
@@ -477,6 +512,7 @@ mod tests {
             fillers: Vec::new(),
             alerts: Vec::new(),
             system: None,
+            actions: Vec::new(),
         }
     }
 

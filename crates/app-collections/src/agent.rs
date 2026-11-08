@@ -229,6 +229,10 @@ fn field_schema(f: &AgentField) -> Value {
             json!({ "type": "string", "description": "YYYY-MM-DDTHH:MM with the UTC offset when the source gives one (e.g. 2026-11-06T19:30-07:00), or YYYY-MM-DD" })
         }
         Kind::Choice => json!({ "type": "string", "enum": f.options }),
+        Kind::Ref => json!({ "type": "string", "description": "a row id" }),
+        Kind::Quantity => {
+            json!({ "type": "string", "description": "an amount and a unit, e.g. 1 1/2 cups" })
+        }
     };
     json!({ "anyOf": [one, { "type": "null" }] })
 }

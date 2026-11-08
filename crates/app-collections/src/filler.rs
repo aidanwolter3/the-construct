@@ -824,6 +824,12 @@ fn check_one(def: &Definition, f: &Filler, max_fills_per_day: u32) -> Result<(),
                 x.name
             ));
         }
+        if x.kind == Kind::Ref {
+            return Err(format!(
+                "field '{}' is a ref, so it can't be filled (a page holds no row ids; fill a text field and look it up)",
+                x.name
+            ));
+        }
     }
     if let Source::Fetch {
         details: Some(d), ..
@@ -997,6 +1003,7 @@ mod tests {
             fillers: Vec::new(),
             alerts: Vec::new(),
             system: None,
+            actions: Vec::new(),
         }
     }
 

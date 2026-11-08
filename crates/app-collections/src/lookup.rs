@@ -111,8 +111,14 @@ impl Rules {
         let Some((_, other)) = db::latest_def(conn, collection)? else {
             return Ok(out);
         };
-        let Some(kf) = other.by_id(key).filter(|f| f.live()) else {
-            return Ok(out);
+        // `None`: the key is the row's id (a lookup through a ref field).
+        let kf = if key == model::ROW_ID {
+            None
+        } else {
+            match other.by_id(key).filter(|f| f.live()) {
+                Some(f) => Some(f),
+                None => return Ok(out),
+            }
         };
         // `None`: the value is the matched row's id (`model::ROW_ID`).
         let vf = if value == model::ROW_ID {
@@ -124,7 +130,11 @@ impl Rules {
             }
         };
         for r in db::all_rows(conn, collection, false)? {
-            let Some(k) = r.values.get(&kf.id).and_then(text_of) else {
+            let k = match kf {
+                Some(kf) => r.values.get(&kf.id).and_then(text_of),
+                None => Some(r.id.clone()),
+            };
+            let Some(k) = k else {
                 continue;
             };
             let v = match vf {
