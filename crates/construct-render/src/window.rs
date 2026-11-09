@@ -476,6 +476,24 @@ impl App {
         moved && !done
     }
 
+    /// A finger or the mouse button went down: the row there darkens.
+    fn press(&mut self, x: f32, y: f32) {
+        if self.controller.session.press(x, y)
+            && let Some(s) = &self.surface
+        {
+            s.window.request_redraw();
+        }
+    }
+
+    /// The press ended (lifted, cancelled, or turned into a drag).
+    fn release_press(&mut self) {
+        if self.controller.session.release_press()
+            && let Some(s) = &self.surface
+        {
+            s.window.request_redraw();
+        }
+    }
+
     /// Scrolls the view at a point; true if it moved.
     fn scroll(&mut self, x: f32, y: f32, dy: f32) -> bool {
         matches!(
@@ -895,13 +913,21 @@ impl ApplicationHandler for App {
                 self.cursor = (position.x as f32 / scale, position.y as f32 / scale);
             }
             WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => self.press(self.cursor.0, self.cursor.1),
+            WindowEvent::MouseInput {
                 state: ElementState::Released,
                 button: MouseButton::Left,
                 ..
-            } => self.apply(Event::Tap {
-                x: self.cursor.0,
-                y: self.cursor.1,
-            }),
+            } => {
+                self.release_press();
+                self.apply(Event::Tap {
+                    x: self.cursor.0,
+                    y: self.cursor.1,
+                })
+            }
             WindowEvent::MouseWheel { delta, .. } => {
                 let dy = match delta {
                     MouseScrollDelta::LineDelta(_, y) => -y * 40.0,
@@ -938,6 +964,7 @@ impl ApplicationHandler for App {
                             long_pressed: false,
                             pending: 0.0,
                         });
+                        self.press(p.0, p.1);
                     }
                     TouchPhase::Moved => {
                         let Some(mut d) = self.drag.take() else {
@@ -959,6 +986,8 @@ impl ApplicationHandler for App {
                         let (tx, ty) = (p.0 - d.start.0, p.1 - d.start.1);
                         if !d.dragging && (tx.abs() > TOUCH_SLOP || ty.abs() > TOUCH_SLOP) {
                             d.dragging = true;
+                            // A drag is no tap: the row stops looking pressed.
+                            self.release_press();
                             // A sheet moves on a drag along its axis; a panel on
                             // a sideways one.
                             d.moving_frame = match d.frame {
@@ -991,6 +1020,7 @@ impl ApplicationHandler for App {
                         }
                     }
                     TouchPhase::Ended => {
+                        self.release_press();
                         let Some(mut d) = self.drag.take() else {
                             return;
                         };
@@ -1060,6 +1090,7 @@ impl ApplicationHandler for App {
                         }
                     }
                     TouchPhase::Cancelled => {
+                        self.release_press();
                         if let Some(d) = self.drag.take() {
                             if d.grabbing {
                                 self.controller.session.release_grab();

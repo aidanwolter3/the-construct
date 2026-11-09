@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::cpu::CpuRenderer;
-use crate::layout::{Input, Laid, RenderError, SceneBuilder, Viewport};
+use crate::layout::{Input, Laid, Pressed, RenderError, SceneBuilder, Viewport};
 use crate::scene::{Draw, QuadInstance, Scene, SemanticNode, Tap};
 use crate::style::Rgba;
 
@@ -505,6 +505,8 @@ pub struct Session {
     edit: Option<Edit>,
     /// Whether the caret was drawn in the frame kept (it blinks).
     caret_shown: Option<bool>,
+    /// The `core://Tappable` held down, drawn pressed until it is let go.
+    pressed: Option<Pressed>,
     /// Where the edit handles are, to grab them (from the last frame).
     handles: Vec<(Grab, [f32; 4])>,
     /// A handle being dragged, and how far the finger is below the text
@@ -624,6 +626,7 @@ impl Session {
             pager_anims: BTreeMap::new(),
             edit: None,
             caret_shown: None,
+            pressed: None,
             handles: Vec::new(),
             grab: None,
             picking: None,
@@ -979,6 +982,43 @@ impl Session {
         e.blink = Instant::now();
         // Laid out again: the field is drawn focused.
         self.invalidate();
+    }
+
+    /// A finger (or the mouse button) went down at a point: a
+    /// `core://Tappable` there is drawn pressed until [`Session::release_press`],
+    /// so the touch shows it registered. Returns whether anything is drawn
+    /// pressed (the window draws again).
+    pub fn press(&mut self, x: f32, y: f32) -> bool {
+        let pressed = self
+            .find(&Target::Point(x, y))
+            .ok()
+            .flatten()
+            .filter(|n| n.node_type == "core://Tappable")
+            .map(|n| Pressed {
+                id: n.id,
+                at: (x, y),
+            });
+        let changed = pressed != self.pressed;
+        if changed {
+            self.pressed = pressed;
+            self.scene = None;
+        }
+        self.pressed.is_some()
+    }
+
+    /// The finger lifted, or the touch became a scroll or a swipe: nothing
+    /// is drawn pressed. Returns whether something was.
+    pub fn release_press(&mut self) -> bool {
+        let was = self.pressed.take().is_some();
+        if was {
+            self.scene = None;
+        }
+        was
+    }
+
+    /// What is drawn pressed (tests and the simulator read it).
+    pub fn pressed(&self) -> Option<&Pressed> {
+        self.pressed.as_ref()
     }
 
     /// A long press at a point: on a text field, the word there is selected
@@ -1741,6 +1781,8 @@ impl Session {
             let p = self.progress(i, now);
             let (frame, content, _) = self.frame_rects(i);
             let e = &self.stack[i];
+            // Only the top layout's nodes can be pressed, as tapped.
+            let pressed = self.pressed.as_ref().filter(|_| i >= top_group);
             if i == top_group {
                 keep_from = scene.semantics.len();
             }
@@ -1792,7 +1834,7 @@ impl Session {
                 let mut q = QuadInstance::fill(r, theme.background, 0.0);
                 q.clip = frame_now;
                 scene.draws.push(Draw::Quad(q));
-                laid.emit_into(&mut scene, &e.scroll, (r[0], r[1]), frame_now);
+                laid.emit_into(&mut scene, &e.scroll, (r[0], r[1]), frame_now, pressed);
                 continue;
             }
             match e.frame {
@@ -1813,6 +1855,7 @@ impl Session {
                         &e.scroll,
                         (frame_now[0], frame_now[1]),
                         [0.0, 0.0, w, h],
+                        pressed,
                     );
                 }
                 Frame::Dialog => {
@@ -1837,7 +1880,13 @@ impl Session {
                         });
                     }
                     if p > 0.5 {
-                        laid.emit_into(&mut scene, &e.scroll, (0.0, 0.0), [0.0, 0.0, w, h]);
+                        laid.emit_into(
+                            &mut scene,
+                            &e.scroll,
+                            (0.0, 0.0),
+                            [0.0, 0.0, w, h],
+                            pressed,
+                        );
                     }
                 }
                 Frame::Edge(edge) => {
@@ -1896,7 +1945,7 @@ impl Session {
                     if matches!(edge, protocol::Edge::Bottom | protocol::Edge::Top) {
                         clip = [origin.0, origin.1, content[2], content[3]];
                     }
-                    laid.emit_into(&mut scene, &e.scroll, origin, clip);
+                    laid.emit_into(&mut scene, &e.scroll, origin, clip, pressed);
                 }
             }
         }
@@ -2209,6 +2258,8 @@ impl Session {
                 node.bounds[1] + node.bounds[3] / 2.0,
             ),
         };
+        // A tap ends the touch: nothing stays pressed.
+        self.pressed = None;
         let menu = node.node_type == "menu";
         if !menu {
             self.focused = None;
@@ -3185,7 +3236,7 @@ impl Session {
         })?;
         let (w, h) = (self.viewport.width, self.viewport.height);
         let y = h - self.insets[2] - laid.used_height();
-        laid.emit_into(scene, &BTreeMap::new(), (0.0, y), [0.0, 0.0, w, h]);
+        laid.emit_into(scene, &BTreeMap::new(), (0.0, y), [0.0, 0.0, w, h], None);
         Ok(())
     }
 

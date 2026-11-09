@@ -143,7 +143,7 @@ evaluated against the entity before the change: a JSON literal, `entity.<field>`
 | `core://Conditional` | `value`, `content`, `equals` | `content` only when `value` is truthy, or, with `equals`, when it equals that text. Works with `$form` values to switch views. |
 | `core://Button` | `label`, `on_click` | A text button. |
 | `core://IconButton` | `icon`, `content_description`, `on_click`, `active`, `active_icon`, `active_tint`, `active_content_description`, `size_dp`, `tag` | `active` binds a bool (`$item.is_liked`) to switch icon and tint. |
-| `core://Tappable` | `on_click`, `content`, `content_description`, `tag` | Makes any node tappable; buttons inside keep their own taps. |
+| `core://Tappable` | `on_click`, `content`, `content_description`, `tag` | Makes any node tappable; buttons inside keep their own taps. Drawn pressed (slightly darker) while held. |
 | `core://Gesture` | `content`, `on_tap`, `on_long_press`, `on_swipe_up`, `on_swipe_down`, `on_swipe_left`, `on_swipe_right`, `content_description` | `content` with gestures, each running its intent; at least one is set (feature `gesture`, decision `edge-overlays-and-gestures`). A swipe is a drag of at least 48 dp mostly one way (left and right on screen), run when the finger lifts. A pull the content can't scroll for counts, so a page inside still scrolls and pulling it down at its top is a swipe down; a drag an outer scroll takes doesn't, so put the gesture around what scrolls. Buttons inside keep their own taps. As a workspace's one slot around a filling node, it fills the screen too. |
 | `core://Chip` | `text`, `icon`, `tone` | A small label; `tone` `Neutral` or `Warning`. |
 | `core://Badge` | `text`, `icon` | A one-line note with an icon ("Bob boosted"). |
