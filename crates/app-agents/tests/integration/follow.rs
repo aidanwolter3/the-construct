@@ -188,3 +188,39 @@ async fn signing_out_forgets_the_runner() {
         .unwrap();
     assert_eq!(stored, 0);
 }
+
+#[tokio::test]
+async fn a_reconnect_reads_the_runners_schedules_again() {
+    let (pod, fake, _) = signed_in().await;
+    let app = agents_layout(&pod).await;
+    let ws = workspace(&pod, &app).await;
+    assert_eq!(
+        ws["entities"]["agents://schedules/nightly-deps"]["cron"],
+        "0 3 * * *"
+    );
+
+    // The runner is redeployed with a new time and a new schedule; no event
+    // says so. The stream it was following ends and the pod reconnects soon
+    // after, with its stored state still fresh.
+    {
+        let mut snap = fake.snapshot.lock().unwrap();
+        snap["schedules"][0]["cron"] = json!("30 4 * * *");
+        let mut weekly = snap["schedules"][0].clone();
+        weekly["name"] = json!("weekly-audit");
+        snap["schedules"].as_array_mut().unwrap().push(weekly);
+    }
+    fake.end_streams.store(true, Ordering::SeqCst);
+
+    until("the new schedule times", || async {
+        let ws = workspace(&pod, &app).await;
+        ws["entities"]["agents://schedules/nightly-deps"]["cron"] == "30 4 * * *"
+            && ws["entities"]["agents://schedules/weekly-audit"]["cron"] == "30 4 * * *"
+    })
+    .await;
+    // Only the set-up was read again: the stream still resumes from its cursor.
+    assert!(
+        fake.sinces().iter().all(|s| *s == 10),
+        "{:?}",
+        fake.sinces()
+    );
+}
