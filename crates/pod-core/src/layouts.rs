@@ -1013,12 +1013,38 @@ pub struct DataEvent {
     /// The session whose data changed; `None`: the pod's own data (every
     /// session's subscribers, decision `collections`).
     pub token_hash: Option<String>,
+    /// What changed, when the publisher knows (decision
+    /// `scoped-data-events`); `None`: anything may have.
+    pub scope: Option<DataScope>,
+    /// The device whose own write this is, which already shows it: its
+    /// streams don't get the event.
+    pub except_device: Option<String>,
 }
 
-fn data_event(workspace_id: &str) -> Event {
-    Event::default()
-        .event("data")
-        .data(json!({ "workspace_id": workspace_id }).to_string())
+/// What a scoped `event: data` says changed (decision
+/// `scoped-data-events`). Clients reload only the data whose entity URIs
+/// start with one of `uri_prefixes`, or whose query keys are one of
+/// `query_prefixes` or start with one followed by `:`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DataScope {
+    pub uri_prefixes: Vec<String>,
+    pub query_prefixes: Vec<String>,
+    /// The source's own account of the change, sent as is (Collections:
+    /// `changes: [{collection, rows}]`).
+    pub detail: serde_json::Map<String, Value>,
+}
+
+fn data_event(workspace_id: &str, source: Option<&str>, scope: Option<&DataScope>) -> Event {
+    let mut body = json!({ "workspace_id": workspace_id });
+    if let (Some(source), Some(scope)) = (source, scope) {
+        body["source"] = json!(source);
+        for (k, v) in &scope.detail {
+            body[k] = v.clone();
+        }
+        body["uri_prefixes"] = json!(scope.uri_prefixes);
+        body["query_prefixes"] = json!(scope.query_prefixes);
+    }
+    Event::default().event("data").data(body.to_string())
 }
 
 fn layout_event(ev: &LayoutEvent) -> Event {
@@ -1290,6 +1316,7 @@ async fn events(
     // The session's own `data` events (D50) need to know who listens, and
     // which sources this app draws on.
     let session_hash = caller.session().map(|s| s.token_hash.clone());
+    let device = crate::notify::device_id(&headers);
     let sources = state.sources_of(&app);
     let client = client_caps(&headers);
     // Subscribe before reading the current version so nothing published in
@@ -1313,6 +1340,9 @@ async fn events(
         _live: Option<crate::notify::LiveDevice>,
         data_rx: broadcast::Receiver<DataEvent>,
         session_hash: Option<String>,
+        /// This stream's device (`x-construct-device`), whose own writes
+        /// it isn't told of.
+        device: Option<String>,
         sources: Vec<&'static str>,
         recheck: Option<tokio::time::Interval>,
         _slot: Option<SseSlot>,
@@ -1341,6 +1371,7 @@ async fn events(
             _live: live,
             data_rx,
             session_hash,
+            device,
             sources,
             recheck,
             _slot: slot,
@@ -1414,6 +1445,7 @@ async fn events(
                                     && d.token_hash.as_ref().is_none_or(|h| {
                                         s.session_hash.as_deref() == Some(h.as_str())
                                     })
+                                    && (d.except_device.is_none() || d.except_device != s.device)
                             }
                             // Lagged: a reload is never wrong.
                             Err(broadcast::error::RecvError::Lagged(_)) => s.session_hash.is_some(),
@@ -1423,7 +1455,12 @@ async fn events(
                             if !session_still_valid(&s.state, s.session_hash.as_deref()).await {
                                 return None;
                             }
-                            let e = data_event(&s.id);
+                            // A lag lost what changed: the unscoped event
+                            // (reload everything).
+                            let e = match &d {
+                                Ok(d) => data_event(&s.id, Some(&d.source), d.scope.as_ref()),
+                                Err(_) => data_event(&s.id, None, None),
+                            };
                             return Some((Ok(e), s));
                         }
                         continue;

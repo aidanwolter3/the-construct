@@ -389,6 +389,8 @@ impl AppState {
         let _ = self.data_tx.send(layouts::DataEvent {
             source: source.to_owned(),
             token_hash: Some(session.token_hash.clone()),
+            scope: None,
+            except_device: None,
         });
     }
 
@@ -399,6 +401,26 @@ impl AppState {
         let _ = self.data_tx.send(layouts::DataEvent {
             source: source.to_owned(),
             token_hash: None,
+            scope: None,
+            except_device: None,
+        });
+    }
+
+    /// [`Pod::publish_data_all`] saying what changed (decision
+    /// `scoped-data-events`): clients reload only the data `scope`
+    /// matches. `except_device` (the `x-construct-device` of the write's
+    /// request) isn't told: it already shows the change.
+    pub fn publish_data_scoped(
+        &self,
+        source: &str,
+        scope: layouts::DataScope,
+        except_device: Option<&str>,
+    ) {
+        let _ = self.data_tx.send(layouts::DataEvent {
+            source: source.to_owned(),
+            token_hash: None,
+            scope: Some(scope),
+            except_device: except_device.map(str::to_owned),
         });
     }
 

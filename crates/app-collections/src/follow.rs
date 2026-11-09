@@ -26,7 +26,7 @@
 //! rest is dropped, so a cycle of computes ends. Only the collections that
 //! read a changed one are read.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use pod_core::Pod;
 use rusqlite::Connection;
@@ -50,18 +50,67 @@ pub struct Followed {
     pub changed: usize,
     /// Model jobs, by collection.
     pub jobs: BTreeMap<String, Vec<Job>>,
+    /// Every row the transaction changed (its own writes and the computes
+    /// that followed them), by collection.
+    pub rows: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl Followed {
-    /// After the commit: tell clients and ask the model.
+    /// After the commit: tell clients of the computes that followed (the
+    /// caller tells them of its own writes) and ask the model.
     pub fn finish(self, pod: &Pod) {
         if self.changed > 0 {
-            pod.publish_data_all(NAME);
+            publish_rows(pod, &self.rows, None);
         }
+        self.ask_model(pod);
+    }
+
+    /// After the commit: tell clients of every row the transaction changed
+    /// in one event, except `writer` (the device whose write it was) when
+    /// no compute followed it (it already shows what it wrote), and ask
+    /// the model. With no rows changed: `event: data` unscoped.
+    pub fn publish(self, pod: &Pod, writer: Option<&str>) {
+        if self.rows.is_empty() {
+            pod.publish_data_all(NAME);
+        } else {
+            let writer = writer.filter(|_| self.changed == 0);
+            publish_rows(pod, &self.rows, writer);
+        }
+        self.ask_model(pod);
+    }
+
+    fn ask_model(self, pod: &Pod) {
         for (collection, jobs) in self.jobs {
             compute::spawn(pod, &collection, jobs);
         }
     }
+}
+
+/// Tell clients that `rows` changed (decision `scoped-data-events`):
+/// `event: data` naming each collection and its row ids, which clients
+/// match against the entity URIs (`collections://<c>/`) and query keys
+/// (`collection:<c>`, and the `collection:<c>:...` ones) of their data.
+/// `except_device` isn't told.
+pub fn publish_rows(
+    pod: &Pod,
+    rows: &BTreeMap<String, BTreeSet<String>>,
+    except_device: Option<&str>,
+) {
+    if rows.is_empty() {
+        return;
+    }
+    let changes: Vec<Value> = rows
+        .iter()
+        .map(|(c, ids)| serde_json::json!({ "collection": c, "rows": ids }))
+        .collect();
+    let mut detail = Map::new();
+    detail.insert("changes".into(), Value::Array(changes));
+    let scope = pod_core::layouts::DataScope {
+        uri_prefixes: rows.keys().map(|c| db::row_uri(c, "")).collect(),
+        query_prefixes: rows.keys().map(|c| db::query_key(c)).collect(),
+        detail,
+    };
+    pod.publish_data_scoped(NAME, scope, except_device);
 }
 
 /// A computed field's kind that reads another collection.
@@ -101,6 +150,12 @@ pub fn settle(tx: &Connection, now: i64, caps: Caps) -> rusqlite::Result<Followe
         let changed = db::take_changed(tx)?;
         if changed.is_empty() {
             break;
+        }
+        for ch in &changed {
+            out.rows
+                .entry(ch.collection.clone())
+                .or_default()
+                .insert(ch.id.clone());
         }
         if wave >= MAX_WAVES {
             tracing::warn!(
