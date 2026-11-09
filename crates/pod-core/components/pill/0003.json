@@ -1,0 +1,77 @@
+{
+  "note": "A corner parameter (default 8, as before), so tighter tags are pills too",
+  "component": {
+    "doc": "A small tinted tag with text (a date, a status, a count).",
+    "params": [
+      {
+        "name": "text",
+        "type": "text",
+        "doc": "The text.",
+        "required": true
+      },
+      {
+        "name": "background",
+        "type": "text",
+        "doc": "Fill colour.",
+        "default": "${local://theme#accent_surface}"
+      },
+      {
+        "name": "color",
+        "type": "text",
+        "doc": "Text colour.",
+        "default": "${local://theme#accent}"
+      },
+      {
+        "name": "style",
+        "type": "text",
+        "doc": "A core://Text style.",
+        "default": "Caption"
+      },
+      {
+        "name": "corner",
+        "type": "number",
+        "doc": "Corner radius.",
+        "default": 8
+      }
+    ],
+    "template": {
+      "type": "core://Box",
+      "background": "$arg.background",
+      "content_color": "$arg.color",
+      "corner_dp": "$arg.corner",
+      "padding_h_dp": 8,
+      "padding_v_dp": 3,
+      "content": {
+        "type": "core://Text",
+        "value_expr": "$arg.text",
+        "style": "$arg.style"
+      }
+    },
+    "examples": [
+      {
+        "args": {
+          "text": "$item.start_text"
+        },
+        "note": "an event's date"
+      },
+      {
+        "args": {
+          "text": "$item.status",
+          "background": "${local://theme#error_surface}",
+          "color": "${local://theme#error}",
+          "corner": 6
+        },
+        "note": "a task's status, with tighter corners"
+      },
+      {
+        "args": {
+          "text": "3 unread",
+          "background": "${local://theme#unread}",
+          "color": "${local://theme#card}",
+          "corner": 6
+        },
+        "note": "a count on a list row"
+      }
+    ]
+  }
+}
