@@ -484,3 +484,26 @@ fn panels_draw_over_their_layout_and_a_scrim_tap_closes_them() {
     assert_eq!(s.current(), "home");
     assert!(s.scene().unwrap().find_text("Home underneath").is_some());
 }
+
+#[test]
+fn a_spinner_turns_while_the_session_animates() {
+    let root: protocol::UiNode = serde_json::from_value(json!({
+        "type": "core://Column", "children": [{ "type": "core://Progress", "size_dp": 48 }] }))
+    .unwrap();
+    let head = |s: &mut Session| {
+        let scene = s.scene().unwrap();
+        assert!(scene.spinning);
+        scene.quads().next().unwrap().rect
+    };
+    // Still for previews and tests: the same frame every time.
+    let mut s = Session::new("home", root, Default::default(), Viewport::PHONE);
+    let still = head(&mut s);
+    assert!(!s.animating());
+    // In a window it keeps drawing, and the arc's head moves.
+    s.animate = true;
+    let first = head(&mut s);
+    assert!(s.animating());
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    assert_ne!(head(&mut s), first);
+    assert_eq!(still[2], first[2], "same dots, turned");
+}
