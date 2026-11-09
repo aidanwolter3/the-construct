@@ -153,9 +153,9 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         PathSpec {
             pattern: REOPEN_PATH,
             query_keys: &[],
-            doc: "Reopen a linked task whose run has ended: {id (the row), message}. A new run \
-                  resumes the last one's conversation with the message as the next prompt; the \
-                  row goes back to queued.",
+            doc: "Reopen a linked task whose run has ended: {id (the row) or run_id (a run of \
+                  it), message}. A new run resumes the last one's conversation with the message \
+                  as the next prompt; the row goes back to queued.",
         },
         PathSpec {
             pattern: RUN_SCHEDULE_PATH,
@@ -906,9 +906,15 @@ async fn reopen_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -
         Ok(b) => b,
         Err(r) => return r,
     };
-    let (id, message) = match (field(&body, "id", 200), field(&body, "message", 20_000)) {
-        (Ok(i), Ok(m)) => (i, m),
-        (Err(r), _) | (_, Err(r)) => return r,
+    let message = match field(&body, "message", 20_000) {
+        Ok(m) => m,
+        Err(r) => return r,
+    };
+    // The row, or a run of it (a run's screen knows only the run).
+    let by_run = body.get("id").is_none() && body.get("run_id").is_some();
+    let id = match field(&body, if by_run { "run_id" } else { "id" }, 200) {
+        Ok(i) => i,
+        Err(r) => return r,
     };
     let (a, runner) = match signed_in(&pod).await {
         Ok(v) => v,
@@ -917,6 +923,20 @@ async fn reopen_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -
     let state = match pod.blocking(db::state).await {
         Ok(st) => st.map(|(s, _)| s).unwrap_or_default(),
         Err(e) => return e.into_response(),
+    };
+    let id = if by_run {
+        match state.runs.get(&id).map(|r| r.task_id.clone()) {
+            Some(t) if !t.is_empty() && state::schedule_of_task(&t).is_none() => t,
+            _ => {
+                return refuse(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "that run is not a task's",
+                );
+            }
+        }
+    } else {
+        id
     };
     match tasks::reopen(&pod, &a.clients, &runner, &state, &id, &message).await {
         Ok(run_id) => Json(json!({"ok": true, "run_id": run_id})).into_response(),

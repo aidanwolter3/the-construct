@@ -402,4 +402,30 @@ async fn reopen_resumes_the_last_run() {
     assert_eq!(s, StatusCode::CONFLICT, "{b}");
     assert_eq!(b["detail"], "run_again has no session to resume");
     assert_eq!(field(&pod, &id, "status"), "review");
+
+    // From a run's screen, which knows only the run.
+    let (s, b) = call(
+        &pod,
+        "POST",
+        "/v1/agents/tasks/reopen",
+        Some("phone"),
+        Some(json!({"run_id": "run_again", "message": "Try again"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert_eq!(
+        fake.sent("start_run").last().unwrap()["resume_from"],
+        "run_again"
+    );
+    assert_eq!(field(&pod, &id, "status"), "queued");
+    // A run that isn't a task's can't be reopened.
+    let (s, _) = call(
+        &pod,
+        "POST",
+        "/v1/agents/tasks/reopen",
+        Some("phone"),
+        Some(json!({"run_id": "run_work", "message": "x"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
 }
