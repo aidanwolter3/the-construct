@@ -222,6 +222,19 @@ impl Runner {
                 let o = self.session.tap(&Target::Point(x, y))?;
                 self.effects(o)
             }
+            Step::Press(target) => {
+                let node = self.reveal(target)?;
+                let (x, y) = center(&node);
+                if self.session.press(x, y) {
+                    done("pressed")
+                } else {
+                    Err(format!("no core://Tappable at '{target}'"))
+                }
+            }
+            Step::Release => {
+                self.session.release_press();
+                done("")
+            }
             Step::Type { target, text } => {
                 let field = self.field(target)?;
                 let o = self.session.type_text(&field, text);

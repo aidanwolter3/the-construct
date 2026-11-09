@@ -77,6 +77,7 @@ word is the command and the rest of the entry, as written, its argument: `click 
 |---|---|
 | `shot <name>` | Writes `<NN>-<name>.png` (waits up to 5 s for on-screen images first). |
 | `click <target>` | Taps the node's centre, scrolling it into view first. |
+| `press <target>` / `release` | Holds a finger down on the node's centre (a `core://Tappable` there is drawn pressed) until `release` or a `click`. |
 | `type <target> <text>` | Replaces a text field's text (`field:<name>`, `tag:textfield:<name>`, its placeholder, or the field's name). |
 | `swipe-left <target>` / `swipe-right <target>` | Pages a carousel, else runs the `core://Gesture`'s `on_swipe_left` / `on_swipe_right` there. |
 | `swipe-down <target>` / `swipe-up <target>` | A flick: closes a sheet from its handle (`tag:sheet-handle`), else runs the gesture's `on_swipe_down` / `on_swipe_up`. |

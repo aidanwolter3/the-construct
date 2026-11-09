@@ -2448,6 +2448,19 @@ fn intersects(a: [f32; 4], b: [f32; 4]) -> bool {
     r[2] > 0.0 && r[3] > 0.0 || (a[2] == 0.0 || a[3] == 0.0)
 }
 
+/// The `core://Tappable` a finger (or the mouse button) is down on: its
+/// semantic id and the point pressed, so a node elsewhere with the same id
+/// (a repeated tag) is not drawn pressed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pressed {
+    pub id: String,
+    pub at: (f32, f32),
+}
+
+/// How much of the text colour a pressed row is washed with: it darkens a
+/// light page and lightens a dark one, as Android's ripple does.
+const PRESSED_ALPHA: f32 = 0.10;
+
 /// A sticky node pinned at the top of its scrolling view: drawn after the
 /// view's other content, over the page background.
 struct Pinned {
@@ -2527,18 +2540,20 @@ impl Laid {
             background: self.theme.background.0,
             ..Default::default()
         };
-        self.emit_into(&mut scene, scroll, (0.0, 0.0), NO_CLIP);
+        self.emit_into(&mut scene, scroll, (0.0, 0.0), NO_CLIP, None);
         scene
     }
 
     /// Places the frame into `scene` at `offset`, drawing nothing outside
-    /// `clip` (a sheet or panel over another layout).
+    /// `clip` (a sheet or panel over another layout), with `pressed` drawn
+    /// pressed.
     pub fn emit_into(
         &self,
         scene: &mut Scene,
         scroll: &BTreeMap<String, f32>,
         offset: (f32, f32),
         clip: [f32; 4],
+        pressed: Option<&Pressed>,
     ) {
         let vp = self.viewport;
         let at = At {
@@ -2554,6 +2569,7 @@ impl Laid {
             None,
             at,
             scroll,
+            pressed,
             &mut pinned,
             scene,
         );
@@ -2586,6 +2602,7 @@ impl Laid {
         parent_sem: Option<usize>,
         at: At,
         scroll: &BTreeMap<String, f32>,
+        pressed: Option<&Pressed>,
         pinned: &mut Vec<Pinned>,
         scene: &mut Scene,
     ) {
@@ -2685,6 +2702,7 @@ impl Laid {
                 sem_index,
                 kid_at,
                 scroll,
+                pressed,
                 pins,
                 scene,
             );
@@ -2719,10 +2737,46 @@ impl Laid {
                 p.parent_sem,
                 free,
                 scroll,
+                pressed,
                 &mut none,
                 scene,
             );
         }
+        if visible && let Some(p) = pressed {
+            self.paint_pressed(e, rect, clip, p, scene);
+        }
+    }
+
+    /// A pressed `core://Tappable`: a wash over what it drew, in its box
+    /// (rounded as its one child is: a card's corners), inside its clip.
+    fn paint_pressed(
+        &self,
+        e: &Elem,
+        rect: [f32; 4],
+        clip: [f32; 4],
+        p: &Pressed,
+        scene: &mut Scene,
+    ) {
+        let Some(s) = &e.sem else { return };
+        let [x, y, w, h] = rect;
+        let inside = p.at.0 >= x && p.at.0 < x + w && p.at.1 >= y && p.at.1 < y + h;
+        if s.id != p.id || s.node_type != "core://Tappable" || !inside {
+            return;
+        }
+        let radius = match e.kids.as_slice() {
+            [k] => match &self.elems[*k].paint {
+                Paint::Quad { radius, .. } | Paint::Image { radius, .. } => *radius,
+                _ => 0.0,
+            },
+            _ => 0.0,
+        };
+        let mut q = QuadInstance::fill(
+            rect,
+            self.theme.on_background.with_alpha(PRESSED_ALPHA),
+            radius,
+        );
+        q.clip = clip;
+        scene.draws.push(Draw::Quad(q));
     }
 
     fn paint(

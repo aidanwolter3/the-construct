@@ -42,6 +42,10 @@ pub enum Direction {
 pub enum Step {
     Shot(String),
     Click(String),
+    /// A finger held down on a node (drawn pressed) until `release` or a
+    /// `click`.
+    Press(String),
+    Release,
     Type {
         target: String,
         text: String,
@@ -96,6 +100,8 @@ impl Step {
         match self {
             Step::Shot(_) => "shot",
             Step::Click(_) => "click",
+            Step::Press(_) => "press",
+            Step::Release => "release",
             Step::Type { .. } => "type",
             Step::Pick(_) => "pick",
             Step::Swipe(Direction::Left, _) => "swipe-left",
@@ -178,6 +184,7 @@ pub fn parse(script: &str) -> Result<Vec<Line>, String> {
         let step = match command.as_str() {
             "shot" => Step::Shot(need("a name")?),
             "click" => Step::Click(need("the text to click")?),
+            "press" => Step::Press(need(target)?),
             "type" => {
                 let a = need("a target and the text to type")?;
                 let (target, text) = split_type_arg(&a).ok_or_else(|| {
@@ -219,6 +226,7 @@ pub fn parse(script: &str) -> Result<Vec<Line>, String> {
             }
             "scroll-to" => Step::ScrollTo(need(target)?),
             "back" => none(Step::Back)?,
+            "release" => none(Step::Release)?,
             "wait" => Step::Wait(ms(&need("a duration in ms")?).ok_or_else(|| {
                 format!(
                     "{}: 'wait' needs a whole number of ms in 0..{MAX_WAIT_MS}",

@@ -486,6 +486,42 @@ fn panels_draw_over_their_layout_and_a_scrim_tap_closes_them() {
 }
 
 #[test]
+fn a_pressed_tappable_is_drawn_pressed_until_let_go() {
+    let mut s = tasks();
+    let scene = s.scene().unwrap();
+    let before = scene.quads().count();
+    let title = scene.find_text("Call the plumber").unwrap().clone();
+    let (x, y) = (title.bounds[0] + 2.0, title.bounds[1] + 2.0);
+    let card = scene.hit_test(x, y).unwrap().clone();
+    assert_eq!(card.node_type, "core://Tappable");
+    let add = scene.find_node("add_task").unwrap().bounds;
+
+    // Down on the card: one wash over its box, on top of what it drew.
+    assert!(s.press(x, y));
+    assert_eq!(s.pressed().map(|p| p.id.as_str()), Some(card.id.as_str()));
+    let scene = s.scene().unwrap();
+    assert_eq!(scene.quads().count(), before + 1);
+    let wash = scene
+        .quads()
+        .find(|q| q.rect == card.bounds && q.bg_color[3] > 0.0 && q.bg_color[3] < 0.2)
+        .expect("a wash over the card");
+    assert!(wash.radii[0] > 0.0, "rounded as the card is: {wash:?}");
+
+    // Let go: drawn as before.
+    assert!(s.release_press());
+    assert_eq!(s.scene().unwrap().quads().count(), before);
+
+    // A button is not a row: nothing is drawn pressed.
+    assert!(!s.press(add[0] + add[2] / 2.0, add[1] + add[3] / 2.0));
+    assert_eq!(s.scene().unwrap().quads().count(), before);
+
+    // A tap ends the touch.
+    assert!(s.press(x, y));
+    s.tap(&Target::Point(x, y)).unwrap();
+    assert!(s.pressed().is_none());
+}
+
+#[test]
 fn a_spinner_turns_while_the_session_animates() {
     let root: protocol::UiNode = serde_json::from_value(json!({
         "type": "core://Column", "children": [{ "type": "core://Progress", "size_dp": 48 }] }))
