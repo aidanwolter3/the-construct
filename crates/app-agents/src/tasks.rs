@@ -1,25 +1,30 @@
-//! The Tasks wiring (opt-in per collection): a row moving to `queued`
-//! sends `start_task` with the row's id as the task id, and the session's
-//! events flow back to the row.
+//! The Tasks wiring (opt-in per collection, decision `agents-runs`): a row
+//! moving to `queued` sends `start_run` once, with the row's id as the task
+//! id, and the row's `status` then follows its current run through one
+//! fixed table ([`task_status`]):
 //!
-//! - `session.started`: `status = started`, `session_id` set.
-//! - `session.finished`: the summary and PR link appended to `diagnosis`,
-//!   `status = review`.
-//! - `session.failed`: `status = todo`, the error appended to `diagnosis`.
-//! - A row marked done (`status = done` or `done = true`) whose session is
-//!   still open: `stop_session`, so a finished task doesn't keep a session
-//!   waiting for you. A done row keeps its status whatever its session
-//!   sends after.
-//! - A `start_task` the runner refuses (400, 404): `status = failed` with
-//!   the reason. At the concurrency limit (429) the row stays queued and is
-//!   sent again later.
+//! | current run | row status |
+//! |---|---|
+//! | queued | queued |
+//! | starting, working | running |
+//! | needs_you | needs_you |
+//! | ended, outcome done | done |
+//! | ended, outcome review; or reported, exited, stopped without one | review |
+//! | outcome failed or blocked; or lost, start_failed, timed_out, expired | failed |
+//!
+//! The current run is the one the row's `run_id` names, else the newest run
+//! whose `task_id` is the row's id. When it ends, its outcome (summary and
+//! pull request, or why it failed) is appended to `diagnosis`, once.
+//!
+//! A row you set to `done` (or tick `done`) or `todo` keeps that status:
+//! its run only adds to `diagnosis`, and a run that hasn't ended gets
+//! `stop_run`, once. Reopen ([`reopen`]) starts a run that resumes the
+//! last one's conversation with your message.
 //!
 //! The collection is linked with the MCP tool `agents_link_tasks`, which
-//! adds what the wiring needs (the status options and the `session_id`,
-//! `workspace` and `diagnosis` fields) through Collections' own
-//! `apply_change`.
-
-use std::collections::HashSet;
+//! adds what the wiring needs (the status options and the `run_id`,
+//! `session_id`, `workspace` and `diagnosis` fields) through Collections'
+//! own `apply_change`.
 
 use pod_core::Pod;
 use pod_core::store::Store;
@@ -30,14 +35,22 @@ use app_collections::{db as cdb, model};
 
 use crate::cap::{self, CapError, Clients, Command, Runner};
 use crate::db;
-use crate::state::{Effect, State};
+use crate::state::{self as st, Run, State};
 
 /// Pod setting: the linked collection (`{collection, workspace}` as JSON).
 pub const TASKS_SETTING: &str = "agents.tasks";
 
-/// The `status` options the wiring sets, and the one that starts a task.
+/// The `status` options the wiring sets; `queued` starts a run.
+pub const TODO: &str = "todo";
 pub const QUEUED: &str = "queued";
-const NEEDED_OPTIONS: [&str; 4] = ["todo", "started", "review", "failed"];
+pub const RUNNING: &str = "running";
+pub const NEEDS_YOU: &str = "needs_you";
+pub const REVIEW: &str = "review";
+pub const DONE: &str = "done";
+pub const FAILED: &str = "failed";
+const NEEDED_OPTIONS: [&str; 7] = [TODO, QUEUED, RUNNING, NEEDS_YOU, REVIEW, DONE, FAILED];
+/// The text fields the wiring writes.
+const NEEDED_FIELDS: [&str; 4] = ["run_id", "session_id", "workspace", "diagnosis"];
 /// The most of `diagnosis` kept (the newest text).
 const DIAGNOSIS_MAX: usize = 3_900;
 /// The most of a prompt sent.
@@ -115,7 +128,7 @@ pub async fn set_link(pod: &Pod, args: &Value) -> Result<Value, Value> {
     if options != status.options {
         changes.push(json!({"op": "update_field", "field": "status", "options": options}));
     }
-    for f in ["session_id", "workspace", "diagnosis"] {
+    for f in NEEDED_FIELDS {
         if def.field(f).is_none() {
             changes.push(json!({"op": "add_field", "name": f, "type": "text", "optional": true}));
         }
@@ -140,7 +153,7 @@ pub async fn set_link(pod: &Pod, args: &Value) -> Result<Value, Value> {
         .await
         .map_err(|_| bad("the pod's settings can't be written"))?;
     Ok(json!({"ok": true, "linked": link, "changes": changes,
-        "next": "Rows whose status becomes queued now start a session on the runner."}))
+        "next": "Rows whose status becomes queued now start a run on the runner."}))
 }
 
 /// A row's values by field name.
@@ -148,27 +161,13 @@ type Named = Map<String, Value>;
 
 /// Whether a row is marked done: `status = done`, or a `done` box ticked.
 fn is_done(row: &Named) -> bool {
-    text(row, "status") == "done" || row.get("done") == Some(&Value::Bool(true))
+    text(row, "status") == DONE || row.get("done") == Some(&Value::Bool(true))
 }
 
-/// The open sessions of done rows: a session started for the row (its
-/// `task_id`) or the one the row names (`session_id`).
-fn done_sessions(rows: &[(String, Named)], state: &State) -> Vec<String> {
-    let done: Vec<(&str, String)> = rows
-        .iter()
-        .filter(|(_, r)| is_done(r))
-        .map(|(id, r)| (id.as_str(), text(r, "session_id")))
-        .collect();
-    state
-        .sessions
-        .values()
-        .filter(|s| s.is_active())
-        .filter(|s| {
-            done.iter()
-                .any(|(id, sid)| s.task_id == *id || (!sid.is_empty() && s.id == *sid))
-        })
-        .map(|s| s.id.clone())
-        .collect()
+/// Whether a row keeps the status you gave it (done or todo): its run only
+/// adds to `diagnosis`.
+fn is_kept(row: &Named) -> bool {
+    is_done(row) || text(row, "status") == TODO
 }
 
 fn rows(store: &Store, collection: &str) -> rusqlite::Result<Vec<(String, Named)>> {
@@ -235,20 +234,87 @@ async fn update(pod: &Pod, collection: &str, id: &str, values: Value) {
     }
 }
 
-/// Send `start_task` for every queued row of the linked collection that
-/// hasn't been sent, and forget sends for rows no longer queued.
-pub async fn launch_queued(pod: &Pod, clients: &Clients, runner: &Runner) {
+/// The task status run `r` maps to: the one table (module docs).
+pub fn task_status(r: &Run) -> &'static str {
+    match r.state.as_str() {
+        st::QUEUED => QUEUED,
+        st::STARTING | st::WORKING => RUNNING,
+        st::NEEDS_YOU => NEEDS_YOU,
+        _ => match (r.outcome.as_str(), r.end_reason.as_str()) {
+            ("done", _) => DONE,
+            ("review", _) => REVIEW,
+            ("failed" | "blocked", _) => FAILED,
+            (_, "lost" | "start_failed" | "timed_out" | "expired") => FAILED,
+            _ => REVIEW,
+        },
+    }
+}
+
+/// What an ended run adds to its row's `diagnosis`: the outcome's summary
+/// and pull request, or why it failed.
+pub fn end_note(r: &Run) -> String {
+    let (word, _) = crate::bundle::run_look(&r.state, &r.end_reason, &r.outcome);
+    let summary = if r.outcome_summary.is_empty() {
+        r.summary.as_str()
+    } else {
+        r.outcome_summary.as_str()
+    };
+    let mut note = match (r.outcome.as_str(), task_status(r)) {
+        ("done" | "review", _) if !summary.is_empty() => summary.to_owned(),
+        ("done" | "review", _) => format!("{word}."),
+        (_, FAILED) => {
+            let why = if !r.outcome.is_empty() && !summary.is_empty() {
+                summary.to_owned()
+            } else if !r.error.is_empty() {
+                r.error.clone()
+            } else {
+                crate::alerts::end_reason_text(&r.end_reason).to_owned()
+            };
+            format!("{word}: {why}")
+        }
+        _ if !summary.is_empty() => summary.to_owned(),
+        _ => crate::alerts::end_reason_text(&r.end_reason).to_owned(),
+    };
+    if !r.pr().is_empty() {
+        note.push_str(&format!("\nPR: {}", r.pr()));
+    }
+    note
+}
+
+/// A refused `start_run`'s reason, when the runner refused it for good
+/// (400, 404, 409); `None` when it may work later.
+fn refusal(e: &CapError) -> Option<String> {
+    match e {
+        CapError::Status(400 | 404 | 409, d) if d.is_empty() => {
+            Some("the runner refused the task".to_owned())
+        }
+        CapError::Status(400 | 404 | 409, d) => Some(d.clone()),
+        _ => None,
+    }
+}
+
+/// One pass over the linked collection: send `start_run` for queued rows
+/// that need one, then set each row from its current run, note ended runs
+/// in `diagnosis` and stop the runs of rows you set to done or todo.
+pub async fn sync(pod: &Pod, clients: &Clients, runner: &Runner, state: &State) {
     let Ok(Some(link)) = pod.blocking(link).await else {
         return;
     };
     let coll = link.collection.clone();
-    let Ok((rows, pending)) = pod
+    let Ok((rows, launches)) = pod
         .blocking(move |s| Ok((rows(s, &coll)?, db::launches(s, &coll)?)))
         .await
     else {
         return;
     };
-    for id in &pending {
+    let launch_of = |id: &str| {
+        launches
+            .iter()
+            .find(|(t, _, _)| t == id)
+            .map(|(_, r, _)| r.clone())
+    };
+    // Sends are forgotten once their row moves on.
+    for (id, _, _) in &launches {
         if !rows
             .iter()
             .any(|(r, v)| r == id && text(v, "status") == QUEUED)
@@ -257,184 +323,270 @@ pub async fn launch_queued(pod: &Pod, clients: &Clients, runner: &Runner) {
             let _ = pod.blocking(move |s| db::remove_launch(s, &id)).await;
         }
     }
+    let mut sending = true;
     for (id, row) in rows {
-        if text(&row, "status") != QUEUED || pending.contains(&id) {
+        let launched = launch_of(&id);
+        let named = text(&row, "run_id");
+        let run_id = if named.is_empty() {
+            launched.clone().unwrap_or_default()
+        } else {
+            named.clone()
+        };
+        let queued = text(&row, "status") == QUEUED && !is_done(&row);
+        // A queued row needs a run unless it has the one this pod started
+        // for it; a row queued again after its run ended (a retry) gets a
+        // new one.
+        let ours = launched.as_deref() == Some(run_id.as_str()) && launched.is_some();
+        let needs_run = queued
+            && !ours
+            && (run_id.is_empty() || state.runs.get(&run_id).is_none_or(|r| !r.is_active()));
+        if needs_run {
+            if sending {
+                sending = start(pod, clients, runner, &link, &id, &row, None, None).await;
+            }
             continue;
         }
-        let ws = text(&row, "workspace");
-        let cmd = Command::StartTask {
-            workspace: if ws.is_empty() {
-                link.workspace.clone()
-            } else {
-                ws
-            },
-            task_id: id.clone(),
-            title: text(&row, "title"),
-            prompt: prompt(&row),
+        let Some(run) = state.current_run(&id, &run_id) else {
+            continue;
         };
-        match cap::command(clients, runner, &cmd).await {
-            Ok(_) => {
-                let (coll, id) = (link.collection.clone(), id.clone());
-                let now = pod_core::util::now_secs();
-                let _ = pod
-                    .blocking(move |s| db::add_launch(s, &coll, &id, now))
-                    .await;
-            }
-            Err(CapError::Status(400 | 404, e)) => {
-                let reason = if e.is_empty() {
-                    "the runner refused the task".to_owned()
-                } else {
-                    e
-                };
+        follow(pod, clients, runner, &link.collection, &id, &row, run).await;
+    }
+}
+
+/// Send `start_run` for row `id` (`resume_from` and `prompt` for Reopen),
+/// remember the run it answers and put it in the row. Whether the runner
+/// answered (a refusal for good fails the row).
+#[allow(clippy::too_many_arguments)]
+async fn start(
+    pod: &Pod,
+    clients: &Clients,
+    runner: &Runner,
+    link: &Link,
+    id: &str,
+    row: &Named,
+    resume_from: Option<String>,
+    message: Option<String>,
+) -> bool {
+    match start_run(pod, clients, runner, link, id, row, resume_from, message).await {
+        Ok(_) => true,
+        Err(e) => match refusal(&e) {
+            Some(reason) => {
                 let diagnosis = append(
-                    &text(&row, "diagnosis"),
+                    &text(row, "diagnosis"),
                     &format!("Couldn't start: {reason}"),
                 );
                 update(
                     pod,
                     &link.collection,
-                    &id,
-                    json!({"status": "failed", "diagnosis": diagnosis}),
+                    id,
+                    json!({"status": FAILED, "diagnosis": diagnosis}),
                 )
                 .await;
+                true
             }
-            // At the limit, or the runner is away: try again later.
-            Err(e) => {
+            // The runner is away: try again on the next pass.
+            None => {
                 tracing::info!(error = %e, "a queued task waits for the runner");
-                return;
+                false
+            }
+        },
+    }
+}
+
+/// `start_run` for row `id`; the new run's id, remembered and put in the
+/// row (with `status = queued`).
+#[allow(clippy::too_many_arguments)]
+async fn start_run(
+    pod: &Pod,
+    clients: &Clients,
+    runner: &Runner,
+    link: &Link,
+    id: &str,
+    row: &Named,
+    resume_from: Option<String>,
+    message: Option<String>,
+) -> Result<String, CapError> {
+    let ws = text(row, "workspace");
+    let cmd = Command::StartRun {
+        workspace: if ws.is_empty() {
+            link.workspace.clone()
+        } else {
+            ws
+        },
+        task_id: id.to_owned(),
+        title: text(row, "title").chars().take(200).collect(),
+        prompt: message.unwrap_or_else(|| prompt(row)),
+        resume_from,
+    };
+    let answer = cap::command(clients, runner, &cmd).await?;
+    let run_id = cap::run_id_of(&answer).unwrap_or_default();
+    let (coll, task, run, now) = (
+        link.collection.clone(),
+        id.to_owned(),
+        run_id.clone(),
+        pod_core::util::now_secs(),
+    );
+    // Remembered before the row changes: the change wakes another pass.
+    let _ = pod
+        .blocking(move |s| db::add_launch(s, &coll, &task, &run, now))
+        .await;
+    update(
+        pod,
+        &link.collection,
+        id,
+        json!({"status": QUEUED, "run_id": run_id}),
+    )
+    .await;
+    Ok(run_id)
+}
+
+/// Set row `id` from its current run `run`.
+async fn follow(
+    pod: &Pod,
+    clients: &Clients,
+    runner: &Runner,
+    collection: &str,
+    id: &str,
+    row: &Named,
+    run: &Run,
+) {
+    let mut values = Map::new();
+    if text(row, "run_id") != run.id {
+        values.insert("run_id".into(), json!(run.id));
+    }
+    if !run.session_id.is_empty() && text(row, "session_id") != run.session_id {
+        values.insert("session_id".into(), json!(run.session_id));
+    }
+    let kept = is_kept(row);
+    if !kept && text(row, "status") != task_status(run) {
+        values.insert("status".into(), json!(task_status(run)));
+    }
+    let noted = format!("noted:{}", run.id);
+    let note = !run.is_active() && {
+        let k = noted.clone();
+        !pod.blocking(move |s| db::marked(s, &k))
+            .await
+            .unwrap_or(true)
+    };
+    if note {
+        values.insert(
+            "diagnosis".into(),
+            json!(append(&text(row, "diagnosis"), &end_note(run))),
+        );
+    }
+    if !values.is_empty() {
+        let ok = app_collections::update_row(pod, collection, id, values).await;
+        match ok {
+            Ok(_) if note => {
+                let now = pod_core::util::now_secs();
+                let _ = pod.blocking(move |s| db::mark(s, &noted, now)).await;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = %e["error"], detail = %e["detail"], "a task row could not be updated");
             }
         }
     }
-}
-
-/// Show the open sessions of done rows as finished, whatever the runner
-/// last said: a session it can't stop any more (its sandbox is gone) would
-/// otherwise wait for you forever.
-pub fn close_done(store: &Store, state: &mut State) -> rusqlite::Result<()> {
-    let Some(link) = link(store)? else {
-        return Ok(());
-    };
-    let rows = rows(store, &link.collection)?;
-    for id in done_sessions(&rows, state) {
-        if let Some(s) = state.sessions.get_mut(&id) {
-            s.status = crate::state::FINISHED.to_owned();
+    // Set to done or todo while its run goes on: stop the run, once.
+    if kept && run.is_active() {
+        let key = format!("stop:{}", run.id);
+        let k = key.clone();
+        if pod
+            .blocking(move |s| db::marked(s, &k))
+            .await
+            .unwrap_or(true)
+        {
+            return;
+        }
+        let cmd = Command::StopRun {
+            run_id: run.id.clone(),
+        };
+        match cap::command(clients, runner, &cmd).await {
+            Ok(_) | Err(CapError::Status(400 | 404 | 409, _)) => {
+                let now = pod_core::util::now_secs();
+                let _ = pod.blocking(move |s| db::mark(s, &key, now)).await;
+            }
+            Err(e) => tracing::info!(error = %e, "a task's run waits to be stopped"),
         }
     }
-    Ok(())
 }
 
-/// Send `stop_session` for each open session of a done row, once per
-/// session (`stopped` remembers them while the follower runs). Whether it
-/// found one it hadn't, so the feeds are sent again.
-pub async fn stop_done(
+/// Why Reopen was refused: the status, error and detail for the route.
+pub type Refusal = (u16, &'static str, String);
+
+/// Reopen row `id` with `message`: its last run must have ended; a new run
+/// resumes that run's conversation (`resume_from`) with `message` as the
+/// next prompt, and the row goes back to `queued`. The new run's id.
+pub async fn reopen(
     pod: &Pod,
     clients: &Clients,
     runner: &Runner,
     state: &State,
-    stopped: &mut HashSet<String>,
-) -> bool {
-    let Ok(Some(link)) = pod.blocking(link).await else {
-        return false;
-    };
-    let coll = link.collection;
-    let Ok(rows) = pod.blocking(move |s| rows(s, &coll)).await else {
-        return false;
-    };
-    let mut new = false;
-    for session_id in done_sessions(&rows, state) {
-        if stopped.contains(&session_id) {
-            continue;
+    id: &str,
+    message: &str,
+) -> Result<String, Refusal> {
+    let link = pod.blocking(link).await.ok().flatten().ok_or((
+        409,
+        "not_linked",
+        "no tasks collection is linked to the runner".to_owned(),
+    ))?;
+    let (coll, rid) = (link.collection.clone(), id.to_owned());
+    let row = pod
+        .blocking(move |s| Ok(rows(s, &coll)?.into_iter().find(|(r, _)| *r == rid)))
+        .await
+        .ok()
+        .flatten()
+        .map(|(_, r)| r)
+        .ok_or((
+            404,
+            "not_found",
+            format!("'{}' has no row {id}", link.collection),
+        ))?;
+    let named = text(&row, "run_id");
+    let last = state.current_run(id, &named);
+    let last_id = match (last, named.is_empty()) {
+        (Some(r), _) if r.is_active() => {
+            return Err((
+                409,
+                "run_not_ended",
+                "the task's run hasn't ended; answer it in the Claude app or stop it first".into(),
+            ));
         }
-        new = true;
-        let cmd = Command::StopSession {
-            session_id: session_id.clone(),
-        };
-        match cap::command(clients, runner, &cmd).await {
-            Ok(_) | Err(CapError::Status(400 | 404, _)) => {
-                stopped.insert(session_id);
-            }
-            Err(e) => {
-                tracing::info!(error = %e, "a done task's session waits to be stopped");
-                return new;
-            }
+        (Some(r), _) => r.id.clone(),
+        // A run the pod no longer lists: the runner says whether it ended.
+        (None, false) => named,
+        (None, true) => {
+            return Err((409, "no_run", "the task has no run to reopen".into()));
         }
-    }
-    new
-}
-
-/// Apply the task effects among `effects` to the linked collection's rows.
-pub async fn apply(pod: &Pod, effects: &[Effect]) {
-    if !effects.iter().any(|e| {
-        matches!(
-            e,
-            Effect::TaskStarted { .. } | Effect::TaskFinished { .. } | Effect::TaskFailed { .. }
-        )
-    }) {
-        return;
-    }
-    let Ok(Some(link)) = pod.blocking(link).await else {
-        return;
     };
-    for e in effects {
-        let task_id = match e {
-            Effect::TaskStarted { task_id, .. }
-            | Effect::TaskFinished { task_id, .. }
-            | Effect::TaskFailed { task_id, .. } => task_id.clone(),
-            _ => continue,
-        };
-        let (coll, id) = (link.collection.clone(), task_id.clone());
-        let row = pod
-            .blocking(move |s| {
-                s.with_conn(|c| {
-                    let Some((_, def)) = cdb::latest_def(c, &coll)? else {
-                        return Ok(None);
-                    };
-                    Ok(cdb::row(c, &coll, &id)?
-                        .filter(|r| r.deleted_at.is_none())
-                        .map(|r| model::row_entity(&def, &r.id, &r.values, "", "")))
-                })
-            })
-            .await;
-        let Ok(Some(row)) = row else {
-            continue;
-        };
-        let id = task_id.clone();
-        if is_done(&row) {
-            // Marked done already (often the session itself did, then was
-            // stopped): what the session sends after doesn't reopen it.
-            let _ = pod.blocking(move |s| db::remove_launch(s, &id)).await;
-            continue;
-        }
-        let _ = pod.blocking(move |s| db::remove_launch(s, &id)).await;
-        let values = match e {
-            Effect::TaskStarted { session_id, .. } => {
-                json!({"status": "started", "session_id": session_id})
-            }
-            Effect::TaskFinished {
-                summary, pr_url, ..
-            } => {
-                let mut more = if summary.is_empty() {
-                    "Finished.".to_owned()
-                } else {
-                    summary.clone()
-                };
-                if !pr_url.is_empty() {
-                    more.push_str(&format!("\nPR: {pr_url}"));
-                }
-                json!({"status": "review", "diagnosis": append(&text(&row, "diagnosis"), &more)})
-            }
-            Effect::TaskFailed { error, .. } => {
-                let more = if error.is_empty() {
-                    "The session failed.".to_owned()
-                } else {
-                    format!("The session failed: {error}")
-                };
-                json!({"status": "todo", "diagnosis": append(&text(&row, "diagnosis"), &more)})
-            }
-            _ => continue,
-        };
-        update(pod, &link.collection, &task_id, values).await;
-    }
+    start_run(
+        pod,
+        clients,
+        runner,
+        &link,
+        id,
+        &row,
+        Some(last_id),
+        Some(message.to_owned()),
+    )
+    .await
+    .map_err(|e| match e {
+        CapError::Status(s @ (400 | 404 | 409), d) => (
+            s,
+            "runner_refused",
+            if d.is_empty() {
+                "the runner refused to reopen it".into()
+            } else {
+                d
+            },
+        ),
+        CapError::Unauthorized => (
+            502,
+            "runner_refused_token",
+            "the runner refused the pod's token; sign in to the runner again".into(),
+        ),
+        other => (502, "runner_unreachable", other.to_string()),
+    })
 }
 
 #[cfg(test)]
@@ -451,40 +603,63 @@ mod tests {
         assert!(out.ends_with("\n\nend"));
     }
 
-    #[test]
-    fn done_rows_name_their_open_sessions() {
-        use crate::state::{FINISHED, Session, WAITING_PERMISSION};
-        let session = |id: &str, task: &str, status: &str| Session {
-            id: id.into(),
-            task_id: task.into(),
-            status: status.into(),
+    fn run(state: &str, end: &str, outcome: &str) -> Run {
+        Run {
+            id: "run_1".into(),
+            state: state.into(),
+            end_reason: end.into(),
+            outcome: outcome.into(),
             ..Default::default()
-        };
-        let mut state = State::default();
-        for s in [
-            session("s-done", "r1", WAITING_PERMISSION),
-            session("s-named", "", WAITING_PERMISSION),
-            session("s-ended", "r3", FINISHED),
-            session("s-open", "r4", WAITING_PERMISSION),
-        ] {
-            state.sessions.insert(s.id.clone(), s);
         }
-        let row = |v: Value| serde_json::from_value::<Named>(v).unwrap();
-        let rows = vec![
-            ("r1".to_owned(), row(json!({"status": "done"}))),
-            (
-                "r2".to_owned(),
-                row(json!({"status": "review", "done": true, "session_id": "s-named"})),
-            ),
-            ("r3".to_owned(), row(json!({"status": "done"}))),
-            (
-                "r4".to_owned(),
-                row(json!({"status": "review", "done": false})),
-            ),
-        ];
-        let mut got = done_sessions(&rows, &state);
-        got.sort();
-        assert_eq!(got, ["s-done", "s-named"]);
+    }
+
+    #[test]
+    fn the_mapping_table() {
+        for (state, end, outcome, want) in [
+            ("queued", "", "", QUEUED),
+            ("starting", "", "", RUNNING),
+            ("working", "", "", RUNNING),
+            ("needs_you", "", "", NEEDS_YOU),
+            // The outcome survives the run ending, whatever ended it.
+            ("ended", "reported", "done", DONE),
+            ("ended", "lost", "done", DONE),
+            ("ended", "reported", "review", REVIEW),
+            ("ended", "reported", "", REVIEW),
+            ("ended", "exited", "", REVIEW),
+            ("ended", "stopped", "", REVIEW),
+            ("ended", "reported", "failed", FAILED),
+            ("ended", "reported", "blocked", FAILED),
+            ("ended", "lost", "", FAILED),
+            ("ended", "start_failed", "", FAILED),
+            ("ended", "timed_out", "", FAILED),
+            ("ended", "expired", "", FAILED),
+        ] {
+            assert_eq!(
+                task_status(&run(state, end, outcome)),
+                want,
+                "{state} {end} {outcome}"
+            );
+        }
+    }
+
+    #[test]
+    fn ended_runs_note_why() {
+        let mut r = run("ended", "reported", "review");
+        r.outcome_summary = "Opened a PR.".into();
+        r.outcome_pr_url = "https://github.com/o/r/pull/2".into();
+        assert_eq!(
+            end_note(&r),
+            "Opened a PR.\nPR: https://github.com/o/r/pull/2"
+        );
+        let mut r = run("ended", "reported", "blocked");
+        r.outcome_summary = "Needs a key.".into();
+        assert_eq!(end_note(&r), "Blocked: Needs a key.");
+        let r = run("ended", "lost", "");
+        assert_eq!(end_note(&r), "Lost: The run was lost: its process is gone.");
+        let mut r = run("ended", "start_failed", "");
+        r.error = "The sandbox didn't wake".into();
+        assert_eq!(end_note(&r), "Didn't start: The sandbox didn't wake");
+        assert_eq!(end_note(&run("ended", "reported", "done")), "Done.");
     }
 
     #[test]

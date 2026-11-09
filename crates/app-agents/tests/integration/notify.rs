@@ -35,28 +35,62 @@ async fn runner_events_notify_the_agents_layout() {
         .collect();
     assert_eq!(mine, ["needs_you", "sessions", "warnings"]);
 
-    let s = "session_01Work";
-    fake.push(json!({"type": "permission.requested", "session_id": s,
-        "data": {"tool": "Bash", "detail": "rm -rf build"}}));
-    fake.push(json!({"type": "session.status", "session_id": s, "status": "waiting_permission"}));
-    fake.push(json!({"type": "session.status", "session_id": s, "status": "working"}));
-    fake.push(json!({"type": "session.finished", "session_id": s, "data": {
-        "summary": "Tidied the readme.", "pr_url": "https://github.com/sample-owner/sample-repo/pull/12",
-        "cost_usd": 0.42, "input_tokens": 1000, "output_tokens": 200, "duration_s": 300, "reason": "done"}}));
-    fake.push(
-        json!({"type": "session.failed", "session_id": "session_01Other",
-        "data": {"error": "The sandbox ran out of disk"}}),
+    let r = "run_work";
+    fake.runs
+        .lock()
+        .unwrap()
+        .insert(r.into(), crate::runner::snapshot_data()["runs"][0].clone());
+    // Waiting for a permission: one notice, however often the runner says so.
+    let ask = json!({"state": "needs_you", "needs_you": {"reason": "permission", "text": "Bash: rm -rf build"}});
+    fake.run(r, ask.clone());
+    fake.run(r, ask.clone());
+    fake.run(r, json!({"asleep": true}));
+    // Answered, then a question: a second notice.
+    fake.run(
+        r,
+        json!({"state": "working", "needs_you": null, "asleep": false}),
     );
-    for status in ["warn", "warn", "ok", "warn"] {
-        fake.push(json!({"type": "security.check", "status": status,
-            "data": {"id": "egress", "title": "Network egress", "detail": "An unknown host was contacted"}}));
+    fake.run(
+        r,
+        json!({"state": "needs_you", "needs_you": {"reason": "question",
+        "text": "Open the PR now or wait for the Android check?"}}),
+    );
+    fake.run(
+        r,
+        json!({"state": "ended", "end_reason": "reported", "needs_you": null,
+        "outcome": {"status": "review", "summary": "Tidied the readme.",
+        "pr_url": "https://github.com/sample-owner/sample-repo/pull/12"}}),
+    );
+    // A copy of the same end (a higher version): nothing more.
+    fake.run(r, json!({"cost_usd": 0.42}));
+    // A run that is stopped notifies nothing; one that is lost warns.
+    fake.run(
+        "run_stopped",
+        json!({"title": "Try a thing", "state": "working"}),
+    );
+    fake.run(
+        "run_stopped",
+        json!({"state": "ended", "end_reason": "stopped"}),
+    );
+    fake.run(
+        "run_lost",
+        json!({"title": "Shade rows", "state": "working"}),
+    );
+    fake.run(
+        "run_lost",
+        json!({"state": "ended", "end_reason": "lost",
+        "error": "The sandbox was reset"}),
+    );
+    let check = |v: i64, status: &str| {
+        json!({"id": "egress", "title": "Network egress", "status": status, "version": v,
+            "detail": "An unknown host was contacted"})
+    };
+    for (v, status) in [(2, "warn"), (3, "warn"), (4, "ok"), (5, "warn")] {
+        fake.push("check.updated", check(v, status));
     }
-    fake.push(json!({"type": "schedule.missed", "data": {"schedule": "nightly-deps", "error": "The runner was asleep"}}));
-    fake.push(json!({"type": "schedule.timeout",
-        "data": {"schedule": "nightly-deps", "max_runtime_minutes": 30, "stopped": true}}));
 
-    until("eight notifications", || async {
-        notifications(&pod).await.len() >= 7
+    until("six notifications", || async {
+        notifications(&pod).await.len() >= 6
     })
     .await;
     // Let anything extra arrive before counting.
@@ -70,28 +104,44 @@ async fn runner_events_notify_the_agents_layout() {
     assert_eq!(
         titles,
         [
-            "Failed: a session",
-            "Finished: Tidy the readme",
+            "Lost: Shade rows",
+            "Needs review: Tidy the readme",
+            "Needs you: Tidy the readme",
             "Needs you: Tidy the readme",
             "Runner: Network egress",
             "Runner: Network egress",
-            "Schedule missed: nightly-deps",
-            "Schedule ran too long: nightly-deps",
         ],
         "{got:#?}"
     );
     assert!(got.iter().all(|n| n["app_id"] == app.as_str()));
-    let finished = got
+    let ended = got
         .iter()
-        .find(|n| n["title"] == "Finished: Tidy the readme")
+        .find(|n| n["title"] == "Needs review: Tidy the readme")
         .unwrap();
     assert_eq!(
-        finished["body"],
+        ended["body"],
         "Tidied the readme.\nhttps://github.com/sample-owner/sample-repo/pull/12"
     );
-    let needs = got
+    assert_eq!(ended["channel"], "sessions");
+    let mut asks: Vec<&str> = got
         .iter()
-        .find(|n| n["title"].as_str().unwrap().starts_with("Needs"))
+        .filter(|n| n["channel"] == "needs_you")
+        .map(|n| n["body"].as_str().unwrap())
+        .collect();
+    asks.sort();
+    assert_eq!(
+        asks,
+        [
+            "Bash: rm -rf build",
+            "Open the PR now or wait for the Android check?"
+        ]
+    );
+    let lost = got
+        .iter()
+        .find(|n| n["title"] == "Lost: Shade rows")
         .unwrap();
-    assert_eq!(needs["body"], "Wants to use Bash: rm -rf build");
+    assert_eq!(
+        (&lost["channel"], &lost["body"]),
+        (&json!("warnings"), &json!("The sandbox was reset"))
+    );
 }

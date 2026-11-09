@@ -1,22 +1,23 @@
-//! The `agents` data source (decision `agents-data-source`, issue #165):
-//! Claude Code sessions run by an external **agent runner**, shown and
-//! controlled from the pod. The pod is the dashboard and the "start work"
-//! button; the sessions themselves are watched and steered in the Claude
-//! app.
+//! The `agents` data source (decisions `agents-data-source`, `agents-runs`):
+//! Claude Code runs started by an external **agent runner** (the Foreman),
+//! shown and controlled from the pod. The pod is the dashboard and the
+//! "start work" button; the runs themselves are watched and steered in the
+//! Claude app.
 //!
-//! The runner speaks CAP v1 ([`cap`]). The pod signs in with the runner's
-//! URL and a token (`POST /v1/agents/sign-in`, from the Agents layout's
-//! form), stored sealed. A background follower per pod ([`follower`]) takes
-//! a snapshot, follows the event stream from its cursor and keeps the
-//! result ([`state`], [`db`]), so the feeds answer while the runner is away.
+//! The runner speaks CAP v2 ([`cap`]) and alone decides each run's state;
+//! the pod keeps a mirror of its records ([`state`], [`db`]). The pod signs
+//! in with the runner's URL and a token (`POST /v1/agents/sign-in`, from the
+//! Agents layout's form), stored sealed. A background follower per signed-in
+//! pod ([`follower`]) takes a snapshot and follows the stream from its
+//! cursor, so the feeds answer while the runner is away.
 //!
-//! - Feeds: `sessions` (`agents:status`, `agents:sessions`), `sandboxes`,
-//!   `checks`, `schedules`; a data path for one session's timeline.
-//! - Actions: stop a session, wake a sandbox, start a task, run, pause and
-//!   resume a schedule. Commands are a fixed set ([`cap::Command`]).
+//! - Feeds: `sessions` (`agents:status`, `agents:sessions`: the runs),
+//!   `sandboxes`, `checks`, `schedules`; a data path for one run's log.
+//! - Actions: stop a run, wake a sandbox, start a run, reopen a task, run,
+//!   pause and resume a schedule. Commands are a fixed set ([`cap::Command`]).
 //! - Notifications ([`alerts`]) in the layout that shows the source.
-//! - Tasks wiring ([`tasks`]): a linked collection's queued rows start
-//!   sessions, and their events come back to the rows.
+//! - Tasks wiring ([`tasks`]): a linked collection's queued rows start runs,
+//!   and each row's status follows its run through one table.
 //! - The `agents` blueprint: `layouts/agents/`.
 
 // Route helpers hand back the refusal as an axum `Response`.
@@ -78,6 +79,7 @@ pub const START_PATH: &str = "/v1/agents/tasks/start";
 pub const RUN_SCHEDULE_PATH: &str = "/v1/agents/schedules/run";
 pub const PAUSE_SCHEDULE_PATH: &str = "/v1/agents/schedules/pause";
 pub const RESUME_SCHEDULE_PATH: &str = "/v1/agents/schedules/resume";
+pub const REOPEN_PATH: &str = "/v1/agents/tasks/reopen";
 pub const TIMELINE_PATH: &str = "/v1/agents/sessions/timeline";
 
 /// Minutes a Wake keeps a sandbox up unless the request says.
@@ -91,9 +93,10 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         FeedSpec {
             name: SESSIONS_FEED,
             query_keys: &[STATUS_QUERY, SESSIONS_QUERY],
-            doc: "The agent runner's Claude Code sessions, active first (the ones that need \
-                  you before them), and agents:status: whether the pod is signed in to a \
-                  runner and reaches it, with a one-line summary such as 2 working · 1 needs you.",
+            doc: "The agent runner's runs (one attempt at one piece of work each): the ones that \
+                  need you, then working, queued and ended ones; and agents:status: whether the \
+                  pod is signed in to a runner and reaches it, with a one-line summary such as \
+                  1 working · 1 needs you · 2 queued.",
         },
         FeedSpec {
             name: SANDBOXES_FEED,
@@ -115,7 +118,7 @@ pub const MANIFEST: SourceManifest = SourceManifest {
     data_paths: &[PathSpec {
         pattern: "/v1/agents/sessions/timeline?id={id}",
         query_keys: &["agents:timeline:{id}"],
-        doc: "One session (agents://sessions/<id>) and its recent events, oldest first.",
+        doc: "One run (agents://sessions/<id>) and its log from the runner, oldest first.",
     }],
     actions: &[
         PathSpec {
@@ -132,7 +135,8 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         PathSpec {
             pattern: STOP_PATH,
             query_keys: &[],
-            doc: "Stop a session: {session_id}. Wrap it in action.confirm.",
+            doc: "Stop a run: {run_id} (the session entity's id; session_id is taken too). \
+                  Wrap it in action.confirm.",
         },
         PathSpec {
             pattern: WAKE_PATH,
@@ -143,8 +147,15 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         PathSpec {
             pattern: START_PATH,
             query_keys: &[],
-            doc: "Start a session: {workspace, title, prompt, task_id?}. 429 when the runner is \
-                  at its limit.",
+            doc: "Start a run: {workspace, title, prompt, task_id?}. The runner queues it; the \
+                  answer has its run_id.",
+        },
+        PathSpec {
+            pattern: REOPEN_PATH,
+            query_keys: &[],
+            doc: "Reopen a linked task whose run has ended: {id (the row), message}. A new run \
+                  resumes the last one's conversation with the message as the next prompt; the \
+                  row goes back to queued.",
         },
         PathSpec {
             pattern: RUN_SCHEDULE_PATH,
@@ -177,13 +188,11 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ("status_text", "e.g. Connected to runner.example"),
                 (
                     "summary_text",
-                    "e.g. 2 working · 1 needs you, or Nothing running (idle sessions don't count)",
+                    "e.g. 1 working · 1 needs you · 2 queued, or Nothing running",
                 ),
-                (
-                    "working_count",
-                    "sessions starting or working (not idle ones)",
-                ),
-                ("needs_you_count", "sessions waiting for you"),
+                ("working_count", "runs starting or working"),
+                ("needs_you_count", "runs waiting for you"),
+                ("queued_count", "runs waiting for a slot"),
                 ("color", "#RRGGBB for the summary"),
                 (
                     "updated_text",
@@ -193,25 +202,48 @@ pub const MANIFEST: SourceManifest = SourceManifest {
         },
         EntityDoc {
             uri: "agents://sessions/{id}",
-            doc: "A Claude Code session (agents:sessions).",
+            doc: "A run: one attempt at one piece of work (agents:sessions); id is the run's.",
             fields: &[
-                ("id", "the session id"),
+                ("id", "the run's id"),
                 ("title", "what it works on"),
+                ("state", "queued, starting, working, needs_you or ended"),
+                ("status", "the same as state"),
                 (
-                    "status",
-                    "starting, working, waiting_permission, waiting_input, idle, finished, failed or stale",
+                    "status_text",
+                    "e.g. Queued, Working, Needs you, Done, Needs review, Failed, Stopped, Lost",
                 ),
-                ("status_text", "e.g. Working, Needs you, Finished"),
                 ("status_color", "#RRGGBB"),
-                ("active", "true until it finishes or fails"),
-                ("needs_you", "true while it waits for a permission or input"),
-                ("current_tool", "e.g. Bash: npm test"),
-                ("summary", "what it did (once finished)"),
+                ("active", "true until it ends"),
+                ("needs_you", "true while it waits for you"),
+                (
+                    "needs_you_reason",
+                    "permission, question or stopped (while waiting)",
+                ),
+                ("needs_you_label", "e.g. Wants permission, Has a question"),
+                (
+                    "needs_you_text",
+                    "the question, the permission, or Claude's last message",
+                ),
+                (
+                    "end_reason",
+                    "once ended: reported, exited, stopped, timed_out, lost, start_failed or expired",
+                ),
+                (
+                    "outcome",
+                    "the agent's report: done, review, blocked or failed, or empty",
+                ),
+                ("outcome_summary", "the report's summary"),
+                ("summary", "the last thing Claude said at the end of a turn"),
+                ("error", "why it ended badly"),
                 (
                     "pr_url",
                     "its pull request (https://github.com/.../pull/N), or empty",
                 ),
-                ("error", "why it failed"),
+                (
+                    "asleep",
+                    "true while its sandbox sleeps (the run is frozen, not ended)",
+                ),
+                ("current_tool", "e.g. Bash: npm test (while active)"),
                 ("cost_text", "e.g. $0.42"),
                 ("tokens_text", "e.g. 12000 tokens"),
                 ("elapsed_text", "how long it has run, e.g. 12 min"),
@@ -220,19 +252,32 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                 ("schedule", "the schedule it runs for, or empty"),
                 ("sandbox", "the sandbox it runs in"),
                 ("workspace", "the runner workspace"),
+                ("origin", "task, schedule or phone"),
+                ("session_id", "Claude Code's session id"),
+                (
+                    "resumed_from",
+                    "the run this one continues (Reopen), or empty",
+                ),
                 ("claude_url", "opens it in the Claude app, or empty"),
             ],
         },
         EntityDoc {
             uri: "agents://sandboxes/{name}",
-            doc: "A sandbox sessions run in (agents:sandboxes).",
+            doc: "A sandbox runs run in (agents:sandboxes).",
             fields: &[
                 ("name", "its name"),
-                ("state", "awake or asleep"),
+                (
+                    "state",
+                    "unprovisioned, asleep, waking, awake, unreachable or updating",
+                ),
                 ("awake", "true while awake"),
-                ("state_text", "Awake or Asleep"),
+                (
+                    "state_text",
+                    "Not set up, Asleep, Waking, Awake, Unreachable or Updating",
+                ),
                 ("color", "#RRGGBB"),
-                ("last_seen_text", "e.g. 5 min ago"),
+                ("last_seen_text", "its last heartbeat, e.g. 5 min ago"),
+                ("agentd_version", "the version its agent daemon reports"),
                 ("workspace", "what Wake sends"),
             ],
         },
@@ -271,23 +316,27 @@ pub const MANIFEST: SourceManifest = SourceManifest {
                     "e.g. in 3 h · Sat 03:00 (in the schedule's timezone, else the pod's), or Paused",
                 ),
                 ("ran", "true once it has a last run"),
-                ("last_status", "finished, failed, missed, ..."),
-                ("last_status_text", "e.g. Finished"),
+                (
+                    "last_status",
+                    "the last run's state, end reason or outcome, e.g. done or expired",
+                ),
+                ("last_status_text", "e.g. Done, Expired"),
                 ("last_status_color", "#RRGGBB"),
                 ("last_summary", "what the last run did"),
-                ("last_error", "why the last run failed or was missed"),
+                ("last_error", "why the last run ended badly"),
                 ("last_cost_text", "e.g. $0.42"),
-                ("last_session_id", "the last run's session"),
+                ("last_run_id", "the last run's id"),
+                ("last_session_id", "the same as last_run_id"),
                 ("last_run_text", "when the last run was due, e.g. 3 h ago"),
             ],
         },
         EntityDoc {
-            uri: "agents://events/{seq}",
-            doc: "A line of a session's timeline (agents:timeline:<id>).",
+            uri: "agents://events/{run}-{n}",
+            doc: "A line of a run's log (agents:timeline:<id>).",
             fields: &[
-                ("seq", "the event's number"),
-                ("type", "e.g. tool.used"),
-                ("text", "e.g. Used Bash: npm test"),
+                ("seq", "its place in the log"),
+                ("type", "the runner's kind of line, e.g. tool"),
+                ("text", "e.g. Bash: npm test"),
                 ("time_text", "e.g. 4 min ago"),
             ],
         },
@@ -370,15 +419,15 @@ impl AgentsAdapter {
     }
 }
 
-const INSTRUCTIONS: &str = "The agents source shows Claude Code sessions an agent runner runs for \
-the user (feeds sessions, sandboxes, checks, schedules), with actions to stop a session, wake a \
-sandbox, start a task and run, pause or resume a schedule. The blueprint layout agents is a whole \
-dashboard: reference it ({type: core://Ref, app: agents, part: layout}) and link it from home, \
-where agents:status's summary_text (e.g. 2 working · 1 needs you) makes a one-line summary. The \
-pod signs in to the runner from that layout's form (the runner's URL and token): never ask for the \
-token in the conversation. agents_link_tasks links a tasks collection (a title and a choice status \
-with the option queued): its rows that become queued start sessions, and their results come back \
-to the rows.";
+const INSTRUCTIONS: &str = "The agents source shows the runs (Claude Code work) an agent runner \
+runs for the user (feeds sessions, sandboxes, checks, schedules), with actions to stop a run, wake \
+a sandbox, start a run, reopen a task and run, pause or resume a schedule. The blueprint layout \
+agents is a whole dashboard: reference it ({type: core://Ref, app: agents, part: layout}) and link \
+it from home, where agents:status's summary_text (e.g. 1 working · 1 needs you) makes a one-line \
+summary. The pod signs in to the runner from that layout's form (the runner's URL and token): never \
+ask for the token in the conversation. agents_link_tasks links a tasks collection (a title and a \
+choice status with the option queued): its rows that become queued start runs, and each row's \
+status follows its run.";
 
 impl AppAdapter for AgentsAdapter {
     fn name(&self) -> &'static str {
@@ -415,6 +464,7 @@ impl AppAdapter for AgentsAdapter {
             .route(RUN_SCHEDULE_PATH, post(run_schedule_route))
             .route(PAUSE_SCHEDULE_PATH, post(pause_schedule_route))
             .route(RESUME_SCHEDULE_PATH, post(resume_schedule_route))
+            .route(REOPEN_PATH, post(reopen_route))
             .route(TIMELINE_PATH, get(timeline_route))
     }
 
@@ -431,10 +481,7 @@ impl AppAdapter for AgentsAdapter {
             follower::spawn(pod);
             let read = pod
                 .blocking(|s| {
-                    let mut st = db::state(s)?;
-                    if let Some((state, _)) = st.as_mut() {
-                        tasks::close_done(s, state)?;
-                    }
+                    let st = db::state(s)?;
                     let host = db::runner(s)?
                         .map(|r| cap::host_of(&r.url))
                         .unwrap_or_default();
@@ -475,8 +522,8 @@ impl AppAdapter for AgentsAdapter {
         }
     }
 
-    /// The follower sends the notifications itself; polling keeps it
-    /// running for pods with a registered device.
+    /// The follower sends the notifications itself; polling makes sure it
+    /// runs.
     fn poll_interval(&self) -> Option<Duration> {
         Some(Duration::from_secs(60))
     }
@@ -496,16 +543,24 @@ impl AppAdapter for AgentsAdapter {
         Box::pin(async move { follower::spawn(pod) })
     }
 
+    /// A pod signed in to a runner stays open, so its follower runs from
+    /// server start whether or not anyone uses the pod.
+    fn keeps_open(&self, store: &Store) -> bool {
+        db::signed_in(store).unwrap_or(false)
+    }
+
     fn mcp_tools(&self) -> Vec<Value> {
         vec![json!({
             "name": "agents_link_tasks",
             "description": "Link a tasks collection to the agent runner (or unlink it with collection null). \
         The collection needs a title field and a choice field status with the option queued. Linking adds what \
-        the wiring needs: the status options todo, started, review and failed, and optional text fields \
-        session_id, workspace and diagnosis. Then a row whose status becomes queued starts a session on the \
-        runner (prompt: the title and notes; workspace: the row's workspace, else this default); the row goes \
-        to started, then review with the summary and pull request appended to diagnosis, or back to todo with \
-        the error if the session fails.",
+        the wiring needs: the status options todo, queued, running, needs_you, review, done and failed, and \
+        optional text fields run_id, session_id, workspace and diagnosis. Then a row whose status becomes queued \
+        starts a run on the runner (prompt: the title and notes; workspace: the row's workspace, else this \
+        default), and the row's status follows its run: running, needs_you, then done, review or failed, with \
+        the outcome's summary and pull request (or why it failed) appended to diagnosis. A row set to done or \
+        todo keeps that status (its run is stopped). The action /v1/agents/tasks/reopen continues an ended \
+        run with a follow-up message.",
             "inputSchema": {"type": "object", "properties": {
                 "collection": {"type": ["string", "null"], "description": "The collection's name, or null to unlink"},
                 "workspace": {"type": "string", "description": "The runner workspace tasks start in by default"}},
@@ -590,16 +645,7 @@ fn field(body: &Value, k: &str, max: usize) -> Result<String, Response> {
 /// 401, which would tell the client its own session is stale.
 fn runner_error(e: CapError) -> Response {
     match e {
-        CapError::Status(429, d) => refuse(
-            StatusCode::TOO_MANY_REQUESTS,
-            "runner_busy",
-            if d.is_empty() {
-                "the runner is running as many sessions as it may; try again later".to_owned()
-            } else {
-                d
-            },
-        ),
-        CapError::Status(s @ (400 | 404), d) => refuse(
+        CapError::Status(s @ (400 | 404 | 409), d) => refuse(
             StatusCode::from_u16(s).unwrap_or(StatusCode::BAD_REQUEST),
             "runner_refused",
             if d.is_empty() { e_text(s) } else { d },
@@ -618,35 +664,50 @@ fn runner_error(e: CapError) -> Response {
 }
 
 fn e_text(status: u16) -> String {
-    if status == 404 {
-        "the runner doesn't know that".into()
-    } else {
-        "the runner refused the request".into()
+    match status {
+        404 => "the runner doesn't know that".into(),
+        409 => "the runner can't do that now".into(),
+        _ => "the runner refused the request".into(),
+    }
+}
+
+/// The adapter and the runner the pod is signed in to, or the refusal.
+async fn signed_in(pod: &Pod) -> Result<(&AgentsAdapter, Runner), Response> {
+    let Some(a) = pod.adapter::<AgentsAdapter>() else {
+        return Err(refuse(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "no agents source",
+        ));
+    };
+    match pod.blocking(db::runner).await {
+        Ok(Some(r)) => Ok((a, r)),
+        Ok(None) => Err(refuse(
+            StatusCode::CONFLICT,
+            "not_signed_in",
+            "the pod is not signed in to an agent runner",
+        )),
+        Err(e) => Err(e.into_response()),
     }
 }
 
 async fn send(pod: &Pod, cmd: Command) -> Response {
-    let Some(a) = pod.adapter::<AgentsAdapter>() else {
-        return refuse(StatusCode::NOT_FOUND, "not_found", "no agents source");
-    };
-    let runner = match pod.blocking(db::runner).await {
-        Ok(Some(r)) => r,
-        Ok(None) => {
-            return refuse(
-                StatusCode::CONFLICT,
-                "not_signed_in",
-                "the pod is not signed in to an agent runner",
-            );
-        }
-        Err(e) => return e.into_response(),
+    let (a, runner) = match signed_in(pod).await {
+        Ok(v) => v,
+        Err(r) => return r,
     };
     match cap::command(&a.clients, &runner, &cmd).await {
         Ok(answer) => {
             let mut out = json!({"ok": true});
-            for k in ["run_key", "task_id"] {
-                if let Some(v) = answer.get(k).and_then(Value::as_str) {
-                    out[k] = json!(text::clean(v, 200));
-                }
+            if let Some(id) = cap::run_id_of(&answer) {
+                out["run_id"] = json!(id);
+            }
+            if let Some(t) = answer
+                .get("run")
+                .and_then(|r| r.get("task_id"))
+                .and_then(Value::as_str)
+            {
+                out["task_id"] = json!(text::clean(t, 200));
             }
             Json(out).into_response()
         }
@@ -727,8 +788,18 @@ async fn stop_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> 
         Ok(b) => b,
         Err(r) => return r,
     };
-    match field(&body, "session_id", 120) {
-        Ok(session_id) => send(&pod, Command::StopSession { session_id }).await,
+    let key = if body.get("run_id").is_some() {
+        "run_id"
+    } else {
+        "session_id"
+    };
+    match field(&body, key, 120) {
+        Ok(run_id) if cap::valid_id(&run_id) => send(&pod, Command::StopRun { run_id }).await,
+        Ok(_) => refuse(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "\"run_id\" names a run",
+        ),
         Err(r) => r,
     }
 }
@@ -758,7 +829,7 @@ async fn wake_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> 
             }
         },
     };
-    send(&pod, Command::Wake { workspace, minutes }).await
+    send(&pod, Command::WakeSprite { workspace, minutes }).await
 }
 
 async fn start_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
@@ -787,11 +858,12 @@ async fn start_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) ->
     };
     send(
         &pod,
-        Command::StartTask {
+        Command::StartRun {
             workspace,
             task_id,
             title,
             prompt,
+            resume_from: None,
         },
     )
     .await
@@ -829,9 +901,60 @@ async fn resume_schedule_route(
     schedule_route(pod, headers, body, |name| Command::ResumeSchedule { name }).await
 }
 
+async fn reopen_route(State(pod): State<Pod>, headers: HeaderMap, body: Bytes) -> Response {
+    let body = match body_of(&pod, &headers, &body).await {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let (id, message) = match (field(&body, "id", 200), field(&body, "message", 20_000)) {
+        (Ok(i), Ok(m)) => (i, m),
+        (Err(r), _) | (_, Err(r)) => return r,
+    };
+    let (a, runner) = match signed_in(&pod).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let state = match pod.blocking(db::state).await {
+        Ok(st) => st.map(|(s, _)| s).unwrap_or_default(),
+        Err(e) => return e.into_response(),
+    };
+    match tasks::reopen(&pod, &a.clients, &runner, &state, &id, &message).await {
+        Ok(run_id) => Json(json!({"ok": true, "run_id": run_id})).into_response(),
+        Err((status, error, detail)) => refuse(
+            StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
+            error,
+            detail,
+        ),
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct TimelineQuery {
     id: String,
+}
+
+/// Run logs read lately, per pod: `(run id) -> (when, log)`.
+#[derive(Debug, Default)]
+pub struct LogCache(
+    std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Value)>>,
+);
+
+/// How long a run's log is served from [`LogCache`].
+pub const LOG_FRESH: Duration = Duration::from_secs(10);
+
+impl LogCache {
+    fn get(&self, id: &str) -> Option<Value> {
+        let m = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        m.get(id)
+            .filter(|(at, _)| at.elapsed() < LOG_FRESH)
+            .map(|(_, v)| v.clone())
+    }
+
+    fn put(&self, id: &str, log: &Value) {
+        let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        m.retain(|_, (at, _)| at.elapsed() < LOG_FRESH);
+        m.insert(id.to_owned(), (std::time::Instant::now(), log.clone()));
+    }
 }
 
 async fn timeline_route(
@@ -843,31 +966,46 @@ async fn timeline_route(
         return r;
     }
     let id = q.id.trim().to_owned();
-    if id.is_empty() || id.len() > 120 {
+    if !cap::valid_id(&id) {
         return refuse(
             StatusCode::BAD_REQUEST,
             "invalid_request",
-            "\"id\" names a session",
+            "\"id\" names a run",
         );
     }
-    let key = id.clone();
     let read = pod
         .blocking(move |s| {
-            let signed_in = db::runner(s)?.is_some();
-            let st = db::state(s)?.filter(|_| signed_in);
-            Ok((st, db::timeline(s, &key)?))
+            let runner = db::runner(s)?;
+            let st = db::state(s)?.filter(|_| runner.is_some());
+            Ok((runner, st))
         })
         .await;
-    match read {
-        Ok((st, events)) => Json(bundle::timeline(
-            st.as_ref(),
-            &id,
-            &events,
-            follower::now_ms(),
-        ))
-        .into_response(),
-        Err(e) => e.into_response(),
-    }
+    let (runner, st) = match read {
+        Ok(v) => v,
+        Err(e) => return e.into_response(),
+    };
+    let cache = pod.local::<LogCache>();
+    let log = match (cache.get(&id), runner, pod.adapter::<AgentsAdapter>()) {
+        (Some(l), _, _) => Some(l),
+        (None, Some(runner), Some(a)) => match cap::run_log(&a.clients, &runner, &id).await {
+            Ok(l) => {
+                cache.put(&id, &l);
+                Some(l)
+            }
+            Err(e) => {
+                tracing::info!(error = %e, "a run's log could not be read");
+                None
+            }
+        },
+        _ => None,
+    };
+    Json(bundle::timeline(
+        st.as_ref(),
+        &id,
+        log.as_ref(),
+        follower::now_ms(),
+    ))
+    .into_response()
 }
 
 /// The adapter as the server builds it.
