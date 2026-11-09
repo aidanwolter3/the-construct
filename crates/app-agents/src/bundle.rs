@@ -174,7 +174,12 @@ pub fn session(s: &Session, now_ms: i64) -> EntityRecord {
         "schedule": state::schedule_of_task(&s.task_id).unwrap_or(""),
         "sandbox": s.sprite,
         "workspace": s.workspace,
-        "claude_url": text::claude_url(&s.id).unwrap_or_default(),
+        // The runner's link, else one built from a claude.ai session id.
+        "claude_url": if s.claude_url.is_empty() {
+            text::claude_url(&s.id).unwrap_or_default()
+        } else {
+            s.claude_url.clone()
+        },
     }))
 }
 

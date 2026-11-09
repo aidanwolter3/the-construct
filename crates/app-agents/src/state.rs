@@ -65,6 +65,10 @@ pub struct Session {
     pub tool_detail: String,
     pub summary: String,
     pub pr_url: String,
+    /// The session's page in the Claude app, when the runner knows it
+    /// (checked by [`text::claude_link`]).
+    #[serde(default)]
+    pub claude_url: String,
     pub error: String,
     pub reason: String,
     pub cost_usd: f64,
@@ -205,6 +209,13 @@ fn pr(v: &Value) -> String {
         .unwrap_or_default()
 }
 
+fn link(v: &Value) -> String {
+    v.get("claude_url")
+        .and_then(Value::as_str)
+        .and_then(text::claude_link)
+        .unwrap_or_default()
+}
+
 fn sprite_of(v: &Value) -> Option<Sprite> {
     let name = s(v, &["name", "id", "sprite"], 100);
     if name.is_empty() {
@@ -238,6 +249,7 @@ fn session_of(v: &Value) -> Option<Session> {
         tool_detail: s(v, &["tool_detail", "detail"], 300),
         summary: summary(v),
         pr_url: pr(v),
+        claude_url: link(v),
         error: s(v, &["error"], 500),
         reason: s(v, &["reason"], 100),
         cost_usd: f(v, "cost_usd"),
@@ -397,6 +409,10 @@ impl State {
                 *field = text::clean(&v, 200);
             }
         }
+        let url = link(&e.data);
+        if !url.is_empty() {
+            s.claude_url = url;
+        }
         Some(s)
     }
 
@@ -452,6 +468,11 @@ impl State {
                         });
                     }
                 }
+            }
+            // The runner learned the session's Claude app link (and maybe
+            // its workspace): `session` records both.
+            "session.link" => {
+                self.session(e);
             }
             "tool.used" => {
                 let tool = e.text("tool").map(|t| text::clean(&t, 80));
@@ -699,6 +720,45 @@ mod tests {
             v[k] = x.clone();
         }
         Event::parse(&v).unwrap()
+    }
+
+    #[test]
+    fn a_session_link_from_the_runner_is_kept_only_when_it_is_claude_s() {
+        let mut st = State::default();
+        st.apply(&ev(
+            1,
+            "session.started",
+            json!({"session_id": "u-1", "data": {"workspace": "construct"}}),
+        ));
+        assert_eq!(st.sessions["u-1"].workspace, "construct");
+        assert!(
+            st.apply(&ev(
+                2,
+                "session.link",
+                json!({"session_id": "u-1", "data": {"claude_url": "https://evil.example/code/x"}})
+            ))
+            .is_empty()
+        );
+        assert_eq!(st.sessions["u-1"].claude_url, "");
+        st.apply(&ev(
+            3,
+            "session.link",
+            json!({"session_id": "u-1", "data": {"claude_url": "https://claude.ai/code/session_01Ab"}}),
+        ));
+        assert_eq!(
+            st.sessions["u-1"].claude_url,
+            "https://claude.ai/code/session_01Ab"
+        );
+        // A later event without one keeps it.
+        st.apply(&ev(
+            4,
+            "session.status",
+            json!({"session_id": "u-1", "status": "idle"}),
+        ));
+        assert_eq!(
+            st.sessions["u-1"].claude_url,
+            "https://claude.ai/code/session_01Ab"
+        );
     }
 
     #[test]

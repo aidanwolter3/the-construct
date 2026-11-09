@@ -76,6 +76,20 @@ pub fn claude_url(id: &str) -> Option<String> {
         .then(|| format!("https://claude.ai/code/{id}"))
 }
 
+/// A Claude app session link the runner sent, kept only as
+/// `https://claude.ai/code/` and a path of plain segments (letters, digits,
+/// `_`, `-`), at most 300 characters.
+pub fn claude_link(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://claude.ai/code/")?;
+    let plain = |seg: &str| {
+        !seg.is_empty()
+            && seg
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    };
+    (url.len() <= 300 && rest.split('/').all(plain)).then(|| url.to_owned())
+}
+
 /// A length of time, e.g. `45 s`, `12 min`, `3 h 5 min`, `2 days`.
 pub fn duration(secs: i64) -> String {
     let s = secs.max(0);
@@ -166,5 +180,18 @@ mod tests {
             Some("https://claude.ai/code/session_01Abc")
         );
         assert!(claude_url("../x").is_none());
+        assert_eq!(
+            claude_link("https://claude.ai/code/session_01Ab").as_deref(),
+            Some("https://claude.ai/code/session_01Ab")
+        );
+        for bad in [
+            "https://claude.ai/code/",
+            "https://claude.ai/code/a/../b",
+            "https://claude.ai/code/a?x=1",
+            "https://claude.ai.evil.example/code/a",
+            "http://claude.ai/code/a",
+        ] {
+            assert!(claude_link(bad).is_none(), "{bad}");
+        }
     }
 }
