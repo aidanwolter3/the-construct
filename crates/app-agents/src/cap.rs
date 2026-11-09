@@ -1,13 +1,17 @@
-//! The runner's side of the wire: the Construct Agent Protocol, v1.
+//! The runner's side of the wire: the Construct Agent Protocol, v2
+//! (decision `agents-runs`).
 //!
 //! The pod connects out to the runner; the runner never calls the pod.
-//! Every request carries the pod's bearer token for the runner.
-//! - `GET /v1/snapshot`: `{v, cursor, sprites[], sessions[], checks[],
-//!   schedules[]}`, the state now.
-//! - `GET /v1/stream?since=<cursor>`: server-sent events, one CAP event per
-//!   message with `id: <seq>`, resumable with `Last-Event-ID`.
-//! - `POST /v1/commands`: one of a fixed set ([`Command`]). Errors are JSON
-//!   `{error}` with 400, 401, 404, 429 or 502.
+//! Every request carries the pod's bearer token for the runner. The runner
+//! sends whole records with a `version`; the pod keeps the higher one.
+//! - `GET /v2/snapshot`: `{v: 2, cursor, runs[], sprites[], schedules[],
+//!   checks[]}`, the state now.
+//! - `GET /v2/stream?since=<cursor>`: server-sent events with `id: <seq>`,
+//!   resumable with `Last-Event-ID`; each is `{v: 2, seq, ts, type,
+//!   record}` ([`Event`]).
+//! - `GET /v2/runs/<id>/log`: one run's history, read on demand.
+//! - `POST /v2/commands`: one of a fixed set ([`Command`]). Errors are JSON
+//!   `{error}` with 400, 401, 404, 409 or 502.
 //!
 //! Everything the runner sends is read leniently (unknown fields ignored,
 //! missing ones empty) and treated as untrusted display text.
@@ -16,51 +20,48 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-/// A CAP event: `{v: 1, seq, ts (ms), type, sprite?, session_id?, task_id?,
-/// status?, data}`.
+/// The kind of record an [`Event`] carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Run,
+    Sprite,
+    Schedule,
+    Check,
+}
+
+/// A CAP v2 event: `{v: 2, seq, ts (ms), type, record}`, `type` one of
+/// `run.updated`, `sprite.updated`, `schedule.updated`, `check.updated`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Event {
     pub seq: i64,
     /// Milliseconds since the epoch.
     pub ts: i64,
-    pub kind: String,
-    pub sprite: Option<String>,
-    pub session_id: Option<String>,
-    pub task_id: Option<String>,
-    pub status: Option<String>,
-    pub data: Value,
-}
-
-fn opt_str(v: &Value, k: &str) -> Option<String> {
-    v.get(k)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
+    pub kind: Kind,
+    /// The whole record.
+    pub record: Value,
 }
 
 impl Event {
     /// The event in `v` (one SSE message's data), or `None` when it is not a
-    /// v1 event with a sequence number and a type.
+    /// v2 event with a sequence number, a known type and a record.
     pub fn parse(v: &Value) -> Option<Self> {
-        if v.get("v").and_then(Value::as_i64).unwrap_or(1) != 1 {
+        if v.get("v").and_then(Value::as_i64) != Some(2) {
             return None;
         }
+        let kind = match v.get("type").and_then(Value::as_str)? {
+            "run.updated" => Kind::Run,
+            "sprite.updated" => Kind::Sprite,
+            "schedule.updated" => Kind::Schedule,
+            "check.updated" => Kind::Check,
+            _ => return None,
+        };
+        let record = v.get("record").filter(|r| r.is_object())?.clone();
         Some(Self {
             seq: v.get("seq")?.as_i64()?,
             ts: v.get("ts").and_then(Value::as_i64).unwrap_or(0),
-            kind: opt_str(v, "type")?,
-            sprite: opt_str(v, "sprite"),
-            session_id: opt_str(v, "session_id"),
-            task_id: opt_str(v, "task_id"),
-            status: opt_str(v, "status"),
-            data: v.get("data").cloned().unwrap_or(Value::Null),
+            kind,
+            record,
         })
-    }
-
-    /// A text field of `data`.
-    pub fn text(&self, k: &str) -> Option<String> {
-        opt_str(&self.data, k)
     }
 }
 
@@ -68,18 +69,22 @@ impl Event {
 /// token) can't send arbitrary shell or configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    Wake {
-        workspace: String,
-        minutes: u32,
-    },
-    StartTask {
+    /// Start a run (202), or get the task's run that hasn't ended (200).
+    /// `resume_from`: an ended run whose conversation the new run continues
+    /// with `prompt` as the next message (Reopen).
+    StartRun {
         workspace: String,
         task_id: String,
         title: String,
         prompt: String,
+        resume_from: Option<String>,
     },
-    StopSession {
-        session_id: String,
+    StopRun {
+        run_id: String,
+    },
+    WakeSprite {
+        workspace: String,
+        minutes: u32,
     },
     RunSchedule {
         name: String,
@@ -96,24 +101,50 @@ impl Command {
     /// The request body.
     pub fn body(&self) -> Value {
         match self {
-            Self::Wake { workspace, minutes } => {
-                json!({"type": "wake", "workspace": workspace, "minutes": minutes})
-            }
-            Self::StartTask {
+            Self::StartRun {
                 workspace,
                 task_id,
                 title,
                 prompt,
-            } => json!({"type": "start_task", "workspace": workspace, "task_id": task_id,
-                "title": title, "prompt": prompt}),
-            Self::StopSession { session_id } => {
-                json!({"type": "stop_session", "session_id": session_id})
+                resume_from,
+            } => {
+                let mut b = json!({"type": "start_run", "workspace": workspace,
+                    "task_id": task_id, "title": title, "prompt": prompt});
+                if let Some(r) = resume_from {
+                    b["resume_from"] = json!(r);
+                }
+                b
+            }
+            Self::StopRun { run_id } => json!({"type": "stop_run", "run_id": run_id}),
+            Self::WakeSprite { workspace, minutes } => {
+                json!({"type": "wake_sprite", "workspace": workspace, "minutes": minutes})
             }
             Self::RunSchedule { name } => json!({"type": "run_schedule", "name": name}),
             Self::PauseSchedule { name } => json!({"type": "pause_schedule", "name": name}),
             Self::ResumeSchedule { name } => json!({"type": "resume_schedule", "name": name}),
         }
     }
+}
+
+/// The id of the run in a command's answer (`{run: {id, ...}}`), if it is
+/// one the pod can use as a key.
+pub fn run_id_of(answer: &Value) -> Option<String> {
+    answer
+        .get("run")
+        .and_then(|r| r.get("id"))
+        .and_then(Value::as_str)
+        .filter(|id| valid_id(id))
+        .map(str::to_owned)
+}
+
+/// A run id the pod accepts: 1 to 120 letters, digits, `_` or `-` (it goes
+/// in URLs and entity URIs).
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 120
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 /// Why a runner request failed.
@@ -125,7 +156,7 @@ pub enum CapError {
     Unauthorized,
     /// Any other error status, with the runner's `error` text.
     Status(u16, String),
-    /// An answer that isn't CAP v1.
+    /// An answer that isn't CAP v2.
     Invalid(String),
 }
 
@@ -136,7 +167,7 @@ impl std::fmt::Display for CapError {
             Self::Unauthorized => f.write_str("the runner refused the pod's token"),
             Self::Status(s, e) if e.is_empty() => write!(f, "the runner answered {s}"),
             Self::Status(s, e) => write!(f, "the runner answered {s}: {e}"),
-            Self::Invalid(e) => write!(f, "the runner's answer is not CAP v1 ({e})"),
+            Self::Invalid(e) => write!(f, "the runner's answer is not CAP v2 ({e})"),
         }
     }
 }
@@ -245,11 +276,11 @@ async fn error_of(resp: reqwest::Response) -> CapError {
     CapError::Status(status, text)
 }
 
-/// `GET /v1/snapshot`.
+/// `GET /v2/snapshot`.
 pub async fn snapshot(clients: &Clients, runner: &Runner) -> Result<Value, CapError> {
     let resp = clients
         .request
-        .get(format!("{}/v1/snapshot", runner.url))
+        .get(format!("{}/v2/snapshot", runner.url))
         .bearer_auth(&runner.token)
         .send()
         .await
@@ -261,17 +292,43 @@ pub async fn snapshot(clients: &Clients, runner: &Runner) -> Result<Value, CapEr
         .json()
         .await
         .map_err(|e| CapError::Invalid(short(&e)))?;
-    if !v.is_object() || v.get("v").and_then(Value::as_i64).unwrap_or(1) != 1 {
-        return Err(CapError::Invalid("not a v1 snapshot".into()));
+    if !v.is_object() || v.get("v").and_then(Value::as_i64) != Some(2) {
+        return Err(CapError::Invalid("not a v2 snapshot".into()));
     }
     Ok(v)
 }
 
-/// `POST /v1/commands`: the runner's answer (`{ok, ...}`).
+/// `GET /v2/runs/<id>/log`: `{entries: [{ts, kind, text}]}`, oldest first.
+pub async fn run_log(clients: &Clients, runner: &Runner, id: &str) -> Result<Value, CapError> {
+    if !valid_id(id) {
+        return Err(CapError::Status(400, "not a run id".into()));
+    }
+    let resp = clients
+        .request
+        .get(format!("{}/v2/runs/{id}/log", runner.url))
+        .bearer_auth(&runner.token)
+        .send()
+        .await
+        .map_err(|e| CapError::Unreachable(short(&e)))?;
+    if !resp.status().is_success() {
+        return Err(error_of(resp).await);
+    }
+    let v: Value = resp
+        .json()
+        .await
+        .map_err(|e| CapError::Invalid(short(&e)))?;
+    if !v.get("entries").is_some_and(Value::is_array) {
+        return Err(CapError::Invalid("not a run log".into()));
+    }
+    Ok(v)
+}
+
+/// `POST /v2/commands`: the runner's answer (`{run}`, `{sprite}` or
+/// `{schedule}`).
 pub async fn command(clients: &Clients, runner: &Runner, cmd: &Command) -> Result<Value, CapError> {
     let resp = clients
         .request
-        .post(format!("{}/v1/commands", runner.url))
+        .post(format!("{}/v2/commands", runner.url))
         .bearer_auth(&runner.token)
         .json(&cmd.body())
         .send()
@@ -283,7 +340,7 @@ pub async fn command(clients: &Clients, runner: &Runner, cmd: &Command) -> Resul
     Ok(resp.json().await.unwrap_or_else(|_| json!({"ok": true})))
 }
 
-/// `GET /v1/stream?since=<cursor>`: the open response, its body still to
+/// `GET /v2/stream?since=<cursor>`: the open response, its body still to
 /// read with [`SseParser`].
 pub async fn open_stream(
     clients: &Clients,
@@ -292,7 +349,7 @@ pub async fn open_stream(
 ) -> Result<reqwest::Response, CapError> {
     let resp = clients
         .stream
-        .get(format!("{}/v1/stream", runner.url))
+        .get(format!("{}/v2/stream", runner.url))
         .query(&[("since", since.to_string())])
         .header("Last-Event-ID", since.to_string())
         .header("Accept", "text/event-stream")
@@ -411,16 +468,51 @@ mod tests {
 
     #[test]
     fn events_parse_leniently() {
-        let e = Event::parse(
-            &json!({"v": 1, "seq": 42, "ts": 5, "type": "session.status",
-            "sprite": "box-1", "session_id": "s1", "status": "waiting_permission",
-            "data": {"tool": "Bash"}}),
-        )
+        let e = Event::parse(&json!({"v": 2, "seq": 42, "ts": 5, "type": "run.updated",
+            "record": {"id": "run_1", "version": 3}, "extra": true}))
         .unwrap();
-        assert_eq!(e.kind, "session.status");
-        assert_eq!(e.text("tool").as_deref(), Some("Bash"));
-        assert!(Event::parse(&json!({"v": 2, "seq": 1, "type": "x"})).is_none());
-        assert!(Event::parse(&json!({"seq": 1})).is_none());
+        assert_eq!((e.seq, e.kind), (42, Kind::Run));
+        assert_eq!(e.record["id"], "run_1");
+        for bad in [
+            json!({"v": 1, "seq": 1, "type": "run.updated", "record": {}}),
+            json!({"v": 2, "seq": 1, "type": "session.status", "record": {}}),
+            json!({"v": 2, "seq": 1, "type": "run.updated"}),
+            json!({"v": 2, "type": "run.updated", "record": {}}),
+        ] {
+            assert!(Event::parse(&bad).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn commands_have_their_v2_bodies() {
+        let start = Command::StartRun {
+            workspace: "w".into(),
+            task_id: "r1".into(),
+            title: "t".into(),
+            prompt: "p".into(),
+            resume_from: None,
+        };
+        assert!(start.body().get("resume_from").is_none());
+        let reopen = Command::StartRun {
+            workspace: "w".into(),
+            task_id: "r1".into(),
+            title: "t".into(),
+            prompt: "p".into(),
+            resume_from: Some("run_1".into()),
+        };
+        assert_eq!(reopen.body()["resume_from"], "run_1");
+        assert_eq!(
+            Command::StopRun {
+                run_id: "run_1".into()
+            }
+            .body(),
+            json!({"type": "stop_run", "run_id": "run_1"})
+        );
+        assert_eq!(
+            run_id_of(&json!({"run": {"id": "run_9"}})).as_deref(),
+            Some("run_9")
+        );
+        assert!(run_id_of(&json!({"run": {"id": "../x"}})).is_none());
     }
 
     #[test]

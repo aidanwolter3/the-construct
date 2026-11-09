@@ -1,17 +1,21 @@
 //! The adapter's tables (decision `named-migrations`):
 //! - `agents_runner`: the runner's URL and the pod's token for it, sealed
 //!   ([`pod_core::secrets`]); one row, or none when signed out.
-//! - `agents_state`: the last [`State`] (snapshot plus events), and how the
-//!   connection is going, so the feeds answer while the runner is away.
-//! - `agents_events`: recent events, for each session's timeline.
-//! - `agents_launches`: Tasks rows a `start_task` was sent for and not yet
-//!   answered by a session event, so a queued row is sent once.
+//! - `agents_state`: the mirror of the runner's records ([`State`]), and how
+//!   the connection is going, so the feeds answer while the runner is away.
+//! - `agents_launches`: Tasks rows a `start_run` was sent for, with the run
+//!   it answered, so a queued row is sent once.
+//! - `agents_marks`: what the Tasks wiring did once per run (a `stop_run`
+//!   sent, an ended run noted in the row's diagnosis).
+//!
+//! Step `cap_v2` (decision `agents-runs`) drops v1's event timeline (a run's
+//! log is read from the runner on demand) and empties the stored state, so
+//! the follower takes a v2 snapshot.
 
 use pod_core::store::{Step, Store};
 use rusqlite::{OptionalExtension, params};
-use serde_json::Value;
 
-use crate::cap::{Event, Runner};
+use crate::cap::Runner;
 use crate::state::State;
 
 const SCHEMA: &str = "
@@ -45,11 +49,21 @@ CREATE TABLE agents_launches (
 
 /// By name: add steps at the end; never rename, edit or remove one that
 /// shipped.
-pub static MIGRATIONS: &[Step] = &[Step::sql("schema", SCHEMA)];
+pub static MIGRATIONS: &[Step] = &[Step::sql("schema", SCHEMA), Step::sql("cap_v2", CAP_V2)];
 
-/// Events kept in all, and per session's timeline.
-pub const MAX_EVENTS: i64 = 5000;
-pub const TIMELINE: i64 = 200;
+const CAP_V2: &str = "
+DROP TABLE agents_events;
+DELETE FROM agents_launches;
+ALTER TABLE agents_launches ADD COLUMN run_id TEXT NOT NULL DEFAULT '';
+CREATE TABLE agents_marks (
+    key TEXT PRIMARY KEY,
+    at INTEGER NOT NULL
+);
+UPDATE agents_state SET state_json = '{}', connected = 0, last_ok_at = NULL;
+";
+
+/// Marks kept (the newest).
+pub const MAX_MARKS: i64 = 2000;
 
 const TOKEN_CONTEXT: &str = "agents_runner.token:1";
 
@@ -95,8 +109,8 @@ pub fn sign_in(store: &Store, runner: &Runner, state: &State, now: i64) -> rusql
 
 fn clear_on(tx: &rusqlite::Connection) -> rusqlite::Result<()> {
     tx.execute_batch(
-        "DELETE FROM agents_runner; DELETE FROM agents_state; DELETE FROM agents_events;
-         DELETE FROM agents_launches;",
+        "DELETE FROM agents_runner; DELETE FROM agents_state; DELETE FROM agents_launches;
+         DELETE FROM agents_marks;",
     )
 }
 
@@ -158,44 +172,25 @@ pub fn state(store: &Store) -> rusqlite::Result<Option<(State, Health)>> {
     })
 }
 
-/// Save `state` after a good answer from the runner, with `events` (the
-/// ones just applied) for the timelines. Nothing is saved once signed out.
-pub fn save(store: &Store, state: &State, events: &[Event], now: i64) -> rusqlite::Result<()> {
-    store.transaction(|tx| {
-        let n = tx.execute(
+/// Save `state` after a good answer from the runner. Nothing is saved once
+/// signed out.
+pub fn save(store: &Store, state: &State, now: i64) -> rusqlite::Result<()> {
+    store.with_conn(|c| {
+        c.execute(
             "UPDATE agents_state SET state_json = ?1, connected = 1, last_error = NULL,
              last_ok_at = ?2, updated_at = ?2 WHERE id = 1",
             params![serde_json::to_string(state).expect("serializes"), now],
-        )?;
-        if n == 0 {
-            return Ok(());
-        }
-        for e in events {
-            let mut json = serde_json::json!({"seq": e.seq, "ts": e.ts, "type": e.kind,
-                "status": e.status, "sprite": e.sprite, "task_id": e.task_id, "data": e.data});
-            if json.to_string().len() > 8_000 {
-                json["data"] = Value::Null;
-            }
-            tx.execute(
-                "INSERT OR IGNORE INTO agents_events (seq, session_id, ts, json) VALUES (?1, ?2, ?3, ?4)",
-                params![e.seq, e.session_id, e.ts, json.to_string()],
-            )?;
-            if let Some(sid) = &e.session_id {
-                tx.execute(
-                    "DELETE FROM agents_events WHERE session_id = ?1 AND seq NOT IN
-                     (SELECT seq FROM agents_events WHERE session_id = ?1 ORDER BY seq DESC LIMIT ?2)",
-                    params![sid, TIMELINE],
-                )?;
-            }
-        }
-        if !events.is_empty() {
-            tx.execute(
-                "DELETE FROM agents_events WHERE seq NOT IN
-                 (SELECT seq FROM agents_events ORDER BY seq DESC LIMIT ?1)",
-                [MAX_EVENTS],
-            )?;
-        }
-        Ok(())
+        )
+        .map(|_| ())
+    })
+}
+
+/// Whether the pod is signed in to a runner (without opening the token).
+pub fn signed_in(store: &Store) -> rusqlite::Result<bool> {
+    store.with_conn(|c| {
+        c.query_row("SELECT 1 FROM agents_runner WHERE id = 1", [], |_| Ok(()))
+            .optional()
+            .map(|r| r.is_some())
     })
 }
 
@@ -210,38 +205,30 @@ pub fn mark_unreachable(store: &Store, error: &str, now: i64) -> rusqlite::Resul
     })
 }
 
-/// Session `id`'s recent events, oldest first: `(seq, json)`.
-pub fn timeline(store: &Store, id: &str) -> rusqlite::Result<Vec<Value>> {
+/// The launches sent for `collection`'s rows: `(task_id, run_id, at)`.
+pub fn launches(store: &Store, collection: &str) -> rusqlite::Result<Vec<(String, String, i64)>> {
     store.with_conn(|c| {
         let mut stmt = c.prepare_cached(
-            "SELECT json FROM (SELECT seq, json FROM agents_events WHERE session_id = ?1
-             ORDER BY seq DESC LIMIT ?2) ORDER BY seq",
+            "SELECT task_id, run_id, at FROM agents_launches WHERE collection = ?1",
         )?;
-        stmt.query_map(params![id, TIMELINE], |r| r.get::<_, String>(0))?
-            .map(|r| r.map(|j| serde_json::from_str(&j).unwrap_or(Value::Null)))
+        stmt.query_map([collection], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect()
     })
 }
 
-/// The task ids a launch is pending for, in `collection`.
-pub fn launches(store: &Store, collection: &str) -> rusqlite::Result<Vec<String>> {
-    store.with_conn(|c| {
-        let mut stmt =
-            c.prepare_cached("SELECT task_id FROM agents_launches WHERE collection = ?1")?;
-        stmt.query_map([collection], |r| r.get(0))?.collect()
-    })
-}
-
+/// Remember that `start_run` for row `task_id` answered run `run_id`.
 pub fn add_launch(
     store: &Store,
     collection: &str,
     task_id: &str,
+    run_id: &str,
     now: i64,
 ) -> rusqlite::Result<()> {
     store.with_conn(|c| {
         c.execute(
-            "INSERT OR REPLACE INTO agents_launches (task_id, collection, at) VALUES (?1, ?2, ?3)",
-            params![task_id, collection, now],
+            "INSERT OR REPLACE INTO agents_launches (task_id, collection, at, run_id)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![task_id, collection, now, run_id],
         )
         .map(|_| ())
     })
@@ -252,4 +239,61 @@ pub fn remove_launch(store: &Store, task_id: &str) -> rusqlite::Result<()> {
         c.execute("DELETE FROM agents_launches WHERE task_id = ?1", [task_id])
             .map(|_| ())
     })
+}
+
+/// Set mark `key` unless it was set; whether it is new.
+pub fn mark(store: &Store, key: &str, now: i64) -> rusqlite::Result<bool> {
+    store.with_conn(|c| {
+        let n = c.execute(
+            "INSERT OR IGNORE INTO agents_marks (key, at) VALUES (?1, ?2)",
+            params![key, now],
+        )?;
+        if n > 0 {
+            c.execute(
+                "DELETE FROM agents_marks WHERE key NOT IN
+                 (SELECT key FROM agents_marks ORDER BY at DESC, rowid DESC LIMIT ?1)",
+                [MAX_MARKS],
+            )?;
+        }
+        Ok(n > 0)
+    })
+}
+
+/// Whether mark `key` is set.
+pub fn marked(store: &Store, key: &str) -> rusqlite::Result<bool> {
+    store.with_conn(|c| {
+        c.query_row("SELECT 1 FROM agents_marks WHERE key = ?1", [key], |_| {
+            Ok(())
+        })
+        .optional()
+        .map(|r| r.is_some())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_v2_step_upgrades_a_v1_database() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .with_conn(|c| {
+                c.execute_batch(SCHEMA)?;
+                c.execute_batch(
+                    "INSERT INTO agents_state (id, state_json, connected, last_ok_at, updated_at)
+                     VALUES (1, '{\"cursor\": 42, \"sessions\": {}}', 1, 5, 5);
+                     INSERT INTO agents_launches (task_id, collection, at) VALUES ('r1', 'tasks', 1);",
+                )?;
+                c.execute_batch(CAP_V2)
+            })
+            .unwrap();
+        let (st, h) = state(&store).unwrap().unwrap();
+        assert_eq!(st.cursor, 0);
+        assert!(!h.connected && h.last_ok_at.is_none());
+        assert!(launches(&store, "tasks").unwrap().is_empty());
+        assert!(mark(&store, "stop:run_1", 1).unwrap());
+        assert!(!mark(&store, "stop:run_1", 2).unwrap());
+        assert!(marked(&store, "stop:run_1").unwrap());
+    }
 }

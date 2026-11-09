@@ -250,6 +250,20 @@ pub trait AppAdapter: Any + Send + Sync {
         Box::pin(async {})
     }
 
+    /// Whether this pod must stay open while the server runs, for
+    /// background work that can't wait for someone to use the pod (e.g.
+    /// following an upstream's event stream). Such a pod is opened when the
+    /// server starts and never waits for a request: its
+    /// [`AppState::poll_due`](crate::AppState::poll_due) reports it due
+    /// ([`KEEP_OPEN_WAKE`](crate::notify::KEEP_OPEN_WAKE)), so the host's
+    /// scheduler opens it, and [`Self::resume`] starts the work. Called on
+    /// every scheduler pass (every 30 s): keep it to a quick read of the
+    /// store. Default: `false`.
+    fn keeps_open(&self, store: &Store) -> bool {
+        let _ = store;
+        false
+    }
+
     /// How a client starts sign-in `sign_in` (one of [`Self::sign_ins`])
     /// without a signed-out screen (from its Settings, or a layout's
     /// `action.device` `sign_in`): `GET /v1/auth/sign-ins` lists it under

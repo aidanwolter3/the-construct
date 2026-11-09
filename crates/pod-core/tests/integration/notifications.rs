@@ -46,6 +46,8 @@ const BELL: AppInfo = AppInfo {
 struct Bell {
     outcomes: Mutex<VecDeque<PollOutcome>>,
     polls: Mutex<u32>,
+    /// What `keeps_open` answers.
+    keep: std::sync::atomic::AtomicBool,
 }
 
 impl AppAdapter for Bell {
@@ -76,6 +78,9 @@ impl AppAdapter for Bell {
     }
     fn poll_interval(&self) -> Option<Duration> {
         Some(Duration::from_secs(120))
+    }
+    fn keeps_open(&self, _: &pod_core::store::Store) -> bool {
+        self.keep.load(std::sync::atomic::Ordering::SeqCst)
     }
     fn poll_notifications<'a>(&'a self, _: &'a Pod, _: &'a PollCtx) -> BoxFuture<'a, PollOutcome> {
         *self.polls.lock().unwrap() += 1;
@@ -502,6 +507,20 @@ async fn polling_needs_a_device_and_backs_off() {
         .attach_sign_in(&session_hash(&p.token), "test")
         .unwrap();
     assert_eq!(p.pod.next_wake().await, Some(0));
+}
+
+#[tokio::test]
+async fn a_pod_an_adapter_keeps_open_is_always_due() {
+    let p = pod_with(None);
+    assert_eq!(p.pod.poll_due().await, None);
+    p.bell.keep.store(true, std::sync::atomic::Ordering::SeqCst);
+    // No device: nothing is polled, but the host opens the pod at once
+    // (whenever the server starts) and keeps it open.
+    assert_eq!(
+        p.pod.poll_due().await,
+        Some(pod_core::notify::KEEP_OPEN_WAKE)
+    );
+    assert_eq!(*p.bell.polls.lock().unwrap(), 0);
 }
 
 /// Read the SSE body until `needle` shows up (or time runs out).

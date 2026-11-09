@@ -1,5 +1,8 @@
 # An `agents` data source follows an external agent runner over CAP v1
 
+Superseded in part by [agents-runs](agents-runs.md): CAP v2, runs mirrored rather than sessions replayed, the
+Tasks mapping table, and a follower for every signed-in pod.
+
 Date: 2026-11-07. Related: [custom-apps-and-data-sources](custom-apps-and-data-sources.md),
 [server-monitoring-alerts](server-monitoring-alerts.md), [notification-owner](notification-owner.md),
 [upstream-credentials-sealed-at-rest](upstream-credentials-sealed-at-rest.md), [collections](collections.md). Issue #165.

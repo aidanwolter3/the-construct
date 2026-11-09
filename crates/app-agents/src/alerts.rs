@@ -8,7 +8,7 @@ use pod_core::{Catalog, NewNotification};
 use protocol::{Importance, NotificationChannel};
 
 use crate::state::Effect;
-use crate::text;
+use crate::{bundle, text};
 
 pub const NEEDS_YOU: &str = "needs_you";
 pub const SESSIONS: &str = "sessions";
@@ -45,27 +45,27 @@ pub fn channels(app: &str) -> Vec<NotificationChannel> {
         ch(
             NEEDS_YOU,
             "Needs you",
-            "When a Claude session waits for your permission",
+            "When a run waits for you: a permission, a question, or a reply",
             Importance::High,
         ),
         ch(
             SESSIONS,
-            "Finished sessions",
-            "When a Claude session finishes (with its summary and pull request) or fails",
+            "Finished runs",
+            "When a run ends with a report (its summary and pull request)",
             Importance::Default,
         ),
         ch(
             WARNINGS,
             "Runner warnings",
-            "When a security check on the agent runner warns, or a schedule is missed or runs too long",
+            "When a run is lost, doesn't start, runs too long or expires, or a security check on the runner warns",
             Importance::High,
         ),
     ]
 }
 
-/// The notifications `effects` owe in layout `app`; `seq` is the event (or
-/// snapshot cursor) they came from, `now` Unix seconds.
-pub fn notifications(effects: &[Effect], app: &str, seq: i64, now: i64) -> Vec<NewNotification> {
+/// The notifications `effects` owe in layout `app`; `now` Unix seconds.
+/// Each one's dedupe key names its run and transition.
+pub fn notifications(effects: &[Effect], app: &str, now: i64) -> Vec<NewNotification> {
     let n = |channel: &str, key: String, title: String, body: String, target: Option<String>| {
         NewNotification {
             app_id: app.to_owned(),
@@ -82,7 +82,7 @@ pub fn notifications(effects: &[Effect], app: &str, seq: i64, now: i64) -> Vec<N
     };
     let named = |t: &str| {
         if t.is_empty() {
-            "a session".to_owned()
+            "a run".to_owned()
         } else {
             text::clean(t, 120)
         }
@@ -92,122 +92,142 @@ pub fn notifications(effects: &[Effect], app: &str, seq: i64, now: i64) -> Vec<N
     for e in effects {
         out.push(match e {
             Effect::NeedsYou {
-                session_id,
+                run_id,
                 title,
-                detail,
+                reason,
+                text: question,
+                key,
             } => n(
                 NEEDS_YOU,
-                format!("agents:needs:{session_id}:{seq}"),
+                format!("agents:{key}"),
                 format!("Needs you: {}", named(title)),
-                if detail.is_empty() {
-                    "A session is waiting for your permission.".to_owned()
+                if question.is_empty() {
+                    format!("{}.", bundle::needs_you_label(reason))
                 } else {
-                    format!("Wants to use {detail}")
+                    text::clean(question, 300)
                 },
-                target(session_id),
+                target(run_id),
             ),
-            Effect::Finished {
-                session_id,
-                title,
-                summary,
-                pr_url,
-            } => {
-                let mut body = text::clean(summary, 300);
-                if !pr_url.is_empty() {
-                    if !body.is_empty() {
-                        body.push('\n');
+            Effect::Ended { run } => {
+                let (word, _) = bundle::run_look(&run.state, &run.end_reason, &run.outcome);
+                let bad = matches!(
+                    run.end_reason.as_str(),
+                    "lost" | "start_failed" | "timed_out" | "expired"
+                ) && run.outcome.is_empty();
+                if bad {
+                    n(
+                        WARNINGS,
+                        format!("agents:ended:{}", run.id),
+                        format!("{word}: {}", named(&run.title)),
+                        if run.error.is_empty() {
+                            end_reason_text(&run.end_reason).to_owned()
+                        } else {
+                            text::clean(&run.error, 300)
+                        },
+                        target(&run.id),
+                    )
+                } else if !run.outcome.is_empty() || run.end_reason == "reported" {
+                    let summary = if run.outcome_summary.is_empty() {
+                        &run.summary
+                    } else {
+                        &run.outcome_summary
+                    };
+                    let mut body = text::clean(summary, 300);
+                    if !run.pr().is_empty() {
+                        if !body.is_empty() {
+                            body.push('\n');
+                        }
+                        body.push_str(run.pr());
                     }
-                    body.push_str(pr_url);
+                    n(
+                        SESSIONS,
+                        format!("agents:ended:{}", run.id),
+                        format!("{word}: {}", named(&run.title)),
+                        body,
+                        target(&run.id),
+                    )
+                } else {
+                    continue;
                 }
-                n(
-                    SESSIONS,
-                    format!("agents:finished:{session_id}"),
-                    format!("Finished: {}", named(title)),
-                    body,
-                    target(session_id),
-                )
             }
-            Effect::Failed {
-                session_id,
+            Effect::CheckWarn {
+                id,
                 title,
-                error,
+                detail,
+                key,
             } => n(
-                SESSIONS,
-                format!("agents:failed:{session_id}"),
-                format!("Failed: {}", named(title)),
-                text::clean(error, 300),
-                target(session_id),
-            ),
-            Effect::CheckWarn { id, title, detail } => n(
                 WARNINGS,
-                format!("agents:check:{id}:{seq}"),
+                format!("agents:{key}"),
                 format!("Runner: {}", if title.is_empty() { id } else { title }),
                 text::clean(detail, 300),
                 None,
             ),
-            Effect::ScheduleMissed { name, error } => n(
-                WARNINGS,
-                format!("agents:missed:{name}:{seq}"),
-                format!("Schedule missed: {name}"),
-                text::clean(error, 300),
-                Some(format!("agents://schedules/{name}")),
-            ),
-            Effect::ScheduleTimeout {
-                name,
-                minutes,
-                stopped,
-            } => n(
-                WARNINGS,
-                format!("agents:timeout:{name}:{seq}"),
-                format!("Schedule ran too long: {name}"),
-                format!(
-                    "It passed its {minutes}-minute limit{}",
-                    if *stopped { " and was stopped." } else { "." }
-                ),
-                Some(format!("agents://schedules/{name}")),
-            ),
-            _ => continue,
         });
     }
     out
 }
 
+/// Why a run ended badly, in words.
+pub fn end_reason_text(reason: &str) -> &'static str {
+    match reason {
+        "lost" => "The run was lost: its process is gone.",
+        "start_failed" => "The run didn't start.",
+        "timed_out" => "The run passed its time limit and was stopped.",
+        "expired" => "The run wasn't started in time.",
+        "stopped" => "The run was stopped.",
+        "exited" => "The run ended without a report.",
+        _ => "The run ended.",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::Run;
 
     #[test]
     fn effects_read_as_notifications() {
-        let effects = [
-            Effect::Finished {
-                session_id: "s1".into(),
+        let ended = |end: &str, outcome: &str| Effect::Ended {
+            run: Box::new(Run {
+                id: format!("run_{end}{outcome}"),
                 title: "Fix login".into(),
-                summary: "Fixed the redirect.".into(),
-                pr_url: "https://github.com/owner/repo/pull/3".into(),
-            },
-            Effect::TaskStarted {
-                task_id: "r1".into(),
-                session_id: "s1".into(),
-            },
-            Effect::ScheduleTimeout {
-                name: "nightly".into(),
-                minutes: 30,
-                stopped: true,
+                state: "ended".into(),
+                end_reason: end.into(),
+                outcome: outcome.into(),
+                outcome_summary: "Fixed the redirect.".into(),
+                outcome_pr_url: "https://github.com/owner/repo/pull/3".into(),
+                ..Default::default()
+            }),
+        };
+        let effects = [
+            ended("reported", "review"),
+            ended("stopped", ""),
+            ended("lost", ""),
+            Effect::NeedsYou {
+                run_id: "run_1".into(),
+                title: String::new(),
+                reason: "permission".into(),
+                text: String::new(),
+                key: "needs:run_1:4".into(),
             },
         ];
-        let got = notifications(&effects, "c-1", 7, 100);
-        assert_eq!(got.len(), 2);
-        assert_eq!(got[0].title, "Finished: Fix login");
+        let got = notifications(&effects, "c-1", 100);
+        assert_eq!(got.len(), 3, "a stopped run notifies nothing");
+        assert_eq!(got[0].title, "Needs review: Fix login");
+        assert_eq!(got[0].channel, SESSIONS);
         assert_eq!(
             got[0].body,
             "Fixed the redirect.\nhttps://github.com/owner/repo/pull/3"
         );
-        assert_eq!(got[0].channel, SESSIONS);
-        assert_eq!(got[0].target_uri.as_deref(), Some("agents://sessions/s1"));
-        assert_eq!(got[1].dedupe_key, "agents:timeout:nightly:7");
         assert_eq!(
-            got[1].body,
-            "It passed its 30-minute limit and was stopped."
+            got[0].target_uri.as_deref(),
+            Some("agents://sessions/run_reportedreview")
         );
+        assert_eq!(got[1].channel, WARNINGS);
+        assert_eq!(got[1].title, "Lost: Fix login");
+        assert_eq!(got[1].body, "The run was lost: its process is gone.");
+        assert_eq!(got[2].channel, NEEDS_YOU);
+        assert_eq!(got[2].body, "Wants permission.");
+        assert_eq!(got[2].dedupe_key, "agents:needs:run_1:4");
     }
 }
