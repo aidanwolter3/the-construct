@@ -30,12 +30,13 @@ app needs adapter code only.
   backlog as already read, so nothing floods in. Collections uses the same poll to send due reminders and to run
   scheduled fills, whose alerts notify. Its channels belong to the custom app showing the collection. Server
   monitoring looks at its checks every 5 minutes and notifies the custom apps built on it when one turns to warning.
-- **From a stream:** the Agents source follows its runner's event stream and notifies as events arrive (a session
-  that needs you, finished or failed sessions, runner warnings; [agents.md](agents.md)).
+- **From a stream:** the Agents source follows its runner's event stream and notifies as records change (a run
+  that needs you, a run that ends with a report, runner warnings; [agents.md](agents.md)).
 - **From a route:** an adapter calls `AppState::notify` from its own handlers.
 - **Waking pods:** pods open lazily, so the host's scheduler checks every 30 s and opens pods whose
   `host.db` `pods.next_wake_at` is due (8 at a time). A pod polls only while it has a device seen in the last 30 days,
-  so idle and temporary pods cost no upstream calls. Failed polls back off from 1 minute to 1 hour; a revoked
+  so idle and temporary pods cost no upstream calls. A pod an adapter keeps open (`AppAdapter::keeps_open`, e.g. one
+  signed in to an agent runner) is always due, so it is opened when the server starts. Failed polls back off from 1 minute to 1 hour; a revoked
   sign-in stops polls until someone signs in again.
 
 ## Delivery
