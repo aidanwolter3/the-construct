@@ -2833,10 +2833,29 @@ impl Laid {
                 }
             }
             Paint::Spinner { color } => {
-                let bw = (w / 8.0).max(1.5);
-                let mut q = QuadInstance::fill(rect, Rgba::TRANSPARENT, w / 2.0).border(*color, bw);
-                q.clip = clip;
-                scene.draws.push(Draw::Quad(q));
+                // An arc with a fading tail, turning with `scene.spin`: dots
+                // close enough to overlap, as quads can't draw an arc.
+                const DOTS: usize = 64;
+                const ARC: f32 = 0.8; // of a turn
+                let d = (w / 8.0).max(1.5);
+                let r = (w - d) / 2.0;
+                let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+                let head = scene.spin * std::f32::consts::TAU;
+                for i in 0..DOTS {
+                    let t = i as f32 / (DOTS - 1) as f32;
+                    let a = head - t * ARC * std::f32::consts::TAU;
+                    let (px, py) = (cx + r * a.sin(), cy - r * a.cos());
+                    let mut c = *color;
+                    c.0[3] *= (1.0 - t).powi(3);
+                    let mut q = QuadInstance::fill([px - d / 2.0, py - d / 2.0, d, d], c, d / 2.0);
+                    q.clip = clip;
+                    scene.draws.push(Draw::Quad(q));
+                }
+                let visible = x < clip[0] + clip[2]
+                    && x + w > clip[0]
+                    && y < clip[1] + clip[3]
+                    && y + h > clip[1];
+                scene.spinning |= visible;
             }
             Paint::Switch { on, track, thumb } => {
                 // Material 3: off is an outlined track with a small grey

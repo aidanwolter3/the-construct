@@ -168,6 +168,10 @@ pub struct Scene {
     pub semantics: Vec<SemanticNode>,
     /// Where each visible text field's text is drawn, for editing it.
     pub fields: Vec<FieldBox>,
+    /// How far spinners have turned, in turns (0 to 1): set before drawing.
+    pub spin: f32,
+    /// Whether a spinner was drawn (a window draws again next frame).
+    pub spinning: bool,
 }
 
 /// A text field's text box: where its value is drawn and how.

@@ -167,6 +167,8 @@ enum Frame {
 /// How long a layout or screen takes to slide in or out (the shared UI's
 /// `FRAME_SLIDE_MS`).
 const SLIDE: Duration = Duration::from_millis(280);
+/// One turn of a spinner.
+const SPIN: Duration = Duration::from_millis(1000);
 /// A sheet's share of the screen's height, and a panel's of its width (at
 /// most [`PANEL_MAX_WIDTH`]), as in the shared UI.
 const SHEET_HEIGHT_FRACTION: f32 = 0.85;
@@ -558,6 +560,10 @@ pub struct Session {
     edit: Option<Edit>,
     /// Whether the caret was drawn in the frame kept (it blinks).
     caret_shown: Option<bool>,
+    /// Spinners turn from here.
+    spin_from: Instant,
+    /// Whether the frame kept draws a spinner (it turns).
+    spinning: bool,
     /// Where the edit handles are, to grab them (from the last frame).
     handles: Vec<(Grab, [f32; 4])>,
     /// A handle being dragged, and how far the finger is below the text
@@ -679,6 +685,8 @@ impl Session {
             pager_anims: BTreeMap::new(),
             edit: None,
             caret_shown: None,
+            spin_from: Instant::now(),
+            spinning: false,
             handles: Vec::new(),
             grab: None,
             picking: None,
@@ -1606,7 +1614,8 @@ impl Session {
             return false;
         }
         let now = Instant::now();
-        if !self.pager_anims.is_empty()
+        if self.spinning
+            || !self.pager_anims.is_empty()
             || self
                 .frame_settle
                 .is_some_and(|(at, _)| now.duration_since(at) < SETTLE)
@@ -1800,6 +1809,12 @@ impl Session {
             height: h,
             scale: self.viewport.scale,
             background: theme.background.0,
+            // Still when not animating, so previews and tests are stable.
+            spin: if animate {
+                (now.duration_since(self.spin_from).as_secs_f32() / SPIN.as_secs_f32()).fract()
+            } else {
+                0.0
+            },
             ..Default::default()
         };
         let mut keep_from = 0;
@@ -1983,6 +1998,7 @@ impl Session {
         }
         self.caret_shown = self.caret_on();
         self.edit_overlay(&mut scene, &theme);
+        self.spinning = scene.spinning;
         self.scene = Some(scene);
         Ok(self.scene.as_ref().expect("just built"))
     }
