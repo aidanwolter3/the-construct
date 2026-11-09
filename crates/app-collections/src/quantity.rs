@@ -880,7 +880,7 @@ mod tests {
         let s = sum([&q("1 cup"), &q("19 tbsp")]);
         assert_eq!(s.text(), "2 cups + 3 Tbsp");
         let s = sum([&q("1 tbsp"), &q("4 tsp")]);
-        assert_eq!(s.text(), "2 Tbsp + 1 tsp");
+        assert_eq!(s.text(), "2 1/3 Tbsp", "thirds are plain");
         let s = sum([&q("1 lb"), &q("3 oz")]);
         assert_eq!(s.text(), "1 lb + 3 oz");
         // A sum's parts sum again to the same.
