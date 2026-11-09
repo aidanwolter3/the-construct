@@ -237,6 +237,8 @@ struct Entry {
     error: Option<String>,
     /// The data path being loaded for it (`local://screen#loading`).
     loading: Option<String>,
+    /// Its screen's data path, if it has one.
+    data: Option<String>,
     /// Scroll offsets of this entry's scrolling views (by semantic id).
     scroll: BTreeMap<String, f32>,
     frame: Frame,
@@ -280,6 +282,7 @@ impl Entry {
             screens,
             error: None,
             loading: None,
+            data: None,
             scroll: BTreeMap::new(),
             frame: Frame::Full,
             size: None,
@@ -432,6 +435,19 @@ pub trait Loader: Send {
     fn changes(&self) -> Option<Changes> {
         None
     }
+    /// What is on screen now, topmost first, whenever it changes: where
+    /// the loader reloads changed data (the engine, decision
+    /// `scoped-data-events`), it reloads this first. Must not block.
+    fn visible(&self, _shown: &[Shown]) {}
+}
+
+/// Something a frame draws ([`Loader::visible`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Shown {
+    /// A layout, by id (the home layout too).
+    Layout(String),
+    /// A screen's data path.
+    Data(String),
 }
 
 /// `uri` against a route pattern (`collections://tasks/{id}`): the captured
@@ -552,6 +568,8 @@ pub struct Session {
     picking: Option<(String, u32)>,
     /// Photos being picked or staged (a script waits for them).
     pub staging: usize,
+    /// What the loader was last told is on screen ([`Loader::visible`]).
+    shown: Vec<Shown>,
 }
 
 /// How long the caret shows, then hides (Android's 500 ms).
@@ -665,6 +683,7 @@ impl Session {
             grab: None,
             picking: None,
             staging: 0,
+            shown: Vec::new(),
         }
     }
 
@@ -1762,6 +1781,7 @@ impl Session {
             }
         }
         visible.reverse();
+        self.report_shown(&visible);
         for &i in &visible {
             self.layout_entry(i)?;
         }
@@ -3294,6 +3314,7 @@ impl Session {
             screens,
             error: None,
             loading: None,
+            data: None,
             scroll: BTreeMap::new(),
             in_frame: frame != Frame::Full,
             frame,
@@ -3311,7 +3332,10 @@ impl Session {
         if let Some(path) = &screen.data {
             let mut v = Value::String(path.clone());
             bind_route(&mut v, &route);
-            self.load_data(&crate::bind::render(&v), out);
+            let path = crate::bind::render(&v);
+            let ti = self.top_index();
+            self.stack[ti].data = Some(path.clone());
+            self.load_data(&path, out);
         }
         true
     }
@@ -3358,6 +3382,44 @@ impl Session {
         }
     }
 
+    /// Tells the loader what the entries `drawn` (bottom first) show, when
+    /// it changed: each one's layout and data path, and the layouts drawn
+    /// inline in them, topmost first ([`Loader::visible`]).
+    fn report_shown(&mut self, drawn: &[usize]) {
+        let Some(loader) = self.loader.as_ref() else {
+            return;
+        };
+        let mut shown = Vec::new();
+        for &i in drawn.iter().rev() {
+            let e = &self.stack[i];
+            if let Some(d) = &e.data {
+                push_new(&mut shown, Shown::Data(d.clone()));
+            }
+            push_new(&mut shown, Shown::Layout(e.id.clone()));
+            // Inline layouts, and theirs (each once).
+            let mut roots = vec![&e.root];
+            while let Some(root) = roots.pop() {
+                for n in root.walk() {
+                    if let UiNode::Layout {
+                        layout,
+                        presentation: protocol::EmbedPresentation::Inline,
+                        ..
+                    } = n
+                        && !layout.contains('$')
+                        && push_new(&mut shown, Shown::Layout(layout.clone()))
+                        && let Some(r) = self.layouts.get(layout)
+                    {
+                        roots.push(r);
+                    }
+                }
+            }
+        }
+        if shown != self.shown {
+            loader.visible(&shown);
+            self.shown = shown;
+        }
+    }
+
     /// Loads the layouts inline `core://Layout`s of the top entry draw.
     fn load_inline_layouts(&mut self) {
         if self.loader.is_none() {
@@ -3398,6 +3460,15 @@ impl Session {
                 "scroll": self.stack.last().map(|e| e.scroll.clone()).unwrap_or_default(),
                 "stack": self.stack.iter().map(|e| e.id.clone()).collect::<Vec<_>>() })
     }
+}
+
+/// Adds `s` unless `list` has it; true when added.
+fn push_new(list: &mut Vec<Shown>, s: Shown) -> bool {
+    if list.contains(&s) {
+        return false;
+    }
+    list.push(s);
+    true
 }
 
 /// An error as the notice bar shows it: the pod's own `detail` (or error

@@ -41,7 +41,7 @@ use serde_json::{Map, Value, json};
 use crate::db::{self, Row};
 use crate::lookup::{self, Rules};
 use crate::model::{self, Compute, Definition, Field, Kind};
-use crate::{Caps, CollectionsAdapter, NAME};
+use crate::{Caps, CollectionsAdapter};
 
 /// What a `model` compute asks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -892,10 +892,9 @@ pub fn spawn(pod: &Pod, collection: &str, jobs: Vec<Job>) {
                 .await;
             match updated {
                 Ok((0, followed)) => followed.finish(&pod),
-                Ok((_, followed)) => {
-                    pod.publish_data_all(NAME);
-                    followed.finish(&pod);
-                }
+                // The rows it answered and those that followed, in one
+                // event (decision `scoped-data-events`).
+                Ok((_, followed)) => followed.publish(&pod, None),
                 Err(e) => tracing::warn!(?e, "storing a computed value failed"),
             }
         }

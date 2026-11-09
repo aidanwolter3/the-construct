@@ -1724,6 +1724,9 @@ Superseded in part by [recipes-start-empty](decisions/recipes-start-empty.md) (`
 
 ## D50: Creates can stay pending on the server; the pod can say "your data changed"
 
+Partly superseded by [scoped-data-events](decisions/scoped-data-events.md) (what `event: data` carries and what the
+engine reloads).
+
 - **Why:** Pixelfed processes media after upload, so a post isn't there when the create returns. The client's
   placeholder is dropped on the first reload after a 2xx (D35), so the server has to keep showing it, and tell the
   client when the real thing exists.

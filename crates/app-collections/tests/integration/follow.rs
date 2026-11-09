@@ -660,3 +660,52 @@ async fn a_cycle_of_computes_ends() {
     add(&pod, "b", json!({"name": "other"})).await;
     assert_eq!(rows(&pod, "b").await.len(), 2);
 }
+
+#[tokio::test]
+async fn a_write_that_moves_computes_names_them_and_tells_its_device_too() {
+    let pod = pod();
+    define_chain(&pod).await;
+    let stew = add(&pod, "meals", json!({"name": "Stew"})).await;
+    add(
+        &pod,
+        "meal_ingredients",
+        json!({"meal": "Stew", "item": "onion"}),
+    )
+    .await;
+    add(&pod, "ingredients", json!({"name": "onion"})).await;
+    let mut events = pod.subscribe_data();
+    let resp = pod_core::app(pod.clone())
+        .oneshot(
+            Request::post("/v1/collections/meals/update")
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer phone")
+                .header(protocol::DEVICE_HEADER, "phone-0001")
+                .body(Body::from(
+                    json!({"id": stew, "favorite": true}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let e = events.try_recv().expect("one event");
+    assert!(events.try_recv().is_err(), "only one");
+    // The device didn't know the computes moved: it is told too.
+    assert_eq!(e.except_device, None);
+    let scope = e.scope.expect("scoped");
+    let named: Vec<&str> = scope.detail["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["collection"].as_str().unwrap())
+        .collect();
+    assert_eq!(named, ["ingredients", "meal_ingredients", "meals"]);
+    assert_eq!(
+        scope.uri_prefixes,
+        [
+            "collections://ingredients/",
+            "collections://meal_ingredients/",
+            "collections://meals/"
+        ]
+    );
+}

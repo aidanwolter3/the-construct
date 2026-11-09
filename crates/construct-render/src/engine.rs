@@ -777,6 +777,20 @@ impl Loader for PodEngine {
         Ok((root, data))
     }
 
+    /// Tells the engine what's on screen, as its load keys (decision
+    /// `scoped-data-events`).
+    fn visible(&self, shown: &[crate::interact::Shown]) {
+        use crate::interact::Shown;
+        let keys = shown
+            .iter()
+            .map(|s| match s {
+                Shown::Layout(id) => format!("{}{id}", client_core::LAYOUT_LOAD_PREFIX),
+                Shown::Data(path) => path.clone(),
+            })
+            .collect();
+        self.engine.set_visible(keys);
+    }
+
     /// `action.data.load` through the engine (its answer is cached and
     /// shown offline); waits for it.
     fn data(&self, path: &str) -> Result<DataBundle, String> {

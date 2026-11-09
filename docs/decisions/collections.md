@@ -4,6 +4,8 @@ Extended by [collection-reminders](collection-reminders.md) (reminders, open que
 Extended by [collection-computed-fields](collection-computed-fields.md) (computed fields, multi-key order), which
 amends "no computed fields" below.
 Extended by [collection-delete](collection-delete.md) (deleting a whole collection, "not done yet" below).
+Amended by [scoped-data-events](scoped-data-events.md): a write's `event: data` names its rows and skips the device
+that made it ("Data events" below).
 
 Date: 2026-11-03. Related: D37, D41, D52, [custom-apps-and-data-sources](custom-apps-and-data-sources.md),
 [mcp-connector](mcp-connector.md), [layout-parts](layout-parts.md), issue #54.

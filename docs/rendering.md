@@ -235,7 +235,9 @@ while its `data` path loads through the engine (`action.data.load`, cached; `loc
 snapshot the engine sends reaches the session on its next frame (`Loader::changes`, snapshots since the last frame merged into one; the window is woken; only entities and queries that differ are taken, and news with nothing new draws nothing again): data,
 `local://connection` (online, offline or connecting, and how many writes wait), and the new root of every layout
 the event stream announced, so a layout edited over MCP, or a change from another device, shows without opening it
-again. The simulator's live mode (`construct-sim --base-url`) still fetches straight from the pod (`PodClient`). `local://nav` and
+again. Each new frame tells the engine what it draws, topmost first (`Loader::visible`: every drawn entry's layout and
+data path, and the layouts drawn inline in them), so an `event: data` reloads what's on screen first and leaves the
+rest stale until it's shown again (decision `scoped-data-events`). The simulator's live mode (`construct-sim --base-url`) still fetches straight from the pod (`PodClient`). `local://nav` and
 `local://screen` are set as the Compose UI set them. Images (`core://Image`) download on four background threads, newest request first,
 without the session (the pod serves media from public paths), are cut to their box (cropped to fill, corners
 rounded) and drawn over their placeholder once they arrive; the window redraws then.
