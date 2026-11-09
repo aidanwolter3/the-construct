@@ -627,7 +627,7 @@ async fn quantities_parse_format_and_sum_by_unit() {
         (
             json!("1 Tbsp"),
             json!({"amount": 1, "unit": "tbsp"}),
-            "1 tbsp",
+            "1 Tbsp",
         ),
         (
             json!("3 cloves"),
@@ -649,10 +649,11 @@ async fn quantities_parse_format_and_sum_by_unit() {
         );
     }
     let p = row(&pod, "pantry", "id", &flour).await;
-    assert_eq!(p["total_text"], "2 9/16 cups + 3 cloves", "{p}");
+    // 2 cups + 1/2 cup + 1 tbsp: the units as written, not "2 9/16 cups".
+    assert_eq!(p["total_text"], "2 1/2 cups + 1 Tbsp + 3 cloves", "{p}");
     assert_eq!(
         p["total"],
-        json!([{"amount": 2.5625, "unit": "cup"}, {"amount": 3, "unit": "clove"}])
+        json!([{"amount": 2.5, "unit": "cup"}, {"amount": 1, "unit": "tbsp"}, {"amount": 3, "unit": "clove"}])
     );
     let d = ok(
         &pod,
@@ -913,7 +914,7 @@ async fn the_grocery_list_accumulates_recipes_checks_off_and_undoes() {
             g("Chicken broth", "6 1/4 cups", both, false),
             g("Onion", "1 large + 1 medium", both, false),
             g("Garlic", "5 cloves", both, false),
-            g("Olive oil", "1 2/3 tbsp", both, false),
+            g("Olive oil", "1 2/3 Tbsp", both, false),
             g("Salt", "", "Harvest Soup", false),
             g("Paper towels", "", "", false),
         ]
@@ -951,7 +952,7 @@ async fn the_grocery_list_accumulates_recipes_checks_off_and_undoes() {
             g("Chicken broth", "8 cups", "Harvest Soup", false),
             g("Onion", "3 large + 1 medium", both, false),
             g("Garlic", "9 cloves", both, false),
-            g("Olive oil", "3 2/3 tbsp", both, false),
+            g("Olive oil", "3 2/3 Tbsp", both, false),
         ]
     );
     // Undo puts it all back: the broth checked off with its two recipes.
@@ -963,7 +964,7 @@ async fn the_grocery_list_accumulates_recipes_checks_off_and_undoes() {
             g("Chicken broth", "6 1/4 cups", both, true),
             g("Onion", "1 large + 1 medium", both, false),
             g("Garlic", "5 cloves", both, false),
-            g("Olive oil", "1 2/3 tbsp", both, false),
+            g("Olive oil", "1 2/3 Tbsp", both, false),
         ]
     );
     // Removing a grocery takes all its contributions off the list.

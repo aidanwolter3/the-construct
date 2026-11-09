@@ -15,8 +15,11 @@
 //!   other single word ("sprig"), and a size before it ("1 (14 oz) can" is
 //!   1 of unit `(14 oz) can`). A count-like unit adds only to itself.
 //!
-//! [`sum`] and [`scale`] choose a sensible unit again: US volume as cups
-//! (from 1/4 cup), tablespoons (from 1 tbsp) or teaspoons, preferring the
+//! [`sum`] keeps US units as written: one unit stays (4 tbsp + 2 tbsp = 6
+//! tbsp); several become one amount of the largest when that is a plain
+//! fraction (1/2 cup + 2 tbsp = 5/8 cup), else stay apart (1 cup + 3 tbsp).
+//! [`scale`] (and a sum with metric parts) chooses a unit again: US volume as
+//! cups (from 1/4 cup), tablespoons (from 1 tbsp) or teaspoons, preferring the
 //! largest whose amount is a plain fraction; US weight as lb (from 16 oz) or
 //! oz; metric as ml/l and g/kg. A value written by hand keeps its unit.
 
@@ -31,11 +34,13 @@ pub enum Dim {
     Count,
 }
 
-/// A built-in unit: its canonical name, plural, dimension, size in the
-/// dimension's base (ml, g) and whether it is metric.
+/// A built-in unit: its canonical name (as stored), how one is shown, its
+/// plural, dimension, size in the dimension's base (ml, g) and whether it is
+/// metric.
 #[derive(Debug, Clone, Copy)]
 pub struct Unit {
     pub name: &'static str,
+    pub label: &'static str,
     pub plural: &'static str,
     pub dim: Dim,
     pub base: f64,
@@ -45,6 +50,7 @@ pub struct Unit {
 const fn unit(name: &'static str, plural: &'static str, dim: Dim, base: f64, metric: bool) -> Unit {
     Unit {
         name,
+        label: name,
         plural,
         dim,
         base,
@@ -55,7 +61,11 @@ const fn unit(name: &'static str, plural: &'static str, dim: Dim, base: f64, met
 /// The built-in units.
 pub const UNITS: &[Unit] = &[
     unit("tsp", "tsp", Dim::Volume, 4.928_921_593_75, false),
-    unit("tbsp", "tbsp", Dim::Volume, 14.786_764_781_25, false),
+    // Shown as "Tbsp" (never "tablespoons"), stored as "tbsp".
+    Unit {
+        label: "Tbsp",
+        ..unit("tbsp", "Tbsp", Dim::Volume, 14.786_764_781_25, false)
+    },
     unit("fl oz", "fl oz", Dim::Volume, 29.573_529_562_5, false),
     unit("cup", "cups", Dim::Volume, 236.588_236_5, false),
     unit("pint", "pints", Dim::Volume, 473.176_473, false),
@@ -418,11 +428,8 @@ pub fn parse(text: &str) -> Option<Quantity> {
             Some(_) => return None,
         }
     }
-    if parts.len() == 1 {
-        return Some(Quantity { parts });
-    }
-    // "1/4 cup plus 2 tbsp": one amount.
-    Some(sum(std::iter::once(&Quantity { parts })))
+    // "1/4 cup plus 2 tbsp" stays as written; sums combine it.
+    Some(Quantity { parts })
 }
 
 // ---------- values ----------
@@ -563,12 +570,28 @@ pub fn is_unparsed(v: &Value) -> bool {
 
 /// The sum of `qs`: amounts of one dimension convert and add (volume and
 /// weight; metric only when every part is), count-like units add to
-/// themselves; each result in a sensible unit. Volume, then weight, then
-/// count-like units in the order first seen.
+/// themselves. Volume, then weight, then count-like units in the order first
+/// seen. US units keep the units the parts were written in ([`combine`]).
 pub fn sum<'a>(qs: impl IntoIterator<Item = &'a Quantity>) -> Quantity {
-    // (base total, any US part) per dimension.
-    let mut volume: Option<(f64, bool)> = None;
-    let mut weight: Option<(f64, bool)> = None;
+    sum_in(qs, true)
+}
+
+/// One dimension's parts while summing: the amount per built-in unit seen.
+#[derive(Default)]
+struct Totals {
+    units: Vec<(&'static Unit, f64)>,
+}
+
+impl Totals {
+    fn base(&self) -> f64 {
+        self.units.iter().map(|(u, a)| a * u.base).sum()
+    }
+}
+
+/// [`sum`]; `keep_units` false picks a unit afresh ([`best`]) as scaling does.
+fn sum_in<'a>(qs: impl IntoIterator<Item = &'a Quantity>, keep_units: bool) -> Quantity {
+    let mut volume: Option<Totals> = None;
+    let mut weight: Option<Totals> = None;
     let mut counts: Vec<Part> = Vec::new();
     for q in qs {
         for p in &q.parts {
@@ -579,9 +602,11 @@ pub fn sum<'a>(qs: impl IntoIterator<Item = &'a Quantity>) -> Quantity {
                     } else {
                         &mut weight
                     };
-                    let (t, us) = slot.get_or_insert((0.0, false));
-                    *t += p.amount * u.base;
-                    *us |= !u.metric;
+                    let t = slot.get_or_insert_with(Totals::default);
+                    match t.units.iter_mut().find(|(seen, _)| seen.name == u.name) {
+                        Some((_, a)) => *a += p.amount,
+                        None => t.units.push((u, p.amount)),
+                    }
                 }
                 None => match counts.iter_mut().find(|c| c.unit == p.unit) {
                     Some(c) => c.amount += p.amount,
@@ -591,14 +616,57 @@ pub fn sum<'a>(qs: impl IntoIterator<Item = &'a Quantity>) -> Quantity {
         }
     }
     let mut parts = Vec::new();
-    if let Some((t, us)) = volume {
-        parts.push(best(Dim::Volume, t, !us));
-    }
-    if let Some((t, us)) = weight {
-        parts.push(best(Dim::Weight, t, !us));
+    for (dim, t) in [(Dim::Volume, volume), (Dim::Weight, weight)] {
+        let Some(t) = t else { continue };
+        let metric = t.units.iter().all(|(u, _)| u.metric);
+        if keep_units && t.units.iter().all(|(u, _)| !u.metric) {
+            parts.extend(combine(t));
+        } else {
+            parts.push(best(dim, t.base(), metric));
+        }
     }
     parts.extend(counts);
     Quantity { parts }
+}
+
+/// US amounts of one dimension, in the units they were written in: one unit
+/// stays as it is (4 tbsp + 2 tbsp = 6 tbsp); several make one amount of the
+/// largest when that is a plain fraction to eighths (1/2 cup + 2 tbsp = 5/8
+/// cup), else stay apart, largest first, each smaller amount's whole multiples
+/// of the next larger unit carried up (1 cup + 3 tbsp; 1 cup + 19 tbsp = 2 cups
+/// + 3 tbsp).
+fn combine(mut t: Totals) -> Vec<Part> {
+    t.units.sort_by(|a, b| {
+        b.0.base
+            .partial_cmp(&a.0.base)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let part = |u: &Unit, amount: f64| Part {
+        amount,
+        unit: u.name.to_owned(),
+    };
+    if let [(u, a)] = t.units.as_slice() {
+        return vec![part(u, *a)];
+    }
+    let largest = t.units[0].0;
+    let whole = t.base() / largest.base;
+    if nice(whole).is_some_and(|(_, _, d)| d <= 8) {
+        return vec![part(largest, whole)];
+    }
+    for i in (1..t.units.len()).rev() {
+        let (small, a) = t.units[i];
+        let big = t.units[i - 1].0;
+        let k = (a * small.base / big.base + 1e-9).floor();
+        if k >= 1.0 {
+            t.units[i].1 = (a - k * big.base / small.base).max(0.0);
+            t.units[i - 1].1 += k;
+        }
+    }
+    t.units
+        .iter()
+        .filter(|(_, a)| *a > 1e-6)
+        .map(|(u, a)| part(u, *a))
+        .collect()
 }
 
 /// `q` times `k`, in a sensible unit (`k` = 1: unchanged).
@@ -616,7 +684,7 @@ pub fn scale(q: &Quantity, k: f64) -> Quantity {
             })
             .collect(),
     };
-    sum(std::iter::once(&scaled))
+    sum_in(std::iter::once(&scaled), false)
 }
 
 /// A total `base` (ml or g) of `dim` in the unit people would use.
@@ -709,7 +777,11 @@ fn part_text(p: &Part) -> String {
         return a;
     }
     let one = p.amount <= 1.0 + 1e-9;
-    let unit = if one { p.unit.clone() } else { plural(&p.unit) };
+    let unit = match (one, builtin(&p.unit)) {
+        (true, Some(u)) => u.label.to_owned(),
+        (true, None) => p.unit.clone(),
+        (false, _) => plural(&p.unit),
+    };
     format!("{a} {unit}")
 }
 
@@ -750,8 +822,10 @@ mod tests {
         assert_eq!(one("2 large"), (2.0, "large".into()));
         assert_eq!(one("3 sprigs"), (3.0, "sprig".into()));
         assert_eq!(one("250 ml"), (250.0, "ml".into()));
-        // Several terms of one dimension: one amount.
-        assert_eq!(one("1/4 cup plus 2 tbsp"), (0.375, "cup".into()));
+        // Several terms stay as written.
+        assert_eq!(q("1/4 cup plus 2 tbsp").text(), "1/4 cup + 2 Tbsp");
+        assert_eq!(q("1 1/2 Tablespoons").text(), "1 1/2 Tbsp");
+        assert_eq!(q("1 T").text(), "1 Tbsp");
         assert_eq!(q("2 cups + 3 cloves").text(), "2 cups + 3 cloves");
         for bad in [
             "to taste",
@@ -779,23 +853,44 @@ mod tests {
     }
 
     #[test]
-    fn sums_convert_within_a_dimension_and_pick_a_unit() {
-        let s = sum([&q("2 cups"), &q("1 tbsp")]);
-        assert_eq!(s.text(), "2 1/16 cups");
+    fn sums_convert_within_a_dimension_and_keep_the_units_written() {
+        // One unit stays as written.
+        let s = sum([&q("4 T")]);
+        assert_eq!(s.text(), "4 Tbsp");
+        let s = sum([&q("4 tbsp"), &q("2 tbsp")]);
+        assert_eq!(s.text(), "6 Tbsp");
         let s = sum([&q("48 tsp")]);
-        assert_eq!(s.text(), "1 cup");
-        let s = sum([&q("2 tbsp"), &q("1 tbsp")]);
-        assert_eq!(s.text(), "3 tbsp");
-        let s = sum([&q("1 tsp"), &q("1 tsp")]);
-        assert_eq!(s.text(), "2 tsp");
+        assert_eq!(s.text(), "48 tsp");
         let s = sum([&q("4 cups"), &q("2 1/4 cups")]);
         assert_eq!(s.text(), "6 1/4 cups");
-        let s = sum([&q("2 cups"), &q("3 cloves"), &q("1 clove")]);
-        assert_eq!(s.text(), "2 cups + 4 cloves");
         let s = sum([&q("12 oz"), &q("8 oz")]);
-        assert_eq!(s.text(), "1 1/4 lb");
+        assert_eq!(s.text(), "20 oz");
+        // Several units: the largest, when a plain fraction to eighths.
+        let s = sum([&q("1/2 cup"), &q("2 tbsp")]);
+        assert_eq!(s.text(), "5/8 cup");
+        let s = sum([&q("1 lb"), &q("8 oz")]);
+        assert_eq!(s.text(), "1 1/2 lb");
+        // Else apart, largest first, whole larger units carried up.
+        let s = sum([&q("1 cup"), &q("3 T")]);
+        assert_eq!(s.text(), "1 cup + 3 Tbsp");
+        let s = sum([&q("2 cups"), &q("1 tbsp")]);
+        assert_eq!(s.text(), "2 cups + 1 Tbsp");
+        let s = sum([&q("1/3 cup"), &q("1 tbsp")]);
+        assert_eq!(s.text(), "1/3 cup + 1 Tbsp");
+        let s = sum([&q("1 cup"), &q("19 tbsp")]);
+        assert_eq!(s.text(), "2 cups + 3 Tbsp");
+        let s = sum([&q("1 tbsp"), &q("4 tsp")]);
+        assert_eq!(s.text(), "2 1/3 Tbsp", "thirds are plain");
+        let s = sum([&q("1 lb"), &q("3 oz")]);
+        assert_eq!(s.text(), "1 lb + 3 oz");
+        // A sum's parts sum again to the same.
+        let s = sum([&s, &q("0 oz")]);
+        assert_eq!(s.text(), "1 lb + 3 oz");
+        // Metric picks a unit; count-like units stay apart.
         let s = sum([&q("500 g"), &q("750 g")]);
         assert_eq!(s.text(), "1.25 kg");
+        let s = sum([&q("2 cups"), &q("3 cloves"), &q("1 clove")]);
+        assert_eq!(s.text(), "2 cups + 4 cloves");
         let s = sum([&q("1 can"), &q("1 (14 oz) can")]);
         assert_eq!(s.text(), "1 can + 1 (14 oz) can");
         let s = sum([&q("2"), &q("1")]);
@@ -808,6 +903,7 @@ mod tests {
         assert_eq!(scale(&q("1/3 cup"), 3.0).text(), "1 cup");
         assert_eq!(scale(&q("1 tbsp"), 0.5).text(), "1 1/2 tsp");
         assert_eq!(scale(&q("2 cloves"), 1.5).text(), "3 cloves");
+        assert_eq!(scale(&q("3 tbsp"), 4.0).text(), "3/4 cup");
         assert_eq!(scale(&q("48 tsp"), 1.0).text(), "48 tsp", "unchanged at 1");
     }
 

@@ -163,10 +163,12 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
   or quantities), the smallest or largest number, whether there is any, or the distinct values as a ", " list. The
   field's only kind, live like a count; prefer it to `count` for new fields.
 - **Quantities.** A `quantity` field parses text such as "1 1/2 cups", "2 Tbsp", "1 (14 oz) can", "1/4 cup plus 2
-  tbsp" or "a pinch" (no model), stores `{amount, unit}`, and serves `<name>_text` ("1 1/2 cups"). Text that
+  tbsp" or "a pinch" (no model), stores `{amount, unit}`, and serves `<name>_text` ("1 1/2 cups", "2 Tbsp": one spelling per unit, so bind it rather than the text as
+  written). Text that
   doesn't parse ("to taste") is kept and shown as written, left out of sums, and counted by `describe_collection`.
-  A rollup `sum` converts within volume and weight (2 cups + 1 tbsp = "2 1/16 cups") and keeps other units apart
-  ("2 cups + 3 cloves"), choosing a sensible unit (48 tsp → "1 cup").
+  A rollup `sum` converts within volume and weight, keeping the units written: one unit stays (4 tbsp + 2 tbsp =
+  "6 tbsp"), several make one amount of the largest when it is a plain fraction (1/2 cup + 2 tbsp = "5/8 cup"),
+  else stay apart ("1 cup + 3 tbsp"). Other units stay apart too ("2 cups + 3 cloves"); metric picks ml/l or g/kg.
 - **Actions.** A collection may hold named insert-from-query actions (`apply_change {op: set_action}`): for each
   row of a source collection matching `where`, find the row of this collection by `match` (else create it), apply
   `update` (first deleting its children when it matches `reset_when`), and add a child row to another collection,
