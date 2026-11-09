@@ -122,7 +122,7 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
 | `POST /v1/collections/<c>/update {id, <field>: …}` | For `action.mutation.optimistic`; an id `pending-<nonce>` finds a row whose create was just sent. |
 | `POST /v1/collections/<c>/delete {id}` | Sets `deleted`; hide such rows at once with `where: {field: "deleted", equals: "false"}`, or, with another filter, `where: [{field: "deleted", equals: "false"}, {field: "category", equals: "$form.tab"}]` (every condition must match). |
 | `GET /v1/collections/<c>/export` | Everything, deleted rows and kept-aside values included. |
-| `POST /v1/collections/<c>/actions/<a> {<param>: …, client_id?}` | Runs an insert-from-query action, sent with `action.mutation.optimistic` (its `field` a view flag, e.g. `adding` on `$item.uri`); the new rows arrive through the feed; a repeated `client_id` is applied once. |
+| `POST /v1/collections/<c>/actions/<a> {<param>: …, client_id?}` | Runs an insert-from-query or delete action, sent with `action.mutation.optimistic` (its `field` a view flag, e.g. `adding` on `$item.uri`); the new (or deleted) rows arrive through the feed; a repeated `client_id` is applied once. |
 
 `describe_collection` gives ready-made layout snippets for all of these.
 
@@ -172,8 +172,12 @@ never writes code: it declares typed fields (`text`, `number`, `bool`, `date`, `
   `update` (first deleting its children when it matches `reset_when`), and add a child row to another collection,
   values scaled by `times / per` where marked. A grocery list built this way: one row per ingredient with the total
   across recipes (a rollup sum over its entries) and the recipes it's for (a rollup list), manual items still typed
-  by hand, a checked-off item starting again when a recipe adds to it. A call is one edit across both collections,
-  undone with `undo_edit`; `run_action` runs one over MCP. Decision
+  by hand, a checked-off item starting again when a recipe adds to it. A delete action (`delete: true`, its source
+  its own collection, no `match`, `create`, `update`, `reset_when`, `scale` or `child`) instead deletes every live row
+  matching `where`, as a row delete does: a one-tap "Clear bag", `{"name": "clear_bag", "title": "Clear the bag",
+  "source": {"collection": "groceries", "where": [{"field": "done", "equals": true}]}, "delete": true}`; the answer
+  says how many it `deleted`. A call is one edit across both collections, undone with `undo_edit`; `run_action`
+  runs one over MCP. Decision
   [`collection-primitives`](decisions/collection-primitives.md).
 - **Reminders.** `apply_change {op: add_reminder, field: "due", title: "Due today: {title}", unless: {field:
   "done", equals: true}, at?: "09:00"}` notifies once per row when its date arrives, in the pod's time zone
