@@ -143,6 +143,16 @@ changed with `apply_change` `set_action` / `remove_action` (or `define_collectio
   for action endpoints and checks the action exists and that payload keys are its params or `client_id`. The new
   rows reach devices through the change feed (no optimistic rows). The manifest lists the action route, so the
   capability check accepts it.
+- **Delete actions** (added later): `{"name": "clear_bag", "title": "Clear the bag", "source": {"collection":
+  "groceries", "where": [{"field": "done", "equals": true}]}, "delete": true}` deletes every live row of its own
+  collection matching `where` (params work as in any action). Why: a grocery list wants a one-tap "Clear bag" for
+  the checked-off items, and deleting them one row at a time is a tap per item and an edit per row. It stays
+  declarative, the same shape as the other actions: a delete action is the only one whose source is its own
+  collection, and it has no `match`, `create`, `update`, `reset_when`, `scale` or `child` (refused when given). Each
+  row is soft-deleted as a row delete does (restorable; `follow.rs` moves the lookups, counts and rollups that
+  read it; clients hear of the rows in one event), a row a filler owns is refused as a row delete is, the call is
+  one edit (`undo_edit` brings them back) within the row cap (`too_many_rows`), a repeated `client_id` is applied
+  once, and the answer counts them (`deleted`).
 - **From MCP**: `run_action {collection, action, params}` (a new tool), answering the edit id and what it did.
 - Not grocery code: nothing in the code names meals or groceries.
 

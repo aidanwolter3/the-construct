@@ -1107,3 +1107,215 @@ async fn actions_are_checked_when_defined_and_called() {
     .await;
     assert_eq!(v["error"], "collection_in_use", "{v}");
 }
+
+#[tokio::test]
+async fn a_delete_action_clears_the_matching_rows_in_one_undoable_edit() {
+    let pod = pod();
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "aisles", "fields": [{"name": "name", "type": "text", "unique": true}]}),
+    )
+    .await;
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "groceries", "fields": [
+            {"name": "name", "type": "text"},
+            {"name": "done", "type": "bool", "default": false},
+            {"name": "aisle", "type": "ref", "collection": "aisles", "optional": true}]}),
+    )
+    .await;
+    ok(
+        &pod,
+        "apply_change",
+        json!({"collection": "aisles", "changes": [
+            {"op": "add_field", "name": "items", "type": "number", "default": 0,
+             "compute": {"kind": "rollup", "collection": "groceries", "via": "aisle", "op": "count"}}]}),
+    )
+    .await;
+    let set = |a: Value| json!({"collection": "groceries", "changes": [{"op": "set_action", "action": a}]});
+    // Refusals: its own collection only with delete, delete only of its own,
+    // and nothing to upsert.
+    for (bad, why) in [
+        (
+            json!({"name": "a", "source": {"collection": "groceries"},
+                   "match": {"name": "$row.name"}}),
+            "only a delete action",
+        ),
+        (
+            json!({"name": "a", "source": {"collection": "aisles"}, "delete": true}),
+            "its own collection",
+        ),
+        (
+            json!({"name": "a", "source": {"collection": "groceries"}, "delete": true,
+                   "match": {"name": "$row.name"}}),
+            "has no match",
+        ),
+        (
+            json!({"name": "a", "source": {"collection": "groceries"}, "delete": true,
+                   "child": {"collection": "aisles", "values": {"name": "x"}}}),
+            "has no child",
+        ),
+        (
+            json!({"name": "a", "source": {"collection": "groceries"}, "delete": "yes"}),
+            "true or false",
+        ),
+    ] {
+        let v = refused(&pod, "apply_change", set(bad)).await;
+        assert!(
+            v["detail"].as_str().unwrap_or("").contains(why),
+            "{why}: {v}"
+        );
+    }
+    let clear = json!({"name": "clear_bag", "title": "Clear the bag",
+        "source": {"collection": "groceries", "where": [{"field": "done", "equals": true}]},
+        "delete": true});
+    ok(&pod, "apply_change", set(clear.clone())).await;
+    // With a param in where too.
+    ok(
+        &pod,
+        "apply_change",
+        set(json!({"name": "clear_aisle", "params": [{"name": "aisle", "type": "ref", "collection": "aisles"}],
+            "source": {"collection": "groceries", "where": [{"field": "aisle", "equals": "$param.aisle"}]},
+            "delete": true})),
+    )
+    .await;
+    let d = ok(
+        &pod,
+        "describe_collection",
+        json!({"collection": "groceries"}),
+    )
+    .await;
+    let described = &d["definition"]["actions"][0];
+    assert_eq!(described["delete"], true, "{d}");
+    assert_eq!(described["source"], clear["source"], "{d}");
+    assert!(described.get("match").is_none(), "{d}");
+    assert_eq!(
+        described["endpoint"],
+        "/v1/collections/groceries/actions/clear_bag"
+    );
+
+    let produce = add(&pod, "aisles", json!({"name": "Produce"})).await;
+    let dairy = add(&pod, "aisles", json!({"name": "Dairy"})).await;
+    for (name, done, aisle) in [
+        ("Pears", true, &produce),
+        ("Leeks", false, &produce),
+        ("Oat milk", true, &dairy),
+        ("Feta", false, &dairy),
+    ] {
+        add(
+            &pod,
+            "groceries",
+            json!({"name": name, "done": done, "aisle": aisle}),
+        )
+        .await;
+    }
+    let names = || async {
+        rows(&pod, "groceries")
+            .await
+            .iter()
+            .map(|e| e["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let items = |id: String| {
+        let pod = pod.clone();
+        async move { row(&pod, "aisles", "id", &id).await["items"].clone() }
+    };
+    assert_eq!(items(produce.clone()).await, json!(2));
+
+    // From a layout: the action endpoint, with a client_id.
+    let (status, v) = post(
+        &pod,
+        "groceries",
+        "actions/clear_bag",
+        json!({"client_id": "tap-1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(
+        (v["rows"].clone(), v["deleted"].clone()),
+        (json!(2), json!(2)),
+        "{v}"
+    );
+    assert_eq!(names().await, ["Leeks", "Feta"]);
+    // The rollup reading groceries followed.
+    assert_eq!(items(produce.clone()).await, json!(1));
+    assert_eq!(items(dairy.clone()).await, json!(1));
+    // A retry of the same tap is applied once.
+    let (status, again) = post(
+        &pod,
+        "groceries",
+        "actions/clear_bag",
+        json!({"client_id": "tap-1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(
+        (again["repeated"].clone(), again["edit"].clone()),
+        (json!(true), v["edit"].clone())
+    );
+    // Nothing left to clear: no edit.
+    let none = ok(
+        &pod,
+        "run_action",
+        json!({"collection": "groceries", "action": "clear_bag"}),
+    )
+    .await;
+    assert_eq!(
+        (none["deleted"].clone(), none["edit"].clone()),
+        (json!(0), Value::Null),
+        "{none}"
+    );
+
+    // Undo brings both back, and the rollup with them.
+    let u = ok(&pod, "undo_edit", json!({"edit": v["edit"]})).await;
+    assert_eq!(u["restored"], 2, "{u}");
+    assert_eq!(names().await, ["Pears", "Leeks", "Oat milk", "Feta"]);
+    assert_eq!(items(produce.clone()).await, json!(2));
+
+    // A param in where: only that aisle's rows, done or not.
+    let r = ok(
+        &pod,
+        "run_action",
+        json!({"collection": "groceries", "action": "clear_aisle", "params": {"aisle": {"name": "Dairy"}}}),
+    )
+    .await;
+    assert_eq!(r["deleted"], 2, "{r}");
+    assert_eq!(names().await, ["Pears", "Leeks"]);
+    assert_eq!(items(dairy.clone()).await, json!(0));
+}
+
+#[tokio::test]
+async fn a_delete_action_keeps_to_the_row_cap() {
+    let adapter = CollectionsAdapter::with_caps(Caps {
+        edit_rows: 2,
+        ..Caps::default()
+    });
+    let pod: Pod = Arc::new(AppState::in_memory(vec![Arc::new(adapter)]));
+    pod.store()
+        .create_pinned_session(&session_hash("pod"))
+        .unwrap();
+    ok(
+        &pod,
+        "define_collection",
+        json!({"name": "chores", "fields": [{"name": "title", "type": "text"}],
+            "actions": [{"name": "clear_all", "source": {"collection": "chores"}, "delete": true}]}),
+    )
+    .await;
+    for t in ["Sweep", "Water ferns", "Fold towels"] {
+        ok(
+            &pod,
+            "add_row",
+            json!({"collection": "chores", "values": {"title": t}}),
+        )
+        .await;
+    }
+    let v = refused(
+        &pod,
+        "run_action",
+        json!({"collection": "chores", "action": "clear_all"}),
+    )
+    .await;
+    assert_eq!(v["error"], "too_many_rows", "{v}");
+}
