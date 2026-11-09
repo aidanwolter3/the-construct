@@ -17,6 +17,10 @@
 //! `$row.<ref>.<field>`, and `.id`) and, in child values, `$parent.id` or
 //! `$parent.<field>`. They are stored by field id, so renames keep them.
 //!
+//! A delete action (`delete: true`) reads its own collection instead: it
+//! deletes each live row matching `where` (as a row delete does; no
+//! `match`, `create`, `update`, `reset_when`, `scale` or `child`).
+//!
 //! A call is one edit across both collections (`undo_edit` reverts it),
 //! and a repeated `client_id` answers the first call's edit.
 
@@ -121,7 +125,7 @@ pub struct Action {
     pub conditions: Vec<Cond>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<Scale>,
-    #[serde(rename = "match")]
+    #[serde(rename = "match", default, skip_serializing_if = "Vec::is_empty")]
     pub matching: Vec<Assign>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub create: Vec<Assign>,
@@ -131,6 +135,9 @@ pub struct Action {
     pub reset_when: Vec<Cond>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub child: Option<Child>,
+    /// Delete the matching rows of its own collection (the source).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub delete: bool,
 }
 
 impl Action {
@@ -367,7 +374,8 @@ fn str_of<'a>(o: &'a Map<String, Value>, k: &str) -> &'a str {
 /// Parse an action spec for collection `def` (`defs`: every collection):
 /// `{name, title?, params?, source: {collection, where?}, scale?: {times,
 /// per}, match, create?, update?, reset_when?, child?: {collection,
-/// values}}`.
+/// values}}`, or a delete action `{name, title?, params?, source: {collection
+/// (its own), where?}, delete: true}`.
 pub fn parse(def: &Definition, spec: &Value, defs: &Defs) -> Result<Action, String> {
     let Some(o) = spec.as_object() else {
         return Err("an action is an object {name, source, match, ...}".into());
@@ -441,12 +449,37 @@ pub fn parse(def: &Definition, spec: &Value, defs: &Defs) -> Result<Action, Stri
         .and_then(Value::as_object)
         .ok_or_else(|| at("source is {collection, where?}: the rows it reads".into()))?;
     let source_name = str_of(source_spec, "collection").to_owned();
-    if source_name == def.name {
-        return Err(at("source is another collection than its own".into()));
+    let delete = match o.get("delete") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(at("delete is true or false".into())),
+    };
+    if delete {
+        if source_name != def.name {
+            return Err(at(format!(
+                "a delete action deletes rows of its own collection, so source.collection is '{}'",
+                def.name
+            )));
+        }
+        if let Some(k) = ["match", "create", "update", "reset_when", "scale", "child"]
+            .into_iter()
+            .find(|k| o.get(*k).is_some_and(|v| !v.is_null()))
+        {
+            return Err(at(format!(
+                "a delete action only deletes the rows matching source.where, so it has no {k}"
+            )));
+        }
+    } else if source_name == def.name {
+        return Err(at(
+            "source is another collection than its own (only a delete action, delete: true, reads its own rows)".into(),
+        ));
     }
-    let source = defs
-        .get(&source_name)
-        .ok_or_else(|| at(format!("source collection '{source_name}' doesn't exist")))?;
+    let source = if delete {
+        def
+    } else {
+        defs.get(&source_name)
+            .ok_or_else(|| at(format!("source collection '{source_name}' doesn't exist")))?
+    };
     let ctx = Ctx {
         def,
         source,
@@ -479,7 +512,7 @@ pub fn parse(def: &Definition, spec: &Value, defs: &Defs) -> Result<Action, Stri
     let matching = ctx
         .assigns(o.get("match"), def, Place::Row, "match")
         .map_err(at)?;
-    if matching.is_empty() {
+    if matching.is_empty() && !delete {
         return Err(at("match names the fields that find the parent row, e.g. {\"ingredient\": \"$row.ingredient\"}".into()));
     }
     let create = ctx
@@ -526,6 +559,7 @@ pub fn parse(def: &Definition, spec: &Value, defs: &Defs) -> Result<Action, Stri
         update,
         reset_when,
         child,
+        delete,
     };
     check(def, &action, defs).map_err(at)?;
     Ok(action)
@@ -587,6 +621,26 @@ pub fn check(def: &Definition, action: &Action, defs: &Defs) -> Result<(), Strin
     for c in &action.conditions {
         field_of(source, &c.field)?;
         c.equals.as_ref().map_or(Ok(()), expr)?;
+    }
+    if action.delete {
+        if action.source != def.name {
+            return Err("a delete action reads its own collection".into());
+        }
+        let parts = !action.matching.is_empty()
+            || !action.create.is_empty()
+            || !action.update.is_empty()
+            || !action.reset_when.is_empty()
+            || action.scale.is_some()
+            || action.child.is_some();
+        if parts {
+            return Err(
+                "a delete action has no match, create, update, reset_when, scale or child".into(),
+            );
+        }
+        return Ok(());
+    }
+    if action.source == def.name {
+        return Err("source is another collection than its own".into());
     }
     for c in &action.reset_when {
         field_of(def, &c.field)?;
@@ -735,7 +789,11 @@ fn expr_text(e: &Expr, def: &Definition, source: Option<&Definition>, defs: &Def
 
 /// An action as a spec, with names (as [`parse`] takes it).
 pub fn describe(def: &Definition, a: &Action, defs: &Defs) -> Value {
-    let source = defs.get(&a.source);
+    let source = if a.source == def.name {
+        Some(def)
+    } else {
+        defs.get(&a.source)
+    };
     let name_in =
         |d: Option<&Definition>, id: &str| d.map_or_else(|| id.to_owned(), |d| d.name_of(id));
     let conds = |cs: &[Cond], on: Option<&Definition>| -> Value {
@@ -777,9 +835,13 @@ pub fn describe(def: &Definition, a: &Action, defs: &Defs) -> Value {
         "name": a.name,
         "params": a.params,
         "source": src,
-        "match": assigns(&a.matching, Some(def)),
         "endpoint": format!("/v1/collections/{}/actions/{}", def.name, a.name),
     });
+    if a.delete {
+        v["delete"] = json!(true);
+    } else {
+        v["match"] = assigns(&a.matching, Some(def));
+    }
     if !a.title.is_empty() {
         v["title"] = json!(a.title);
     }
@@ -840,6 +902,7 @@ struct Report {
     updated: usize,
     reset: usize,
     added: usize,
+    deleted: usize,
     skipped: Vec<Value>,
     unparsed: Vec<Value>,
     parents: Vec<String>,
@@ -1223,10 +1286,27 @@ pub fn run(
         rows: rows.len(),
         ..Report::default()
     };
+    if action.delete {
+        for r in &rows {
+            if let Err(e) =
+                crate::filler::check_write(&def, &Map::new(), "delete", r.filler.as_deref())
+            {
+                return refuse(409, "filled_by_filler", e);
+            }
+            let mut d = r.clone();
+            run.touch(&def.name, &d.id, Some(d.state()));
+            d.deleted_at = Some(now);
+            d.updated_at = now;
+            db::save_row(tx, &def.name, &d)?;
+            report.deleted += 1;
+        }
+    }
+    // A delete action has nothing to upsert.
+    let upserts = if action.delete { &[][..] } else { &rows[..] };
     let mut parents: Vec<Row> = db::all_rows(tx, &def.name, false)?;
     let mut reset_done: HashSet<String> = HashSet::new();
     let mut updated: HashSet<String> = HashSet::new();
-    for r in &rows {
+    for r in upserts {
         let src = (&source, r);
         // The parent's match values.
         let mut wanted: Vec<(String, Value)> = Vec::new();
@@ -1396,7 +1476,8 @@ pub fn run(
         answer: json!({
             "ok": true, "action": name, "edit": edit,
             "rows": report.rows, "created": report.created, "updated": report.updated,
-            "reset": report.reset, "added": report.added, "parents": report.parents,
+            "reset": report.reset, "added": report.added, "deleted": report.deleted,
+            "parents": report.parents,
             "skipped": report.skipped, "unparsed": report.unparsed,
         }),
         jobs,
