@@ -17,12 +17,15 @@ the runner.
   is `{v: 1, seq, ts, type, sprite?, session_id?, task_id?, status?, data}`. Types: `task.launched`,
   `sprite.state` (awake/asleep), `session.started`, `session.status`, `tool.used`, `permission.requested`,
   `session.finished` `{summary, pr_url, cost_usd, input_tokens, output_tokens, duration_s, reason}`,
-  `session.failed` `{error}`, `security.check` `{id, title, detail}` (ok/warn), `schedule.state` `{schedule}`
+  `session.failed` `{error}`, `session.link` `{claude_url, workspace?}` (the session's page in the Claude app),
+  `security.check` `{id, title, detail}` (ok/warn), `schedule.state` `{schedule}`
   (paused/active), `schedule.missed` `{schedule, error}`, `schedule.timeout` `{schedule, max_runtime_minutes,
   stopped}`.
 - `POST /v1/commands`, a fixed set: `wake {workspace, minutes}`, `start_task {workspace, task_id, title, prompt}`
   (429 at the concurrency limit), `stop_session {session_id}`, `run_schedule {name}`, `pause_schedule {name}`,
   `resume_schedule {name}`. Errors are `{error}` with 400, 401, 404, 429 or 502.
+
+A snapshot's session may carry `workspace` and `claude_url`; `session.started` may carry `workspace` in its data.
 
 Session statuses: `starting`, `working`, `waiting_permission`, `waiting_input`, `idle`, `finished`, `failed`,
 `stale`. Only `starting` and `working` count as working in `agents:status` (`working_count`, `summary_text`), and
@@ -50,8 +53,9 @@ Control keeps an idle standby session open and a finished run's session stays op
   `/v1/agents/schedules/run`, `/pause` and `/resume`. They need a valid pod session; runner refusals come back as
   429 `runner_busy`, 400 or 404 `runner_refused`, and 502 otherwise (never 401, which would sign the device out).
 - **Untrusted text:** everything the runner sends is plain display text, cleaned of control characters and capped.
-  The only link kept is `pr_url`, and only as `https://github.com/<owner>/<repo>/pull/<n>`; "Open in Claude" is
-  built from the session id.
+  The links kept are `pr_url`, only as `https://github.com/<owner>/<repo>/pull/<n>`, and `claude_url`, only as
+  `https://claude.ai/code/` and a path of plain segments; without a `claude_url`, "Open in Claude" is built from the
+  session id when it is a claude.ai one (`session_…`).
 
 ## The Agents blueprint
 
