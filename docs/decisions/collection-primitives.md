@@ -83,13 +83,18 @@ A field `{type: "quantity"}` holds an amount and a unit (`quantity.rs`, determin
 - **Stored** as `{amount, unit}` (a list of them when parts don't combine), the unit canonical; `""` for a plain
   count. Text that doesn't parse is stored as the text, shown as is, left out of sums, and counted per field by
   `describe_collection` (`quantities`). Writes also take a number (a count) or `{amount, unit}`.
-- **Served** with `<name>_text`: ASCII fractions to sixteenths ("1 1/2 cups", "2 1/16 cups"), decimals when an
+- **Served** with `<name>_text`: ASCII fractions to sixteenths ("1 1/2 cups", "1 3/16 cups"), decimals when an
   amount isn't one ("0.35 cup") and for metric units ("1.25 kg"), plurals ("2 cloves", "2 (14 oz) cans"; tsp,
   tbsp, oz, lb, g, ml and the sizes don't change), parts joined by " + ".
 - **Sums** (rollup `sum`): volume (tsp, tbsp, fl oz, cup, pint, quart, ml, l) and weight (g, kg, oz, lb) convert
   within their dimension; count-like units add only to the same unit; the result lists volume, then weight, then
   each count-like unit in the order first seen ("2 cups + 3 cloves").
-- **Choosing a unit** after a sum or a scaling: US volume as cups from 1/4 cup, else tablespoons from 1 tbsp, else
+- **Keeping the units written** in a sum of US units (2026-11): people measure in the units the recipe used, so
+  one unit stays (4 tbsp + 2 tbsp = 6 tbsp, not 3/8 cup); several units make one amount of the largest when it is
+  a plain fraction to eighths (1/2 cup + 2 tbsp = 5/8 cup, 1 lb + 8 oz = 1 1/2 lb); otherwise they stay apart,
+  largest first, a smaller amount's whole multiples of the next larger unit carried up (1 cup + 3 tbsp, not
+  1 3/16 cups; 1 cup + 19 tbsp = 2 cups + 3 tbsp).
+- **Choosing a unit** after a scaling, or a sum with metric parts: US volume as cups from 1/4 cup, else tablespoons from 1 tbsp, else
   teaspoons, preferring the largest whose amount is a plain fraction (48 tsp → 1 cup, 5 tsp → 1 2/3 tbsp); US
   weight as lb from 1 lb when a plain fraction, else oz; metric (only when every part is) as ml/l and g/kg. A
   value written by hand keeps its unit.

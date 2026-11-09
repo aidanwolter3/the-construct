@@ -649,10 +649,11 @@ async fn quantities_parse_format_and_sum_by_unit() {
         );
     }
     let p = row(&pod, "pantry", "id", &flour).await;
-    assert_eq!(p["total_text"], "2 9/16 cups + 3 cloves", "{p}");
+    // 2 cups + 1/2 cup + 1 tbsp: the units as written, not "2 9/16 cups".
+    assert_eq!(p["total_text"], "2 1/2 cups + 1 tbsp + 3 cloves", "{p}");
     assert_eq!(
         p["total"],
-        json!([{"amount": 2.5625, "unit": "cup"}, {"amount": 3, "unit": "clove"}])
+        json!([{"amount": 2.5, "unit": "cup"}, {"amount": 1, "unit": "tbsp"}, {"amount": 3, "unit": "clove"}])
     );
     let d = ok(
         &pod,
